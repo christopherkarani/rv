@@ -1009,17 +1009,23 @@ public struct MCPGatewayCore {
                 "MCP server \(shownServer) lists \(unserved.count) tool(s) whose names rv does not serve "
                     + "(only A-Z a-z 0-9 _ . -, at most 64 bytes), such as \"\(shown)\"; they are hidden"))
         }
-        let hiding = listed.map { scrub($0, for: server) }.filter(Self.schemaNamesHideText).compactMap { tool in
+        let scrubbed = listed.map { scrub($0, for: server) }
+        let hidingOrder = scrubbed.filter(Self.schemaNamesHideText).compactMap { tool in
             tool["name"]?.stringValue.flatMap { Self.servesToolName($0) ? $0 : nil }
         }
-        hidingSchemas[server] = Set(hiding)
-        if let first = hiding.first, hidingSchemaNoticed.insert(server).inserted {
+        let hiding = Set(hidingOrder)
+        // A tool once listed hiding stays refused until a listing shows it
+        // with a definition that does not hide: a listing that omits it (a
+        // partial page, an error reply, a dead upstream) clears nothing.
+        let listedNames = Set(scrubbed.compactMap { $0["name"]?.stringValue })
+        hidingSchemas[server] = (hidingSchemas[server] ?? []).subtracting(listedNames).union(hiding)
+        if let first = hidingOrder.first, hidingSchemaNoticed.insert(server).inserted {
             // `first` conforms to `servesToolName` (ASCII, at most 64 bytes);
             // escaped and bounded anyway, as for the name notice. The
             // property name that hides text is never quoted.
             let shown = MCPDisplayedText.field(MCPCallRecord.bounded(first, 64))
             outputs.append(.log(
-                "MCP server \(shownServer) lists \(hiding.count) tool(s) with schema property names rv does not serve "
+                "MCP server \(shownServer) lists \(hidingOrder.count) tool(s) with schema property names rv does not serve "
                     + "(control, separator or format characters), such as \"\(shown)\"; they are hidden"))
         }
         if pinning.enforced {
@@ -1057,19 +1063,20 @@ public struct MCPGatewayCore {
             }
             var unpinned: [String: JSONValue] = [:]
             var untrusted = 0
-            // A hidden tool is still checked against its pin above, but is
-            // never offered for review: it would not be served once trusted.
-            for name in seen.keys.sorted()
-            where configuration.decision(server: upstream.definition, tool: name) != .deny && hiding.contains(name) == false {
+            for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
                 let status = pinStatus(server: server, tool: name)
                 guard status != .pinned else { continue }
-                untrusted += 1
+                // A hidden tool is checked against its pin above and audited
+                // below, but never counted or offered for review: it would
+                // not be served once trusted.
+                let hidden = hiding.contains(name)
+                if hidden == false { untrusted += 1 }
                 let hash = seen[name] ?? ""
                 let change = name + "\0" + hash
                 // Offered to the review queue once per definition, again
                 // only after the queue did not keep it; at most
                 // `maximumTrackedChanges` per server, and the tool asks either way.
-                if reportedChanges[server]?.contains(change) != true {
+                if hidden == false, reportedChanges[server]?.contains(change) != true {
                     if (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges {
                         reportedChanges[server, default: []].insert(change)
                         // The pinned definition itself, listed again after another
@@ -1104,11 +1111,15 @@ public struct MCPGatewayCore {
                     continue
                 }
                 eventedChanges[server, default: []].insert(change)
+                var detail = ["server": server, "tool": name, "status": status.rawValue, "sha256": hash]
+                if hidden { detail["hidden"] = "true" }
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
-                    reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
-                    source: "mcp-gateway",
-                    detail: ["server": server, "tool": name, "status": status.rawValue, "sha256": hash])))
+                    reason: hidden
+                        ? "MCP tool definition names a schema property with a control, separator or format character; "
+                            + "rv does not serve it"
+                        : "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
+                    source: "mcp-gateway", detail: detail)))
             }
             if untrusted > 0, untrustedNoticed.insert(server).inserted {
                 outputs.append(.log(untrusted == 1
@@ -1278,19 +1289,26 @@ public struct MCPGatewayCore {
     static let hidingSchemaReason = "rv does not serve tools whose schema property names hide text"
 
     /// True when a tool's `inputSchema` or `outputSchema` names a property
-    /// (a `properties` or `dependencies` member, a `required` entry, a
-    /// `dependentRequired` member or entry, a `dependencies` list entry)
-    /// with a scalar `MCPDisplayedText.hidesText` flags. Those names are
-    /// data rv forwards exactly and a client may show raw, so rv serves
-    /// no such tool, as for a name `servesToolName` rejects.
+    /// (a `properties`, `dependencies` or `dependentSchemas` member, a
+    /// `required` entry, a `dependentRequired` member or entry, a
+    /// `dependencies` list entry) with a scalar `MCPDisplayedText.hidesText`
+    /// flags. Those names are data rv forwards exactly and a client may
+    /// show raw, so rv serves no such tool, as for a name `servesToolName`
+    /// rejects. A name list of another shape fails closed: every string and
+    /// key in it is checked.
     static func schemaNamesHideText(_ tool: JSONValue) -> Bool {
         ["inputSchema", "outputSchema"].contains { key in tool[key].map(namesHideText) ?? false }
     }
 
     private static func namesHideText(_ schema: JSONValue) -> Bool {
         func hides(_ text: String) -> Bool { MCPDisplayedText.hidesText(text) }
-        func listHides(_ value: JSONValue) -> Bool {
-            value.arrayValue?.contains { $0.stringValue.map(hides) ?? false } ?? false
+        func anyHides(_ value: JSONValue) -> Bool {
+            switch value {
+            case .string(let text): return hides(text)
+            case .array(let items): return items.contains(where: anyHides)
+            case .object(let members): return members.entries.contains { hides($0.key) || anyHides($0.value) }
+            default: return false
+            }
         }
         switch schema {
         case .array(let items):
@@ -1299,13 +1317,13 @@ public struct MCPGatewayCore {
             return object.entries.contains { entry in
                 let (key, value) = entry
                 switch key {
-                case "required":
-                    return listHides(value)
-                case "dependentRequired":
-                    return value.objectValue?.entries.contains { hides($0.key) || listHides($0.value) } ?? false
-                case "properties", "dependencies":
-                    guard let members = value.objectValue else { return namesHideText(value) }
-                    return members.entries.contains { hides($0.key) || listHides($0.value) || namesHideText($0.value) }
+                case "required", "dependentRequired":
+                    return anyHides(value)
+                case "properties", "dependencies", "dependentSchemas":
+                    guard let members = value.objectValue else { return anyHides(value) }
+                    return members.entries.contains { member in
+                        hides(member.key) || (member.value.objectValue == nil ? anyHides(member.value) : namesHideText(member.value))
+                    }
                 case _ where schemaValueKeywords.contains(key):
                     return false
                 case _ where schemaMapKeywords.contains(key):
