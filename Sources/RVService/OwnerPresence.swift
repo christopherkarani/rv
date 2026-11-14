@@ -358,21 +358,27 @@ actor OwnerPresence {
         return .denied(ConfirmOwnerActionReply(outcome: outcome))
     }
 
-    /// Appends one `owner.action` event to the hash-chained audit log.
+    /// Appends one `owner.action` event to the hash-chained audit log, on a
+    /// global queue: the append can wait for the file lock, and the caller
+    /// is the `ServiceRuntime` actor that hook evaluation also enters.
+    /// False when the event was not written; an approval must then not be
+    /// acted on. True without a home (nothing is configured to record to).
     nonisolated static func audit(
         summary: String, approved: Bool, outcome: String, context: AuthenticatedRequestContext, home: HomeDirectory?
-    ) {
-        guard let home else { return }
+    ) async -> Bool {
+        guard let home else { return true }
         var detail = ["outcome": outcome]
         if let role = context.componentRole { detail["caller"] = String(describing: role) }
-        AuditLog.append(
-            AuditEvent(
-                time: Date(), kind: AuditEventKind(rawValue: "owner.action"),
-                decision: approved ? .allowed : .denied,
-                subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
-                source: AuditLedger.Source.audit.rawValue, detail: detail
-            ),
-            configDirectory: RVPolicyPaths.configDirectory(home: home)
-        )
+        let event = AuditEvent(
+            time: Date(), kind: AuditEventKind(rawValue: "owner.action"),
+            decision: approved ? .allowed : .denied,
+            subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
+            source: AuditLedger.Source.audit.rawValue, detail: detail)
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: AuditLog.append(event, configDirectory: directory))
+            }
+        }
     }
 }

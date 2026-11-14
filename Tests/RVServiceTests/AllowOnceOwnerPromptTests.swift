@@ -193,6 +193,43 @@ struct AllowOnceOwnerPromptTests {
         #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
     }
 
+    /// Makes `audit.jsonl` unwritable (a directory in its place), so every
+    /// append returns false at once.
+    private func breakAuditLog(_ rig: Rig) throws {
+        try FileManager.default.createDirectory(
+            at: AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: rig.home)),
+            withIntermediateDirectories: true)
+    }
+
+    /// A2: an approval rvd cannot record plants nothing.
+    @Test func anApprovedRedeemThatCannotBeAuditedPlantsNothing() async throws {
+        let rig = try rig(FakeAuthenticator(approve: true))
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let params = try await issue("git push --force origin main", store: rig.store, rule: pushRule)
+        try breakAuditLog(rig)
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("an unrecorded approval must answer with the owner check")
+            return
+        }
+        #expect(reply.planted == false)
+        #expect(reply.ownerCheck == ConfirmOwnerActionReply(outcome: .unavailable))
+        #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
+    }
+
+    /// A2: an approved pre-arm rvd cannot record mints nothing.
+    @Test func anApprovedPreArmThatCannotBeAuditedMintsNothing() async throws {
+        let rig = try rig(FakeAuthenticator(approve: true))
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        try breakAuditLog(rig)
+        guard case .mintAllowOnce(let reply) = await mint("git reset --hard", rig) else {
+            Issue.record("an unrecorded pre-arm must answer with the owner check")
+            return
+        }
+        #expect(reply.ownerCheck?.outcome == .unavailable)
+        #expect(reply.code == nil)
+        #expect(await rig.store.list(now: now).isEmpty)
+    }
+
     @Test func thePinnedCLIRoleIsPromptedToo() async throws {
         let prompt = FakeAuthenticator(approve: false)
         let rig = try rig(prompt)

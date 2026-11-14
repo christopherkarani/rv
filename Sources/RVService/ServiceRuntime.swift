@@ -489,9 +489,13 @@ public actor ServiceRuntime {
                 outcome: .approved, presence: ownerPresence.promptsItself ? .daemonPrompt : .password)
         case .denied(let denied): reply = denied
         }
-        OwnerPresence.audit(
+        let recorded = await OwnerPresence.audit(
             summary: summary, approved: reply.outcome == .approved, outcome: reply.outcome.rawValue,
             context: context, home: configHome)
+        // An approval rvd could not record is not given: the CLI acts on it.
+        if reply.outcome == .approved, recorded == false {
+            return .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .unavailable))
+        }
         return .confirmOwnerAction(reply)
     }
 
@@ -583,13 +587,18 @@ public actor ServiceRuntime {
         }
         // The audit names the redeem, never the command: the audit log is a
         // same-user file, like the pending file that keeps only its head.
-        OwnerPresence.audit(
+        let recorded = await OwnerPresence.audit(
             summary: "redeem allow-once code", approved: approved, outcome: outcome,
             context: context, home: configHome)
         if case .denied(let reply) = verdict {
             // The owner check ran and refused: tell the CLI why.
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply))
+        }
+        // An approval rvd could not record plants nothing.
+        guard recorded else {
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString, ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable)))
         }
         let now = clock()
         switch await grants.plant(
@@ -650,11 +659,15 @@ public actor ServiceRuntime {
         case .approved: outcome = ConfirmOwnerActionReply.Outcome.approved.rawValue
         case .denied(let reply): outcome = reply.outcome.rawValue
         }
-        OwnerPresence.audit(
+        let recorded = await OwnerPresence.audit(
             summary: "pre-arm allow-once code", approved: verdict == .approved, outcome: outcome,
             context: context, home: configHome)
         if case .denied(let reply) = verdict {
             return .mintAllowOnce(MintAllowOnceReply(ownerCheck: reply))
+        }
+        // An approval rvd could not record mints nothing.
+        guard recorded else {
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable)))
         }
         do {
             let code = try await allowOnce.mintPreArmed(
