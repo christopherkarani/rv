@@ -216,6 +216,25 @@ struct MCPHostCLITextTests {
         #expect(hasUnfollowableShellText("echo 'a\\ b' \"a\\$b\" $'a\\x27b' a\\\nb") == false)
     }
 
+    /// `$IFS` / `${IFS…}` splits words where the tokenizer sees none, so it
+    /// is unfollowable in any quoting (a quoted one may reach a shell that
+    /// expands it): a line that runs something and may name a host CLI
+    /// asks; others are untouched.
+    @Test func ifsSeparatorIsUnfollowable() {
+        #expect(hasUnfollowableShellText("claude$IFS mcp add x"))
+        #expect(hasUnfollowableShellText("claude${IFS}mcp add x"))
+        #expect(hasUnfollowableShellText("claude\"$IFS\"mcp"))
+        #expect(hasUnfollowableShellText("sh -c 'claude${IFS}mcp add x'"))
+        #expect(hasUnfollowableShellText("echo $IF ${IF} $HOME IFS") == false)
+        var reads = HostTextReads()
+        #expect(judge("claude${IFS}mcp add evil -- x", &reads))
+        #expect(reads.unfollowable)
+        for command in ["echo $IFS", "npm install $PKG", "make $TARGET install"] {
+            var plain = HostTextReads()
+            #expect(judge(command, &plain) == false, "\(command)")
+        }
+    }
+
     /// Past the read budget or the nesting depth, a read counts (fail closed).
     @Test func exhaustedBudgetCounts() {
         var reads = HostTextReads()

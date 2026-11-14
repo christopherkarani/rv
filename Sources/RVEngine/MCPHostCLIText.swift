@@ -183,10 +183,14 @@ private func isInertLine(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
 /// from a shell, so its words cannot be trusted: a backslash escape it
 /// keeps as text where the shell does not (outside single quotes, a
 /// backslash before a quote or a blank, as in `'\''`, `"a \"b\""` or
-/// `a\ b`; `\'` inside `$'…'`), or a zsh `=(…)` process substitution,
-/// which runs its text with none of the characters the splitter knows.
+/// `a\ b`; `\'` inside `$'…'`), a zsh `=(…)` process substitution, which
+/// runs its text with none of the characters the splitter knows, or `$IFS`
+/// / `${IFS…}`, which the shell splits into words where the tokenizer sees
+/// none (`claude${IFS}mcp add`). `$IFS` counts in any quoting and under any
+/// name starting `IFS` (fail closed): a quoted one may reach a shell that
+/// expands it (`sh -c 'claude${IFS}mcp add'`), whose text is not re-read.
 func hasUnfollowableShellText(_ text: String) -> Bool {
-    if text.contains("=(") { return true }
+    if text.contains("=(") || text.contains("$IFS") || text.contains("${IFS") { return true }
     enum Quote { case bare, single, double, ansi }
     var quote = Quote.bare
     var previous: Character?
