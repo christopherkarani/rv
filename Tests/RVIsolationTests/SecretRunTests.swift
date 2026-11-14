@@ -68,12 +68,13 @@ private func context(
     capability: @escaping @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = capable,
     transport: SecretUpstreamTransport = RecordingUpstream().transport, notices: Notices = Notices(),
     environment: [String: String] = ["PATH": "/usr/bin:/bin"],
-    signals: @escaping @Sendable () -> SecretRunSignals = detachedSignals
+    signals: @escaping @Sendable () -> SecretRunSignals = detachedSignals, bound: Shared<pid_t>? = nil
 ) -> SecretRunContext {
     SecretRunContext(
         configDirectory: fixture.directory, resolver: fakeResolver, transport: transport, peers: peers,
         capability: capability, environment: environment, directory: directory.path,
-        manageTerminal: false, notice: notices.sink, signals: signals)
+        manageTerminal: false, notice: notices.sink, signals: signals,
+        bound: { group in bound?.set(group.pgid.rawValue) })
 }
 
 /// Runs `body` on a thread of its own, so a regression that blocks in
@@ -360,10 +361,13 @@ struct SecretRunPlanTests {
     /// rv inherited ignored (`nohup`, a parent that ignores SIGPIPE).
     @Test func theCommandKeepsEverySignalRvInheritedIgnored() {
         #if os(macOS)
-        let reset = [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGPIPE, SIGWINCH, SIGINFO]
-        #expect(SecretRunProcess.defaultedSignals(keepIgnored: []) == reset)
+        let reset: Set<Int32> = [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGPIPE, SIGWINCH, SIGINFO]
+        #expect(SecretRunProcess.defaultedSignals(keepIgnored: []).count == reset.count)
+        #expect(Set(SecretRunProcess.defaultedSignals(keepIgnored: [])) == reset)
         let kept: Set<Int32> = [SIGHUP, SIGPIPE, SIGTSTP]
-        #expect(SecretRunProcess.defaultedSignals(keepIgnored: kept) == reset.filter { kept.contains($0) == false })
+        #expect(Set(SecretRunProcess.defaultedSignals(keepIgnored: kept)) == reset.subtracting(kept))
+        // What rv reads as inherited ignored covers every signal it resets.
+        #expect(Set(SecretRunSignals.forwarded + [SIGTTOU] + SecretRunSignals.untouched) == reset)
         #endif
     }
 
@@ -440,13 +444,17 @@ struct SecretRunLaunchTests {
     /// The stop a supervisor observed may be followed at once by the
     /// leader's exit. Consuming the stop must not reap that exit: the zombie
     /// is what keeps the group id from being reused before the group kill.
-    @Test func consumingAStopNeverReapsAnExitedLeader() throws {
+    @Test(.timeLimit(.minutes(1)))
+    func consumingAStopNeverReapsAnExitedLeader() throws {
         let pid = try SecretRunProcess.spawnSuspended(
             executable: "/usr/bin/true", arguments: ["true"], environment: [], descriptors: [:]).get()
         #expect(kill(pid, SIGCONT) == 0)
-        var info = siginfo_t()
-        while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0, errno == EINTR {}
-        #expect(info.si_code == CLD_EXITED)
+        let observed = bounded(killing: Shared(pid)) {
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0, errno == EINTR {}
+            return .success(info.si_code)
+        }
+        #expect(observed == .success(CLD_EXITED))
         #expect(SecretRunProcess.consumeStop(pid) == nil)
         #expect(kill(pid, 0) == 0)  // still an unreaped zombie
         var status: Int32 = 0
@@ -596,7 +604,7 @@ struct SecretRunLaunchTests {
     /// fanned out to every guard; SIGCHLD is default meanwhile so nothing
     /// reaps behind rv; signals rv inherited ignored are reported, among
     /// them ones rv never touches.
-    @Test func signalGuardsShareOneInstallationThatTheLastOutRestores() {
+    @Test func signalGuardsShareOneInstallationThatTheLastOutRestores() throws {
         let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD, SIGWINCH]
         let noted: sig_t = { _ in }
         let previousChild = signal(SIGCHLD, noted)
@@ -613,7 +621,38 @@ struct SecretRunLaunchTests {
             #expect(SecretRunSignals.installed)
             #expect(disposition(SIGINT) == ignoredDisposition)
             #expect(disposition(SIGCHLD) == 0)
-            #expect(guards[0].inheritedIgnored.isSuperset(of: [SIGHUP, SIGWINCH]))
+            let inherited = guards[0].inheritedIgnored
+            #expect(inherited.isSuperset(of: [SIGHUP, SIGWINCH]))
+            if lastOut == 0 {
+                // The launch's spawn wiring, read from the kernel while the
+                // child is suspended in `bind` (it is refused, so it never
+                // runs): it keeps what rv inherited ignored and defaults what
+                // rv ignores itself. A third guard, so the two above stay armed.
+                let inspecting = SecretRunSignals()
+                var ignored: UInt32?
+                let launched = SecretRunProcess.launch(
+                    executable: "/usr/bin/true", arguments: ["true"], environment: [], terminal: nil,
+                    signals: inspecting, notice: { _ in }
+                ) { group in
+                    ignored = ignoredSignals(of: group.pgid.rawValue)
+                    return .failure(.bindFailed("inspected only"))
+                }
+                inspecting.restore()
+                #expect(launched == .failure(.bindFailed("inspected only")))
+                let mask = try #require(ignored)
+                for number in [SIGHUP, SIGWINCH] { #expect(ignores(mask, number)) }
+                for number in [SIGINT, SIGQUIT, SIGTERM, SIGTTOU] {
+                    #expect(ignores(mask, number) == inherited.contains(number))
+                }
+                // The production factory opens an installing guard (joining
+                // the open installation changes no disposition).
+                let production = SecretRunContext(
+                    configDirectory: URL(fileURLWithPath: "/nonexistent-rv-config"), resolver: fakeResolver,
+                    environment: [:], directory: "/", manageTerminal: false, notice: { _ in }
+                ).signals()
+                #expect(production.installs)
+                production.restore()
+            }
             let delivered = SecretRunSignals.deliveredCount
             _ = kill(getpid(), SIGINT)
             let deadline = Date().addingTimeInterval(5)
@@ -738,14 +777,15 @@ struct SecretRunLaunchTests {
             """
         let request = SecretRunRequest(
             secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", script, "sh", directory.path])
+        let bound = Shared<pid_t>(0)
         let run = context(
             fixture, directory: directory, peers: .runtime, capability: SecretRunCapability.check,
             transport: upstream.transport, notices: notices,
             environment: [
                 "PATH": "/usr/bin:/bin", "KEEP": "1", "OPENAI_API_KEY": realOpenAI, "FAKE_OPENAI": realOpenAI,
                 "DOTENV_COPY": realOpenAI,
-            ])
-        let result = bounded { SecretRun.execute(request, context: run) }
+            ], bound: bound)
+        let result = bounded(killing: bound) { SecretRun.execute(request, context: run) }
         #expect(result == .success(7))
 
         func read(_ name: String) -> String {
@@ -779,8 +819,9 @@ struct SecretRunLaunchTests {
         let request = SecretRunRequest(
             secrets: ["OPENAI_API_KEY"], all: false,
             command: ["/bin/sh", "-c", "sleep 30 & echo $! > \"$1/bg\"; kill -TERM $$", "sh", directory.path])
-        let run = context(fixture, directory: directory, peers: .runtime)
-        let result = bounded { SecretRun.execute(request, context: run) }
+        let bound = Shared<pid_t>(0)
+        let run = context(fixture, directory: directory, peers: .runtime, bound: bound)
+        let result = bounded(killing: bound) { SecretRun.execute(request, context: run) }
         #expect(result == .success(128 + SIGTERM))
         let text = try String(contentsOf: directory.appendingPathComponent("bg"), encoding: .utf8)
         let leftover = try #require(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
@@ -801,13 +842,14 @@ struct SecretRunLaunchTests {
         let notices = Notices()
         let request = SecretRunRequest(
             secrets: [], all: true, command: ["/bin/sh", "-c", "env > \"$1/env\"", "sh", directory.path])
+        let bound = Shared<pid_t>(0)
         let run = context(
             fixture, directory: directory, peers: .runtime, notices: notices,
             environment: [
                 "PATH": "/usr/bin:/bin", "KEEP": "1", "GH_TOKEN": "ghp_realtoken", "FAKE_GH": "ghp_realtoken",
                 "CODEX_ONLY": "sk-codex-real", "CODEX_BASE_URL": "https://real.example.com",
-            ])
-        let result = bounded { SecretRun.execute(request, context: run) }
+            ], bound: bound)
+        let result = bounded(killing: bound) { SecretRun.execute(request, context: run) }
         #expect(result == .success(0))
         let environment = try String(contentsOf: directory.appendingPathComponent("env"), encoding: .utf8)
         for name in ["GH_TOKEN=", "FAKE_GH=", "CODEX_ONLY=", "CODEX_BASE_URL="] {
@@ -924,6 +966,20 @@ private func disposition(_ number: Int32) -> Int {
 }
 
 private let ignoredDisposition = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+
+/// The signals `pid` ignores, from the kernel (`kp_proc.p_sigignore`).
+private func ignoredSignals(of pid: pid_t) -> UInt32? {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    let length = u_int(name.count)
+    guard sysctl(&name, length, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+    return info.kp_proc.p_sigignore
+}
+
+private func ignores(_ mask: UInt32, _ number: Int32) -> Bool {
+    mask & (UInt32(1) << UInt32(number - 1)) != 0
+}
 
 /// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).
 private func isStopped(_ pid: pid_t) -> Bool {
