@@ -330,6 +330,71 @@ struct MCPHostCLITextTests {
         #expect(reads.readsDone < HostTextReads.maxReads, "\(command)")
     }
 
+    /// The variants of a word or tail (as written, ANSI-C decoded, `echo -e`
+    /// decoded) are read in a fixed order, so every process keeps the same
+    /// books: judged again in one process, the deep line gives the same
+    /// verdict and counters each time, and the depth cap is what asks.
+    @Test("deep quoting is judged with the same books every time", arguments: ["watch xmcp end", "claude mcp add x -- y"])
+    func deepQuotingKeepsTheSameBooks(bottom: String) {
+        let command = ansiNested(bottom, levels: HostTextReads.maxDepth + 2)
+        var first = HostTextReads()
+        #expect(judge(command, &first))
+        #expect(first.depthExceeded, "\(bottom)")
+        for _ in 0..<10 {
+            var again = HostTextReads()
+            #expect(judge(command, &again))
+            #expect(books(again) == books(first), "\(bottom)")
+        }
+    }
+
+    /// Whatever order the variants are read in (`variantOrderSeed` shuffles
+    /// each list as a hash seed would have ordered a `Set`), the verdict is
+    /// the one the fixed order gives. A text is read once per depth, so a
+    /// shallower read of it never hides the deeper one that reaches the cap.
+    @Test("the order variants are read in never changes the verdict")
+    func variantOrderNeverChangesTheVerdict() {
+        let levels = HostTextReads.maxDepth + 2
+        let shallow = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth - 1)
+        let deeper = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth)
+        let inputs: [(label: String, line: String)] = [
+            ("deep-harmless", ansiNested("watch xmcp end", levels: levels)),
+            ("deep-mutation", ansiNested("claude mcp add x -- y", levels: levels)),
+            ("shallow-then-deeper", "watch " + ansiQuoted(shallow) + " " + ansiQuoted(deeper)),
+            ("deeper-then-shallow", "watch " + ansiQuoted(deeper) + " " + ansiQuoted(shallow)),
+        ]
+        for input in inputs {
+            var fixed = HostTextReads()
+            let verdict = judge(input.line, &fixed)
+            var seen: Set<String> = []
+            for seed in UInt64(1)...64 {
+                var shuffled = HostTextReads()
+                shuffled.variantOrderSeed = seed
+                #expect(judge(input.line, &shuffled) == verdict, "\(input.label) seed \(seed)")
+                seen.insert(books(shuffled).description)
+            }
+            print("VARIANTORDER \(input.label) verdict=\(verdict) fixed=\(books(fixed)) orders=\(seen.sorted())")
+        }
+    }
+
+    /// The same text reached through one more level of quoting is read
+    /// again at that depth: a line naming a text both directly and inside
+    /// one more `watch $'…'` asks at the cap in either operand order, rather
+    /// than allowing when the shallower copy happens to be read first.
+    @Test("a text read again one level deeper still reaches the cap")
+    func deeperCopyStillReachesTheCap() {
+        let shallow = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth - 1)
+        let deeper = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth)
+        for line in ["watch " + ansiQuoted(shallow) + " " + ansiQuoted(deeper),
+                     "watch " + ansiQuoted(deeper) + " " + ansiQuoted(shallow)] {
+            var reads = HostTextReads()
+            #expect(judge(line, &reads), "\(line.prefix(40))")
+            print("DEEPERCOPY \(line.prefix(12)) books=\(books(reads))")
+        }
+        var alone = HostTextReads()
+        let aloneAsks = judge("watch " + ansiQuoted(shallow), &alone)
+        print("DEEPERCOPY alone asks=\(aloneAsks) books=\(books(alone))")
+    }
+
     /// Through the guard, long text is judged by what it names, not its
     /// size: past the piece caps, text with no stem stays allowed and text
     /// that names a host mutation, plain or encoded, still asks.
@@ -368,4 +433,43 @@ private func judge(_ command: String) -> Bool {
 private func judge(_ command: String, _ reads: inout HostTextReads) -> Bool {
     let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
     return mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context, reads: &reads)
+}
+
+/// `bottom` nested `levels` times as `watch $'…'`, each level's backslash,
+/// quote and blank written `\x5c`, `\x27` and `\x20`.
+private func ansiNested(_ bottom: String, levels: Int) -> String {
+    var command = bottom
+    for _ in 0..<levels { command = "watch " + ansiQuoted(command) }
+    return command
+}
+
+/// `text` as one ANSI-C word the tokenizer follows exactly.
+private func ansiQuoted(_ text: String) -> String {
+    let escaped = text
+        .replacingOccurrences(of: "\\", with: "\\x5c")
+        .replacingOccurrences(of: "'", with: "\\x27")
+        .replacingOccurrences(of: " ", with: "\\x20")
+    return "$'" + escaped + "'"
+}
+
+/// The counters a judgement leaves in `reads`.
+private struct Books: Equatable, CustomStringConvertible {
+    let depthExceeded: Bool
+    let unfollowable: Bool
+    let exceeded: Bool
+    let readsDone: Int
+    let piecesExamined: Int
+    let wordVisits: Int
+    let spellingSteps: Int
+    var description: String {
+        "depth=\(depthExceeded) unfollowable=\(unfollowable) exceeded=\(exceeded) reads=\(readsDone)"
+            + " pieces=\(piecesExamined) visits=\(wordVisits) steps=\(spellingSteps)"
+    }
+}
+
+private func books(_ reads: HostTextReads) -> Books {
+    Books(
+        depthExceeded: reads.depthExceeded, unfollowable: reads.unfollowable, exceeded: reads.exceeded,
+        readsDone: reads.readsDone, piecesExamined: reads.piecesExamined, wordVisits: reads.wordVisits,
+        spellingSteps: reads.spelling.steps)
 }
