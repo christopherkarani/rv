@@ -414,6 +414,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
+    /// `run` stops every upstream and returns, as when the client closes its input.
+    public func requestShutdown() {
+        queue.async { self.finished.signal() }
+    }
+
     private func spawn(_ launch: MCPUpstreamLaunch) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launch.executable)

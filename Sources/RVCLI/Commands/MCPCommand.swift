@@ -1697,7 +1697,12 @@ struct MCPServe: AsyncParsableCommand {
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log)
+        // Without this a signal ends rv before its placeholder servers'
+        // groups are stopped and reaped; a plain serve keeps the defaults.
+        let signals = bound.isEmpty
+            ? nil : MCPShutdownSignals(MCPShutdownSignals.handled, ignoring: true) { _ in runtime.requestShutdown() }
         runtime.run()
+        signals?.cancel()
         MCPSandbox.stopProxies()
     }
 }
