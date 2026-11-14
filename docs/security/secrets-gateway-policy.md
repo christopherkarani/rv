@@ -184,9 +184,10 @@ The check is the same scan; only the reads differ.
   `127.0.0.1:<client port> -> 127.0.0.1:<gateway port>` (IPv4, or IPv6
   v4-mapped for a dual-stack client socket). The gateway's own end must be
   in the same tables, and exactly one held client end (inode not 0) must
-  be. A process holds it when one of its `/proc/<pid>/fd/*` links reads
-  `socket:[<inode>]`. A forked child that inherited the socket is a holder
-  too.
+  be. A process holds it when one of its `/proc/<pid>/fd/*` links, or one
+  of a thread's `/proc/<pid>/task/<tid>/fd/*` (a thread that unshared its
+  table with `unshare(CLONE_FILES)`), reads `socket:[<inode>]`. A forked
+  child that inherited the socket is a holder too.
 - A process is identified by its pid and its start time (`/proc/<pid>/stat`
   field 22, clock ticks after boot). The `comm` field is read from the last
   `)`, as bytes, so a process cannot forge the fields after its name.
@@ -197,22 +198,28 @@ The check is the same scan; only the reads differ.
   may have been the holder), leaves the scan undecided: unless another
   candidate is a holder, the answer is `runtimeUnverified`, not
   `runtimeMismatch`. A process already gone when
-  the scan lists processes, or a zombie, is skipped, as on macOS.
+  the scan lists processes, or a zombie, is skipped, as on macOS. A
+  process whose main thread exited while other threads run reads as a
+  zombie in `stat` but is alive: it is kept while `/proc/<pid>/task` lists
+  more than one thread.
+- In a terminal runtime's session, a listed process whose session cannot
+  be read leaves the scan undecided too.
 - `runtimeUnverified` also covers: a `/proc` whose `self` is not rv's pid
   (another pid namespace's), a `/proc` mounted with `hidepid` other than
   `0`/`off` (a descendant running as another user could not be seen), an
-  unreadable descriptor table (a setuid or non-dumpable process, or one
-  that exited mid-read), a socket table that is missing, truncated,
+  unreadable descriptor table, the process's or any thread's (a setuid,
+  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, an
+  LSM ptrace rule, or one that exited mid-read), a socket table that is missing, truncated,
   malformed, ambiguous, or lacks the gateway's end, and a client end no
   process holds (inode 0: time-wait or orphaned).
 - A process in another network namespace cannot reach the gateway's
   loopback, so it is never a holder. A listening socket shared with
   `SO_REUSEPORT` does not matter: a connected 4-tuple is unique within a
   namespace.
-- Limits beyond macOS's: a thread that unshared its descriptor table
-  (`unshare(CLONE_FILES)`) is not scanned, so a socket only it holds reads
-  as `runtimeMismatch`. A recorded group's start time is ticks after boot,
-  so it names a process only until the host reboots.
+- Limits beyond macOS's: a recorded group's start time is ticks after
+  boot, so it names a process only until the host reboots. A process
+  whose main thread exited has no readable `/proc/<pid>/exe`, so binary
+  binding on it is `runtimeUnverified`.
 
 ## Binary binding
 

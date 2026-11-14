@@ -64,6 +64,19 @@ final class ProcFixture {
         if let exe {
             try FileManager.default.createSymbolicLink(atPath: "\(root)/\(pid)/exe", withDestinationPath: exe)
         }
+        // The main thread; its table is `fd`, which the reader does not read twice.
+        try FileManager.default.createDirectory(atPath: "\(root)/\(pid)/task/\(pid)", withIntermediateDirectories: true)
+    }
+
+    /// Another thread of `pid`, with a descriptor table of its own
+    /// (`unshare(CLONE_FILES)`), holding `sockets`.
+    func thread(_ pid: pid_t, _ tid: pid_t, sockets: [Int]) throws {
+        let fd = "\(root)/\(pid)/task/\(tid)/fd"
+        try FileManager.default.createDirectory(atPath: fd, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: fd + "/0", withDestinationPath: "/dev/null")
+        for (index, inode) in sockets.enumerated() {
+            try FileManager.default.createSymbolicLink(atPath: fd + "/\(index + 3)", withDestinationPath: "socket:[\(inode)]")
+        }
     }
 
     func write(_ relative: String, _ text: String) throws {
@@ -276,6 +289,74 @@ struct ProcFSProcessTableTests {
         try proc.remove("201")
         try proc.process(201, parent: 1, group: 201, start: 5_000, sockets: [ProcFixture.clientInode])
         #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: table) == .outsider)
+    }
+
+    /// The tree was read; then a user process's session could not be: it
+    /// could be in the leader's session, and the holder.
+    @Test(arguments: [true, false])
+    func aUserProcessWhoseSessionCannotBeReadLeavesTheSessionUndecided(leaderHolds: Bool) throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, session: 200, sockets: leaderHolds ? [ProcFixture.clientInode] : [])
+        try proc.process(400, parent: 1, group: 400, session: 200)
+        let group = try proc.group(200)
+        let table = proc.table
+        #expect(table.children(of: 200) == [])  // the tree is read with 400's stat
+        try proc.write("400/stat", "400 (x\n")
+        if leaderHolds {
+            #expect(GatewayPeerScan.holders(proc.peer, group: group, in: table) == nil)
+        } else {
+            #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: table) == .unverifiable)
+        }
+    }
+
+    /// An unreaped child in the session has exited: skipped, as on macOS.
+    @Test func aZombieInTheSessionIsSkipped() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, session: 200)
+        try proc.process(400, parent: 1, group: 400, session: 200, state: "Z")
+        #expect(proc.verdict(try proc.group(200)) == .outsider)
+    }
+
+    /// A thread that unshared its descriptor table holds what is in it.
+    @Test func aThreadWithItsOwnDescriptorTableHoldingTheSocketIsAHolder() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 200)
+        try proc.thread(201, 205, sockets: [ProcFixture.clientInode])
+        let group = try proc.group(200)
+        #expect(proc.verdict(group) == .member)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: proc.table)
+            == [GatewayHolder(pid: 201, startSeconds: 10, startMicroseconds: 0)])
+    }
+
+    @Test func aThreadWhoseDescriptorsCannotBeReadIsUnverifiable() throws {
+        guard unprivileged else { return }
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.thread(200, 205, sockets: [])
+        proc.lock("200/task/205/fd")
+        #expect(proc.verdict(try proc.group(200)) == .unverifiable)
+    }
+
+    /// Linux shows a process whose main thread exited as a zombie while its
+    /// other threads run, and its descriptors are theirs. It is alive: its
+    /// group is not taken for stopped, its children are still its own, and
+    /// it holds what they hold. A zombie with no other thread has exited.
+    @Test func aProcessWhoseMainThreadExitedIsAlive() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, state: "Z")
+        try proc.thread(200, 205, sockets: [])
+        try proc.process(201, parent: 200, group: 200, state: "Z")
+        try proc.thread(201, 206, sockets: [ProcFixture.clientInode])
+        try proc.process(202, parent: 200, group: 200, state: "Z")
+        let table = proc.table
+        guard case .found = table.lookup(200) else {
+            Issue.record("a running process was read as exited")
+            return
+        }
+        #expect(table.lookup(202) == .absent)
+        #expect(table.children(of: 200) == [201])
+        #expect(proc.verdict(try proc.group(200)) == .member)
     }
 
     // MARK: holders and binaries

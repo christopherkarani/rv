@@ -85,10 +85,12 @@ enum ProcFSReader {
 /// here) when `/proc` is not this process's (`self` is not our pid), when it
 /// hides other users' processes (`hidepid`), when a table or file is
 /// unreadable, malformed or truncated, when a descriptor table cannot be
-/// read (`EACCES` from a non-dumpable or setuid process, Yama, or
-/// `hidepid`), and when a process changes or exits between the reads that
-/// bracket its descriptor scan. Only a process gone before it is looked at
-/// is skipped. A zombie is gone (`lookup` says `absent`), as on macOS.
+/// read (`EACCES` from a non-dumpable, setuid or other user's process
+/// without `CAP_SYS_PTRACE`, or an LSM ptrace rule; Yama gates only attach,
+/// not these reads), and when a process changes or exits between the reads
+/// that bracket its descriptor scan. Only a process gone before it is
+/// looked at is skipped. A zombie is gone (`lookup` says `absent`), as on
+/// macOS, unless other threads of it still run.
 ///
 /// One table serves one decision: it caches the process listing and the
 /// socket inode, which are then as old as that decision.
@@ -123,7 +125,16 @@ final class ProcFSProcessTable: ProcessTable {
         case .absent: return .absent
         case .unavailable: return .unavailable
         case .value(let stat):
-            if ProcFSParse.exited(stat) { return .absent }
+            if ProcFSParse.exited(stat) {
+                // Linux shows a process whose main thread exited as a zombie
+                // while its other threads run: alive while `task` lists more
+                // than the main thread.
+                switch ProcFSReader.directory("\(root)/\(pid)/task") {
+                case .absent: return .absent
+                case .unavailable: return .unavailable
+                case .value(let threads): if threads.count <= 1 { return .absent }
+                }
+            }
             guard stat.pid == UInt32(pid), let start = ProcFSParse.start(ticks: stat.startTicks, hz: hz) else {
                 return .unavailable
             }
@@ -148,6 +159,12 @@ final class ProcFSProcessTable: ProcessTable {
         guard let pids = processes() else { return nil }
         var mine: [pid_t] = []
         for pid in pids where pid > 1 {
+            // An exited, unreaped process is no one's, as on macOS.
+            switch lookup(pid) {
+            case .absent: continue
+            case .unavailable: return nil
+            case .found: break
+            }
             switch ProcFSReader.file("\(root)/\(pid)/status") {
             case .absent: continue
             case .unavailable: return nil
@@ -163,21 +180,38 @@ final class ProcFSProcessTable: ProcessTable {
 
     func holdsSocket(_ pid: pid_t, _ peer: GatewayPeer) -> Bool? {
         guard let inode = socketInode(peer), case .found(let before) = lookup(pid) else { return nil }
-        let descriptors = "\(root)/\(pid)/fd"
-        guard case .value(let names) = ProcFSReader.directory(descriptors) else { return nil }
-        var holds = false
-        for name in names {
-            switch ProcFSReader.link(descriptors + "/" + name) {
-            case .value(let target): holds = ProcFSParse.socketInode(link: target) == inode
-            case .absent: continue  // closed since the listing
-            case .unavailable: return nil
+        // The process's table, then each thread's: a thread that unshared its
+        // table (`unshare(CLONE_FILES)`) holds what only it has, and a process
+        // whose main thread exited keeps its descriptors in the others.
+        guard var holds = holds(inode, in: "\(root)/\(pid)/fd") else { return nil }
+        if holds == false {
+            guard case .value(let threads) = ProcFSReader.directory("\(root)/\(pid)/task") else { return nil }
+            for thread in threads where thread != String(pid) {
+                guard let held = self.holds(inode, in: "\(root)/\(pid)/task/\(thread)/fd") else { return nil }
+                if held {
+                    holds = true
+                    break
+                }
             }
-            if holds { break }
         }
         // The same process before and after: a pid reused in between, or one
         // that exited mid-scan (perhaps the holder), is not an answer.
         guard case .found(let after) = lookup(pid), after == before else { return nil }
         return holds
+    }
+
+    /// Whether a link in `descriptors` names socket `inode`; nil when the
+    /// table could not be read (a thread or process gone mid-scan included).
+    private func holds(_ inode: UInt64, in descriptors: String) -> Bool? {
+        guard case .value(let names) = ProcFSReader.directory(descriptors) else { return nil }
+        for name in names {
+            switch ProcFSReader.link(descriptors + "/" + name) {
+            case .value(let target): if ProcFSParse.socketInode(link: target) == inode { return true }
+            case .absent: continue  // closed since the listing
+            case .unavailable: return nil
+            }
+        }
+        return false
     }
 
     func executable(_ pid: pid_t) -> ProcessExecutable? {

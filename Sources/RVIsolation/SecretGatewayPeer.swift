@@ -105,9 +105,19 @@ enum GatewayPeerScan {
         let (parents, complete) = descendants(of: leader, in: table)
         guard complete else { return nil }
         var candidates = Set(parents.keys).union([leader])
-        if table.session(of: leader) == leader {
+        let strict = table.failedListingIsEmptySession == false
+        switch table.session(of: leader) {
+        case .some(leader):
             guard let processes = table.userProcesses() else { return nil }
-            candidates.formUnion(processes.filter { table.session(of: $0) == leader })
+            for pid in processes {
+                switch table.session(of: pid) {
+                case .some(leader): candidates.insert(pid)
+                case .some: continue
+                case .none: if strict { return nil }
+                }
+            }
+        case .some: break
+        case .none: if strict { return nil }
         }
         var found: [GatewayHolder] = []
         for pid in candidates.sorted() {
@@ -146,11 +156,22 @@ enum GatewayPeerScan {
         if search.finds(Array(parents.keys), in: table, still: { parent(of: $0, in: table) == parents[$0] }) {
             return .member
         }
-        if table.session(of: leader) == leader {
+        let strict = table.failedListingIsEmptySession == false
+        switch table.session(of: leader) {
+        case .some(leader):
             let listed = table.userProcesses()
-            if listed == nil, table.failedListingIsEmptySession == false { search.incomplete = true }
-            let session = (listed ?? []).filter { table.session(of: $0) == leader }
+            if listed == nil, strict { search.incomplete = true }
+            var session: [pid_t] = []
+            for pid in listed ?? [] {
+                switch table.session(of: pid) {
+                case .some(leader): session.append(pid)
+                case .some: continue
+                case .none: if strict { search.incomplete = true }
+                }
+            }
             if search.finds(session, in: table, still: { table.session(of: $0) == leader }) { return .member }
+        case .some: break
+        case .none: if strict { search.incomplete = true }
         }
         return search.incomplete ? .unverifiable : .outsider
     }

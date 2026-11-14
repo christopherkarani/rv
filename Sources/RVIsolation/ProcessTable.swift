@@ -54,10 +54,11 @@ protocol ProcessTable {
     func holdsSocket(_ pid: pid_t, _ peer: GatewayPeer) -> Bool?
     /// Nil when it could not be read.
     func executable(_ pid: pid_t) -> ProcessExecutable?
-    /// How `GatewayPeerScan.verdict` reads a failed `userProcesses()` while
-    /// it searches a session. The libproc scan has always read it as an
-    /// empty session, and keeps doing so; `/proc` reads it as a scan that
-    /// cannot tell.
+    /// How `GatewayPeerScan` reads a failed `userProcesses()`, or a session
+    /// (the leader's or a listed process's) that `session(of:)` could not
+    /// read, while it searches a session. The libproc scan has always read
+    /// these as not in the session, and keeps doing so; `/proc` reads them
+    /// as a scan that cannot tell.
     var failedListingIsEmptySession: Bool { get }
 }
 
