@@ -82,7 +82,8 @@ let coreLibraryTargets: [Target] = [
             "landlock_apply.c",
             "include",
             "README.md",
-        ]
+        ],
+        resources: [.embedInCode("Resources/providers")]
     ),
     .target(name: "RVTheme"),
     .target(name: "RVEngine", dependencies: ["RVDomain"]),
