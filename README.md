@@ -255,9 +255,15 @@ rv is one binary, 25 commands. The rest of the surface:
   or deny as `core.mcp:mcp-host-config`. *Known limits:* a nested agent
   started with servers rv does not govern (`claude --mcp-config …`,
   `claude --plugin-dir …`, `codex -c mcp_servers…`), and a program that
-  writes a config without its name on the command line (a script, a
-  shell fed an expansion, or a git hook — which `git commit -m` still
-  runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
+  writes a config without its name on the command line (a script or a
+  scheduled job written to disk earlier, by the shell or the file tool;
+  a shell fed an expansion; text decoded by a program such as `base64
+  -d`, `rev` or `tr`; a tarball, directory or URL whose name the agent
+  chooses; or a git hook — which `git commit -m` still runs — diff/pager
+  tool or `.ackrc`/lesskey file set up earlier). Text that names a host
+  mutation asks even as data (`git commit -m 'run claude mcp add x'`,
+  `grep 'claude mcp add' docs/`, `grep claude "$f"`), as do dynamic
+  programs given `config` (`"$GIT" config user.name`).
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
