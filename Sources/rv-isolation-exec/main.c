@@ -111,6 +111,7 @@ static int rv_run_stopped(int argc, char **argv) {
 }
 
 static int rv_run_confined(int argc, char **argv) {
+    sigset_t none;
     int executable;
     int failure;
 
@@ -120,6 +121,12 @@ static int rv_run_confined(int argc, char **argv) {
     }
     executable = rv_landlock_confine(argc, argv);
     if (executable < 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    /* The gateway starts servers from a thread that blocks most signals,
+     * and a blocked SIGTERM would be one the server never hears. */
+    sigemptyset(&none);
+    if (sigprocmask(SIG_SETMASK, &none, NULL) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     execve(argv[executable], &argv[executable + 1], environ);
