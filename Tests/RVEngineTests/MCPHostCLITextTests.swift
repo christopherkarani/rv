@@ -7,9 +7,12 @@ import Testing
 /// every table word, and package specs normalise to the names they ship.
 @Suite("MCP host CLI text reads")
 struct MCPHostCLITextTests {
+    /// Both prefilters pass every table word: the text-read one and the
+    /// program-text one, each with its own predicate.
     @Test func everyTableWordHoldsAStem() {
         for word in hostMCPTableWords() {
             #expect(mayNameHostMCP(word), "\(word) holds no stem in hostMCPStems")
+            #expect(pieceMayNameHostMCP(word), "\(word) fails the piece prefilter")
         }
     }
 
@@ -50,6 +53,7 @@ struct MCPHostCLITextTests {
     /// A head that is a path to a host binary its basename does not name.
     @Test("a path to a host binary is that host", arguments: [
         "~/.local/share/claude/versions/2.0.14 mcp add evil -- x",
+        "claude/versions/2.0.14 mcp add evil -- x",
         "./node_modules/@anthropic-ai/claude-code/cli.js mcp add evil -- x",
         "node_modules/@openai/codex/bin/codex.js mcp add evil -- x",
         "/opt/homebrew/bin/claude mcp add evil -- x",
@@ -65,17 +69,87 @@ struct MCPHostCLITextTests {
         #expect(mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context) == false)
     }
 
-    /// `mcp install` in prose that names no host is left alone; run, or
-    /// carried as a command line of its own, it still counts.
-    @Test func mcpInstallInProseIsNotRun() {
-        let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
-        let judge = { (command: String) in
-            mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context)
-        }
-        #expect(judge("git commit -m 'add mcp install docs'") == false)
-        #expect(judge("chronic mcp install docs"))
-        #expect(judge("echo 'mcp install docs' | sh"))
-        #expect(judge("echo 'chronic mcp install server.py' | sh"))
+    /// `mcp install` that some program may run counts, whatever the server
+    /// and however deep the quoting: behind any wrapper, in text a runner,
+    /// shell, `ssh` or substitution runs, and with no Python runner.
+    @Test("mcp install that may run asks", arguments: [
+        "watch 'chronic mcp install srv'",
+        "su -c 'chronic mcp install srv'",
+        "runuser -l me -c 'chronic mcp install srv'",
+        "script -q -c 'chronic mcp install srv' /dev/null",
+        "tmux new-session -d 'chronic mcp install srv'",
+        "screen -dm sh -c 'chronic mcp install srv'",
+        "find . -maxdepth 0 -exec sh -c 'chronic mcp install srv' ';'",
+        "echo srv | xargs -n1 sh -c 'chronic mcp install \"$0\"'",
+        "nsenter -t 1 -m sh -c 'chronic mcp install srv'",
+        "chronic sh -c 'chronic mcp install srv'",
+        "ssh localhost 'chronic mcp install srv'",
+        "bash <<< 'true; chronic mcp install srv'",
+        "$(echo 'chronic mcp install srv')",
+        "echo 'chronic mcp install srv' > /tmp/i.sh && sh /tmp/i.sh",
+        "printf '%s\\n' 'chronic mcp install srv' | sh",
+        "printf '%s\\n' 'chronic mcp install srv' | at now",
+        "sh -c 'echo \"chronic mcp install srv\" | sh'",
+        "echo 'chronic mcp install srv' | sh",
+        "echo 'npx mcp install srv' | sh",
+        "echo 'chronic mcp install srv --python python3' | sh",
+        "echo 'python3 -V; chronic mcp install srv' | sh",
+        "echo 'chronic mcp install pkg.mod:app' | sh",
+        "echo 'chronic mcp install ./servers/' | sh",
+        "echo 'chronic mcp install https://example.test/s' | sh",
+        "echo 'chronic mcp install s.pyz' | sh",
+        "echo 'chronic mcp install s.pyw' | sh",
+        "echo 'mcp install docs' | sh",
+        "echo 'chronic mcp install server.py' | sh",
+        // At top level, behind a wrapper with options or operands before `mcp`.
+        "chronic mcp install docs",
+        "op run -- mcp install srv",
+        "doppler run -- mcp install srv",
+        "chronic -q mcp install srv",
+        "direnv exec . mcp install srv",
+        "tmux new-session -d mcp install srv",
+        "screen -dm mcp install srv",
+        "find . -maxdepth 0 -exec mcp install srv ';'",
+        // A directory option exempts `mcp` only under a build tool.
+        "nsenter -t 1 -w mcp install srv",
+        "chronic -C mcp install srv",
+        "echo 'chronic --dir mcp install srv' | sh",
+    ])
+    func runnableMCPInstallAsks(command: String) {
+        #expect(judge(command), "\(command)")
+    }
+
+    /// `mcp install` that nothing runs is left alone: a plain operand of a
+    /// single command that never runs its operands, on a line with no pipe,
+    /// list, redirect, here-string or substitution, or `mcp` as a directory
+    /// or workspace option's value.
+    @Test("mcp install that nothing runs is left alone", arguments: [
+        "git commit -m 'add mcp install docs'",
+        "git tag -a v1 -m 'mcp install notes'",
+        "gh pr create --title 'mcp install docs' --body 'run mcp install srv'",
+        "grep -n 'mcp install' README.md",
+        "rg 'chronic mcp install srv' docs",
+        "echo 'remember to mcp install later'",
+        "grep mcp install notes.txt",
+        "make -C mcp install",
+        "pnpm --filter mcp install",
+        "npm --prefix mcp install lodash",
+    ])
+    func inertMCPInstallIsLeftAlone(command: String) {
+        #expect(judge(command) == false, "\(command)")
+    }
+
+    /// The inert rule is the line's, not the word's: the same message on a
+    /// line that runs other text, or under an unknown program, asks.
+    @Test("mcp install text off an inert line asks", arguments: [
+        "cd x && git commit -m 'add mcp install docs'",
+        "git commit -m 'add mcp install docs' | sh",
+        "rg --pre ./x 'chronic mcp install srv' docs",
+        "git -c core.editor=vi commit -m 'chronic mcp install srv'",
+        "notes add 'chronic mcp install srv'",
+    ])
+    func mcpInstallOffAnInertLineAsks(command: String) {
+        #expect(judge(command), "\(command)")
     }
 
     /// Past the read budget or the nesting depth, a read counts (fail closed).

@@ -107,8 +107,11 @@ func mcpHostConfigUnmodeledWrite(
     if launched.contains(where: \.truncated), mayNameHostMCP(raw) { return true }
     // Any program may run a command line another word carries (`echo
     // 'claude mcp add x' | sh`, `| at now`, `$(echo '…')`, `bash <<< '…'`,
-    // `python3 -c 'os.system("…")'`).
-    if carriesHostMCPText(launched, reads: reads) || hostMCPTextNamesMutation(raw, reads: reads) { return true }
+    // `python3 -c 'os.system("…")'`). Only text on a line nothing runs is
+    // read as data (`git commit -m 'add mcp install docs'`).
+    if carriesHostMCPText(launched, reads: reads, line: raw) || hostMCPTextNamesMutation(raw, reads: reads) {
+        return true
+    }
     if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }

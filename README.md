@@ -265,16 +265,25 @@ rv is one binary, 25 commands. The rest of the surface:
   a shell fed an expansion; text decoded or rendered by a program such
   as `base64 -d`, `rev`, `tr` or a `printf` format (`'cla%sude …' u`);
   output joined across commands other than `echo`/`printf`/`print`, such
-  as two `cat <<<…`; `mcp install` of a server file not named `.py`
-  behind an unknown program, inside text handed to a shell; a tarball,
-  directory or URL whose name the agent
-  chooses; or a git hook — which `git commit -m` still runs — diff/pager
-  tool or `.ackrc`/lesskey file set up earlier). Text that names a host
-  mutation asks even as data (`git commit -m 'run claude mcp add x'`,
-  `grep 'claude mcp add' docs/`, `grep claude "$f"`), as do dynamic
-  programs given `config` (`"$GIT" config user.name`) and carried text
-  that may name a host CLI or installer and runs past the guard's read
-  budget.
+  as two `cat <<<…`; a tarball, directory or URL whose name the agent
+  chooses; Claude Code's native build reached through the working
+  directory, a variable or a renamed copy (`cd …/claude/versions &&
+  ./2.0.14 …`, `$D/versions/…`); or a git hook — which `git commit -m`
+  still runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
+  Text that names a host mutation asks even as data (`git commit -m 'run
+  claude mcp add x'`, `grep 'claude mcp add' docs/`, `grep claude "$f"`),
+  as do dynamic programs given `config` (`"$GIT" config user.name`) and
+  carried text that may name a host CLI or installer and runs past the
+  guard's read budget. `mcp install` asks wherever a program may run it,
+  whatever the server (`op run -- mcp install srv`, `watch '…'`, `ssh
+  host '…'`, `echo '…' | sh`), so the two words as any other program's
+  operands ask too (`ls mcp install`). It is left alone as the value of
+  a `make`, `npm`, `pnpm`, `yarn` or `bun` directory or workspace option
+  (`make -C mcp install`, `pnpm --filter mcp install`) and as text on a
+  line that runs nothing: one `grep`, `rg`,
+  `echo`, `printf`, `git commit|tag` or `gh pr|issue create|comment|edit`
+  with no pipe, list, redirect or substitution (`git commit -m 'add mcp
+  install docs'`; after `cd x &&` it asks).
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review

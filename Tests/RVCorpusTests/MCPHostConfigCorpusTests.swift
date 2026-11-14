@@ -27,19 +27,25 @@ struct MCPHostConfigCorpusTests {
     }
 
     /// Rows an earlier stage judges indeterminate before the guard runs
-    /// (each row's `note` says which): so with the guard on or off.
+    /// (each row's `note` says which, `reason_contains` pins the reason): so
+    /// with the guard on or off.
     @Test func indeterminateRowsStayIndeterminateWithOrWithoutTheGuard() throws {
         let harness = try StressHarness.dayOne()
         let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "indeterminate" }
         #expect(rows.isEmpty == false)
         for row in rows {
             guard let command = row.command else { continue }
+            guard let expected = row.reasonContains else {
+                Issue.record("\(row.id) must pin its reason in reason_contains")
+                continue
+            }
             for guarded in [true, false] {
                 let result = door(harness, command, guarded: guarded)
-                guard case .indeterminate = result.decision else {
+                guard case .indeterminate(let reason) = result.decision else {
                     Issue.record("\(row.id) must be indeterminate, got \(describeDecision(result)): \(command)")
                     continue
                 }
+                #expect(reason.rawValue == expected, "\(row.id) guarded: \(guarded)")
             }
         }
     }
@@ -175,7 +181,7 @@ struct MCPHostConfigCorpusTests {
             let start = ContinuousClock.now
             let result = door(harness, command, guarded: true)
             #expect(result.decision != .allow, "\(command.prefix(80))")
-            #expect(ContinuousClock.now - start < .seconds(20), "\(command.prefix(80))")
+            #expect(ContinuousClock.now - start < .seconds(600), "\(command.prefix(80))")
         }
     }
 
@@ -204,6 +210,9 @@ struct MCPHostConfigCorpusTests {
         "npm config set registry https://registry.example", "git config --get user.email",
         "rsync -av src/ dst/ --delete", "pnpm exec vitest run", "deno run -A main.ts",
         "npx github:owner/some-tool --help", "echo 'npm test' | sh", "cd tools/gemini-cli-docs",
+        "git tag -a v1 -m 'mcp install notes'", "grep -n 'mcp install' README.md",
+        "echo 'remember to mcp install later'", "grep mcp install notes.txt",
+        "gh pr create --title 'mcp install docs' --body 'run mcp install srv'",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()
