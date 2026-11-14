@@ -332,6 +332,117 @@ never starts. Linux has no no-window spawn in `rv run` yet, so it is
 refused there (`rv run: this platform cannot start the command suspended
 ...`) even once its peer check binds process groups.
 
+## Stdio MCP servers (`rv mcp serve`)
+
+A local server in mcp.json gets the real value of every secret in its
+`secrets` map and in `${secret:NAME}` arguments, as before. It can list
+secrets under `placeholders` instead:
+
+```json
+{ "name": "llm", "command": "llm-mcp",
+  "placeholders": ["OPENAI_API_KEY"],
+  "sandbox": { "network": false } }
+```
+
+Each one is staged for that server's launch only, as `rv run` stages it:
+the server gets the placeholder and the base URL (the AWS endpoint and
+stand-in credentials for an `awsSigV4` secret) and never the real value,
+and `rv mcp serve`'s own gateway honors the placeholder only for that
+server's process group.
+
+The field is for local (`command`) servers; a remote server with it is
+rejected. Names are listed once, and a secret a server also gets as a real
+value (`secrets` or `args`) is rejected: a server gets a secret one way.
+
+`rv mcp trust` shows each placeholder, the variables it sets and the
+upstream (`scheme://host[:port]`) its real value goes to, and signs nothing
+whose review leaves one out. Those details come from secrets.json, which
+the mcp.json signature does not cover: trust signs nothing while
+secrets.json cannot be read or does not define a listed placeholder, and
+at start `rv mcp serve` writes to stderr, for each server it bound, each
+placeholder with the variables it set and the upstream it goes to. A later
+change to secrets.json changes what serve binds without a new review; read
+that line.
+
+An untrusted mcp.json fails the whole of `rv mcp serve`, as before: no
+server starts. Otherwise each of these refuses that server, with the
+reason on serve's stderr, and the other servers still start:
+
+- The platform is not macOS, or the server has no enforced `sandbox` with
+  `network` false (list the hosts it needs in `sandbox.hosts`).
+- A listed secret is not in secrets.json, has `environment` delivery, is
+  read from rv's own environment (a `hostEnvironment` source), has an
+  upstream that is neither https nor loopback, has an `agents` filter (an
+  MCP server carries no agent tag), or has `approve` rules. No approver can
+  answer for an MCP server, so these are refused before any value is
+  resolved rather than per request as in `rv run`.
+- A variable the lease stages is already set by the server's `env`,
+  `secrets` or the base environment.
+- The host fails `SecretRunCapability.check` (asked once per serve), or
+  the lease cannot be staged.
+- The launch would hold a real value of one of its placeholders under any
+  name: another secret in its `secrets` map or arguments with the same
+  value, an `env` literal, or an argument. The rule is `rv run`'s: equal
+  as is or trimmed, or contained when the value is at least 12 bytes. Or
+  the sandbox hook would not run it under `sandbox-exec`.
+
+Every refusal before the last one is decided before any of the server's
+own `secrets` are resolved, so a refused server prompts for nothing; the
+last two need the resolved values and the caged launch.
+
+A `hostEnvironment` source is refused because its value sits in the
+environment rv was started with, which the MCP client that started rv
+also holds and may pass to every other server it starts. What the cage
+itself allows, as tested on macOS 27: `/bin/ps eww -p $PPID` fails with
+"Operation not permitted" (`ps` is setuid), and `sysctl` `KERN_PROCARGS2`
+shows a same-user, non-root process no environment of another process,
+caged or not. Other ways to read rv's memory (`task_for_pid` and the like)
+were not tested; the refusal does not depend on them.
+
+How it starts the server:
+
+- The cage may dial only the gateway's loopback port (and, with
+  `sandbox.hosts`, the egress proxy's). With `sandbox.hosts`, `NO_PROXY`
+  is `127.0.0.1`: the proxy does not relay loopback.
+- `posix_spawn` starts `sandbox-exec` stopped as the leader of its own
+  process group, with only stdio inherited. `sandbox-exec` and `env` exec
+  in place, so the server keeps that pid and group. rv binds the lease to
+  the group and then sends `SIGCONT`. If the group cannot be read or the
+  resume fails, the stopped child is killed and reaped before it ran, and
+  the lease is revoked.
+- One thread per server waits for the leader to exit, kills what is left
+  of its group, reaps it and revokes the lease, in that order. When the
+  client goes away serve closes the server's stdin; once the plain
+  servers have stopped, it sends `SIGTERM` to each placeholder server's
+  group 2 seconds after that group's own shutdown began and `SIGKILL` a
+  second after the `SIGTERM`. A server that exits is not restarted, and
+  its stdout closing ends its group.
+- When it bound a placeholder server, `SIGINT`, `SIGTERM` and `SIGHUP` make
+  serve run that same shutdown instead of exiting at once (one rv
+  inherited ignored stays ignored). `SIGKILL` to rv still ends it at once:
+  its gateway goes with it, so the placeholders are dead, but the server's
+  group is left running.
+- The staged records and every gateway record for these placeholders
+  carry `runtime` `mcp:<server>`.
+
+Who can spend them, and who outlives the server: the gateway honors a
+placeholder for the leader and its live descendants, not for the process
+group. A process reparented to launchd is no longer a descendant, so it
+cannot spend them; while it stays in the group it is killed with it when
+the leader exits. A process that left the group (`setsid`, `setpgid`, or
+`posix_spawn`'s `SETSID`/`SETPGROUP`, which this cage does not block) is
+not killed then. While the leader lives, such a process can still spend
+the placeholders as long as its parent chain leads back to the leader;
+once the leader exits the lease is revoked and nobody can.
+
+Also: `rv mcp check` and `rv mcp list` do not show placeholders, only
+`rv mcp trust` and serve's stderr do. Placeholders are macOS only; on
+Linux each such server is refused. A client that ignores the base-URL
+variable and calls the upstream directly simply fails: with `network`
+false it cannot connect, and with the upstream in `sandbox.hosts` it gets
+there through the proxy holding only the placeholder, which the upstream
+rejects.
+
 ## Binary binding
 
 `binaries` on a `gateway` or `awsSigV4` secret narrows the runtime check

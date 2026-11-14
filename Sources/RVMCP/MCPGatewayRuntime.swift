@@ -16,13 +16,24 @@ public struct MCPUpstreamLaunch: Sendable, Equatable {
     public var environment: [String: String]
     public var workingDirectory: String?
 
-    public init(server: String, executable: String, arguments: [String], environment: [String: String], workingDirectory: String? = nil) {
+    public init(
+        server: String, executable: String, arguments: [String], environment: [String: String],
+        workingDirectory: String? = nil
+    ) {
         self.server = server
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
     }
+}
+
+/// Whether the leases for this plan's placeholder servers can be bound
+/// here, asked once and only when a server lists placeholders.
+enum MCPPlaceholderCapability {
+    case unprobed
+    case available
+    case unavailable(String)
 }
 
 public enum MCPLaunchError: Error, Sendable, Equatable {
@@ -61,10 +72,31 @@ public enum MCPLaunchPlanner {
         baseEnvironment: [String: String],
         requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
+        placeholders: MCPPlaceholderLeasing = .unavailable,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
+        // A plan that fails starts nothing: the leases it took end with it.
+        var leases: [SecretPlaceholderLease] = []
+        let planned = planServers(
+            names, configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: baseEnvironment,
+            requireSandbox: requireSandbox, oauthTokens: oauthTokens, sandbox: sandbox, placeholders: placeholders,
+            leases: &leases, now: now)
+        if case .failure = planned {
+            for lease in leases { lease.revoke() }
+        }
+        return planned
+    }
+
+    private static func planServers(
+        _ names: [String], configuration: MCPConfiguration, secrets: SecretsConfiguration, resolver: SecretResolver,
+        baseEnvironment: [String: String], requireSandbox: Bool, oauthTokens: (String) -> MCPOAuthTokens?,
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
+        placeholders: MCPPlaceholderLeasing, leases: inout [SecretPlaceholderLease],
+        now: @escaping @Sendable () -> Date
+    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
+        var capability = MCPPlaceholderCapability.unprobed
         for name in names {
             if configuration.untrusted { return .failure(.untrustedRemote(name)) }
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
@@ -90,6 +122,19 @@ public enum MCPLaunchPlanner {
                     server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens)
                 let scrubbed = named(resolved) + (tokens.map(MCPGatewayCore.oauthSecrets) ?? [])
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
+                continue
+            }
+            if definition.placeholders.isEmpty == false {
+                switch placeholderServer(
+                    definition, configuration: configuration, secrets: secrets, resolver: resolver,
+                    baseEnvironment: baseEnvironment, requireSandbox: requireSandbox, placeholders: placeholders,
+                    capability: &capability, sandbox: sandbox, now: now)
+                {
+                case .failure(let error): return .failure(error)
+                case .success(let entry):
+                    if case .placeholderBound(_, let binding) = entry.1 { leases.append(binding.lease) }
+                    planned.append(entry)
+                }
                 continue
             }
             if requireSandbox {
@@ -119,7 +164,7 @@ public enum MCPLaunchPlanner {
             let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
             let launch = MCPUpstreamLaunch(
                 server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
-            switch sandbox(definition, launch) {
+            switch sandbox(definition, launch, .standard) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
                 var scrubbed = named(resolved)
@@ -130,6 +175,102 @@ public enum MCPLaunchPlanner {
             }
         }
         return .success(planned)
+    }
+
+    /// A local server with `placeholders`: real values for its `secrets` and
+    /// `args` as for any server, placeholders leased for the rest, and a cage
+    /// that may reach the secrets gateway. A placeholder refusal refuses this
+    /// server only (`.refused`); a failure any server would hit fails the plan.
+    /// Every refusal that needs no value comes before its own secrets are
+    /// resolved; only the real-value and cage checks come after.
+    static func placeholderServer(
+        _ definition: MCPServerDefinition, configuration: MCPConfiguration, secrets: SecretsConfiguration,
+        resolver: SecretResolver, baseEnvironment: [String: String], requireSandbox: Bool,
+        placeholders: MCPPlaceholderLeasing, capability: inout MCPPlaceholderCapability,
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
+        now: @escaping @Sendable () -> Date
+    ) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> {
+        let name = definition.name
+        func refuse(_ refusal: MCPPlaceholderRefusal) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> {
+            .success((MCPGatewayCore.Upstream(definition: definition, secretValues: []), .refused(server: name, refusal)))
+        }
+        if let refusal = MCPPlaceholderPlanning.refusal(
+            definition, platformSupported: placeholders.platformSupported, cageEnforced: requireSandbox, secrets: secrets)
+        {
+            return refuse(refusal)
+        }
+        if let reason = capabilityRefusal(&capability, placeholders) { return refuse(.capabilityUnavailable(reason)) }
+        let lease: SecretPlaceholderLease
+        switch placeholders.lease(name, definition.placeholders) {
+        case .failure(let error): return refuse(.leaseFailed(error.message))
+        case .success(let leased): lease = leased
+        }
+        var environment = sandboxEnvironment(baseEnvironment)
+        for (key, value) in definition.environment { environment[key] = value }
+        switch MCPPlaceholderPlanning.merge(environment, lease: lease.environment) {
+        case .failure(let refusal):
+            lease.revoke()
+            return refuse(refusal)
+        case .success(let merged): environment = merged
+        }
+        // The lease's own definitions may differ from the ones checked above.
+        if let clash = lease.environment.first(where: { definition.secrets[$0.name] != nil }) {
+            lease.revoke()
+            return refuse(.variableCollision(clash.name))
+        }
+        let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
+        let resolved: [String: String]
+        switch resolve(
+            referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
+            into: .stdioProcess, now: now)
+        {
+        case .failure(let error):
+            lease.revoke()
+            return .failure(error)
+        case .success(let values): resolved = values
+        }
+        for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
+        let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
+        let launch = MCPUpstreamLaunch(
+            server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+        // By value, under any name: an alias secret, an `env` literal, an argument.
+        if lease.holdsRealValue(environment: launch.environment, arguments: launch.arguments) {
+            lease.revoke()
+            return refuse(.realValueToo(definition.placeholders.joined(separator: ", ")))
+        }
+        switch sandbox(definition, launch, .secretsGateway(port: lease.gatewayPort)) {
+        case .failure(let error):
+            lease.revoke()
+            return .failure(error)
+        case .success(let caged):
+            guard caged.executable == MCPSandbox.sandboxExec else {
+                lease.revoke()
+                return refuse(.uncaged)
+            }
+            var scrubbed = named(resolved)
+            if let credential = MCPSandbox.proxyCredential(in: caged.environment) {
+                scrubbed.append((name: "HTTPS_PROXY", value: credential))
+            }
+            return .success((
+                MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed),
+                .placeholderBound(caged, MCPPlaceholderBinding(lease: lease))))
+        }
+    }
+
+    /// Why leases cannot be bound here, probed the first time a server asks:
+    /// before anything is resolved, so a server that cannot be bound never
+    /// prompts or unlocks.
+    static func capabilityRefusal(
+        _ capability: inout MCPPlaceholderCapability, _ placeholders: MCPPlaceholderLeasing
+    ) -> String? {
+        switch capability {
+        case .unprobed:
+            let reason = placeholders.capability()
+            capability = reason.map { .unavailable($0) } ?? .available
+            return reason
+        case .available: return nil
+        case .unavailable(let reason): return reason
+        }
     }
 
     static func named(_ resolved: [String: String]) -> [(name: String, value: String)] {
@@ -212,6 +353,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let log: @Sendable (String) -> Void
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
     private var processes: [String: Process] = [:]
+    private var placeholderGroups: [String: SecretPlaceholderGroup] = [:]
     private var upstreamInputs: [String: FileHandle] = [:]
     private var remotes: [String: MCPRemoteUpstream] = [:]
     private let finished = DispatchSemaphore(value: 0)
@@ -245,6 +387,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             for connection in connections {
                 switch connection {
                 case .process(let launch): if spawn(launch) == false { failed.append(launch.server) }
+                case .placeholderBound(let launch, let binding):
+                    if spawnBound(launch, binding) == false { failed.append(launch.server) }
+                case .refused(let server, let refusal):
+                    log("not starting MCP server \(server): \(refusal.message)")
+                    failed.append(server)
                 case .remote(let launch): connect(launch)
                 }
             }
@@ -264,6 +411,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             stopping = true
             stopUpstreams()
         }
+    }
+
+    /// `run` stops every upstream and returns, as when the client closes its input.
+    public func requestShutdown() {
+        queue.async { self.finished.signal() }
     }
 
     private func spawn(_ launch: MCPUpstreamLaunch) -> Bool {
@@ -305,6 +457,72 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             queue.async {
                 guard self.stopping == false else { return }
                 self.perform(self.core.handle(.upstreamExited(server: server)))
+            }
+        }
+        return true
+    }
+
+    /// A server with placeholders: started stopped in its own process group,
+    /// bound, then resumed (`SecretPlaceholderLease.launch`); on any failure
+    /// there it never ran and its lease is gone. Its exit reaches the core
+    /// once its group is killed, it is reaped and its lease revoked.
+    private func spawnBound(_ launch: MCPUpstreamLaunch, _ binding: MCPPlaceholderBinding) -> Bool {
+        let server = launch.server
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        // rv's ends stay out of every other child (a plain server holding this
+        // stdin's write end would keep it from ever reading EOF).
+        for pipe in [stdin, stdout, stderr] {
+            _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
+            _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
+        }
+        let group: SecretPlaceholderGroup
+        do throws(SecretPlaceholderLaunchError) {
+            group = try binding.lease.launch(
+                executable: launch.executable, arguments: launch.arguments, environment: launch.environment,
+                descriptors: [
+                    STDIN_FILENO: stdin.fileHandleForReading.fileDescriptor,
+                    STDOUT_FILENO: stdout.fileHandleForWriting.fileDescriptor,
+                    STDERR_FILENO: stderr.fileHandleForWriting.fileDescriptor,
+                ],
+                workingDirectory: launch.workingDirectory,
+                exited: { [self] _ in
+                    queue.async {
+                        guard self.stopping == false else { return }
+                        self.perform(self.core.handle(.upstreamExited(server: server)))
+                    }
+                })
+        } catch {
+            log("could not start MCP server \(server): \(error.message)")
+            return false
+        }
+        // The child holds its own copies of these ends.
+        try? stdin.fileHandleForReading.close()
+        try? stdout.fileHandleForWriting.close()
+        try? stderr.fileHandleForWriting.close()
+        placeholderGroups[server] = group
+        upstreamInputs[server] = stdin.fileHandleForWriting
+        let stderrReader = stderr.fileHandleForReading
+        Thread.detachNewThread {
+            Self.relayStderr(stderrReader.fileDescriptor) { data in
+                Self.writeStderr(data)
+            }
+        }
+        let reader = stdout.fileHandleForReading
+        Thread.detachNewThread { [self] in
+            Self.readLines(reader.fileDescriptor) { line in
+                guard let message = try? JSONValue.parse(line) else {
+                    self.log("MCP server \(server) wrote a line that is not JSON; ignored")
+                    return
+                }
+                queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
+            }
+            // It can answer nothing more. Ending its group ends its lease; the
+            // exit is reported when the supervisor reaps it.
+            queue.async {
+                guard self.stopping == false else { return }
+                group.signal(SIGKILL)
             }
         }
         return true
@@ -376,6 +594,37 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         processes = [:]
+        stopPlaceholderGroups()
+    }
+
+    /// Signals each placeholder server's whole group as
+    /// `MCPPlaceholderShutdown` says until its leader exits, then waits for
+    /// its supervisor to kill the rest of the group, reap it and revoke its
+    /// lease. Timed from now, not from when plain servers began stopping.
+    /// Bounded: a group still there after that is left to the broker's stop,
+    /// which ends every lease.
+    private func stopPlaceholderGroups() {
+        let started = Date()
+        var shutdowns = placeholderGroups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
+        func waiting(_ now: Date) -> Bool {
+            placeholderGroups.contains { server, group in
+                group.hasExited == false && now < (shutdowns[server]?.giveUp ?? now)
+            }
+        }
+        while waiting(Date()) {
+            let now = Date()
+            for (server, group) in placeholderGroups {
+                if let number = shutdowns[server]?.signal(exited: group.hasExited, now: now) {
+                    group.signal(number)
+                }
+            }
+            usleep(20_000)
+        }
+        let reaped = Date().addingTimeInterval(2)
+        for (server, group) in placeholderGroups where group.waitUntilFinished(until: reaped) == false {
+            log("MCP server \(server) did not exit; its placeholders end when serve stops the secrets gateway")
+        }
+        placeholderGroups = [:]
     }
 
     private static let stderrLock = NSLock()

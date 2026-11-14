@@ -218,7 +218,7 @@ public struct SecretDefinition: Sendable, Equatable {
         self.expires = expires
     }
 
-    func stages(forAgent agent: String?) -> Bool {
+    package func stages(forAgent agent: String?) -> Bool {
         guard let agents else { return true }
         guard let agent else { return false }
         return agents.contains(agent)
@@ -339,7 +339,7 @@ extension SecretDefinition {
     }
 
     /// Every variable a launch staging this secret sets.
-    var stagedVariables: [String] {
+    package var stagedVariables: [String] {
         guard case .awsSigV4 = delivery else { return exportedVariables }
         return exportedVariables + AWSSigningBinding.stagedVariables.sorted()
     }

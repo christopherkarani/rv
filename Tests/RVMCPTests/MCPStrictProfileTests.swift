@@ -140,7 +140,7 @@ struct MCPStrictProfileTests {
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = try! MCPSandbox.profile(
             policy: policy, scratch: scratch, home: home, configDirectory: home + "/.config/rv",
-            temporaryDirectory: root.appendingPathComponent("tmp").path, proxyPort: 4321).get()
+            temporaryDirectory: root.appendingPathComponent("tmp").path, loopbackPorts: [4321]).get()
         #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
         // The proxy port is the only localhost reach the profile grants.
         #expect(proxied.components(separatedBy: "localhost:").count == 2)
@@ -159,6 +159,65 @@ struct MCPStrictProfileTests {
         #expect(environment["NODE_USE_ENV_PROXY"] == "1")
         #expect(environment["NO_PROXY"] == nil && environment["no_proxy"] == nil)
         #expect(environment["PATH"] == "/bin")
+    }
+
+    @Test func gatewayPortIsTheOnlyLoopbackReachOfAClosedCage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-gateway-profile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path,
+            loopbackPorts: MCPSandbox.cageNetwork([:], proxy: nil, reach: .secretsGateway(port: 5151)).loopbackPorts).get()
+        #expect(text.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:5151\"))"))
+        #expect(text.components(separatedBy: "localhost:").count == 2)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    @Test func hostsAndGatewayEachGetOneLoopbackRule() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-gateway-profile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let ports = MCPSandbox.cageNetwork([:], proxy: (4321, "abc"), reach: .secretsGateway(port: 5151)).loopbackPorts
+        #expect(ports == [4321, 5151])
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, hosts: ["api.example.com"]),
+            scratch: root.appendingPathComponent("scratch").path, home: home, configDirectory: home + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path, loopbackPorts: ports).get()
+        #expect(text.contains(
+            "(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))\n"
+                + "(allow network-outbound (remote tcp \"localhost:5151\"))"))
+        #expect(text.components(separatedBy: "localhost:").count == 3)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// What `apply` puts in the cage: the gateway port only for a
+    /// placeholder server, and a proxy bypass that names only the gateway's
+    /// address only when a `sandbox.hosts` proxy is also set.
+    @Test func onlyAPlaceholderCageDialsTheGatewayAndItsRequestsSkipTheProxy() {
+        let base = ["PATH": "/bin"]
+        let both = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .secretsGateway(port: 5151))
+        #expect(both.loopbackPorts == [4321, 5151])
+        #expect(both.environment["NO_PROXY"] == "127.0.0.1" && both.environment["no_proxy"] == "127.0.0.1")
+        #expect(both.environment["HTTPS_PROXY"] == "http://abc@127.0.0.1:4321")
+        let gatewayOnly = MCPSandbox.cageNetwork(base, proxy: nil, reach: .secretsGateway(port: 5151))
+        #expect(gatewayOnly.loopbackPorts == [5151])
+        #expect(gatewayOnly.environment == base)
+        let proxyOnly = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .standard)
+        #expect(proxyOnly.loopbackPorts == [4321])
+        #expect(proxyOnly.environment == MCPSandbox.proxyEnvironment(base, port: 4321, credential: "abc"))
+        #expect(proxyOnly.environment["NO_PROXY"] == nil && proxyOnly.environment["no_proxy"] == nil)
+        let neither = MCPSandbox.cageNetwork(base, proxy: nil, reach: .standard)
+        #expect(neither.loopbackPorts.isEmpty)
+        #expect(neither.environment == base)
     }
 }
 
@@ -229,7 +288,7 @@ struct MCPSandboxHostsLiveTests {
         defer { proxy.stop() }
         let text = try MCPSandbox.profile(
             policy: try #require(definition.sandbox), scratch: scratch.path, home: home.path,
-            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory(), proxyPort: port).get()
+            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory(), loopbackPorts: [port]).get()
         var caged = launch
         caged.environment = MCPSandbox.proxyEnvironment(launch.environment, port: port, credential: credential)
         caged.executable = MCPSandbox.sandboxExec
