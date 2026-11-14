@@ -114,6 +114,11 @@ check_value_types() {
   #            idle watchdog), mirroring RVService; and
   #            RVMCP/CustodianXPCClient.swift — its libxpc client handle,
   #            mirroring XPCEvaluateClient. The key logic stays value-only.
+  #   RVMCP/MCPShutdownSignals.swift and rv-mcp-probe Count — each holds a
+  #            Mutex shared by escaping signal-source handlers and the code
+  #            that reads it; a struct holding a Mutex is noncopyable and
+  #            cannot be captured by an escaping closure and still read
+  #            elsewhere, so the shared state is a reference.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
   # the keyword on a line that may start with any run of those tokens.
@@ -126,6 +131,8 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
+    | grep -v 'Sources/RVMCP/MCPShutdownSignals.swift:' \
+    | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class Count' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
@@ -376,7 +383,7 @@ check_no_main_in_library() {
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-mcp-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' || true)
   local count
@@ -392,7 +399,7 @@ check_no_main_in_library() {
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-mcp-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' || true)
   local acount
