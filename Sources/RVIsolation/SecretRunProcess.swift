@@ -35,7 +35,12 @@ package enum SecretRunCapability {
 /// all `rv run` needs from this file.
 enum SecretRunProcess {
     #if os(macOS) || os(Linux)
+    #if os(macOS)
     static let isAvailable = true
+    #else
+    /// The launcher (`SecretRunLauncher`) is what starts a command stopped here.
+    static var isAvailable: Bool { SecretRunLauncher.path() != nil }
+    #endif
 
     /// `launch` with rv's controlling terminal (when `manageTerminal`) and
     /// its own signal guard.

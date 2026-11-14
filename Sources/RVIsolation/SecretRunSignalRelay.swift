@@ -25,14 +25,15 @@ enum SecretRunSignalRelay {
     /// Routes `numbers` to `deliver` until `remove`. The caller has already
     /// recorded their previous dispositions and restores them itself. If
     /// the pipe cannot be made the signals stay as the caller left them
-    /// (ignored): rv then forwards nothing, and still ends with the command.
+    /// (ignored): rv then forwards nothing, cannot be interrupted, and
+    /// still ends with the command.
     static func install(_ numbers: [Int32], deliver: @escaping @Sendable (Int32) -> Void) {
         guard started else { return }
         sink.withLock { $0 = deliver }
         for number in numbers { _ = signal(number, secretRunRelayHandler) }
     }
 
-    /// Nothing is delivered after this returns.
+    /// No new delivery starts after this returns.
     static func remove() {
         sink.withLock { $0 = nil }
     }
@@ -55,10 +56,11 @@ enum SecretRunSignalRelay {
                 let count = read(readEnd, &numbers, numbers.count)
                 if count < 0, errno == EINTR { continue }
                 guard count > 0 else { return }
-                // Under the lock, so `remove` returns only after a delivery in flight.
-                sink.withLock { deliver in
-                    for number in numbers.prefix(count) { deliver?(Int32(number)) }
-                }
+                // Called outside the lock: `deliver` takes the guard's own
+                // lock, which `remove`'s caller holds. A delivery already
+                // under way when `remove` returns finds no guard to tell.
+                guard let deliver = sink.withLock({ $0 }) else { continue }
+                for number in numbers.prefix(count) { deliver(Int32(number)) }
             }
         }
         self.writeEnd.store(writeEnd, ordering: .sequentiallyConsistent)

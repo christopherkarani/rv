@@ -454,6 +454,67 @@ struct SecretRunLaunchTests {
         #expect(result == .success(4 << 8))
     }
 
+    /// `rv run` opens two guards in turn: one around its capability probe,
+    /// one around the launch. The first must put every disposition back,
+    /// an ignored one included, or the second sees its own leftovers as
+    /// what rv inherited and the command loses `nohup`.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalRvInheritedIgnoredStaysIgnoredAcrossTheProbeAndTheLaunch() {
+        let previous = signal(SIGHUP, SIG_IGN)
+        defer { _ = signal(SIGHUP, previous) }
+        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD]
+        let before = watched.map(disposition)
+        let probing = SecretRunSignals()
+        #expect(probing.inheritedIgnored == [SIGHUP])
+        probing.restore()
+        #expect(watched.map(disposition) == before)
+        let signals = SecretRunSignals()
+        defer { signals.restore() }
+        #expect(signals.inheritedIgnored == [SIGHUP])
+        // A hangup while rv waits is ignored, as rv was told to: it is not an interrupt.
+        _ = kill(getpid(), SIGHUP)
+        usleep(100_000)
+        #expect(signals.interrupted == nil)
+        let result = SecretRunProcess.launch(
+            executable: "/bin/sh", arguments: ["sh", "-c", "kill -HUP $$; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals
+        ) { _ in .success(()) }
+        #expect(result == .success(4 << 8))
+    }
+
+    /// Signals arriving while guards open and close must not wedge the
+    /// guard: closing one waits on nothing a delivery holds.
+    @Test(.timeLimit(.minutes(2)))
+    func guardsOpenAndCloseUnderAStormOfSignals() {
+        // A handler, so a signal that lands between two guards is harmless.
+        let noted: sig_t = { _ in }
+        let previous = signal(SIGQUIT, noted)
+        defer { _ = signal(SIGQUIT, previous) }
+        let storming = Mutex(true)
+        let stormed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            while storming.withLock({ $0 }) {
+                _ = kill(getpid(), SIGQUIT)
+                usleep(200)
+            }
+            stormed.signal()
+        }
+        let finished = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            for _ in 0..<2_000 {
+                let signals = SecretRunSignals()
+                _ = signals.target(Int32.max)  // no such group: forwarding sends nothing
+                signals.restore()
+            }
+            finished.signal()
+        }
+        let done = finished.wait(timeout: .now() + 60)
+        storming.withLock { $0 = false }
+        #expect(done == .success, "opening and closing guards under signals did not finish")
+        _ = stormed.wait(timeout: .now() + 10)
+        #expect(SecretRunSignals.installed == false || done != .success)
+    }
+
     /// Dispositions are process-wide: every guard shares one installation,
     /// which the last one out restores, whichever order they leave in.
     /// While installed, SIGCHLD is default so nothing reaps behind rv.

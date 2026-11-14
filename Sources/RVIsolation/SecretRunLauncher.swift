@@ -10,12 +10,13 @@ import Glibc
 /// stop, so when `spawnSuspended` returns the child has run none of the
 /// command's image and holds none of rv's descriptors; pid, process group
 /// and start time survive `exec`, so what rv then binds is the command.
-enum SecretRunLauncher {
+package enum SecretRunLauncher {
     /// The launcher installed beside the running executable (rv-cli, or a
     /// test runner in the build directory). Found from the kernel's
     /// `/proc/self/exe`, never from `PATH` or `argv[0]`. Nil when it is
-    /// not there or not an executable file.
-    static func path(besideExecutable executable: String? = posixRealpath("/proc/self/exe")) -> String? {
+    /// not there or not an executable file. The MCP gateway's Landlock
+    /// cage runs through the same helper.
+    package static func path(besideExecutable executable: String? = posixRealpath("/proc/self/exe")) -> String? {
         guard let executable else { return nil }
         let path = URL(fileURLWithPath: executable).deletingLastPathComponent()
             .appendingPathComponent(IsolationBackends.isolationExecName).path
@@ -29,15 +30,28 @@ enum SecretRunLauncher {
     struct Floor: Equatable, Sendable {
         let rawValue: Int32
 
-        /// Nil when a kept descriptor is negative or too large to step past.
+        /// Nil unless the descriptors above stdio are 3, 4, ... with no gap:
+        /// the launcher closes from the floor up, so a number left out
+        /// below it would pass on whatever rv has open there.
         init?(keeping descriptors: some Sequence<Int32>) {
-            var highest: Int32 = STDERR_FILENO
-            for descriptor in descriptors {
-                guard descriptor >= 0, descriptor < Int32.max else { return nil }
-                highest = max(highest, descriptor)
-            }
-            rawValue = highest + 1
+            let kept = Set(descriptors)
+            guard kept.allSatisfy({ $0 >= 0 }) else { return nil }
+            var floor: Int32 = STDERR_FILENO + 1
+            while kept.contains(floor) { floor += 1 }
+            guard kept.allSatisfy({ $0 < floor }) else { return nil }
+            rawValue = floor
         }
+    }
+
+    /// Whether a descriptor asked to be inherited as it is (same number in
+    /// the child) is passed on, from its `fcntl(F_GETFD)` flags (-1 when it
+    /// is closed). A descriptor rv was started with is never close-on-exec;
+    /// every one rv opens is. So one that is closed, or close-on-exec, is
+    /// not the caller's to pass on: rv was started without it (`<&-`) and
+    /// its number is free, or now names something of rv's own. The child
+    /// gets it closed.
+    static func passesOn(descriptorFlags flags: Int32) -> Bool {
+        flags != -1 && flags & FD_CLOEXEC == 0
     }
 
     /// The launcher's argv: the executable, then the command's own argv.
@@ -88,17 +102,23 @@ extension siginfo_t {
 }
 
 extension SecretRunProcess {
+    /// How long the launcher has to reach its stop. It does nothing but
+    /// close descriptors first; one that has not stopped by then is killed.
+    static let launcherDeadline: TimeInterval = 10
+
     /// The Linux spawn primitive: the launcher as its own group leader
     /// (`POSIX_SPAWN_SETPGROUP`), with only `descriptors` (child fd: rv fd),
     /// returned once it has stopped itself. A launcher that exits, is
-    /// killed, or stops for any other reason is not returned: it is dead
-    /// and reaped, and the command never ran. A signal in `keepIgnored`
-    /// stays ignored for the child, as rv inherited it.
+    /// killed, stops for any other reason or does not stop in time is not
+    /// returned: it is dead and reaped, and the command never ran. A signal
+    /// in `keepIgnored` is one rv's guard left ignored, as rv inherited it:
+    /// it is not reset, so it stays ignored for the child.
     static func spawnSuspended(
         executable: String, arguments: [String], environment: [String], descriptors: [Int32: Int32],
-        keepIgnored: Set<Int32> = []
+        keepIgnored: Set<Int32> = [], launcher: String? = SecretRunLauncher.path(),
+        deadline: TimeInterval = launcherDeadline
     ) -> Result<pid_t, SecretRunRefusal> {
-        guard let launcher = SecretRunLauncher.path() else {
+        guard let launcher else {
             return .failure(.spawnFailed(
                 "\(IsolationBackends.isolationExecName) is not installed beside rv, and rv cannot start a command "
                     + "stopped without it; reinstall rv"))
@@ -129,9 +149,9 @@ extension SecretRunProcess {
         guard posix_spawn_file_actions_init(&actions) == 0 else { return .failure(.spawnFailed("spawn file actions")) }
         defer { posix_spawn_file_actions_destroy(&actions) }
         for (target, source) in descriptors.sorted(by: { $0.key < $1.key }) {
-            // A descriptor rv itself has closed (stdin under `<&-`) stays
-            // closed. Onto itself, dup2 clears close-on-exec.
-            if target == source, fcntl(source, F_GETFD) == -1 { continue }
+            if target == source, SecretRunLauncher.passesOn(descriptorFlags: fcntl(source, F_GETFD)) == false {
+                continue
+            }
             guard posix_spawn_file_actions_adddup2(&actions, source, target) == 0 else {
                 return .failure(.spawnFailed("spawn file actions"))
             }
@@ -143,33 +163,38 @@ extension SecretRunProcess {
             argv.release()
             envp.release()
         }
-        // rv's guard holds the forwarded signals with a handler here
-        // (`SecretRunSignalRelay`), and a handler does not survive `exec`:
-        // the child would get the default back. Ignored across the spawn,
-        // the ones rv inherited ignored stay ignored for the child.
-        let held = keepIgnored.sorted().map { (number: $0, handler: signal($0, SIG_IGN)) }
         var pid: pid_t = 0
         let spawned = argv.withPointers { argvPointer in
             envp.withPointers { envPointer in
                 posix_spawn(&pid, launcher, &actions, &attributes, argvPointer, envPointer)
             }
         }
-        for entry in held.reversed() { _ = signal(entry.number, entry.handler) }
         guard let spawned, let status = spawned else { return .failure(.spawnFailed("spawn arguments")) }
         guard status == 0, pid > 1 else { return .failure(.spawnFailed(String(cString: strerror(status)))) }
-        return awaitStop(pid)
+        return awaitStop(pid, deadline: deadline)
     }
 
     /// Waits for the launcher's own stop and consumes its report, so the
     /// supervisor later sees only stops the command's signals cause.
-    private static func awaitStop(_ pid: pid_t) -> Result<pid_t, SecretRunRefusal> {
+    private static func awaitStop(_ pid: pid_t, deadline: TimeInterval) -> Result<pid_t, SecretRunRefusal> {
+        let end = Date().addingTimeInterval(deadline)
         var info = siginfo_t()
-        while waitid(P_PID, id_t(pid), &info, WSTOPPED | WEXITED) != 0 {
-            guard errno == EINTR else {
-                // Not waitable: still rv's child, so its group is its own.
-                discard(pid)
+        while true {
+            info = siginfo_t()
+            let waited = waitid(P_PID, id_t(pid), &info, WSTOPPED | WEXITED | WNOHANG)
+            if waited != 0 {
+                if errno == EINTR { continue }
+                // Not rv's child to wait for, so not rv's to signal either.
                 return .failure(SecretRunLauncher.refusal(nil))
             }
+            // With WNOHANG, no report yet leaves `si_pid` 0.
+            if info.si_pid == pid { break }
+            guard Date() < end else {
+                // Alive, unreaped and rv's own: its group is still its own.
+                discard(pid)
+                return .failure(.spawnFailed("the launcher did not stop within \(Int(deadline)) seconds"))
+            }
+            usleep(500)
         }
         let state = SecretRunLauncher.state(code: info.si_code, status: info.si_status)
         switch state {

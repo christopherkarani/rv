@@ -156,7 +156,7 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     private let queue = DispatchQueue(label: "rv.run.signals")
     private var members: [ObjectIdentifier: SecretRunSignalTarget] = [:]
     private var sources: [any DispatchSourceSignal] = []
-    private var previous: [(number: Int32, handler: sig_t?)] = []
+    private var previous: [SavedDisposition] = []
     private var ignoredBefore: Set<Int32> = []
 
     var installed: Bool {
@@ -187,7 +187,8 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         #if os(Linux)
         SecretRunSignalRelay.remove()
         #endif
-        for entry in previous.reversed() { _ = signal(entry.number, entry.handler) }
+        // By index: see `SavedDisposition`.
+        for index in previous.indices.reversed() { previous[index].restore() }
         previous.removeAll()
         ignoredBefore.removeAll()
     }
@@ -202,11 +203,13 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     /// Under `lock`, by the first member.
     private func install() {
         for number in SecretRunSignals.forwarded + [SIGTTOU] {
-            let handler = signal(number, SIG_IGN)
-            previous.append((number, handler))
-            if Self.ignores(handler) { ignoredBefore.insert(number) }
+            let saved = SavedDisposition(number)
+            previous.append(saved)
+            if saved.isIgnored { ignoredBefore.insert(number) }
+            _ = signal(number, SIG_IGN)
         }
-        previous.append((SIGCHLD, signal(SIGCHLD, SIG_DFL)))
+        previous.append(SavedDisposition(SIGCHLD))
+        _ = signal(SIGCHLD, SIG_DFL)
         #if os(macOS)
         for number in SecretRunSignals.forwarded {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
@@ -215,13 +218,45 @@ private final class SecretRunSignalTable: @unchecked Sendable {
             sources.append(source)
         }
         #else
-        // Linux drops an ignored signal before a signal source could read it.
-        SecretRunSignalRelay.install(SecretRunSignals.forwarded) { [unowned self] in self.deliver($0) }
+        // Linux drops an ignored signal before a signal source could read
+        // it, so the forwarded ones get a handler. Not the ones rv inherited
+        // ignored: they stay ignored, here and (a handler would not survive
+        // `exec`) for the command.
+        SecretRunSignalRelay.install(SecretRunSignals.forwarded.filter { ignoredBefore.contains($0) == false }) {
+            [unowned self] in self.deliver($0)
+        }
         #endif
     }
 
-    private static func ignores(_ handler: sig_t?) -> Bool {
-        unsafeBitCast(handler, to: Int.self) == unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+}
+
+/// One signal's disposition as it was, whole (handler, mask and flags), to
+/// be put back exactly. Kept as a `sigaction`, never as an optional handler
+/// in a tuple: Swift gives `Optional<(Int32, sig_t?)>` the bit pattern of
+/// `SIG_IGN` (1) for `nil`, so a loop over such tuples ends at the first
+/// ignored signal and restores nothing after it.
+private struct SavedDisposition {
+    let number: Int32
+    private var action: sigaction
+
+    init(_ number: Int32) {
+        self.number = number
+        action = sigaction()
+        _ = sigaction(number, nil, &action)
+    }
+
+    var isIgnored: Bool {
+        #if canImport(Darwin)
+        let handler = action.__sigaction_u.__sa_handler
+        #else
+        let handler = action.__sigaction_handler.sa_handler
+        #endif
+        return unsafeBitCast(handler, to: Int.self) == unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+    }
+
+    func restore() {
+        var action = action
+        _ = sigaction(number, &action, nil)
     }
 }
 

@@ -329,15 +329,27 @@ How it starts the command:
   kernel refuses, so a kernel before 5.9 cannot run `rv run`), stops
   itself with `SIGSTOP`, and execs the command only once continued. rv
   waits for that stop, and takes only a stop by `SIGSTOP` for it: a
-  launcher that exited, was killed, or stopped for another reason is
-  killed and the launch refused. The rest is the same code as on macOS:
+  launcher that exited, was killed, stopped for another reason, or has
+  not stopped within 10 seconds is killed and the launch refused. A
+  standard descriptor rv itself was started without (`<&-`) is closed for
+  the command too: its number may by then name something rv opened, and
+  every descriptor rv opens is close-on-exec, so a closed or close-on-exec
+  one is never passed on. If rv dies while the launcher is stopped, the
+  launcher sees its parent changed when the kernel continues it and exits
+  without running the command. The rest is the same code as on macOS:
   rv records the stopped process's pid and start time, which survive
   `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
   So the command's image runs no instruction before its placeholders are
   bound, and holds none of rv's descriptors. If `exec` then fails the
   launcher says why on stderr and exits 126. A `SIGSTOP` sent to the new
-  child by another process before its own is indistinguishable from it;
-  the command then stops once more as it starts, bound either way.
+  child by another process before its own is indistinguishable from it:
+  rv binds and continues the launcher, which then stops once more at its
+  own. With a terminal rv stops with it, as for Ctrl-Z, and `fg` resumes
+  both; without one the command waits for a `SIGCONT` (any signal rv
+  forwards is followed by one). It is bound either way. The launcher is
+  an ordinary dynamically linked program started with the command's
+  environment, so loader variables in it (`LD_PRELOAD`) act in the
+  launcher, before its stop, as they would in the command after it.
 - `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
   command's group, each followed by `SIGCONT` so a stopped group gets it,
   until the leader exits; nothing is signalled once it is reaped. One rv
@@ -346,9 +358,10 @@ How it starts the command:
   are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
   behind rv. macOS ignores the four signals and reads them from a signal
   source. Linux discards an ignored signal unread, so there each has a
-  handler that writes its number to a pipe one thread reads; a handler
-  does not survive `exec`, so the signals rv inherited ignored are
-  ignored again for the instant of the spawn. rv takes its terminal from `/dev/tty`, so a command reading
+  handler that writes its number to a pipe one thread reads. A signal rv
+  inherited ignored gets no handler on Linux: it stays ignored for rv and
+  for the command, and is not forwarded. If that pipe cannot be made the
+  four stay ignored: rv forwards nothing and ends with the command. rv takes its terminal from `/dev/tty`, so a command reading
   the terminal while stdin is a pipe still stops and resumes with job
   control. Ctrl-Z stops rv with the command, and `fg` resumes both; `bg`
   resumes both and leaves the terminal with the shell. rv hands the
@@ -400,7 +413,9 @@ check must call that connection the probe's and a second one not. A
 platform without a no-window spawn, or whose peer check cannot tell
 (`/proc` hidden or another pid namespace's, no libproc, rv confined so
 it may not read other processes, the Linux launcher missing), is refused
-with exit 125 and the command never starts.
+with exit 125 and the command never starts. On Linux a missing
+launcher is named as such (`rv-isolation-exec is not installed beside
+rv ... reinstall rv`).
 
 ## Binary binding
 

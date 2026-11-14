@@ -79,6 +79,7 @@ static int rv_parse_floor(const char *text, unsigned int *floor) {
 
 static int rv_run_stopped(int argc, char **argv) {
     unsigned int floor;
+    pid_t parent;
     int failure;
 
     if (argc < 6 || rv_parse_floor(argv[2], &floor) != 0) {
@@ -93,7 +94,14 @@ static int rv_run_stopped(int argc, char **argv) {
     if (syscall(SYS_close_range, floor, UINT_MAX, 0u) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
+    parent = getppid();
     if (raise(SIGSTOP) != 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    /* Continued by someone other than the rv that started this: rv died
+     * while this was stopped (the kernel continues an orphaned stopped
+     * group), so nothing bound the command and nothing will serve it. */
+    if (getppid() != parent) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     execve(argv[4], &argv[5], environ);
@@ -102,9 +110,34 @@ static int rv_run_stopped(int argc, char **argv) {
     return RV_ISOLATION_EXEC_EXEC_FAILED;
 }
 
+static int rv_run_confined(int argc, char **argv) {
+    int executable;
+    int failure;
+
+    /* Landlock does not revoke descriptors opened before it. */
+    if (syscall(SYS_close_range, 3u, UINT_MAX, 0u) != 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    executable = rv_landlock_confine(argc, argv);
+    if (executable < 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    execve(argv[executable], &argv[executable + 1], environ);
+    failure = errno;
+    dprintf(STDERR_FILENO, "rv mcp: the server was not started: %s: %s\n", argv[executable], strerror(failure));
+    return RV_ISOLATION_EXEC_EXEC_FAILED;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--stopped") == 0) {
         return rv_run_stopped(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--confine") == 0) {
+        return rv_run_confined(argc, argv);
+    }
+    if (argc == 2 && strcmp(argv[1], "--landlock-abi") == 0) {
+        printf("%d\n", rv_landlock_abi());
+        return 0;
     }
     if (argc < 5) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;

@@ -6,13 +6,11 @@ import Testing
 @testable import RVIsolation
 
 /// `rv run`'s Linux spawn: the launcher (`rv-isolation-exec --stopped`), a
-/// real child of it, and the `/proc` reading of rv's process group. The
-/// launch, supervision and signal tests shared with macOS are in
-/// SecretRunTests. Every wait has a deadline only so a broken run fails
-/// instead of hanging.
-@Suite("SecretRun Linux launcher", .serialized)
-struct SecretRunLinuxTests {
-    private func temporaryDirectory() throws -> URL {
+/// real child of it, and the `/proc` reading of rv's process group. Part of
+/// the serialized launch suite: these change the process's signal
+/// dispositions and wait for children, as the tests shared with macOS do.
+extension SecretRunLaunchTests {
+    private func scratchDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rv-run-linux-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -46,7 +44,9 @@ struct SecretRunLinuxTests {
             usleep(5_000)
         }
         guard process.isRunning == false else {
-            process.terminate()
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+            Issue.record("the launcher neither exited nor stopped")
             return nil
         }
         return process.terminationStatus
@@ -54,13 +54,36 @@ struct SecretRunLinuxTests {
 
     // MARK: - Pure
 
-    @Test func theFloorIsOnePastTheHighestKeptDescriptorAndNeverBelowThree() {
+    @Test func theFloorIsOnePastTheKeptDescriptorsWhichLeaveNoGap() {
         #expect(SecretRunLauncher.Floor(keeping: [Int32]())?.rawValue == 3)
         #expect(SecretRunLauncher.Floor(keeping: [0, 1, 2])?.rawValue == 3)
         #expect(SecretRunLauncher.Floor(keeping: [3])?.rawValue == 4)
-        #expect(SecretRunLauncher.Floor(keeping: [0, 9, 4])?.rawValue == 10)
+        #expect(SecretRunLauncher.Floor(keeping: [0, 1, 2, 3, 4])?.rawValue == 5)
+        // A gap below the floor would pass on whatever rv has open there.
+        #expect(SecretRunLauncher.Floor(keeping: [4]) == nil)
+        #expect(SecretRunLauncher.Floor(keeping: [0, 9, 3]) == nil)
         #expect(SecretRunLauncher.Floor(keeping: [-1]) == nil)
         #expect(SecretRunLauncher.Floor(keeping: [Int32.max]) == nil)
+        #expect(SecretRunProcess.spawnSuspended(
+            executable: "/usr/bin/true", arguments: ["true"], environment: [], descriptors: [5: 0])
+            == .failure(.spawnFailed("spawn file actions")))
+    }
+
+    /// "Inherit this descriptor as it is" never passes on one of rv's own:
+    /// rv's are close-on-exec, the ones it was started with are not. When
+    /// rv is started with a standard descriptor closed (`<&-`), its number
+    /// goes to something rv opens, and the command must not get that.
+    @Test func aClosedOrCloseOnExecDescriptorIsNotPassedOnAsItIs() throws {
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: -1) == false)
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: FD_CLOEXEC) == false)
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: 0))
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        let own = fcntl(ends[0], F_DUPFD_CLOEXEC, 100)
+        defer { [ends[0], ends[1], own].forEach { _ = close($0) } }
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(own, F_GETFD)) == false)
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(ends[0], F_GETFD)))
+        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(own + 1_000, F_GETFD)) == false)
     }
 
     @Test func theLaunchersArgumentsAreTheFloorTheExecutableAndTheCommandsOwn() throws {
@@ -91,7 +114,7 @@ struct SecretRunLinuxTests {
         #expect(path.hasSuffix("/rv-isolation-exec"))
         #expect(URL(fileURLWithPath: path).deletingLastPathComponent().path
             == URL(fileURLWithPath: try #require(posixRealpath("/proc/self/exe"))).deletingLastPathComponent().path)
-        let directory = try temporaryDirectory()
+        let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let elsewhere = directory.appendingPathComponent("rv-cli").path
         #expect(SecretRunLauncher.path(besideExecutable: elsewhere) == nil)
@@ -133,7 +156,7 @@ struct SecretRunLinuxTests {
 
     @Test(.timeLimit(.minutes(1)))
     func theLauncherStopsBeforeItRunsAnything() throws {
-        let directory = try temporaryDirectory()
+        let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let marker = directory.appendingPathComponent("ran").path
         #expect(try launcherExit(["--stopped", "3", "--", "/bin/sh", "sh", "-c", "touch \"$1\"", "sh", marker]) == nil)
@@ -148,7 +171,7 @@ struct SecretRunLinuxTests {
     /// while it was stopped is the command.
     @Test(.timeLimit(.minutes(1)))
     func theChildIsStoppedAsTheLauncherAndBecomesTheCommandWithTheSameIdentity() throws {
-        let directory = try temporaryDirectory()
+        let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let pid = try SecretRunProcess.spawnSuspended(
             executable: "/bin/sh",
@@ -164,7 +187,6 @@ struct SecretRunLinuxTests {
         #expect(stopped.group == UInt32(pid))
         #expect(stopped.parent == UInt32(getpid()))
         let launcher = try #require(SecretRunLauncher.path())
-        #expect(ProcFSProcessTable().executable(pid) == ProcFSProcessTable().executable(pid))
         guard case .file(let running, _) = ProcFSProcessTable().executable(pid) else {
             Issue.record("the child's executable is unreadable")
             return
@@ -192,7 +214,7 @@ struct SecretRunLinuxTests {
     /// flag) do not reach the command: it has stdio and nothing else.
     @Test(.timeLimit(.minutes(1)))
     func theCommandInheritsStdioAndNothingElse() throws {
-        let directory = try temporaryDirectory()
+        let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         var ends: [Int32] = [-1, -1]
         try #require(pipe(&ends) == 0)
@@ -249,15 +271,100 @@ struct SecretRunLinuxTests {
         let result = SecretRunProcess.spawnSuspended(
             executable: "sh", arguments: ["sh"], environment: [], descriptors: [0: 0, 1: 1, 2: 2])
         #expect(result == .failure(.spawnFailed("the launcher refused to start it (exit 125)")))
-        var status: Int32 = 0
-        #expect(waitpid(-1, &status, WNOHANG) <= 0, "the refused launcher was left unreaped")
+        #expect(launchersBelowThisProcess().isEmpty, "the refused launcher was left behind")
+    }
+
+    /// This process's children that are still the launcher.
+    private func launchersBelowThisProcess() -> [pid_t] {
+        let table = ProcFSProcessTable()
+        let launcher = SecretRunLauncher.path()
+        return (table.children(of: getpid()) ?? []).filter { child in
+            if case .file(let path, _) = table.executable(child) { path == launcher } else { false }
+        }
+    }
+
+    /// A stand-in launcher: a script at `rv-isolation-exec` in a directory of its own.
+    private func fakeLauncher(_ script: String) throws -> (path: String, directory: URL) {
+        let directory = try scratchDirectory()
+        let path = directory.appendingPathComponent("rv-isolation-exec").path
+        try Data(("#!/bin/sh\n" + script + "\n").utf8).write(to: URL(fileURLWithPath: path))
+        try #require(chmod(path, 0o755) == 0)
+        return (path, directory)
+    }
+
+    /// A launcher that stops for any reason but its own `SIGSTOP`, or never
+    /// stops, is killed and reaped, and nothing is bound to it.
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        ("kill -TSTP $$; sleep 300", "the launcher was stopped by signal \(SIGTSTP) before it was ready"),
+        ("exec sleep 300", "the launcher did not stop within 1 seconds"),
+        ("exit 0", "the launcher refused to start it (exit 0)"),
+        ("kill -KILL $$", "the launcher was killed by signal \(SIGKILL)"),
+    ])
+    func aLauncherThatDoesNotStopItselfIsKilledAndRefused(script: String, reason: String) throws {
+        let fake = try fakeLauncher(script)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let before = Set(ProcFSProcessTable().children(of: getpid()) ?? [])
+        let result = SecretRunProcess.spawnSuspended(
+            executable: "/bin/true", arguments: ["true"], environment: ["PATH=/usr/bin:/bin"],
+            descriptors: [0: 0, 1: 1, 2: 2], launcher: fake.path, deadline: 1)
+        #expect(result == .failure(.spawnFailed(reason)))
+        let left = Set(ProcFSProcessTable().children(of: getpid()) ?? []).subtracting(before)
+        #expect(left.isEmpty, "the stand-in launcher was left running")
+    }
+
+    @Test func aMissingLauncherIsARefusalThatSaysWhatToInstall() {
+        let result = SecretRunProcess.spawnSuspended(
+            executable: "/bin/true", arguments: ["true"], environment: [], descriptors: [:], launcher: nil)
+        guard case .failure(.spawnFailed(let reason)) = result else {
+            Issue.record("a launch without the launcher did not fail")
+            return
+        }
+        #expect(reason.contains("rv-isolation-exec is not installed beside rv") && reason.contains("reinstall rv"))
+        #expect(SecretRunRefusal.spawnUnavailable.message.contains("reinstall rv"))
+    }
+
+    /// rv died while the launcher was stopped: the kernel continues an
+    /// orphaned stopped group, and nothing bound the command. The launcher
+    /// sees its parent changed and runs nothing.
+    @Test(.timeLimit(.minutes(1)))
+    func aLauncherContinuedAfterItsParentDiedRunsNothing() throws {
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let launcher = try #require(SecretRunLauncher.path())
+        let marker = directory.appendingPathComponent("ran").path
+        let pidFile = directory.appendingPathComponent("pid").path
+        // A shell starts the launcher, waits until it has stopped (as rv
+        // does), records its pid and exits, orphaning it.
+        let script = """
+            "$1" --stopped 3 -- /usr/bin/touch touch "$2" &
+            while [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" != T ]; do sleep 0.01; done
+            echo $! > "$3"
+            """
+        let parent = Process()
+        parent.executableURL = URL(fileURLWithPath: "/bin/sh")
+        parent.arguments = ["-c", script, "sh", launcher, marker, pidFile]
+        try parent.run()
+        parent.waitUntilExit()
+        let pid = try #require(pid_t(read(URL(fileURLWithPath: pidFile))))
+        defer { kill(pid, SIGKILL) }
+        let deadline = Date().addingTimeInterval(20)
+        func state() -> UInt8? {
+            guard case .value(let bytes) = ProcFSReader.file("/proc/\(pid)/stat") else { return nil }
+            return ProcFSParse.stat(bytes)?.state
+        }
+        while state() != UInt8(ascii: "T"), state() != nil, Date() < deadline { usleep(5_000) }
+        // Stopped, or already continued by the kernel and gone: either way it must not have run.
+        _ = kill(pid, SIGCONT)
+        while state() != nil, state() != UInt8(ascii: "Z"), Date() < deadline { usleep(5_000) }
+        #expect(state() == nil || state() == UInt8(ascii: "Z"), "the orphaned launcher is still running")
+        #expect(FileManager.default.fileExists(atPath: marker) == false)
     }
 
     /// The file was there when rv resolved it and gone at `exec`: the
     /// launcher says so on stderr and exits 126, as a failed spawn does.
     @Test(.timeLimit(.minutes(1)))
     func aCommandThatCannotBeExecutedExits126() throws {
-        let directory = try temporaryDirectory()
+        let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let errors = directory.appendingPathComponent("stderr")
         FileManager.default.createFile(atPath: errors.path, contents: nil)
