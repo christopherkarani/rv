@@ -13,7 +13,9 @@
 #   noptrace   root without CAP_SYS_PTRACE (another user's descriptors unreadable)
 #   confined   the test process under an AppArmor profile with no ptrace rule
 #   yama       the whole suite at kernel.yama.ptrace_scope 1 and 2
-#              (and 3, which cannot be undone, with RV_YAMA_IRREVERSIBLE=1)
+#              (and 3, which cannot be undone, with RV_YAMA_IRREVERSIBLE=1;
+#              there the MCP sandbox's refusal of a server with an
+#              allowlist is checked too)
 #   container  the suite in a default Docker container (seccomp, no caps)
 #
 # Needs root and a built test bundle (swift build --build-tests). With no
@@ -80,7 +82,8 @@ regime_confined() {
   local profile
   profile="$(mktemp)"
   # Everything but ptrace: reading another process's /proc/<pid>/fd is a
-  # ptrace read, which a confined reader needs a rule for.
+  # ptrace read. Denied by rule, not by omission: without a ptrace rule
+  # some kernels let processes of one profile read each other.
   cat >"$profile" <<EOF
 abi <abi/4.0>,
 profile $PROFILE flags=(attach_disconnected) {
@@ -91,6 +94,7 @@ profile $PROFILE flags=(attach_disconnected) {
   mount,
   unix,
   userns,
+  deny ptrace,
 }
 EOF
   apparmor_parser --replace "$profile"

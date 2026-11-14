@@ -4,13 +4,6 @@ import Glibc
 import Testing
 @testable import RVMCP
 
-/// The Linux cage on the real kernel: a launch built by
-/// `MCPSandbox.applyLinux` and run through `rv-isolation-exec --confine`,
-/// against a home directory made for the test. Every command has a
-/// deadline, so a broken cage fails instead of hanging.
-///
-/// What the kernel's Landlock does not block is asserted too, per ABI, so
-/// the documented limits are the measured ones.
 /// Whether this host forbids what the cage's connector does (copying a
 /// descriptor from the server): `kernel.yama.ptrace_scope` 3 forbids it
 /// to everyone, 2 to everyone but root.
@@ -20,6 +13,13 @@ private func hostForbidsTheConnector() -> Bool {
     return scope >= 3 || (scope == 2 && getuid() != 0)
 }
 
+/// The Linux cage on the real kernel: a launch built by
+/// `MCPSandbox.applyLinux` and run through `rv-isolation-exec --confine`,
+/// against a home directory made for the test. Every command has a
+/// deadline, so a broken cage fails instead of hanging.
+///
+/// What the kernel's Landlock does not block is asserted too, per ABI, so
+/// the documented limits are the measured ones.
 @Suite("MCP Linux sandbox", .serialized)
 struct MCPLinuxSandboxTests {
     /// A home with credential stores, rv's configuration, and ordinary
@@ -312,7 +312,7 @@ struct MCPLinuxSandboxTests {
 
     /// `hosts`: the one port the cage may connect to is the allowlist
     /// proxy's, and the proxy refuses a host that is not listed.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistReachesOnlyTheProxysPort() throws {
         let home = try Home()
         defer { MCPSandbox.stopProxies() }
@@ -333,9 +333,9 @@ struct MCPLinuxSandboxTests {
         #expect(found["unlisted"]?.hasPrefix("4") == true, "\(outcome.output) \(outcome.errors)")
     }
 
-    /// `hosts`: plain TCP sockets exist, for the proxy's port alone. Every
-    /// way round the port rule is refused: another kind of socket, fast
-    /// open (a connection with no `connect`), and listening.
+    /// `hosts`: plain TCP sockets exist, for the connector to connect to
+    /// the proxy. Every way round it is refused: another kind of socket,
+    /// fast open (a connection with no `connect`), and listening.
     @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistHasNoWayRoundTheProxysPort() throws {
         let home = try Home()
@@ -350,7 +350,7 @@ struct MCPLinuxSandboxTests {
         for route in Self.everyRoute where route != "tcp-with-flags" {
             #expect(found[route] == "denied", "\(route): \(found)")
         }
-        // A TCP socket can be made, flags and all; where it may connect is the port rule's.
+        // A TCP socket can be made, flags and all; where it is connected is the connector's.
         #expect(found["tcp-with-flags"] == "ok" && found["socketpair"] == "ok")
         #expect(found["proxy"] == "ok", "\(found)")
     }
@@ -538,7 +538,6 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: getuid() == 0 && FileManager.default.isExecutableFile(atPath: "/usr/bin/setpriv"),
         "needs root to make a setuid binary and drop to another user"), .timeLimit(.minutes(2)))
     func aSetuidBinaryGivesTheServerNoPrivileges() throws {
-        let home = try Home()
         let helper = try #require(MCPSandbox.linuxHelper)
         let directory = "/tmp/rv-mcp-setuid-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
@@ -556,7 +555,6 @@ struct MCPLinuxSandboxTests {
         #expect(try effectiveUser([directory + "/id", "-u"]) == "0")
         #expect(try effectiveUser(
             [helper] + plan.arguments(executable: directory + "/id", argv: ["id", "-u"])) == "65534")
-        _ = home
     }
 
     // MARK: - What the kernel leaves open, measured
@@ -655,8 +653,7 @@ struct MCPLinuxSandboxTests {
 
     // MARK: - Real servers
 
-    /// Set by CI and `Scripts/linux-mcp-sandbox-e2e.sh`: these fetch real
-    /// servers from the npm and PyPI registries.
+    /// Set by CI: these fetch real servers from the npm and PyPI registries.
     static let realServers = ProcessInfo.processInfo.environment["RV_MCP_REAL_SERVERS"] == "1"
 
     /// Starts a caged server, performs the MCP handshake over stdio, asks

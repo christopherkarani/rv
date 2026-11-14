@@ -102,9 +102,9 @@ enum GatewayPeerScan {
     static func holders(_ peer: GatewayPeer, group: ProcessGroupFact, in table: some ProcessTable) -> [GatewayHolder]? {
         let leader = group.pgid.rawValue
         guard isLeader(leader, of: group, in: table) else { return nil }
-        let (parents, complete) = descendants(of: leader, in: table)
+        let (below, complete) = descendants(of: leader, in: table)
         guard complete else { return nil }
-        var candidates = Set(parents.keys).union([leader])
+        var candidates = below.union([leader])
         let strict = table.failedListingIsEmptySession == false
         switch table.session(of: leader) {
         case .some(leader):
@@ -156,9 +156,9 @@ enum GatewayPeerScan {
         // holder or by a process between it and the leader, does not count.
         let member: (ProcessIdentity) -> Bool = { isMember($0, of: group, in: table) }
         if search.finds([leader], in: table, still: member) { return .member }
-        let (parents, complete) = descendants(of: leader, in: table)
+        let (below, complete) = descendants(of: leader, in: table)
         if complete == false { search.incomplete = true }
-        if search.finds(Array(parents.keys), in: table, still: member) { return .member }
+        if search.finds(Array(below), in: table, still: member) { return .member }
         let strict = table.failedListingIsEmptySession == false
         switch table.session(of: leader) {
         case .some(leader):
@@ -267,20 +267,20 @@ enum GatewayPeerScan {
         return walked.allSatisfy { unchanged($0, in: table) }
     }
 
-    /// Child to parent for every live descendant of `root`; false when the
-    /// walk hit its bound or a listing failed.
-    private static func descendants(of root: pid_t, in table: some ProcessTable) -> (parents: [pid_t: pid_t], complete: Bool) {
-        var parents: [pid_t: pid_t] = [:]
+    /// Every live descendant of `root`; false when the walk hit its bound
+    /// or a listing failed.
+    private static func descendants(of root: pid_t, in table: some ProcessTable) -> (found: Set<pid_t>, complete: Bool) {
+        var found: Set<pid_t> = []
         var pending = [root]
         while let parent = pending.popLast() {
-            guard let children = table.children(of: parent) else { return (parents, false) }
-            for child in children where child != root && parents[child] == nil {
-                guard parents.count < maximumDescendants else { return (parents, false) }
-                parents[child] = parent
+            guard let children = table.children(of: parent) else { return (found, false) }
+            for child in children where child != root && found.contains(child) == false {
+                guard found.count < maximumDescendants else { return (found, false) }
+                found.insert(child)
                 pending.append(child)
             }
         }
-        return (parents, true)
+        return (found, true)
     }
 
 }

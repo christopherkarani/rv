@@ -22,7 +22,7 @@
  *
  * Third form, for an MCP server (Sources/RVIsolation/landlock_confine.c):
  *   rv-isolation-exec --confine FLOOR [--read PATH]... [--write PATH]...
- *                     [--temp PATH]... [--tcp PORT]...
+ *                     [--temp PATH]... [--tcp PORT]
  *                     -- EXECUTABLE ARGV0 [ARG...]
  * closes inherited descriptors, sets NO_NEW_PRIVS, applies the Landlock
  * ruleset the request describes, installs the socket filter
@@ -173,24 +173,15 @@ static int rv_start_confined(int argc, char **argv, int channel) {
 
 /* A cage with a port: the server is this process's child, and this
  * process stays outside the cage as its connector (proxy_connector.c). */
-static int rv_run_connected(int argc, char **argv) {
+static int rv_run_connected(int argc, char **argv, unsigned short port) {
     sigset_t relayed;
     pid_t self = getpid();
     pid_t server;
-    unsigned int port = 0;
     int channel[2];
     int listener;
     int status;
-    int index;
     int null;
 
-    for (index = 3; index + 1 < argc && strcmp(argv[index], "--") != 0; index += 2) {
-        if (strcmp(argv[index], "--tcp") == 0
-            && (port != 0 || rv_parse_number(argv[index + 1], 1, &port) != 0 || port > 65535)) {
-            /* Not one port: rv_landlock_confine refuses it and says why. */
-            return rv_start_confined(argc, argv, -1);
-        }
-    }
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, channel) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
@@ -231,26 +222,27 @@ static int rv_run_connected(int argc, char **argv) {
     }
     /* The server's input and output are its own; this keeps stderr. */
     null = open("/dev/null", O_RDWR | O_CLOEXEC);
-    if (null < 0 || dup2(null, STDIN_FILENO) < 0 || dup2(null, STDOUT_FILENO) < 0 || write(channel[0], "g", 1) != 1) {
+    if (null < 0 || dup2(null, STDIN_FILENO) < 0 || dup2(null, STDOUT_FILENO) < 0
+        || send(channel[0], "g", 1, MSG_NOSIGNAL) != 1) {
         kill(server, SIGKILL);
         waitpid(server, &status, 0);
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     close(null);
     close(channel[0]);
-    return rv_connector_serve(listener, server, (unsigned short)port);
+    return rv_connector_serve(listener, server, port);
 }
 
 static int rv_run_confined(int argc, char **argv) {
-    int has_port;
+    int port;
 
     /* Landlock does not revoke descriptors opened before it. */
     if (syscall(SYS_close_range, 3u, UINT_MAX, 0u) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
-    has_port = rv_landlock_confine_has_port(argc, argv);
-    if (has_port > 0) {
-        return rv_run_connected(argc, argv);
+    port = rv_landlock_confine_port(argc, argv);
+    if (port > 0) {
+        return rv_run_connected(argc, argv, (unsigned short)port);
     }
     /* A malformed request too: rv_landlock_confine says what is wrong. */
     return rv_start_confined(argc, argv, -1);

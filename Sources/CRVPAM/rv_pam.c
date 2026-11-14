@@ -124,15 +124,4 @@ int rv_pam_authenticate(const char *service, const char *user, rv_pam_converse c
     return status == RV_PAM_SUCCESS ? RV_PAM_AUTHENTICATED : RV_PAM_REFUSED;
 }
 
-#else
-
-int rv_pam_authenticate(const char *service, const char *user, rv_pam_converse converse, void *context, int *answers) {
-    (void)service;
-    (void)user;
-    (void)converse;
-    (void)context;
-    *answers = 0;
-    return RV_PAM_UNAVAILABLE;
-}
-
 #endif

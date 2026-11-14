@@ -34,8 +34,8 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace);
  */
 int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_port);
 
-/* Whether the request names such a port: 1, 0, or -1 when malformed. */
-int rv_landlock_confine_has_port(int argc, char **argv);
+/* The port the request names: the port, 0 for none, -1 when malformed. */
+int rv_landlock_confine_port(int argc, char **argv);
 
 /* The running kernel's Landlock ABI; 0 when it has none. */
 int rv_landlock_abi(void);

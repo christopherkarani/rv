@@ -81,7 +81,7 @@ drew what the owner read before typing the password (see Known limits).
 | sign **`mcp.json`** or the **tool pins** | yes | It says this is what the owner reviewed. Every rv write of `mcp.json` signs. |
 | sign a pending call's **confirmation code** and **argument names** | no | `rv mcp serve` makes these, unattended, when a call asks. See below. |
 
-The last row is a decision the project's owner should confirm. On macOS
+The last row is a decision, and the weakest point of the design. On macOS
 every use of the key prompts, the gateway's included, because the prompt
 is a system dialog that needs no terminal. On Linux the gateway has no
 terminal to ask on, so if these needed presence no call could ever be
@@ -132,8 +132,7 @@ pseudo-terminal gets a prompt it cannot answer.
 **A PAM stack that asks nothing proves nothing.** An account with an empty
 password, or a stack that accepts without a prompt, is refused
 (`nothingAsked`). This also refuses a stack that authenticates by
-fingerprint alone, which asks for no typed answer; the owner should
-confirm whether to accept that.
+fingerprint alone, which asks for no typed answer.
 
 ## Rollback and replay
 
@@ -404,8 +403,7 @@ helper's lines from an imitation.
   `rv mcp custodian install`, checks the units are active and that
   root's copies search only their own directory, and uninstalls. The
   units' hardening and the install itself run nowhere but under real
-  systemd; the pull request says which Actions run, if any, has passed
-  that path.
+  systemd, in the `linux root e2e` job of `.github/workflows/pr.yml`.
 - Not covered by a test: the helper's refusal of a PAM stack that asks
   nothing, of an invalid account (`pam_acct_mgmt`) and of root; the
   daemons' limits over real sockets; `serve` refusing to run as root.

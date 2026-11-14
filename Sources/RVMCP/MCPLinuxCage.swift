@@ -1,6 +1,6 @@
 /// The cage for local MCP servers on Linux: Landlock for files and TCP
-/// ports, and a seccomp socket filter for the ways onto the network that
-/// Landlock's rules do not cover. What a kernel can keep a server from,
+/// `bind` and `connect`, and a seccomp socket filter for the ways onto
+/// the network that Landlock's rules do not cover. What a kernel can keep a server from,
 /// whether a server may run under it, and the request
 /// `rv-isolation-exec --confine` carries out. Everything here is
 /// pure: the shell (`MCPSandbox.applyLinux`) reads the host and carries the
@@ -33,7 +33,8 @@ public struct LandlockABI: Comparable, Hashable, Sendable, CustomStringConvertib
     public static let scopes = LandlockABI(known: 6)
     /// Connecting to a pathname Unix socket (`LANDLOCK_ACCESS_FS_RESOLVE_UNIX`).
     /// From here Landlock confines Unix sockets, so the socket filter
-    /// allows a server to make them.
+    /// allows a server to make them. The helper decides that itself
+    /// (`abi >= 9` in rv-isolation-exec); this names it for the tests.
     public static let pathnameUnixSockets = LandlockABI(known: 9)
 }
 
@@ -131,7 +132,6 @@ public enum MCPLinuxCageSupport: Equatable, Sendable {
 public enum MCPLinuxCage {
     /// Why a server does not start in a cage.
     public enum Refusal: Error, Equatable, Sendable {
-        case unavailable(MCPLinuxCageSupport.Unavailable)
         /// A variable the dynamic loader acts on, set for the server: it
         /// would take effect in rv's helper, before the cage.
         case loaderVariable(String)
@@ -144,8 +144,6 @@ public enum MCPLinuxCage {
 
         public var reason: String {
             switch self {
-            case .unavailable(let unavailable):
-                unavailable.reason
             case .loaderVariable(let name):
                 "its environment sets \(name), which the dynamic loader would act on in rv's helper before the "
                     + "sandbox applies; set it in the server's own command instead (env \(name)=... command)"

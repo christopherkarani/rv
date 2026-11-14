@@ -19,7 +19,7 @@ enum MCPCustodianSetup {
     static let keyUnit = "/etc/systemd/system/rv-mcp-custodian.service"
     static let presenceUnit = "/etc/systemd/system/rv-mcp-presence.service"
     static let pamFile = "/etc/pam.d/\(MCPCustodianSocket.pamService)"
-    static let state = "/var/lib/rv-mcp-custodian"
+    static let state = MCPCustodianSocket.stateDirectory
     static let units = ["rv-mcp-custodian.service", "rv-mcp-presence.service"]
     /// First line of every file this writes, so `uninstall` and a second
     /// `install` only ever replace their own.

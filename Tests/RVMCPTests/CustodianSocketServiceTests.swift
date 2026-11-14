@@ -88,7 +88,7 @@ struct CustodianSocketServiceTests {
 
     /// Opens a connection for `uid` and greets on it.
     private func connect(_ service: Daemon, _ id: UInt64, uid: UInt32) {
-        service.open(id, peer: MCPCustodianPeer(uid: uid, pid: 100 + Int32(id)))
+        service.open(id, peer: MCPCustodianPeer(uid: uid))
         #expect(service.handle(id, .hello(protocolVersion: MCPCustodianSocket.protocolVersion), now: start)
             == .hello(ok: true, protocolVersion: MCPCustodianSocket.protocolVersion))
     }
@@ -255,7 +255,7 @@ struct CustodianSocketServiceTests {
     @Test func nothingIsAnsweredBeforeAHelloOfThisProtocol() {
         let memory = Memory()
         let service = Daemon(service(memory))
-        service.open(1, peer: MCPCustodianPeer(uid: owner, pid: 5))
+        service.open(1, peer: MCPCustodianPeer(uid: owner))
         #expect(service.handle(1, .challenge, now: start) == nil)
         #expect(service.handle(1, .key(scope: scope, request: .status), now: start) == nil)
         #expect(service.handle(1, .hello(protocolVersion: "rv.mcp-custodian.v2"), now: start)
@@ -510,7 +510,7 @@ struct CustodianSocketServiceTests {
         let owner = self.owner
         let start = self.start
         box.withLock {
-            $0.open(1, peer: MCPCustodianPeer(uid: owner, pid: 5))
+            $0.open(1, peer: MCPCustodianPeer(uid: owner))
             _ = $0.handle(1, .hello(protocolVersion: MCPCustodianSocket.protocolVersion), now: start)
         }
         let scope = self.scope

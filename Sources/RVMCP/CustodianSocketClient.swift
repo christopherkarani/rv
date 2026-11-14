@@ -128,7 +128,7 @@ public final class MCPCustodianSocketClient: Sendable {
     }
 
     /// A connected stream socket whose peer is `uid`, or -1.
-    static func connect(_ path: String, peer uid: uid_t, timeout: time_t) -> Int32 {
+    public static func connect(_ path: String, peer uid: uid_t, timeout: time_t) -> Int32 {
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)

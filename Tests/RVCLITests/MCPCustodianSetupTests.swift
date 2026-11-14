@@ -131,8 +131,8 @@ struct MCPCustodianSetupTests {
     #if os(Linux)
     /// The custodian this build made, beside the other products.
     private var builtCustodian: String {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/debug/rv-mcp-custodian").path
+        URL(fileURLWithPath: "/proc/self/exe").resolvingSymlinksInPath().deletingLastPathComponent()
+            .appendingPathComponent("rv-mcp-custodian").path
     }
 
     /// A build's binary searches its toolchain's directory first, which

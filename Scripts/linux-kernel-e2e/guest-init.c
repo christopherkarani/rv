@@ -8,8 +8,8 @@
  * on its own libraries rather than on the boundary under test.
  *
  * The same binary is the inner probe: `probe OP ARGS...` does one
- * filesystem operation and exits 0 on success or with errno (capped below
- * the trampoline's reserved 125/126). The inner runs from a copy inside the
+ * operation (a file, a socket, a signal, an ioctl) and exits 0 on success
+ * or with errno (capped below the trampoline's reserved 125/126). The inner runs from a copy inside the
  * workspace: Landlock needs READ_FILE to exec, and rv grants that only
  * beneath the workspace (no system read-only layer yet), so a binary
  * outside it cannot be exec'd at all. `exec-outside-workspace-denied` pins
@@ -64,6 +64,8 @@
 #define NESTED TEMP "/own"
 #define NESTED_SOCKET NESTED "/socket"
 #define ABSTRACT_SOCKET "rv-kernel-e2e"
+/* What run() returns for a child a signal killed, plus the signal. */
+#define KILLED_BY 256
 /* A second address of this guest, on the loopback device but not in 127/8. */
 #define BEYOND_ADDRESS "10.99.0.1"
 #define ESTABLISH_FAILED 125
@@ -201,6 +203,19 @@ static int probe(int argc, char **argv) {
     if (strcmp(op, "exit") == 0) {
         return atoi(argv[3]);
     }
+#if defined(__x86_64__)
+    /* getpid through the two other system call tables an x86-64 program
+     * can enter: the 32-bit one (int 0x80, number 20) and x32's. A filter
+     * that tested only this architecture's numbers would not see them. */
+    if (strcmp(op, "int80") == 0) {
+        long result;
+        __asm__ volatile("int $0x80" : "=a"(result) : "a"(20L) : "r8", "r9", "r10", "r11", "cc", "memory");
+        return probe_exit(result == (long)getpid());
+    }
+    if (strcmp(op, "x32") == 0) {
+        return probe_exit(syscall(0x40000000L | 39) == (long)getpid());
+    }
+#endif
     if (strcmp(op, "socketpair") == 0) {
         int pair[2];
         return probe_exit(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
@@ -322,10 +337,14 @@ static int run(char *const argv[]) {
         execv(argv[0], argv);
         _exit(127);
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+    if (waitpid(pid, &status, 0) != pid) {
         return -1;
     }
-    return WEXITSTATUS(status);
+    /* Killed by a signal: past every exit status. */
+    if (WIFSIGNALED(status)) {
+        return KILLED_BY + WTERMSIG(status);
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 /* rv-isolation-exec --workspace WS -- INNER probe OP A [B] */
@@ -596,8 +615,9 @@ static void confine_refusal_cases(void) {
     check(!exists(marker), "confine-refusal-never-execs", "inner wrote %s", marker);
 }
 
-/* ABI 4 and up: files and TCP always; each other channel is open below
- * the ABI that closes it and closed from it on. */
+/* ABI 4 and up: files and the network always; Unix sockets not at all
+ * below ABI 9 and confined from it; signals and device ioctl open below
+ * the ABI that closes them. */
 static void confine_cases(long abi) {
     char port_a[16];
     char port_b[16];
@@ -637,6 +657,25 @@ static void confine_cases(long abi) {
     /* The inner is then a child of the helper, and its exit is the helper's. */
     status = confined("4", port_a, "exit", "7");
     check(status == 7, "confine-exit-status-passes-through-the-connector", "exit %d", status);
+#if defined(__x86_64__)
+    /* A system call by another table's numbers. Where the kernel has the
+     * 32-bit table, a caged program that uses it is killed (and the
+     * connector dies of the same signal); x32 answers "no such call". */
+    {
+        int outside = uncaged("int80", "-");
+        int inside = confined("4", NULL, "int80", "-");
+        int beside = confined("4", port_a, "int80", "-");
+        printf("rv-kernel-e2e: INFO foreign-calls abi=%ld int80 outside=%d caged=%d caged-with-port=%d x32 outside=%d\n",
+            abi, outside, inside, beside, uncaged("x32", "-"));
+        check(outside == 0 ? inside == KILLED_BY + SIGSYS : inside != 0, "confine-32-bit-call-killed", "exit %d", inside);
+        check(outside == 0 ? beside == KILLED_BY + SIGSYS : beside != 0, "confine-32-bit-call-killed-with-a-port",
+            "exit %d", beside);
+        status = confined("4", NULL, "x32", "-");
+        check(status == ENOSYS, "confine-x32-call-unsupported", "exit %d", status);
+        status = confined("4", port_a, "x32", "-");
+        check(status == ENOSYS, "confine-x32-call-unsupported-with-a-port", "exit %d", status);
+    }
+#endif
 
     status = confined("999", NULL, "write", SCRATCH "/floor-ran");
     check(status == ESTABLISH_FAILED && !exists(SCRATCH "/floor-ran"), "confine-floor-above-abi-refuses",
@@ -682,7 +721,7 @@ static void confine_cases(long abi) {
 
     /* The ways onto the network that Landlock's TCP rules do not cover.
      * Each works here outside the cage; the socket filter refuses each
-     * inside it, with no port rule and with one. */
+     * inside it, with no port and with one. */
     {
         static const char *const routes[] = { "mptcp", "tfo", "mptcp-tfo", "listen", "udp", "uring" };
         char name[64];
@@ -699,7 +738,7 @@ static void confine_cases(long abi) {
             check(outside == 0, name, "abi %ld exit %d", abi, outside);
             snprintf(name, sizeof(name), "confine-%s-refused", route);
             check(inside == refusal, name, "abi %ld exit %d", abi, inside);
-            snprintf(name, sizeof(name), "confine-%s-refused-beside-a-port-rule", route);
+            snprintf(name, sizeof(name), "confine-%s-refused-with-a-port", route);
             check(beside == refusal, name, "abi %ld exit %d", abi, beside);
         }
     }

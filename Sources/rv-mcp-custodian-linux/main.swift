@@ -43,10 +43,6 @@ func options(_ arguments: ArraySlice<String>, allowed: Set<String>) -> [String: 
     return values
 }
 
-func peer(of fd: Int32) -> MCPCustodianPeer? {
-    MCPCustodianPeer(socket: fd)
-}
-
 func setTimeouts(_ fd: Int32, receive: time_t, send: time_t) -> Bool {
     var incoming = timeval(tv_sec: receive, tv_usec: 0)
     var outgoing = timeval(tv_sec: send, tv_usec: 0)
@@ -115,7 +111,7 @@ func serve(socketPath: String, state: String) -> Never {
             if errno == EINTR || errno == ECONNABORTED { continue }
             fail("accept: \(String(cString: strerror(errno)))")
         }
-        guard let peer = peer(of: fd), setTimeouts(fd, receive: idleSeconds, send: 10) else {
+        guard let peer = MCPCustodianPeer(socket: fd), setTimeouts(fd, receive: idleSeconds, send: 10) else {
             close(fd)
             continue
         }
@@ -168,7 +164,7 @@ func presence(socketPath: String, custodian: String) -> Never {
         // Sessions that ended since the last connection.
         var status: Int32 = 0
         while case let ended = waitpid(-1, &status, WNOHANG), ended > 0 { sessions[ended] = nil }
-        guard let peer = peer(of: fd), setTimeouts(fd, receive: proveSeconds, send: 10) else {
+        guard let peer = MCPCustodianPeer(socket: fd), setTimeouts(fd, receive: proveSeconds, send: 10) else {
             close(fd)
             continue
         }
@@ -241,19 +237,11 @@ func converse(
 /// Tells the key daemon the owner of `uid` answered `challenge`.
 func attest(challenge: String, uid: UInt32, custodian: String) -> MCPPresenceResult {
     guard let account = getpwnam(MCPCustodianSocket.account) else { return .unavailable }
-    var address = sockaddr_un()
-    address.sun_family = sa_family_t(AF_UNIX)
-    let bytes = Array(custodian.utf8)
-    guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return .unavailable }
-    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
-    let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue), 0)
+    // The daemon on the other end must be the custodian's account.
+    let fd = MCPCustodianSocketClient.connect(custodian, peer: account.pointee.pw_uid, timeout: 10)
     guard fd >= 0 else { return .unavailable }
     defer { close(fd) }
-    let connected = withUnsafePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0 }
-    }
-    // The daemon on the other end must be the custodian's account.
-    guard connected, setTimeouts(fd, receive: 10, send: 10), peer(of: fd)?.uid == account.pointee.pw_uid,
+    guard
         MCPCustodianFrame.write(
             MCPCustodianSocketRequest.hello(protocolVersion: MCPCustodianSocket.protocolVersion), to: fd),
         case .hello(ok: true, _)? = MCPCustodianFrame.read(MCPCustodianSocketResponse.self, from: fd),
@@ -269,7 +257,7 @@ func presenceSession(custodian: String) -> Never {
     func finish(_ result: MCPPresenceResult) -> Never {
         // A record of who proved presence, and who failed to, that comes
         // from root's unit (the journal says which lines do).
-        let uid = peer(of: fd).map { String($0.uid) } ?? "unknown"
+        let uid = MCPCustodianPeer(socket: fd).map { String($0.uid) } ?? "unknown"
         withVaList(["rv-mcp-custodian: presence for uid \(uid): \(result.rawValue)" as NSString]) {
             vsyslog(LOG_AUTHPRIV | (result == .proved ? LOG_INFO : LOG_NOTICE), "%s", $0)
         }
@@ -278,7 +266,7 @@ func presenceSession(custodian: String) -> Never {
     }
     guard geteuid() == 0 else { finish(.unavailable) }
     // The account is the connection's peer, as the kernel names it.
-    guard let peer = peer(of: fd) else { finish(.unavailable) }
+    guard let peer = MCPCustodianPeer(socket: fd) else { finish(.unavailable) }
     guard case .prove(let version, let challenge)? = MCPCustodianFrame.read(MCPPresenceRequest.self, from: fd),
         version == MCPCustodianSocket.protocolVersion, MCPCustodianSocket.isValid(challenge: challenge)
     else { finish(.badRequest) }
@@ -312,7 +300,7 @@ case "serve":
     let values = options(arguments.dropFirst(), allowed: ["--socket", "--state"])
     serve(
         socketPath: values["--socket"] ?? MCPCustodianSocket.path,
-        state: values["--state"] ?? "/var/lib/rv-mcp-custodian")
+        state: values["--state"] ?? MCPCustodianSocket.stateDirectory)
 case "presence":
     let values = options(arguments.dropFirst(), allowed: ["--socket", "--custodian"])
     presence(

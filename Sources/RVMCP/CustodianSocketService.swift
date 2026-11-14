@@ -124,11 +124,9 @@ public struct MCPCustodianAdmission: Sendable {
 /// A connected peer, as the kernel names it (`SO_PEERCRED`).
 public struct MCPCustodianPeer: Equatable, Sendable {
     public var uid: UInt32
-    public var pid: Int32
 
-    public init(uid: UInt32, pid: Int32) {
+    public init(uid: UInt32) {
         self.uid = uid
-        self.pid = pid
     }
 }
 
@@ -150,7 +148,7 @@ extension MCPCustodianPeer {
         guard getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0,
             length == socklen_t(MemoryLayout<SocketCredentials>.size), credentials.pid > 0
         else { return nil }
-        self.init(uid: credentials.uid, pid: credentials.pid)
+        self.init(uid: credentials.uid)
     }
 }
 #endif

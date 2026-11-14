@@ -6,6 +6,6 @@
 5.10	0	9dea3b33afaf95c2b13c4d25a35cc83bff1413edd395955c801fac539b0bc099	https://kernel.ubuntu.com/mainline/v5.10/amd64/linux-image-unsigned-5.10.0-051000-generic_5.10.0-051000.202012132330_amd64.deb
 6.1	2	178f3cdfd9bd587a77c8b0efae050cfa98718dec51dce1e98b9530f6de5185d5	https://kernel.ubuntu.com/mainline/v6.1/amd64/linux-image-unsigned-6.1.0-060100-generic_6.1.0-060100.202303090726_amd64.deb
 6.6	3	4534a0b1b8a27fad9d8a0d3f7daf198130f16d330327b533f510747926879ddd	https://kernel.ubuntu.com/mainline/v6.6/amd64/linux-image-unsigned-6.6.0-060600-generic_6.6.0-060600.202311151808_amd64.deb
-6.12	6	3f156eab453866391b1939652829c67f4e4e9a9c18917d76751f41a26da4a330	https://kernel.ubuntu.com/mainline/v6.12/amd64/linux-image-unsigned-6.12.0-061200-generic_6.12.0-061200.202411220723_amd64.deb
 6.8	4	855df18273dc67e6df0458f3bd69829259a11617af66a465eb5af214be9676db	https://kernel.ubuntu.com/mainline/v6.8/amd64/linux-image-unsigned-6.8.0-060800-generic_6.8.0-060800.202502181545_amd64.deb
+6.12	6	3f156eab453866391b1939652829c67f4e4e9a9c18917d76751f41a26da4a330	https://kernel.ubuntu.com/mainline/v6.12/amd64/linux-image-unsigned-6.12.0-061200-generic_6.12.0-061200.202411220723_amd64.deb
 7.3	11	be0f145f9933c068e20d2c033ae63f6bae1c9f3b0e4a27b6d96ead86f4eb867c	https://kernel.ubuntu.com/mainline/v7.3/amd64/linux-image-unsigned-7.3.0-070300-generic_7.3.0-070300.202611031544_amd64.deb

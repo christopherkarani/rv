@@ -60,9 +60,6 @@
 #error "rv-isolation-exec's socket filter knows x86-64 and arm64"
 #endif
 
-#ifndef IPPROTO_MPTCP
-#define IPPROTO_MPTCP 262
-#endif
 #ifndef MSG_FASTOPEN
 #define MSG_FASTOPEN 0x20000000
 #endif

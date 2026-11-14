@@ -23,6 +23,8 @@ public enum MCPCustodianSocket {
     /// presence means a custodian is installed even while its socket is
     /// not there (stopped, or crashed).
     public static let installedBinary = "/usr/local/libexec/rv/rv-mcp-custodian"
+    /// Where the key daemon keeps each account's key and ledger.
+    public static let stateDirectory = "/var/lib/rv-mcp-custodian"
     /// The system account that holds the keys.
     public static let account = "rv-mcp-custodian"
     /// The PAM service the presence helper authenticates the owner with.

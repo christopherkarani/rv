@@ -26,6 +26,7 @@ struct CustodianSocketClientTests {
         let answersPerConnection = Mutex<Int?>(nil)
         let connections = Mutex(0)
         private let listeners = Mutex<[Int32]>([])
+        private let stopped = Mutex(false)
 
         init() throws {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-cust-\(UUID().uuidString.prefix(8))")
@@ -42,8 +43,13 @@ struct CustodianSocketClientTests {
             try listen(presencePath) { [self] fd in presenceHelper(fd) }
         }
 
+        /// Shut down, not closed: each accepting thread closes its own
+        /// descriptor when its `accept` fails. Closed here, the number could
+        /// be another test's listener by the time that thread accepts
+        /// again, and this host would answer the other test's client.
         func stop() {
-            listeners.withLock { $0.forEach { shutdown($0, Int32(SHUT_RDWR)); close($0) } }
+            stopped.withLock { $0 = true }
+            listeners.withLock { $0.forEach { shutdown($0, Int32(SHUT_RDWR)) } }
             try? FileManager.default.removeItem(at: directory)
         }
 
@@ -59,10 +65,14 @@ struct CustodianSocketClientTests {
             }
             try #require(fd >= 0 && bound && Glibc.listen(fd, 16) == 0)
             listeners.withLock { $0.append(fd) }
-            Thread.detachNewThread {
+            Thread.detachNewThread { [self] in
                 while true {
                     let connection = accept(fd, nil, nil)
-                    guard connection >= 0 else { return }
+                    guard connection >= 0, stopped.withLock({ $0 }) == false else {
+                        if connection >= 0 { close(connection) }
+                        close(fd)
+                        return
+                    }
                     Thread.detachNewThread { serve(connection) }
                 }
             }
@@ -102,7 +112,7 @@ struct CustodianSocketClientTests {
             var result = typed == "right" ? helperResult.withLock { $0 } : .authenticationFailed
             if result == .proved {
                 let attested = service.withLock { service -> MCPCustodianSocketResponse? in
-                    service.open(0, peer: MCPCustodianPeer(uid: UInt32.max - 1, pid: 1))
+                    service.open(0, peer: MCPCustodianPeer(uid: UInt32.max - 1))
                     _ = service.handle(0, .hello(protocolVersion: MCPCustodianSocket.protocolVersion), now: .now)
                     return service.handle(0, .attest(challenge: challenge, uid: getuid()), now: .now)
                 }

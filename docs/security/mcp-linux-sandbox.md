@@ -96,9 +96,12 @@ What follows from the connector being the server's parent:
 
 - The gateway holds the connector. It exits with the server's status, or
   dies of the signal the server died of. SIGTERM, SIGINT, SIGHUP and
-  SIGQUIT sent to it are passed on; half a second after a SIGTERM it
-  kills a server that is still there, and a server whose connector is
-  killed is killed with it (`PR_SET_PDEATHSIG`).
+  SIGQUIT sent to it are passed on, and half a second after a SIGTERM it
+  kills a server that is still there. A server whose connector is killed
+  outright is killed with it (`PR_SET_PDEATHSIG`) unless the server
+  switched that off, which it may: it then stays, caged and with no
+  connector, so with no network. That is no more than any server can do
+  on either platform by leaving a child behind when it is stopped.
 - A process the server leaves behind when it exits has no connector, and
   its `connect` calls fail.
 - The connector needs `/proc` and must be allowed to copy a descriptor
@@ -106,7 +109,10 @@ What follows from the connector being the server's parent:
   Ubuntu and Debian is 1), or 2 when the gateway runs as root. Where it
   is not allowed, a server with `sandbox.hosts` is not started and the
   helper says why; servers without hosts are not affected.
-- Calls are answered one at a time.
+- Calls are answered one at a time, and a blocking socket's connection
+  is made while the connector waits. A server that fills the proxy's
+  backlog stalls its own connections and the passing on of a SIGTERM;
+  the gateway's kill a second later still ends the connector.
 - A program inside the cage that installs a seccomp filter with its own
   notification listener gets `EBUSY`.
 
@@ -264,13 +270,13 @@ Limits of the mechanism rather than of what it blocks:
   works outside the cage and is refused inside it, with a port and
   without; that the listed port is reached on loopback and refused on
   another address of the guest; Unix sockets per ABI; an exit status
-  through the connector.
+  through the connector; a 32-bit system call killed and an x32 one
+  unsupported.
 - `Scripts/linux-custodian-e2e.sh` runs its fixture server in the cage.
-- Not asserted by a test: the refusal where the host forbids the
-  connector (asserted only by a test that needs
-  `kernel.yama.ptrace_scope` 3, run in the Actions job that sets it; the
-  pull request says whether it has passed), a container runtime's
-  filter, a Go server (the reason for `SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV`),
+- The refusal where the host forbids the connector is asserted by a test
+  that needs `kernel.yama.ptrace_scope` 3, which only the `linux root
+  e2e` job of `.github/workflows/pr.yml` sets.
+- Not asserted by a test: a container runtime's filter, a Go server (the reason for `SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV`),
   hard links, bind mounts, and a rename over a protected file. ABI 5 has
   no lane of its own (6.8 is ABI 4, 6.12 is ABI 6); ABI 9 and 10
   behaviour is checked on the 7.3 guest (ABI 11).

@@ -10,6 +10,8 @@ on:
     paths:
       - Sources/RVIsolation/landlock_apply.c
       - Sources/RVIsolation/landlock_confine.c
+      - Sources/RVIsolation/socket_filter.c
+      - Sources/RVIsolation/proxy_connector.c
       - Sources/RVIsolation/include/rv_landlock_apply.h
       - Sources/rv-isolation-exec/**
       - Scripts/linux-kernel-e2e.sh
@@ -20,6 +22,8 @@ on:
     paths:
       - Sources/RVIsolation/landlock_apply.c
       - Sources/RVIsolation/landlock_confine.c
+      - Sources/RVIsolation/socket_filter.c
+      - Sources/RVIsolation/proxy_connector.c
       - Sources/RVIsolation/include/rv_landlock_apply.h
       - Sources/rv-isolation-exec/**
       - Scripts/linux-kernel-e2e.sh

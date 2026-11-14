@@ -260,7 +260,7 @@ jobs:
 
       # Each step below runs whether or not the one before it passed (a
       # failed step still fails the job), so one failure does not hide the next.
-      # Real MCP servers in the Landlock cage, as the runner's own user: a
+      # Real MCP servers in the cage, as the runner's own user: a
       # Node server fetched by npx through the allowlist proxy and a Python
       # server off the network (docs/security/mcp-linux-sandbox.md).
       - name: MCP sandbox with real Node and Python servers

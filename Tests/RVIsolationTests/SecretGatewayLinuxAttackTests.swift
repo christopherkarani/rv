@@ -14,7 +14,7 @@ import Testing
 /// which is how CI proves each test ran on a real VM. The `RV_PROC_REGIME`
 /// tests run only inside the environment
 /// `Scripts/linux-peer-binding-e2e.sh` builds for them.
-@Suite("Secret gateway Linux peer binding under attack", .serialized)
+@Suite("Secret gateway Linux peer binding under attack", .serialized, .timeLimit(.minutes(3)))
 struct SecretGatewayLinuxAttackTests {
     typealias Connection = SecretGatewayLinuxPeerTests.Connection
     typealias Leader = SecretGatewayLinuxPeerTests.Leader

@@ -46,10 +46,15 @@ let isolationExecTargets: [Target] = [
     ),
 ]
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
+// The products these suites run: the cage's helper, the custodian binary.
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "rv-isolation-exec"]
+let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService", "rv-mcp-custodian"]
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP"]
+let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService"]
 #endif
 
 #if os(macOS)
@@ -194,7 +199,7 @@ let coreTestTargets: [Target] = [
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
-    .testTarget(name: "RVMCPTests", dependencies: ["RVMCP"]),
+    .testTarget(name: "RVMCPTests", dependencies: mcpTestDependencies),
     .testTarget(
         name: "RVCorpusTests",
         dependencies: ["RVDomain", "RVEngine", "RVPacks"],
@@ -316,7 +321,7 @@ let cliProducts: [Product] = [
 let cliTestTargets: [Target] = [
     .testTarget(
         name: "RVCLITests",
-        dependencies: ["RVCLI", "RVService"],
+        dependencies: cliTestDependencies,
         linkerSettings: scanLinkerSettings
     ),
 ]

@@ -13,12 +13,16 @@ Production Linux never runs a contained command. `prepareLandlock`
 refuses any Landlock request before exec. Neither one asks the kernel
 anything, so the host `swift test` run covers that refusal on any kernel.
 
-The only Linux enforcement that depends on the kernel is the trampoline
-(`Sources/rv-isolation-exec/main.c` plus
-`Sources/RVIsolation/landlock_apply.c`). It closes inherited descriptors,
-sets `NO_NEW_PRIVS`, requires Landlock ABI 3 or later, grants read and write
+What does depend on the kernel is `rv-isolation-exec`
+(`Sources/rv-isolation-exec/main.c`), in two of its modes. The workspace
+trampoline (`--workspace`, `Sources/RVIsolation/landlock_apply.c`) is
+reachable only from tests: it closes inherited descriptors, sets
+`NO_NEW_PRIVS`, requires Landlock ABI 3 or later, grants read and write
 beneath the workspace, then execs. On any failure it exits 125 without exec.
-ABI 1 and 2 are refused because they cannot handle `TRUNCATE`.
+ABI 1 and 2 are refused because they cannot handle `TRUNCATE`. The MCP
+server cage (`--confine`: `landlock_confine.c`, `socket_filter.c`,
+`proxy_connector.c`) is what `rv mcp serve` runs every local server in on
+Linux 6.7 or later; see "MCP server confinement" below.
 
 ## Lanes
 
@@ -49,7 +53,7 @@ workspace. Each must exit 125 and never exec. The 5.10 and 6.1 lanes skip
 those cases: below ABI 3 the trampoline exits 125 for every argv, so they
 could not tell the argv lock from the ABI refusal. Those lanes prove only the
 refusal. The host script pins the exact number of checks each regime runs (7
-below ABI 3, 23 at ABI 3, 43 from ABI 4), so a dropped case fails the lane.
+below ABI 3, 23 at ABI 3, 69 from ABI 4), so a dropped case fails the lane.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
 kernel that boots with Landlock disabled fails its lane instead of quietly
 testing the wrong regime. The kernel command line passes `lsm=landlock` so
@@ -77,7 +81,9 @@ outside the cage:
   datagram and `io_uring_setup`: each succeeds outside the cage and is
   refused inside it (`EACCES`; `ENOSYS` for io_uring), with a port listed
   and without. The guest prints the three results per route
-  (`INFO route`).
+  (`INFO route`). A 32-bit system call (`int 0x80`) works outside the
+  cage and kills the program inside it; one by the x32 table answers
+  `ENOSYS`.
 - **Unix sockets.** Another program's pathname socket, outside the write
   roots or in a shared one, is never reached. An abstract one is refused
   (`EACCES` at `socket` below ABI 9, `EPERM` from Landlock from it on). A

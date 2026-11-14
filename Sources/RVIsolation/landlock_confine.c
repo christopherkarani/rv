@@ -59,9 +59,6 @@
 #define LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
 #define LANDLOCK_SCOPE_SIGNAL (1ULL << 1)
 #endif
-#ifndef LANDLOCK_RULE_NET_PORT
-#define LANDLOCK_RULE_NET_PORT 2
-#endif
 
 #define RV_CONFINE_MINIMUM_ABI 4
 
@@ -280,16 +277,20 @@ int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_port) {
     return index + 1;
 }
 
-/* Whether the request has a --tcp port, read before anything is applied:
- * 1, 0, or -1 when the request is not one rv_landlock_confine would take
- * (which then says why). */
-int rv_landlock_confine_has_port(int argc, char **argv) {
+/* The request's --tcp port, read before anything is applied: the port,
+ * 0 for none, or -1 when the request is not one rv_landlock_confine
+ * would take (which then says why). */
+int rv_landlock_confine_port(int argc, char **argv) {
+    unsigned long port;
     int index;
     int found = 0;
 
     for (index = 3; index + 1 < argc && strcmp(argv[index], "--") != 0; index += 2) {
         if (strcmp(argv[index], "--tcp") == 0) {
-            found = 1;
+            if (found != 0 || rv_confine_number(argv[index + 1], 65535, &port) != 0 || port == 0) {
+                return -1;
+            }
+            found = (int)port;
         }
     }
     return index < argc && strcmp(argv[index], "--") == 0 ? found : -1;
@@ -311,7 +312,7 @@ int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_port) {
     return -1;
 }
 
-int rv_landlock_confine_has_port(int argc, char **argv) {
+int rv_landlock_confine_port(int argc, char **argv) {
     (void)argc;
     (void)argv;
     return -1;
