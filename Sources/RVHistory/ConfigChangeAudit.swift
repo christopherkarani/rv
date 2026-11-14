@@ -191,14 +191,18 @@ public enum ConfigChangeAudit {
     }
 
     /// A tightening change made while the log was unavailable: one more
-    /// try to record it, and a warning either way.
+    /// try to record it, and a warning either way. Events have no id, so
+    /// the late record keeps the change's own time as `changed_at` and the
+    /// warning names kind, subject and that time.
     private static func recordLate(_ event: AuditEvent, _ configDirectory: URL) {
+        let changedAt = ISO8601DateFormatter().string(from: event.time)
         var late = event
         late.time = Date()
         late.reason = recordedLate
+        late.detail["changed_at"] = changedAt
         let recorded = append(late, configDirectory)
-        let line = "rv: warning: the audit log could not record the \(event.subject) change when it was made; "
-            + "it was made anyway because it only tightens the gate"
+        let line = "rv: warning: the audit log could not record \(event.kind.rawValue) \(event.subject) "
+            + "at \(changedAt) when it was made; it was made anyway because it only tightens the gate"
             + (recorded ? " (recorded afterwards)" : " (still not recorded)") + "\n"
         FileHandle.standardError.write(Data(line.utf8))
     }

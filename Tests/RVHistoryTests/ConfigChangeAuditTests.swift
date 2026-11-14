@@ -136,7 +136,7 @@ struct ConfigChangeAuditTests {
         #expect(wrote)
     }
 
-    @Test func aTighteningMadeWhileTheLogIsBusyIsRecordedLate() async throws {
+    @Test func aTighteningMadeWhileTheLogIsBusyIsStillMade() async throws {
         let directory = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try await ConfigChangeAudit.$lockTimeout.withValue(.milliseconds(50)) {
@@ -163,6 +163,21 @@ struct ConfigChangeAuditTests {
     private func release(_ fd: Int32) {
         _ = flock(fd, LOCK_UN)
         close(fd)
+    }
+
+    @Test func aTighteningIsRecordedLateOnceTheLogFrees() throws {
+        let directory = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let holder = try holdLog(directory)
+        let change = setting(.tightening)
+        try ConfigChangeAudit.$lockTimeout.withValue(.milliseconds(50)) {
+            try ConfigChangeAudit.commit(change, configDirectory: directory) { release(holder) }
+        }
+        let recorded = events(directory)
+        #expect(recorded.count == 2)
+        #expect(recorded.last?.reason == ConfigChangeAudit.recordedLate)
+        #expect(recorded.last?.detail["changed_at"] == ISO8601DateFormatter().string(from: change.time))
+        #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: directory)).get().isIntact)
     }
 
     @Test func aHeldLogLockRefusesALooseningWithinTheTimeout() throws {
