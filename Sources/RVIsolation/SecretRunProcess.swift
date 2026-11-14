@@ -423,10 +423,10 @@ final class SecretRunSignals: @unchecked Sendable {
         for number in Self.forwarded + [SIGTTOU] {
             previous.append((number, signal(number, SIG_IGN)))
         }
-        let forwarding = forwarding
+        let target = self.forwarding
         for number in Self.forwarded {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
-            source.setEventHandler { forwarding.deliver(number) }
+            source.setEventHandler { target.deliver(number) }
             source.resume()
             sources.append(source)
         }
