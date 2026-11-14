@@ -708,17 +708,6 @@ public struct TypedRuleStore: Sendable {
         }
     }
 
-    public func loadEffective(builtin: [TypedRule], workspace: URL?) throws -> [TypedRule] {
-        let machine = try loadMachine()
-        let repo: [TypedRule]
-        if let workspace {
-            repo = try loadRepo(workspace: workspace)
-        } else {
-            repo = []
-        }
-        return Self.merge(builtin: builtin, machine: machine, repo: repo)
-    }
-
     /// Restrict-only: later layers may tighten, never drop an earlier deny or ask.
     /// The owner's policy ceiling goes last, as a machine-origin layer: its
     /// deny and ask rules hold whatever the other layers say.
