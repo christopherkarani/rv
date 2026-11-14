@@ -38,6 +38,9 @@ self_test() {
   check 1 "nothing matched" 1 printf '%s\n' 'No matching test cases were run'
   check 1 "only a skipped test" 1 printf '%s\n%s\n' '➜ Test a() skipped.' '✔ Test run with 1 test in 1 suite passed after 0.1 seconds.'
   check 1 "a skip under --no-skips" --no-skips 1 printf '%s\n%s\n%s\n' "$pass" '➜ Test b() skipped: "x"' '✔ Test run with 2 tests in 1 suite passed after 0.1 seconds.'
+  check 1 "a display-named skip under --no-skips" --no-skips 1 printf '%s\n%s\n%s\n' "$pass" '➜ Test "b c" skipped.' '✔ Test run with 2 tests in 1 suite passed after 0.1 seconds.'
+  check 1 "a skipped suite under --no-skips" --no-skips 1 printf '%s\n%s\n%s\n' "$pass" '➜ Suite B skipped: "x"' '✔ Test run with 2 tests in 1 suite passed after 0.1 seconds.'
+  check 0 "colour and arguments in a passed line" 1 printf '\033[32m✔\033[0m Test a(x:) with 2 argument values passed after 0.1 seconds.\n%s\n' '✔ Test run with 1 test in 1 suite passed after 0.1 seconds.'
   check 0 "a skip without --no-skips" 1 printf '%s\n%s\n%s\n' "$pass" '➜ Test b() skipped.' '✔ Test run with 2 tests in 1 suite passed after 0.1 seconds.'
   check 1 "too few tests" 2 printf '%s\n%s\n' "$pass" '✔ Test run with 1 test in 1 suite passed after 0.1 seconds.'
   check 1 "too few suites" --suites 2 1 printf '%s\n%s\n%s\n' "$pass" "$suite" '✔ Test run with 1 test in 1 suite passed after 0.1 seconds.'
@@ -79,7 +82,8 @@ plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log")"
 count() { printf '%s\n' "$plain" | grep -Ec "$1" || true; }
 # A test's name ends in its parameter list; "Test run with ..." has none.
 passed="$(count '^✔ Test [^ ]+\(.* passed after ')"
-skipped="$(count '^➜ Test [^ ]+\(.* skipped[.:]')"
+# Any skip, a display-named test's or a whole suite's included.
+skipped="$(count '^➜ (Test|Suite) .* skipped')"
 suites_passed="$(count '^✔ Suite .* passed after ')"
 summary="$(count '^✔ Test run with [0-9]+ tests? in [0-9]+ suites? passed after ')"
 

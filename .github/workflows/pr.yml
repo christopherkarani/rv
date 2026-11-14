@@ -265,6 +265,7 @@ jobs:
         env:
           RV_MCP_REAL_SERVERS: "1"
         run: |
+          Scripts/require-tests-ran.sh --self-test
           Scripts/require-tests-ran.sh --no-skips 2 timeout 900 swift test --skip-build \
             --filter 'aNodeServerStartedWithNpxRunsInTheCage|aPythonServerRunsInTheCage'
 
