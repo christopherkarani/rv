@@ -58,8 +58,9 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     // a runner the parser does not strip (`stdbuf -o0 $c mcp add`), with a
     // group word (literal or a brace/glob spelling) after it: treated like a
     // dynamic head, which `headIsDynamic` only catches at index 0.
-    for index in words.indices where runs(index) && later.spelledGroups[index] != 0 {
-        if wordIsDynamic(words[index]) { return true }
+    for index in words.indices {
+        reads.visit(words: 1)
+        if runs(index), later.spelledGroups[index] != 0, wordIsDynamic(words[index]) { return true }
     }
     // argv holds the head's basename; the head as written is judged too, as
     // a path to a host binary its basename does not name
@@ -75,6 +76,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
         judged.append((index: 0, word: name, spelling: spell(name, &reads.spelling)))
     }
     let operandsRun = reads.inert == false && isNonExecutor(command) == false
+    let operandsStayWords = leavesOperandsAlone(command)
     // A build tool's own directory options, or any of them heading a
     // re-split of operands already judged in their own command (`-C mcp
     // install`, `joinedReadsRun`).
@@ -92,7 +94,8 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
         let pythonRun = (index == 0 && reads.inert == false) || firstPythonRunner.map { $0 < index } == true
         let place = HostWordPlace(
             runs: runs(index), feedsWords: feedsWords, pythonRun: pythonRun, mayRun: mayRun,
-            spelled: literalOnly == false && (runs(index) || mayRun || pythonRun))
+            spelled: literalOnly == false && (runs(index) || mayRun || pythonRun)
+                && (index > 0 && operandsStayWords) == false)
         var hosts = hostCLIs(word)
         if place.spelled, spelling.expands {
             // A brace or glob word that may run: one rv cannot expand may be
@@ -127,8 +130,9 @@ private struct HostWordPlace {
     /// value.
     let mayRun: Bool
     /// The word may run (`runs`, `mayRun` or `pythonRun`) outside a literal
-    /// read, so brace and glob spellings of it and of the words after it
-    /// count.
+    /// read, and is no operand of a command that leaves its operands alone
+    /// (`leavesOperandsAlone`), so brace, glob and dynamic spellings of it
+    /// and of the words after it count.
     let spelled: Bool
 }
 
@@ -215,6 +219,8 @@ private func groupMask(_ spelling: WordSpelling, budget: inout SpellingBudget) -
 /// (fail closed).
 private func expansionsRunHostMutation(_ expansions: [String], budget: inout SpellingBudget) -> Bool {
     guard expansions.count > 1 else { return false }
+    // Every element-follower pair may be compared, by a glob or by equality.
+    guard budget.spend(expansions.count * expansions.count) else { return true }
     for (offset, element) in expansions.enumerated().dropLast() {
         let name = commandName(element)
         for (spelling, host) in spelledHostNames where patternMayBe(name, spelling, budget: &budget) {
@@ -281,6 +287,30 @@ func isNonExecutor(_ command: LaunchedCommand) -> Bool {
     case "gh":
         return words.count >= 2 && ["pr", "issue"].contains(words[0])
             && ["create", "comment", "edit"].contains(words[1])
+    default:
+        return false
+    }
+}
+
+/// A command run by its plain name that never runs an operand as a program
+/// or command line: `ls`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `cat`, and `git
+/// add|status|diff|rm` with the subcommand first. None has an option that
+/// runs a program it is given. Unlike `isNonExecutor`, its operands are
+/// still read as written (`ls 'chronic mcp install x'`, `ls mcp install`);
+/// only their brace, glob and dynamic spellings are not, since a word it
+/// is given is never run (`ls mcp *`, `cp -r packages/mcp "$DEST"`, `touch
+/// {a..z}{0..9}`).
+func leavesOperandsAlone(_ command: LaunchedCommand) -> Bool {
+    let head = foldedWord(command.head)
+    guard command.headIsDynamic == false, head.contains("/") == false, commandName(command.head) == head else {
+        return false
+    }
+    switch head {
+    case "ls", "cp", "mv", "rm", "mkdir", "touch", "cat":
+        return true
+    case "git":
+        return command.guardArgv.dropFirst().first.map { ["add", "status", "diff", "rm"].contains(foldedWord($0)) }
+            == true
     default:
         return false
     }
