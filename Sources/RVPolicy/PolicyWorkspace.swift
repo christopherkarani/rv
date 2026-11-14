@@ -129,7 +129,8 @@ public struct PolicyWorkspace: Sendable {
     /// still succeeds. The gate compares the live policy file.
     /// `expected` (from a preview) makes the rollback refuse `headChanged`
     /// when the layer's head or the target moved since that preview. It is
-    /// required, so no caller can skip the binding by omission.
+    /// a required argument; it binds only as tightly as the preview it came
+    /// from.
     public func rollback(
         layer: PolicyDocumentLayer,
         to revision: Int,

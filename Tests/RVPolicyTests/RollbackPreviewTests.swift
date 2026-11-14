@@ -285,6 +285,54 @@ struct RollbackPreviewTests {
         }
     }
 
+    @Test func aStaleBindingDoesNotSealAnInterruptedSave() throws {
+        let root = try isolatedPreviewDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        try store.saveMachine(PolicyDocument(rules: [previewDeny]))
+        try store.saveMachine(PolicyDocument(rules: [previewDeny, previewAllow]))
+        let preview = try store.previewMachineRollback(to: 1)
+        // A save of r3 crashed after policy.toml and the display line, before the seal.
+        let third = PolicyDocument(rules: [previewDeny, previewAllow, previewAsk])
+        let thirdText = PolicyDocumentTOML.render(third)
+        try thirdText.write(to: store.machineFileURL, atomically: true, encoding: .utf8)
+        let tail = PolicyRevision(
+            revision: 3, hash: PolicyRevisionIdentity.hash(third), ruleCount: third.rules.count,
+            recordedAt: Date(), toml: thirdText, document: third
+        )
+        let handle = try FileHandle(forWritingTo: store.machineRevisionsURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: try JSONEncoder().encode(tail) + Data("\n".utf8))
+        try handle.close()
+        let before = try directorySnapshot(root)
+
+        #expect(throws: TypedRuleStoreError.headChanged) {
+            _ = try store.rollbackMachine(to: 1, expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
+        }
+
+        #expect(try directorySnapshot(root) == before)
+    }
+
+    @Test func aBoundRollbackOnATruncatedDisplayLogReportsCorruption() throws {
+        let root = try isolatedPreviewDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        try store.saveMachine(PolicyDocument(rules: [previewDeny]))
+        try store.saveMachine(PolicyDocument(rules: [previewDeny, previewAllow]))
+        try store.saveMachine(PolicyDocument(rules: [previewDeny, previewAllow, previewAsk]))
+        let preview = try store.previewMachineRollback(to: 1)
+        let lines = try String(contentsOf: store.machineRevisionsURL, encoding: .utf8)
+            .split(separator: "\n").prefix(2).joined(separator: "\n") + "\n"
+        try lines.write(to: store.machineRevisionsURL, atomically: true, encoding: .utf8)
+        let before = try directorySnapshot(root)
+
+        #expect(throws: TypedRuleStoreError.logCorrupted) {
+            _ = try store.rollbackMachine(to: 1, expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
+        }
+
+        #expect(try directorySnapshot(root) == before)
+    }
+
     @Test func rollbackBoundToTheCurrentHeadProceeds() throws {
         let config = try isolatedPreviewDirectory()
         defer { try? FileManager.default.removeItem(at: config) }

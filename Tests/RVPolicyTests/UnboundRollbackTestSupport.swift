@@ -10,8 +10,13 @@ extension TypedRuleStore {
     }
 
     @discardableResult
+    func rollbackMachine(toRevision target: Int) throws -> PolicyRevision {
+        try rollbackMachine(toRevision: target, expected: nil, interlock: nil)
+    }
+
+    @discardableResult
     func rollbackRepo(to revision: Int, workspace: URL) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, interlock: nil)
+        try rollbackRepo(to: revision, workspace: workspace, expected: nil, interlock: nil)
     }
 }
 

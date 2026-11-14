@@ -22,9 +22,9 @@ public enum TypedRuleStoreError: Error, Sendable, Equatable {
     case revisionNotFound
     /// A rollback bound to a preview (`PolicyRollbackBinding`) found a
     /// different head or target under the lock: the policy changed since
-    /// the preview. Nothing was rolled back. On the machine layer the
-    /// binding is checked before an interrupted save is reconciled, and
-    /// again under the file lock (see `rollbackMachine(toRevision:...)`).
+    /// the preview. Nothing was rolled back or sealed: on the machine layer
+    /// the binding is checked before an interrupted save is reconciled, and
+    /// again under the file lock (see `requireBindingBeforeReconcile`).
     case headChanged
 }
 
@@ -355,26 +355,20 @@ public struct TypedRuleStore: Sendable {
     /// against the sealed head alone, so rollback stays the repair path
     /// for a corrupt hand-edit. Dropping an allow still succeeds.
     /// Returns the new head revision carrying the restored bytes.
-    @discardableResult
-    public func rollbackMachine(toRevision target: Int) throws -> PolicyRevision {
-        try rollbackMachine(toRevision: target, interlock: nil)
-    }
-
+    /// `expected` nil (no binding) is for tests of the gate only; every
+    /// public entry point requires one.
     @discardableResult
     func rollbackMachine(
         toRevision target: Int,
-        interlock: RollbackInterlock?,
-        expected: PolicyRollbackBinding? = nil
+        expected: PolicyRollbackBinding?,
+        interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
-            // The log lock serializes machine saves, so a binding that
-            // already fails here refuses before reconciliation can seal an
-            // interrupted save. An unreadable display log is left to the
-            // cross-check below; the binding is re-checked there.
-            if let expected, let early = try? readRevisions(from: machineRevisionsURL) {
-                try Self.requireBinding(expected, target: target, in: early)
+            let verified = try loadVerifiedChain()
+            if let expected {
+                try requireBindingBeforeReconcile(expected, target: target, chain: verified)
             }
-            let chain = try reconcileInterruptedSave(verified: try loadVerifiedChain())
+            let chain = try reconcileInterruptedSave(verified: verified)
             // Public revisions are generations, so `target` names the same
             // generation `machineHistory()` and `rv policy list` print.
             let (match, sealedHead) = try MachineRevisionLog.rollbackTarget(
@@ -617,7 +611,7 @@ public struct TypedRuleStore: Sendable {
         // `machineHistory()`), so this is a forwarder, not a second
         // rollback with its own numbering and lock discipline.
         do {
-            return try rollbackMachine(toRevision: revision, interlock: nil, expected: binding)
+            return try rollbackMachine(toRevision: revision, expected: binding, interlock: nil)
         } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
@@ -638,14 +632,15 @@ public struct TypedRuleStore: Sendable {
         workspace: URL,
         expected: PolicyRollbackBinding
     ) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, interlock: nil, expected: expected)
+        try rollbackRepo(to: revision, workspace: workspace, expected: expected, interlock: nil)
     }
 
+    /// `expected` nil (no binding) is for tests of the gate only.
     func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        interlock: RollbackInterlock?,
-        expected: PolicyRollbackBinding? = nil
+        expected: PolicyRollbackBinding?,
+        interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
@@ -753,6 +748,28 @@ public struct TypedRuleStore: Sendable {
         else {
             throw TypedRuleStoreError.headChanged
         }
+    }
+
+    /// The binding check that runs under the log lock before an
+    /// interrupted save can be reconciled (sealed), so a stale binding
+    /// refuses with nothing written. It runs only on a display log that
+    /// is consistent with the verified chain, or that reconciliation would
+    /// seal as one interrupted save; any other display log (tampered,
+    /// truncated, unreadable) is left to the cross-check, which reports
+    /// `logCorrupted` before the binding is checked again.
+    private func requireBindingBeforeReconcile(
+        _ expected: PolicyRollbackBinding,
+        target: Int,
+        chain: MachineRevisionLog.VerifiedChain
+    ) throws {
+        guard let display = try? readRevisions(from: machineRevisionsURL) else { return }
+        if (try? MachineRevisionLog.checkDisplay(chain, matches: display)) == nil {
+            let liveText = try? String(contentsOf: machineFileURL, encoding: .utf8)
+            guard case .sealTail = MachineRevisionLog.reconcile(chain, display: display, liveTOML: liveText) else {
+                return
+            }
+        }
+        try Self.requireBinding(expected, target: target, in: display)
     }
 
     private static func rollbackPreviewRisk(
