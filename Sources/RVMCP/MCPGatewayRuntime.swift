@@ -976,8 +976,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     static func mebibytes(_ bytes: Int) -> Int { bytes >> 20 }
 
     /// Blocks until every byte is written or the write fails (a reader that
-    /// is gone): only ever on a writer's own thread.
-    /// `wrote` is told after each part of `bytes` is written.
+    /// is gone, or any error other than an interrupt): only ever on a
+    /// writer's own thread. A non-blocking descriptor that is full is waited
+    /// on, so a line is never left half written. `wrote` is told after each
+    /// part of `bytes` is written.
     static func writeAll(_ fd: Int32, _ bytes: [UInt8], wrote: (() -> Void)? = nil) {
         var written = 0
         while written < bytes.count {
@@ -986,6 +988,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 return write(fd, base + written, raw.count - written)
             }
             if n < 0, errno == EINTR { continue }
+            if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                _ = poll(&poller, 1, -1)
+                continue
+            }
             guard n > 0 else { return }
             written += n
             wrote?()
