@@ -53,7 +53,13 @@ package final class MCPShutdownSignals {
     /// every thread blocks), so there the handler is how a signal is heard,
     /// whether or not `catching`: it writes the signal's number to a pipe
     /// that one thread reads (`MCPSignalRelay`).
+    ///
+    /// With `catching`, an inherited ignored SIGCHLD is also set back to
+    /// the default, and left so by `cancel`: an ignored SIGCHLD reaps each
+    /// child by itself, and a server's supervisor could then neither kill
+    /// what is left of its group nor learn how it ended.
     package init(_ numbers: [Int32], catching: Bool) {
+        if catching { Self.defaultChildSignal() }
         #if !canImport(Darwin)
         guard MCPSignalRelay.listen(heard) else { return }
         #endif
@@ -113,6 +119,19 @@ package final class MCPShutdownSignals {
         #else
         MCPSignalRelay.stopListening(heard)
         #endif
+    }
+
+    private static func defaultChildSignal() {
+        var current = sigaction()
+        guard sigaction(SIGCHLD, nil, &current) == 0, ignores(current) else { return }
+        var standard = sigaction()
+        #if canImport(Darwin)
+        standard.__sigaction_u.__sa_handler = SIG_DFL
+        #else
+        standard.__sigaction_handler.sa_handler = SIG_DFL
+        #endif
+        sigemptyset(&standard.sa_mask)
+        _ = sigaction(SIGCHLD, &standard, nil)
     }
 
     private static func ignores(_ action: sigaction) -> Bool {
