@@ -131,6 +131,12 @@ public final class SecretGateway: @unchecked Sendable {
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
     static let maximumConnections = 64
+    /// Connections from a process in none of the registered runtimes that
+    /// may read a request head at once. They hold none of the
+    /// `maximumConnections` slots; past this they are turned away unread.
+    static let outsiderConnections = 8
+    /// Seconds such a connection has for its request head.
+    static let outsiderHeadDeadline: TimeInterval = 2
     /// Above the spawn floors (8 and 16). Gateway sockets must not remain
     /// on a descriptor `relocateDescriptor` has just closed.
     static let socketFloor: Int32 = 64
@@ -158,6 +164,7 @@ public final class SecretGateway: @unchecked Sendable {
     /// not publish its listener afterwards.
     private var lifecycleGeneration = 0
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
+    private let outsiderSlots = DispatchSemaphore(value: SecretGateway.outsiderConnections)
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
@@ -177,6 +184,8 @@ public final class SecretGateway: @unchecked Sendable {
     static let requestBodyDeadline: TimeInterval = 60
     /// Test seam: the request body deadline. Set before serving.
     var requestBodyDeadline = SecretGateway.requestBodyDeadline
+    /// Test seam: the outsider head deadline. Set before serving.
+    var outsiderHeadDeadline = SecretGateway.outsiderHeadDeadline
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
@@ -503,8 +512,9 @@ public final class SecretGateway: @unchecked Sendable {
             let handler = Thread { [weak self] in
                 defer { close(clientFD) }
                 guard let self else { return }
-                defer { self.slots.signal() }
-                self.handle(clientFD)
+                let slot = GatewaySlot(self.slots)
+                defer { slot.release() }
+                self.handle(clientFD, slot: slot)
             }
             handler.name = "rv.secret-gateway.connection"
             handler.qualityOfService = .userInitiated
@@ -512,12 +522,24 @@ public final class SecretGateway: @unchecked Sendable {
         }
     }
 
-    func handle(_ client: Int32) {
+    func handle(_ client: Int32, slot: GatewaySlot? = nil) {
         let started = DispatchTime.now()
+        // Any local process can connect. Before a byte is read, the peer is
+        // checked against every registered runtime: one in none of them, or
+        // one that cannot be placed, gives its slot back, has a short head
+        // deadline, and is never forwarded. Its head is still read, so a
+        // placeholder spent from outside is refused naming its runtime.
+        let outsider = insideARuntime(client) == false
+        if outsider {
+            slot?.release()
+            guard outsiderSlots.wait(timeout: .now()) == .success else {
+                GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+                return
+            }
+        }
+        defer { if outsider { outsiderSlots.signal() } }
         let reader = GatewaySocket.Reader(fd: client)
-        // Before the peer check: any local process can connect, and each
-        // connection holds one of `maximumConnections` slots while it reads.
-        reader.deadline = started + requestHeadDeadline
+        reader.deadline = started + (outsider ? min(requestHeadDeadline, outsiderHeadDeadline) : requestHeadDeadline)
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
@@ -569,6 +591,11 @@ public final class SecretGateway: @unchecked Sendable {
             // Only the placeholder's own runtime may trigger a refresh.
             if let failure = verifyPeer(client, presented) {
                 deny(failure.refusal, runtime: failure.entry?.runtime)
+                return
+            }
+            // Outside every runtime a moment ago: refused even if it passed now.
+            if outsider {
+                deny(.runtimeUnverified)
                 return
             }
             if let refusal = prepare(result.used.token) {
@@ -724,7 +751,8 @@ public final class SecretGateway: @unchecked Sendable {
     /// is not enough: the connection must come from each named entry's
     /// runtime. Fails closed when that cannot be shown, and names the entry
     /// that failed so the finding points at the runtime whose lease was
-    /// spent from outside.
+    /// spent from outside. Scanned again after the head is read: the socket
+    /// may have changed hands since `insideARuntime` looked.
     private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> (refusal: GatewayRefusal, entry: Entry?)? {
         guard let peer = GatewayPeer.of(client) else { return (.runtimeUnverified, presented.first) }
         var checked: [ProcessGroupFact] = []
@@ -749,6 +777,19 @@ public final class SecretGateway: @unchecked Sendable {
         return nil
     }
 
+    /// Whether a registered runtime holds this connection. False when none
+    /// does, none is registered, or the peer cannot be told.
+    private func insideARuntime(_ client: Int32) -> Bool {
+        guard let peer = GatewayPeer.of(client) else { return false }
+        lock.lock()
+        var groups: [ProcessGroupFact] = []
+        for group in entries.values.compactMap(\.processGroup) where groups.contains(group) == false {
+            groups.append(group)
+        }
+        lock.unlock()
+        return groups.contains { peers.verify(peer, $0) == .member }
+    }
+
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
         runtime: String? = nil, started: DispatchTime
@@ -763,6 +804,25 @@ public final class SecretGateway: @unchecked Sendable {
             refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
+    }
+}
+
+/// One connection's hold on the gateway's connection slots, given back once.
+final class GatewaySlot: @unchecked Sendable {
+    private let slots: DispatchSemaphore
+    private let lock = NSLock()
+    private var held = true
+
+    init(_ slots: DispatchSemaphore) {
+        self.slots = slots
+    }
+
+    func release() {
+        lock.lock()
+        let was = held
+        held = false
+        lock.unlock()
+        if was { slots.signal() }
     }
 }
 
