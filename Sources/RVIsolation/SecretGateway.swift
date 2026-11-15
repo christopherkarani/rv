@@ -1049,9 +1049,12 @@ final class URLSessionStreamingTransport: NSObject, URLSessionDataDelegate, @unc
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 300
         configuration.timeoutIntervalForResource = 3_600
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        // Each request's handler blocks a global-queue thread until a
+        // callback here signals it; on the shared pool those callbacks could
+        // wait behind the very handlers waiting for them.
+        return URLSession(
+            configuration: configuration, delegate: self,
+            delegateQueue: URLSessionDelegateQueue.serial("rv.secrets.gateway.upstream"))
     }()
 
     func send(_ request: SecretUpstreamRequest, sink: SecretResponseSink) {
