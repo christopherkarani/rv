@@ -217,5 +217,73 @@ struct MCPCageCredentialLiveTests {
         #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("y").path)
         #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
     }
+
+    /// Two servers, each in its own `sandbox-exec` of the same profile, as
+    /// serve starts them: the second cannot read the first's arguments and
+    /// environment (`KERN_PROCARGS2`, where rv puts a server's `secrets`),
+    /// though this process can. It still reads its own, and a child it
+    /// started.
+    @Test(.timeLimit(.minutes(1)))
+    func aCagedServerCannotReadASiblingServersEnvironment() throws {
+        let probe = try mcpProbe()
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-procargs-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/reader", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+
+        // The first server waits on its stdin until the test ends.
+        let sibling = Process()
+        sibling.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
+        sibling.arguments = ["-p", profile, probe.path, "stderr", "1", "closed"]
+        sibling.environment = ["HOME": "/rv-procargs-sibling", "PATH": "/usr/bin:/bin"]
+        let input = Pipe()
+        sibling.standardInput = input
+        sibling.standardOutput = FileHandle.nullDevice
+        sibling.standardError = FileHandle.nullDevice
+        try sibling.run()
+        defer {
+            try? input.fileHandleForWriting.close()
+            if sibling.isRunning { kill(sibling.processIdentifier, SIGKILL) }
+            sibling.waitUntilExit()
+        }
+        // sandbox-exec execs the probe in place: wait until it has.
+        let pid = sibling.processIdentifier
+        let deadline = Date().addingTimeInterval(10)
+        var fromHere = ""
+        while Date() < deadline {
+            fromHere = MCPPlaceholderLiveTests.procargsFromHere(probe, pid, in: root)
+            if fromHere.hasSuffix(" home=yes") { break }
+            usleep(50_000)
+        }
+        try #require(fromHere.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(fromHere)")
+
+        let script = """
+            p="$1"; sibling="$2"
+            echo "sibling: $("$p" procargs "$sibling")"
+            echo "self: $("$p" procargs self)"
+            /usr/bin/mkfifo "$PWD/hold"
+            HOME=/rv-procargs-child "$p" stderr 1 closed < "$PWD/hold" > /dev/null 2>&1 &
+            child=$!
+            exec 3> "$PWD/hold"
+            /bin/sleep 0.5
+            echo "child: $("$p" procargs $child)"
+            exec 3>&-
+            wait $child
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [probe.path, String(pid)], in: scratch.path))
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("sibling: failed errno=\(EPERM)"), "\(output)")
+        #expect(output.contains("self: ok argc="), "\(output)")
+        #expect(output.contains("child: ok argc="), "\(output)")
+    }
 }
 #endif
