@@ -189,6 +189,64 @@ struct MCPHostSpellingTests {
         }
     }
 
+    /// A brace or class span holding a blank or a separator (`{clau?e,x y}`,
+    /// `cl[;a]ude`): quoted, the shell keeps it one word, and the guard
+    /// expands that word whole. The prefilters split text at blanks and
+    /// separators before spelling it, and so passed over such words.
+    static let brokenSpanSpellings: [String] = [
+        #"$x "env '{clau?e,x y}' '{m?p,x y}' add s -- x""#,
+        #"$x "sudo 'cl[;a]ude' 'm[;c]p' add s -- x""#,
+        #"watch "env '{clau?e,x y}' '{m?p,x y}' add s -- x""#,
+        #"watch "'cl[;a]ude' 'm[;c]p' add s -- x""#,
+        #"echo "env '{clau?e,x|y}' '{m?p,x&y}' add s -- x" | sh"#,
+        #"stdbuf -o0 '{clau?e,x y}' '{m?p,x y}' add s -- x"#,
+        #"chronic 'm[;c]p' 'i[(n]stall' srv"#,
+    ]
+
+    @Test("a spelling with a blank or separator inside a span still asks", arguments: brokenSpanSpellings)
+    func brokenSpanSpellingAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Each payload word, alone and all at once, inside a span holding a
+    /// blank or a separator.
+    static let brokenSpanCases: [String] = {
+        let spans: [@Sendable (String) -> String?] = [
+            { w in w.count >= 3 ? "'{\(w),x y}'" : nil },
+            { w in w.count >= 3 ? "'{\(w),x;y}'" : nil },
+            { w in w.count >= 3 ? "'{\(w),x|y}'" : nil },
+            { w in w.count >= 3 ? "'\(w.first!)[;\(Array(w)[1])]\(w.dropFirst(2))'" : nil },
+            { w in w.count >= 3 ? "'\(w.first!)[ <\(Array(w)[1])]\(w.dropFirst(2))'" : nil },
+        ]
+        var lines: [String] = []
+        for payload in Self.payloads {
+            for span in spans {
+                for position in payload.indices {
+                    guard let spelled = span(payload[position]) else { continue }
+                    var words = payload
+                    words[position] = spelled
+                    lines.append(words.joined(separator: " "))
+                }
+                lines.append(payload.map { span($0) ?? $0 }.joined(separator: " "))
+            }
+        }
+        return lines.flatMap { line in
+            [line, "stdbuf -o0 \(line)", "watch \(shQuoted(line))", "$x \(shQuoted("env " + line))"]
+        }
+    }()
+
+    /// The prefilters never say no where the full judgement could say yes:
+    /// a command `isHostMCPMutation` matches, as a fixture line or text it
+    /// carries launches it, passes `commandMayNameHostMCP` (the speculative
+    /// command prefilter), and the text holding it passes `mayNameHostMCP`
+    /// (the prefilter every read begins with).
+    @Test("a prefilter passes whatever the full judgement matches")
+    func prefilterCoversFullJudgement() {
+        let lines = Self.spellingCases.map(\.command) + Self.brokenSpanSpellings + Self.brokenSpanCases
+        let violations = lines.flatMap(prefilterViolations)
+        #expect(violations.isEmpty, "\(violations.count): \(violations.prefix(12))")
+    }
+
     /// A brace word the shell splits into several words, a POSIX class, and
     /// a word the shell expands to nothing before the subcommand.
     @Test("a spelling the shell splits or classes still asks", arguments: [
@@ -586,6 +644,40 @@ struct MCPHostSpellingTests {
         #expect(lineReads.spelling.steps <= SpellingBudget.maxSteps)
         #expect(lineReads.readsDone <= HostTextReads.maxReads)
     }
+}
+
+/// Where a prefilter says no and the full judgement yes, for `line` and the
+/// blank-holding words its commands carry (as written and ANSI-C decoded),
+/// read the way `carriesHostMCPText` reads them.
+private func prefilterViolations(_ line: String) -> [String] {
+    var texts = [line]
+    var violations: [String] = []
+    var index = 0
+    while index < texts.count, index < 64 {
+        let text = texts[index]
+        index += 1
+        let launched = launchedCommandHeads(text)
+        var matched = false
+        for command in launched {
+            var reads = HostTextReads()
+            guard isHostMCPMutation(command, reads: &reads) else { continue }
+            matched = true
+            var budget = SpellingBudget()
+            var named: [String: Bool] = [:]
+            if commandMayNameHostMCP(command, budget: &budget, named: &named) == false {
+                violations.append("command \(command.guardArgv) of \(line)")
+            }
+        }
+        if matched, mayNameHostMCP(text) == false { violations.append("text \(text) of \(line)") }
+        for command in launched {
+            for word in command.argv.dropFirst() + command.assignments where word.contains(where: \.isWhitespace) {
+                for variant in [word, word.ansiCDecodedIfMarked] where texts.contains(variant) == false {
+                    texts.append(variant)
+                }
+            }
+        }
+    }
+    return violations
 }
 
 /// The MCP guard's verdict on `command` in isolation: true asks.
