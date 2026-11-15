@@ -9,6 +9,23 @@ import Synchronization
 import Testing
 @testable import RVHistory
 
+/// Whether the temporary directory can hard-link a file, so two names
+/// reach one inode.
+private let hardLinksShareAnInode: Bool = {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rv-auditlink-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("a")
+    let other = dir.appendingPathComponent("b")
+    guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
+        FileManager.default.createFile(atPath: file.path, contents: nil),
+        link(file.path, other.path) == 0
+    else { return false }
+    var first = stat()
+    var second = stat()
+    guard stat(file.path, &first) == 0, stat(other.path, &second) == 0 else { return false }
+    return first.st_dev == second.st_dev && first.st_ino == second.st_ino
+}()
+
 /// What `AuditLog.append` writes: one bounded line, readable on a terminal.
 @Suite("AuditLog line")
 struct AuditLogLineTests {
@@ -261,7 +278,8 @@ struct AuditLogLineTests {
     /// deadline (5 pauses of 10 fake ms against 50 ms), leaving no file and
     /// the holder's entry in place, while an append to another log of this
     /// process, made from inside that wait, is written.
-    @Test func aBusyLogTimesOutWhileAnotherLogIsWritten() throws {
+    @Test(.timeLimit(.minutes(1)))
+    func aBusyLogTimesOutWhileAnotherLogIsWritten() throws {
         let busy = try scratch()
         let other = try scratch()
         defer {
@@ -294,23 +312,29 @@ struct AuditLogLineTests {
     /// The busy set's own mutex is held only to change the set: an append
     /// that meets another thread inside it waits for that thread, and does
     /// not take it for its log being busy. With its budget already spent (a
-    /// zero timeout) it would otherwise fail with its log free.
+    /// zero timeout) it would otherwise fail with its log free. The holder
+    /// lets go 50 ms after the append is about to start, not on a clock of
+    /// its own: nothing outside the append can see it blocked on the mutex,
+    /// so the hold cannot be handed off exactly.
     @Test(.timeLimit(.minutes(1)))
     func aThreadInsideTheBusySetIsNotTakenForABusyLog() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
         let inside = DispatchSemaphore(value: 0)
+        let starting = DispatchSemaphore(value: 0)
         let left = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
             AuditLog.AppendLock.mutex.withLock { _ in
                 inside.signal()
-                usleep(200_000)
+                _ = starting.wait(timeout: .now() + 10)
+                usleep(50_000)
             }
             left.signal()
         }
         #expect(inside.wait(timeout: .now() + 10) == .success)
         let paused = Ticks()
         let wait = AuditLog.LockWait(timeout: 0, pause: { _ = paused.increment() })
+        starting.signal()
         #expect(AuditLog.append(event("free"), configDirectory: dir, wait: wait), "a free log was taken for a busy one")
         #expect(paused.value == 0)
         #expect(left.wait(timeout: .now() + 10) == .success)
@@ -322,7 +346,9 @@ struct AuditLogLineTests {
     /// in the set), an append through either directory gives up on its own
     /// deadline with nothing written, without counting on `flock`, which a
     /// network filesystem may count per process. The holder's entry stays.
-    @Test func oneFileThroughTwoDirectoriesIsOneLog() throws {
+    /// Skipped where the temporary directory cannot hard-link a file.
+    @Test(.enabled(if: hardLinksShareAnInode, "hard links are not supported in the temporary directory"))
+    func oneFileThroughTwoDirectoriesIsOneLog() throws {
         let first = try scratch()
         let second = try scratch()
         defer {
