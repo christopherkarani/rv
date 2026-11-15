@@ -103,10 +103,10 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// in the order it came, from a thread of their own: `deliver` may wait for
 /// the gateway, and the delegate queue never waits with it, so a POST is
 /// let go of and its bytes stop counting however far behind the gateway
-/// is. A session goes on reading what a waiting delegate queue leaves
-/// (corelibs on Linux), so the server is never slowed: once more than
-/// `deliveryLimit` bytes of it wait for `deliver`, nothing more is
-/// delivered and `overflowed` is told, once.
+/// is. The server is never slowed down (a waiting delegate queue does not
+/// stop corelibs from reading, and no task is suspended): once more than
+/// `deliveryLimit` bytes of what it sent wait for `deliver`, nothing more
+/// is delivered and `overflowed` is told, once.
 package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
