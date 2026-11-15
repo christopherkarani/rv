@@ -62,6 +62,26 @@ private func dial(_ fd: Int32, to port: Int) throws {
     try #require(connected == 0)
 }
 
+/// A member's connection, marked before it dials, dialled again while the
+/// kernel refuses it (a full listen backlog), at most 200 times.
+private func dialAgainWhileRefused(_ port: Int, marked: MarkedPorts) throws -> (fd: Int32, port: UInt16) {
+    for _ in 0..<200 {
+        let member = try boundClient()
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(member.fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        if connected == 0 { return member }
+        close(member.fd)
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+    throw POSIXError(.ECONNREFUSED)
+}
+
 /// Connects and resets the connection at once, recording nothing when
 /// either fails. A reset leaves no port waiting out TIME_WAIT, and one
 /// that lands before the gateway accepts makes its `accept` fail.
@@ -195,7 +215,10 @@ struct SecretGatewayOutsiderTests {
     }
 
     /// Outsiders connecting and hanging up as fast as they can, while a
-    /// member sends one request after another: every one is served.
+    /// member sends one request after another: every one is served. They
+    /// can fill the listen backlog, and the kernel then refuses the member's
+    /// connection before the gateway sees it, so the member dials again;
+    /// the gateway itself never turns it away.
     @Test(.timeLimit(.minutes(1)))
     func outsidersHammeringTheGatewayNeverTurnAwayAMember() throws {
         let marked = MarkedPorts()
@@ -215,9 +238,7 @@ struct SecretGatewayOutsiderTests {
         }
         var statuses: [String] = []
         for _ in 0..<20 {
-            let member = try boundClient()
-            marked.ports.withLock { _ = $0.insert(member.port) }
-            try dial(member.fd, to: port)
+            let member = try dialAgainWhileRefused(port, marked: marked)
             #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
             statuses.append(String(answer(member.fd).prefix(12)))
             close(member.fd)
