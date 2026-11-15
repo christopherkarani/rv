@@ -1090,13 +1090,17 @@ runs again after the head for every connection, so a socket handed to
 another process in between is refused as before.
 
 Outsiders can still keep each other out, and they can slow the runtimes
-down, but no longer turn them away: a runtime's connection waits behind
-the outsiders being checked, never holds a slot they hold, and is never
-answered `503` for them. A check lists the host's processes and walks each
-registered runtime's, once per runtime for an outsider, so a flood of
-outsiders delays each runtime's connection by up to that many checks, 8 at
-a time. Past the 128 waiting in the backlog, the kernel drops new
-connections, the runtimes' included, until there is room. Refusals that
+down. The gateway no longer turns a runtime away for them: a runtime's
+connection waits behind the outsiders being checked, never holds a slot
+they hold, and is never answered `503` for them. A check lists the host's
+processes and walks each registered runtime's, once per runtime for an
+outsider, so a flood of outsiders delays each runtime's connection by up
+to that many checks, 8 at a time. The kernel can still turn one away:
+past the 128 waiting in the backlog, it refuses new connections, the
+runtimes' included, until there is room. Sixteen threads connecting and
+resetting as fast as they could filled it on macOS, and a runtime's
+`connect` failed until it dialled again. A connection reset while it
+waits there still holds its place until the gateway accepts and closes it. Refusals that
 name no secret (`malformed`, `requestTimeout`, `unknownRoute`) from outside
 every runtime are recorded at most once a second, with how many were left
 out since the record before; one that names a secret is always recorded.
