@@ -628,24 +628,24 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits("GET", "/v1/big") == 1)
     }
 
-    /// An answer whose parts come 2.5 s apart, longer than the 1 s window,
+    /// An answer whose parts come 5 s apart, longer than the 2 s window,
     /// as SSE events may: waiting for the upstream is not waiting to write,
     /// so a client reading as it comes is never cut off.
     @Test(.timeLimit(.minutes(1)))
     func aStreamIdleLongerThanThePaceWindowIsNotCutOff() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 2)
         defer { under.gateway.stop() }
         let size = 3 << 16
         let client = try connectGateway(under.port)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/2500").utf8)))
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/5000").utf8)))
         let answer = try ChunkedAnswer(reading: client)
         #expect(answer.head.hasPrefix("http/1.1 200"))
         #expect(answer.ended)
         #expect(answer.body == size)
-        #expect(upstream.hits("GET", "/v1/slow/\(size)/2500") == 1)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/5000") == 1)
     }
 
     /// An upstream faster than its reader, with an answer well past the
