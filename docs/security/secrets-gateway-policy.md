@@ -1286,9 +1286,13 @@ processes and walks each registered runtime's, once per runtime for an
 outsider, so a flood of outsiders delays each runtime's connection by up
 to that many checks, 8 at a time. The kernel can still turn one away:
 past the 128 waiting in the backlog, it refuses new connections, the
-runtimes' included, until there is room. Sixteen threads connecting and
-resetting as fast as they could filled it on macOS, and a runtime's
-`connect` failed until it dialled again. A connection reset while it
+runtimes' included, until there is room, and it can drop one after its
+`connect` returned, which then reads nothing. Sixteen threads connecting
+and resetting as fast as they could filled it on macOS, and a runtime
+dialled again; every connection the gateway itself took was answered.
+That was so before outsiders were told apart first as well (the test
+passed on that code once the kernel's drops were told apart from the
+gateway's answers), so a flood is not what turned runtimes away before. A connection reset while it
 waits there still holds its place until the gateway accepts and closes it. Refusals from
 outside every runtime that present no live placeholder (`malformed`,
 `requestTimeout`, `unknownRoute`, and any refusal of a request naming a
