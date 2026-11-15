@@ -134,6 +134,7 @@ private func hasBlankOutsideBraces(_ word: String) -> Bool {
 /// element other than `*`, a closed `[…]` class counting once.
 func shortestGlobMatch(_ pattern: String) -> Int {
     let p = Array(pattern)
+    let classes = p.contains("[") ? GlobClasses(p) : nil
     var count = 0
     var index = 0
     while index < p.count {
@@ -141,7 +142,7 @@ func shortestGlobMatch(_ pattern: String) -> Int {
             index += 1
             continue
         }
-        if p[index] == "[", let end = globClassEnd(p, index) {
+        if p[index] == "[", let end = classes?.end(at: index) {
             index = end.close + 1
         } else {
             index += 1
@@ -303,29 +304,58 @@ private enum BraceRange {
     }
 }
 
-/// The closing `]` of the bracket expression opening at `open` in `p`, and
-/// whether it holds a POSIX class, equivalence class or collating symbol;
-/// nil when it never closes (the `[` is then a literal).
-private func globClassEnd(_ p: [Character], _ open: Int) -> (close: Int, anyCharacter: Bool)? {
-    var k = open + 1
-    if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
-    if k < p.count, p[k] == "]" { k += 1 }
-    var anyCharacter = false
-    while k < p.count, p[k] != "]" {
-        if p[k] == "[", k + 1 < p.count, ":=.".contains(p[k + 1]) {
-            anyCharacter = true
-            let kind = p[k + 1]
-            var j = k + 2
-            while j + 1 < p.count, (p[j] == kind && p[j + 1] == "]") == false { j += 1 }
-            // An unterminated `[:` is plain text inside the class.
-            if j + 1 < p.count {
-                k = j + 2
-                continue
+/// The bracket expressions of a glob pattern, scanned once from its end so
+/// each lookup costs the same whatever the pattern holds: a run of `[`, or
+/// of `[[:`, stays linear.
+private struct GlobClasses {
+    private let p: [Character]
+    /// Scanning a class body from each offset: the `]` that closes it
+    /// (`p.count` when none does) and whether a POSIX class, equivalence
+    /// class or collating symbol (`[:…:]`, `[=…=]`, `[.….]`) comes first.
+    private let close: [Int]
+    private let anyCharacter: [Bool]
+
+    init(_ p: [Character]) {
+        let n = p.count
+        // The first offset at or after each one where `kind` and `]` meet.
+        func terminators(_ kind: Character) -> [Int] {
+            var next = [Int](repeating: n, count: n + 3)
+            for j in stride(from: n - 2, through: 0, by: -1) {
+                next[j] = p[j] == kind && p[j + 1] == "]" ? j : next[j + 1]
+            }
+            return next
+        }
+        let ends: [Character: [Int]] = [":": terminators(":"), "=": terminators("="), ".": terminators(".")]
+        var close = [Int](repeating: n, count: n + 3)
+        var anyCharacter = [Bool](repeating: false, count: n + 3)
+        for k in stride(from: n - 1, through: 0, by: -1) {
+            if p[k] == "]" {
+                close[k] = k
+            } else if p[k] == "[", k + 1 < n, let next = ends[p[k + 1]] {
+                // An unterminated `[:` is plain text inside the class.
+                let resume = next[k + 2] < n ? next[k + 2] + 2 : k + 1
+                close[k] = close[resume]
+                anyCharacter[k] = true
+            } else {
+                close[k] = close[k + 1]
+                anyCharacter[k] = anyCharacter[k + 1]
             }
         }
-        k += 1
+        self.p = p
+        self.close = close
+        self.anyCharacter = anyCharacter
     }
-    return k < p.count ? (k, anyCharacter) : nil
+
+    /// The closing `]` of the bracket expression opening at `open`, and
+    /// whether it holds a POSIX class, equivalence class or collating symbol;
+    /// nil when it never closes (the `[` is then a literal).
+    func end(at open: Int) -> (close: Int, anyCharacter: Bool)? {
+        var k = open + 1
+        if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
+        if k < p.count, p[k] == "]" { k += 1 }
+        guard close[k] < p.count else { return nil }
+        return (close[k], anyCharacter[k])
+    }
 }
 
 /// Whether the bracket expression `body` (between `[` and `]`) of a
@@ -380,6 +410,7 @@ func globCanMatch(_ pattern: String, _ text: String, budget: inout SpellingBudge
     let p = Array(pattern)
     let t = Array(text)
     guard budget.spend(p.count + t.count) else { return true }
+    let classes = p.contains("[") ? GlobClasses(p) : nil
     let width = t.count + 1
     var failed: Set<Int> = []
     func match(_ startP: Int, _ startT: Int) -> Bool {
@@ -392,7 +423,7 @@ func globCanMatch(_ pattern: String, _ text: String, budget: inout SpellingBudge
             // A closed `[…]` class; an unclosed `[` is a literal (`default`).
             if p[pi] == "[" {
                 guard budget.spend(p.count - pi) else { return true }
-                if let end = globClassEnd(p, pi) {
+                if let end = classes?.end(at: pi) {
                     guard ti < t.count, end.anyCharacter || foldedClassMayMatch(p[(pi + 1)..<end.close], t[ti]) else {
                         failed.insert(key)
                         return false
@@ -490,7 +521,7 @@ private let maxJoinedLength = 4
 /// The words of `chars` split at blanks and `;|&()<>`, then, as one more
 /// word each, the run of pieces each `{…}` span (braces matched by nesting,
 /// as brace expansion pairs them) or `[…]` class (closed where the guard's
-/// own `globClassEnd` closes it) joins when it holds such a character, and
+/// own `GlobClasses` closes it) joins when it holds such a character, and
 /// each union of a run with the runs after it that overlap it in turn
 /// (`{c?aude,x y}{,a b}`, also inside a stray `[ … ]`); nil once those
 /// words, and the steps that build them, pass `maxJoinedLength` times the
@@ -518,9 +549,10 @@ private func spelledWordCandidates(_ chars: [Character]) -> [String]? {
             spans.append(open...index)
         }
     }
+    let classes = GlobClasses(chars)
     var index = 0
     while index < chars.count {
-        guard chars[index] == "[", let close = globClassEnd(chars, index)?.close else {
+        guard chars[index] == "[", let close = classes.end(at: index)?.close else {
             index += 1
             continue
         }
