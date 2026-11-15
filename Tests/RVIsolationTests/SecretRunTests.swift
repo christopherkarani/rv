@@ -364,15 +364,16 @@ struct SecretRunLaunchTests {
         #expect(waitpid(pid, &status, 0) == pid)
     }
 
-    /// Only an exit ends the wait for the leader. Darwin answers a wait that
-    /// asked for exits alone with a stop as well, and taking that for the
-    /// exit killed the group of a command that had only stopped.
-    @Test func onlyAnExitEndsTheWaitForTheLeader() {
-        for code in [CLD_EXITED, CLD_KILLED, CLD_DUMPED] {
-            #expect(SecretRunProcess.leaderEnded(reportCode: Int32(code)))
+    /// A stop does not end the wait for the leader. macOS runners answer a
+    /// wait that asked for exits alone with a stop as well, and taking that
+    /// for the exit killed the group of a command that had only stopped. A
+    /// trace stop still ends it: no signal rv forwards would.
+    @Test func aStopDoesNotEndTheWaitForTheLeader() {
+        for code in [CLD_EXITED, CLD_KILLED, CLD_DUMPED, CLD_TRAPPED] {
+            #expect(SecretRunProcess.endsTheWait(reportCode: Int32(code)))
         }
-        for code in [Int32(CLD_STOPPED), Int32(CLD_CONTINUED), Int32(CLD_TRAPPED), 0] {
-            #expect(SecretRunProcess.leaderEnded(reportCode: code) == false)
+        for code in [Int32(CLD_STOPPED), Int32(CLD_CONTINUED), 0] {
+            #expect(SecretRunProcess.endsTheWait(reportCode: code) == false)
         }
     }
 
@@ -496,12 +497,15 @@ struct SecretRunLaunchTests {
         let returned = Date().timeIntervalSince(began)
         let status = try result.get()
         let times = seen.withLock { $0 }
+        let ended = SecretRunExit.code(waitStatus: status)
+        // Asked only of a failure: what this kernel tells an exit-only wait.
+        let kernel = ended == 128 + number ? "" : exitOnlyWaitOnAStoppedChild()
         #expect(
-            SecretRunExit.code(waitStatus: status) == 128 + number,
+            ended == 128 + number,
             """
             wait status \(status); the launch returned after \(returned) s; the command's pid was read after \
             \(times.pid) s, its stop seen after \(times.stopped) s, the signal sent after \(times.sent) s; \
-            signals rv had ignored before: \(ignoredBefore.sorted())
+            signals rv had ignored before: \(ignoredBefore.sorted()); \(kernel)
             """)
     }
 
@@ -872,6 +876,30 @@ private func isGuarded(_ number: Int32) -> Bool {
 }
 
 /// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`; `T` in `stat`).
+/// What `waitid` answers, about a child that has stopped itself, to a wait
+/// that asks for exits alone. For a failure's message.
+private func exitOnlyWaitOnAStoppedChild() -> String {
+    guard case .success(let pid) = SecretRunProcess.spawnSuspended(
+        executable: "/bin/sh", arguments: ["sh", "-c", "kill -STOP $$; exit 0"],
+        environment: ["PATH=/usr/bin:/bin"], descriptors: [:])
+    else { return "no child to ask waitid about" }
+    defer { SecretRunProcess.discard(pid) }
+    guard kill(pid, SIGCONT) == 0 else { return "the child asked about could not be resumed" }
+    // Not the spawn suspension: the stop the script gives itself.
+    usleep(200_000)
+    let deadline = Date().addingTimeInterval(10)
+    while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
+    guard isStopped(pid) else { return "the child asked about never stopped" }
+    var info = siginfo_t()
+    errno = 0
+    let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT | WNOHANG)
+    let failure = errno
+    return """
+        waitid(WEXITED | WNOWAIT | WNOHANG) on a stopped child returned \(result) with errno \(failure), \
+        si_pid \(info.si_pid), si_code \(info.si_code), si_status \(info.si_status)
+        """
+}
+
 private func isStopped(_ pid: pid_t) -> Bool {
     #if os(macOS)
     guard pid > 1, case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }
