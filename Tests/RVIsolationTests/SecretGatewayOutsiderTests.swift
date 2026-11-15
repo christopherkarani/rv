@@ -188,12 +188,15 @@ struct SecretGatewayOutsiderTests {
     /// Outsiders that take long to tell apart hold every classifier, and
     /// more wait behind them: a member that connects meanwhile waits its
     /// turn and is served. It never takes a slot an outsider could hold.
+    /// 0.1 s each, 8 at a time: the member waits about 0.8 s, well inside
+    /// the 10 s its answer is read for (the wait for a classifier does not
+    /// count against its head deadline).
     @Test(.timeLimit(.minutes(1)))
     func outsidersSlowToTellApartDelayAMemberButNeverTurnItAway() throws {
         let marked = MarkedPorts()
         let slow = GatewayPeerCheck { peer, _ in
             if marked.ports.withLock({ $0.contains(peer.port) }) { return .member }
-            Thread.sleep(forTimeInterval: 0.2)
+            Thread.sleep(forTimeInterval: 0.1)
             return .outsider
         }
         let upstream = RecordingUpstream(status: 200)
