@@ -66,7 +66,8 @@ private let compoundWords: Set<String> = [
 
 /// The text after the last top-level list operator of `segment`, or nil
 /// when it holds a group, subshell, substitution, backtick or compound
-/// command word outside quotes. A `&` next to `<` or `>` is a redirect.
+/// command word outside quotes, or an ANSI-C `$'…'` word. A `&` next to
+/// `<` or `>` is a redirect.
 private func lastListElement(_ segment: String) -> String? {
     let chars = Array(segment)
     // Each quoted or escaped character masked to `x`.
@@ -91,6 +92,9 @@ private func lastListElement(_ segment: String) -> String? {
         index += 1
     }
     if masked.contains(where: { "{}()`".contains($0) }) { return nil }
+    // In an ANSI-C word `\'` does not close the quote, which this mask
+    // assumes it does (`sh -c $'echo \'x\'; y'`).
+    if segment.contains("$'") { return nil }
     let words = String(masked).split(whereSeparator: { $0.isWhitespace || ";&|<>".contains($0) })
     if words.contains(where: { compoundWords.contains(String($0)) }) { return nil }
     var start = 0
@@ -119,30 +123,28 @@ private struct StdinRead {
     var fileRedirect = false
 }
 
+/// The operands that name stdin as a program file: `-` and the paths that
+/// open it.
+private let stdinOperands: Set<String> = ["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]
+
 /// How an interpreter argv takes its program from stdin, or nil when it
 /// runs a script file or an inline program instead. The head counts as the
 /// program it decodes to (`$'python3'`). Words after `-` or `/dev/stdin`
-/// are the program's arguments, not a script. deno and bun read one only
-/// given `-`; awk only from `-f -`; `xargs` running an interpreter with no
-/// script operand feeds it the pipe as its program (`xargs python3 -c`).
+/// (`stdinOperands`) are the program's arguments, not a script or an inline
+/// program (`python3 - -c x`). deno and bun read one only given `-`; awk
+/// only from `-f -`; `xargs` running an interpreter with no script operand
+/// feeds it the pipe as its program (`xargs python3 -c`).
 private func stdinRead(_ written: [String]) -> StdinRead? {
     guard let first = written.first else { return nil }
     let program = commandName(first.ansiCDecodedIfMarked).lowercased()
     var argv = [program] + written.dropFirst()
     if program == "xargs" { return xargsStdinRead(argv) }
     if program == "osascript" { return osascriptStdinRead(argv) }
-    if awkNames.contains(program) {
-        let readsStdin = argv.indices.dropFirst().contains { index in
-            let arg = argv[index]
-            if arg == "--file=-" || arg == "--file=/dev/stdin" || arg == "-f-" { return true }
-            return (arg == "-f" || arg == "--file") && index + 1 < argv.count
-                && (argv[index + 1] == "-" || argv[index + 1] == "/dev/stdin")
-        }
-        return readsStdin ? StdinRead(kind: .awk) : nil
-    }
+    if awkNames.contains(program) { return awkStdinRead(argv) }
     let explicitOnly = program == "deno" || program == "bun"
     if explicitOnly, argv.count > 1, argv[1] == "run" { argv.remove(at: 1) }
-    guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(argv) == nil
+    let options = argv.prefix { stdinOperands.contains($0) == false }
+    guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(Array(options)) == nil
     else { return nil }
     var read = StdinRead(kind: kind)
     var sawStdin = false
@@ -150,34 +152,72 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
     while index < argv.count {
         let arg = argv[index]
         index += 1
-        if arg == "<<<" {
-            read.hereString = index < argv.count ? argv[index] : ""
-            index += 1
-        } else if arg.hasPrefix("<<<") {
-            read.hereString = String(arg.dropFirst(3))
-        } else if arg == "<<" || arg == "<<-" {
-            read.heredoc = true
-            index += 1
-        } else if arg.hasPrefix("<<") {
-            read.heredoc = true
-        } else if arg == "<" {
-            read.fileRedirect = true
-            index += 1
-        } else if arg.hasPrefix("<"), arg.hasPrefix("<(") == false {
-            read.fileRedirect = true
-        } else if arg == "-" || arg == "/dev/stdin" {
+        if scanStdinRedirect(argv, at: &index, into: &read) {
+            continue
+        } else if stdinOperands.contains(arg) {
             sawStdin = true
         } else if sawStdin || arg.contains(">") {
             continue
         } else if arg.hasPrefix("-") {
-            // Python's `-W ignore`, `-X dev`: the value is no script.
-            if kind == .plain, isPythonExecutable(program), arg == "-W" || arg == "-X" { index += 1 }
+            // Python's `-W ignore`, `-X dev`: the value is no script, and
+            // never a redirect (`python3 -W <<< …`).
+            if kind == .plain, isPythonExecutable(program), arg == "-W" || arg == "-X", index < argv.count,
+               argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false
+            {
+                index += 1
+            }
         } else {
             return nil
         }
     }
     if explicitOnly, sawStdin == false, read.hereString == nil, read.heredoc == false, read.fileRedirect == false {
         return nil
+    }
+    return read
+}
+
+/// Records the stdin redirect `argv[index - 1]` opens (a here-string,
+/// heredoc or `<` file; not `<(…)`) into `read`, stepping `index` past its
+/// target word, or false when it is no stdin redirect.
+private func scanStdinRedirect(_ argv: [String], at index: inout Int, into read: inout StdinRead) -> Bool {
+    let arg = argv[index - 1]
+    if arg == "<<<" {
+        read.hereString = index < argv.count ? argv[index] : ""
+        index += 1
+    } else if arg.hasPrefix("<<<") {
+        read.hereString = String(arg.dropFirst(3))
+    } else if arg == "<<" || arg == "<<-" {
+        read.heredoc = true
+        index += 1
+    } else if arg.hasPrefix("<<") {
+        read.heredoc = true
+    } else if arg == "<" {
+        read.fileRedirect = true
+        index += 1
+    } else if arg.hasPrefix("<"), arg.hasPrefix("<(") == false {
+        read.fileRedirect = true
+    } else {
+        return false
+    }
+    return true
+}
+
+/// awk reading its program from stdin (`-f -`, `--file=/dev/stdin`,
+/// `-f/dev/fd/0`), with the redirect that feeds it, or nil.
+private func awkStdinRead(_ argv: [String]) -> StdinRead? {
+    let readsStdin = argv.indices.dropFirst().contains { index in
+        let arg = argv[index]
+        for prefix in ["--file=", "-f"] where arg.hasPrefix(prefix) && arg.count > prefix.count {
+            if stdinOperands.contains(String(arg.dropFirst(prefix.count))) { return true }
+        }
+        return (arg == "-f" || arg == "--file") && index + 1 < argv.count && stdinOperands.contains(argv[index + 1])
+    }
+    guard readsStdin else { return nil }
+    var read = StdinRead(kind: .awk)
+    var index = 1
+    while index < argv.count {
+        index += 1
+        _ = scanStdinRedirect(argv, at: &index, into: &read)
     }
     return read
 }
@@ -198,24 +238,32 @@ private func xargsStdinRead(_ argv: [String]) -> StdinRead? {
     return nil
 }
 
-/// `osascript` with no script file, or `-`, and no `-e`: it runs stdin.
+/// `osascript` with no script file, or `-` (`stdinOperands`), and no `-e`
+/// before it: it runs stdin, and words after `-` are the script's
+/// arguments.
 private func osascriptStdinRead(_ argv: [String]) -> StdinRead? {
+    var sawStdin = false
     var index = 1
     while index < argv.count {
         let arg = argv[index]
         index += 1
-        if arg == "-e" { return nil }
         // Any input redirect is read as an opaque program.
         if arg.hasPrefix("<") {
             var read = StdinRead(kind: .appleScript)
             read.fileRedirect = true
             return read
         }
-        if arg == "-l" || arg == "-s" || arg == ">" || arg == ">>" {
+        if stdinOperands.contains(arg) {
+            sawStdin = true
+        } else if sawStdin {
+            continue
+        } else if arg == "-e" {
+            return nil
+        } else if arg == "-l" || arg == "-s" || arg == ">" || arg == ">>" {
             index += 1
         } else if arg.contains(">") {
             continue
-        } else if arg != "-", arg.hasPrefix("-") == false {
+        } else if arg.hasPrefix("-") == false {
             return nil
         }
     }
