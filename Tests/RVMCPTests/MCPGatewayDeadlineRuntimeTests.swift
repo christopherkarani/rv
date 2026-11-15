@@ -132,6 +132,10 @@ final class GatewayRun: Sendable {
     }
 }
 
+final class ForwardCount: Sendable {
+    let value = Mutex(0)
+}
+
 @Suite("MCPGatewayRuntime deadlines", .enabled(if: python3Available))
 struct MCPGatewayDeadlineRuntimeTests {
     static func scratch() throws -> URL {
@@ -176,6 +180,52 @@ struct MCPGatewayDeadlineRuntimeTests {
         #expect(await eventuallyAsync { Self.seen("slow", in: directory).contains("notifications/cancelled") })
         #expect(Self.seen("slow", in: directory).components(separatedBy: "tools/call").count == 2)
         #expect(await run.finish())
+    }
+
+    /// A call still in flight when serving ends has its one terminal
+    /// record (it may still have run) before `run` returns.
+    @Test(.timeLimit(.minutes(5)))
+    func aCallInFlightWhenServingEndsIsInterrupted() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let slow = MCPServerDefinition(name: "slow", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        let run = GatewayRun(
+            core: GatewayRun.core([slow], startTimeout: 300),
+            connections: [Self.launch("slow", mode: "answers", in: directory)])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        #expect(await eventuallyAsync { Self.seen("slow", in: directory).contains("tools/call") })
+        #expect(await run.finish())
+        let records = run.audits.items.withLock { $0 }
+        #expect(records.count == 1, "\(records)")
+        #expect(records.first?.outcome == .interrupted(grant: nil))
+        #expect(records.first?.reason == "gateway stopped; the call may still have run")
+    }
+
+    /// Once serving is stopping, a client line is not handled: nothing is
+    /// recorded as forwarded for a call that can go nowhere.
+    @Test(.timeLimit(.minutes(5)))
+    func clientLinesAfterServingStopsAreNotHandled() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let slow = MCPServerDefinition(name: "slow", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        let counted = ForwardCount()
+        let core = MCPGatewayCore(
+            configuration: MCPConfiguration(servers: [slow]), upstreams: [MCPGatewayCore.Upstream(definition: slow)],
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced,
+            recordForward: { _ in
+                counted.value.withLock { $0 += 1 }
+                return true
+            })
+        let run = GatewayRun(core: core, connections: [Self.launch("slow", mode: "answers", in: directory)])
+        #expect(await run.initialize())
+        run.runtime.requestShutdown()
+        #expect(await run.ended(within: 90))
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        let handled = await eventuallyAsync(3) { counted.value.withLock { $0 } > 0 }
+        #expect(handled == false)
+        try? run.client.toGateway.fileHandleForWriting.close()
     }
 
     @Test func serverThatNeverAnswersInitializeIsKilledAndReleasesTheClient() async throws {

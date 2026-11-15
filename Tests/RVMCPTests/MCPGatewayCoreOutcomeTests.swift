@@ -58,6 +58,32 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(record?.auditEvent().decision == .allowed)
     }
 
+    /// A call in flight when the gateway stops ends with one record, saying
+    /// it may still have run; a second stop finds nothing.
+    @Test func callInFlightWhenTheGatewayStopsIsInterruptedOnce() {
+        var harness = MCPGatewayElicitationTests.harness(elicitation: nil)
+        let hash = JSONValue.object(["body": .string("b"), "title": .string("t")]).canonicalHash
+        _ = harness.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
+        #expect(harness.client(Self.createCall).toUpstream.count == 1)
+        let records = harness.core.handle(.gatewayStopping).audits
+        #expect(records.count == 1)
+        #expect(records.first?.reason == "gateway stopped; the call may still have run")
+        #expect(records.first?.approvalID == "grant1")
+        if case .interrupted? = records.first?.outcome {} else { Issue.record("\(String(describing: records.first))") }
+        #expect(harness.core.handle(.gatewayStopping).audits.isEmpty)
+    }
+
+    /// A prompt still shown when the gateway stops ends declined, once.
+    @Test func heldPromptWhenTheGatewayStopsIsDeclinedOnce() {
+        var harness = MCPGatewayElicitationTests.harness(elicitation: "{}")
+        #expect(harness.client(Self.createCall).audits.first?.auditEvent().decision == .pending)
+        let records = harness.core.handle(.gatewayStopping).audits
+        #expect(records.count == 1)
+        #expect(records.first?.reason == "gateway stopped")
+        #expect(records.first?.auditEvent().decision == .denied)
+        #expect(harness.core.handle(.gatewayStopping).audits.isEmpty)
+    }
+
     @Test func heldPromptWhoseUpstreamExitsWasNeverGrantedSoIsDenied() {
         var harness = MCPGatewayElicitationTests.harness(elicitation: "{}")
         #expect(harness.client(Self.createCall).audits.first?.auditEvent().decision == .pending)

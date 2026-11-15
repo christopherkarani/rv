@@ -12,6 +12,8 @@ public enum MCPGatewayInput: Sendable, Equatable {
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
+    /// Serving ends: what is still in flight gets its last record.
+    case gatewayStopping
 }
 
 public enum MCPGatewayOutput: Sendable, Equatable {
@@ -479,7 +481,7 @@ public struct MCPGatewayCore {
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
         case .upstreamRelaunched(let server): outputs += upstreamRelaunched(server)
-        case .tick: break
+        case .tick, .gatewayStopping: break
         }
         return outputs
     }

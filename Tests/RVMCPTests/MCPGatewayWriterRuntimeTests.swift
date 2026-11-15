@@ -242,6 +242,36 @@ struct MCPGatewayWriterRuntimeTests {
         #expect(await run.finish())
     }
 
+    /// A non-blocking descriptor that is full is waited on, not given up
+    /// on mid-line: every byte arrives, in order.
+    @Test(.timeLimit(.minutes(5)))
+    func aFullNonBlockingOutputIsWaitedOn() async throws {
+        var fds: [Int32] = [0, 0]
+        #expect(pipe(&fds) == 0)
+        let (reader, writer) = (fds[0], fds[1])
+        #expect(fcntl(writer, F_SETFL, fcntl(writer, F_GETFL) | O_NONBLOCK) == 0)
+        let bytes = (0..<(1 << 20)).map { UInt8(truncatingIfNeeded: $0 % 251) }
+        Thread.detachNewThread {
+            MCPGatewayRuntime.writeAll(writer, bytes)
+            close(writer)
+        }
+        let received: [UInt8] = await offThePool {
+            var all: [UInt8] = []
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            while true {
+                usleep(200)
+                let n = read(reader, &chunk, chunk.count)
+                if n < 0, errno == EINTR { continue }
+                guard n > 0 else { break }
+                all += chunk[0..<n]
+            }
+            close(reader)
+            return all
+        }
+        #expect(received.count == bytes.count)
+        #expect(received == bytes)
+    }
+
     /// A shutdown gets through while the client's writer is stalled.
     @Test(.timeLimit(.minutes(5)))
     func shutdownGetsThroughWhileTheClientIsNotReading() async throws {
