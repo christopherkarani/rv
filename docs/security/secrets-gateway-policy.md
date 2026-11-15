@@ -1042,48 +1042,131 @@ shape as `allow`. A request they match needs a human's yes, every time:
 
 ## Connections and slow clients
 
-The gateway serves at most 64 connections at once. Past that, a connection
-gets `503 gateway busy`. Each connection holds its slot until its answer has
-been written, so the gateway bounds how long a client may take:
+The gateway serves at most 64 connections from its runtimes at once. Past
+that, a connection gets `503 gateway busy`. Each connection holds its slot
+until its answer has been written, so the gateway bounds how long a client
+may take:
 
 - **Request head:** 10 s from being accepted. Each read also waits at most
-  30 s for bytes. A client that sends
-  its head a byte at a time is answered `400` and closed at the deadline.
-- **Request body:** 60 s from the moment the head is accepted, answered `413`
-  past it.
+  30 s for bytes. A client that sends its head a byte at a time is answered
+  `408` (`requestTimeout`, "the request did not arrive in time") and closed
+  at the deadline.
+- **Request body:** 60 s from the moment the head is accepted, answered
+  `408` the same way past it.
 - **Writing the answer:** a write to the client that blocks for 30 s closes
-  the connection.
+  the connection. A write that moves a few bytes before its timeout starts
+  the next one, so a client that does not read is cut off after more than
+  one timeout: with a 3 s timeout, a client that never read was cut off
+  after 11.2 s on macOS.
 
-The upstream is never paused. What it has sent and the client has not yet
-taken waits in memory, within two limits:
+Any local process can connect, and a head deadline alone does not stop one
+that reconnects: 64 connections opened again every 10 s would keep every
+runtime's request waiting for a slot, an outage for as long as it kept
+going. So before reading a byte, the gateway checks the connecting process
+against every registered runtime, as it does a placeholder's runtime after
+the head. A connection from none of them (or whose process cannot be
+placed, or that arrives while no runtime is registered) gives its slot back
+at once and takes one of 8 slots of its own, with 2 s for its head; past
+those 8 it gets `503 gateway busy` unread, and no audit record. Its head is
+still read, so a placeholder spent from outside is refused as
+`runtimeMismatch` naming its runtime. It is never forwarded: if its process
+passes the check after its head is read, it is refused as
+`runtimeUnverified`. Such processes can still keep each other out, but not
+the runtimes. The check runs again after the head for every connection, so
+a socket handed to another process in between is refused as before.
 
-- at most 8 MiB for one answer;
-- at most 64 MiB for all answers together, counting only what each holds
-  beyond its first 1 MiB. With 64 connections that is at most 128 MiB.
+### Answers larger than the client takes in
 
-A request that would pass either limit fails: its upstream request is
-cancelled, and its client's answer ends cut short, without the chunked
-terminator. A client that falls more than 8 MiB behind its upstream is
-therefore cut off, however long it would have kept reading. A client that
-keeps up gets all of an answer, whatever its size: a 24 MiB answer from an
-upstream sending about 8 MiB/s reached a reader that started half a second
-late, whole. A client may still take several minutes over a long answer by
-reading a few KiB every 29 s. Streaming answers such as SSE depend on that,
-so no overall time limit applies.
+What the upstream has sent and the client has not yet taken waits in
+memory. The upstream request is never suspended: corelibs-foundation's
+`suspend` drops the transfer and `resume` sends the request, and its
+secret, again. Darwin's session went on reading a suspended request, so
+suspending bounded nothing there.
+
+Every request in flight has a URLSession and delegate queue of its own, so
+one request's wait never holds up another's.
+
+**macOS.** Darwin's session stops reading while its delegate's callback has
+not returned. The callback waits while more than 256 KiB waits for the
+client, so a slow client slows its upstream to its own pace, and an answer
+of any size reaches a client that keeps reading at any pace, sent once.
+Each request holds about one of Darwin's bodies (up to 4 MiB) and 256 KiB
+at most. A session that served its request to the end is kept, up to 64,
+so requests one after another share one upstream connection and TLS
+handshake; requests at the same time each have their own (16 at once used
+15 connections).
+
+**Linux.** corelibs-foundation goes on reading while a callback waits, and
+queues what arrives without bound, so nothing waits and two limits apply:
+
+- at most 64 MiB for one answer;
+- at most 256 MiB for all answers together, counting only what each holds
+  beyond its first 1 MiB; at most 320 MiB with 64 connections.
+
+When an answer would pass the first limit it fails. When the second is
+full, the request holding the most fails, even if its upstream has already
+finished. A failed request's upstream request is cancelled, and its client's
+answer ends cut short, without the chunked terminator. **On Linux an answer
+over 64 MiB from an upstream faster than the gateway forwards it is
+therefore cut off, with no terminator.** On loopback the gateway forwarded
+144–373 MB/s to a client reading as fast as it could: a 64 MiB answer from
+an unthrottled upstream arrived whole with 43 MiB waiting, and a 256 MiB
+one was cut off after 32 MiB. From an upstream sending 125 MB/s a client
+could stop reading for 0.2 s and get a 128 MiB answer whole; one that
+stopped for 1 s was cut off. Each Linux request also has its session to
+itself and is invalidated after: libcurl sent a request again on a reused
+connection that dropped before an answer, and a request with a body went
+again without it and then waited 300 s for it. So every Linux request opens
+its own connection and TLS handshake.
 
 The terminator is written only after every byte before it, so a client never
-reads a cut-off answer as a complete one.
+reads a cut-off answer as a complete one. A client may take several minutes
+over a long answer, which streaming answers such as SSE depend on, so no
+overall time limit applies.
 
-Measured on loopback against a fast upstream, using rv's transport and
-response writer (macOS 27 with Swift 6.4, and Linux in a container with
-Swift 6.4.2). Clients stalled for 3 s before reading. Resident memory is
-the whole process's:
+### Requests sent again
 
-| | before | macOS | Linux |
-| --- | --- | --- | --- |
-| one 64 MiB answer: most waiting / peak resident | 61 MiB (macOS) / 165–228 MiB | 8.0 MiB / 26 MiB, cut off | 8.0 MiB / 40 MiB, cut off |
-| 16 such answers at once: peak resident | 2.1–2.2 GiB | 91 MiB (38 MiB waiting), all cut off | 126–172 MiB (25–30 MiB waiting), all cut off |
-| 6–7 MiB answers, reader 1.5 s late | whole; on Linux sent upstream twice in 2 of 6 GETs, with more bytes than the answer | whole, sent once | whole, sent once (10 of 10) |
+Counted at a loopback upstream that closes the connection without
+answering, on a fresh connection and on one an earlier request left open:
+on Linux every method, with or without a body, is sent once. On macOS a
+POST, PUT, PATCH, DELETE or OPTIONS is sent once, and a GET or HEAD three
+times, its credential with it each time: Darwin's URLSession retries those
+on a dropped connection whatever the request says (`Connection: close`
+included), and has no setting to stop it.
+
+### Measurements
+
+Measured on loopback with rv's transport, response writer and scrubber
+built `-O` into a test binary, against a local upstream sending as fast as
+it can unless a rate is given (macOS 27 with Swift 6.4, and Linux in a
+container with Swift 6.4.2). Clients count the chunked body as they read
+it. "Waiting" is the most the transport held for clients at once; resident
+memory is the whole process's, sampled every 0.5 s. A stalled client reads
+nothing for 5 s (20 s for the 256 MiB answers), then reads everything.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| one 64 MiB answer, client reading at once | whole, 387 MB/s, 4.2 MiB waiting, 31 MiB resident | whole, 373 MB/s, 43 MiB waiting, 75 MiB resident |
+| one 256 MiB answer, client reading at once | whole, 471 MB/s, 4.1 MiB waiting | cut off after 32 MiB |
+| 128 MiB at 125 MB/s, client stops 0.05 s / 0.2 s / 1 s | whole / whole / whole | whole / whole / cut off |
+| 128 MiB unthrottled, client stops 0.05 s / 0.2 s / 1 s | whole / whole / whole | cut off / cut off / cut off |
+| 128 MiB at 250 MB/s, client reading at once | whole | whole, 4.8 MiB waiting |
+| 128 MiB at 12.5 MB/s, client stops 1 s | whole | whole |
+| one 64 MiB answer stalled | whole; 23 MiB resident while stalled | whole; 62 MiB waiting, 94 MiB resident |
+| 16 such answers stalled | all whole; 58 MiB waiting, 102 MiB resident while stalled, 240 MiB peak once all read at once; 55 threads | 4 whole, 12 cut off; 265 MiB waiting, 310 MiB resident; 40 threads |
+| 64 such answers stalled | all whole; 194 MiB waiting, 373 MiB resident while stalled, 821 MiB peak once all read at once; 199 threads | 4 whole, 60 cut off; 300 MiB waiting, 559 MiB resident; 137 threads |
+| 16 / 64 answers of 256 MiB stalled 20 s | all whole; 103 / 374 MiB resident, unchanged over the 20 s; 240 / 762 MiB peak once all read | not measured |
+| a 64 MiB answer beside 16 stalled ones | whole, 438 MB/s (446 MB/s alone) | whole, 11 MB/s (154–307 MB/s alone) |
+| 16 requests one after another / at once | 1 / 15 upstream connections | 16 / 16 |
+
+Before this change both systems cut a client off once 8 MiB waited for it,
+and the docs said a client that keeps up gets an answer however large. In
+these runs that cut off even a client reading as fast as it could: an
+unthrottled 64 MiB answer reached it cut short after 0.9 MiB on macOS and
+2.5 MiB on Linux. Of the rate rows above, only the 125 MB/s answer with a
+0.05 s stop arrived whole on both, with 250 MB/s on macOS and 12.5 MB/s on
+Linux. 16 stalled 64 MiB answers held 100 MiB resident on macOS and 79 MiB
+on Linux, all cut off.
 
 ## Audit
 
@@ -1100,7 +1183,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable` | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable`, `requestTimeout` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
   | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
   | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |
