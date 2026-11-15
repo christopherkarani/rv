@@ -1,7 +1,8 @@
 import Foundation
 
-/// Audit records for refusals of connections from outside every runtime
-/// that present no live placeholder. Any local process can send such heads
+/// Audit records for refusals of connections from outside every runtime:
+/// every malformed or timed-out head, whatever it holds, and any other
+/// that presents no live placeholder. Any local process can send such heads
 /// as fast as the outsider threads refuse them, naming any secret it likes,
 /// and each record is appended and synced. The first in each interval is
 /// written, with how many were left out since the one before it; the rest
@@ -10,8 +11,8 @@ import Foundation
 /// and no stop, that count is not written. The drain is final: a refusal
 /// from a connection still being refused as the gateway stops is written
 /// as it comes, and there are at most as many as the gateway's connection
-/// threads. A start bounds afresh. A refusal that presents a live
-/// placeholder, such as one spent from outside, is always written.
+/// threads. A start bounds afresh. A refusal whose parsed head presents a
+/// live placeholder, such as one spent from outside, is always written.
 final class GatewayOutsiderAudit: @unchecked Sendable {
     static let interval: TimeInterval = 1
 
