@@ -905,28 +905,29 @@ struct URLSessionStreamingTransportTests {
     }
 
     /// Without a hand-off, a reader that keeps up with an upstream sending
-    /// about 4 MiB a second gets all of an answer three times `perRequest`,
-    /// sent once. It starts 0.2 s late and pauses after each read, so more
-    /// than 512 KiB waits for it before it catches up, and it can fall about
-    /// another 0.8 s behind on a starved host before 4 MiB waits: only a
-    /// reader cut while it keeps up turns this red.
+    /// about 8 MiB a second gets all of an answer one and a half times
+    /// `perRequest`, sent once. It starts 0.3 s late and pauses after each
+    /// read, so more than 512 KiB waits for it before it catches up (at
+    /// 4 MiB a second and 0.2 s late, the sockets' buffers took nearly all
+    /// of it), and it can fall about another 0.7 s behind on a starved host
+    /// before 8 MiB waits: only a reader cut while it keeps up turns this red.
     @Test(.timeLimit(.minutes(1)))
     func aLiveReaderGetsTheWholeOfAnAnswerLargerThanTheCap() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let limits = URLSessionStreamingTransport.Limits(perRequest: 4 << 20, total: .max, handoff: nil)
+        let limits = URLSessionStreamingTransport.Limits(perRequest: 8 << 20, total: .max, handoff: nil)
         let under = try GatewayUnderTest(upstreamPort: upstream.port, limits: limits)
         defer { under.gateway.stop() }
         let size = 12 << 20
         let client = try connectGateway(under.port)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/16").utf8)))
-        let answer = try ChunkedAnswer(reading: client, pause: 0.2, perRead: 0.001)
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/8").utf8)))
+        let answer = try ChunkedAnswer(reading: client, pause: 0.3, perRead: 0.001)
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
-        #expect(upstream.hits("GET", "/v1/slow/\(size)/16") == 1)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
         #expect(under.transport.peakQueuedBytes > 512 << 10, "\(under.transport.peakQueuedBytes)")
     }
 
