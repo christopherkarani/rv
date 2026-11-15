@@ -14,9 +14,9 @@ import FoundationNetworking
 ///
 /// The sink runs on the thread that called `send`, never on the session's
 /// one delegate queue: a sink that blocks, writing to a client that does not
-/// read, holds up only its own request. While more than `highWater` bytes
-/// wait for a sink its task is suspended, so a slow reader is not buffered
-/// without bound.
+/// read, holds up only its own request. On Darwin, while more than
+/// `highWater` bytes wait for a sink its task is suspended. Elsewhere tasks
+/// are never suspended: corelibs-foundation restarts a resumed task.
 final class URLSessionStreamingTransport: @unchecked Sendable {
     /// Bytes queued for one sink before its task is suspended.
     static let highWater = 1 << 20
@@ -116,10 +116,14 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         if case .body(let data) = event {
             queuedBytes += data.count
             peak.observe(queuedBytes)
+            // corelibs-foundation's `suspend` drops the transfer and its
+            // `resume` sends the request again, credential and all.
+            #if canImport(Darwin)
             if queuedBytes > URLSessionStreamingTransport.highWater, suspended == false {
                 suspended = true
                 task.suspend()
             }
+            #endif
         }
         condition.signal()
     }
