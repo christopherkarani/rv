@@ -373,15 +373,14 @@ struct UnixSocketListenerTests {
     }
 
     /// A same-user client that sends a request and closes before rvd sets
-    /// up its connection: Darwin refuses `SO_NOSIGPIPE` (and every other
-    /// option) on a socket whose peer is gone, yet the request is still
-    /// readable, and a reply sent with flags 0 raises SIGPIPE, killing the
-    /// whole process. Today the refused `SO_RCVTIMEO` closes such a
-    /// connection first, and replies are sent from dispatch worker threads,
-    /// where Darwin 27 was measured not to kill the process for it; replies
-    /// also pass MSG_NOSIGNAL so neither is what keeps rvd alive. The
-    /// listener must keep serving.
-    @Test func aClientGoneBeforeItsReplyDoesNotKillTheListener() throws {
+    /// up its connection is closed, and the listener keeps serving. Darwin
+    /// refuses every option on a socket whose peer is gone, so the refused
+    /// `SO_RCVTIMEO` closes it. This test cannot go red on the reply's send
+    /// flags: an accepted socket inherits `SO_NOSIGPIPE` from the listening
+    /// socket, which `openStream` sets, so even with that close removed and
+    /// flags 0 the reply's EPIPE raised no signal (measured on Darwin 27).
+    /// `repliesPassMSGNOSIGNAL` covers the flags.
+    @Test func aClientGoneBeforeItsReplyIsClosedAndTheListenerKeepsServing() throws {
         let home = try makeIsolatedHome("pipe")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -418,6 +417,12 @@ struct UnixSocketListenerTests {
         defer { client.close() }
         let data = try #require(sendWithin(seconds: 10, client, body: hello).data)
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    /// Replies never rely on the socket's `SO_NOSIGPIPE` alone: a flags-0
+    /// send on a gone peer whose socket lacks it ends the whole process.
+    @Test func repliesPassMSGNOSIGNAL() {
+        #expect(DarwinFrameIO.sendFlags & Int32(MSG_NOSIGNAL) != 0)
     }
 
     @Test func concurrentConnectionsAreBothServed() throws {
