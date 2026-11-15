@@ -52,12 +52,32 @@ private struct StdinRead {
 }
 
 /// How an interpreter argv takes its program from stdin, or nil when it
-/// runs a script file or an inline program instead.
-private func stdinRead(_ argv: [String]) -> StdinRead? {
-    guard let program = argv.first?.lowercased(), let kind = stdinProgramKind(program),
-          inlineProgram(argv) == nil
+/// runs a script file or an inline program instead. The head counts as the
+/// program it decodes to (`$'python3'`). Words after `-` or `/dev/stdin`
+/// are the program's arguments, not a script. deno and bun read one only
+/// given `-`; awk only from `-f -`; `xargs` running an interpreter with no
+/// script operand feeds it the pipe as its program (`xargs python3 -c`).
+private func stdinRead(_ written: [String]) -> StdinRead? {
+    guard let first = written.first else { return nil }
+    let program = commandName(first.ansiCDecodedIfMarked).lowercased()
+    var argv = [program] + written.dropFirst()
+    if program == "xargs" { return xargsStdinRead(argv) }
+    if program == "osascript" { return osascriptStdinRead(argv) }
+    if awkNames.contains(program) {
+        let readsStdin = argv.indices.dropFirst().contains { index in
+            let arg = argv[index]
+            if arg == "--file=-" || arg == "--file=/dev/stdin" || arg == "-f-" { return true }
+            return (arg == "-f" || arg == "--file") && index + 1 < argv.count
+                && (argv[index + 1] == "-" || argv[index + 1] == "/dev/stdin")
+        }
+        return readsStdin ? StdinRead(kind: .awk) : nil
+    }
+    let explicitOnly = program == "deno" || program == "bun"
+    if explicitOnly, argv.count > 1, argv[1] == "run" { argv.remove(at: 1) }
+    guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(argv) == nil
     else { return nil }
     var read = StdinRead(kind: kind)
+    var sawStdin = false
     var index = 1
     while index < argv.count {
         let arg = argv[index]
@@ -77,13 +97,61 @@ private func stdinRead(_ argv: [String]) -> StdinRead? {
             index += 1
         } else if arg.hasPrefix("<"), arg.hasPrefix("<(") == false {
             read.fileRedirect = true
-        } else if arg == "-" || arg == "/dev/stdin" || arg.hasPrefix("-") || arg.contains(">") {
+        } else if arg == "-" || arg == "/dev/stdin" {
+            sawStdin = true
+        } else if sawStdin || arg.contains(">") {
             continue
+        } else if arg.hasPrefix("-") {
+            // Python's `-W ignore`, `-X dev`: the value is no script.
+            if kind == .plain, isPythonExecutable(program), arg == "-W" || arg == "-X" { index += 1 }
         } else {
             return nil
         }
     }
+    if explicitOnly, sawStdin == false, read.hereString == nil, read.heredoc == false, read.fileRedirect == false {
+        return nil
+    }
     return read
+}
+
+/// `xargs` running an interpreter given no script operand after it (only
+/// options and `{}`): the words it reads from the pipe reach the
+/// interpreter as its program or the inline program's text.
+private func xargsStdinRead(_ argv: [String]) -> StdinRead? {
+    for index in argv.indices.dropFirst() {
+        let name = commandName(argv[index].ansiCDecodedIfMarked).lowercased()
+        let kind: ProgramKind? = awkNames.contains(name) ? .awk
+            : (name == "deno" || name == "bun") ? .plain : stdinProgramKind(name)
+        guard let kind else { continue }
+        let rest = argv[(index + 1)...].filter { ($0 == "run" && (name == "deno" || name == "bun")) == false }
+        let scriptless = rest.allSatisfy { $0.hasPrefix("-") || $0.contains("{}") }
+        return scriptless ? StdinRead(kind: kind) : nil
+    }
+    return nil
+}
+
+/// `osascript` with no script file, or `-`, and no `-e`: it runs stdin.
+private func osascriptStdinRead(_ argv: [String]) -> StdinRead? {
+    var index = 1
+    while index < argv.count {
+        let arg = argv[index]
+        index += 1
+        if arg == "-e" { return nil }
+        // Any input redirect is read as an opaque program.
+        if arg.hasPrefix("<") {
+            var read = StdinRead(kind: .appleScript)
+            read.fileRedirect = true
+            return read
+        }
+        if arg == "-l" || arg == "-s" || arg == ">" || arg == ">>" {
+            index += 1
+        } else if arg.contains(">") {
+            continue
+        } else if arg != "-", arg.hasPrefix("-") == false {
+            return nil
+        }
+    }
+    return StdinRead(kind: .appleScript)
 }
 
 private func stdinProgramKind(_ program: String) -> ProgramKind? {
