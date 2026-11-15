@@ -218,6 +218,55 @@ struct MCPCageCredentialLiveTests {
         #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
     }
 
+    /// `~/.ssh` → `W/l/../keys`, `l` a symlink to `W/z/q`, all in a write
+    /// root: the key directory is `W/z/keys`, reached through `l`, which the
+    /// `..` drops from the spelling. Replacing `l` with a link to the scratch
+    /// would move `~/.ssh` to `scratch/keys`; `l` cannot be removed,
+    /// renamed, replaced or swapped, and the key stays unread.
+    @Test(.timeLimit(.minutes(1)))
+    func aLinkADotDotDropsFromACredentialTargetCannotBeSwapped() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-dotdot-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let keys = root.appendingPathComponent("z/keys")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("z/q"), withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: keys.appendingPathComponent("id_rsa"))
+        let link = root.appendingPathComponent("l")
+        try #require(symlink(root.appendingPathComponent("z/q").path, link.path) == 0)
+        try #require(symlink(link.path + "/../keys", home.appendingPathComponent(".ssh").path) == 0)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/dotdot", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; s="$2"; l="$3"
+            /bin/echo STARTED
+            /bin/cat "$home/.ssh/id_rsa" 2>/dev/null
+            /bin/mkdir -p "$s/mine/q" "$s/keys" && /bin/ln -s "$s/mine/q" "$s/newl"
+            /bin/rm "$l" 2>/dev/null && echo UNLINK_OK
+            /bin/mv "$l" "$s/moved" 2>/dev/null && echo RENAME_OK
+            replace "$s/newl" "$l" && echo REPLACE_OK
+            swap "$s/newl" "$l" && echo SWAP_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, scratch.path, link.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains(marker) == false, "\(output)")
+        for refused in ["UNLINK_OK", "RENAME_OK", "REPLACE_OK", "SWAP_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("z/q").path)
+    }
+
     /// A missing directory above a credential, inside a write root (here
     /// `~/Library/Application Support/Google` above Chrome's, the home under
     /// the temp directory). Whatever the cage put there would hold the
