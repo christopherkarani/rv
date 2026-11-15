@@ -507,9 +507,9 @@ public final class SecretGateway: @unchecked Sendable {
             }
             _ = fcntl(held, F_SETFD, FD_CLOEXEC)
             #if canImport(Darwin)
-            // Darwin refuses this on a connection its client already reset,
-            // and a write to that socket raises SIGPIPE in the gateway's
-            // process: such a connection is closed unanswered.
+            // Darwin refuses this on a connection its client already reset.
+            // Sends pass MSG_NOSIGNAL as well, but there is no one left to
+            // answer: such a connection is closed unanswered.
             var one: Int32 = 1
             guard setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
                 close(held)
@@ -1104,11 +1104,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
 }
 
 enum GatewaySocket {
-    #if canImport(Darwin)
-    static let sendFlags: Int32 = 0
-    #else
+    /// Every send, on both platforms: Darwin's SO_NOSIGPIPE is only as good
+    /// as the setsockopt that set it, and that is refused once the peer is
+    /// gone.
     static let sendFlags = Int32(MSG_NOSIGNAL)
-    #endif
 
     @discardableResult
     static func writeAll(_ fd: Int32, _ bytes: [UInt8]) -> Bool {
