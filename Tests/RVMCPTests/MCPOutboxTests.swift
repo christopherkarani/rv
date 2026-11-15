@@ -22,12 +22,12 @@ struct MCPOutboxTests {
     @Test func runsWorkInOrderOffTheCallersThread() {
         let outbox = MCPOutbox(limit: 100)
         let order = Mutex<[Int]>([])
-        let caller = Thread.current
+        let caller = ObjectIdentifier(Thread.current)
         let elsewhere = Mutex(true)
         for index in 0..<50 {
             #expect(outbox.submit(cost: 1) {
                 order.withLock { $0.append(index) }
-                if Thread.current == caller { elsewhere.withLock { $0 = false } }
+                if ObjectIdentifier(Thread.current) == caller { elsewhere.withLock { $0 = false } }
             } == .queued)
         }
         outbox.close()
@@ -141,7 +141,7 @@ struct MCPLogRelayTests {
 
 @Suite("MCPBacklog")
 struct MCPBacklogTests {
-    @Test func aReaderWaitsWhileTheQueueIsBehindAndGoesOnOnceItCatchesUp() async {
+    @Test func aReaderWaitsWhileTheQueueIsBehindAndGoesOnOnceItCatchesUp() {
         let backlog = MCPBacklog(limit: 10)
         backlog.admit(8)
         let through = Mutex(false)
@@ -157,7 +157,7 @@ struct MCPBacklogTests {
         // A correct backlog never lets it through here; a broken one may.
         #expect(through.withLock { $0 } == false)
         backlog.release(8)
-        let finished = await offThePool { done.wait(timeout: .now() + 60) } == .success
+        let finished = done.wait(timeout: .now() + 60) == .success
         #expect(finished)
         #expect(through.withLock { $0 })
         // One line of any size goes when nothing waits.
