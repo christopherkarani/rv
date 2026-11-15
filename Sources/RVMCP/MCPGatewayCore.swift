@@ -688,6 +688,11 @@ public struct MCPGatewayCore {
 
     mutating func clientNotification(_ method: String, _ params: JSONValue?) -> [MCPGatewayOutput] {
         guard method == "notifications/cancelled", let target = params?["requestId"] else { return [] }
+        // Still waiting for the servers to start: it is never run.
+        if let index = waiting.firstIndex(where: { $0["id"] == target }) {
+            waiting.remove(at: index)
+            return []
+        }
         if let key = held.first(where: { $0.value.client == target })?.key {
             held[key] = nil
             return [.toClient(Self.notification("notifications/cancelled", .object([
