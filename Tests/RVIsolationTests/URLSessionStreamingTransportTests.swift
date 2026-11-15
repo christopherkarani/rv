@@ -195,6 +195,44 @@ private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     }
 }
 
+/// Counts what one `send` delivered, stalling on its first body until the gate opens.
+private final class GatedSink: SecretResponseSink, @unchecked Sendable {
+    private let gate: DispatchSemaphore
+    private let lock = NSLock()
+    private var bytes = 0
+    private var opened = false
+    private var ended: String?
+
+    init(_ gate: DispatchSemaphore) {
+        self.gate = gate
+    }
+
+    func head(status: Int, headers: [(name: String, value: String)]) {}
+    func body(_ data: Data) -> Bool {
+        lock.lock()
+        let first = opened == false
+        opened = true
+        bytes += data.count
+        lock.unlock()
+        if first { gate.wait() }
+        return true
+    }
+    func finish() { end("finished") }
+    func fail(_ reason: String) { end("failed: \(reason)") }
+
+    private func end(_ how: String) {
+        lock.lock()
+        ended = how
+        lock.unlock()
+    }
+
+    var result: (bytes: Int, ended: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (bytes, ended)
+    }
+}
+
 /// The production transport, pointed at the loopback upstream: the gateway
 /// only forwards to https, so the request is rewritten on its way out.
 private func loopbackTransport(_ transport: URLSessionStreamingTransport, port: Int) -> SecretUpstreamTransport {
@@ -473,6 +511,59 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
         #expect(under.transport.peakQueuedBytes <= 8 << 20)
+    }
+
+    /// The total counts only what each request holds beyond its exempt
+    /// first bytes, so a request keeping up is never failed for the others.
+    @Test
+    func theBudgetCountsOnlyWhatEachRequestHoldsPastItsExemptBytes() {
+        let budget = URLSessionStreamingBudget(.init(perRequest: 8, total: 4, exempt: 2))
+        #expect(budget.admit(2, holding: 0))
+        #expect(budget.admit(2, holding: 0))
+        #expect(budget.admit(4, holding: 2))
+        #expect(budget.admit(1, holding: 6) == false, "past the total")
+        #expect(budget.admit(1, holding: 0), "within its exempt bytes")
+        #expect(budget.admit(9, holding: 0) == false, "past the per-request cap")
+        budget.release(4, holding: 6)
+        #expect(budget.admit(4, holding: 2))
+        #expect(budget.waiting == 9)
+        #expect(budget.peak == 9)
+    }
+
+    /// Readers stalled together never hold more than the total beyond each
+    /// one's exempt bytes, the requests that would pass it fail, the others
+    /// arrive whole, and every byte is given back once all have returned.
+    @Test(.timeLimit(.minutes(1)))
+    func stalledReadersTogetherStayWithinTheTotal() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let limits = URLSessionStreamingTransport.Limits(perRequest: 8 << 20, total: 4 << 20, exempt: 1 << 20)
+        let transport = URLSessionStreamingTransport(limits: limits)
+        let count = 4
+        let size = 6 << 20
+        let gate = DispatchSemaphore(value: 0)
+        let sinks = (0..<count).map { _ in GatedSink(gate) }
+        let done = DispatchGroup()
+        for (index, sink) in sinks.enumerated() {
+            let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/bytes/\(size + index)"))
+            done.enter()
+            Thread.detachNewThread {
+                transport.send(SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+                done.leave()
+            }
+        }
+        Thread.sleep(forTimeInterval: 2)
+        for _ in 0..<count { gate.signal() }
+        #expect(done.wait(timeout: .now() + 20) == .success, "some sends never returned")
+        #expect(transport.peakQueuedBytes <= limits.total + count * limits.exempt)
+        #expect(transport.budget.waiting == 0)
+        let ends = sinks.map(\.result)
+        #expect(ends.contains { $0.ended?.hasPrefix("failed: the client fell too far behind") == true })
+        for (index, end) in ends.enumerated() {
+            #expect(end.ended != nil)
+            if end.ended == "finished" { #expect(end.bytes == size + index) }
+            #expect(upstream.hits("GET", "/bytes/\(size + index)") == 1)
+        }
     }
 
     /// Clients that send their request heads a byte at a time hold their
