@@ -557,7 +557,9 @@ public final class SecretGateway: @unchecked Sendable {
     /// against every registered runtime, and only one found inside a runtime
     /// takes one of the `maximumConnections` slots. Any other takes one of
     /// the `outsiderConnections` slots, past which it is answered `503`
-    /// unread, has a short head deadline, and is never forwarded.
+    /// unread and has a short head deadline. It is never forwarded, unless
+    /// it could not be placed at all and the full check after its head
+    /// places it in a runtime.
     func serve(_ client: Int32) {
         let started = DispatchTime.now()
         let early = classify(client)
@@ -580,6 +582,9 @@ public final class SecretGateway: @unchecked Sendable {
         started: DispatchTime = .now()
     ) {
         let outsider = early != .member
+        // Taken once the full check places an `.unverifiable` peer in a runtime.
+        var promoted: GatewaySlot?
+        defer { promoted?.release() }
         let reader = GatewaySocket.Reader(fd: client)
         reader.deadline = started + (outsider ? min(requestHeadDeadline, outsiderHeadDeadline) : requestHeadDeadline)
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
@@ -640,10 +645,19 @@ public final class SecretGateway: @unchecked Sendable {
             switch early {
             case .member:
                 break
-            case .outsider, .unverifiable:
+            case .outsider:
                 // Outside every runtime a moment ago: refused even if it passed now.
                 deny(.runtimeUnverified)
                 return
+            case .unverifiable:
+                // Could not be placed a moment ago, placed now by the full
+                // check, which decides: the request moves to a runtime's slot.
+                guard slots.wait(timeout: .now()) == .success else {
+                    GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+                    return
+                }
+                promoted = GatewaySlot(slots)
+                slot?.release()
             }
             if let refusal = prepare(result.used.token) {
                 deny(refusal)

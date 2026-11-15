@@ -258,6 +258,36 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.isEmpty)
     }
 
+    /// A peer that could not be placed when it connected waits as an
+    /// outsider, and the full check after its head decides: placed in the
+    /// runtime, it is forwarded; still unplaced, it is refused.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
+    func aPeerUnplacedAtFirstIsDecidedByTheFullCheck(placedLater: Bool) throws {
+        let checked = MarkedPorts()
+        let settles = GatewayPeerCheck { peer, _ in
+            let first = checked.ports.withLock { $0.insert(peer.port).inserted }
+            return first || placedLater == false ? .unverifiable : .member
+        }
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(settles, upstream: upstream, audit: audit)
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let client = try boundClient()
+        defer { close(client.fd) }
+        try dial(client.fd, to: port)
+        #expect(GatewaySocket.writeAll(client.fd, bearer(placeholder)))
+        let served = answer(client.fd)
+        if placedLater {
+            #expect(served.hasPrefix("HTTP/1.1 200"), "\(served.prefix(80))")
+            #expect(upstream.requests.count == 1)
+        } else {
+            #expect(served.hasPrefix("HTTP/1.1 403"), "\(served.prefix(80))")
+            #expect(upstream.requests.isEmpty)
+            #expect(audit.items.withLock { $0.last?.refusal?.code } == "runtimeUnverified")
+        }
+    }
+
     /// Outside every runtime when it connected, inside one by the time its
     /// placeholder is checked: still refused, and nothing is forwarded.
     @Test(.timeLimit(.minutes(1)))
