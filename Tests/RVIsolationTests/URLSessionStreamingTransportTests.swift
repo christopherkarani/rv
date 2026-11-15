@@ -310,7 +310,8 @@ struct URLSessionStreamingTransportTests {
         }
         #expect(last == 0)
         let separator = Array("\r\n\r\n".utf8)
-        let headEnd = try #require((0...(min(received.count, 4096) - separator.count)).first {
+        try #require(received.count > 4096)
+        let headEnd = try #require((0...(4096 - separator.count)).first {
             Array(received[$0..<($0 + separator.count)]) == separator
         })
         #expect(String(decoding: received[..<headEnd], as: UTF8.self).lowercased().contains("transfer-encoding: chunked"))
