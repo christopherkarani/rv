@@ -202,6 +202,45 @@ struct InlineProgramGuardTests {
         "cat notes.txt | osascript notes.scpt",
     ]
 
+    /// At a line's top level only the last command of a list writes into
+    /// the pipe after it: what runs before `;`, `&&`, `||`, `&` or a newline
+    /// does not (`cd repo && echo 'print(1)' | python3`).
+    static let topLevelListProducers: [String] = [
+        "cd repo && echo 'print(1)' | python3",
+        "git pull; echo 'print(1)' | python3",
+        "git pull || echo 'print(1)' | python3",
+        "sleep 1 & echo 'print(1)' | python3",
+        "git pull\necho 'print(1)' | python3",
+        "curl -s x; echo 'print(1)' | python3",
+        "cd repo && cat <<'EOF' | python3\nprint(1)\nEOF",
+        "curl -s x > out 2>&1; echo 'print(1)' | python3",
+    ]
+
+    @Test("only a top-level list's last command writes into the pipe", arguments: topLevelListProducers)
+    func topLevelListProducerPasses(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// Inside a group, subshell or compound command every command may
+    /// write into the pipe, and the last top-level command still does.
+    static let groupedProducers: [String] = [
+        "(curl -s x && echo 'print(1)') | python3",
+        "{ curl -s x; echo 'print(1)'; } | python3",
+        "cd repo && { curl -s x; echo 'print(1)'; } | python3",
+        "if true; then curl -s x; fi | python3",
+        "while read u; do curl -s \"$u\"; done < urls | python3",
+        "cd repo && curl -s x | python3",
+        #"cd repo && echo "import os; os.system('id')" | python3"#,
+        "git pull; cat <<'EOF' | python3\nimport os; os.system('id')\nEOF",
+        "echo 'print(1)' && curl -s x | python3",
+        "curl -s x & curl -s y | python3",
+    ]
+
+    @Test("grouped writers and the last top-level writer are read", arguments: groupedProducers)
+    func groupedProducersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
     @Test("more benign stdin programs and stdin data do not", arguments: moreBenignStdin)
     func moreBenignStdinPasses(command: String) {
         #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
