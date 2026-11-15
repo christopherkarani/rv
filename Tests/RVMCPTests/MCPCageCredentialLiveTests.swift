@@ -30,7 +30,7 @@ struct MCPCageCredentialLiveTests {
     /// cannot stall it, and without waiting for end of file: a child another
     /// test spawns meanwhile can inherit the pipe's write end and hold it
     /// open. Nil when it did not finish.
-    private func caged(_ profile: String, _ script: String, _ arguments: [String], in directory: String) throws -> String? {
+    func caged(_ profile: String, _ script: String, _ arguments: [String], in directory: String) throws -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
         process.arguments = ["-p", profile, "/bin/sh", "-c",

@@ -14,6 +14,11 @@
 // `rv-mcp-probe hold` reads its stdin until it ends, then exits: a process
 // whose arguments and environment stay there to read for as long as the
 // test holds that stdin open.
+// `rv-mcp-probe unix-connect <path>` connects to the Unix-domain stream
+// socket at `path` and writes one byte, printing whether it connected or
+// the errno.
+// `rv-mcp-probe peerinfo <pid>` asks `proc_pidfdinfo` about `pid`'s fd 0
+// and `proc_pid_rusage` about `pid`, printing whether each answered.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
 // work that never ends, then sends `initialize` to the MCP server at `url`
 // through `MCPRemoteUpstream` and a GET through the secrets gateway's
@@ -272,6 +277,55 @@ case "hold":
         if count == 0 || (count < 0 && errno != EINTR) { break }
     }
     exit(0)
+case "unix-connect":
+    guard arguments.count == 2 else {
+        say("usage: rv-mcp-probe unix-connect <path>")
+        exit(2)
+    }
+    let path = Array(arguments[1].utf8)
+    var address = sockaddr_un()
+    guard path.count < MemoryLayout.size(ofValue: address.sun_path) else {
+        say("unix-connect failed path too long")
+        exit(2)
+    }
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path) }
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        say("unix-connect failed socket errno=\(errno)")
+        exit(1)
+    }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard connected == 0 else {
+        say("unix-connect failed errno=\(errno)")
+        exit(1)
+    }
+    var byte = UInt8(ascii: "x")
+    let sent = write(fd, &byte, 1)
+    say(sent == 1 ? "unix-connect connected sent=1" : "unix-connect connected send failed errno=\(errno)")
+    close(fd)
+    exit(0)
+case "peerinfo":
+    // `proc_pidfdinfo` of `pid`'s fd 0 (a pipe in the tests) and
+    // `proc_pid_rusage` of `pid`: whether each answered, never what.
+    guard arguments.count == 2, let pid = pid_t(arguments[1]) else {
+        say("usage: rv-mcp-probe peerinfo <pid>")
+        exit(2)
+    }
+    var pipeInfo = pipe_fdinfo()
+    let pipeSize = Int32(MemoryLayout<pipe_fdinfo>.size)
+    let filled = proc_pidfdinfo(pid, 0, PROC_PIDFDPIPEINFO, &pipeInfo, pipeSize)
+    let fdAnswer = filled == pipeSize ? "pidfdinfo ok" : "pidfdinfo failed errno=\(errno)"
+    var usage = rusage_info_v0()
+    let usageResult = withUnsafeMutablePointer(to: &usage) {
+        $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V0, $0) }
+    }
+    let usageAnswer = usageResult == 0 ? "rusage ok" : "rusage failed errno=\(errno)"
+    say(fdAnswer + " " + usageAnswer)
+    exit(0)
 case "procargs-bytes":
     // A hand-built buffer, hex encoded, for layouts no real process makes.
     let hex = arguments.count == 2 ? Array(arguments[1].utf8) : []
@@ -286,6 +340,6 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | hold | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
+        + " | hold | unix-connect <path> | peerinfo <pid> | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
     exit(2)
 }

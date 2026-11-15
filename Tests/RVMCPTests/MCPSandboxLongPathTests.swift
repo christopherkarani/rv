@@ -70,16 +70,43 @@ struct MCPSandboxLongPathTests {
             path += "/" + String("Straße-ΣIGMA-ﬁle-\(Self.letterHeavy)".prefix(200))
         }
         while path.utf8.count < 1023 { path += "x" }
-        // This path has no symlink, so it emits no opening allows (those need
-        // a real link to redirect a missing name); passing a write root would
-        // not change the output. The deny literals are the long ones here, and
-        // opening literals, when a symlinked path produces them, go through the
-        // same chunker (covered by the live symlink tests that build and
-        // compile real profiles, and by seatbeltStringSplitsWithoutBreakingAnEscape).
+        // This path has no symlink, so it emits no openings (those need a real
+        // link to redirect a missing name) and a write root would not change
+        // the output: it covers the deny literals. The next test covers the
+        // openings.
         let filters = MCPSandbox.paths([path], denyTargets: true, writable: [])
         let profile = "(version 1)(allow default)(deny file-read* " + filters + ")"
         #expect(Self.longestLiteral(in: profile) <= MCPSandbox.seatbeltLiteralBytes)
         #expect(MCPSandbox.seatbeltLiteralBytes < Self.readerLimit)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(profile) == nil)
+        #endif
+    }
+
+    /// A credential path that crosses a real symlink to a letter-heavy
+    /// directory, with a letter-heavy name missing after it, inside a write
+    /// root: `symlinkOpenings` emits openings (only with the write root, where
+    /// the cage could create the name), and every literal they add, folded
+    /// past the reader limit, is still chunked under it and compiles.
+    @Test(.timeLimit(.minutes(1))) func symlinkOpeningsStayUnderTheReaderLimitAndCompile() throws {
+        let root = URL(fileURLWithPath: MCPSandbox.realPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("rv-open-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent(Self.letterHeavy, isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let path = link.appendingPathComponent("Q\(Self.letterHeavy)").appendingPathComponent("key").path
+
+        let openings = MCPSandbox.missingSymlinkOpenings(path)
+        #expect(openings.isEmpty == false, "no openings for \(path)")
+        #expect(openings.contains { $0.contains(Self.letterHeavy) })
+        let filters = MCPSandbox.paths([path], denyTargets: true, writable: [root.path])
+        #expect(filters.utf8.count > MCPSandbox.paths([path], denyTargets: true, writable: []).utf8.count,
+                "the write root should add the openings")
+        let profile = "(version 1)(allow default)(deny file-read* " + filters + ")"
+        #expect(profile.contains("(string-append"))
+        #expect(Self.longestLiteral(in: profile) <= MCPSandbox.seatbeltLiteralBytes)
         #if os(macOS)
         #expect(MCPSandbox.profileCompileError(profile) == nil)
         #endif
@@ -119,12 +146,12 @@ struct MCPSandboxLongPathTests {
     /// fresh 0700 directory under `/Users/Shared`, named with the letter-heavy
     /// component so the credential literals still fold past the reader limit;
     /// a real home is not needed, only a long path component no profile line
-    /// names.
+    /// names. A UUID per run (250 bytes in all, under NAME_MAX) keeps two
+    /// test processes from sharing or removing each other's directory.
     @Test(.enabled(if: FileManager.default.isWritableFile(atPath: "/Users/Shared"), "needs a writable /Users/Shared outside the cage's write roots"))
     func cagedServerWithALetterHeavyHomeStartsAndStillDeniesCredentials() throws {
         let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
-            .appendingPathComponent("rv-cage-long-\(Self.letterHeavy)", isDirectory: true)
-        try? FileManager.default.removeItem(at: root)
+            .appendingPathComponent("rv-cage-long-\(Self.letterHeavy)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }

@@ -550,7 +550,10 @@ those of its children while they are alive (a child it started is in the
 same sandbox and stays readable until it exits; once it has exited its pid
 is outside every sandbox and reads "Operation not permitted" like any
 other), and every process's pid, parent pid and short command name
-(`pgrep` and `KERN_PROC_ALL` still list them). The behaviour change:
+(`pgrep` and `KERN_PROC_ALL` still list them). `task_name_for_pid` stays
+allowed too: it returns a task's name port, which identifies the task but
+gives no access to its memory, threads or arguments (from the Mach API's
+definition; not probed here). The behaviour change:
 `proc_pidinfo`, and now `proc_pidfdinfo` and `proc_pid_rusage`, are
 refused for every process outside the cage, so a tool that asks about one
 by pid gets nothing — its open-file paths, socket endpoints and resource
@@ -561,8 +564,10 @@ enumeration still works. `ps` already failed (it is setuid). Python, Node
 (`task_for_pid`, the remaining `proc_info` calls, launchd's environment
 for rvd) were not tested. This refusal is of the cage's own calls; the
 cage also denies LaunchServices and Apple events (below), so a server
-cannot ask a process started outside the cage to read the arguments for
-it.
+cannot have either start or drive a process outside the cage to read the
+arguments for it. A `network` true server can still reach daemons outside
+the cage through their Unix sockets, and any caged server XPC services
+(see "What a `network` true server can still reach" below).
 
 How it starts the server:
 
@@ -656,10 +661,14 @@ What it does not:
   Elsewhere the cage cannot create the name by its own calls (live test:
   a symlink, a directory, a cloned link, a rename and a hard link onto it
   all fail), so only the credential paths are denied and such a server
-  runs as usual. "By its own calls" is the whole of it only because the
-  cage also denies LaunchServices and Apple events (below): a server
-  cannot hand the create, or a credential read, to a process started
-  outside the cage. File copies and file clones are not affected:
+  runs as usual. "By its own calls" leans on the cage also denying
+  LaunchServices and Apple events (below), so a server cannot have either
+  start or drive a process outside the cage to make the create, or a
+  credential read, for it. That is the whole of it for a `network` false
+  server (every placeholder server), which cannot connect to any Unix
+  socket either, but for XPC services, which no caged server is denied; a
+  `network` true server can also ask a daemon outside the cage through
+  its socket (below). File copies and file clones are not affected:
   `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
   tree file by file; only a raw `clonefile(2)` of a directory from
   outside those is refused, so a tool that clones whole package
@@ -705,12 +714,36 @@ What it does not:
   its scratch and runs `open` on it, or sends an `osascript` event to a
   running app, could reach an uncaged process. The behaviour change: a
   caged server can no longer open a browser or any app — `open`, `open -a`
-  and an `osascript` Apple event to a running app are refused, and
-  `launchctl submit`/`bootstrap` was already refused (live test).
-  `launchd` (`launchctl submit`) is refused too, so that route to a fresh
-  process is closed. A narrow, safe allowance would have to name a single
-  helper and confirm LaunchServices runs it inside the same sandbox (it
-  does not by default); this round adds no switch for it.
+  and an `osascript` Apple event to a running app are refused (live
+  tests), and `launchctl submit` was already refused (live test), so that
+  route to a fresh launchd job is closed too. `launchctl bootstrap` was not
+  tried: a test of it would load a job into your own launchd domain. A
+  narrow, safe allowance would have to name a single helper and confirm
+  LaunchServices runs it inside the same sandbox (it does not by
+  default); this round adds no switch for it.
+- What a `network` true server can still reach. Those two denies are the
+  only launch routes the cage closes, and a `network` true server (no
+  `sandbox.hosts`) has no socket deny at all: besides the internet it can
+  connect to the Unix-domain control sockets of daemons running outside
+  the cage, and each of them acts outside it — a tmux or screen server
+  (runs any command it is sent), the Docker socket (starts containers,
+  host mounts included), ssh-agent (signs with your keys), gpg-agent and a
+  password manager's agent. XPC services reached by Mach lookup (the
+  Shortcuts runner, `nsurlsessiond` and the rest) are not denied for any
+  caged server (above) and were not probed. A `network` false server, and
+  so every placeholder server, is not affected by the socket route:
+  `(deny network*)` refuses an AF_UNIX connect as well as TCP and UDP, and
+  the only allow on top of it is TCP to the gateway's (and proxy's)
+  loopback port. Live test: a caged connect to a socket the test itself
+  listens on, inside the cage's own temporary write root, fails
+  "Operation not permitted" and delivers nothing, while an uncaged connect
+  to the same listener before and after it succeeds. rv adds no socket
+  deny for `network` true, since a server such as a Docker MCP server
+  needs its socket. An opt-in "no local sockets" setting would add a deny
+  of outbound Unix-socket connects to a `network` true profile, with an
+  allow for each socket path the server lists in `sandbox`; it would need
+  the same live test to show the narrower deny refuses every connect the
+  way `(deny network*)` does, and it would not touch XPC.
 - It keeps nothing else from the server: other variables, the server's
   own `secrets`, and files outside the denied directories are as for any
   caged server.
