@@ -195,6 +195,41 @@ struct MCPGatewayDeadlineRuntimeTests {
         #expect(await run.finish())
     }
 
+    /// A stop asks first: SIGTERM, then SIGKILL once the grace has passed.
+    /// The server notes the SIGTERM and carries on, so only the SIGKILL ends
+    /// it. It is stopped for answering `initialize` with an error, sent only
+    /// once its handler is in place.
+    @Test func aStoppedServerGetsSIGTERMThenSIGKILL() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = #"""
+            import json, signal, sys, time
+            def term(signum, frame):
+                with open(sys.argv[1], "w") as f:
+                    f.write("term")
+            signal.signal(signal.SIGTERM, term)
+            msg = json.loads(sys.stdin.readline())
+            print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -1, "message": "no"}}), flush=True)
+            while True:
+                time.sleep(0.05)
+            """#
+        try Data(script.utf8).write(to: directory.appendingPathComponent("stubborn.py"))
+        let marker = directory.appendingPathComponent("term")
+        let stubborn = MCPServerDefinition(name: "stubborn", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        let run = GatewayRun(
+            core: GatewayRun.core([stubborn], startTimeout: 300),
+            connections: [.process(MCPUpstreamLaunch(
+                server: "stubborn", executable: "/usr/bin/env",
+                arguments: ["python3", "-u", directory.appendingPathComponent("stubborn.py").path, marker.path],
+                environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"]))])
+        #expect(await run.initialize())
+        let logs = run.logs
+        #expect(await eventuallyAsync { logs.text.contains("MCP server stubborn exited") }, "\(logs.text)")
+        #expect(logs.text.contains("failed to initialize"))
+        #expect((try? String(contentsOf: marker, encoding: .utf8)) == "term")
+        #expect(await run.finish())
+    }
+
     @Test func legacySSECallAcceptedButNeverAnsweredFails() async throws {
         let fixture = try RemoteFixture(["--hang-calls"])
         var legacy = MCPServerDefinition(
