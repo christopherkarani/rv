@@ -23,6 +23,10 @@ final class URLSessionStreamingTransport: @unchecked Sendable {
 
     private let delegate: URLSessionStreamingDelegate
     private let session: URLSession
+    private let peak = URLSessionStreamingPeak()
+
+    /// Test seam: the most bytes that have waited for one sink at once.
+    var peakQueuedBytes: Int { peak.value }
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -57,10 +61,27 @@ final class URLSessionStreamingTransport: @unchecked Sendable {
         if request.body.isEmpty == false || ["POST", "PUT", "PATCH"].contains(request.method) {
             urlRequest.httpBody = request.body
         }
-        let exchange = URLSessionStreamingExchange(task: session.dataTask(with: urlRequest))
+        let exchange = URLSessionStreamingExchange(task: session.dataTask(with: urlRequest), peak: peak)
         delegate.register(exchange)
         exchange.task.resume()
         exchange.deliver(to: sink)
+    }
+}
+
+final class URLSessionStreamingPeak: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peak = 0
+
+    func observe(_ queued: Int) {
+        lock.lock()
+        peak = max(peak, queued)
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return peak
     }
 }
 
@@ -80,9 +101,11 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
     private var events: [Event] = []
     private var queuedBytes = 0
     private var suspended = false
+    private let peak: URLSessionStreamingPeak
 
-    init(task: URLSessionDataTask) {
+    init(task: URLSessionDataTask, peak: URLSessionStreamingPeak) {
         self.task = task
+        self.peak = peak
     }
 
     /// From the delegate queue; never waits for the sink.
@@ -92,6 +115,7 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         events.append(event)
         if case .body(let data) = event {
             queuedBytes += data.count
+            peak.observe(queuedBytes)
             if queuedBytes > URLSessionStreamingTransport.highWater, suspended == false {
                 suspended = true
                 task.suspend()

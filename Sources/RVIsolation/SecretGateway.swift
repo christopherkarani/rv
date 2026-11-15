@@ -168,6 +168,14 @@ public final class SecretGateway: @unchecked Sendable {
     static let clientSendTimeout = 30
     /// Test seam: the client send timeout. Set before serving.
     var clientSendTimeout = SecretGateway.clientSendTimeout
+    /// Seconds a client has to send its whole request head.
+    static let requestHeadDeadline: TimeInterval = 10
+    /// Test seam: the request head deadline. Set before serving.
+    var requestHeadDeadline = SecretGateway.requestHeadDeadline
+    /// Seconds a client has to send its whole request body.
+    static let requestBodyDeadline: TimeInterval = 60
+    /// Test seam: the request body deadline. Set before serving.
+    var requestBodyDeadline = SecretGateway.requestBodyDeadline
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
