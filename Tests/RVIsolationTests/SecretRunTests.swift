@@ -455,7 +455,7 @@ struct SecretRunLaunchTests {
             while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0, errno == EINTR {}
             return .success(info.si_code)
         }
-        #expect(observed == .success(CLD_EXITED))
+        #expect(observed == .success(Int32(CLD_EXITED)))
         #expect(SecretRunProcess.consumeStop(pid) == nil)
         #expect(kill(pid, 0) == 0)  // still an unreaped zombie
         var status: Int32 = 0
