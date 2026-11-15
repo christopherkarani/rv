@@ -388,8 +388,15 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// A placeholder server is running bound: its name and what its lease staged.
     private let placeholdersBound: @Sendable (String, [SecretDefinition]) -> Void
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
-    private var processes: [String: Process] = [:]
-    private var placeholderGroups: [String: SecretPlaceholderGroup] = [:]
+    /// Numbers each launch (a process, or a remote session), so what an old
+    /// launch says after it was replaced or stopped reaches nobody.
+    private var nextGeneration = 0
+    /// The launch of each server the core counts as up: only its lines and
+    /// its exit reach the core, and its exit only once.
+    private var live: [String: Int] = [:]
+    /// Every stdio server's process group not yet reaped (and, for a
+    /// placeholder server, its lease not yet revoked), by launch.
+    private var groups: [Int: (server: String, group: any MCPSupervisedGroup, bound: Bool)] = [:]
     /// Each stdio upstream's input, written off the gateway queue.
     private var upstreamWriters: [String: (outbox: MCPOutbox, input: FileHandle)] = [:]
     private var remotes: [String: MCPRemoteUpstream] = [:]
@@ -506,42 +513,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         shutdownRequests.load(ordering: .sequentiallyConsistent) >= 2
     }
 
+    /// A plain server, as the leader of a process group of its own
+    /// (`MCPProcessGroup`). Its exit reaches the core when it is reaped.
     private func spawn(_ launch: MCPUpstreamLaunch) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launch.executable)
-        process.arguments = launch.arguments
-        process.environment = launch.environment
-        if let directory = launch.workingDirectory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
-        let stderrReader = stderr.fileHandleForReading
-        Thread.detachNewThread {
-            Self.relayStderr(stderrReader.fileDescriptor) { data in
-                Self.writeStderr(data)
-            }
+        start(launch, bound: false) { descriptors, exited in
+            MCPProcessGroup.spawn(launch, descriptors: descriptors, exited: exited).map { $0 as any MCPSupervisedGroup }
         }
-        do {
-            try process.run()
-        } catch {
-            log("could not start MCP server \(launch.server): \(error.localizedDescription)")
-            return false
-        }
-        processes[launch.server] = process
-        upstreamWriters[launch.server] = (MCPOutbox(limit: writeBufferBytes), stdin.fileHandleForWriting)
-        let server = launch.server
-        let reader = stdout.fileHandleForReading
-        Thread.detachNewThread { [self] in
-            readUpstream(server, reader.fileDescriptor)
-            queue.async {
-                guard self.stopping == false else { return }
-                self.perform(self.core.handle(.upstreamExited(server: server)))
-            }
-        }
-        return true
     }
 
     /// A server with placeholders: started stopped in its own process group,
@@ -549,65 +526,100 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// there it never ran and its lease is gone. Its exit reaches the core
     /// once its group is killed, it is reaped and its lease revoked.
     private func spawnBound(_ launch: MCPUpstreamLaunch, _ binding: MCPPlaceholderBinding) -> Bool {
-        let server = launch.server
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        // rv's ends stay out of every other child (a plain server holding this
-        // stdin's write end would keep it from ever reading EOF).
-        for pipe in [stdin, stdout, stderr] {
-            _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
-            _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
-        }
-        let group: SecretPlaceholderGroup
-        do throws(SecretPlaceholderLaunchError) {
-            group = try binding.lease.launch(
-                executable: launch.executable, arguments: launch.arguments, environment: launch.environment,
-                descriptors: [
-                    STDIN_FILENO: stdin.fileHandleForReading.fileDescriptor,
-                    STDOUT_FILENO: stdout.fileHandleForWriting.fileDescriptor,
-                    STDERR_FILENO: stderr.fileHandleForWriting.fileDescriptor,
-                ],
-                workingDirectory: launch.workingDirectory,
-                exited: { [self] _ in
-                    queue.async {
-                        guard self.stopping == false else { return }
-                        self.perform(self.core.handle(.upstreamExited(server: server)))
-                    }
-                })
-        } catch {
-            log("could not start MCP server \(server): \(error.message)")
-            return false
-        }
-        // The child holds its own copies of these ends.
-        try? stdin.fileHandleForReading.close()
-        try? stdout.fileHandleForWriting.close()
-        try? stderr.fileHandleForWriting.close()
-        placeholderGroups[server] = group
-        upstreamWriters[server] = (MCPOutbox(limit: writeBufferBytes), stdin.fileHandleForWriting)
-        placeholdersBound(server, binding.lease.definitions)
-        let stderrReader = stderr.fileHandleForReading
-        Thread.detachNewThread {
-            Self.relayStderr(stderrReader.fileDescriptor) { data in
-                Self.writeStderr(data)
+        let started = start(launch, bound: true) { descriptors, exited in
+            do throws(SecretPlaceholderLaunchError) {
+                let group = try binding.lease.launch(
+                    executable: launch.executable, arguments: launch.arguments, environment: launch.environment,
+                    descriptors: descriptors, workingDirectory: launch.workingDirectory, exited: exited)
+                return .success(group)
+            } catch {
+                return .failure(MCPStartFailure(error.message))
             }
         }
-        let reader = stdout.fileHandleForReading
+        // Not started: its lease ends now (a launch that failed revoked it already).
+        guard started else {
+            binding.lease.revoke()
+            return false
+        }
+        placeholdersBound(launch.server, binding.lease.definitions)
+        return true
+    }
+
+    /// Starts one launch of a stdio server through `body` (given the child's
+    /// descriptors and what to call once its group is reaped) and reads it.
+    /// Its lines and its one exit reach the core while it is `live`.
+    private func start(
+        _ launch: MCPUpstreamLaunch, bound: Bool,
+        _ body: ([Int32: Int32], @escaping @Sendable (Int32) -> Void) -> Result<any MCPSupervisedGroup, MCPStartFailure>
+    ) -> Bool {
+        let server = launch.server
+        let shown = MCPDisplayedText.field(server)
+        guard let stdin = MCPPipe.make(), let stdout = MCPPipe.make(), let stderr = MCPPipe.make() else {
+            log("could not start MCP server \(shown): no pipes")
+            return false
+        }
+        let generation = nextGeneration
+        nextGeneration += 1
+        let gate = MCPExitGate { [self] in
+            queue.async { self.exited(server, generation) }
+        }
+        let started = body(
+            [STDIN_FILENO: stdin.read, STDOUT_FILENO: stdout.write, STDERR_FILENO: stderr.write],
+            { [self] _ in
+                queue.async { self.groups[generation] = nil }
+                gate.reaped()
+            })
+        // The child holds its own copies of these ends.
+        close(stdin.read)
+        close(stdout.write)
+        close(stderr.write)
+        let group: any MCPSupervisedGroup
+        switch started {
+        case .failure(let reason):
+            close(stdin.write)
+            close(stdout.read)
+            close(stderr.read)
+            log("could not start MCP server \(shown): \(reason.reason)")
+            return false
+        case .success(let running): group = running
+        }
+        groups[generation] = (server, group, bound)
+        live[server] = generation
+        upstreamWriters[server] = (MCPOutbox(limit: writeBufferBytes), FileHandle(fileDescriptor: stdin.write, closeOnDealloc: true))
+        let stderrReader = stderr.read
+        Thread.detachNewThread {
+            Self.relayStderr(stderrReader) { data in
+                Self.writeStderr(data)
+            }
+            close(stderrReader)
+        }
+        let reader = stdout.read
         Thread.detachNewThread { [self] in
-            readUpstream(server, reader.fileDescriptor)
-            // It can answer nothing more. Ending its group ends its lease; the
-            // exit is reported when the supervisor reaps it.
+            readUpstream(server, reader, generation: generation)
+            close(reader)
+            // It can answer nothing more: its group is ended (a placeholder
+            // server's lease with it), and its exit follows its reap.
             queue.async {
                 guard self.stopping == false else { return }
                 group.signal(SIGKILL)
             }
+            gate.drained()
         }
         return true
     }
 
+    /// One launch is gone. The core hears of it once, and only while that
+    /// launch is still the one it counts as up.
+    private func exited(_ server: String, _ generation: Int) {
+        guard stopping == false, live[server] == generation else { return }
+        live[server] = nil
+        release(server)
+        perform(core.handle(.upstreamExited(server: server)))
+    }
+
     /// Hands each line `server` writes to the gateway queue, waiting while
     /// `readerBacklogBytes` of them are not yet handled. Returns at EOF.
-    private func readUpstream(_ server: String, _ fd: Int32) {
+    private func readUpstream(_ server: String, _ fd: Int32, generation: Int) {
         let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
         Self.readLines(fd) { line in
             guard let message = try? JSONValue.parse(line) else {
@@ -616,7 +628,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             }
             backlog.admit(line.count)
             queue.async {
-                self.perform(self.core.handle(.upstream(server: server, message: message)))
+                if self.live[server] == generation {
+                    self.perform(self.core.handle(.upstream(server: server, message: message)))
+                }
                 backlog.release(line.count)
             }
         }
@@ -624,6 +638,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     private func connect(_ launch: MCPRemoteLaunch) {
         let server = launch.server
+        let generation = nextGeneration
+        nextGeneration += 1
         let authorizer = launch.oauth.map { tokens in
             MCPRemoteAuthorizer.oauth(
                 server: server, tokens: tokens, store: oauthStore, log: log,
@@ -638,18 +654,90 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         let remote = MCPRemoteUpstream(
             launch: launch, authorizer: authorizer,
             deliver: { [self] message in
-                queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
+                queue.async {
+                    guard self.live[server] == generation else { return }
+                    self.perform(self.core.handle(.upstream(server: server, message: message)))
+                }
             },
             exited: { [self] in
-                queue.async {
-                    guard self.stopping == false else { return }
-                    self.perform(self.core.handle(.upstreamExited(server: server)))
-                }
+                queue.async { self.exited(server, generation) }
             },
             log: log)
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
+        live[server] = generation
         remote.start()
+    }
+
+    /// The core's restart of a server that went away. Off the gateway
+    /// queue, every earlier launch of it is waited for until reaped (a
+    /// placeholder server's lease revoked), then it is planned again
+    /// (`relaunch`, or its serve-start connection); back on the queue it is
+    /// started and the core told, or the core hears it went away again.
+    private func restart(_ server: String) {
+        let earlier = groups.values.filter { $0.server == server }.map { $0.group }
+        let original = connections.first { $0.server == server }
+        let relaunch = relaunch
+        Thread.detachNewThread { [self] in
+            let deadline = Date().addingTimeInterval(Self.stopGrace + Self.restartReapGrace)
+            let planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
+            if earlier.allSatisfy({ $0.waitUntilFinished(until: deadline) }) == false {
+                planned = .failure(MCPStartFailure("its last process did not exit"))
+            } else if let relaunch {
+                planned = relaunch(server)
+                    .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }
+                    .mapError { MCPStartFailure($0.message) }
+            } else {
+                planned = Self.reused(original)
+            }
+            queue.async { self.relaunched(server, planned) }
+        }
+    }
+
+    /// How long a restart waits, past `stopGrace`, for the last process to be reaped.
+    static let restartReapGrace: TimeInterval = 5
+
+    /// Without `relaunch`: the serve-start connection again, unless it held
+    /// a lease, which ended with its process.
+    static func reused(_ original: MCPUpstreamConnection?) -> Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure> {
+        guard let original else { return .failure(MCPStartFailure("it has nothing to start")) }
+        switch original {
+        case .process, .remote: return .success((nil, original))
+        case .placeholderBound: return .failure(MCPStartFailure("its placeholders cannot be leased again without planning it again"))
+        case .refused: return .failure(MCPStartFailure("it has nothing to start"))
+        }
+    }
+
+    private func relaunched(_ server: String, _ planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>) {
+        let shown = MCPDisplayedText.field(server)
+        guard stopping == false else {
+            if case .success((_, .placeholderBound(_, let binding))) = planned { binding.lease.revoke() }
+            return
+        }
+        let connection: MCPUpstreamConnection
+        switch planned {
+        case .failure(let reason):
+            log("could not start MCP server \(shown) again: \(reason.reason)")
+            perform(core.handle(.upstreamExited(server: server)))
+            return
+        case .success((let upstream, let next)):
+            for secret in upstream?.secretValues ?? [] {
+                core.addSecret(server: server, name: secret.name, value: secret.value)
+            }
+            connection = next
+        }
+        let started: Bool
+        switch connection {
+        case .process(let launch): started = spawn(launch)
+        case .placeholderBound(let launch, let binding): started = spawnBound(launch, binding)
+        case .remote(let launch):
+            connect(launch)
+            started = true
+        case .refused(_, let refusal):
+            log("not starting MCP server \(shown) again: \(refusal.message)")
+            started = false
+        }
+        perform(core.handle(started ? .upstreamRelaunched(server: server) : .upstreamExited(server: server)))
     }
 
     private func perform(_ outputs: [MCPGatewayOutput]) {
@@ -667,8 +755,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 log(text)
             case .stopUpstream(let server):
                 stopUpstream(server)
-            case .restartUpstream:
-                break
+            case .restartUpstream(let server):
+                restart(server)
             }
         }
     }
@@ -687,8 +775,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     }
 
     /// Queued for the upstream's writer or remote sender. Past its bound the
-    /// upstream is not reading: it is stopped, and its exit reaches the core
-    /// as any exit does.
+    /// upstream is not reading: it is stopped, which the core hears at once.
     private func sendUpstream(_ server: String, _ message: JSONValue) {
         let admission: MCPOutbox.Admission
         if let writer = upstreamWriters[server] {
@@ -703,44 +790,39 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         guard admission == .overflow else { return }
         log("MCP server \(MCPDisplayedText.field(server)) is not reading its input "
             + "(more than \(Self.mebibytes(writeBufferBytes)) MiB waiting); stopping it")
-        let remote = remotes[server] != nil
         stopUpstream(server)
-        // A stopped connection reports no exit of its own.
-        if remote { perform(core.handle(.upstreamExited(server: server))) }
     }
 
     /// How long a stopped server has between SIGTERM and SIGKILL.
     static let stopGrace: TimeInterval = 2
 
-    /// Stop this server's process or group, or close its connection, never
-    /// waiting on the gateway queue: SIGTERM now and SIGKILL after
-    /// `stopGrace` if it is still there, from a timer on the queue; its
-    /// input is closed by its writer, and a remote's stop (and its DELETE)
-    /// runs on its sender. A process's exit still reaches the core through
-    /// its reader or supervisor. A plain server's signals go to its own pid
-    /// only, so what it started in a group of its own, or outside rv
-    /// (`docker run`'s container), is not reached; a placeholder server's
-    /// go to its whole group.
+    /// Stops this server's process group, or closes its connection, never
+    /// waiting on the gateway queue: SIGTERM to the whole group now and
+    /// SIGKILL after `stopGrace` if its leader is still there, from a timer
+    /// on the queue (a leader that exited has its group killed by its
+    /// supervisor); signals reach a group only while its leader is
+    /// unreaped. Its input is closed by its writer, and a remote's stop (and
+    /// its DELETE) runs on its sender. The core hears it is gone now, once:
+    /// its later exit, and anything it still writes, reach nobody.
     private func stopUpstream(_ server: String) {
+        for entry in groups.values where entry.server == server {
+            let group = entry.group
+            group.signal(SIGTERM)
+            queue.asyncAfter(deadline: .now() + Self.stopGrace) {
+                if group.hasExited == false { group.signal(SIGKILL) }
+            }
+        }
+        let wasLive = live.removeValue(forKey: server) != nil
+        release(server)
+        if wasLive { perform(core.handle(.upstreamExited(server: server))) }
+    }
+
+    /// Closes the server's input (after the write running now) and its
+    /// remote connection.
+    private func release(_ server: String) {
         if let writer = upstreamWriters.removeValue(forKey: server) {
             let input = writer.input
             writer.outbox.abandon { try? input.close() }
-        }
-        if let process = processes[server], process.isRunning {
-            let pid = process.processIdentifier
-            kill(pid, SIGTERM)
-            queue.asyncAfter(deadline: .now() + Self.stopGrace) { [self] in
-                // The same process, not one started for this server since.
-                guard let process = processes[server], process.processIdentifier == pid, process.isRunning else { return }
-                kill(pid, SIGKILL)
-            }
-        }
-        if let group = placeholderGroups[server] {
-            group.signal(SIGTERM)
-            queue.asyncAfter(deadline: .now() + Self.stopGrace) {
-                // A leader that exited has its group killed by its supervisor.
-                if group.hasExited == false { group.signal(SIGKILL) }
-            }
         }
         if let remote = remotes.removeValue(forKey: server) {
             remoteSenders.removeValue(forKey: server)?.abandon { remote.stop() }
@@ -748,6 +830,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     }
 
     private func stopUpstreams() {
+        live = [:]
         // Remote stops (each DELETE waits at most 2 s) run on their senders,
         // side by side, while the processes stop.
         var closing: [MCPOutbox] = []
@@ -765,52 +848,45 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             writer.outbox.close { try? input.close() }
         }
         upstreamWriters = [:]
-        let deadline = Date().addingTimeInterval(2)
-        for process in processes.values {
-            while process.isRunning, Date() < deadline, hurried == false { usleep(20_000) }
-            if process.isRunning, hurried == false { process.terminate() }
-        }
-        let killDeadline = Date().addingTimeInterval(1)
-        for process in processes.values {
-            while process.isRunning, Date() < killDeadline, hurried == false { usleep(20_000) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        }
-        processes = [:]
-        stopPlaceholderGroups()
+        stopGroups()
         let closed = Date().addingTimeInterval(hurried ? 0 : Self.drainGrace + 1)
         for sender in closing { _ = sender.waitUntilDone(until: closed) }
     }
 
-    /// Signals each placeholder server's whole group as
-    /// `MCPPlaceholderShutdown` says until its leader exits, then waits for
-    /// its supervisor to kill the rest of the group, reap it and revoke its
-    /// lease. Timed from now, not from when plain servers began stopping.
-    /// Bounded: a group still there after that is left to the broker's stop,
-    /// which ends every lease.
-    private func stopPlaceholderGroups() {
+    /// Signals each server's whole group as `MCPPlaceholderShutdown` says
+    /// until its leader exits (its input closed above, it has the grace to
+    /// exit on its own), then waits for its supervisor to kill the rest of
+    /// the group, reap it and revoke its lease. Bounded: a placeholder group
+    /// still there after that is left to the broker's stop, which ends
+    /// every lease.
+    private func stopGroups() {
         let started = Date()
-        var shutdowns = placeholderGroups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
+        var shutdowns = groups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
         func waiting(_ now: Date) -> Bool {
-            placeholderGroups.contains { server, group in
-                group.hasExited == false && now < (shutdowns[server]?.giveUp ?? now)
+            groups.contains { launch, entry in
+                entry.group.hasExited == false && now < (shutdowns[launch]?.giveUp ?? now)
             }
         }
         while waiting(Date()) {
             let now = Date()
             let hurry = hurried
-            for (server, group) in placeholderGroups {
+            for (launch, entry) in groups {
+                let exited = entry.group.hasExited
                 let number = hurry
-                    ? shutdowns[server]?.hurry(exited: group.hasExited)
-                    : shutdowns[server]?.signal(exited: group.hasExited, now: now)
-                if let number { group.signal(number) }
+                    ? shutdowns[launch]?.hurry(exited: exited)
+                    : shutdowns[launch]?.signal(exited: exited, now: now)
+                if let number { entry.group.signal(number) }
             }
             usleep(20_000)
         }
         let reaped = Date().addingTimeInterval(2)
-        for (server, group) in placeholderGroups where group.waitUntilFinished(until: reaped) == false {
-            log("MCP server \(server) did not exit; its placeholders end when serve stops the secrets gateway")
+        for entry in groups.values where entry.group.waitUntilFinished(until: reaped) == false {
+            let shown = MCPDisplayedText.field(entry.server)
+            log(entry.bound
+                ? "MCP server \(shown) did not exit; its placeholders end when serve stops the secrets gateway"
+                : "MCP server \(shown) did not exit; it is left running")
         }
-        placeholderGroups = [:]
+        groups = [:]
     }
 
     /// Serialized raw-fd stderr write shared by every upstream relay thread.
