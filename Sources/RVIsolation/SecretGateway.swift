@@ -168,6 +168,15 @@ public final class SecretGateway: @unchecked Sendable {
     static let clientSendTimeout = 30
     /// Test seam: the client send timeout. Set before serving.
     var clientSendTimeout = SecretGateway.clientSendTimeout
+    /// Seconds from accepting a connection to the end of its request head.
+    static let requestHeadDeadline: TimeInterval = 10
+    /// Test seam: the request head deadline. Set before serving.
+    var requestHeadDeadline = SecretGateway.requestHeadDeadline
+    /// Seconds a client has to send its whole request body, from the
+    /// moment its head has passed every check.
+    static let requestBodyDeadline: TimeInterval = 60
+    /// Test seam: the request body deadline. Set before serving.
+    var requestBodyDeadline = SecretGateway.requestBodyDeadline
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
@@ -506,6 +515,9 @@ public final class SecretGateway: @unchecked Sendable {
     func handle(_ client: Int32) {
         let started = DispatchTime.now()
         let reader = GatewaySocket.Reader(fd: client)
+        // Before the peer check: any local process can connect, and each
+        // connection holds one of `maximumConnections` slots while it reads.
+        reader.deadline = started + requestHeadDeadline
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
@@ -588,6 +600,7 @@ public final class SecretGateway: @unchecked Sendable {
         if head.header("Expect")?.lowercased() == "100-continue" {
             GatewaySocket.writeAll(client, Array("HTTP/1.1 100 Continue\r\n\r\n".utf8))
         }
+        reader.deadline = .now() + requestBodyDeadline
         guard let body = readBody(reader, head: head) else {
             deny(.tooLarge)
             return
@@ -856,18 +869,26 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream sent no response"))
             return
         }
+        // The terminator only follows a body whose every byte was written: a
+        // client must never read a cut-off answer as a complete one.
         if framed {
             let rest = scrubber.finish()
             if scrubber.tripped {
                 _ = trip(sending: rest)
                 return
             }
-            _ = writeChunk(rest)
-            _ = write(Array("0\r\n\r\n".utf8))
+            guard writeChunk(rest), write(Array("0\r\n\r\n".utf8)) else {
+                closed = true
+                failure = failure ?? Self.cutShort
+                return
+            }
         }
-        flushHeld()
+        let flushed = flushHeld()
         closed = true
+        if flushed == false { failure = failure ?? Self.cutShort }
     }
+
+    static let cutShort = "the client stopped reading; its answer was cut short"
 
     func fail(_ reason: String) {
         lock.lock()
@@ -962,8 +983,14 @@ enum GatewaySocket {
     }
 
     final class Reader {
+        /// Milliseconds one read may wait for bytes to arrive.
+        static let idleMilliseconds = 30_000
         private let fd: Int32
         private var buffer: [UInt8] = []
+        /// Reads fail from this instant, however steadily bytes arrive: a
+        /// client sending a byte at a time would otherwise hold its slot
+        /// for as long as it liked. Nil waits only `idleMilliseconds` a read.
+        var deadline: DispatchTime?
 
         init(fd: Int32) {
             self.fd = fd
@@ -972,16 +999,20 @@ enum GatewaySocket {
         private func fill() -> Bool {
             var chunk = [UInt8](repeating: 0, count: 16 * 1024)
             while true {
-                let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-                if n < 0, errno == EINTR { continue }
-                if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                    // A not-yet-arrived HEAD is not the end of the request.
-                    var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-                    let waited = poll(&state, 1, 30_000)
-                    if waited < 0, errno == EINTR { continue }
-                    if waited > 0 { continue }
-                    return false
+                var wait = Self.idleMilliseconds
+                if let deadline {
+                    let now = DispatchTime.now()
+                    guard now < deadline else { return false }
+                    let left = (deadline.uptimeNanoseconds - now.uptimeNanoseconds + 999_999) / 1_000_000
+                    wait = Int(min(UInt64(wait), left))
                 }
+                // A not-yet-arrived HEAD is not the end of the request.
+                var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let waited = poll(&state, 1, Int32(wait))
+                if waited < 0, errno == EINTR { continue }
+                guard waited > 0 else { return false }
+                let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+                if n < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
                 guard n > 0 else { return false }
                 buffer += chunk.prefix(n)
                 return true

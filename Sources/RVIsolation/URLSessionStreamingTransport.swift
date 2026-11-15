@@ -14,17 +14,38 @@ import FoundationNetworking
 ///
 /// The sink runs on the thread that called `send`, never on the session's
 /// one delegate queue: a sink that blocks, writing to a client that does not
-/// read, holds up only its own request. While more than `highWater` bytes
-/// wait for a sink its task is suspended, so a slow reader is not buffered
-/// without bound.
+/// read, holds up only its own request. What the upstream has sent and the
+/// sink has not yet taken waits in memory, bounded by `Limits`: a request
+/// whose reader falls further behind than that fails, and its sink hears
+/// `fail`, never `finish`.
+///
+/// Tasks are never suspended. corelibs-foundation's `suspend` drops the
+/// transfer and its `resume` sends the request again, credential and all.
+/// Darwin's session goes on reading a suspended task, so it bounded nothing,
+/// and it held more memory, outside these limits, while suspended: 16
+/// stalled 64 MiB answers peaked at 311 MiB resident with it, 91 MiB without.
 final class URLSessionStreamingTransport: @unchecked Sendable {
-    /// Bytes queued for one sink before its task is suspended.
-    static let highWater = 1 << 20
+    /// How many bytes may wait for sinks before requests fail.
+    struct Limits: Sendable {
+        /// Waiting for one sink; past this its request fails.
+        var perRequest = 8 << 20
+        /// Waiting for all sinks together, beyond the first `exempt` bytes
+        /// of each; past this the request that would add more fails.
+        var total = 64 << 20
+        /// Bytes of each request not counted toward `total`, so a request
+        /// keeping up is never failed for others' backlog.
+        var exempt = 1 << 20
+    }
 
     private let delegate: URLSessionStreamingDelegate
     private let session: URLSession
+    let budget: URLSessionStreamingBudget
 
-    init() {
+    /// Test seam: the most bytes that have waited for sinks at once.
+    var peakQueuedBytes: Int { budget.peak }
+
+    init(limits: Limits = Limits()) {
+        budget = URLSessionStreamingBudget(limits)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -57,10 +78,64 @@ final class URLSessionStreamingTransport: @unchecked Sendable {
         if request.body.isEmpty == false || ["POST", "PUT", "PATCH"].contains(request.method) {
             urlRequest.httpBody = request.body
         }
-        let exchange = URLSessionStreamingExchange(task: session.dataTask(with: urlRequest))
+        let exchange = URLSessionStreamingExchange(task: session.dataTask(with: urlRequest), budget: budget)
         delegate.register(exchange)
         exchange.task.resume()
         exchange.deliver(to: sink)
+    }
+}
+
+/// Bytes waiting for sinks, across every request of one transport.
+final class URLSessionStreamingBudget: @unchecked Sendable {
+    let limits: URLSessionStreamingTransport.Limits
+    private let lock = NSLock()
+    private var queued = 0
+    /// Sum over requests of what each holds beyond `limits.exempt`.
+    private var counted = 0
+    private var peakQueued = 0
+
+    init(_ limits: URLSessionStreamingTransport.Limits) {
+        self.limits = limits
+    }
+
+    /// Takes `count` more bytes for a request already holding `held`, or
+    /// refuses them when that would pass either limit.
+    func admit(_ count: Int, holding held: Int) -> Bool {
+        guard held + count <= limits.perRequest else { return false }
+        let more = excess(held + count) - excess(held)
+        lock.lock()
+        defer { lock.unlock() }
+        guard counted + more <= limits.total else { return false }
+        counted += more
+        queued += count
+        peakQueued = max(peakQueued, queued)
+        return true
+    }
+
+    /// Gives back `count` of the `held` bytes a request had taken.
+    func release(_ count: Int, holding held: Int) {
+        guard count > 0 else { return }
+        let less = excess(held) - excess(held - count)
+        lock.lock()
+        counted -= less
+        queued -= count
+        lock.unlock()
+    }
+
+    var waiting: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return queued
+    }
+
+    var peak: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return peakQueued
+    }
+
+    private func excess(_ held: Int) -> Int {
+        max(held - limits.exempt, 0)
     }
 }
 
@@ -76,51 +151,75 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
 
     /// Held so the delegate's key, the task's identity, cannot be reused meanwhile.
     let task: URLSessionDataTask
+    private let budget: URLSessionStreamingBudget
     private let condition = NSCondition()
     private var events: [Event] = []
+    /// Admitted to the budget and not yet given back: queued, or being handed to the sink.
     private var queuedBytes = 0
-    private var suspended = false
+    /// Bodies are no longer taken: the sink refused one, or the request overflowed.
+    private var dropping = false
+    private var overflowed = false
 
-    init(task: URLSessionDataTask) {
+    init(task: URLSessionDataTask, budget: URLSessionStreamingBudget) {
         self.task = task
+        self.budget = budget
+    }
+
+    var overflowReason: String {
+        "the client fell too far behind the upstream: more than \(budget.limits.perRequest >> 20) MiB "
+            + "waited for it, or more than \(budget.limits.total >> 20) MiB for all clients"
     }
 
     /// From the delegate queue; never waits for the sink.
     func push(_ event: Event) {
+        var cancel = false
         condition.lock()
-        defer { condition.unlock() }
-        events.append(event)
-        if case .body(let data) = event {
-            queuedBytes += data.count
-            if queuedBytes > URLSessionStreamingTransport.highWater, suspended == false {
-                suspended = true
-                task.suspend()
+        switch event {
+        case .head:
+            events.append(event)
+        case .body(let data):
+            guard dropping == false else { break }
+            guard budget.admit(data.count, holding: queuedBytes) else {
+                overflowed = true
+                cancel = true
+                stopTaking()
+                break
             }
+            queuedBytes += data.count
+            events.append(event)
+        case .finish, .fail:
+            events.append(overflowed ? .fail(overflowReason) : event)
         }
         condition.signal()
+        condition.unlock()
+        if cancel { task.cancel() }
     }
 
     /// Returns once the sink has been finished or failed. A sink that refuses
     /// a body has its task cancelled and hears nothing more until the task's
-    /// own end.
+    /// own end; so does an overflowed request, whose sink then hears `fail`.
     func deliver(to sink: SecretResponseSink) {
+        defer { releaseAll() }
         var refused = false
         while true {
             condition.lock()
             while events.isEmpty { condition.wait() }
             let batch = events
             events = []
-            queuedBytes = 0
             condition.unlock()
             for event in batch {
                 switch event {
                 case .head(let status, let headers):
                     if refused == false { sink.head(status: status, headers: headers) }
                 case .body(let data):
-                    if refused == false, sink.body(data) == false {
+                    if refused == false, isDropping == false, sink.body(data) == false {
                         refused = true
+                        condition.lock()
+                        stopTaking()
+                        condition.unlock()
                         task.cancel()
                     }
+                    delivered(data.count)
                 case .finish:
                     sink.finish()
                     return
@@ -129,12 +228,38 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
                     return
                 }
             }
-            condition.lock()
-            let resume = suspended && refused == false
-            if resume { suspended = false }
-            condition.unlock()
-            if resume { task.resume() }
         }
+    }
+
+    private var isDropping: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return dropping
+    }
+
+    /// Under the lock: takes no more bodies and gives back those queued.
+    private func stopTaking() {
+        dropping = true
+        events = events.filter { event in
+            guard case .body(let data) = event else { return true }
+            budget.release(data.count, holding: queuedBytes)
+            queuedBytes -= data.count
+            return false
+        }
+    }
+
+    private func delivered(_ count: Int) {
+        condition.lock()
+        defer { condition.unlock() }
+        budget.release(count, holding: queuedBytes)
+        queuedBytes -= count
+    }
+
+    private func releaseAll() {
+        condition.lock()
+        budget.release(queuedBytes, holding: queuedBytes)
+        queuedBytes = 0
+        condition.unlock()
     }
 }
 

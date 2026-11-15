@@ -9,12 +9,17 @@ import Synchronization
 import Testing
 @testable import RVIsolation
 
-/// Loopback HTTP/1.1 upstream, one thread per connection. `/big` answers
-/// `bigBytes` x's with a Content-Length; any other path answers `ok:<path>`.
+/// Loopback HTTP/1.1 upstream, one thread per connection, counting the
+/// requests it receives by method and path. `/big` answers `bigBytes` x's
+/// with a Content-Length, `/bytes/N` answers N x's, and `/slow/N/ms`
+/// answers N x's in 64 KiB blocks `ms` milliseconds apart; any other path
+/// answers `ok:<path>`. A request body is read before the answer.
 private final class LoopbackUpstream: @unchecked Sendable {
     static let bigBytes = 64 << 20
     let port: Int
     private let listenFD: Int32
+    private let lock = NSLock()
+    private var hits: [String: Int] = [:]
 
     init() throws {
         #if canImport(Darwin)
@@ -49,6 +54,13 @@ private final class LoopbackUpstream: @unchecked Sendable {
         close(listenFD)
     }
 
+    /// How many requests arrived with this method and path.
+    func hits(_ method: String, _ path: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return hits["\(method) \(path)"] ?? 0
+    }
+
     private func acceptLoop() {
         while true {
             let client = accept(listenFD, nil, nil)
@@ -60,31 +72,71 @@ private final class LoopbackUpstream: @unchecked Sendable {
             var one: Int32 = 1
             _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
             #endif
-            Thread.detachNewThread { Self.serve(client) }
+            Thread.detachNewThread { [self] in serve(client) }
         }
     }
 
-    private static func serve(_ client: Int32) {
+    private func serve(_ client: Int32) {
         defer { close(client) }
+        let separator = Array("\r\n\r\n".utf8)
         var request: [UInt8] = []
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while request.count < 65_536, String(decoding: request, as: UTF8.self).contains("\r\n\r\n") == false {
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        var headEnd: Int?
+        while headEnd == nil {
+            guard request.count < 65_536 else { return }
             let n = buffer.withUnsafeMutableBytes { recv(client, $0.baseAddress, $0.count, 0) }
             guard n > 0 else { return }
             request += buffer.prefix(n)
+            if request.count >= separator.count {
+                headEnd = (0...(request.count - separator.count)).first {
+                    Array(request[$0..<($0 + separator.count)]) == separator
+                }
+            }
         }
-        let line = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n").first ?? ""
-        let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+        let end = headEnd ?? 0
+        let lines = String(decoding: request[..<end], as: UTF8.self).components(separatedBy: "\r\n")
+        let parts = (lines.first ?? "").split(separator: " ").map(String.init)
+        let method = parts.first ?? "?"
+        let path = parts.dropFirst().first ?? "/"
+        let length = lines.dropFirst().compactMap { line -> Int? in
+            let field = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            return field.count == 2 && field[0].lowercased() == "content-length" ? Int(field[1]) : nil
+        }.first ?? 0
+        var bodyRead = request.count - end - separator.count
+        while bodyRead < length {
+            let n = buffer.withUnsafeMutableBytes { recv(client, $0.baseAddress, $0.count, 0) }
+            guard n > 0 else { return }
+            bodyRead += n
+        }
+        lock.lock()
+        hits["\(method) \(path)", default: 0] += 1
+        lock.unlock()
+        let segments = path.split(separator: "/").map(String.init)
         if path.hasSuffix("/big") {
-            guard write(client, Array("HTTP/1.1 200 OK\r\nContent-Length: \(bigBytes)\r\nConnection: close\r\n\r\n".utf8))
-            else { return }
-            let block = [UInt8](repeating: UInt8(ascii: "x"), count: 65_536)
-            var sent = 0
-            while sent < bigBytes, write(client, block) { sent += block.count }
+            Self.stream(client, bytes: Self.bigBytes, pause: 0)
+        } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
+            Self.stream(client, bytes: size, pause: 0)
+        } else if let at = segments.firstIndex(of: "slow"), at + 2 < segments.count,
+            let size = Int(segments[at + 1]), let pause = Int(segments[at + 2])
+        {
+            Self.stream(client, bytes: size, pause: pause)
         } else {
             let body = Array("ok:\(path)".utf8)
-            _ = write(client, Array("HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
-                + body)
+            _ = Self.write(
+                client, Array("HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body)
+        }
+    }
+
+    private static func stream(_ client: Int32, bytes: Int, pause milliseconds: Int) {
+        guard write(client, Array("HTTP/1.1 200 OK\r\nContent-Length: \(bytes)\r\nConnection: close\r\n\r\n".utf8))
+        else { return }
+        let block = [UInt8](repeating: UInt8(ascii: "x"), count: 65_536)
+        var sent = 0
+        while sent < bytes {
+            let next = min(block.count, bytes - sent)
+            guard write(client, Array(block.prefix(next))) else { return }
+            sent += next
+            if milliseconds > 0 { Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000) }
         }
     }
 
@@ -143,6 +195,44 @@ private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     }
 }
 
+/// Counts what one `send` delivered, stalling on its first body until the gate opens.
+private final class GatedSink: SecretResponseSink, @unchecked Sendable {
+    private let gate: DispatchSemaphore
+    private let lock = NSLock()
+    private var bytes = 0
+    private var opened = false
+    private var ended: String?
+
+    init(_ gate: DispatchSemaphore) {
+        self.gate = gate
+    }
+
+    func head(status: Int, headers: [(name: String, value: String)]) {}
+    func body(_ data: Data) -> Bool {
+        lock.lock()
+        let first = opened == false
+        opened = true
+        bytes += data.count
+        lock.unlock()
+        if first { gate.wait() }
+        return true
+    }
+    func finish() { end("finished") }
+    func fail(_ reason: String) { end("failed: \(reason)") }
+
+    private func end(_ how: String) {
+        lock.lock()
+        ended = how
+        lock.unlock()
+    }
+
+    var result: (bytes: Int, ended: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (bytes, ended)
+    }
+}
+
 /// The production transport, pointed at the loopback upstream: the gateway
 /// only forwards to https, so the request is rewritten on its way out.
 private func loopbackTransport(_ transport: URLSessionStreamingTransport, port: Int) -> SecretUpstreamTransport {
@@ -158,13 +248,22 @@ private func loopbackTransport(_ transport: URLSessionStreamingTransport, port: 
     }
 }
 
-private func connectGateway(_ port: Int) throws -> Int32 {
+/// A small `receiveBuffer` keeps what the kernel holds for a client that is
+/// not reading well under the transport's marks.
+private func connectGateway(_ port: Int, receiveBuffer: Int32? = nil) throws -> Int32 {
     #if canImport(Darwin)
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     #else
     let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
     #endif
     try #require(fd >= 0)
+    #if canImport(Darwin)
+    var one: Int32 = 1
+    _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+    #endif
+    if var size = receiveBuffer {
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, socklen_t(MemoryLayout<Int32>.size))
+    }
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = UInt16(port).bigEndian
@@ -179,14 +278,21 @@ private func connectGateway(_ port: Int) throws -> Int32 {
 
 private struct GatewayUnderTest {
     let gateway: SecretGateway
+    let transport: URLSessionStreamingTransport
     let port: Int
     let placeholder: SecretPlaceholder
 
-    init(upstreamPort: Int, clientSendTimeout: Int? = nil) throws {
+    init(
+        upstreamPort: Int, clientSendTimeout: Int? = nil, headDeadline: TimeInterval? = nil,
+        bodyDeadline: TimeInterval? = nil
+    ) throws {
+        transport = URLSessionStreamingTransport()
         gateway = SecretGateway(
-            transport: loopbackTransport(URLSessionStreamingTransport(), port: upstreamPort),
+            transport: loopbackTransport(transport, port: upstreamPort),
             peers: .fixed(.member), audit: { _ in true })
         if let clientSendTimeout { gateway.clientSendTimeout = clientSendTimeout }
+        if let headDeadline { gateway.requestHeadDeadline = headDeadline }
+        if let bodyDeadline { gateway.requestBodyDeadline = bodyDeadline }
         port = try gateway.start().get()
         placeholder = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(placeholder, entry: SecretGateway.Entry(
@@ -195,8 +301,60 @@ private struct GatewayUnderTest {
             surfaces: [.header], processGroup: testProcessGroup))
     }
 
-    func request(_ path: String) -> String {
-        "GET /s/OPENAI_API_KEY\(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n"
+    func request(_ path: String, method: String = "GET", body: String = "") -> String {
+        let length = method == "GET" ? "" : "Content-Length: \(body.utf8.count)\r\n"
+        return "\(method) /s/OPENAI_API_KEY\(path) HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            + "Authorization: Bearer \(placeholder.text)\r\n\(length)\r\n\(body)"
+    }
+}
+
+/// What a client read of one chunked answer, until the gateway closed the
+/// connection or a read timed out.
+private struct ChunkedAnswer {
+    var head = ""
+    /// Body bytes, whole chunks and any part of a last cut-off one.
+    var body = 0
+    /// The zero-length chunk that ends a complete body arrived.
+    var ended = false
+    /// The gateway closed the connection; false when a read timed out.
+    var closed = false
+    var bodyIsAllX = true
+
+    /// Waits `pause` before the first read and `perRead` after each one.
+    init(reading fd: Int32, pause: TimeInterval = 0, perRead: TimeInterval = 0) throws {
+        var timeout = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        if pause > 0 { Thread.sleep(forTimeInterval: pause) }
+        var received: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        while true {
+            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if n <= 0 {
+                closed = n == 0
+                break
+            }
+            received += buffer.prefix(n)
+            if perRead > 0 { Thread.sleep(forTimeInterval: perRead) }
+        }
+        let separator = Array("\r\n\r\n".utf8)
+        try #require(received.count >= separator.count)
+        let headEnd = try #require((0...min(4096, received.count - separator.count)).first {
+            Array(received[$0..<($0 + separator.count)]) == separator
+        })
+        head = String(decoding: received[..<headEnd], as: UTF8.self).lowercased()
+        var cursor = headEnd + separator.count
+        while cursor < received.count, let lineEnd = received[cursor...].firstIndex(of: 13) {
+            guard let size = Int(String(decoding: received[cursor..<lineEnd], as: UTF8.self), radix: 16) else { break }
+            if size == 0 {
+                ended = true
+                break
+            }
+            let start = min(lineEnd + 2, received.count)
+            let stop = min(start + size, received.count)
+            body += stop - start
+            if received[start..<stop].contains(where: { $0 != UInt8(ascii: "x") }) { bodyIsAllX = false }
+            cursor = stop + 2
+        }
     }
 }
 
@@ -284,51 +442,195 @@ struct URLSessionStreamingTransportTests {
         #expect(Array(received.suffix(5)) != Array("0\r\n\r\n".utf8), "a cut-off answer ended like a complete one")
     }
 
-    /// A client that reads, slowly, gets the whole of a large answer: the
-    /// upstream is paused while the client falls behind and resumed as it
-    /// catches up, with nothing lost or repeated.
-    @Test(.timeLimit(.minutes(1)))
-    func aSlowReaderGetsTheWholeLargeAnswer() throws {
+    /// An upstream faster than its reader, with an answer well past the
+    /// 1 MiB mark and under the 8 MiB cap: the whole answer arrives once,
+    /// and the upstream saw the request once. corelibs-foundation restarts
+    /// a task it suspends, so a pause sent the request, and its secret,
+    /// again, and the client got the answer more than once.
+    @Test(.timeLimit(.minutes(1)), arguments: ["GET", "POST"])
+    func aRequestWhoseReaderFallsBehindReachesTheUpstreamOnce(method: String) throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
         let under = try GatewayUnderTest(upstreamPort: upstream.port)
         defer { under.gateway.stop() }
+        let size = 6 << 20
+        let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        let body = method == "POST" ? #"{"input":"x"}"# : ""
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/bytes/\(size)", method: method, body: body).utf8)))
+        let answer = try ChunkedAnswer(reading: client, pause: 1.5)
+        #expect(answer.head.hasPrefix("http/1.1 200"))
+        #expect(answer.closed, "the answer never ended")
+        #expect(answer.ended)
+        #expect(answer.body == size)
+        #expect(answer.bodyIsAllX)
+        #expect(upstream.hits(method, "/v1/bytes/\(size)") == 1)
+        // The reader really fell behind: more than the 1 MiB at which the
+        // transport used to pause waited at once.
+        #expect(under.transport.peakQueuedBytes > 1 << 20)
+    }
+
+    /// A reader that falls more than 8 MiB behind a fast upstream is cut
+    /// off: no more than 8 MiB ever waits for it, and what it reads is cut
+    /// short, with no terminator.
+    @Test(.timeLimit(.minutes(1)))
+    func aReaderMoreThanTheCapBehindIsCutOff() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        let answer = try ChunkedAnswer(reading: client, pause: 3)
+        #expect(answer.head.hasPrefix("http/1.1 200"))
+        #expect(answer.closed, "the connection was not closed")
+        #expect(answer.ended == false, "a cut-off answer ended like a complete one")
+        #expect(answer.body < LoopbackUpstream.bigBytes)
+        #expect(upstream.hits("GET", "/v1/big") == 1)
+        #expect(under.transport.peakQueuedBytes <= 8 << 20)
+    }
+
+    /// A live reader of an answer three times the cap, from an upstream
+    /// that sends about 8 MiB a second, gets all of it, and the upstream
+    /// saw the request once. The reader starts late, so more than the mark
+    /// waits for it before it catches up.
+    @Test(.timeLimit(.minutes(1)))
+    func aSlowLiveReaderGetsTheWholeOfALargeAnswer() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let size = 24 << 20
         let client = try connectGateway(under.port)
         defer { close(client) }
-        var timeout = timeval(tv_sec: 10, tv_usec: 0)
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
-        var received: [UInt8] = []
-        received.reserveCapacity(LoopbackUpstream.bigBytes + (1 << 20))
-        var buffer = [UInt8](repeating: 0, count: 1 << 16)
-        var last = 0
-        while true {
-            last = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
-            if last <= 0 { break }
-            received += buffer.prefix(last)
-            Thread.sleep(forTimeInterval: 0.001)
-        }
-        #expect(last == 0)
-        let separator = Array("\r\n\r\n".utf8)
-        try #require(received.count > 4096)
-        let headEnd = try #require((0...(4096 - separator.count)).first {
-            Array(received[$0..<($0 + separator.count)]) == separator
-        })
-        #expect(String(decoding: received[..<headEnd], as: UTF8.self).lowercased().contains("transfer-encoding: chunked"))
-        var cursor = headEnd + separator.count
-        var body = 0
-        var ended = false
-        while cursor < received.count, let lineEnd = received[cursor...].firstIndex(of: 13) {
-            let size = try #require(Int(String(decoding: received[cursor..<lineEnd], as: UTF8.self), radix: 16))
-            cursor = lineEnd + 2 + size + 2
-            if size == 0 {
-                ended = true
-                break
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/8").utf8)))
+        let answer = try ChunkedAnswer(reading: client, pause: 0.5, perRead: 0.001)
+        #expect(answer.closed, "the answer never ended")
+        #expect(answer.ended)
+        #expect(answer.body == size)
+        #expect(answer.bodyIsAllX)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
+        #expect(under.transport.peakQueuedBytes <= 8 << 20)
+    }
+
+    /// The total counts only what each request holds beyond its exempt
+    /// first bytes, so a request keeping up is never failed for the others.
+    @Test
+    func theBudgetCountsOnlyWhatEachRequestHoldsPastItsExemptBytes() {
+        let budget = URLSessionStreamingBudget(.init(perRequest: 8, total: 4, exempt: 2))
+        #expect(budget.admit(2, holding: 0))
+        #expect(budget.admit(2, holding: 0))
+        #expect(budget.admit(4, holding: 2))
+        #expect(budget.admit(1, holding: 6) == false, "past the total")
+        #expect(budget.admit(1, holding: 0), "within its exempt bytes")
+        #expect(budget.admit(9, holding: 0) == false, "past the per-request cap")
+        budget.release(4, holding: 6)
+        #expect(budget.admit(4, holding: 2))
+        #expect(budget.waiting == 9)
+        #expect(budget.peak == 9)
+    }
+
+    /// Readers stalled together never hold more than the total beyond each
+    /// one's exempt bytes, the requests that would pass it fail, the others
+    /// arrive whole, and every byte is given back once all have returned.
+    @Test(.timeLimit(.minutes(1)))
+    func stalledReadersTogetherStayWithinTheTotal() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let limits = URLSessionStreamingTransport.Limits(perRequest: 8 << 20, total: 4 << 20, exempt: 1 << 20)
+        let transport = URLSessionStreamingTransport(limits: limits)
+        let count = 4
+        let size = 6 << 20
+        let gate = DispatchSemaphore(value: 0)
+        let sinks = (0..<count).map { _ in GatedSink(gate) }
+        let done = DispatchGroup()
+        for (index, sink) in sinks.enumerated() {
+            let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/bytes/\(size + index)"))
+            done.enter()
+            Thread.detachNewThread {
+                transport.send(SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+                done.leave()
             }
-            body += size
         }
-        #expect(ended)
-        #expect(body == LoopbackUpstream.bigBytes)
+        Thread.sleep(forTimeInterval: 2)
+        for _ in 0..<count { gate.signal() }
+        #expect(done.wait(timeout: .now() + 20) == .success, "some sends never returned")
+        #expect(transport.peakQueuedBytes <= limits.total + count * limits.exempt)
+        #expect(transport.budget.waiting == 0)
+        let ends = sinks.map(\.result)
+        #expect(ends.contains { $0.ended?.hasPrefix("failed: the client fell too far behind") == true })
+        for (index, end) in ends.enumerated() {
+            #expect(end.ended != nil)
+            if end.ended == "finished" { #expect(end.bytes == size + index) }
+            #expect(upstream.hits("GET", "/bytes/\(size + index)") == 1)
+        }
+    }
+
+    /// Clients that send their request heads a byte at a time hold their
+    /// slots only until the head deadline. With every slot held that way,
+    /// a request made after the deadline is answered, and each trickling
+    /// connection has been answered or closed.
+    @Test(.timeLimit(.minutes(1)))
+    func clientsThatTrickleTheirHeadsAreDroppedAtTheDeadline() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, headDeadline: 1)
+        defer { under.gateway.stop() }
+        let tricklers = try (0..<SecretGateway.maximumConnections).map { _ in try connectGateway(under.port) }
+        defer { tricklers.forEach { close($0) } }
+        let head = Array(under.request("/trickle").utf8)
+        let trickled = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            for index in 0..<15 {
+                for fd in tricklers { _ = GatewaySocket.writeAll(fd, [head[index]]) }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            trickled.signal()
+        }
+        Thread.sleep(forTimeInterval: 1.6)
+        let answer = try gatewayExchange(port: under.port, under.request("/after"))
+        #expect(answer.status == 200)
+        #expect(answer.body == "ok:/v1/after")
+        _ = trickled.wait(timeout: .now() + 10)
+        let held = tricklers.filter { fd in
+            var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            return poll(&state, 1, 0) == 0
+        }
+        #expect(held.isEmpty, "\(held.count) trickling connections still held")
+        #expect(upstream.hits("GET", "/v1/trickle") == 0)
+    }
+
+    /// A client that trickles its request body is dropped at the body
+    /// deadline, not held while it keeps sending.
+    @Test(.timeLimit(.minutes(1)))
+    func aClientThatTricklesItsBodyIsDroppedAtTheDeadline() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, bodyDeadline: 1)
+        defer { under.gateway.stop() }
+        let client = try connectGateway(under.port)
+        defer { close(client) }
+        let full = under.request("/upload", method: "POST", body: String(repeating: "y", count: 64))
+        let bytes = Array(full.utf8)
+        let headLength = bytes.count - 64
+        #expect(GatewaySocket.writeAll(client, Array(bytes[..<headLength])))
+        let started = Date()
+        let trickled = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            for index in headLength..<(headLength + 25) {
+                _ = GatewaySocket.writeAll(client, [bytes[index]])
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            trickled.signal()
+        }
+        var state = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+        let ready = poll(&state, 1, 4_000)
+        let waited = Date().timeIntervalSince(started)
+        _ = trickled.wait(timeout: .now() + 10)
+        #expect(ready == 1, "the trickling client was still held after 4 s")
+        #expect(waited < 3)
+        #expect(upstream.hits("POST", "/v1/upload") == 0)
     }
 
     #if os(macOS)
