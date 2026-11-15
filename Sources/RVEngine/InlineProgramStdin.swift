@@ -18,17 +18,16 @@ func stdinProgramRequiresJudge(_ raw: String, secrets: SecretPathCatalog) -> Boo
         if read.heredoc, let body, scriptIsRisky(body, kind: read.kind, secrets: secrets) { return true }
     }
 
-    // No launched command is picked by position: any command the consumer
-    // segment launches may be the interpreter reading the pipe, and any
-    // command the producer segment launches may write to it (an `eval` or
-    // `sh -c` payload launches each view, as written and decoded, and a
-    // group or payload may run several commands).
+    // Any command the consumer segment launches may be the interpreter
+    // reading the pipe, and any command the producer segment launches inside
+    // a group or payload may write to it (an `eval` or `sh -c` payload
+    // launches each view, as written and decoded): `pipeWriters`.
     let pipes = splitTopLevelPipes(header)
     for index in pipes.indices.dropFirst() {
         let reads = launchedCommands(pipes[index]).compactMap(stdinRead).filter {
             $0.hereString == nil && $0.heredoc == false && $0.fileRedirect == false
         }
-        let producers = launchedCommands(pipes[index - 1])
+        let producers = pipeWriters(pipes[index - 1])
         guard reads.isEmpty == false, producers.isEmpty == false else { continue }
         var programs: [String] = []
         for producer in producers {
@@ -42,6 +41,75 @@ func stdinProgramRequiresJudge(_ raw: String, secrets: SecretPathCatalog) -> Boo
         if risky { return true }
     }
     return false
+}
+
+/// The commands of `segment` that may write into the pipe after it. At its
+/// top level only the last list element does: what follows its last `;`,
+/// `&&`, `||`, `&` or newline (`cd repo && echo … |`). A segment holding a
+/// group, subshell, substitution or compound command (`{ a; b; }`, `( … )`,
+/// `if …; fi`), which this scan does not parse, is read whole, as is one
+/// whose last element launches nothing. The segment's last launched
+/// command is always one of them.
+private func pipeWriters(_ segment: String) -> [[String]] {
+    let all = launchedCommands(segment)
+    guard let tail = lastListElement(segment) else { return all }
+    var writers = launchedCommands(tail)
+    guard writers.isEmpty == false else { return all }
+    if let last = all.last, writers.contains(last) == false { writers.append(last) }
+    return writers
+}
+
+private let compoundWords: Set<String> = [
+    "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "in", "case", "esac", "select",
+    "function", "coproc", "[[", "]]", "!", "time",
+]
+
+/// The text after the last top-level list operator of `segment`, or nil
+/// when it holds a group, subshell, substitution, backtick or compound
+/// command word outside quotes. A `&` next to `<` or `>` is a redirect.
+private func lastListElement(_ segment: String) -> String? {
+    let chars = Array(segment)
+    // Each quoted or escaped character masked to `x`.
+    var masked = chars
+    var quote: Character?
+    var index = 0
+    while index < chars.count {
+        let char = chars[index]
+        if char == "\\", quote != "'" {
+            masked[index] = "x"
+            if index + 1 < chars.count { masked[index + 1] = "x" }
+            index += 2
+            continue
+        }
+        if let open = quote {
+            masked[index] = "x"
+            if char == open { quote = nil }
+        } else if char == "'" || char == "\"" {
+            masked[index] = "x"
+            quote = char
+        }
+        index += 1
+    }
+    if masked.contains(where: { "{}()`".contains($0) }) { return nil }
+    let words = String(masked).split(whereSeparator: { $0.isWhitespace || ";&|<>".contains($0) })
+    if words.contains(where: { compoundWords.contains(String($0)) }) { return nil }
+    var start = 0
+    for (position, char) in masked.enumerated() {
+        let before = position > 0 ? masked[position - 1] : nil
+        let after = position + 1 < masked.count ? masked[position + 1] : nil
+        switch char {
+        case ";", "\n":
+            start = position + 1
+        case "&" where before != ">" && before != "<" && after != ">":
+            start = position + 1
+        case "|" where after == "|" || before == "|":
+            start = position + 1
+        default:
+            continue
+        }
+    }
+    let tail = String(chars[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return tail.isEmpty ? nil : tail
 }
 
 private struct StdinRead {
