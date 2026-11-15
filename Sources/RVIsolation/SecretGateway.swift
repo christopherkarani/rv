@@ -790,6 +790,8 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private(set) var upstreamStatus: Int?
     private(set) var bytesWritten = 0
     private(set) var failure: String?
+    /// Test seam: how bytes reach the client socket. Set before the first write.
+    var transmit: (Int32, [UInt8]) -> Bool = { GatewaySocket.writeAll($0, $1) }
 
     init(
         fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []
@@ -815,7 +817,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             self.status = 502
             failure = "upstream returned 401 for the brokered credential"
             closed = true
-            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+            _ = transmit(fd, GatewaySocket.plainResponse(
                 status: 502, reason: "the brokered credential was rejected upstream; update it with `rv secrets set`"))
             return
         }
@@ -825,7 +827,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             self.status = 502
             failure = "upstream response is compressed and cannot be scanned for the secret"
             closed = true
-            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+            _ = transmit(fd, GatewaySocket.plainResponse(
                 status: 502, reason: "upstream response is compressed and cannot be scanned for the secret"))
             return
         }
@@ -866,7 +868,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         if wroteHead == false {
             closed = true
             failure = "upstream sent no response"
-            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream sent no response"))
+            _ = transmit(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream sent no response"))
             return
         }
         // The terminator only follows a body whose every byte was written: a
@@ -899,7 +901,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         flushHeld()
         if wroteHead == false {
             status = 502
-            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream failed: \(reason)"))
+            _ = transmit(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream failed: \(reason)"))
         }
     }
 
@@ -918,7 +920,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     /// Sends, or while a tripwire could still fire before anything has left,
     /// holds the bytes; past `holdLimit` the hold is released.
     private func write(_ bytes: [UInt8]) -> Bool {
-        guard held != nil else { return GatewaySocket.writeAll(fd, bytes) }
+        guard held != nil else { return transmit(fd, bytes) }
         held?.append(contentsOf: bytes)
         guard (held?.count ?? 0) > Self.holdLimit else { return true }
         return flushHeld()
@@ -928,7 +930,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private func flushHeld() -> Bool {
         guard let bytes = held else { return true }
         held = nil
-        return GatewaySocket.writeAll(fd, bytes)
+        return transmit(fd, bytes)
     }
 
     /// A tripwire matched. While nothing has been sent the agent gets a plain
@@ -942,10 +944,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         if held != nil {
             held = nil
             status = refused.status
-            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: refused.status, reason: refused.reason))
+            _ = transmit(fd, GatewaySocket.plainResponse(status: refused.status, reason: refused.reason))
         } else if framed {
             bytesWritten += clean.count
-            _ = GatewaySocket.writeAll(fd, Self.chunk(clean))
+            _ = transmit(fd, Self.chunk(clean))
         }
         return false
     }
