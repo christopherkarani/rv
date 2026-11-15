@@ -1040,6 +1040,51 @@ shape as `allow`. A request they match needs a human's yes, every time:
 | `approvalDenied` | 403 | no | the human denied it, it expired or was cancelled, or the approval could not be consumed. The next request files a new one |
 | `approvalUnavailable` | 403 | no | no approval service for this runtime, no live agent principal, or the service declined to file it (for example, 8 approvals already open for the agent) |
 
+## Connections and slow clients
+
+The gateway serves at most 64 connections at once. Past that, a connection
+gets `503 gateway busy`. Each connection holds its slot until its answer has
+been written, so the gateway bounds how long a client may take:
+
+- **Request head:** 10 s from being accepted. Each read also waits at most
+  30 s for bytes. A client that sends
+  its head a byte at a time is answered `400` and closed at the deadline.
+- **Request body:** 60 s from the moment the head is accepted, answered `413`
+  past it.
+- **Writing the answer:** a write to the client that blocks for 30 s closes
+  the connection.
+
+The upstream is never paused. What it has sent and the client has not yet
+taken waits in memory, within two limits:
+
+- at most 8 MiB for one answer;
+- at most 64 MiB for all answers together, counting only what each holds
+  beyond its first 1 MiB. With 64 connections that is at most 128 MiB.
+
+A request that would pass either limit fails: its upstream request is
+cancelled, and its client's answer ends cut short, without the chunked
+terminator. A client that falls more than 8 MiB behind its upstream is
+therefore cut off, however long it would have kept reading. A client that
+keeps up gets all of an answer, whatever its size: a 24 MiB answer from an
+upstream sending about 8 MiB/s reached a reader that started half a second
+late, whole. A client may still take several minutes over a long answer by
+reading a few KiB every 29 s. Streaming answers such as SSE depend on that,
+so no overall time limit applies.
+
+The terminator is written only after every byte before it, so a client never
+reads a cut-off answer as a complete one.
+
+Measured on loopback against a fast upstream, using rv's transport and
+response writer (macOS 27 with Swift 6.4, and Linux in a container with
+Swift 6.4.2). Clients stalled for 3 s before reading. Resident memory is
+the whole process's:
+
+| | before | macOS | Linux |
+| --- | --- | --- | --- |
+| one 64 MiB answer: most waiting / peak resident | 61 MiB (macOS) / 165–228 MiB | 8.0 MiB / 26 MiB, cut off | 8.0 MiB / 40 MiB, cut off |
+| 16 such answers at once: peak resident | 2.1–2.2 GiB | 91 MiB (38 MiB waiting), all cut off | 126–172 MiB (27–30 MiB waiting), all cut off |
+| 6–7 MiB answers, reader 1.5 s late | whole; on Linux sent upstream twice in 2 of 6 GETs, with more bytes than the answer | whole, sent once | whole, sent once (10 of 10) |
+
 ## Audit
 
 Every gateway request writes `secret.use` events to `audit.jsonl`. None of
