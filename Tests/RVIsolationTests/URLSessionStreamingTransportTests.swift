@@ -659,6 +659,13 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits(method, "/v1/bytes/\(size)") == 1)
+        // The reader really fell behind: Darwin's callback waited for it,
+        // and elsewhere more than 1 MiB waited for it.
+        #if canImport(Darwin)
+        #expect(under.transport.budget.paced > 0)
+        #else
+        #expect(under.transport.peakQueuedBytes > 1 << 20, "\(under.transport.peakQueuedBytes)")
+        #endif
     }
 
     /// The upstream drops the connection without answering, on a fresh
@@ -754,25 +761,29 @@ struct URLSessionStreamingTransportTests {
 
     #if canImport(Darwin)
     /// Darwin's session stops reading while its callback waits, so a reader
-    /// that pauses slows the upstream down instead of being cut off: a
-    /// 64 MiB answer arrives whole and sent once, and about one of Darwin's
-    /// bodies, up to 4 MiB, waits for it at most.
+    /// that pauses slows the upstream down instead of being cut off: an
+    /// answer twice the old 8 MiB cut-off arrives whole and sent once, its
+    /// callback waited for the reader, and about one of Darwin's bodies, up
+    /// to 4 MiB, waits for it at most. 16 MiB, not 64: a debug build's
+    /// scrubber moved 8 to 9 MB/s on a loaded host.
     @Test(.timeLimit(.minutes(1)))
     func aReaderThatPausesSlowsTheUpstreamInsteadOfBeingCutOff() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
         let under = try GatewayUnderTest(upstreamPort: upstream.port)
         defer { under.gateway.stop() }
+        let size = 16 << 20
         let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/bytes/\(size)").utf8)))
         let answer = try ChunkedAnswer(reading: client, pause: 3)
         #expect(answer.head.hasPrefix("http/1.1 200"))
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
-        #expect(answer.body == LoopbackUpstream.bigBytes)
+        #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
-        #expect(upstream.hits("GET", "/v1/big") == 1)
+        #expect(upstream.hits("GET", "/v1/bytes/\(size)") == 1)
+        #expect(under.transport.budget.paced > 0)
         #expect(under.transport.peakQueuedBytes <= 8 << 20, "\(under.transport.peakQueuedBytes)")
     }
     #endif
@@ -801,7 +812,8 @@ struct URLSessionStreamingTransportTests {
 
     /// Without a hand-off, a reader that keeps up with an upstream sending
     /// about 8 MiB a second gets all of an answer three times `perRequest`,
-    /// sent once.
+    /// sent once. It starts 0.3 s late and pauses after each read, so more
+    /// than 512 KiB waits for it before it catches up.
     @Test(.timeLimit(.minutes(1)))
     func aLiveReaderGetsTheWholeOfAnAnswerLargerThanTheCap() throws {
         let upstream = try LoopbackUpstream()
@@ -813,12 +825,13 @@ struct URLSessionStreamingTransportTests {
         let client = try connectGateway(under.port)
         defer { close(client) }
         #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/8").utf8)))
-        let answer = try ChunkedAnswer(reading: client)
+        let answer = try ChunkedAnswer(reading: client, pause: 0.3, perRead: 0.001)
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
+        #expect(under.transport.peakQueuedBytes > 512 << 10, "\(under.transport.peakQueuedBytes)")
     }
 
     /// The total counts only what each request holds beyond its exempt

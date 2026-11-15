@@ -192,6 +192,7 @@ final class URLSessionStreamingBudget: @unchecked Sendable {
     /// Sum over requests of what each holds beyond `limits.exempt`.
     private var counted = 0
     private var peakQueued = 0
+    private var pacedBodies = 0
 
     init(_ limits: URLSessionStreamingTransport.Limits) {
         self.limits = limits
@@ -250,6 +251,19 @@ final class URLSessionStreamingBudget: @unchecked Sendable {
         return peakQueued
     }
 
+    /// Bodies whose callback waited for a sink that had fallen behind.
+    var paced: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pacedBodies
+    }
+
+    func notePaced() {
+        lock.lock()
+        pacedBodies += 1
+        lock.unlock()
+    }
+
     private func excess(_ held: Int) -> Int {
         max(held - limits.exempt, 0)
     }
@@ -305,7 +319,8 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         case .body(let data):
             cancel = takeBody(data)
             // Queued first, so a blocked callback holds no second body.
-            if let handoff {
+            if let handoff, dropping == false, queuedBytes > handoff {
+                budget.notePaced()
                 while dropping == false, queuedBytes > handoff { condition.wait() }
             }
         case .finish, .fail:
