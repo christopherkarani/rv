@@ -497,7 +497,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 let message: MCPGatewayInput = (try? JSONValue.parse(line)).map { .client($0) } ?? .clientUnparseable
                 backlog.admit(line.count)
                 queue.async {
-                    self.perform(self.core.handle(message), charging: backlog)
+                    // The client is gone for rv, or serving is ending: what
+                    // it asks now could not be answered.
+                    if self.clientNotReading == false, self.stopping == false {
+                        self.perform(self.core.handle(message), charging: backlog)
+                    }
                     backlog.release(line.count)
                 }
             }
