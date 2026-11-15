@@ -515,6 +515,14 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
             completionHandler(.cancel)
             return
         }
+        // corelibs-foundation hands on an interim answer (`103 Early Hints`,
+        // an unasked `100 Continue`) as if it were the answer, and the
+        // exchange keeps only the first head: wait for the final one.
+        // Darwin never reports these.
+        guard (100..<200).contains(http.statusCode) == false else {
+            completionHandler(.allow)
+            return
+        }
         exchange.push(.head(status: http.statusCode, headers: Self.headers(of: http)))
         completionHandler(.allow)
     }
