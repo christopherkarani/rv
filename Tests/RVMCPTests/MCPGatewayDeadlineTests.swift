@@ -146,7 +146,7 @@ struct MCPGatewayDeadlineTests {
         var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
         _ = harness.ready()
         let hash = JSONValue.object([:]).canonicalHash
-        harness.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
+        _ = harness.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
         let call = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_issue","arguments":{}}}"#)
         #expect(call.toUpstream.count == 1)
         clock.advance(11)

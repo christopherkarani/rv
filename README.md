@@ -238,6 +238,12 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
+  A server that does not answer `initialize` within 30 s is stopped and
+  fails; a `tools/list` page unanswered for 30 s is left out of the
+  listing; a `tools/call` unanswered for the server's
+  `"callTimeoutSeconds"` in mcp.json (1 to 86400, default 300; each
+  progress notification for the call restarts it) fails with an error,
+  is cancelled on the server and is never sent again.
   Each `rv mcp serve` process also warns once at start, on stderr and in
   the audit log, when host configs bypass the gateway, run a server
   mcp.json blocks, or hold unreviewed servers (a host set up by

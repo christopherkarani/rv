@@ -463,7 +463,7 @@ public struct MCPGatewayCore {
     mutating func expireDeadlines() -> [MCPGatewayOutput] {
         let now = clock()
         var outputs: [MCPGatewayOutput] = []
-        for (id, entry) in pending.sorted(by: { $0.key < $1.key }) where entry.deadline <= now {
+        for (id, entry) in pending.filter({ $0.value.deadline <= now }).sorted(by: { $0.key < $1.key }) {
             switch entry {
             case .initialize(let server, _):
                 pending[id] = nil
