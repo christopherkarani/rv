@@ -211,6 +211,12 @@ private final class Answers: Sendable {
     let items = Mutex<[Int: String]>([:])
 }
 
+/// What a reader thread has read, and whether it should go on.
+private final class Trickle: Sendable {
+    let going = Atomic<Bool>(true)
+    let received = Mutex<[UInt8]>([])
+}
+
 /// Collects what one `send` delivered.
 private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     private let lock = NSLock()
@@ -558,6 +564,76 @@ struct URLSessionStreamingTransportTests {
         #expect(Array(received.suffix(5)) != Array("0\r\n\r\n".utf8), "a cut-off answer ended like a complete one")
         #expect(under.transport.budget.waiting == 0)
         #expect(upstream.hits("GET", "/v1/big") == 1)
+    }
+
+    /// A client that takes in 1 KiB every 0.25 s, each bit well inside the
+    /// send timeout, is cut off once it has taken in less than the minimum
+    /// over a window of the gateway waiting to write to it. Its upstream
+    /// request is cancelled, everything it held is given back, and what it
+    /// still reads is cut short, with no terminator.
+    @Test(.timeLimit(.minutes(1)))
+    func aClientTakingInTooLittleIsCutOff() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        defer { under.gateway.stop() }
+        let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        let trickle = Trickle()
+        let stopped = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            var buffer = [UInt8](repeating: 0, count: 1_024)
+            while trickle.going.load(ordering: .relaxed) {
+                let n = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
+                if n <= 0 { break }
+                trickle.received.withLock { $0 += buffer.prefix(n) }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            stopped.signal()
+        }
+        let counts = { under.transport.sessionCounts }
+        let released = eventually(within: 20) {
+            counts().made == 1 && counts().live == 0 && under.transport.budget.waiting == 0
+        }
+        trickle.going.store(false, ordering: .relaxed)
+        _ = stopped.wait(timeout: .now() + 5)
+        #expect(released, "still served after \(trickle.received.withLock { $0.count }) bytes: \(counts())")
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var all = trickle.received.withLock { $0 }
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        var last = 0
+        while true {
+            last = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
+            if last <= 0 { break }
+            all += buffer.prefix(last)
+        }
+        #expect(last == 0, "the connection was not closed")
+        #expect(String(decoding: all.prefix(512), as: UTF8.self).lowercased().hasPrefix("http/1.1 200"))
+        #expect(all.count < LoopbackUpstream.bigBytes)
+        #expect(Array(all.suffix(5)) != Array("0\r\n\r\n".utf8), "a cut-off answer ended like a complete one")
+        #expect(upstream.hits("GET", "/v1/big") == 1)
+    }
+
+    /// An answer whose parts come 2.5 s apart, longer than the 1 s window,
+    /// as SSE events may: waiting for the upstream is not waiting to write,
+    /// so a client reading as it comes is never cut off.
+    @Test(.timeLimit(.minutes(1)))
+    func aStreamIdleLongerThanThePaceWindowIsNotCutOff() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        defer { under.gateway.stop() }
+        let size = 3 << 16
+        let client = try connectGateway(under.port)
+        defer { close(client) }
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/2500").utf8)))
+        let answer = try ChunkedAnswer(reading: client)
+        #expect(answer.head.hasPrefix("http/1.1 200"))
+        #expect(answer.ended)
+        #expect(answer.body == size)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/2500") == 1)
     }
 
     /// An upstream faster than its reader, with an answer well past the

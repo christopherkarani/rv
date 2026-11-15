@@ -175,10 +175,14 @@ public final class SecretGateway: @unchecked Sendable {
     var beforeListenerPublish: (@Sendable () -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
-    /// Seconds a write to a client may block before its connection is cut.
+    /// Seconds a write to a client may block before its connection is cut,
+    /// and the window over which a client the gateway has bytes waiting for
+    /// must take in `clientMinimumBytes` (`GatewayClientPace`).
     static let clientSendTimeout = 30
-    /// Test seam: the client send timeout. Set before serving.
+    /// Test seam: the client send timeout and pace window. Set before serving.
     var clientSendTimeout = SecretGateway.clientSendTimeout
+    /// Test seam: what a client must take in over that window. Set before serving.
+    var clientMinimumBytes = GatewayClientPace.minimumBytes
     /// Seconds from accepting a connection to the end of its request head.
     static let requestHeadDeadline: TimeInterval = 10
     /// Test seam: the request head deadline. Set before serving.
@@ -738,7 +742,8 @@ public final class SecretGateway: @unchecked Sendable {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
             } + echoes,
             // A call that mints credentials answers with a new key the scrubber has never seen.
-            tripwires: live.signingBinding?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
+            tripwires: live.signingBinding?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : [],
+            pace: GatewayClientPace(window: TimeInterval(clientSendTimeout), minimumBytes: clientMinimumBytes)
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         headers.append(GatewayHeaders.identityEncoding)
@@ -902,10 +907,13 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     /// Test seam: how bytes reach the client socket. Set before the first write.
     var transmit: (Int32, [UInt8]) -> Bool = { GatewaySocket.writeAll($0, $1) }
 
+    /// With a `pace`, a client too slow to take in its answer is cut off.
     init(
-        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []
+        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = [],
+        pace: GatewayClientPace? = nil
     ) {
         self.fd = fd
+        if let pace { transmit = { pace.write($0, $1) } }
         self.method = method
         let watching = tripwires.isEmpty == false
         self.watching = watching
