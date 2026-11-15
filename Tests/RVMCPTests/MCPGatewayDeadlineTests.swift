@@ -175,6 +175,62 @@ struct MCPGatewayDeadlineTests {
         #expect(late.audits.map(\.outcome) == [.interrupted(grant: nil)])
     }
 
+    // MARK: client cancels
+
+    /// A request the client cancels while it waits for the servers to start
+    /// is never run; one it did not cancel still is.
+    @Test func cancelledWhileWaitingIsNeverRun() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github()], clock: clock)
+        let started = harness.core.start().toUpstream
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#).isEmpty)
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#).isEmpty)
+        #expect(harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}"#).isEmpty)
+        let initialize = try #require(started.first?.1["id"])
+        let ready = harness.core.handle(.upstream(server: "github", message: Self.answer(initialize)))
+        let calls = ready.toUpstream.filter { $0.1["method"] == .string("tools/call") }
+        #expect(calls.count == 1)
+        #expect(ready.toClient.isEmpty)
+        let id = try #require(calls.first?.1["id"]?.intValue)
+        let answered = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#)
+        #expect(answered.toClient.map { $0["id"] } == [.int(6)])
+    }
+
+    /// A forwarded call the client cancels ends its trail with one
+    /// interrupted record; nothing after it adds another.
+    @Test func clientCancelOfAForwardedCallEndsItsRecordOnce() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues","arguments":{"q":1}}}"#)
+        let id = try #require(call.toUpstream.first?.1["id"]?.intValue)
+        let cancel = harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5,"reason":"user"}}"#)
+        let record = try #require(cancel.audits.first)
+        #expect(cancel.audits.count == 1)
+        #expect(record.outcome == .interrupted(grant: nil))
+        #expect(record.reason == "cancelled by client")
+        #expect(record.argumentKeys == ["q"])
+        #expect(cancel.toUpstream.map { $0.1["method"] } == [.string("notifications/cancelled")])
+        #expect(cancel.toClient.isEmpty)
+        // A second cancel, the late answer, the deadline and the exit add nothing.
+        #expect(harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}"#).isEmpty)
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#).isEmpty)
+        clock.advance(11)
+        #expect(harness.core.handle(.tick).isEmpty)
+        #expect(harness.core.handle(.upstreamExited(server: "github")).audits.isEmpty)
+    }
+
+    /// A cancel after the timeout finds nothing to cancel.
+    @Test func clientCancelAfterATimeoutAddsNothing() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        clock.advance(11)
+        #expect(harness.core.handle(.tick).audits.count == 1)
+        #expect(harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}"#).isEmpty)
+    }
+
     @Test func progressFromAnotherServerDoesNotResetTheDeadline() throws {
         let clock = ManualClock()
         var harness = Self.harness([Self.github(callTimeout: 10), MCPGatewayCoreTests.notes], clock: clock)
@@ -350,6 +406,68 @@ struct MCPGatewayDeadlineTests {
         let expired = harness.core.handle(.tick)
         let names = expired.toClient.first?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue }
         #expect(names == ["list_issues"])
+    }
+
+    @Test func searchListingNotAnsweredInTimeStillAnswersTheSearch() throws {
+        let clock = ManualClock()
+        let configuration = try MCPConfiguration.decode(Data(#"""
+            {"version": 1, "toolMode": "search", "servers": [{"name": "db", "command": "db-mcp", "tools": {"allow": ["*"]}}]}
+            """#.utf8)).get()
+        var harness = GatewayHarness(configuration, clock: { clock.now })
+        _ = harness.ready()
+        let asked = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rv_search_tools","arguments":{}}}"#)
+        #expect(asked.toUpstream.first?.1["method"] == .string("tools/list"))
+        clock.advance(MCPGatewayDeadlines.standardList + 1)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.toClient.first?["id"] == .int(2))
+        #expect(expired.toClient.first?["result"]?["structuredContent"]?["total"]?.intValue == 0)
+        #expect(expired.logs.contains { $0.contains("db") && $0.contains("did not list tools") })
+    }
+
+    // MARK: progress numbers
+
+    @Test func nonFiniteOrMalformedProgressDoesNotMoveTheDeadline() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":7}}}"#)
+        clock.advance(8)
+        for params in [
+            #"{"progressToken":7,"progress":1e999}"#, #"{"progressToken":7,"progress":-1e999}"#,
+            #"{"progressToken":7,"progress":1,"total":1e999}"#, #"{"progressToken":7,"progress":1,"total":"9"}"#,
+            #"{"progressToken":7,"progress":null}"#, #"{"progressToken":7}"#,
+        ] {
+            #expect(harness.upstream("github", #"{"jsonrpc":"2.0","method":"notifications/progress","params":\#(params)}"#).isEmpty)
+        }
+        clock.advance(3)
+        #expect(harness.core.handle(.tick).toClient.first?["id"] == .string("c"))
+    }
+
+    // MARK: approvals
+
+    /// A call approved in the client that times out is recorded with its
+    /// grant, as one whose server exits is.
+    @Test func elicitationApprovedCallThatTimesOutKeepsItsGrantAsOnExit() throws {
+        func approved(_ clock: ManualClock) throws -> (GatewayHarness, String) {
+            var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock, elicits: true)
+            _ = harness.ready()
+            let prompt = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_issue","arguments":{}}}"#)
+            let key = try #require(prompt.toClient.first?["id"]?.stringValue)
+            let accepted = harness.client(#"{"jsonrpc":"2.0","id":"\#(key)","result":{"action":"accept","content":{"approve":true}}}"#)
+            #expect(accepted.toUpstream.first?.1["method"] == .string("tools/call"))
+            return (harness, key)
+        }
+        let clock = ManualClock()
+        var (timing, timedKey) = try approved(clock)
+        clock.advance(11)
+        let timedOut = try #require(timing.core.handle(.tick).audits.first)
+        #expect(timedOut.outcome == .interrupted(grant: MCPCallRecord.Grant(approvalID: timedKey, channel: .elicitation)))
+        #expect(timedOut.approvedVia == .elicitation)
+
+        var (exiting, exitKey) = try approved(ManualClock())
+        let exited = try #require(exiting.core.handle(.upstreamExited(server: "github")).audits.first)
+        #expect(exited.outcome == .interrupted(grant: MCPCallRecord.Grant(approvalID: exitKey, channel: .elicitation)))
+        #expect(exited.approvedVia == timedOut.approvedVia)
     }
 
     // MARK: held approvals
