@@ -306,4 +306,27 @@ struct MCPGatewayRestartRuntimeTests {
         #expect(planned.withLock { $0 } == 1)
         #expect(await run.finish())
     }
+
+    /// `gone` counts a zombie as gone: it has exited and waits only to be
+    /// reaped, which a container's PID 1 may never do for an orphan.
+    @Test(.timeLimit(.minutes(1)))
+    func aZombieCountsAsGone() async throws {
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup("exit 0"), nil]
+        defer { for pointer in argv { free(pointer) } }
+        var environment: [UnsafeMutablePointer<CChar>?] = [nil]
+        var pid: pid_t = 0
+        let status = argv.withUnsafeBufferPointer { arguments in
+            environment.withUnsafeMutableBufferPointer { environment in
+                posix_spawn(&pid, "/bin/sh", nil, nil, UnsafeMutablePointer(mutating: arguments.baseAddress!), environment.baseAddress!)
+            }
+        }
+        try #require(status == 0)
+        let child = pid
+        // Never reaped until the end, so it stays a zombie meanwhile.
+        defer {
+            var exited: Int32 = 0
+            _ = waitpid(child, &exited, 0)
+        }
+        #expect(await eventually(30) { Self.gone(child) }, "an exited, unreaped child is not gone")
+    }
 }

@@ -35,6 +35,13 @@
 // probe closed itself, so no other process can hold it open. Prints
 // "returned" once the write returns.
 // `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
+// `rv-mcp-probe serve <directory> <script> [INT] [TERM] [HUP] [CHLD-ignored]`
+// sets the named signals to the default (and SIGCHLD to ignored), then
+// serves one plain stdio server, `python3 -u <script> <directory>/server`,
+// with serve's own signal wiring and this probe's stdin and stdout as the
+// client. It writes SIGCHLD's disposition once the signals are set up to
+// `<directory>/chld`, one `<tool> <outcome>` line per audit record to
+// `<directory>/audit`, and exits as serve would.
 import Darwin
 import Foundation
 import RVIsolation
@@ -193,6 +200,73 @@ private func pipeDisposition() -> String {
     return "PIPE=" + (handler == 0 ? "default" : handler == ignore ? "ignore" : "handler")
 }
 
+/// What signal `number` is set to now: `default`, `ignore` or `handler`.
+private func disposition(_ number: Int32) -> String {
+    var current = sigaction()
+    guard sigaction(number, nil, &current) == 0 else { return "unreadable" }
+    let handler = unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self)
+    let ignore = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+    return handler == 0 ? "default" : handler == ignore ? "ignore" : "handler"
+}
+
+private func append(_ line: String, to path: String) {
+    guard let handle = FileHandle(forWritingAtPath: path) ?? {
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }() else { return }
+    handle.seekToEndOfFile()
+    handle.write(Data((line + "\n").utf8))
+    try? handle.close()
+}
+
+private func outcomeName(_ outcome: MCPCallRecord.Outcome) -> String {
+    switch outcome {
+    case .ran: "ran"
+    case .interrupted: "interrupted"
+    case .forwarding: "forwarding"
+    default: "\(outcome)"
+    }
+}
+
+/// `serve`: the signal wiring of `rv mcp serve` around one plain server.
+private func serveUnderSignals(_ directory: String, _ script: String, _ flags: ArraySlice<String>) -> Int32 {
+    let names: [String: Int32] = ["INT": SIGINT, "TERM": SIGTERM, "HUP": SIGHUP]
+    for flag in flags {
+        if flag == "CHLD-ignored" {
+            signal(SIGCHLD, SIG_IGN)
+            continue
+        }
+        guard let number = names[flag] else { return 2 }
+        signal(number, SIG_DFL)
+    }
+    let definition = MCPServerDefinition(name: "plain", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+    // As serve: a serve with no placeholder server keeps the defaults.
+    let signals = MCPShutdownSignals.wanted(by: [definition])
+        ? MCPShutdownSignals(MCPShutdownSignals.handled, catching: true) : nil
+    defer { signals?.cancel() }
+    append(disposition(SIGCHLD), to: directory + "/chld")
+    guard let tool = try? JSONValue.parse(#"{"name":"wait","inputSchema":{"type":"object"}}"#) else { return 1 }
+    let core = MCPGatewayCore(
+        configuration: MCPConfiguration(servers: [definition]), upstreams: [MCPGatewayCore.Upstream(definition: definition)],
+        approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+        pinning: MCPToolPinning(pins: ["plain": ["wait": MCPToolPinStore.hash(tool)]], recordChanged: { _, _ in .recorded }),
+        recordForward: { _ in true })
+    let launch = MCPUpstreamLaunch(
+        server: "plain", executable: "/usr/bin/env", arguments: ["python3", "-u", script, directory + "/server"],
+        environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"])
+    let audit = directory + "/audit"
+    let runtime = MCPGatewayRuntime(
+        core: core, connections: [.process(launch)],
+        audit: { record in append("\(record.tool) \(outcomeName(record.outcome))", to: audit) },
+        log: { _ in })
+    if let number = signals?.first { return 128 + number }
+    signals?.forward { runtime.requestShutdown() }
+    let ending = runtime.run()
+    signals?.cancel()
+    if let number = signals?.first { return 128 + number }
+    return ending == .clientNotReading ? 1 : 0
+}
+
 private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
     signal(SIGPIPE, mode == "closed-default" ? SIG_DFL : SIG_IGN)
     switch mode {
@@ -279,6 +353,12 @@ case "pipe-disposition":
         exit(2)
     }
     exit(FileManager.default.createFile(atPath: arguments[1], contents: Data(pipeDisposition().utf8)) ? 0 : 1)
+case "serve":
+    guard arguments.count >= 3 else {
+        say("usage: rv-mcp-probe serve <directory> <script> [INT] [TERM] [HUP] [CHLD-ignored]")
+        exit(2)
+    }
+    exit(serveUnderSignals(arguments[1], arguments[2], arguments.dropFirst(3)))
 case "report":
     say(dispositions())
     exit(0)
@@ -385,6 +465,7 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | hold | unix-connect <path> | unix-dgram <path> | peerinfo <pid> | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
+        + " | hold | unix-connect <path> | unix-dgram <path> | peerinfo <pid> | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>"
+        + " | serve <directory> <script> [INT] [TERM] [HUP] [CHLD-ignored]")
     exit(2)
 }

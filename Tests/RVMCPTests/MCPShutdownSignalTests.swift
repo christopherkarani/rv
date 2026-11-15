@@ -1,5 +1,8 @@
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Foundation
 import Synchronization
@@ -16,37 +19,96 @@ private func eventually(_ seconds: TimeInterval = 10, _ condition: () -> Bool) -
     return true
 }
 
-/// Runs `executable` to its end and returns its output lines by their first
-/// word. Hard bound: killed, and the test fails, after 20 seconds; the wait
-/// polls instead of blocking in `waitid`.
-private func probeLines(_ executable: String, _ arguments: [String]) throws -> [String: String] {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    let output = Pipe()
-    process.standardOutput = output
-    try process.run()
-    let finished = eventually(20) { process.isRunning == false }
-    if finished == false {
-        kill(process.processIdentifier, SIGKILL)
-        Issue.record("the signal probe did not finish")
+/// `eventually`, polled off the concurrency pool.
+private func eventuallyOffThePool(_ seconds: TimeInterval = 60, _ condition: @escaping @Sendable () -> Bool) async -> Bool {
+    await offThePool { eventually(seconds, condition) }
+}
+
+/// A plain stdio server that notes every SIGTERM, SIGINT and SIGHUP it or
+/// its child gets in `<argv[1]>.signals` (and exits on SIGTERM). At start
+/// it writes its SIGHUP disposition to `.start`, then forks a child in its
+/// group and writes both pids to `.pids`. Its one tool, `wait`, is never
+/// answered; a call to it is noted in `.called`.
+let signalNotingServer = #"""
+    import json, os, signal, sys, time
+    record = sys.argv[1]
+    def note(suffix, text):
+        with open(record + suffix, "a") as f:
+            f.write(text + "\n")
+    hup = signal.getsignal(signal.SIGHUP)
+    note(".start", "HUP=" + ("ignore" if hup == signal.SIG_IGN else "default" if hup == signal.SIG_DFL else "handler"))
+    def heard(number, frame):
+        note(".signals", signal.Signals(number).name[3:])
+        if number == signal.SIGTERM:
+            os._exit(0)
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, heard)
+    child = os.fork()
+    if child == 0:
+        time.sleep(600)
+        os._exit(0)
+    note(".pids", "%d %d" % (os.getpid(), child))
+    for line in sys.stdin:
+        msg = json.loads(line)
+        method, mid = msg.get("method"), msg.get("id")
+        if mid is None:
+            continue
+        if method == "initialize":
+            result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "plain", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "wait", "inputSchema": {"type": "object"}}]}
+        elif method == "tools/call":
+            note(".called", "wait")
+            continue
+        else:
+            continue
+        print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}), flush=True)
+    """#
+
+/// One run of `signalNotingServer`: its files are `<directory>/server.*`.
+private struct NotingServer {
+    let directory: URL
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-signal-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(signalNotingServer.utf8).write(to: script)
     }
-    #expect(eventually(5) { process.isRunning == false })
-    #expect(process.terminationReason == .exit && process.terminationStatus == 0)
-    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    var lines: [String: String] = [:]
-    for line in text.split(separator: "\n") {
-        let parts = line.split(separator: " ", maxSplits: 1)
-        lines[String(parts[0])] = parts.count > 1 ? String(parts[1]) : ""
+
+    var script: URL { directory.appendingPathComponent("server.py") }
+    var record: String { directory.appendingPathComponent("server").path }
+
+    var launch: MCPUpstreamLaunch {
+        MCPUpstreamLaunch(
+            server: "plain", executable: "/usr/bin/env", arguments: ["python3", "-u", script.path, record],
+            environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"])
     }
-    return lines
+
+    func lines(_ suffix: String) -> [String] {
+        let text = (try? String(contentsOfFile: record + suffix, encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").map(String.init)
+    }
+
+    var called: Bool { lines(".called").isEmpty == false }
+    var pids: [pid_t] { lines(".pids").first?.split(separator: " ").compactMap { pid_t($0) } ?? [] }
+
+    /// The test's own cleanup, whatever happened: kills what is still there.
+    func remove() {
+        for pid in pids where MCPGatewayRestartRuntimeTests.gone(pid) == false { kill(pid, SIGKILL) }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    static let call = #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#
 }
 
 /// Serialized: the SIGURG tests share one process-wide signal.
 @Suite("rv mcp serve: shutdown on a signal", .serialized)
 struct MCPShutdownSignalTests {
     /// SIGURG is discarded by default, so sending it to this process ends
-    /// nothing, and the test changes no disposition (`catching: false`).
+    /// nothing. On macOS the test changes no disposition (`catching:
+    /// false`); on Linux a signal is heard only through a handler, which
+    /// `cancel` takes away again.
     @Test(.timeLimit(.minutes(1)))
     func aHandledSignalReachesTheHandlerUntilCancelled() {
         let heard = Mutex<[Int32]>([])
@@ -76,44 +138,38 @@ struct MCPShutdownSignalTests {
         #expect(eventually { heard.withLock { $0 } == 2 })
     }
 
-    /// In a child, so this process's dispositions never change. Installed:
-    /// a real handler, not `SIG_IGN`, so a plain server spawned meanwhile
-    /// starts with the defaults; the signal still reaches serve, which does
-    /// not die of it; cancel puts the defaults back. The probe first sets
-    /// the three to the default itself, so a runner started under `nohup`
-    /// runs this test too rather than skipping it.
-    @Test(.timeLimit(.minutes(1)))
-    func caughtSignalsLeaveAPlainChildTheDefaultsAndAreRestored() throws {
-        let lines = try probeLines(try mcpProbe().path, ["signals", "INT", "TERM", "HUP"])
-        #expect(lines["inherited"] == "INT=default TERM=default HUP=default")
-        #expect(lines["installed"] == "INT=handler TERM=handler HUP=handler")
-        #expect(lines["child"] == "INT=default TERM=default HUP=default")
-        #expect(lines["heard"] == "1 first \(SIGTERM)")
-        #expect(lines["restored"] == "INT=default TERM=default HUP=default")
-    }
-
-    /// A signal rv inherited ignored (`nohup`) stays ignored, unhandled, and
-    /// is left so, for serve and for its children. `nohup` ignores HUP; the
-    /// probe sets INT and TERM to the default whatever the runner had.
-    @Test(.timeLimit(.minutes(1)))
-    func aSignalInheritedIgnoredStaysIgnored() throws {
-        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals", "INT", "TERM"])
-        #expect(lines["inherited"] == "INT=default TERM=default HUP=ignore")
-        #expect(lines["installed"] == "INT=handler TERM=handler HUP=ignore")
-        // Serve adds nothing: the child keeps HUP ignored, unless Foundation's
-        // `Process` resets it, which this does not depend on.
-        #expect(["INT=default TERM=default HUP=ignore", "INT=default TERM=default HUP=default"].contains(lines["child"]))
-        #expect(lines["restored"] == "INT=default TERM=default HUP=ignore")
-    }
-
-    /// Only a serve that names a server with placeholders catches signals;
-    /// any other keeps the defaults.
-    @Test func onlyAServeWithAPlaceholderServerCatchesSignals() {
-        let plain = MCPServerDefinition(name: "plain", command: "/bin/sh")
-        let bound = MCPServerDefinition(name: "bound", command: "/bin/sh", placeholders: ["OPENAI_API_KEY"])
-        #expect(MCPShutdownSignals.wanted(by: []) == false)
-        #expect(MCPShutdownSignals.wanted(by: [plain]) == false)
-        #expect(MCPShutdownSignals.wanted(by: [plain, bound]))
+    /// A signal to a serve of one plain server, with a call in flight: the
+    /// call gets its interrupted record, the server's group (its child
+    /// too) is gone, and the first signal the server gets is rv's SIGTERM.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
+    func aSignalEndsAPlainServeWithItsCallInterruptedAndItsGroupGone() async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let definition = MCPServerDefinition(name: "plain", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        let core = MCPGatewayCore(
+            configuration: MCPConfiguration(servers: [definition]), upstreams: [MCPGatewayCore.Upstream(definition: definition)],
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true })
+        let run = GatewayRun(core: core, connections: [.process(server.launch)])
+        let signals = MCPShutdownSignals([SIGURG], catching: false)
+        defer { signals.cancel() }
+        let runtime = run.runtime
+        signals.forward { runtime.requestShutdown() }
+        #expect(await run.initialize())
+        run.client.send(NotingServer.call)
+        #expect(await eventuallyOffThePool { server.called }, "the call never reached the server")
+        #expect(kill(getpid(), SIGURG) == 0)
+        let ended = await run.ended(within: 60)
+        #expect(ended, "the signal did not end serve")
+        if ended == false { _ = await run.finish() }
+        #expect(run.audits.items.withLock { $0.filter { $0.tool == "wait" }.map(\.outcome) } == [.interrupted(grant: nil)])
+        let pids = server.pids
+        #expect(pids.count == 2)
+        for pid in pids {
+            #expect(await eventuallyOffThePool { MCPGatewayRestartRuntimeTests.gone(pid) }, "\(pid) is still running")
+        }
+        #expect(server.lines(".signals").first == "TERM", "\(server.lines(".signals"))")
+        try? run.client.toGateway.fileHandleForWriting.close()
     }
 
     /// What the signal handler asks for: `run` stops every upstream and
@@ -179,6 +235,169 @@ struct MCPShutdownSignalTests {
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
             audit: { _ in }, log: { _ in })
+    }
+
+    #if os(macOS)
+    /// In a child, so this process's dispositions never change. Installed:
+    /// a real handler, not `SIG_IGN`, so a plain server spawned meanwhile
+    /// starts with the defaults; the signal still reaches serve, which does
+    /// not die of it; cancel puts the defaults back. The probe first sets
+    /// the three to the default itself, so a runner started under `nohup`
+    /// runs this test too rather than skipping it.
+    @Test(.timeLimit(.minutes(1)))
+    func caughtSignalsLeaveAPlainChildTheDefaultsAndAreRestored() throws {
+        let lines = try probeLines(try mcpProbe().path, ["signals", "INT", "TERM", "HUP"])
+        #expect(lines["inherited"] == "INT=default TERM=default HUP=default")
+        #expect(lines["installed"] == "INT=handler TERM=handler HUP=handler")
+        #expect(lines["child"] == "INT=default TERM=default HUP=default")
+        #expect(lines["heard"] == "1 first \(SIGTERM)")
+        #expect(lines["restored"] == "INT=default TERM=default HUP=default")
+    }
+
+    /// A signal rv inherited ignored (`nohup`) stays ignored, unhandled, and
+    /// is left so, for serve and for its children. `nohup` ignores HUP; the
+    /// probe sets INT and TERM to the default whatever the runner had.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalInheritedIgnoredStaysIgnored() throws {
+        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals", "INT", "TERM"])
+        #expect(lines["inherited"] == "INT=default TERM=default HUP=ignore")
+        #expect(lines["installed"] == "INT=handler TERM=handler HUP=ignore")
+        // Serve adds nothing: the child keeps HUP ignored, unless Foundation's
+        // `Process` resets it, which this does not depend on.
+        #expect(["INT=default TERM=default HUP=ignore", "INT=default TERM=default HUP=default"].contains(lines["child"]))
+        #expect(lines["restored"] == "INT=default TERM=default HUP=ignore")
+    }
+
+    /// The real dispositions, in the probe: SIGTERM, SIGINT or SIGHUP to a
+    /// serve of one plain server with a call in flight ends serve as killed
+    /// by that signal (128 plus it), after the call's interrupted record,
+    /// with the server's group gone and rv's SIGTERM the first signal the
+    /// server got.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available), arguments: [SIGTERM, SIGINT, SIGHUP])
+    func aRealSignalEndsAPlainServeWithItsCallInterruptedAndItsGroupGone(_ number: Int32) async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP"])
+        defer { serve.kill() }
+        #expect(await serve.initialize())
+        serve.client.send(NotingServer.call)
+        #expect(await eventuallyOffThePool { server.called }, "the call never reached the server")
+        #expect(Darwin.kill(serve.process.processIdentifier, number) == 0)
+        #expect(await eventuallyOffThePool { serve.process.isRunning == false }, "serve did not end")
+        let process = serve.process
+        #expect(process.isRunning == false && process.terminationReason == .exit, "serve was killed by the signal")
+        #expect(process.isRunning == false && process.terminationStatus == 128 + number)
+        #expect(serve.lines("audit") == ["wait interrupted"])
+        let pids = server.pids
+        #expect(pids.count == 2)
+        for pid in pids {
+            #expect(await eventuallyOffThePool { MCPGatewayRestartRuntimeTests.gone(pid) }, "\(pid) is still running")
+        }
+        #expect(server.lines(".signals").first == "TERM", "\(server.lines(".signals"))")
+    }
+
+    /// A server starts with every signal at its default, even one serve
+    /// inherited ignored (`nohup`'s SIGHUP): rv, not the server, decides
+    /// when it stops, and it sends SIGTERM to the server's group.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
+    func aServerStartsWithTheDefaultsWhateverServeInheritedIgnored() async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let serve = try ProbeServe(server, prefix: ["/usr/bin/nohup"], flags: ["INT", "TERM"])
+        defer { serve.kill() }
+        #expect(await serve.initialize())
+        #expect(await eventuallyOffThePool { server.lines(".start").isEmpty == false })
+        #expect(server.lines(".start") == ["HUP=default"])
+        #expect(await serve.ends(within: 60) == 0)
+    }
+
+    /// Serve sets SIGCHLD back to its default when it inherited it ignored:
+    /// an ignored SIGCHLD reaps a server by itself, and its supervisor could
+    /// then neither kill what is left of its group nor learn how it ended.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
+    func serveTakesBackAnInheritedChildSignalIgnore() async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP", "CHLD-ignored"])
+        defer { serve.kill() }
+        #expect(await serve.initialize())
+        #expect(serve.lines("chld") == ["default"])
+        #expect(await serve.ends(within: 60) == 0)
+    }
+    #endif
+}
+
+#if os(macOS)
+/// Runs `executable` to its end and returns its output lines by their first
+/// word. Hard bound: killed, and the test fails, after 20 seconds; the wait
+/// polls instead of blocking in `waitid`.
+private func probeLines(_ executable: String, _ arguments: [String]) throws -> [String: String] {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    let output = Pipe()
+    process.standardOutput = output
+    try process.run()
+    let finished = eventually(20) { process.isRunning == false }
+    if finished == false {
+        kill(process.processIdentifier, SIGKILL)
+        Issue.record("the signal probe did not finish")
+    }
+    #expect(eventually(5) { process.isRunning == false })
+    #expect(process.terminationReason == .exit && process.terminationStatus == 0)
+    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    var lines: [String: String] = [:]
+    for line in text.split(separator: "\n") {
+        let parts = line.split(separator: " ", maxSplits: 1)
+        lines[String(parts[0])] = parts.count > 1 ? String(parts[1]) : ""
+    }
+    return lines
+}
+
+/// `rv-mcp-probe serve` over `server`, with this test as its client.
+/// Unchecked: `Process` is only read here, and its own state is locked.
+private final class ProbeServe: @unchecked Sendable {
+    let process: Process
+    let client: LineClient
+    let directory: URL
+
+    init(_ server: NotingServer, prefix: [String], flags: [String]) throws {
+        let probe = try mcpProbe().path
+        let process = Process()
+        let arguments = [probe, "serve", server.directory.path, server.script.path] + flags
+        process.executableURL = URL(fileURLWithPath: prefix.first ?? probe)
+        process.arguments = prefix.isEmpty ? Array(arguments.dropFirst()) : Array(prefix.dropFirst()) + arguments
+        let client = LineClient()
+        process.standardInput = client.toGateway
+        process.standardOutput = client.fromGateway
+        try process.run()
+        self.process = process
+        self.client = client
+        directory = server.directory
+    }
+
+    func lines(_ name: String) -> [String] {
+        let text = (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").map(String.init)
+    }
+
+    func initialize() async -> Bool {
+        client.send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
+        let reply = await client.next(timeout: 120)
+        client.send(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        return reply?["result"]?["serverInfo"]?["name"] == .string("rv")
+    }
+
+    /// Closes serve's input and returns its exit status, or nil if it did
+    /// not exit by itself in time.
+    func ends(within seconds: TimeInterval) async -> Int32? {
+        try? client.toGateway.fileHandleForWriting.close()
+        guard await eventuallyOffThePool(seconds, { self.process.isRunning == false }) else { return nil }
+        return process.terminationReason == .exit ? process.terminationStatus : nil
+    }
+
+    func kill() {
+        if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
     }
 }
 #endif

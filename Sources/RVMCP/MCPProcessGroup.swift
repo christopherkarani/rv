@@ -236,6 +236,16 @@ struct MCPPipe {
         return MCPPipe(read: read, write: write)
     }
 
+    /// `count` pipes from `make`, or nil when one of them cannot be made.
+    static func make(_ count: Int, using make: () -> MCPPipe? = { MCPPipe.make() }) -> [MCPPipe]? {
+        var pipes: [MCPPipe] = []
+        for _ in 0..<count {
+            guard let pipe = make() else { return nil }
+            pipes.append(pipe)
+        }
+        return pipes
+    }
+
     /// `fd`, close-on-exec, at a number above 2 (moved there if rv was
     /// started with a standard descriptor closed).
     private static func lifted(_ fd: Int32) -> Int32? {
