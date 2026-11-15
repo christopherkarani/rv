@@ -157,6 +157,13 @@ private final class LoopbackUpstream: @unchecked Sendable {
             _ = Self.write(client, Array(
                 "HTTP/1.1 401 Unauthorized\r\n\(challenge)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
                     .utf8) + body)
+        } else if let at = segments.firstIndex(of: "interim"), at + 1 < segments.count,
+            let code = Int(segments[at + 1])
+        {
+            let body = Array("the final answer".utf8)
+            _ = Self.write(client, Array(
+                ("HTTP/1.1 \(code) Interim\r\nLink: </style.css>; rel=preload\r\n\r\n"
+                    + "HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n").utf8) + body)
         } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
@@ -768,6 +775,42 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.status == 502)
         #expect(answer.body.contains("the brokered credential was rejected upstream"), "\(answer.body)")
         #expect(upstream.hits("POST", "/v1/auth/\(challenge)") == 1)
+    }
+
+    /// An interim answer (`103 Early Hints`, or a `100 Continue` the gateway
+    /// did not ask for) is not the answer: the final status and its whole
+    /// body are handed on.
+    @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
+    func anInterimAnswerIsPassedOverForTheFinalOne(code: Int) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/interim/\(code)"))
+        URLSessionStreamingTransport().send(
+            SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+        #expect(sink.headStatus == 200)
+        #expect(sink.result.body == "the final answer")
+        #expect(sink.result.ended == "finished")
+    }
+
+    /// Through the gateway: the client gets the final answer whole, also
+    /// when it asked for `100 Continue` (which the gateway sends itself).
+    @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
+    func aClientGetsTheFinalAnswerPastAnUpstreamInterim(code: Int) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let body = #"{"input":"x"}"#
+        let expect = code == 100 ? "Expect: 100-continue\r\n" : ""
+        let answer = try gatewayExchange(
+            port: under.port,
+            "POST /s/OPENAI_API_KEY/interim/\(code) HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                + "Authorization: Bearer \(under.placeholder.text)\r\n\(expect)"
+                + "Content-Length: \(body.utf8.count)\r\n\r\n\(body)")
+        #expect(answer.status == 200, "\(answer.body)")
+        #expect(answer.body == "the final answer")
+        #expect(upstream.hits("POST", "/v1/interim/\(code)") == 1)
     }
 
     #if canImport(Darwin)
