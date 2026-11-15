@@ -231,6 +231,24 @@ struct MCPGatewayDeadlineTests {
         #expect(harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}"#).isEmpty)
     }
 
+    /// A client that reuses one token on two live calls to one server gets
+    /// that server's progress counted for the older call, every run.
+    @Test func progressForATokenTwoCallsShareMovesTheOlderCall() throws {
+        for _ in 0..<20 {
+            let clock = ManualClock()
+            var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+            _ = harness.ready()
+            for client in [5, 6] {
+                _ = harness.client(#"{"jsonrpc":"2.0","id":\#(client),"method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":7}}}"#)
+            }
+            clock.advance(8)
+            #expect(harness.upstream("github", #"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":7,"progress":1}}"#).toClient.count == 1)
+            clock.advance(3)
+            let expired = harness.core.handle(.tick)
+            #expect(expired.toClient.compactMap { $0["id"]?.intValue } == [6])
+        }
+    }
+
     @Test func progressFromAnotherServerDoesNotResetTheDeadline() throws {
         let clock = ManualClock()
         var harness = Self.harness([Self.github(callTimeout: 10), MCPGatewayCoreTests.notes], clock: clock)
