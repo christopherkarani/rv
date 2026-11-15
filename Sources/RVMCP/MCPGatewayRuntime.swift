@@ -77,14 +77,21 @@ public enum MCPLaunchPlanner {
         placeholders: MCPPlaceholderLeasing = .unavailable,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
-        // A plan that fails starts nothing: the leases it took end with it.
+        // A plan that fails starts nothing: the leases it took end with it,
+        // and so do the proxies its cages started.
         var leases: [SecretPlaceholderLease] = []
+        var caged: [String] = []
         let planned = planServers(
             names, configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: baseEnvironment,
-            requireSandbox: requireSandbox, oauthTokens: oauthTokens, sandbox: sandbox, placeholders: placeholders,
-            leases: &leases, now: now)
+            requireSandbox: requireSandbox, oauthTokens: oauthTokens,
+            sandbox: { definition, launch, reach in
+                caged.append(definition.name)
+                return sandbox(definition, launch, reach)
+            },
+            placeholders: placeholders, leases: &leases, now: now)
         if case .failure = planned {
             for lease in leases { lease.revoke() }
+            for server in caged { MCPSandbox.stopProxies(server: server) }
         }
         return planned
     }
@@ -249,6 +256,7 @@ public enum MCPLaunchPlanner {
         case .success(let caged):
             guard caged.executable == MCPSandbox.sandboxExec else {
                 lease.revoke()
+                if MCPSandbox.proxyCredential(in: caged.environment) != nil { MCPSandbox.stopProxies(server: name) }
                 return refuse(.uncaged)
             }
             var scrubbed = named(resolved)

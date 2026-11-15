@@ -61,6 +61,31 @@ struct MCPSandboxProxyTests {
         #expect(MCPSandbox.proxies.withLock { $0.filter { $0.server == server }.count } <= 1)
     }
 
+    /// Stopping one server's proxy leaves every other server's running: a
+    /// test that cleans up its own server does not stop another test's.
+    @Test func stoppingOneServersProxyLeavesAnothersRunning() throws {
+        let mine = "proxy-mine-\(UUID().uuidString)"
+        let theirs = "proxy-theirs-\(UUID().uuidString)"
+        let first = Self.proxy()
+        let second = Self.proxy()
+        guard case .success(let firstPort) = first.start(), case .success(let secondPort) = second.start() else {
+            Issue.record("a proxy did not start")
+            return
+        }
+        defer {
+            first.stop()
+            second.stop()
+        }
+        MCPSandbox.track(first, server: mine)
+        MCPSandbox.track(second, server: theirs)
+        MCPSandbox.stopProxies(server: mine)
+        #expect(Self.accepts(firstPort) == false)
+        #expect(Self.accepts(secondPort))
+        #expect(MCPSandbox.proxies.withLock { $0.contains { $0.server == mine } } == false)
+        #expect(MCPSandbox.proxies.withLock { $0.contains { $0.server == theirs } })
+        MCPSandbox.stopProxies(server: theirs)
+    }
+
     /// A plan that fails after a server's proxy started (here because a
     /// later server it names is not in mcp.json) stops that proxy and
     /// forgets it: nothing it planned runs, so nothing uses it.
