@@ -364,6 +364,18 @@ struct SecretRunLaunchTests {
         #expect(waitpid(pid, &status, 0) == pid)
     }
 
+    /// Only an exit ends the wait for the leader. Darwin answers a wait that
+    /// asked for exits alone with a stop as well, and taking that for the
+    /// exit killed the group of a command that had only stopped.
+    @Test func onlyAnExitEndsTheWaitForTheLeader() {
+        for code in [CLD_EXITED, CLD_KILLED, CLD_DUMPED] {
+            #expect(SecretRunProcess.leaderEnded(reportCode: Int32(code)))
+        }
+        for code in [Int32(CLD_STOPPED), Int32(CLD_CONTINUED), Int32(CLD_TRAPPED), 0] {
+            #expect(SecretRunProcess.leaderEnded(reportCode: code) == false)
+        }
+    }
+
     /// rv started with a standard descriptor closed (`rv run ... <&-`) has
     /// since opened something of its own at that number. "Inherit stdin as
     /// it is" must give the command that number closed, not rv's file.

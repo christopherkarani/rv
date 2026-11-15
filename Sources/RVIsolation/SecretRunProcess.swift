@@ -213,11 +213,17 @@ enum SecretRunProcess {
                 takeBack(terminal, &job)
                 return SIGKILL
             }
-            guard info.si_code == CLD_STOPPED, let terminal else { break }
+            if leaderEnded(reportCode: info.si_code) { break }
             // Consume the stop. Without WEXITED this never reaps, even if the
             // leader exited since. The spawn suspension reads as a stop with
-            // no signal; only a signal stop is passed on.
-            guard consumeStop(pid) != nil else { continue }
+            // no signal; only a signal stop is passed on, and only where
+            // there is a terminal. Darwin reports a stop even to a wait that
+            // asked for exits alone; the pause bounds this loop should a
+            // kernel report one it has already given up.
+            guard consumeStop(pid) != nil, let terminal else {
+                usleep(10_000)
+                continue
+            }
             // Ctrl-Z (or a background read) stopped the command's group,
             // which the shell does not see; stop rv too so the shell regains
             // the terminal. `fg` gives rv the foreground before continuing
@@ -239,6 +245,13 @@ enum SecretRunProcess {
             guard errno == EINTR else { return SIGKILL }
         }
         return status
+    }
+
+    /// Whether a `waitid` report (`si_code`) says the leader is gone: it
+    /// exited or a signal killed it. Anything else is a stop or a
+    /// continue, and the leader is still there to be waited for.
+    static func leaderEnded(reportCode: Int32) -> Bool {
+        [Int32(CLD_EXITED), Int32(CLD_KILLED), Int32(CLD_DUMPED)].contains(reportCode)
     }
 
     /// Consumes the leader's pending stop report and returns the signal that
