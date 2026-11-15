@@ -16,11 +16,12 @@
 // through `MCPRemoteUpstream` and a GET through the secrets gateway's
 // upstream transport, and prints how long each took to answer ("none"
 // after 10 s).
-// `rv-mcp-probe stderr <bytes> [interrupted|closed]` ignores SIGPIPE as serve
-// does, then writes one line of `bytes` x's through the gateway's stderr
-// writer: `interrupted` under a 1 ms SIGALRM without SA_RESTART, `closed`
-// after its stdin ends (the test closes stderr's read end first). Prints
-// "returned" once the write returns.
+// `rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]` ignores
+// SIGPIPE as serve does (`closed-default` sets it to the default instead,
+// as during planning), then writes one line of `bytes` x's through the
+// gateway's stderr writer: `interrupted` under a 1 ms SIGALRM without
+// SA_RESTART, `closed` and `closed-default` after its stdin ends (the test
+// closes stderr's read end first). Prints "returned" once the write returns.
 // `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
 import Darwin
 import Foundation
@@ -181,7 +182,7 @@ private func pipeDisposition() -> String {
 }
 
 private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
-    signal(SIGPIPE, SIG_IGN)
+    signal(SIGPIPE, mode == "closed-default" ? SIG_DFL : SIG_IGN)
     switch mode {
     case "interrupted":
         var action = sigaction()
@@ -191,7 +192,7 @@ private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
         sigaction(SIGALRM, &action, nil)
         var timer = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 1000), it_value: timeval(tv_sec: 0, tv_usec: 1000))
         setitimer(ITIMER_REAL, &timer, nil)
-    case "closed":
+    case "closed", "closed-default":
         _ = FileHandle.standardInput.readDataToEndOfFile()
     case nil: break
     default: return 2
@@ -215,7 +216,7 @@ case "stderr":
     guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0,
         writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil) == 0
     else {
-        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed]")
+        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]")
         exit(2)
     }
     exit(0)
@@ -265,6 +266,6 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | remote-starved <url> | stderr <bytes> [interrupted|closed] | pipe-disposition <file>")
+        + " | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
     exit(2)
 }

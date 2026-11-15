@@ -59,9 +59,21 @@ struct MCPGatewayStderrTests {
     /// which ended the process.
     @Test(.timeLimit(.minutes(1)))
     func aClosedStderrReturnsInsteadOfRaising() throws {
+        try Self.expectReturnsOnAClosedStderr("closed")
+    }
+
+    /// With SIGPIPE at its default, as while serve plans its servers, the
+    /// write still fails and returns: the writer does not depend on the
+    /// process's disposition, so a closed stderr cannot end serve there.
+    @Test(.timeLimit(.minutes(1)))
+    func aClosedStderrReturnsWithSIGPIPEAtItsDefault() throws {
+        try Self.expectReturnsOnAClosedStderr("closed-default")
+    }
+
+    static func expectReturnsOnAClosedStderr(_ mode: String) throws {
         let process = Process()
         process.executableURL = try mcpProbe()
-        process.arguments = ["stderr", String(1 << 20), "closed"]
+        process.arguments = ["stderr", String(1 << 20), mode]
         let input = Pipe(), output = Pipe(), errors = Pipe()
         closeOnExec(input)
         closeOnExec(output)
@@ -75,8 +87,8 @@ struct MCPGatewayStderrTests {
         try input.fileHandleForWriting.close()
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
-        #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(text)")
-        #expect(text == "returned\n")
+        #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(mode): \(text)")
+        #expect(text == "returned\n", "\(mode)")
     }
 }
 #endif
