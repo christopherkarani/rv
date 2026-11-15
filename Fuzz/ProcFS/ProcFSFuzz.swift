@@ -83,7 +83,7 @@ enum ProcFSProperties {
             parent: UInt32(truncatingIfNeeded: mix.next()), group: UInt32(truncatingIfNeeded: mix.next()),
             session: UInt32(truncatingIfNeeded: mix.next()), startTicks: mix.next())
         let tail = ") S \(expected.parent) \(expected.group) \(expected.session) 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 "
-            + "\(expected.startTicks) 0 0\n"
+            + "\(expected.startTicks) 0 0" + String(repeating: " 0", count: 28) + "\n"
         let text = utf8("\(expected.pid) (") + comm + utf8(tail)
         if ProcFSParse.stat(text) != expected { broken.append("comm changed the fields read after it") }
         let cut = 1 + Int(mix.next() % UInt64(text.count - 1))

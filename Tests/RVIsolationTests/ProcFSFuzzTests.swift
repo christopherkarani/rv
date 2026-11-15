@@ -80,7 +80,7 @@ struct ProcFSFuzzTests {
             parent: UInt32(truncatingIfNeeded: mix.next()), group: UInt32(truncatingIfNeeded: mix.next()),
             session: UInt32(truncatingIfNeeded: mix.next()), startTicks: mix.next())
         let tail = ") S \(expected.parent) \(expected.group) \(expected.session) 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 "
-            + "\(expected.startTicks) 0 0\n"
+            + "\(expected.startTicks) 0 0" + String(repeating: " 0", count: 28) + "\n"
         let text = utf8("\(expected.pid) (") + comm + utf8(tail)
         if ProcFSParse.stat(text) != expected { broken.append("comm changed the fields read after it") }
         let cut = 1 + Int(mix.next() % UInt64(text.count - 1))
@@ -200,10 +200,18 @@ struct ProcFSFuzzTests {
 
     static let header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 
+    /// A stat line with every field the kernel prints.
+    static let wholeStat: [UInt8] = {
+        let line = "4242 (bash) S 77 4242 4000 34816 4242 4194304 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0"
+        return [0] + utf8(line + String(repeating: " 0", count: 28) + "\n")
+    }()
+
     /// The same inputs as `Fuzz/ProcFS/seeds`.
     static let seeds: [[UInt8]] = [
-        [0] + utf8("4242 (bash) S 77 4242 4000 34816 4242 4194304 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0\n"),
+        wholeStat,
         [0] + utf8("x) R 1 1 1 0 -1"),
+        // Found by libFuzzer: a name that is itself a whole line, so a read cut after it once parsed.
+        [0] + utf8("4241 (bash) S 77 42 4204 0 0 0 0 0 9 0 0 20 0 1 0 980 0 : 0\n"),
         [1] + utf8("Name:\tbash\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n"),
         [1] + utf8("evil\nUid:\t0\t0\t0\t0"),
         [2] + utf8(header

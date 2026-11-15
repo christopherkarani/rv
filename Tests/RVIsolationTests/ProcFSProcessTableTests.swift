@@ -52,7 +52,8 @@ final class ProcFixture {
     ) throws {
         let ids = uids ?? Array(repeating: uid, count: 4)
         try write("\(pid)/stat",
-            "\(pid) (proc \(pid))) \(state) \(parent) \(group) \(session) 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 \(start) 0 0\n")
+            "\(pid) (proc \(pid))) \(state) \(parent) \(group) \(session) 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 \(start) 0 0"
+                + String(repeating: " 0", count: 28) + "\n")
         try write("\(pid)/status", "Name:\tproc\nUid:\t" + ids.map(String.init).joined(separator: "\t") + "\nGid:\t0\t0\t0\t0\n")
         let fd = "\(root)/\(pid)/fd"
         try FileManager.default.createDirectory(atPath: fd, withIntermediateDirectories: true)
@@ -393,7 +394,10 @@ struct ProcFSProcessTableTests {
         let proc = try ProcFixture()
         try proc.process(200, parent: 1, group: 200, exe: "/bin/sh")
         try proc.process(201, parent: 200, group: 200, exe: "/bin/sh")
-        try proc.write("201/stat", "201 (x) S 4294967295 200 50 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 1000 0 0\n")
+        try proc.write(
+            "201/stat",
+            "201 (x) S 4294967295 200 50 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 1000 0 0"
+                + String(repeating: " 0", count: 28) + "\n")
         guard case .found(let holder) = proc.table.lookup(201) else {
             Issue.record("the process is not found")
             return
