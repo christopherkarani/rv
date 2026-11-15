@@ -229,7 +229,7 @@ private func mayDefineCommands(_ raw: String) -> Bool {
 /// `autoload`, a dynamic program).
 func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
     if mayDefineCommands(raw) || namesLookupVariable(raw) || envMayMoveLookup(raw) { return true }
-    if launched.contains(where: setsFunctionFlag) || assignsAnsiCName(raw, launched) { return true }
+    if launched.contains(where: setsFunctionFlag) || assignsExpandedName(launched) { return true }
     let unblanked = raw.filter { $0.isWhitespace == false }
     if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
     let spaced = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
@@ -264,23 +264,31 @@ private func setsLookupVariable(_ command: LaunchedCommand) -> Bool {
 
 private let variableSetters: Set<String> = ["read", "printf", "export", "declare", "typeset", "local", "readonly"]
 
-/// Whether `raw` holds an ANSI-C `$'…'` word and some command of
-/// `launched` is a builtin that assigns its operands (`variableSetters`
-/// but `printf` only with `-v`, and `unset`, `mapfile`, `readarray`) given
-/// a `$` word: `export $'PA\x54H'=./bin` builds a name from escapes, which
-/// `namesLookupVariable` does not decode. The tokenizer gives an ANSI-C
-/// word as `$` and its raw text.
-private func assignsAnsiCName(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
-    guard raw.contains("$'") else { return false }
+/// Whether some command of `launched` is a builtin that assigns its
+/// operands (`variableSetters`, `printf` only through `-v`, and `unset`,
+/// `mapfile`, `readarray`) given an operand whose name part (the text
+/// before `=` or `[`, or the whole word) holds `$` or a backtick: the name
+/// may be built from escapes or expansions (`export P$'\x41'TH=./bin`,
+/// `export ${N}TH=…`), which `namesLookupVariable` does not decode. A value
+/// expansion after `=` (`export FOO=$BAR`) is not a name.
+private func assignsExpandedName(_ launched: [LaunchedCommand]) -> Bool {
     let assigners: Set<String> = [
         "read", "export", "declare", "typeset", "local", "readonly", "unset", "mapfile", "readarray",
     ]
+    let expanded = { (word: Substring) in
+        word.prefix { $0 != "=" && $0 != "[" }.contains { $0 == "$" || $0 == "`" }
+    }
     return launched.contains { command in
         let head = commandName(command.head)
-        let operands = command.guardArgv.dropFirst()
-        guard assigners.contains(head) || (head == "printf" && operands.contains(where: { $0.hasPrefix("-v") }))
-        else { return false }
-        return operands.contains { $0.hasPrefix("$") && $0.hasPrefix("$(") == false && $0.hasPrefix("${") == false }
+        let operands = Array(command.guardArgv.dropFirst())
+        if head == "printf" {
+            return operands.indices.contains { index in
+                let word = operands[index]
+                if word == "-v" { return index + 1 < operands.count && expanded(Substring(operands[index + 1])) }
+                return word.hasPrefix("-v") && expanded(word.dropFirst(2))
+            }
+        }
+        return assigners.contains(head) && operands.contains { expanded(Substring($0)) }
     }
 }
 
@@ -302,7 +310,7 @@ private let lookupNames: Set<String> = [
 /// PATH = 1 ))`), a setter's operand (`unset`, `read -a`, `mapfile`,
 /// `readarray`, `declare -n p=PATH`), a loop variable, and a name glued to
 /// a short option (`printf -vPATH`). A name built from escapes
-/// (`$'PA\x54H'`) is not recognised here (`assignsAnsiCName`).
+/// (`$'PA\x54H'`) is not recognised here (`assignsExpandedName`).
 private func namesLookupVariable(_ text: String) -> Bool {
     let unquoted = text.replacingOccurrences(of: "\\\n", with: "")
         .replacingOccurrences(of: "$'", with: "'").replacingOccurrences(of: "$\"", with: "\"")

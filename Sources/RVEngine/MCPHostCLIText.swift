@@ -458,10 +458,13 @@ func hostMCPTextNamesMutation(_ raw: String, reads: inout HostTextReads) -> Bool
 /// dropped (the tokenizer joins quoted runs, a line continuation joins
 /// lines), `%XX` decoded (`packageNames`), and case-folded as `foldedWord`
 /// folds, after any number of ANSI-C decodings (`\x63laude`). Every word
-/// those checks match holds a stem (`hostMCPTableWords`).
+/// those checks match holds a stem (`hostMCPTableWords`). A stem is also
+/// found with `[…]` groups between its letters, which `packageNames` drops
+/// from a spec (`install-m[x]cp` names `install-mcp`: `holdsPastExtras`).
 func mayNameHostMCP(_ text: String, budget: inout SpellingBudget) -> Bool {
     decodedLayersMayName(text) { folded in
-        hostMCPStems.contains(where: { folded.contains($0) }) || spellsHostMCPTableWord(folded, budget: &budget)
+        hostMCPStems.contains(where: { folded.contains($0) }) || holdsPastExtras(folded, hostMCPStems)
+            || spellsHostMCPTableWord(folded, budget: &budget)
     }
 }
 

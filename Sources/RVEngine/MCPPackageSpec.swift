@@ -84,6 +84,39 @@ private func withoutExtras(_ spec: String) -> String {
     return out
 }
 
+/// Whether some of `needles` occurs in `text` with any `[…]` groups (nested
+/// as `withoutExtras` nests them) between its characters: the names
+/// `packageNames` may give a word of `text` once its extras are dropped,
+/// whatever the word's bounds. Only called with text holding no needle.
+func holdsPastExtras(_ text: String, _ needles: [String]) -> Bool {
+    guard text.contains("[") else { return false }
+    let chars = Array(text)
+    // Past each `[`, the offset after the `]` closing it.
+    var after = [Int?](repeating: nil, count: chars.count)
+    var opens: [Int] = []
+    for (index, char) in chars.enumerated() {
+        if char == "[" {
+            opens.append(index)
+        } else if char == "]", let open = opens.popLast() {
+            after[open] = index + 1
+        }
+    }
+    for needle in needles.map(Array.init) where needle.isEmpty == false {
+        for begin in chars.indices where chars[begin] == needle[0] {
+            var at = begin + 1
+            var matched = 1
+            while matched < needle.count {
+                while at < chars.count, let skip = after[at] { at = skip }
+                guard at < chars.count, chars[at] == needle[matched] else { break }
+                at += 1
+                matched += 1
+            }
+            if matched == needle.count { return true }
+        }
+    }
+    return false
+}
+
 /// `%XX` sequences decoded as UTF-8; anything else kept as written.
 func percentDecoded(_ text: String) -> String {
     guard text.contains("%") else { return text }

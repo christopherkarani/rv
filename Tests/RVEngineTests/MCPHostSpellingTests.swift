@@ -201,6 +201,13 @@ struct MCPHostSpellingTests {
         #"echo "env '{clau?e,x|y}' '{m?p,x&y}' add s -- x" | sh"#,
         #"stdbuf -o0 '{clau?e,x y}' '{m?p,x y}' add s -- x"#,
         #"chronic 'm[;c]p' 'i[(n]stall' srv"#,
+        #"watch "'cl[[:alpha:];]ude' 'm[[:alpha:];]p' add s -- x""#,
+        #"watch "echo [; env '{clau?e,x y}' '{m?p,x y}' add s -- x ]""#,
+        #"watch "echo {; env '{clau?e,x y}' '{m?p,x y}' add s -- x }""#,
+        #"$x "echo [; env 'cl[!;]ude' 'm[[:alpha:]|]p' add s -- x ]""#,
+        "watch 'npx install-m[x]cp srv'", "$x \"npx ge[x]mini-cli m?p add s\"", "watch 'xargs npx ge[x]mini-cli'",
+        #"watch "'{c?aude,x y}{,a b}' 'm[;c]p' add s -- x""#,
+        #"watch "echo [; '{c?aude,x y}{,a b}' 'm[;c]p' add s -- x ]""#,
     ]
 
     @Test("a spelling with a blank or separator inside a span still asks", arguments: brokenSpanSpellings)
@@ -217,6 +224,10 @@ struct MCPHostSpellingTests {
             { w in w.count >= 3 ? "'{\(w),x|y}'" : nil },
             { w in w.count >= 3 ? "'\(w.first!)[;\(Array(w)[1])]\(w.dropFirst(2))'" : nil },
             { w in w.count >= 3 ? "'\(w.first!)[ <\(Array(w)[1])]\(w.dropFirst(2))'" : nil },
+            { w in w.count >= 3 ? "'{\(w.first!)?\(w.dropFirst(2)),x y}'" : nil },
+            { w in w.count >= 3 ? "'{\(w.first!)?\(w.dropFirst(2)),x;y}'" : nil },
+            { w in w.count >= 3 ? "'\(w.first!)[[:alpha:];]\(w.dropFirst(2))'" : nil },
+            { w in w.count >= 3 ? "'\(w.first!)[!;]\(w.dropFirst(2))'" : nil },
         ]
         var lines: [String] = []
         for payload in Self.payloads {
@@ -239,12 +250,16 @@ struct MCPHostSpellingTests {
     /// a command `isHostMCPMutation` matches, as a fixture line or text it
     /// carries launches it, passes `commandMayNameHostMCP` (the speculative
     /// command prefilter), and the text holding it passes `mayNameHostMCP`
-    /// (the prefilter every read begins with).
+    /// (the prefilter every read begins with). Enough matched commands hold
+    /// no stem in any word, so the spelling path is what passes them.
     @Test("a prefilter passes whatever the full judgement matches")
     func prefilterCoversFullJudgement() {
         let lines = Self.spellingCases.map(\.command) + Self.brokenSpanSpellings + Self.brokenSpanCases
-        let violations = lines.flatMap(prefilterViolations)
+        let checks = lines.map(prefilterCheck)
+        let violations = checks.flatMap(\.violations)
+        let spelled = checks.reduce(0) { $0 + $1.spelled }
         #expect(violations.isEmpty, "\(violations.count): \(violations.prefix(12))")
+        #expect(spelled >= 60, "\(spelled) matched commands hold no stem")
     }
 
     /// A brace word the shell splits into several words, a POSIX class, and
@@ -361,6 +376,9 @@ struct MCPHostSpellingTests {
         #"printf -v $'PA\x54H' %s ./bin; ls mcp $X"#,
         ": ${PATH::=./bin}; ls mcp $X", ": ${path[1]:=./bin}; ls mcp $X",
         "env --split 'ls mcp $X'", "env --s 'ls mcp $X'", "env --split-str='ls mcp $X'",
+        #"export P$'\x41'TH=./bin; ls mcp $X"#, #"printf -v$'PA\x54H' %s ./bin; ls mcp $X"#,
+        "N=PA; export ${N}TH=./bin; ls mcp $X", "export P`echo A`TH=./bin; ls mcp $X",
+        "declare -x \"P${A}TH\"=./bin; ls mcp $X", "readonly P$(echo A)TH; ls mcp $X",
     ])
     func spelledLookupChangeAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
@@ -369,6 +387,8 @@ struct MCPHostSpellingTests {
     @Test("the operand list holds where an expansion only reads a lookup variable", arguments: [
         "ls mcp $X ${PATH:-/usr/bin}", "ls mcp $X ${PATH: -3}", "ls mcp $X ${PATH:0:3}", "ls mcp $X ${#PATH}",
         "ls mcp $X ${PATH#*:}", "ls mcp $X ${PATH/x/y}", "printf '%s\\n' x; ls mcp $X",
+        "export FOO=$BAR; ls mcp $X", "export CFLAGS=\"$CFLAGS -O2\" LDFLAGS=${LDFLAGS}; ls mcp $X",
+        "local dir=$(pwd); ls mcp $X",
     ])
     func expandedLookupReadAllows(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
@@ -674,10 +694,12 @@ struct MCPHostSpellingTests {
 
 /// Where a prefilter says no and the full judgement yes, for `line` and the
 /// blank-holding words its commands carry (as written and ANSI-C decoded),
-/// read the way `carriesHostMCPText` reads them.
-private func prefilterViolations(_ line: String) -> [String] {
+/// read the way `carriesHostMCPText` reads them; and how many matched
+/// commands hold no stem in any word.
+private func prefilterCheck(_ line: String) -> (violations: [String], spelled: Int) {
     var texts = [line]
     var violations: [String] = []
+    var spelled = 0
     var index = 0
     while index < texts.count, index < 64 {
         let text = texts[index]
@@ -688,6 +710,7 @@ private func prefilterViolations(_ line: String) -> [String] {
             var reads = HostTextReads()
             guard isHostMCPMutation(command, reads: &reads) else { continue }
             matched = true
+            if ([command.head] + command.guardArgv).allSatisfy({ holdsHostMCPStem($0) == false }) { spelled += 1 }
             var budget = SpellingBudget()
             var named: [String: Bool] = [:]
             if commandMayNameHostMCP(command, budget: &budget, named: &named) == false {
@@ -703,7 +726,7 @@ private func prefilterViolations(_ line: String) -> [String] {
             }
         }
     }
-    return violations
+    return (violations, spelled)
 }
 
 /// The MCP guard's verdict on `command` in isolation: true asks.

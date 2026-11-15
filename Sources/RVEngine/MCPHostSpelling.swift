@@ -439,13 +439,18 @@ private let spellingTableWords: [String] = Array(Set(hostMCPTableWords())).sorte
 /// `$` and backtick characters (`m?p${IFS}install`), and without zsh's
 /// leading `=`. Spends `budget`; each distinct word is judged once.
 ///
-/// Words are split at blanks and `;|&()<>`, except inside a `{…}` or `[…]`
-/// span (`spelledWordCandidates`): quoted, `'{clau?e,x y}'` and
-/// `'cl[;a]ude'` stay one word, which the guard spells whole. A word the
-/// full judgement matches is thus never lost to the split.
+/// Words are split at blanks and `;|&()<>`. A quoted `{…}` or `[…]` span
+/// holding one of those stays one word the guard spells whole
+/// (`'{clau?e,x y}'`, `'cl[;a]ude'`), so each run of pieces such a span
+/// joins, and each chain of overlapping runs, is spelled as one more word
+/// (`spelledWordCandidates`); text whose joined words pass
+/// `maxJoinedLength` times its length may name a host word outright. The
+/// quotes are gone by then, so these are guesses at the shell's words: a
+/// word joined some other way may still be missed.
 func spellsHostMCPTableWord(_ text: String, budget: inout SpellingBudget) -> Bool {
     guard text.contains(where: { "*?[{".contains($0) }) else { return false }
-    for raw in spelledWordCandidates(text) {
+    guard let words = spelledWordCandidates(Array(text)) else { return true }
+    for raw in words {
         var candidates = [raw]
         if raw.hasPrefix("=") { candidates.append(String(raw.dropFirst())) }
         if raw.contains("$") || raw.contains("`") {
@@ -474,30 +479,35 @@ func spellingMayNameTableWord(_ spelling: WordSpelling, budget: inout SpellingBu
     return false
 }
 
-/// The words of `text` split at blanks and `;|&()<>`, then each run of them
-/// that a `{…}` or `[…]` span holding such a character joins (`{clau?e,x
-/// y}`, `cl[;a]ude`), as one more word: the shell keeps a quoted span one
-/// word. Braces nest; a class closes at the first `]` after its first
-/// character (and after a leading `!` or `^`).
-private func spelledWordCandidates(_ text: String) -> [String] {
-    let chars = Array(text)
-    let splits = { (char: Character) in char.isWhitespace || ";|&()<>".contains(char) }
+private func splitsWords(_ char: Character) -> Bool {
+    char.isWhitespace || ";|&()<>".contains(char)
+}
+
+/// The cap on joined words' total length and chain steps, as a multiple of
+/// the text's length.
+private let maxJoinedLength = 4
+
+/// The words of `chars` split at blanks and `;|&()<>`, then, as one more
+/// word each, the run of pieces each `{…}` span (braces matched by nesting,
+/// as brace expansion pairs them) or `[…]` class (closed where the guard's
+/// own `globClassEnd` closes it) joins when it holds such a character, and
+/// each union of a run with the runs after it that overlap it in turn
+/// (`{c?aude,x y}{,a b}`, also inside a stray `[ … ]`); nil once those
+/// words, and the steps that build them, pass `maxJoinedLength` times the
+/// text's length. Not every union of runs is a word here, only these
+/// chains.
+private func spelledWordCandidates(_ chars: [Character]) -> [String]? {
     var pieces: [Range<Int>] = []
     var pieceAt = [Int](repeating: -1, count: chars.count)
     var start: Int?
     for index in 0...chars.count {
-        if index < chars.count, splits(chars[index]) == false {
+        if index < chars.count, splitsWords(chars[index]) == false {
             if start == nil { start = index }
             pieceAt[index] = pieces.count
         } else if let open = start {
             pieces.append(open..<index)
             start = nil
         }
-    }
-    // The first `]` at or after each offset, so a run of `[` stays linear.
-    var nextClose = [Int](repeating: chars.count, count: chars.count + 2)
-    for index in chars.indices.reversed() {
-        nextClose[index] = chars[index] == "]" ? index : nextClose[index + 1]
     }
     var spans: [ClosedRange<Int>] = []
     var opens: [Int] = []
@@ -506,29 +516,43 @@ private func spelledWordCandidates(_ text: String) -> [String] {
             opens.append(index)
         } else if char == "}", let open = opens.popLast() {
             spans.append(open...index)
-        } else if char == "[" {
-            var from = index + 2
-            if index + 1 < chars.count, "!^".contains(chars[index + 1]) { from += 1 }
-            let close = nextClose[min(from, chars.count)]
-            if close < chars.count { spans.append(index...close) }
         }
     }
-    // Split characters before each offset, so each span is tested at once.
+    var index = 0
+    while index < chars.count {
+        guard chars[index] == "[", let close = globClassEnd(chars, index)?.close else {
+            index += 1
+            continue
+        }
+        spans.append(index...close)
+        index = close + 1
+    }
     var splitsBefore = [0]
-    for char in chars { splitsBefore.append(splitsBefore[splitsBefore.count - 1] + (splits(char) ? 1 : 0)) }
-    var joined: [ClosedRange<Int>] = []
+    for char in chars { splitsBefore.append(splitsBefore[splitsBefore.count - 1] + (splitsWords(char) ? 1 : 0)) }
+    var runs: Set<ClosedRange<Int>> = []
     for span in spans where splitsBefore[span.upperBound + 1] > splitsBefore[span.lowerBound] {
-        joined.append(pieceAt[span.lowerBound]...pieceAt[span.upperBound])
+        runs.insert(pieceAt[span.lowerBound]...pieceAt[span.upperBound])
     }
-    joined.sort { $0.lowerBound < $1.lowerBound }
-    var merged: [ClosedRange<Int>] = []
-    for run in joined {
-        if let last = merged.last, run.lowerBound <= last.upperBound {
-            merged[merged.count - 1] = last.lowerBound...max(last.upperBound, run.upperBound)
-        } else {
-            merged.append(run)
+    let ordered = runs.sorted { ($0.lowerBound, $0.upperBound) < ($1.lowerBound, $1.upperBound) }
+    var words = pieces.map { String(chars[$0]) }
+    var joinedLength = 0
+    var emitted: Set<ClosedRange<Int>> = []
+    for first in ordered.indices {
+        var chain = ordered[first]
+        var next = first + 1
+        while true {
+            // Each step costs one, so chains of nested runs stay bounded.
+            joinedLength += 1
+            if emitted.insert(chain).inserted {
+                let range = pieces[chain.lowerBound].lowerBound..<pieces[chain.upperBound].upperBound
+                joinedLength += range.count
+                words.append(String(chars[range]))
+            }
+            guard joinedLength <= maxJoinedLength * chars.count else { return nil }
+            guard next < ordered.count, ordered[next].lowerBound <= chain.upperBound else { break }
+            chain = chain.lowerBound...max(chain.upperBound, ordered[next].upperBound)
+            next += 1
         }
     }
-    return pieces.map { String(chars[$0]) }
-        + merged.map { String(chars[pieces[$0.lowerBound].lowerBound..<pieces[$0.upperBound].upperBound]) }
+    return words
 }
