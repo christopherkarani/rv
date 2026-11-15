@@ -214,23 +214,31 @@ struct HostTextReads {
 /// its square.
 func launchedRunHostMCPMutation(_ launched: [LaunchedCommand], reads: inout HostTextReads) -> Bool {
     var named: [String: Bool] = [:]
-    let mayName = { (word: String, reads: inout HostTextReads) -> Bool in
-        if let known = named[word] { return known }
-        let answer = mayNameHostMCP(word, budget: &reads.spelling)
-        named[word] = answer
-        return answer
-    }
     for command in launched {
         if command.speculative, command.truncated == false {
-            var matters = false
-            for word in [command.head] + command.guardArgv where mayName(word, &reads) {
-                matters = true
-                break
-            }
-            guard matters else { continue }
+            guard commandMayNameHostMCP(command, budget: &reads.spelling, named: &named) else { continue }
             guard reads.admitsSpeculative() else { return true }
         }
         if isHostMCPMutation(command, reads: &reads) { return true }
+    }
+    return false
+}
+
+/// Whether some word of `command` may name a host MCP word: the prefilter
+/// `launchedRunHostMCPMutation` puts before judging a speculative command.
+/// `named` caches each distinct word's answer.
+func commandMayNameHostMCP(
+    _ command: LaunchedCommand, budget: inout SpellingBudget, named: inout [String: Bool]
+) -> Bool {
+    for word in [command.head] + command.guardArgv {
+        let answer: Bool
+        if let known = named[word] {
+            answer = known
+        } else {
+            answer = mayNameHostMCP(word, budget: &budget)
+            named[word] = answer
+        }
+        if answer { return true }
     }
     return false
 }
