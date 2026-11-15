@@ -422,6 +422,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// Bytes each remote launch has been sent whose POST is not over: what
     /// waits in the HTTP layer counts against `writeBufferBytes` until then.
     private var remoteInFlight: [String: (generation: Int, bytes: Int)] = [:]
+    /// Servers whose restart waits for their last process or is being
+    /// planned: a restart of one of them, or of a server that is live, is
+    /// refused, so a server has at most one launch.
+    private var restarting: Set<String> = []
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
     /// Feeds the core `.tick` on the gateway queue, so deadlines pass with
@@ -716,7 +720,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// placeholder server's lease revoked), then it is planned again
     /// (`relaunch`, or its serve-start connection); back on the queue it is
     /// started and the core told, or the core hears it went away again.
+    /// One asked for while the server is live, or while a restart of it is
+    /// under way, is refused and logged: it starts nothing.
     private func restart(_ server: String) {
+        if let busy = restartRefusal(server) {
+            log("not starting MCP server \(MCPDisplayedText.field(server)) again: \(busy)")
+            return
+        }
+        restarting.insert(server)
         let earlier = groups.values.filter { $0.server == server }.map { $0.group }
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
@@ -736,6 +747,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
+    /// Why `server` is not started again now: it is live, or a restart of it
+    /// is already under way. Nil when it may be.
+    private func restartRefusal(_ server: String) -> String? {
+        if live[server] != nil { return "it is running" }
+        if restarting.contains(server) { return "it is already being started" }
+        return nil
+    }
+
     /// How long a restart waits, past `stopGrace`, for the last process to be reaped.
     static let restartReapGrace: TimeInterval = 5
 
@@ -752,6 +771,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     private func relaunched(_ server: String, _ planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>) {
         let shown = MCPDisplayedText.field(server)
+        restarting.remove(server)
         guard stopping == false else {
             if case .success((_, .placeholderBound(_, let binding))) = planned { binding.lease.revoke() }
             return
