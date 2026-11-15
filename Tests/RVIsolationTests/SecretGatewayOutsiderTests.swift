@@ -9,11 +9,16 @@ import Testing
 @testable import RVIsolation
 
 /// A peer is a member of the runtime only when its client port was marked.
+/// Every port the gateway checked is kept in `seen`.
 private final class MarkedPorts: Sendable {
     let ports = Mutex<Set<UInt16>>([])
+    let seen = Mutex<Set<UInt16>>([])
 
     var check: GatewayPeerCheck {
-        GatewayPeerCheck { peer, _ in self.ports.withLock { $0.contains(peer.port) } ? .member : .outsider }
+        GatewayPeerCheck { peer, _ in
+            self.seen.withLock { _ = $0.insert(peer.port) }
+            return self.ports.withLock { $0.contains(peer.port) } ? .member : .outsider
+        }
     }
 }
 
@@ -69,6 +74,9 @@ private func dialAgainWhileRefused(_ port: Int, marked: MarkedPorts) throws -> (
     while Date() < deadline {
         let member = try boundClient()
         marked.ports.withLock { _ = $0.insert(member.port) }
+        // A hammer's earlier connection may have used this port; none can
+        // while the member holds it.
+        marked.seen.withLock { _ = $0.remove(member.port) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = UInt16(port).bigEndian
@@ -221,8 +229,10 @@ struct SecretGatewayOutsiderTests {
     /// Outsiders connecting and hanging up as fast as they can, while a
     /// member sends one request after another: every one is served. They
     /// can fill the listen backlog, and the kernel then refuses the member's
-    /// connection before the gateway sees it, so the member dials again;
-    /// the gateway itself never turns it away.
+    /// connection before the gateway sees it, or drops it after the member's
+    /// `connect` returned (the member then reads nothing), so the member
+    /// dials again. A connection the gateway checked and did not answer,
+    /// or any answer but 200, fails: the gateway itself never turns it away.
     @Test(.timeLimit(.minutes(1)))
     func outsidersHammeringTheGatewayNeverTurnAwayAMember() throws {
         let marked = MarkedPorts()
@@ -241,12 +251,20 @@ struct SecretGatewayOutsiderTests {
             }
         }
         var statuses: [String] = []
-        for _ in 0..<20 {
+        var dropped = 0
+        let deadline = Date().addingTimeInterval(30)
+        while statuses.count < 20, Date() < deadline {
             let member = try dialAgainWhileRefused(port, marked: marked)
-            #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
-            statuses.append(String(answer(member.fd).prefix(12)))
+            _ = GatewaySocket.writeAll(member.fd, bearer(placeholder))
+            let status = String(answer(member.fd).prefix(12))
             close(member.fd)
+            if status.isEmpty, marked.seen.withLock({ $0.contains(member.port) }) == false {
+                dropped += 1
+                continue
+            }
+            statuses.append(status.isEmpty ? "checked, unanswered" : status)
         }
+        #expect(statuses.count == 20, "\(dropped) dropped by the kernel")
         stop.raised.store(true, ordering: .relaxed)
         _ = hammers.wait(timeout: .now() + 10)
         #expect(statuses.allSatisfy { $0 == "HTTP/1.1 200" }, "\(statuses)")
