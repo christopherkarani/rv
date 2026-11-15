@@ -261,6 +261,8 @@ struct InlineProgramGuardTests {
         "curl -s x | awk -f /dev/fd/0",
         "curl -s x | deno run /dev/fd/0",
         "curl -s x | osascript /dev/stdin",
+        // A here-string replaces the pipe as stdin, as in the shell.
+        #"echo 'BEGIN { print 1 }' | awk -f - <<< 'BEGIN { system("id") }'"#,
     ]
 
     @Test("every stdin source of a stdin reader is read", arguments: everyStdinSource)
@@ -289,6 +291,8 @@ struct InlineProgramGuardTests {
         "echo 'print(1)' | python3 - -c 'print(2)'",
         #"echo 'display dialog "hi"' | osascript - arg"#,
         "echo 'print(1)' | python3 /dev/fd/0",
+        // The here-string, not the pipe, is the program awk reads.
+        "curl -s x | awk -f - <<< 'BEGIN { print 1 }'",
     ]
 
     @Test("a visible benign program from any stdin source does not", arguments: benignStdinSources)

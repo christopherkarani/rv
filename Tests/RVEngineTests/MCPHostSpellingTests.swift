@@ -208,11 +208,26 @@ struct MCPHostSpellingTests {
         "watch 'npx install-m[x]cp srv'", "$x \"npx ge[x]mini-cli m?p add s\"", "watch 'xargs npx ge[x]mini-cli'",
         #"watch "'{c?aude,x y}{,a b}' 'm[;c]p' add s -- x""#,
         #"watch "echo [; '{c?aude,x y}{,a b}' 'm[;c]p' add s -- x ]""#,
+        // A class crossing a brace whose `}` lies past the quoted word: the
+        // word is the class and the inner group, which no chain of runs is.
+        #"watch "'cl[;x{;{y;a]ude,;}' $g add s -- x }""#,
     ]
 
     @Test("a spelling with a blank or separator inside a span still asks", arguments: brokenSpanSpellings)
     func brokenSpanSpellingAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// The prefilter closes classes on the text as written; the guard
+    /// expands braces first, so an alternative that supplies a `]` closes a
+    /// class (`cl[];a]ude`) the written text closes earlier. Asking wherever
+    /// a comma group holds a bracket made everyday `jq` and `awk` programs
+    /// ask, so this stays a known limit.
+    @Test("a class a brace alternative closes is a known limit")
+    func braceClosedClassIsKnownLimit() {
+        withKnownIssue("a class closed by a brace alternative") {
+            #expect(judgeSpelling(#"watch "'cl[{],x};a]ude' 'm[{],x};c]p' add s -- x""#))
+        }
     }
 
     /// Each payload word, alone and all at once, inside a span holding a
@@ -251,7 +266,8 @@ struct MCPHostSpellingTests {
     /// carries launches it, passes `commandMayNameHostMCP` (the speculative
     /// command prefilter), and the text holding it passes `mayNameHostMCP`
     /// (the prefilter every read begins with). Enough matched commands hold
-    /// no stem in any word, so the spelling path is what passes them.
+    /// no stem in any word, even past `[…]` extras, so the spelling path is
+    /// what passes them (113 when this floor was set).
     @Test("a prefilter passes whatever the full judgement matches")
     func prefilterCoversFullJudgement() {
         let lines = Self.spellingCases.map(\.command) + Self.brokenSpanSpellings + Self.brokenSpanCases
@@ -259,7 +275,7 @@ struct MCPHostSpellingTests {
         let violations = checks.flatMap(\.violations)
         let spelled = checks.reduce(0) { $0 + $1.spelled }
         #expect(violations.isEmpty, "\(violations.count): \(violations.prefix(12))")
-        #expect(spelled >= 60, "\(spelled) matched commands hold no stem")
+        #expect(spelled >= 110, "\(spelled) matched commands hold no stem")
     }
 
     /// A brace word the shell splits into several words, a POSIX class, and
@@ -298,7 +314,7 @@ struct MCPHostSpellingTests {
     @Test("a spelled operand of a program that may run still asks", arguments: [
         "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "stdbuf -o0 ls mcp $DIR", "/bin/ls mcp $DIR",
         "git -C . add mcp *", "ls mcp install", "ls 'chronic mcp install x'",
-        "git add mcp install",
+        "git add mcp install", "ls 'npx install-m[x]cp srv'", "grep 'npx install-m[x]cp srv' docs/",
     ])
     func runnableSpelledOperandAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
@@ -364,8 +380,8 @@ struct MCPHostSpellingTests {
     }
 
     /// A name written as a `$'…'` or `$"…"` word is the name, not a `$NAME`
-    /// read; any `$'…'` operand of an assigning builtin may build one from
-    /// escapes; zsh's `${NAME::=…}` and an element's `${name[1]:=…}` assign;
+    /// read; an operand of an assigning builtin whose name holds `$` or a
+    /// backtick may build one from escapes or expansions; zsh's `${NAME::=…}` and an element's `${name[1]:=…}` assign;
     /// GNU `env` takes `--split` for `--split-string`.
     @Test("the operand list backs off where a quoted or expanded name may assign", arguments: [
         #"export $'PATH'=./bin; ls mcp $X"#, #"declare $"PATH"=./bin; ls mcp $X"#,
@@ -384,11 +400,24 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// A nameref's target is the value after `=`, which is not read as a
+    /// name: built from an expansion, it is a known limit.
+    @Test("a nameref to an expanded lookup name is a known limit")
+    func expandedNamerefIsKnownLimit() {
+        withKnownIssue("a nameref whose target is an expansion") {
+            #expect(judgeSpelling("N=PA; declare -n R=${N}TH; R=./bin; ls mcp $X"))
+        }
+    }
+
     @Test("the operand list holds where an expansion only reads a lookup variable", arguments: [
         "ls mcp $X ${PATH:-/usr/bin}", "ls mcp $X ${PATH: -3}", "ls mcp $X ${PATH:0:3}", "ls mcp $X ${#PATH}",
         "ls mcp $X ${PATH#*:}", "ls mcp $X ${PATH/x/y}", "printf '%s\\n' x; ls mcp $X",
         "export FOO=$BAR; ls mcp $X", "export CFLAGS=\"$CFLAGS -O2\" LDFLAGS=${LDFLAGS}; ls mcp $X",
         "local dir=$(pwd); ls mcp $X",
+        // `printf` assigns only through `-v`: a `$` format or value word,
+        // beside a `$'…'` word, names nothing.
+        #"printf $'%s\n' "$NAME"; ls mcp $X"#, #"printf -v out $'%s' "$NAME"; ls mcp $X"#,
+        #"printf '%s' $'\t' "$V"; ls mcp $X"#,
     ])
     func expandedLookupReadAllows(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
@@ -689,6 +718,24 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(line, &lineReads))
         #expect(lineReads.spelling.steps <= SpellingBudget.maxSteps)
         #expect(lineReads.readsDone <= HostTextReads.maxReads)
+    }
+
+    /// A run of `[` that never closes, and a run of `[[:`, cost one scan of
+    /// the text: a class scan per `[` once took about n² and n³ steps (16 KiB
+    /// of `[` some two minutes, 2 KiB of `[[:` about one).
+    @Test("a run of brackets is scanned in linear time", arguments: [
+        String(repeating: "[", count: 16_384), String(repeating: "[[:", count: 683),
+    ])
+    func bracketRunIsLinear(_ run: String) {
+        var named = true
+        var asks = true
+        let elapsed = ContinuousClock().measure {
+            named = mayNameHostMCP(run)
+            asks = judgeSpelling("watch '\(run)'")
+        }
+        #expect(named == false)
+        #expect(asks == false)
+        #expect(elapsed < .seconds(10), "\(elapsed)")
     }
 }
 

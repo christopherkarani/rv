@@ -270,7 +270,8 @@ private let variableSetters: Set<String> = ["read", "printf", "export", "declare
 /// before `=` or `[`, or the whole word) holds `$` or a backtick: the name
 /// may be built from escapes or expansions (`export P$'\x41'TH=./bin`,
 /// `export ${N}TH=…`), which `namesLookupVariable` does not decode. A value
-/// expansion after `=` (`export FOO=$BAR`) is not a name.
+/// expansion after `=` is not read (`export FOO=$BAR`), though with `-n`
+/// it names a nameref's target (`declare -n R=${N}TH`): a known limit.
 private func assignsExpandedName(_ launched: [LaunchedCommand]) -> Bool {
     let assigners: Set<String> = [
         "read", "export", "declare", "typeset", "local", "readonly", "unset", "mapfile", "readarray",

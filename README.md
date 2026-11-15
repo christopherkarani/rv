@@ -325,13 +325,16 @@ rv is one binary, 25 commands. The rest of the surface:
   Carried text is read when it holds a host stem (also one broken only by
   `[…]` extras a package spec drops, `install-m[x]cp`) or such a word
   (`watch 'chronic m?p install srv'`). The text is split at blanks and
-  `;|&()<>`; where a brace or class span (closed as the guard closes it)
-  holds one of those, each run of pieces the span joins, and each chain
-  of overlapping runs, is spelled as one more word (`watch "'cl[;a]ude'
-  'm[;c]p' add s -- x"`), and text whose joined words pass four times its
-  length, or whose brace word expands past 64 words, counts as naming a
-  host. These are guesses at the shell's words once quotes are gone, so
-  a word joined some other way may be missed. Where nothing runs the word (a `grep` or
+  `;|&()<>`; where a brace or class span holds one of those, each run of
+  pieces the span joins is spelled as one more word (`watch "'cl[;a]ude'
+  'm[;c]p' add s -- x"`). Text where two such runs cross (share a piece
+  without one holding the other, `'{c?aude,x y}{,a b}'`), whose joined
+  words pass four times its length, or whose brace word expands past 64
+  words counts as naming a host; an integer range in a word with no glob
+  character is the exception, judged as one word, since only its digits
+  differ (`touch f{1..100}`). These are guesses at the shell's words once
+  quotes are gone, and classes are closed on the text as written, before
+  braces expand. Where nothing runs the word (a `grep` or
   `rg` operand, a commit message) and in text such a command carries,
   only literal words count (`grep -rn claude * | head` allows). A
   variable or substitution rv cannot read (`$c`, `"$SUB"`, `${x}`,
@@ -368,8 +371,12 @@ rv is one binary, 25 commands. The rest of the surface:
   several words that supply both a host and its group (`* add x` in a
   directory holding only `claude` and `mcp`); a brace, glob or dynamic
   spelling of a stem inside opaque text never re-parsed as a shell command line
-  (`python3 -c "os.system('claude m{c,}p add')"`); and a config file name
-  written through a brace or glob spelling (`echo {} > .{mcp,x}.json`).
+  (`python3 -c "os.system('claude m{c,}p add')"`); a config file name
+  written through a brace or glob spelling (`echo {} > .{mcp,x}.json`);
+  in carried text, a class only a brace alternative closes
+  (`watch "'cl[{],x};a]ude' 'm[{],x};c]p' add s -- x"`); and a lookup
+  variable reached through a nameref whose target is an expansion
+  (`N=PA; declare -n R=${N}TH; R=./bin; ls mcp $X`).
   Text that names a host mutation asks even as data (`git commit -m 'run
   claude mcp add x'`, `grep 'claude mcp add' docs/`, `grep claude "$f"`),
   as do dynamic programs given `config` (`"$GIT" config user.name`) and
