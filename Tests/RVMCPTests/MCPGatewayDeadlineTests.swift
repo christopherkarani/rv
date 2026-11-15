@@ -356,14 +356,25 @@ struct MCPGatewayDeadlineTests {
         #expect(call.toClient.first?["error"]?["message"]?.stringValue?.contains("it failed to initialize") == true)
     }
 
-    @Test func initializeDeadlineIsInjectable() throws {
+    @Test func initializeWaitsItsOwnServersStartTimeout() throws {
         let clock = ManualClock()
-        var harness = GatewayHarness(
-            MCPConfiguration(servers: [Self.github()]), clock: { clock.now },
-            deadlines: MCPGatewayDeadlines(start: 2, list: 3))
+        var quick = Self.github()
+        quick.startTimeoutSeconds = 2
+        var harness = Self.harness([quick, MCPGatewayCoreTests.notes], clock: clock)
         _ = harness.core.start()
-        clock.advance(3)
-        #expect(harness.core.handle(.tick).stopped == ["github"])
+        clock.advance(1)
+        #expect(harness.core.handle(.tick).isEmpty)
+        clock.advance(2)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.stopped == ["github"])
+        #expect(expired.logs.contains { $0.contains("within 2 s") && $0.contains("startTimeoutSeconds") }, "\(expired.logs)")
+        let call = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github__list_issues"}}"#)
+        #expect(call.toClient.first?["error"]?["message"]?.stringValue?.contains("startTimeoutSeconds") == true)
+        // The other server waits its own default.
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds - 4))
+        #expect(harness.core.handle(.tick).stopped.isEmpty)
+        clock.advance(2)
+        #expect(harness.core.handle(.tick).stopped == ["notes"])
     }
 
     // MARK: tools/list

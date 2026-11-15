@@ -169,8 +169,13 @@ public struct MCPServerDefinition: Sendable, Equatable {
     /// How long one `tools/call` may go unanswered; its progress restarts it.
     public var callTimeoutSeconds: Int = MCPServerDefinition.defaultCallTimeoutSeconds
 
+    /// How long the server may take to answer `initialize`.
+    public var startTimeoutSeconds: Int = MCPServerDefinition.defaultStartTimeoutSeconds
+
     public static let defaultCallTimeoutSeconds = 300
     public static let callTimeoutRange = 1...86400
+    public static let defaultStartTimeoutSeconds = 60
+    public static let startTimeoutRange = 1...600
 
     public init(name: String, description: String? = nil, remote: MCPRemoteServer, tools: MCPToolPolicy = MCPToolPolicy()) {
         self.init(name: name, description: description, command: "", tools: tools)
