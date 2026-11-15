@@ -165,8 +165,10 @@ final class RemoteFixture: @unchecked Sendable {
             return
         }
         let elapsed = String(format: "%.1f", Date().timeIntervalSince(started))
+        // Only a fixture still running is signalled: once it has been
+        // reaped its pid may belong to another process.
         let running = process.isRunning
-        kill(process.processIdentifier, SIGKILL)
+        if running { kill(process.processIdentifier, SIGKILL) }
         process.waitUntilExit()
         let state = running
             ? "still running (killed now)"
@@ -198,7 +200,7 @@ final class RemoteFixture: @unchecked Sendable {
     /// Stops the server and returns its request log. SIGKILL: a child of the
     /// test runner can inherit a mask that blocks SIGTERM.
     func stop() -> String {
-        kill(process.processIdentifier, SIGKILL)
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         process.waitUntilExit()
         return String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
