@@ -333,12 +333,16 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
 
     /// Also called from the delegate queue (a 401 retry, the SSE endpoint
     /// flush), so it can race `stop()`: the task is created under the lock,
-    /// as `openStream` does.
+    /// as `openStream` does. A retry of a request rv cancelled is not sent
+    /// (its cancel was): checked under that same lock, which
+    /// `closeCancelled` takes too, so a cancel either comes first and is
+    /// seen here, or finds the retry's exchange and closes it.
     private func post(_ message: JSONValue, to url: URL, retried: Bool, completed: (@Sendable () -> Void)?) {
         let (sent, token) = headers()
         let body = Data(message.compactText.utf8)
         let task: URLSessionDataTask? = locked {
             guard stopped == false, let shared = self.session else { return nil }
+            if retried, MCPHTTPExchange.isRequest(message), cancelledIDs.contains(message["id"] ?? .null) { return nil }
             var request = MCPHTTPExchange.request(
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
@@ -457,7 +461,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         }
     }
 
-    /// True when the message was posted again (a 401 retry).
+    /// True when a 401 retry took the completion over.
     private func completePost(_ message: JSONValue, exchange: Exchange, error: Error?, retried: Bool) -> Bool {
         var exchange = exchange
         func fail(_ text: String) {
@@ -494,13 +498,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         }
         let status = exchange.status
         if status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token) {
-            // Cancelled meanwhile: not sent again (its cancel was).
-            let cancelled = locked { MCPHTTPExchange.isRequest(message) && cancelledIDs.contains(message["id"] ?? .null) }
-            if cancelled == false, let target = locked({ launch.transport == .sse ? endpoint : launch.url }) {
-                post(message, to: target, retried: true, completed: exchange.completed)
-                return true
-            }
-            return false
+            // `post` sends nothing for a request cancelled meanwhile.
+            guard let target = locked({ launch.transport == .sse ? endpoint : launch.url }) else { return false }
+            post(message, to: target, retried: true, completed: exchange.completed)
+            return true
         }
         // The server ended the session: it is gone for rv, which starts a
         // new one (an answer still owed on it may have run).
