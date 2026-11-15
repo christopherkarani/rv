@@ -64,8 +64,8 @@ struct HostTextReads {
     /// they are read in is fixed, so the verdict and these counters are the
     /// same in every process (`variantOrderSeed` aside).
     mutating func ordered(_ variants: [String]) -> [String] {
-        var kept: Set<String> = []
-        var out = variants.filter { kept.insert($0).inserted }
+        var out: [String] = []
+        for variant in variants where out.contains(variant) == false { out.append(variant) }
         guard var state = variantOrderSeed, out.count > 1 else { return out }
         for index in stride(from: out.count - 1, to: 0, by: -1) {
             // SplitMix64.
