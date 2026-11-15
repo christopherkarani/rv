@@ -1152,8 +1152,9 @@ enum MCPRun {
 
     /// Plans upstream processes. An untrusted mcp.json is refused before any
     /// command, argument, sandbox, or secret is resolved into a launch.
-    /// The plan uses the bytes this call verified. A configuration captured
-    /// earlier is not launched when it differs.
+    /// The plan uses the bytes this call verified, and returns that
+    /// configuration for relaunches. A configuration captured earlier is
+    /// not launched when it differs.
     static func upstreamLaunches(
         names: [String], configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
         resolver: SecretResolver,
@@ -1161,7 +1162,9 @@ enum MCPRun {
             .success(launch)
         },
         placeholders: MCPPlaceholderLeasing = .unavailable
-    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], CommandFailure> {
+    ) -> Result<
+        (configuration: MCPConfiguration, launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]), CommandFailure
+    > {
         let verified: MCPConfiguration
         switch boundConfiguration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -1201,7 +1204,7 @@ enum MCPRun {
                     configDirectory: environment.configDirectory)
             }
             return .failure(CommandFailure(error.message))
-        case .success(let planned): return .success(planned)
+        case .success(let planned): return .success((verified, planned))
         }
     }
 
@@ -1716,6 +1719,9 @@ struct MCPServe: AsyncParsableCommand {
             configDirectory: environment.configDirectory, resolver: .live(home: home.rawValue))
         defer { placeholderBroker.stop() }
         let planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
+        // What relaunches are planned from: the configuration verified for
+        // these launches, not the read above.
+        let verified: MCPConfiguration
         switch MCPRun.upstreamLaunches(
             names: names, configuration: configuration, environment: environment, secrets: secrets,
             resolver: .live(home: home.rawValue),
@@ -1725,7 +1731,9 @@ struct MCPServe: AsyncParsableCommand {
             placeholders: .broker(placeholderBroker))
         {
         case .failure(let failure): try fail(failure.message)
-        case .success(let result): planned = result
+        case .success(let result):
+            planned = result.launches
+            verified = result.configuration
         }
         let configDirectory = environment.configDirectory
         // As `MCPGatewayRuntime.run` does, before the pin-store and
@@ -1771,7 +1779,7 @@ struct MCPServe: AsyncParsableCommand {
             connections: planned.map { $0.1 },
             oauthStore: environment.oauthTokens,
             relaunch: MCPRun.relaunch(
-                configuration: configuration, environment: environment, secrets: secrets,
+                configuration: verified, environment: environment, secrets: secrets,
                 resolver: .live(home: home.rawValue), placeholders: .broker(placeholderBroker),
                 sandbox: {
                     MCPSandbox.apply(

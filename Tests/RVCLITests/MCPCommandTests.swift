@@ -5497,7 +5497,7 @@ struct MCPCommandTests {
             secrets: secrets, resolver: resolver
         ).get()
         #expect(calls.withLock { $0 } == 1)
-        guard case .process(let launch)? = planned.first?.1 else {
+        guard case .process(let launch)? = planned.launches.first?.1 else {
             Issue.record("expected a process launch")
             return
         }
@@ -5590,7 +5590,7 @@ struct MCPCommandTests {
             configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
             placeholders: .unavailable, sandbox: sandbox)
         let again = try relaunch("fs").get()
-        guard case .process(let started)? = first.first?.1, case .process(let relaunched) = again.1 else {
+        guard case .process(let started)? = first.launches.first?.1, case .process(let relaunched) = again.1 else {
             Issue.record("expected process launches")
             return
         }
