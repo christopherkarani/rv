@@ -8,7 +8,9 @@ import Foundation
 /// again, and a call that arrives meanwhile is refused at once. After a
 /// relaunch the server is initialized and listed again (through
 /// `settleListing`, so a changed definition is tainted as any mid-session
-/// change is) before any call reaches it.
+/// change is) before any call reaches it, and from then on a call reaches
+/// only a tool that this launch listed. A relisting that fails, times out,
+/// or whose cursor cycles is not complete: the server is stopped again.
 extension MCPGatewayCore {
     static let restartWindow: TimeInterval = 600
     static let maximumRelaunches = 5
@@ -76,6 +78,7 @@ extension MCPGatewayCore {
             guard case .restarting(let reason, .waiting(let until))? = phases[server], until <= now else { continue }
             phases[server] = .restarting(reason, .launching)
             relaunches[server, default: []].append(now)
+            launchListed[server] = []
             outputs.append(.restartUpstream(server: server))
         }
         return outputs
@@ -94,6 +97,17 @@ extension MCPGatewayCore {
         fanouts[fanout] = ListFanout(client: .null, remaining: [server], tools: [], search: nil, relaunch: server)
         let id = allocate(.list(fanout: fanout, server: server, deadline: deadlineClock().addingTimeInterval(deadlines.list)))
         return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))]
+    }
+
+    /// The names a listing of a relaunched server named, kept for this
+    /// launch. Nothing is kept for a server never started again.
+    mutating func noteLaunchListed(_ tools: [JSONValue], server: String) {
+        guard var names = launchListed[server] else { return }
+        for name in tools.compactMap({ scrub($0, for: server)["name"]?.stringValue })
+        where names.count < Self.maximumListedTools {
+            names.insert(name)
+        }
+        launchListed[server] = names
     }
 
     /// Listed again after a relaunch: ready, or stopped when its listing

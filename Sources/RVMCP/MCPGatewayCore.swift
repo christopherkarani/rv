@@ -383,6 +383,11 @@ public struct MCPGatewayCore {
     var everReady: Set<String> = []
     /// server → when it was relaunched, within the last `restartWindow`.
     var relaunches: [String: [Date]] = [:]
+    /// server → the tool names its current launch listed, for a server rv
+    /// started again this session. A call to any other tool of it is
+    /// refused: what an earlier launch listed says nothing about this one.
+    /// At most `maximumListedTools` names; a name past that is refused.
+    var launchListed: [String: Set<String>] = [:]
     /// A `tools/list` answer gave the client at least one tool, so a server
     /// going or coming back changes what it was told.
     var clientToldTools = false
@@ -906,6 +911,9 @@ public struct MCPGatewayCore {
         guard phases[server] == .ready else {
             return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
         }
+        if let listed = launchListed[server], listed.contains(tool) == false {
+            return notListedSinceRestart(client: client, server: server, tool: tool, exposed: exposed, keys: keys)
+        }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
         // token. Any other top-level params field would reach the upstream
@@ -1111,6 +1119,23 @@ public struct MCPGatewayCore {
         ]
     }
 
+    /// A call to a tool the server's current launch has not listed since rv
+    /// started it again: refused, never forwarded, until a listing of this
+    /// launch names it.
+    func notListedSinceRestart(
+        client: JSONValue, server: String, tool: String, exposed: String, keys: [String]
+    ) -> [MCPGatewayOutput] {
+        [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                reason: "the server has not listed this tool since rv restarted it", outcome: .notRun)),
+            .toClient(Self.error(
+                id: client, code: -32602,
+                message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
+                    + "did not list it after rv restarted it; the call was not run.")),
+        ]
+    }
+
     /// The outcome of a call that never went upstream: declined with its
     /// prompt's approval id, or `notRun` when nothing was asked.
     static func notForwarded(_ approvalID: String?) -> MCPCallRecord.Outcome {
@@ -1231,6 +1256,8 @@ public struct MCPGatewayCore {
                 let key = server + "\0" + cursor
                 if state.seenCursors.contains(key) || state.pages[server, default: 0] >= Self.maximumListPagesPerServer {
                     outputs.append(.log("MCP server \(server) cycled or over-paged its tool list; stopping pagination"))
+                    // rv's own listing after a relaunch is then not complete.
+                    if state.relaunch == server { state.failed.insert(server) }
                 } else {
                     state.seenCursors.insert(key)
                     fanouts[fanout] = state
@@ -1245,7 +1272,9 @@ public struct MCPGatewayCore {
             state.failed.insert(server)
         }
         if let upstream = upstreams[server] {
-            let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
+            let listed = state.listed.removeValue(forKey: server) ?? []
+            noteLaunchListed(listed, server: server)
+            let settled = settleListing(listed, upstream: upstream)
             state.tools += settled.tools
             outputs += settled.outputs
         }
