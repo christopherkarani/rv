@@ -668,7 +668,9 @@ struct MCPLoopbackRedirect: ~Copyable {
         let body = Array("<!doctype html><title>rv</title><p>\(text)</p>\n".utf8)
         let head = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         let bytes = Array(head.utf8) + body
-        _ = bytes.withUnsafeBytes { write(connection, $0.baseAddress, $0.count) }
+        // send with MSG_NOSIGNAL: any local process can reach this port and
+        // reset before its answer, which a plain write turns into SIGPIPE.
+        _ = bytes.withUnsafeBytes { send(connection, $0.baseAddress, $0.count, Int32(MSG_NOSIGNAL)) }
     }
 }
 
