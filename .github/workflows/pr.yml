@@ -173,8 +173,15 @@ jobs:
             echo "- linux/landlock.h: \`$header\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The run prints tens of thousands of lines; a failure is said again
+      # at the end, where the log API and a truncated viewer still show it.
       - name: Swift tests
-        run: swift test
+        run: |
+          set -o pipefail
+          if ! swift test 2>&1 | tee "$RUNNER_TEMP/swift-test.log"; then
+            Scripts/ci-test-failures.sh 'swift test' "$RUNNER_TEMP/swift-test.log"
+            exit 1
+          fi
 
       - name: ~/.config/rv untouched by swift test
         run: |
@@ -595,18 +602,27 @@ jobs:
 
       - name: Darwin Swift (XPC / CLI)
         run: |
+          set -o pipefail
           skip='injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
-          status=0
+          failed=''
           for run in RVWorkspaceTUITests:RVWorkspaceTUITests RVOperatorUITests:RVOperatorUITests \
                      RVLayaTests:RVLayaTests 'RVMCPTests:MCPSandboxCreateTests|MCPSandboxLongPathTests' \
                      RVServiceTests:RVServiceTests RVCLITests:RVCLITests; do
             product="${run%%:*}"
             filter="${run#*:}"
             printf '== %s (filter %s)\n' "$product" "$filter"
-            Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
-              --test-product "$product" --filter "$filter" --skip "$skip" || status=1
+            if ! Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
+              --test-product "$product" --filter "$filter" --skip "$skip" 2>&1 \
+              | tee "$RUNNER_TEMP/darwin-swift-$product.log"; then
+              failed="$failed $product"
+            fi
           done
-          exit "$status"
+          # A later product's output buries an earlier one's failure: say
+          # what failed again at the end.
+          for product in $failed; do
+            Scripts/ci-test-failures.sh "$product" "$RUNNER_TEMP/darwin-swift-$product.log"
+          done
+          [ -z "$failed" ]
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh
