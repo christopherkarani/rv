@@ -707,7 +707,15 @@ public struct MCPGatewayCore {
             var forwarded = JSONObject()
             forwarded["requestId"] = .int(id)
             if let reason = params?["reason"] { forwarded["reason"] = reason }
-            return [.toUpstream(server: server, message: Self.notification("notifications/cancelled", .object(forwarded)))]
+            // The `.forwarding` record gets its one terminal record here; a
+            // late answer is dropped.
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                    argumentKeys: call.keys, isError: true, reason: "cancelled by client",
+                    outcome: .interrupted(grant: call.approval?.grant))),
+                .toUpstream(server: server, message: Self.notification("notifications/cancelled", .object(forwarded))),
+            ]
         }
         return []
     }
