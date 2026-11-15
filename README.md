@@ -240,9 +240,11 @@ rv is one binary, 25 commands. The rest of the surface:
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
   A server that does not answer `initialize` within its
   `"startTimeoutSeconds"` in mcp.json (1 to 600, default 60), or answers it
-  with an error, is stopped and fails; when a server leaves a `tools/list`
-  page unanswered for 30 s, the listing ends with the pages it already
-  returned; a `tools/call` unanswered for the server's
+  with an error, is stopped and fails for the session; until every server
+  has settled, every `tools/list` and `tools/call` waits, so one slow
+  server's start limit holds back every tool. When a server leaves a
+  `tools/list` page unanswered for 30 s (not configurable), the listing
+  ends with the pages it already returned; a `tools/call` unanswered for the server's
   `"callTimeoutSeconds"` in mcp.json (1 to 86400, default 300; each
   progress notification for the call restarts it) fails with an error
   and is never sent again: rv asks the server to cancel and stops
@@ -252,10 +254,21 @@ rv is one binary, 25 commands. The rest of the surface:
   larger `"callTimeoutSeconds"`. These limits run on a clock that stops
   while the machine sleeps and ignores changes to the time of day.
   Stopping a local server sends SIGTERM, then SIGKILL 2 s later if it is
-  still running. Both go to the server's own process only (to its whole
-  process group when it holds placeholders), so what it started in a
-  group of its own, or outside rv (the container of a `docker run`
-  server), is not stopped by them.
+  still running. Each local server runs as the leader of its own process
+  group and both go to the whole group, while its leader is not yet
+  reaped, so what it started in a session of its own (`setsid`), or
+  outside rv (the container of a `docker run` server), is not stopped by
+  them. A server that was ready and then goes away (it exits, ends its
+  session, loses its connection, stops reading its input, or does not
+  answer rv's `ping` within 10 s after a call timed out) is started again
+  after 1, 2, 4 … up to 30 s, at most 5 times in 10 minutes, then stays
+  failed; one that was never ready is not restarted. It is started from
+  the mcp.json serve started with, listed again before any call reaches
+  it (a changed tool asks, and old approvals do not carry over), and the
+  client is told its tools changed. A call in flight is never sent again:
+  it fails saying it may have run, and a call made while the server is
+  coming back is refused at once. A client that takes nothing rv writes
+  for 30 s ends `rv mcp serve` with exit status 1.
   Each `rv mcp serve` process also warns once at start, on stderr and in
   the audit log, when host configs bypass the gateway, run a server
   mcp.json blocks, or hold unreviewed servers (a host set up by
