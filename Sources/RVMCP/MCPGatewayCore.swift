@@ -157,18 +157,43 @@ public struct MCPGatewayCore {
         var grant: MCPCallRecord.Grant { MCPCallRecord.Grant(approvalID: id, channel: channel) }
     }
 
+    /// A `tools/call` the upstream has not answered.
+    struct Call {
+        var client: JSONValue
+        var server: String
+        var tool: String
+        var keys: [String]
+        var approval: Approval?
+        var started: Date
+        /// Past this the client is told the call timed out. Valid progress
+        /// for the call moves it.
+        var deadline: Date
+    }
+
+    /// Every request rv sends upstream, until it is answered or expires.
     enum Pending {
-        case initialize(server: String)
-        case list(fanout: Int, server: String)
-        case call(client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, started: Date)
-        case cancelled
+        case initialize(server: String, deadline: Date)
+        case list(fanout: Int, server: String, deadline: Date)
+        case call(Call)
+        /// Cancelled by the client, or timed out: a late answer is dropped.
+        /// Forgotten at `until`, or when its server exits.
+        case cancelled(server: String, until: Date)
 
         /// The upstream that owns this request; nil once cancelled. A reply
         /// from any other upstream must not consume the entry.
         var owner: String? {
             switch self {
-            case .initialize(let server), .list(_, let server), .call(_, let server, _, _, _, _): server
+            case .initialize(let server, _), .list(_, let server, _): server
+            case .call(let call): call.server
             case .cancelled: nil
+            }
+        }
+
+        var deadline: Date {
+            switch self {
+            case .initialize(_, let deadline), .list(_, _, let deadline): deadline
+            case .call(let call): call.deadline
+            case .cancelled(_, let until): until
             }
         }
     }
@@ -371,7 +396,7 @@ public struct MCPGatewayCore {
     public mutating func start() -> [MCPGatewayOutput] {
         order.map { server in
             phases[server] = .starting
-            let id = allocate(.initialize(server: server))
+            let id = allocate(.initialize(server: server, deadline: clock().addingTimeInterval(deadlines.start)))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
                 "protocolVersion": .string(Self.upstreamVersion),
                 "capabilities": .object([:]),
@@ -386,9 +411,9 @@ public struct MCPGatewayCore {
         // and expiring first would drop it silently.
         if case .client(let message) = input, message["method"] == nil,
             let key = message["id"]?.stringValue, held[key] != nil {
-            return clientMessage(message) + expireHeld()
+            return clientMessage(message) + expireHeld() + expireDeadlines()
         }
-        var outputs = expireHeld()
+        var outputs = expireHeld() + expireDeadlines()
         switch input {
         case .client(let message): outputs += clientMessage(message)
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
@@ -419,6 +444,71 @@ public struct MCPGatewayCore {
                 "rv's approval prompt for \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)) was not answered in time; the call was not run.")))
         }
         return outputs
+    }
+
+    /// How long a `tools/call` to `server` may go unanswered.
+    func callTimeout(_ server: String) -> TimeInterval {
+        TimeInterval(upstreams[server]?.definition.callTimeoutSeconds ?? MCPServerDefinition.defaultCallTimeoutSeconds)
+    }
+
+    static func seconds(_ interval: TimeInterval) -> String {
+        interval == interval.rounded() ? String(Int(interval)) : String(interval)
+    }
+
+    /// Ends every request whose deadline passed, oldest first: an
+    /// `initialize` fails its server, a `tools/list` page ends that server's
+    /// part of the listing, a `tools/call` fails the client's request (it is
+    /// cancelled upstream, never sent again), and a cancelled entry is
+    /// forgotten.
+    mutating func expireDeadlines() -> [MCPGatewayOutput] {
+        let now = clock()
+        var outputs: [MCPGatewayOutput] = []
+        for (id, entry) in pending.sorted(by: { $0.key < $1.key }) where entry.deadline <= now {
+            switch entry {
+            case .initialize(let server, _):
+                pending[id] = nil
+                let limit = Self.seconds(deadlines.start)
+                phases[server] = .failed("it did not answer initialize within \(limit) s")
+                outputs.append(.log(
+                    "MCP server \(MCPDisplayedText.field(server)) did not answer initialize within \(limit) s; stopping it"))
+                outputs.append(.stopUpstream(server: server))
+                outputs += releaseWaiting()
+            case .list(let fanout, let server, _):
+                pending[id] = nil
+                outputs += listPage(
+                    fanout: fanout, server: server, message: .null,
+                    failure: "did not list tools within \(Self.seconds(deadlines.list)) s")
+            case .call(let call):
+                outputs += callTimedOut(id, call, now: now)
+            case .cancelled:
+                pending[id] = nil
+            }
+        }
+        return outputs
+    }
+
+    /// The client is told, the upstream is asked to stop, and the record
+    /// says the call was interrupted. A late answer is then dropped.
+    mutating func callTimedOut(_ id: Int, _ call: Call, now: Date) -> [MCPGatewayOutput] {
+        let limit = callTimeout(call.server)
+        pending[id] = .cancelled(server: call.server, until: now.addingTimeInterval(limit))
+        progressTokens[id] = nil
+        let seconds = Self.seconds(limit)
+        let shownServer = MCPDisplayedText.field(call.server)
+        let shownTool = MCPDisplayedText.field(call.tool)
+        return [
+            .audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                argumentKeys: call.keys, isError: true, reason: "timed out: no answer within \(seconds) s",
+                outcome: .interrupted(grant: call.approval?.grant))),
+            .toUpstream(server: call.server, message: Self.notification("notifications/cancelled", .object([
+                "requestId": .int(id), "reason": .string("rv stopped waiting after \(seconds) s"),
+            ]))),
+            .toClient(Self.error(
+                id: call.client, code: -32603,
+                message: "MCP server \(shownServer) did not answer tool \(shownTool) within \(seconds) s; "
+                    + "rv stopped waiting. The call may still have run, so check before calling it again.")),
+        ]
     }
 
     // MARK: Client side
@@ -566,7 +656,10 @@ public struct MCPGatewayCore {
                     message: "rv could not write the audit record for \(shownServer) tool \(shownTool); the call was not run")),
             ]
         }
-        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
+        let started = clock()
+        let id = allocate(.call(Call(
+            client: client, server: server, tool: tool, keys: keys, approval: approval, started: started,
+            deadline: started.addingTimeInterval(callTimeout(server)))))
         if let token = params["_meta"]?["progressToken"] { progressTokens[id] = token }
         return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(params)))]
     }
@@ -581,8 +674,9 @@ public struct MCPGatewayCore {
             ])))]
         }
         for (id, entry) in pending {
-            guard case .call(let client, let server, _, _, _, _) = entry, client == target else { continue }
-            pending[id] = .cancelled
+            guard case .call(let call) = entry, call.client == target else { continue }
+            let server = call.server
+            pending[id] = .cancelled(server: server, until: clock().addingTimeInterval(callTimeout(server)))
             progressTokens[id] = nil
             var forwarded = JSONObject()
             forwarded["requestId"] = .int(id)
@@ -607,8 +701,9 @@ public struct MCPGatewayCore {
         let fanout = nextID
         nextID += 1
         fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [], search: search)
+        let deadline = clock().addingTimeInterval(deadlines.list)
         return ready.map { server in
-            let id = allocate(.list(fanout: fanout, server: server))
+            let id = allocate(.list(fanout: fanout, server: server, deadline: deadline))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))
         }
     }
@@ -955,9 +1050,10 @@ public struct MCPGatewayCore {
             // not a channel to the client or the model.
             phases[server] = .failed("it failed to initialize")
             return [.log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)")] + releaseWaiting()
-        case .list(let fanout, _):
+        case .list(let fanout, _, _):
             return listPage(fanout: fanout, server: server, message: message)
-        case .call(let client, _, let tool, let keys, let approval, let started):
+        case .call(let call):
+            let client = call.client, tool = call.tool, keys = call.keys, approval = call.approval, started = call.started
             // The reply is rebuilt from the upstream's result or error;
             // no other field of its message reaches the client.
             let visible = clientVisibleReply(message, server: server)
@@ -985,7 +1081,9 @@ public struct MCPGatewayCore {
         }
     }
 
-    mutating func listPage(fanout: Int, server: String, message: JSONValue) -> [MCPGatewayOutput] {
+    mutating func listPage(
+        fanout: Int, server: String, message: JSONValue, failure: String = "did not list tools"
+    ) -> [MCPGatewayOutput] {
         guard var state = fanouts[fanout] else { return [] }
         var outputs: [MCPGatewayOutput] = []
         if upstreams[server] != nil, let tools = message["result"]?["tools"]?.arrayValue {
@@ -1002,13 +1100,14 @@ public struct MCPGatewayCore {
                 } else {
                     state.seenCursors.insert(key)
                     fanouts[fanout] = state
-                    let id = allocate(.list(fanout: fanout, server: server))
+                    let id = allocate(.list(
+                        fanout: fanout, server: server, deadline: clock().addingTimeInterval(deadlines.list)))
                     return outputs + [.toUpstream(server: server, message: Self.request(
                         id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
                 }
             }
         } else {
-            outputs.append(.log("MCP server \(server) did not list tools"))
+            outputs.append(.log("MCP server \(server) \(failure)"))
         }
         if let upstream = upstreams[server] {
             let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
@@ -1454,11 +1553,12 @@ public struct MCPGatewayCore {
     /// (dropped) when no pending call from `server` carries the token, or
     /// when `progress` (or a `total` that is present) is not a finite number
     /// spelled in at most `maximumProgressNumberBytes`. The token sent on is
-    /// the one the client gave, never the upstream's copy of it.
-    func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
+    /// the one the client gave, never the upstream's copy of it. Progress
+    /// that is sent on restarts the call's deadline.
+    mutating func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
         func runs(_ id: Int) -> Bool {
-            guard case .call(_, let owner, _, _, _, _)? = pending[id] else { return false }
-            return owner == server
+            guard case .call(let call)? = pending[id] else { return false }
+            return call.server == server
         }
         func finite(_ value: JSONValue?) -> Bool {
             guard case .number(let spelling)? = value,
@@ -1468,11 +1568,17 @@ public struct MCPGatewayCore {
             return number.isFinite
         }
         guard let sent = params?["progressToken"],
-            let token = progressTokens.first(where: { $0.value == sent && runs($0.key) })?.value,
+            let match = progressTokens.first(where: { $0.value == sent && runs($0.key) }),
             let done = params?["progress"], finite(done)
         else { return nil }
+        let id = match.key
+        let token = match.value
         let total = params?["total"]
         guard total == nil || finite(total) else { return nil }
+        if case .call(var call)? = pending[id] {
+            call.deadline = clock().addingTimeInterval(callTimeout(server))
+            pending[id] = .call(call)
+        }
         var rebuilt = JSONObject()
         rebuilt["progressToken"] = token
         rebuilt["progress"] = done
@@ -1494,24 +1600,28 @@ public struct MCPGatewayCore {
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {
         guard upstreams[server] != nil else { return [] }
-        let reason = "process exited"
         let wasStarting = phases[server] == .starting
-        phases[server] = .failed(reason)
+        // A server already failed keeps its first reason (a start that
+        // timed out, then the stopped process's exit).
+        if case .failed? = phases[server] {} else { phases[server] = .failed("process exited") }
         var outputs: [MCPGatewayOutput] = [.log("MCP server \(server) exited")]
         for (id, entry) in pending.sorted(by: { $0.key < $1.key }) {
             switch entry {
-            case .initialize(let owner) where owner == server:
+            case .initialize(let owner, _) where owner == server:
                 pending[id] = nil
-            case .list(let fanout, let owner) where owner == server:
+            case .list(let fanout, let owner, _) where owner == server:
                 pending[id] = nil
                 outputs += listPage(fanout: fanout, server: server, message: .null)
-            case .call(let client, let owner, let tool, let keys, let approval, _) where owner == server:
+            case .call(let call) where call.server == server:
                 pending[id] = nil
                 progressTokens[id] = nil
                 outputs.append(.audit(MCPCallRecord(
-                    server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
-                    isError: true, reason: "upstream exited", outcome: .interrupted(grant: approval?.grant))))
-                outputs.append(.toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) exited")))
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                    argumentKeys: call.keys, isError: true, reason: "upstream exited",
+                    outcome: .interrupted(grant: call.approval?.grant))))
+                outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
+            case .cancelled(let owner, _) where owner == server:
+                pending[id] = nil
             default:
                 continue
             }

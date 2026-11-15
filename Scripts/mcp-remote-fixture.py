@@ -8,6 +8,7 @@ on stderr. Routes:
   GET /sse, POST /sse        legacy HTTP+SSE; the message endpoint is that same URL
   GET /sse-foreign       legacy stream whose endpoint is on another origin
 With --token T every MCP request needs "Authorization: Bearer T".
+With --hang-calls a legacy SSE tools/call is accepted (202) and never answered.
 With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
 metadata, RFC 8414 metadata, RFC 7591 registration, PKCE S256, refresh
 rotation); MCP requests need a token it issued. POST /auth/expire revokes
@@ -78,6 +79,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     token = None
     oauth = False
+    hang_calls = False
 
     def origin(self):
         return "http://" + self.headers.get("Host")
@@ -297,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404)
         msg = self.read_json()
         log("REQ POST %s %s session=%s" % (path, msg.get("method"), sid))
-        if "id" in msg and "method" in msg:
+        if "id" in msg and "method" in msg and not (self.hang_calls and msg.get("method") == "tools/call"):
             outbox.put(answer(msg, self.headers))
         self.send(202)
 
@@ -307,9 +309,11 @@ def main():
     parser.add_argument("--token")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--oauth", action="store_true")
+    parser.add_argument("--hang-calls", action="store_true")
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
+    Handler.hang_calls = options.hang_calls
     server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)

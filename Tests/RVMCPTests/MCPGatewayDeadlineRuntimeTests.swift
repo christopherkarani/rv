@@ -1,0 +1,185 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import Foundation
+import Synchronization
+import Testing
+@testable import RVMCP
+
+/// A stdio MCP server that gets stuck. `answers`: initialize and tools/list
+/// are answered (one tool, `wait`), tools/call never is. `silent`: nothing
+/// is answered. Every method it reads is appended to the file in argv[2].
+let stuckServer = #"""
+    import json, sys
+    mode, seen = sys.argv[1], sys.argv[2]
+    for line in sys.stdin:
+        msg = json.loads(line)
+        with open(seen, "a") as f:
+            f.write(str(msg.get("method")) + "\n")
+        if "id" not in msg or mode == "silent":
+            continue
+        method, mid = msg.get("method"), msg["id"]
+        if method == "initialize":
+            result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "stuck", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "wait", "inputSchema": {"type": "object"}}]}
+        else:
+            continue
+        print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}), flush=True)
+    """#
+
+/// True once `condition` holds, polled off the concurrency pool for at most
+/// `timeout` seconds: a ceiling, not an expected duration.
+private func eventuallyAsync(_ timeout: TimeInterval = 90, _ condition: @escaping @Sendable () -> Bool) async -> Bool {
+    await offThePool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            usleep(50_000)
+        }
+        return condition()
+    }
+}
+
+/// One `MCPGatewayRuntime` over a `LineClient`, recording audits and logs.
+final class GatewayRun: Sendable {
+    let client: LineClient
+    let audits: RecordedAudits
+    let logs: RecordedLogs
+    let runtime: MCPGatewayRuntime
+    private let done: DispatchSemaphore
+
+    init(core: MCPGatewayCore, connections: [MCPUpstreamConnection]) {
+        let client = LineClient()
+        let audits = RecordedAudits()
+        let logs = RecordedLogs()
+        let done = DispatchSemaphore(value: 0)
+        let runtime = MCPGatewayRuntime(
+            core: core, connections: connections,
+            input: client.toGateway.fileHandleForReading.fileDescriptor,
+            output: client.fromGateway.fileHandleForWriting.fileDescriptor,
+            audit: { record in audits.items.withLock { $0.append(record) } },
+            log: { line in logs.lines.withLock { $0.append(line) } })
+        self.client = client
+        self.audits = audits
+        self.logs = logs
+        self.done = done
+        self.runtime = runtime
+        Thread.detachNewThread {
+            runtime.run()
+            done.signal()
+        }
+    }
+
+    static func core(_ servers: [MCPServerDefinition], deadlines: MCPGatewayDeadlines) -> MCPGatewayCore {
+        MCPGatewayCore(
+            configuration: MCPConfiguration(servers: servers),
+            upstreams: servers.map { MCPGatewayCore.Upstream(definition: $0) },
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true }, deadlines: deadlines)
+    }
+
+    func initialize() async -> Bool {
+        client.send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
+        let reply = await client.next(timeout: 120)
+        client.send(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        return reply?["result"]?["serverInfo"]?["name"] == .string("rv")
+    }
+
+    /// Closes the client's input and waits for `run` to return.
+    func finish() async -> Bool {
+        try? client.toGateway.fileHandleForWriting.close()
+        let done = done
+        return await offThePool { done.wait(timeout: .now() + 60) } == .success
+    }
+}
+
+@Suite("MCPGatewayRuntime deadlines", .enabled(if: python3Available))
+struct MCPGatewayDeadlineRuntimeTests {
+    static func scratch() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-deadline-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(stuckServer.utf8).write(to: directory.appendingPathComponent("stuck.py"))
+        return directory
+    }
+
+    static func launch(_ server: String, mode: String, in directory: URL) -> MCPUpstreamConnection {
+        .process(MCPUpstreamLaunch(
+            server: server, executable: "/usr/bin/env",
+            arguments: [
+                "python3", "-u", directory.appendingPathComponent("stuck.py").path, mode,
+                directory.appendingPathComponent("\(server).seen").path,
+            ],
+            environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"]))
+    }
+
+    static func seen(_ server: String, in directory: URL) -> String {
+        (try? String(contentsOf: directory.appendingPathComponent("\(server).seen"), encoding: .utf8)) ?? ""
+    }
+
+    @Test func stdioCallThatIsNeverAnsweredFailsAndIsCancelledUpstream() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var slow = MCPServerDefinition(name: "slow", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        slow.callTimeoutSeconds = 1
+        let run = GatewayRun(
+            core: GatewayRun.core([slow], deadlines: MCPGatewayDeadlines(start: 300, list: 300)),
+            connections: [Self.launch("slow", mode: "answers", in: directory)])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        let reply = await run.client.next(timeout: 120)
+        #expect(reply?["id"] == .int(3))
+        #expect(reply?["error"]?["code"] == .int(-32603))
+        #expect(reply?["error"]?["message"]?.stringValue?.contains("within 1 s") == true, "\(String(describing: reply))")
+        let audits = run.audits
+        #expect(await eventuallyAsync {
+            audits.items.withLock { $0.contains { $0.outcome == .interrupted(grant: nil) && $0.reason?.contains("timed out") == true } }
+        })
+        #expect(await eventuallyAsync { Self.seen("slow", in: directory).contains("notifications/cancelled") })
+        #expect(Self.seen("slow", in: directory).components(separatedBy: "tools/call").count == 2)
+        #expect(await run.finish())
+    }
+
+    @Test func serverThatNeverAnswersInitializeIsKilledAndReleasesTheClient() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let silent = MCPServerDefinition(name: "silent", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        let run = GatewayRun(
+            core: GatewayRun.core([silent], deadlines: MCPGatewayDeadlines(start: 1, list: 300)),
+            connections: [Self.launch("silent", mode: "silent", in: directory)])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        let listed = await run.client.next(timeout: 120)
+        #expect(listed?["id"] == .int(2))
+        #expect(listed?["result"]?["tools"] == .array([]))
+        let logs = run.logs
+        #expect(await eventuallyAsync { logs.text.contains("MCP server silent exited") }, "\(logs.text)")
+        #expect(logs.text.contains("did not answer initialize within 1 s"))
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        let call = await run.client.next(timeout: 120)
+        #expect(call?["error"]?["message"]?.stringValue?.contains("did not answer initialize") == true)
+        #expect(await run.finish())
+    }
+
+    @Test func legacySSECallAcceptedButNeverAnsweredFails() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        var legacy = MCPServerDefinition(
+            name: "legacy", remote: MCPRemoteServer(url: fixture.url("/sse"), transport: .sse),
+            tools: MCPToolPolicy(allow: ["*"]))
+        legacy.callTimeoutSeconds = 1
+        let run = GatewayRun(
+            core: GatewayRun.core([legacy], deadlines: MCPGatewayDeadlines(start: 300, list: 300)),
+            connections: [.remote(MCPRemoteLaunch(server: "legacy", url: fixture.url("/sse"), transport: .sse))])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
+        let reply = await run.client.next(timeout: 120)
+        #expect(reply?["id"] == .int(3))
+        #expect(reply?["error"]?["message"]?.stringValue?.contains("within 1 s") == true, "\(String(describing: reply))")
+        #expect(await run.finish())
+        let requests = await offThePool { fixture.stop() }
+        #expect(requests.contains("REQ POST /sse tools/call"), "\(requests)")
+    }
+}

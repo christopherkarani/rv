@@ -361,6 +361,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private var remotes: [String: MCPRemoteUpstream] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
+    /// Feeds the core `.tick` on the gateway queue, so deadlines pass with
+    /// no other input.
+    private var ticker: DispatchSourceTimer?
+    static let tickInterval = DispatchTimeInterval.seconds(1)
     /// How many times `requestShutdown` was called; from the second on,
     /// stopping skips the grace periods.
     private let shutdownRequests = Atomic<Int>(0)
@@ -405,6 +409,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             }
             perform(core.start())
             for server in failed { perform(core.handle(.upstreamExited(server: server))) }
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + Self.tickInterval, repeating: Self.tickInterval, leeway: .milliseconds(100))
+            timer.setEventHandler { [self] in
+                guard stopping == false else { return }
+                perform(core.handle(.tick))
+            }
+            timer.resume()
+            ticker = timer
         }
         let clientInput = input
         Thread.detachNewThread { [self] in
@@ -417,6 +429,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         finished.wait()
         queue.sync {
             stopping = true
+            ticker?.cancel()
+            ticker = nil
             stopUpstreams()
         }
     }
@@ -590,10 +604,19 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 event(item)
             case .log(let text):
                 log(text)
-            case .stopUpstream:
-                break
+            case .stopUpstream(let server):
+                stopUpstream(server)
             }
         }
+    }
+
+    /// The core gave up on this server (it never finished starting): kill
+    /// its process or group now, or close its connection. A process's exit
+    /// still reaches the core through its reader or supervisor.
+    private func stopUpstream(_ server: String) {
+        if let process = processes[server], process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        placeholderGroups[server]?.signal(SIGKILL)
+        remotes.removeValue(forKey: server)?.stop()
     }
 
     private func stopUpstreams() {
