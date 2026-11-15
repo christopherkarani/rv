@@ -11,8 +11,9 @@ import Testing
 @Suite("MCP remote upstream with GCD's shared pool exhausted", .enabled(if: python3Available))
 struct MCPRemoteStarvedPoolTests {
     /// In the probe, so this process's pool is never exhausted: 256 items
-    /// that never finish take every global-queue thread. Both HTTP clients
-    /// still hear their answers. Before they had their own queues neither did.
+    /// that never finish take every global-queue thread. The remote upstream
+    /// and the secrets gateway's upstream transport still hear their
+    /// answers; on a plain serial `OperationQueue` neither did.
     @Test(.timeLimit(.minutes(1)))
     func remoteAnswersArriveWhileTheSharedPoolIsExhausted() throws {
         let fixture = try RemoteFixture()
@@ -33,6 +34,7 @@ struct MCPRemoteStarvedPoolTests {
         #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(text)")
         #expect(lines["upstream"].flatMap { Int($0) } != nil, "upstream answered: \(text); fixture: \(requests)")
         #expect(lines["live"]?.hasSuffix(" status 405") == true, "live answered: \(text)")
+        #expect(lines["gateway"]?.hasSuffix(" status 405") == true, "gateway answered: \(text)")
         #expect(requests.contains("REQ POST /mcp initialize"), "\(requests)")
     }
 }

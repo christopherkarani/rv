@@ -13,8 +13,9 @@
 // `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
 // work that never ends, then sends `initialize` to the MCP server at `url`
-// through `MCPRemoteUpstream` and a GET through `MCPOAuthHTTP.live`, and
-// prints how long each took to answer ("none" after 10 s).
+// through `MCPRemoteUpstream`, a GET through `MCPOAuthHTTP.live` and one
+// through the secrets gateway's upstream transport, and prints how long
+// each took to answer ("none" after 10 s).
 // `rv-mcp-probe stderr <bytes> [interrupted|closed]` ignores SIGPIPE as serve
 // does, then writes one line of `bytes` x's through the gateway's stderr
 // writer: `interrupted` under a 1 ms SIGALRM without SA_RESTART, `closed`
@@ -23,6 +24,7 @@
 // `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
 import Darwin
 import Foundation
+import RVIsolation
 import RVMCP
 import Synchronization
 
@@ -147,8 +149,29 @@ private func remoteWhileStarved(_ url: URL) -> Int32 {
     start = Date()
     let status = MCPOAuthHTTP.live(URLRequest(url: url, timeoutInterval: 10))?.status
     say("live " + elapsed(start, status != nil) + " status \(status.map { String($0) } ?? "none")")
+
+    // The secrets gateway's upstream transport, as a gateway connection
+    // handler calls it: blocking, on a thread of its own.
+    let sink = GatewaySink()
+    let transport = SecretUpstreamTransport.urlSession
+    let request = SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data())
+    start = Date()
+    Thread.detachNewThread { transport.send(request, sink) }
+    let finished = sink.done.wait(timeout: .now() + 10) == .success
+    let gatewayStatus = sink.status.withLock { $0 }
+    say("gateway " + elapsed(start, finished) + " status \(gatewayStatus.map { String($0) } ?? "none")")
     // The held work never ends; exit rather than return to it.
     exit(0)
+}
+
+private final class GatewaySink: SecretResponseSink, Sendable {
+    let done = DispatchSemaphore(value: 0)
+    let status = Mutex<Int?>(nil)
+
+    func head(status: Int, headers: [(name: String, value: String)]) { self.status.withLock { $0 = status } }
+    func body(_ data: Data) -> Bool { true }
+    func finish() { done.signal() }
+    func fail(_ reason: String) { done.signal() }
 }
 
 /// `pipe-disposition`: what this process got for SIGPIPE.
