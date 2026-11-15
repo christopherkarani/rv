@@ -372,6 +372,49 @@ struct UnixSocketListenerTests {
         }
     }
 
+    /// A same-user client that sends a request and closes before rvd
+    /// accepts: Darwin refuses `SO_NOSIGPIPE` on a socket whose peer is
+    /// gone, the request is still readable, and a reply sent with flags 0
+    /// raises SIGPIPE, killing the whole process. The reply must fail
+    /// quietly and the listener must keep serving.
+    @Test func aClientGoneBeforeItsReplyDoesNotKillTheListener() throws {
+        let home = try makeIsolatedHome("pipe")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+        try retryDarwinConnect(path: socketURL.path).close()
+
+        var header = Data(count: 4)
+        let hello = try IPCJSON.encode(Hello())
+        header.withUnsafeMutableBytes { $0.storeBytes(of: UInt32(hello.count).bigEndian, as: UInt32.self) }
+        let frame = header + hello
+        var addr = try DarwinFrameIO.sockaddr(path: socketURL.path)
+        for _ in 0..<200 {
+            let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+            try #require(fd >= 0)
+            let connected = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
+            }
+            if connected == 0 {
+                _ = frame.withUnsafeBytes { Darwin.send(fd, $0.baseAddress, frame.count, 0) }
+            }
+            Darwin.close(fd)
+        }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let data = try #require(sendWithin(seconds: 10, client, body: hello).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
     @Test func concurrentConnectionsAreBothServed() throws {
         let home = try makeIsolatedHome("conc")
         defer { try? FileManager.default.removeItem(at: home) }
