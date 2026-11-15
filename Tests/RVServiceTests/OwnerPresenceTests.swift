@@ -53,6 +53,7 @@ struct OwnerPresenceTests {
         let available: Bool
         let hangs: Bool
         let reasons = Mutex<[String]>([])
+        let cancelled = Mutex(0)
         init(approve: Bool, available: Bool = true, hangs: Bool = false) {
             self.approve = approve
             self.available = available
@@ -63,12 +64,18 @@ struct OwnerPresenceTests {
             reasons.withLock { $0.append(reason) }
             if hangs {
                 // Returns early only when the prompt is cancelled.
-                try? await Task.sleep(for: .seconds(60))
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    cancelled.withLock { $0 += 1 }
+                }
                 return false
             }
             return approve
         }
         var promptCount: Int { reasons.withLock { $0.count } }
+        /// Prompts that were cancelled before they answered.
+        var cancelledCount: Int { cancelled.withLock { $0 } }
     }
 
     /// An XPC peer rvd authenticated but gave no role: a macOS one-click
@@ -303,12 +310,11 @@ struct OwnerPresenceTests {
         let presence = OwnerPresence(
             checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: .milliseconds(200))
         let context = Self.unroledXPCContext()
-        let started = ContinuousClock.now
         #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .declined)))
-        // The fake answers only after 60 s, so returning in under 30 s means
-        // the 200 ms timeout fired. The slack absorbs a pool starved by other
-        // suites (seen at ~11 s on CI) without hiding a broken timeout.
-        #expect(ContinuousClock.now - started < .seconds(30))
+        // The fake answers only after 60 s unless it is cancelled, so a
+        // cancelled prompt means the 200 ms timeout fired. No clock is read:
+        // a pool starved by other suites has taken 31 s to say so on CI.
+        #expect(prompt.cancelledCount == 1)
         // The slot is free again: the next request reaches the prompt.
         #expect(await presence.confirm("y", proof: nil, context: context) == .denied(.init(outcome: .declined)))
         #expect(prompt.promptCount == 2)

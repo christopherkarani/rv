@@ -33,6 +33,14 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// `rv mcp serve` started while host configs run MCP servers around
     /// the gateway or hold unreviewed ones; counts only.
     public static let mcpHostsUngoverned = AuditEventKind(rawValue: "mcp.hosts.ungoverned")
+    /// A new machine or repo policy revision (`ConfigChangeAudit.policy`).
+    public static let policyChanged = AuditEventKind(rawValue: "policy.changed")
+    /// The organization bundle: a new serial accepted, or a bundle that
+    /// stopped verifying, went away, or verified again.
+    public static let policyManaged = AuditEventKind(rawValue: "policy.managed")
+    /// One gate setting: safety, a host mode, guard mode, packs, the
+    /// allowlist, secret definitions, an egress review.
+    public static let configChanged = AuditEventKind(rawValue: "config.changed")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")

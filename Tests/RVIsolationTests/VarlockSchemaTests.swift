@@ -490,6 +490,26 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains { $0.hasPrefix("note ANTHROPIC_API_KEY") } == false)
     }
 
+    @Test func proxyImportOfProviderOnlyNamesKeepsGenericDefaults() throws {
+        // Catalog variables outside KnownSecretDefaults.names import as any unknown name would.
+        let plan = try VarlockSchema.plan("""
+            # @proxy(domain=registry.npmjs.org)
+            NPM_TOKEN=op(op://Eng/npm/token)
+            # @proxy(domain=upload.pypi.org)
+            TWINE_PASSWORD=op(op://Eng/pypi/token)
+            # @proxy(domain=openrouter.ai)
+            OPENROUTER_API_KEY=op(op://Eng/openrouter/key)
+            """).get()
+        let delivery = Dictionary(uniqueKeysWithValues: plan.secrets.map { ($0.name, $0.delivery) })
+        #expect(delivery["NPM_TOKEN"] == Self.gateway("https://registry.npmjs.org", "NPM_TOKEN_BASE_URL"))
+        #expect(delivery["TWINE_PASSWORD"] == Self.gateway("https://upload.pypi.org", "TWINE_PASSWORD_BASE_URL"))
+        #expect(delivery["OPENROUTER_API_KEY"] == Self.gateway("https://openrouter.ai", "OPENROUTER_API_KEY_BASE_URL"))
+        #expect(plan.notes.contains(
+            "note NPM_TOKEN: point the client at $NPM_TOKEN_BASE_URL; rv sends the value only to registry.npmjs.org"))
+        #expect(plan.notes.contains(
+            "note TWINE_PASSWORD: point the client at $TWINE_PASSWORD_BASE_URL; rv sends the value only to upload.pypi.org"))
+    }
+
     @Test func proxyMakesAnItemSensitive() throws {
         let plan = try VarlockSchema.plan("""
             # @defaultSensitive=false

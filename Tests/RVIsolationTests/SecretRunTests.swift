@@ -462,6 +462,19 @@ struct SecretRunLaunchTests {
         #expect(waitpid(pid, &status, 0) == pid)
     }
 
+    /// A stop does not end the wait for the leader. macOS runners answer a
+    /// wait that asked for exits alone with a stop as well, and taking that
+    /// for the exit killed the group of a command that had only stopped. A
+    /// trace stop still ends it: no signal rv forwards would.
+    @Test func aStopDoesNotEndTheWaitForTheLeader() {
+        for code in [CLD_EXITED, CLD_KILLED, CLD_DUMPED, CLD_TRAPPED] {
+            #expect(SecretRunProcess.endsTheWait(reportCode: Int32(code)))
+        }
+        for code in [Int32(CLD_STOPPED), Int32(CLD_CONTINUED), 0] {
+            #expect(SecretRunProcess.endsTheWait(reportCode: code) == false)
+        }
+    }
+
     /// rv started with a standard descriptor closed (`rv run ... <&-`) has
     /// since opened something of its own at that number. "Inherit stdin as
     /// it is" must give the command that number closed, not rv's file.
@@ -637,15 +650,32 @@ struct SecretRunLaunchTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let signals = SecretRunSignals(detached: [])
         let finished = Shared(false)
-        onceStopped(markerIn: directory, unless: finished) { _ in signals.deliver(number) }
+        // What happened when, for a failure's message: seconds from the
+        // start to the command's stop being seen and the signal being
+        // delivered (-1: never).
+        let began = Date()
+        let sent = Shared<Double>(-1)
+        onceStopped(markerIn: directory, unless: finished) { _ in
+            signals.deliver(number)
+            sent.set(Date().timeIntervalSince(began))
+        }
         let bound = Shared<pid_t>(0)
         let result = bounded(killing: bound) {
             launchShell(
                 stopsAfterMarker + "exit 0", directory: directory.path, terminal: nil, bound: bound, signals: signals)
         }
+        let returned = Date().timeIntervalSince(began)
         finished.set(true)
         let status = try #require(result).get()
-        #expect(SecretRunExit.code(waitStatus: status) == 128 + number)
+        let ended = SecretRunExit.code(waitStatus: status)
+        // Asked only of a failure: what this kernel tells an exit-only wait.
+        let kernel = ended == 128 + number ? "" : exitOnlyWaitOnAStoppedChild()
+        #expect(
+            ended == 128 + number,
+            """
+            wait status \(status); the launch returned after \(returned) s; the stopped command was signalled \
+            after \(sent.value) s; \(kernel)
+            """)
     }
 
     /// Without a terminal a stop is only waited through: a command another
@@ -1150,6 +1180,30 @@ private func isGuarded(_ number: Int32) -> Bool {
 }
 
 /// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`; `T` in `stat`).
+/// What `waitid` answers, about a child that has stopped itself, to a wait
+/// that asks for exits alone. For a failure's message.
+private func exitOnlyWaitOnAStoppedChild() -> String {
+    guard case .success(let pid) = SecretRunProcess.spawnSuspended(
+        executable: "/bin/sh", arguments: ["sh", "-c", "kill -STOP $$; exit 0"],
+        environment: ["PATH=/usr/bin:/bin"], descriptors: [:])
+    else { return "no child to ask waitid about" }
+    defer { SecretRunProcess.discard(pid) }
+    guard kill(pid, SIGCONT) == 0 else { return "the child asked about could not be resumed" }
+    // Not the spawn suspension: the stop the script gives itself.
+    usleep(200_000)
+    let deadline = Date().addingTimeInterval(10)
+    while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
+    guard isStopped(pid) else { return "the child asked about never stopped" }
+    var info = siginfo_t()
+    errno = 0
+    let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT | WNOHANG)
+    let failure = errno
+    return """
+        waitid(WEXITED | WNOWAIT | WNOHANG) on a stopped child returned \(result) with errno \(failure), \
+        si_pid \(info.si_pid), si_code \(info.si_code), si_status \(info.si_status)
+        """
+}
+
 private func isStopped(_ pid: pid_t) -> Bool {
     #if os(macOS)
     guard pid > 1, case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }

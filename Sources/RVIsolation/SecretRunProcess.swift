@@ -263,11 +263,18 @@ enum SecretRunProcess {
                 takeBack(terminal, &job)
                 return SIGKILL
             }
-            guard info.si_code == CLD_STOPPED else { break }
-            // Consume the stop. Without WEXITED this never reaps, even if the
-            // leader exited since. The spawn suspension reads as a stop with
-            // no signal; only a signal stop is passed on.
-            guard consumeStop(pid) != nil, let terminal else { continue }
+            if endsTheWait(reportCode: info.si_code) { break }
+            // Consume the stop, if that is what was reported. Without WEXITED
+            // this never reaps, even if the leader exited since. The spawn
+            // suspension reads as a stop with no signal; only a signal stop
+            // is passed on, and only where there is a terminal. macOS
+            // runners report a stop even to a wait that asked for exits
+            // alone; the pause paces this loop should a kernel report again
+            // one it has already given up.
+            guard consumeStop(pid) != nil, let terminal else {
+                usleep(10_000)
+                continue
+            }
             // Ctrl-Z (or a background read) stopped the command's group,
             // which the shell does not see; stop rv too so the shell regains
             // the terminal. `fg` gives rv the foreground before continuing
@@ -289,6 +296,14 @@ enum SecretRunProcess {
             guard errno == EINTR else { return SIGKILL }
         }
         return status
+    }
+
+    /// Whether a `waitid` report (`si_code`) ends the wait for the leader:
+    /// it exited, a signal killed it, or it is in a trace stop, which
+    /// nothing rv forwards would end (its group is then killed, as after
+    /// an exit). A stop or a continue leaves it there to be waited for.
+    static func endsTheWait(reportCode: Int32) -> Bool {
+        [Int32(CLD_EXITED), Int32(CLD_KILLED), Int32(CLD_DUMPED), Int32(CLD_TRAPPED)].contains(reportCode)
     }
 
     /// Consumes the leader's pending stop report and returns the signal that

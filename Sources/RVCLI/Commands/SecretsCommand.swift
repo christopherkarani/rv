@@ -64,7 +64,8 @@ enum SecretsRun {
     enum Definition: Equatable {
         case gateway(
             upstream: String, baseURLEnv: String, placeholderPrefix: String,
-            surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [])
+            surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [],
+            binaries: [String]? = nil)
         case environment
     }
 
@@ -170,8 +171,26 @@ enum SecretsRun {
         return (definition, note)
     }
 
+    /// A new well-known name that got no default because the provider
+    /// catalog is invalid: say so, rather than the generic "is new" refusal.
+    static func brokenCatalogFailure(
+        name: String, isNew: Bool, definition: Definition?,
+        catalog: Result<ProviderCatalog, ProviderCatalogError> = ProviderCatalog.shipped
+    ) -> CommandFailure? {
+        guard isNew, definition == nil, let reason = KnownSecretDefaults.catalogFailure(for: name, catalog: catalog)
+        else { return nil }
+        return CommandFailure(
+            "\(reason), so \(DisplayedText.field(name)) has no default; pass --gateway URL --base-url-env VAR, or --environment")
+    }
+
     static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, CommandFailure> {
         SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
+    }
+
+    /// A secrets.json write failure; one the audit log refused exits as
+    /// every refused gate change does.
+    static func failure(_ error: SecretsConfigurationError) -> CommandFailure {
+        CommandFailure(error.message, exitCode: error == .unrecorded ? ConfigChangeRefusal.exitCode : 1)
     }
 
     static func profiles(_ environment: SecretsEnvironment) -> [RuntimeResourceProfile] {
@@ -365,11 +384,11 @@ enum SecretsRun {
             switch definition {
             case .environment:
                 delivery = .environment
-            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow):
+            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow, let binaries):
                 guard let url = URL(string: upstream) else { return .failure("--gateway must be an https URL") }
                 delivery = .gateway(SecretGatewayBinding(
                     upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
-                    allow: allow))
+                    allow: allow, limits: SecretGatewayLimits(binaries: binaries)))
             }
             updated.secrets.append(SecretDefinition(
                 name: name, description: description, agents: agents.isEmpty ? nil : agents,
@@ -393,11 +412,30 @@ enum SecretsRun {
         {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
-        guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
-        }
-        if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-            return .failure(CommandFailure(error.message))
+        let storeFailure = CommandFailure(
+            "could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)")
+        if current.secret(named: name) == nil {
+            // A new definition is written (and recorded) before its value: a
+            // definition the audit log refuses leaves the keychain untouched.
+            // If the value then fails to store, the definition resolves
+            // whatever the keychain already holds under that name (normally
+            // nothing, so launches fail closed) until a retry stores it.
+            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                return .failure(SecretsRun.failure(error))
+            }
+            guard environment.keychain.store(SecretKeychain.service, name, value) else { return .failure(storeFailure) }
+        } else {
+            // An existing secret takes its new value first: a store that
+            // fails leaves the old value under its old expiry and refresh,
+            // and a definition change the audit log then refuses leaves the
+            // new value under the old (never later) expiry.
+            guard environment.keychain.store(SecretKeychain.service, name, value) else { return .failure(storeFailure) }
+            if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                let failure = SecretsRun.failure(error)
+                return .failure(CommandFailure(
+                    "stored the new value of \(DisplayedText.field(name)), but secrets.json was not updated: "
+                        + failure.message, exitCode: failure.exitCode))
+            }
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
         var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
@@ -423,6 +461,15 @@ enum SecretsRun {
         let ownSource = SecretSource.keychain(service: SecretKeychain.service, account: name)
         let existing = current.secret(named: name)
         var lines: [String] = []
+        // The definition goes first (and is recorded): a write the audit log
+        // refuses leaves the value in the keychain.
+        if existing != nil {
+            var updated = current
+            updated.secrets.removeAll { $0.name == name }
+            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                return .failure(SecretsRun.failure(error))
+            }
+        }
         if existing == nil || existing?.source == ownSource {
             guard environment.keychain.delete(SecretKeychain.service, name) else {
                 return .failure(CommandFailure("could not delete \(DisplayedText.field(name)) from \(SecretKeychain.storeName)"))
@@ -432,11 +479,6 @@ enum SecretsRun {
             lines.append("Left the value in place at \(existing.source.locator).")
         }
         if existing != nil {
-            var updated = current
-            updated.secrets.removeAll { $0.name == name }
-            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-                return .failure(CommandFailure(error.message))
-            }
             lines.append("Removed \(DisplayedText.field(name)) from secrets.json.")
         }
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
@@ -687,7 +729,7 @@ enum SecretsRun {
         var updated = pending.current
         updated.secrets += pending.fresh
         switch updated.write(configDirectory: environment.configDirectory) {
-        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .failure(let error): return .failure(SecretsRun.failure(error))
         case .success:
             let count = pending.fresh.count
             let lines = pending.lines + ["wrote secrets.json (\(count) \(count == 1 ? "secret" : "secrets"))"]
@@ -825,7 +867,7 @@ struct Secrets: AsyncParsableCommand {
         subcommands: [
             SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsOAuthReset.self,
             SecretsScan.self,
-            SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
+            SecretsDescribe.self, SecretsImport.self, SecretsHook.self, SecretsProviders.self,
         ],
         defaultSubcommand: SecretsList.self
     )
@@ -891,6 +933,10 @@ struct SecretsSet: AsyncParsableCommand {
             to their gateway; anything else needs a delivery:
               rv secrets set OPENAI_API_KEY --resource-profile main
               rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
+            --provider expands a profile from `rv secrets providers` into upstream and allow
+            rules; --allow and --surface may only narrow it:
+              rv secrets set GITHUB_TOKEN --provider github
+              rv secrets set GITHUB_TOKEN --provider github --allow "GET /repos/**"
               printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
             Setting a new value reaches running sessions that use the gateway on their next
             request. Environment-delivered values only change for new sessions.
@@ -900,6 +946,8 @@ struct SecretsSet: AsyncParsableCommand {
 
     @Argument(help: "Environment variable name the agent sees.") var name: String
     @Option(help: "https upstream the gateway may send this secret to.") var gateway: String?
+    @Option(help: "Provider profile to expand: an id, or id:endpoint (see `rv secrets providers`).")
+    var provider: String?
     @Option(name: .customLong("base-url-env"), help: "Variable that receives the gateway base URL.")
     var baseURLEnv: String?
     @Option(name: .customLong("placeholder-prefix"), help: "Prefix kept on the placeholder (for SDK format checks).")
@@ -923,9 +971,13 @@ struct SecretsSet: AsyncParsableCommand {
     var refresh: String?
 
     func validate() throws {
-        if environment, gateway != nil { throw ValidationError("pass either --gateway or --environment, not both") }
+        if [environment, gateway != nil, provider != nil].filter({ $0 }).count > 1 {
+            throw ValidationError("pass one of --gateway, --provider, or --environment")
+        }
         if gateway != nil, baseURLEnv == nil { throw ValidationError("--gateway needs --base-url-env") }
-        if gateway == nil, baseURLEnv != nil { throw ValidationError("--base-url-env needs --gateway") }
+        if gateway == nil, provider == nil, baseURLEnv != nil {
+            throw ValidationError("--base-url-env needs --gateway or --provider")
+        }
         if environment, surfaces.isEmpty == false { throw ValidationError("--surface applies to gateway delivery") }
         if case .failure(let failure) = SecretsRun.surfaces(surfaces) { throw ValidationError(failure.message) }
         if environment, allow.isEmpty == false { throw ValidationError("--allow applies to gateway delivery") }
@@ -946,12 +998,26 @@ struct SecretsSet: AsyncParsableCommand {
         case .success(let loaded): configuration = loaded
         }
         let isNew = configuration.secret(named: name) == nil
-        let resolved = SecretsRun.definitionForSet(
-            name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
-            placeholderPrefix: placeholderPrefix, environment: self.environment,
-            surfaces: try? SecretsRun.surfaces(surfaces).get(),
-            allow: (try? SecretsRun.allowances(allow).get()) ?? [])
+        let resolved: (definition: SecretsRun.Definition?, note: String?)
+        if let provider {
+            switch SecretsRun.definitionForProvider(
+                provider, name: name, isNew: isNew, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix,
+                surfaces: try SecretsRun.surfaces(surfaces).get(), allow: try SecretsRun.allowances(allow).get())
+            {
+            case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
+            case .success(let expanded): resolved = (expanded.definition, expanded.note)
+            }
+        } else {
+            resolved = SecretsRun.definitionForSet(
+                name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
+                placeholderPrefix: placeholderPrefix, environment: self.environment,
+                surfaces: try? SecretsRun.surfaces(surfaces).get(),
+                allow: (try? SecretsRun.allowances(allow).get()) ?? [])
+        }
         let definition = resolved.definition
+        if let failure = SecretsRun.brokenCatalogFailure(name: name, isNew: isNew, definition: definition) {
+            try ctx.fail("rv secrets set: \(failure.message)\n")
+        }
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
                 "rv secrets set: \(DisplayedText.field(name)) is already defined; edit secrets.json to change its surfaces or allow rules\n")
@@ -976,7 +1042,7 @@ struct SecretsSet: AsyncParsableCommand {
             environment: environment, expires: try? SecretsRun.expiry(expires).get(),
             refresh: try? SecretsRun.refresh(refresh).get())
         {
-        case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(var text):
             if let inferredNote { text = inferredNote + text }
             if let profile {
@@ -1005,7 +1071,7 @@ struct SecretsRemove: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "secrets remove", json: false, robot: false, plain: true, noColor: true)
         switch SecretsRun.remove(name: name, environment: .live(home: try ctx.requireHome())) {
-        case .failure(let failure): try ctx.fail("rv secrets remove: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets remove: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -1098,7 +1164,7 @@ struct SecretsImport: AsyncParsableCommand {
         let environment = SecretsEnvironment.live(home: try ctx.requireHome())
         let path = URL(fileURLWithPath: varlock).standardizedFileURL
         switch SecretsRun.importVarlock(path: path, dryRun: dryRun, profile: profile, environment: environment) {
-        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -1158,9 +1224,12 @@ struct SecretsHookRun: AsyncParsableCommand {
 
 struct CommandFailure: Error, Equatable, ExpressibleByStringInterpolation {
     let message: String
+    /// 1, or `ConfigChangeRefusal.exitCode` when the audit log refused the change.
+    var exitCode: Int32 = 1
 
-    init(_ message: String) {
+    init(_ message: String, exitCode: Int32 = 1) {
         self.message = message
+        self.exitCode = exitCode
     }
 
     init(stringLiteral value: String) {

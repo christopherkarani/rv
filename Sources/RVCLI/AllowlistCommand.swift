@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVEngine
+import RVHistory
 import RVPolicy
 import RVService
 
@@ -77,7 +78,7 @@ struct AllowlistAdd: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
-        try await OwnerConfirmation.require("add allowlist exception for rule \(rule)")
+        let authorization = try await OwnerConfirmation.require("add allowlist exception for rule \(rule)")
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
@@ -92,7 +93,9 @@ struct AllowlistAdd: AsyncParsableCommand {
             addedAt: Date()
         )
         do {
-            try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            }
             ctx.writeStdout("added \(DisplayedText.field(ruleID.rawValue))\n")
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist add: invalid allowlist.toml\n", exitCode: 2)
@@ -122,7 +125,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
-        try await OwnerConfirmation.require("add allowlist exception for an exact command")
+        let authorization = try await OwnerConfirmation.require("add allowlist exception for an exact command")
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
@@ -138,7 +141,9 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             invocationDigest: maskedPayloadContentDigest(Normalize.invocationPrefix(of: shell))
         )
         do {
-            try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            }
             ctx.writeStdout("added exact command\n")
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist add-command: invalid allowlist.toml\n", exitCode: 2)
@@ -165,16 +170,18 @@ struct AllowlistRemove: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
-        try await OwnerConfirmation.require("remove allowlist exception \(target)")
+        let authorization = try await OwnerConfirmation.require("remove allowlist exception \(target)")
         let ctx = CommandContext.current(command: "allowlist", format: format)
         do {
             let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalized = EvaluationWorld.matchingView(of: ShellCommand(rawValue: trimmed)).rawValue
-            let removed = try AllowlistCLI.store(home: try ctx.requireHome()).remove(
-                matching: trimmed,
-                tty: ctx.tty,
-                exactCommandAliases: normalized == trimmed ? [] : [normalized]
-            )
+            let removed = try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                try AllowlistCLI.store(home: try ctx.requireHome()).remove(
+                    matching: trimmed,
+                    tty: ctx.tty,
+                    exactCommandAliases: normalized == trimmed ? [] : [normalized]
+                )
+            }
             ctx.writeStdout("removed \(removed)\n")
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist remove: invalid allowlist.toml\n", exitCode: 2)

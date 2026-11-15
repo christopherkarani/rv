@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import RVIsolation
 
+/// `line` with `count` more zero fields, which bring a short stat line up
+/// to the fields the kernel prints, and then `end`.
+private func padded(_ line: String, _ count: Int, end: String = "\n") -> String {
+    line + String(repeating: " 0", count: count) + end
+}
+
 /// Fixture-driven tests for the pure `/proc` readers. They run on every host.
 @Suite("ProcFS parsing")
 struct ProcFSParseTests {
@@ -24,7 +30,7 @@ struct ProcFSParseTests {
         "nl\nline", "\u{0600}", "e\u{301}",
     ])
     func commCannotForgeTheFieldsAfterIt(comm: String) throws {
-        let line = "4242 (\(comm)) S 77 4242 4000 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0\n"
+        let line = padded("4242 (\(comm)) S 77 4242 4000 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0", 28)
         let stat = try #require(ProcFSParse.stat(bytes(line)))
         #expect(stat.pid == 4242)
         #expect(stat.parent == 77)
@@ -36,26 +42,56 @@ struct ProcFSParseTests {
     /// A delimiter that grapheme clustering would fold into a neighbour
     /// (U+0600 is a prepend mark) is still a byte the parser sees.
     @Test func theLastParenthesisIsFoundByByteNotByCharacter() throws {
-        let line = "10 (x) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0\u{0600}) S 3 3 3 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0\n"
+        let line = padded(
+            "10 (x) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0\u{0600}) S 3 3 3 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0", 29)
         let stat = try #require(ProcFSParse.stat(bytes(line)))
         #expect(stat.parent == 3)
         #expect(stat.startTicks == 9)
     }
 
-    @Test(arguments: [
-        "", "1 (x)", "1 (x) S 0 1 1", "x (y) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5\n",
-        "1(x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5\n", "1 (x)S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5\n",
-        "1 (x) S -1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5\n", "1 (x) SS 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5\n",
-        "1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 99999999999999999999999\n", "1 x) S 0 1 1\n",
-    ])
+    /// The first three are not lines at all. Each of the rest is a whole
+    /// line as the kernel prints one but for the one thing wrong with it,
+    /// so it is that thing which is refused.
+    static let malformed: [String] = [
+        "", "1 (x)", "1 (x) S 0 1 1",
+        // No opening parenthesis; none closes before one opens.
+        padded("1 x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 )x( S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("x (y) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1(x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 (x)S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 (x) S -1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 (x) SS 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 99999999999999999999999", 30),
+        // No newline: a read cut short.
+        padded("1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30, end: ""),
+        // One field fewer than the kernel prints.
+        padded("1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 29),
+    ]
+
+    @Test(arguments: malformed)
     func malformedStatIsRefused(line: String) {
         #expect(ProcFSParse.stat(bytes(line)) == nil)
     }
 
+    /// A name can be a whole line of its own, newline and all. A read cut
+    /// right after such a name is not that process's stat: the fields it
+    /// would give are the name's.
+    @Test func aReadCutAfterANameThatIsAWholeLineIsRefused() throws {
+        let name = "bash) S 77 42 4204 0 0 0 0 0 9 0 0 20 0 1 0 980 0 0 0\n"
+        let whole = padded("4241 (\(name)) S 1 4241 4241 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 555 0 0", 28)
+        let stat = try #require(ProcFSParse.stat(bytes(whole)))
+        #expect(stat.parent == 1)
+        #expect(stat.startTicks == 555)
+        #expect(ProcFSParse.stat(bytes("4241 (" + name)) == nil)
+    }
+
     @Test func zombiesAndDeadProcessesHaveExited() throws {
-        let zombie = try #require(ProcFSParse.stat(bytes("7 (z) Z 1 7 7 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0\n")))
+        let zombie = try #require(
+            ProcFSParse.stat(bytes(padded("7 (z) Z 1 7 7 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0", 29))))
         #expect(ProcFSParse.exited(zombie))
-        let running = try #require(ProcFSParse.stat(bytes("7 (z) R 1 7 7 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0\n")))
+        let running = try #require(
+            ProcFSParse.stat(bytes(padded("7 (z) R 1 7 7 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0", 29))))
         #expect(ProcFSParse.exited(running) == false)
     }
 

@@ -149,7 +149,10 @@ struct IdleExitTests {
             interval: .milliseconds(100),
             onFire: {
                 let done = DispatchSemaphore(value: 0)
-                DispatchQueue.global().async {
+                // A thread of its own, not a global queue: a queue starts
+                // no new work while every core is busy, and this suite
+                // keeps them busy for longer than the deadline.
+                Thread.detachNewThread {
                     _ = slot.watchdog?.hasFired
                     done.signal()
                 }

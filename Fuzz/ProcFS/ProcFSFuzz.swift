@@ -83,11 +83,16 @@ enum ProcFSProperties {
             parent: UInt32(truncatingIfNeeded: mix.next()), group: UInt32(truncatingIfNeeded: mix.next()),
             session: UInt32(truncatingIfNeeded: mix.next()), startTicks: mix.next())
         let tail = ") S \(expected.parent) \(expected.group) \(expected.session) 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 "
-            + "\(expected.startTicks) 0 0\n"
+            + "\(expected.startTicks) 0 0" + String(repeating: " 0", count: 28) + "\n"
         let text = utf8("\(expected.pid) (") + comm + utf8(tail)
         if ProcFSParse.stat(text) != expected { broken.append("comm changed the fields read after it") }
-        let cut = 1 + Int(mix.next() % UInt64(text.count - 1))
-        if ProcFSParse.stat(Array(text.prefix(cut))) != nil { broken.append("a stat cut at \(cut) of \(text.count) was accepted") }
+        // One cut anywhere, and one after each newline short of the last:
+        // those end as a whole line does.
+        let ends = text.indices.dropLast().filter { text[$0] == UInt8(ascii: "\n") }.map { $0 + 1 }
+        for cut in [1 + Int(mix.next() % UInt64(text.count - 1))] + ends
+        where ProcFSParse.stat(Array(text.prefix(cut))) != nil {
+            broken.append("a stat cut at \(cut) of \(text.count) was accepted")
+        }
         return broken
     }
 

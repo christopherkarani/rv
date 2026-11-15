@@ -54,6 +54,7 @@ public enum ManagedGate {
         }
         let state = configDirectory.map { ManagedPolicyLocation.installed.load(serialsIn: $0) }
             ?? ManagedPolicyLocation.installed.load()
+        if let configDirectory { ManagedGateAudit.observe(state, configDirectory: configDirectory) }
         let signedPacks: [PackID]
         switch state {
         case .active(let bundle):

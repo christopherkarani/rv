@@ -65,3 +65,4 @@ complete -c rv -n "__fish_seen_subcommand_from secrets" -a "scan" -d "Scan a tre
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "describe" -d "Metadata only"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "import" -d "Import a Varlock schema"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "hook" -d "Git pre-commit hook"
+complete -c rv -n "__fish_seen_subcommand_from secrets" -a "providers" -d "Provider profiles"

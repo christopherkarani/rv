@@ -412,8 +412,10 @@ rv is one binary, 25 commands. The rest of the surface:
   (`rv egress`); `rv egress approve` asks for owner authentication.
 - **Tamper-evident audit** — every hook and file-tool deny, every override
   (allow-once, allowlist, rebase recovery), plus MCP and secret events,
-  lands in a SHA-256 hash-chained `audit.jsonl` (rule and host, never
-  command text). Verify with `rv audit verify`, export
+  and every gate change (policy revisions, safety, packs, host modes,
+  allowlist, secrets, egress reviews, organization bundles) with its
+  prior and new value and how it was authorized, lands in a SHA-256
+  hash-chained `audit.jsonl` (rule and host, never command text). Verify with `rv audit verify`, export
   as OCSF 1.3.0 to your SIEM.
 - **Session forensics** — `rv scan` replays past agent sessions
   (Claude, Codex, Cursor, Grok, Hermes, OpenClaw, OpenCode, Pi)

@@ -24,6 +24,85 @@ struct AuditLogLineTests {
             reason: reason, source: "mcp-gateway", detail: detail)
     }
 
+    /// An append waiting on one log's file lock must not hold up an append
+    /// to another log: this process's own lock is per log. (One lock
+    /// covered them all and was held through the wait, so one stuck log
+    /// stalled every other log in the process.)
+    @Test(.timeLimit(.minutes(1)))
+    func anAppendWaitingOnOneLogDoesNotHoldUpAnother() throws {
+        let stuck = try scratch()
+        let free = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: stuck)
+            try? FileManager.default.removeItem(at: free)
+        }
+        #expect(AuditLog.append(event("first"), configDirectory: stuck))
+        let holder = open(AuditLog.fileURL(configDirectory: stuck).path, O_RDWR | O_CLOEXEC)
+        try #require(holder >= 0)
+        defer { close(holder) }
+        try #require(flock(holder, LOCK_EX | LOCK_NB) == 0)
+        // A thread of its own waits for the stuck log, far longer than the
+        // other append is given.
+        let waiting = Mutex(false)
+        let waited = DispatchSemaphore(value: 0)
+        let stuckEvent = event("stuck")
+        Thread.detachNewThread {
+            waiting.withLock { $0 = true }
+            _ = AuditLog.append(stuckEvent, configDirectory: stuck, lockTimeout: .seconds(30))
+            waited.signal()
+        }
+        while waiting.withLock({ $0 }) == false { usleep(1_000) }
+        // Long enough for the waiter to be inside its wait.
+        usleep(300_000)
+        #expect(AuditLog.append(event("other"), configDirectory: free, lockTimeout: .seconds(2)))
+        // The waiter was waiting all the while.
+        #expect(waited.wait(timeout: .now()) == .timedOut)
+        // Free the stuck log so the waiter ends at once, and with its line written.
+        _ = flock(holder, LOCK_UN)
+        #expect(waited.wait(timeout: .now() + 20) == .success)
+        #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: stuck)).get().lines == 2)
+    }
+
+    /// Threads appending to one log, half of them through another spelling
+    /// of its path, each get the line before theirs: the chain is whole
+    /// and no line is lost. (On a local filesystem the file's own lock
+    /// would keep the two spellings apart too; this is the result both
+    /// locks owe, whichever one gives it.)
+    @Test(.timeLimit(.minutes(1)))
+    func concurrentAppendsThroughTwoPathsKeepTheChainWhole() throws {
+        let dir = try scratch()
+        let alias = dir.deletingLastPathComponent().appendingPathComponent("rv-auditline-alias-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: alias)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: dir)
+        let threads = 8
+        let each = 12
+        let done = DispatchSemaphore(value: 0)
+        let written = Mutex(0)
+        // Every thread starts appending together, not one after another.
+        let go = Mutex(false)
+        for thread in 0..<threads {
+            let directory = thread % 2 == 0 ? dir : alias
+            let events = (0..<each).map { event("t\(thread)-\($0)") }
+            Thread.detachNewThread {
+                while go.withLock({ $0 }) == false { usleep(500) }
+                for event in events where AuditLog.append(event, configDirectory: directory, lockTimeout: .seconds(30)) {
+                    written.withLock { $0 += 1 }
+                }
+                done.signal()
+            }
+        }
+        usleep(50_000)
+        go.withLock { $0 = true }
+        for _ in 0..<threads { #expect(done.wait(timeout: .now() + 50) == .success) }
+        #expect(written.withLock { $0 } == threads * each)
+        let report = try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get()
+        #expect(report.lines == threads * each)
+        #expect(report.isIntact)
+    }
+
     /// M4: a line the verifier would reject is never written.
     @Test func anOversizedEventIsRefusedAndTheNextOneAppends() throws {
         let dir = try scratch()
@@ -102,11 +181,11 @@ struct AuditLogLineTests {
         defer { close(holder) }
         #expect(flock(holder, LOCK_EX) == 0)
         let started = Date()
-        #expect(AuditLog.append(event("blocked"), configDirectory: dir, lockTimeout: 0.2) == false)
+        #expect(AuditLog.append(event("blocked"), configDirectory: dir, lockTimeout: .milliseconds(200)) == false)
         #expect(Date().timeIntervalSince(started) < 2)
         #expect(try Data(contentsOf: file).isEmpty)
         _ = flock(holder, LOCK_UN)
-        #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: 0.2))
+        #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: .milliseconds(200)))
         #expect(try AuditChain.verify(fileURL: file).get().lines == 1)
     }
 

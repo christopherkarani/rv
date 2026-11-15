@@ -36,6 +36,22 @@ public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
     case sniMismatch = "sni-mismatch"
 }
 
+/// Review-queue intake for one `denied-policy` refusal. The hook calls
+/// `answer` once, from any thread, with the id of the proposal now awaiting a
+/// human for that denial (nil when none). The proxy calls it from its own
+/// dispatch queue. Only an advertising instance (`advertisesProposals`)
+/// waits on `answer`, at most `proposalWait`; every other instance,
+/// including every production proxy today, files and denies without
+/// waiting. A hook that hops into Swift concurrency (the supervisor's does,
+/// to reach the review-queue actor) can therefore delay only the id, never
+/// the deny.
+///
+/// The hook must not block: it runs on one process-wide serial queue, so a
+/// blocking hook delays every proxy's later hooks.
+public typealias EgressReviewHook = @Sendable (
+    _ denial: EgressProxyDenial, _ answer: @escaping @Sendable (String?) -> Void
+) -> Void
+
 /// Unguessable token binding one proxy client to its grant.
 ///
 /// The supervisor mints one credential per runtime (or per approval), maps it
@@ -185,6 +201,31 @@ public final class EgressProxy: @unchecked Sendable {
     private let pins: EgressBinaryPinCache
     private let grants: [EgressProxyCredential: EgressGrant]?
     private let record: @Sendable (EgressProxyDenial) -> Void
+    /// Review-queue intake for `denied-policy` refusals. On an instance
+    /// whose approvals take effect live (`advertisesProposals`) the answered
+    /// id is awaited at most `proposalWait` and named in the refusal body;
+    /// past that the deny goes out without one.
+    private let review: EgressReviewHook?
+    /// Bound on waiting for `review`. A stuck queue costs each policy deny
+    /// this much latency, never a hang and never an allow. Injectable for
+    /// tests on starved CI hosts.
+    let proposalWait: TimeInterval
+    static let defaultProposalWait: TimeInterval = 0.25
+    /// Runs review hooks off the serve thread, one at a time. Serial so a
+    /// hook that blocks parks one thread, not a growing set drawn from the
+    /// root pool the relay queue also uses; the cost is that it delays
+    /// later hooks' answers too (each serve thread still gives up after
+    /// `proposalWait`, so the deny is never held longer than that).
+    private static let reviewDispatch = DispatchQueue(
+        label: "rv.egress.review", qos: .userInitiated
+    )
+    /// At most this many serve threads wait on `review` at once; a flood of
+    /// fresh denied hosts past it still files proposals but denies at once,
+    /// so it cannot park the relay queue's threads. Per instance and
+    /// injectable for tests (small CI hosts run the cap test at 1).
+    let maximumProposalWaiters: Int
+    static let defaultMaximumProposalWaiters = 4
+    private let proposalWaiters = Mutex(0)
     /// Resolves one admitted target to the candidate set `dial` checks and
     /// connects. Production is `boundedResolver(budget: resolverBudget)`;
     /// tests inject answers.
@@ -229,16 +270,21 @@ public final class EgressProxy: @unchecked Sendable {
     /// policy runs, so an unauthenticated sibling cannot ride any grant.
     /// Binary scope composes: when `binaryPolicy` is scoped, the instance
     /// attribution gate runs before credential authentication in both modes.
+    /// `review` is the review-queue intake for `denied-policy` refusals. A
+    /// credentialed instance never names the proposal id in the refusal body
+    /// (`advertisesProposals` is false: live rules do not reach it), so here
+    /// the hook only files the proposal.
     public convenience init(
         grants: [EgressProxyCredential: EgressGrant],
         binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
-        record: (@Sendable (EgressProxyDenial) -> Void)? = nil
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
+        review: EgressReviewHook? = nil
     ) {
         self.init(
             policy: .publicHTTPS, grants: grants, binaryPolicy: binaryPolicy, attribution: attribution,
-            pins: pins, record: record
+            pins: pins, record: record, review: review
         )
     }
 
@@ -253,6 +299,9 @@ public final class EgressProxy: @unchecked Sendable {
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)?,
+        review: EgressReviewHook? = nil,
+        proposalWait: TimeInterval = EgressProxy.defaultProposalWait,
+        maximumProposalWaiters: Int = EgressProxy.defaultMaximumProposalWaiters,
         resolverBudget: EgressResolverBudget = EgressResolverBudget(
             limit: EgressResolverBudget.perProxyLimit, parent: .processCeiling
         ),
@@ -264,6 +313,9 @@ public final class EgressProxy: @unchecked Sendable {
         self.pins = pins
         self.grants = grants
         self.record = record ?? EgressProxy.productionDenialLog()
+        self.review = review
+        self.proposalWait = proposalWait
+        self.maximumProposalWaiters = maximumProposalWaiters
         self.resolverBudget = resolverBudget
         self.resolve = resolve ?? EgressProxy.boundedResolver(budget: resolverBudget)
         admitAttributionPin()
@@ -672,6 +724,12 @@ public final class EgressProxy: @unchecked Sendable {
         return supplementRules.contains(rule)
     }
 
+    /// Writes the 403 refusal (`EgressDenialResponse`: status, Proxy-Status,
+    /// JSON body), records, then closes. Recording before the FIN means a
+    /// client that has read to EOF can rely on the denial being logged; the
+    /// full refusal is already written either way. Only a `denied-policy`
+    /// denial asks the review queue for a proposal id, bounded by
+    /// `proposalWait`.
     private func deny(
         client: Int32,
         host: String,
@@ -679,17 +737,83 @@ public final class EgressProxy: @unchecked Sendable {
         reason: EgressDenialReason,
         binaryPath: String? = nil
     ) {
-        _ = EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 403 Forbidden\r\n\r\n".utf8))
-        close(client)
-        record(
-            EgressProxyDenial(
-                host: host,
-                port: port,
-                reason: reason,
-                recordedAt: Date(),
-                binaryPath: binaryPath
-            )
+        let denial = EgressProxyDenial(
+            host: host,
+            port: port,
+            reason: reason,
+            recordedAt: Date(),
+            binaryPath: binaryPath
         )
+        let proposalID = reason == .deniedPolicy ? awaitProposal(for: denial) : nil
+        let response = EgressDenialResponse(reason: reason, host: host, port: port, proposalID: proposalID)
+        _ = EgressProxy.writeAll(client, bytes: response.bytes)
+        record(denial)
+        EgressProxy.closeAfterRefusal(client)
+    }
+
+    /// Whether refusals on this instance may name a proposal id. Only when
+    /// approving it changes this instance's verdict (`enforcesSupplement`:
+    /// credentialed instances ignore live rules, so an id there would point
+    /// at an approval that never takes effect) and the instance is not
+    /// binary-scoped (a binary-gate denial never mints a proposal, so an id
+    /// on policy denials would tell the cage its binary passed). Instance
+    /// configuration only, never per-request state.
+    var advertisesProposals: Bool {
+        enforcesSupplement && binaryPolicy.isBinaryScoped == false
+    }
+
+    /// The review hook's proposal id, or nil when there is no hook or it
+    /// does not answer within `proposalWait`. The intake keeps running past
+    /// the deadline; only the id is abandoned.
+    ///
+    /// Intake without waiting (nil id) when the instance does not
+    /// `advertisesProposals`, or when `maximumProposalWaiters` are already
+    /// waiting.
+    private func awaitProposal(for denial: EgressProxyDenial) -> String? {
+        guard let review else { return nil }
+        let admitted = advertisesProposals
+            && proposalWaiters.withLock { count in
+                guard count < maximumProposalWaiters else { return false }
+                count += 1
+                return true
+            }
+        guard admitted else {
+            Self.reviewDispatch.async { review(denial) { _ in } }
+            return nil
+        }
+        defer { proposalWaiters.withLock { $0 -= 1 } }
+        return Self.boundedProposal(for: denial, review: review, wait: proposalWait)
+    }
+
+    static func boundedProposal(
+        for denial: EgressProxyDenial,
+        review: @escaping EgressReviewHook,
+        wait: TimeInterval
+    ) -> String? {
+        let slot = ProposalAnswer()
+        reviewDispatch.async {
+            review(denial) { slot.fill($0) }
+        }
+        return slot.take(waiting: wait)
+    }
+
+    /// Ends a refused connection without a reset where possible: FIN first,
+    /// then discard request bytes already received (non-blocking, bounded),
+    /// then close. Closing with unread bytes makes the kernel send RST,
+    /// which can cut the refusal off at a client still sending a body.
+    private static func closeAfterRefusal(_ fd: Int32) {
+        shutdown(fd, Int32(SHUT_WR))
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        var drained = 0
+        while drained < 65_536 {
+            let count = scratch.withUnsafeMutableBytes { pointer -> Int in
+                guard let base = pointer.baseAddress else { return -1 }
+                return recv(fd, base, pointer.count, Int32(MSG_DONTWAIT))
+            }
+            if count <= 0 { break }
+            drained += count
+        }
+        close(fd)
     }
 
     /// Policy judging this request: the shared policy in open mode, or the
@@ -706,16 +830,13 @@ public final class EgressProxy: @unchecked Sendable {
         return .granted(grant.policy)
     }
 
+    /// One constant 407 shape for missing, malformed, and unknown tokens
+    /// (only the client's own target is echoed): no credential-validity hint.
     private func denyProxyAuthRequired(client: Int32, host: String, port: Int) {
-        _ = EgressProxy.writeAll(
-            client,
-            bytes: Array(
-                "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\nConnection: close\r\n\r\n"
-                    .utf8
-            )
-        )
-        close(client)
+        let response = EgressDenialResponse(reason: .deniedCredential, host: host, port: port)
+        _ = EgressProxy.writeAll(client, bytes: response.bytes)
         record(EgressProxyDenial(host: host, port: port, reason: .deniedCredential, recordedAt: Date()))
+        EgressProxy.closeAfterRefusal(client)
     }
 
     /// Presented proxy credential from a header block, or nil when absent or
@@ -1310,6 +1431,28 @@ public final class EgressProxy: @unchecked Sendable {
             diagnose("rv.egress: denial log \(detail)")
             return false
         }
+    }
+}
+
+/// One-shot handoff from a review hook to the waiting serve thread. Only
+/// the first answer counts; a late answer after `take` timed out is
+/// harmless (nobody reads it).
+private final class ProposalAnswer: Sendable {
+    private let state = Mutex<(answered: Bool, id: String?)>((false, nil))
+    private let ready = DispatchSemaphore(value: 0)
+
+    func fill(_ id: String?) {
+        let first = state.withLock { state -> Bool in
+            guard state.answered == false else { return false }
+            state = (true, id)
+            return true
+        }
+        if first { ready.signal() }
+    }
+
+    func take(waiting seconds: TimeInterval) -> String? {
+        guard ready.wait(timeout: .now() + seconds) == .success else { return nil }
+        return state.withLock { $0.id }
     }
 }
 

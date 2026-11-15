@@ -16,10 +16,21 @@ enum ProcFSParse {
         var startTicks: UInt64
     }
 
+    /// The fields Linux prints after `comm`: 52 in all since 3.5, two of
+    /// them before it. A name that forged them all would be over a hundred
+    /// bytes, and the kernel prints at most 63 (15 for a name a process
+    /// gives itself).
+    static let fieldsAfterName = 50
+
     /// `comm` (field 2) may hold spaces, digits and `)`, so the fields after
     /// it are read from the last `)`: nothing the kernel prints after it can
     /// contain one. The kernel ends the line with a newline; text without
     /// one is a read cut short, whose last number may be missing digits.
+    ///
+    /// A name may hold a newline too, so the newline alone does not show a
+    /// whole read: a read cut after a name that was itself a whole line
+    /// would parse as that line. So the line must have every field Linux
+    /// prints after the name (`fieldsAfterName`).
     static func stat(_ bytes: [UInt8]) -> Stat? {
         guard bytes.last == UInt8(ascii: "\n"),
             let open = bytes.firstIndex(of: UInt8(ascii: "(")), open > 1,
@@ -31,7 +42,7 @@ enum ProcFSParse {
         guard rest.first == UInt8(ascii: " ") else { return nil }
         let fields = rest.split(whereSeparator: { $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\n") })
         // fields[0] is field 3 (state), so field n is fields[n - 3].
-        guard fields.count >= 20, fields[0].count == 1,
+        guard fields.count >= fieldsAfterName, fields[0].count == 1,
             let parent: UInt32 = decimal(fields[1]),
             let group: UInt32 = decimal(fields[2]),
             let session: UInt32 = decimal(fields[3]),

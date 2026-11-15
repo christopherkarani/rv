@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import queue
+import socketserver
 import sys
 import threading
 import uuid
@@ -61,6 +62,16 @@ def answer(msg, headers):
 
 def challenge(verifier):
     return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server's own bind asks the resolver for this host's name
+        # (socket.getfqdn), which nothing here uses and which takes half a
+        # minute on a macOS CI runner: three fixtures took 35 s each to
+        # report their port.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -299,7 +310,7 @@ def main():
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
-    server = ThreadingHTTPServer(("127.0.0.1", options.port), Handler)
+    server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)
     try:

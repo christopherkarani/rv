@@ -314,10 +314,65 @@ the seatbelt profile is untouched.
 
 #### Mechanism
 
-- Intake: the workspace supervisor's proxy denial closure chains review
-  intake ahead of the production denial log (chained, never replaced).
-  Only `.deniedPolicy` denials mint proposals; DNS, filter, dial,
-  header, and malformed failures admit no rule and are ignored.
+- Intake: the workspace supervisor hands each per-runtime proxy a review
+  hook (`EgressReviewHook`) beside the production denial log (which it
+  never replaces). The proxy calls it for `.deniedPolicy` denials only,
+  from its own dispatch queue rather than the serve thread; DNS, filter,
+  dial, header, and malformed failures admit no rule and never reach it.
+  The production hook then starts a Swift `Task` to reach the review-queue
+  actor, so a starved cooperative pool can delay filing. Only advertising
+  instances wait for the id, at most `proposalWait`; production proxies
+  never wait, so their deny never depends on that pool. The hook must not
+  block: it runs on one process-wide serial queue.
+- What production refusals carry today: the JSON body, `Proxy-Status`,
+  and `next_step: "rv egress denials"`. Proposal ids appear in a refusal
+  only once per-runtime proxies apply live grant updates (see below).
+- Refusal response: every refusal the proxy writes (CONNECT and
+  absolute-URI, 403 and 407) carries `Content-Type: application/json`,
+  `Content-Length`, `Connection: close`, an RFC 9209 `Proxy-Status:
+  rv-egress; error=…; details="…"` header, and an `rv.egress.denied.v1`
+  body: `schema`, `reason`, `host` (the parsed authority, lowercased,
+  only when it is hostname-safe ASCII), `port`, a constant one-sentence
+  `message`, and `next_step` (`rv egress approve <id>` with
+  `proposal_id`, or `rv egress denials`). `EgressDenialResponse` builds
+  it; the body stays under 1 KiB. Refusals end with FIN, then a bounded
+  non-blocking discard of request bytes already received, then close,
+  so a client still uploading a body is less likely to see the refusal
+  cut off by RST.
+- When the body names a proposal: only on instances where approving it
+  changes this instance's verdict (`EgressProxy.advertisesProposals`:
+  open mode, not binary-scoped). There the proxy waits at most
+  `proposalWait` (250 ms) for the id, with at most
+  `maximumProposalWaiters` (4 by default) threads waiting; past either bound the
+  deny goes out without one and intake still runs. Production per-runtime
+  proxies are credentialed and ignore live rules (per-runtime grant
+  updates are the T4 follow-up), so they file the proposal but never name
+  it: an approval there does not reach the running runtime, and new
+  runtimes start from the static grant too. The choice depends only on
+  instance configuration, never on per-request state. Pinned by
+  `advertisedApprovalTakesEffectOnRetry` and
+  `credentialedInstanceNeverAdvertisesAnApprovalThatCannotApply`
+  (approve, then retry).
+- Oracle rules (pinned by `EgressDenialResponseTests` and
+  `EgressDenialWireTests`): `binary-mismatch` and `unattributed-peer` go
+  out byte-identical to a proposal-less `denied-policy`; `dns-failed` and
+  `address-filtered` go out as `dial-failed`, so the cage cannot probe
+  the host resolver; the 407 is one constant shape for missing,
+  malformed, and unknown tokens, decided before the binary gate. No
+  binary path, pin, credential, or filesystem path is written.
+  `egress-denials.jsonl` keeps the precise reason.
+- Accepted residuals, on advertising (open-mode) instances only: the id
+  disappears when the shared store is full (`storeFull`, 256 awaiting
+  rows), so a cage that mints proposals can estimate how many approvals
+  are awaiting; an id also disappears once a same-workspace sibling's
+  approval for the same `host:port` resolved it (ids are keyed by
+  workspace plus fingerprint, so another workspace's id is never
+  returned); and a fresh row (store write) answers
+  more slowly than a deduped one (store read). Everywhere: an
+  authenticated cage can still tell a binary-gate denial from a policy
+  one by trying an allowed host (inherent to enforcement), and tunnels
+  that already sent `200` (SNI mismatch, dial failure after SNI check)
+  still just close.
 - Proposal: one `PendingApprovalStore` row per blocked `host:port`, reused
   from the existing approval system (no parallel queue). Fingerprint
   `egress:<canonical-host>:<port>`; reason `.mandatoryHuman`;

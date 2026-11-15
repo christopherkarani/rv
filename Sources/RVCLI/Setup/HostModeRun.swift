@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVService
 
@@ -115,30 +116,42 @@ enum HostModeRun {
             }
             let store = store(env)
             let current = store.mode(for: host)
+            // Only loosening asks the owner; tightening needs no check.
+            var authorization: String?
             if mode.isLooser(than: current) {
                 do {
                     try await authenticate()
+                    authorization = "owner (loosening check)"
                 } catch {
                     throw SetupError.ownerAuthenticationRequired
                 }
             }
             // Order keeps every intermediate state no looser than both ends
-            // at rvd: going `off`, the hooks come out before `off` is
-            // stored (a failed detach stores nothing, so wired hooks never
-            // run under `off`, and a retry still needs the owner); leaving
-            // `off`, the tighter mode is stored before re-wiring (a failed
-            // re-wire leaves the host unwired under that mode, which
-            // `rv setup` repairs).
-            if mode == .off {
-                try applyWiring(from: current, to: mode, host: host, env: env)
-            } else if current == .off {
+            // at rvd: going `off`, the hooks come out after the change is
+            // recorded and before `off` is stored (an unrecorded `off`
+            // detaches nothing, a failed detach stores nothing, so wired
+            // hooks never run under `off`, and a retry still needs the
+            // owner); leaving `off`, the tighter mode is stored before
+            // re-wiring (a failed re-wire leaves the host unwired under that
+            // mode, which `rv setup` repairs).
+            if current == .off, mode != .off {
                 // Leaving `off` re-wires the host: refuse, as `rv setup`
                 // does, before storing anything when the fail-closed hook
                 // would reject the installed rvd and deny every tool call.
                 try SetupRun.requireTrustedDaemon(env)
             }
             do {
-                try store.save(mode, for: host)
+                try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                    try store.save(mode, for: host) {
+                        if mode == .off { try applyWiring(from: current, to: mode, host: host, env: env) }
+                    }
+                }
+            } catch let error as SetupError {
+                return failure(error, command: .hostMode)
+            } catch let unrecorded as ConfigChangeUnrecorded {
+                return SetupOutcome(
+                    stdout: "", stderr: ConfigChangeRefusal.message(command: "host mode", unrecorded),
+                    exitCode: ConfigChangeRefusal.exitCode)
             } catch {
                 return SetupOutcome(
                     stdout: "", stderr: "rv host mode failed: unable to write config.json\n",

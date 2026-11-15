@@ -312,18 +312,20 @@ extension SecretRunLaunchTests {
 
     /// A launcher that stops for any reason but its own `SIGSTOP`, or never
     /// stops, is killed and reaped, and nothing is bound to it.
+    /// Only the launcher that never stops is waited out, so only it has a
+    /// short wait: the others may take a loaded machine a while to start.
     @Test(.timeLimit(.minutes(1)), arguments: [
-        ("kill -TSTP $$; sleep 300", "the launcher was stopped by signal \(SIGTSTP) before it was ready"),
-        ("sleep 300", "the launcher did not stop within 1 seconds"),
-        ("exit 0", "the launcher refused to start it (exit 0)"),
-        ("kill -KILL $$", "the launcher was killed by signal \(SIGKILL)"),
+        ("kill -TSTP $$; sleep 300", 30, "the launcher was stopped by signal \(SIGTSTP) before it was ready"),
+        ("sleep 300", 1, "the launcher did not stop within 1 seconds"),
+        ("exit 0", 30, "the launcher refused to start it (exit 0)"),
+        ("kill -KILL $$", 30, "the launcher was killed by signal \(SIGKILL)"),
     ])
-    func aLauncherThatDoesNotStopItselfIsKilledAndRefused(script: String, reason: String) throws {
+    func aLauncherThatDoesNotStopItselfIsKilledAndRefused(script: String, deadline: Int, reason: String) throws {
         let fake = try fakeLauncher(script)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
         let result = SecretRunProcess.spawnSuspended(
             executable: "/bin/true", arguments: ["true"], environment: ["PATH=/usr/bin:/bin"],
-            descriptors: [0: 0, 1: 1, 2: 2], launcher: fake.path, deadline: 1)
+            descriptors: [0: 0, 1: 1, 2: 2], launcher: fake.path, deadline: TimeInterval(deadline))
         #expect(result == .failure(.spawnFailed(reason)))
         // The shell running the stand-in has its path in its command line.
         let running = (ProcFSProcessTable().children(of: getpid()) ?? []).filter { child in
