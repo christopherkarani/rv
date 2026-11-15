@@ -76,11 +76,18 @@ struct MCPGatewayRemoteRestartTests {
         let fixture = try RemoteFixture()
         let run = Self.run(fixture)
         #expect(await run.initialize())
-        #expect(await Self.post(fixture.url("/expire-sessions")) == 200)
+        // Nothing but the call may meet the ended session: rv's own
+        // `notifications/initialized` POST runs beside it, and a 404 on that
+        // would end the session first (the call then refused as restarting).
         run.client.send(Self.call(2))
-        let ended = await MCPGatewayRestartRuntimeTests.reply(run, 2)
+        let served = await MCPGatewayRestartRuntimeTests.reply(run, 2)
+        #expect(served?["result"] != nil, "\(String(describing: served))")
+        #expect(await eventually { fixture.requests().contains("ACCEPTED notifications/initialized") }, "\(fixture.requests())")
+        #expect(await Self.post(fixture.url("/expire-sessions")) == 200)
+        run.client.send(Self.call(3))
+        let ended = await MCPGatewayRestartRuntimeTests.reply(run, 3)
         #expect(ended?["error"]?["message"]?.stringValue?.contains("may have run") == true, "\(String(describing: ended))")
-        let answer = await MCPGatewayRestartRuntimeTests.echoes(run, from: 3)
+        let answer = await MCPGatewayRestartRuntimeTests.echoes(run, from: 4)
         #expect(answer?["result"] != nil, "\(run.logs.text)")
         #expect(Self.initializes(fixture) == 2, "\(fixture.requests())")
         #expect(await run.finish())

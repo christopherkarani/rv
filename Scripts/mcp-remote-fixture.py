@@ -260,6 +260,7 @@ class Handler(BaseHTTPRequestHandler):
         if version != negotiated:
             return self.send(400, b'{"error":"bad MCP-Protocol-Version"}')
         if "id" not in msg:
+            log("ACCEPTED %s session=%s" % (method, sid))
             return self.send(202)
         if method == "tools/call" and self.hang_calls:
             return self.hang(msg.get("id"))
