@@ -57,6 +57,28 @@ private func dial(_ fd: Int32, to port: Int) throws {
     try #require(connected == 0)
 }
 
+/// Connects and resets the connection at once, recording nothing when
+/// either fails. A reset leaves no port waiting out TIME_WAIT, and one
+/// that lands before the gateway accepts makes its `accept` fail.
+private func connectAndHangUp(_ port: Int) {
+    #if canImport(Darwin)
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+    guard fd >= 0 else { return }
+    defer { close(fd) }
+    var reset = linger(l_onoff: 1, l_linger: 0)
+    _ = setsockopt(fd, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = UInt16(port).bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    _ = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+}
+
 /// What the gateway wrote before it closed the connection.
 private func answer(_ fd: Int32) -> String {
     var timeout = timeval(tv_sec: 10, tv_usec: 0)
@@ -135,6 +157,70 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.count == 1)
         #expect(outsiders.filter(readable).count == turnedAway, "an outsider holding a slot was answered")
         #expect(audit.items.withLock { $0.allSatisfy { $0.refusal == nil } })
+    }
+
+    /// Outsiders that take long to tell apart hold every classifier, and
+    /// more wait behind them: a member that connects meanwhile waits its
+    /// turn and is served. It never takes a slot an outsider could hold.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersSlowToTellApartDelayAMemberButNeverTurnItAway() throws {
+        let marked = MarkedPorts()
+        let slow = GatewayPeerCheck { peer, _ in
+            if marked.ports.withLock({ $0.contains(peer.port) }) { return .member }
+            Thread.sleep(forTimeInterval: 0.2)
+            return .outsider
+        }
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(slow, upstream: upstream, audit: audit)
+        gateway.outsiderHeadDeadline = 30
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let outsiders = try (0..<SecretGateway.maximumConnections).map { _ in try boundClient().fd }
+        defer { outsiders.forEach { close($0) } }
+        for fd in outsiders { try dial(fd, to: port) }
+        let member = try boundClient()
+        defer { close(member.fd) }
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        try dial(member.fd, to: port)
+        #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+        let served = answer(member.fd)
+        #expect(served.hasPrefix("HTTP/1.1 200"), "\(served.prefix(80))")
+        #expect(upstream.requests.count == 1)
+    }
+
+    /// Outsiders connecting and hanging up as fast as they can, while a
+    /// member sends one request after another: every one is served.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersHammeringTheGatewayNeverTurnAwayAMember() throws {
+        let marked = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(marked.check, upstream: upstream, audit: audit)
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let stop = Atomic<Bool>(false)
+        let hammers = DispatchGroup()
+        for _ in 0..<16 {
+            hammers.enter()
+            Thread.detachNewThread {
+                defer { hammers.leave() }
+                while stop.load(ordering: .relaxed) == false { connectAndHangUp(port) }
+            }
+        }
+        var statuses: [String] = []
+        for _ in 0..<20 {
+            let member = try boundClient()
+            marked.ports.withLock { _ = $0.insert(member.port) }
+            try dial(member.fd, to: port)
+            #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+            statuses.append(String(answer(member.fd).prefix(12)))
+            close(member.fd)
+        }
+        stop.store(true, ordering: .relaxed)
+        _ = hammers.wait(timeout: .now() + 10)
+        #expect(statuses.allSatisfy { $0 == "HTTP/1.1 200" }, "\(statuses)")
+        #expect(upstream.requests.count == 20)
     }
 
     /// Outside every runtime when it connected, inside one by the time its
