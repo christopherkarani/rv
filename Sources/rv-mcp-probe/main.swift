@@ -240,10 +240,9 @@ private func serveUnderSignals(_ directory: String, _ script: String, _ flags: A
         signal(number, SIG_DFL)
     }
     let definition = MCPServerDefinition(name: "plain", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
-    // As serve: a serve with no placeholder server keeps the defaults.
-    let signals = MCPShutdownSignals.wanted(by: [definition])
-        ? MCPShutdownSignals(MCPShutdownSignals.handled, catching: true) : nil
-    defer { signals?.cancel() }
+    // As serve: every serve catches them.
+    let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
+    defer { signals.cancel() }
     append(disposition(SIGCHLD), to: directory + "/chld")
     guard let tool = try? JSONValue.parse(#"{"name":"wait","inputSchema":{"type":"object"}}"#) else { return 1 }
     let core = MCPGatewayCore(
@@ -259,11 +258,11 @@ private func serveUnderSignals(_ directory: String, _ script: String, _ flags: A
         core: core, connections: [.process(launch)],
         audit: { record in append("\(record.tool) \(outcomeName(record.outcome))", to: audit) },
         log: { _ in })
-    if let number = signals?.first { return 128 + number }
-    signals?.forward { runtime.requestShutdown() }
+    if let number = signals.first { return 128 + number }
+    signals.forward { runtime.requestShutdown() }
     let ending = runtime.run()
-    signals?.cancel()
-    if let number = signals?.first { return 128 + number }
+    signals.cancel()
+    if let number = signals.first { return 128 + number }
     return ending == .clientNotReading ? 1 : 0
 }
 
