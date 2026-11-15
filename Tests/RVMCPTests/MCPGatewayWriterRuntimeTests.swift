@@ -189,7 +189,9 @@ struct MCPGatewayWriterRuntimeTests {
         let run = GatewayRun(
             core: Self.core([Self.server("big")]),
             connections: [Self.launch("big", mode: "big", in: directory)],
-            writeBufferBytes: 256 << 10)
+            // The client reads nothing until both answers are handed on,
+            // which can pass serve's 30 s stall on a loaded machine.
+            writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
         #expect(await run.initialize())
         let size = 1 << 20
         for id in [2, 3] {
@@ -219,7 +221,9 @@ struct MCPGatewayWriterRuntimeTests {
         let run = GatewayRun(
             core: Self.core([Self.server("flood")]),
             connections: [Self.launch("flood", mode: "flood", in: directory)],
-            writeBufferBytes: 256 << 10)
+            // The client reads nothing until the flood is handled, which can
+            // pass serve's 30 s stall on a loaded machine.
+            writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#)
         // Its answer follows the flood on the same pipe, so once it is handed
