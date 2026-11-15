@@ -5604,6 +5604,35 @@ struct MCPCommandTests {
         #expect(seen.withLock { $0 } == ["fs standard", "fs standard"])
     }
 
+    /// A relaunch is planned from the configuration serve verified, not
+    /// from its earlier read of mcp.json: one first read as untrusted, then
+    /// verified, relaunches its servers.
+    @Test func serveRelaunchesFromTheConfigurationItVerified() throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
+        ]))
+        let environment = fixture.environment()
+        var early = try MCPRun.configuration(environment).get()
+        early.untrusted = true
+        let resolver = SecretResolver { _ in .success(SecretValue("fresh-value")!) }
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
+        ])
+        let plan = try MCPRun.upstreamLaunches(
+            names: ["fs"], configuration: early, environment: environment, secrets: secrets, resolver: resolver
+        ).get()
+        #expect(plan.configuration.untrusted == false)
+        let relaunch = MCPRun.relaunch(
+            configuration: plan.configuration, environment: environment, secrets: secrets, resolver: resolver,
+            placeholders: .unavailable, sandbox: { { _, launch, _ in .success(launch) } })
+        guard case .success((_, .process(let launch))) = relaunch("fs") else {
+            Issue.record("the verified configuration did not relaunch fs")
+            return
+        }
+        #expect(launch.arguments.first == "fs-mcp")
+    }
+
     @Test func organizationSecretRefusalsAreAudited() throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [

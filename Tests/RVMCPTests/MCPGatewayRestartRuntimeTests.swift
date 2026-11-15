@@ -551,3 +551,46 @@ extension GatewayRun {
         runtime.requestShutdown()
     }
 }
+
+/// The wait a restart makes for its server's last launches to be reaped.
+@Suite("MCPGatewayRuntime restart wait")
+struct MCPLaunchEndTests {
+    static func later(_ seconds: Double) -> SuspendingClock.Instant {
+        SuspendingClock.now.advanced(by: .seconds(seconds))
+    }
+
+    @Test func theWaitIsOverOnceEveryLaunchHasEnded() {
+        let ends = [MCPLaunchEnd(), MCPLaunchEnd()]
+        ends.forEach { $0.end() }
+        #expect(MCPLaunchEnd.wait(for: ends, until: Self.later(60), abandoned: { false }) == .ended)
+        #expect(MCPLaunchEnd.wait(for: [], until: Self.later(60), abandoned: { false }) == .ended)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aLaunchThatEndsDuringTheWaitEndsIt() {
+        let end = MCPLaunchEnd()
+        Thread.detachNewThread {
+            usleep(50_000)
+            end.end()
+        }
+        #expect(MCPLaunchEnd.wait(for: [end], until: Self.later(50), abandoned: { false }) == .ended)
+    }
+
+    /// Measured on the monotonic clock: a wall-clock step neither cuts it
+    /// short nor stretches it.
+    @Test func theWaitRunsOutOnTheMonotonicClock() {
+        let start = SuspendingClock.now
+        let deadline = start.advanced(by: .milliseconds(100))
+        #expect(MCPLaunchEnd.wait(for: [MCPLaunchEnd()], until: deadline, abandoned: { false }) == .timedOut)
+        #expect(SuspendingClock.now >= deadline)
+    }
+
+    /// Once serve is stopping, the wait is over without planning anything,
+    /// whether or not its launches have ended.
+    @Test func theWaitIsAbandonedOnceServeStops() {
+        let ended = MCPLaunchEnd()
+        ended.end()
+        #expect(MCPLaunchEnd.wait(for: [MCPLaunchEnd()], until: Self.later(60), abandoned: { true }) == .abandoned)
+        #expect(MCPLaunchEnd.wait(for: [ended], until: Self.later(60), abandoned: { true }) == .abandoned)
+    }
+}
