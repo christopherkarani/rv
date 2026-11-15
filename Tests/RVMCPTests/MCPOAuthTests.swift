@@ -236,9 +236,11 @@ struct MCPOAuthTests {
 
     /// Any local process, of any user, can reach the redirect port. A knock
     /// that resets before its 404 is written must not kill `rv mcp connect`
-    /// with SIGPIPE; the real callback after it is still taken. Waits on a
-    /// plain thread, as `rv mcp connect` does from its main thread: Darwin
-    /// does not kill a process for a write from a dispatch worker thread.
+    /// with SIGPIPE; the real callback after it is still taken. The
+    /// redirect's sockets have no `SO_NOSIGPIPE`, so a flags-0 answer to a
+    /// reset knock raised SIGPIPE, which Darwin sends to the process, not
+    /// the writing thread: this test died with signal 13 before the fix.
+    /// Waits on a plain thread, as `rv mcp connect` does from its main thread.
     @Test func aKnockResetBeforeItsAnswerDoesNotEndTheSignIn() {
         let outcome = SignInOutcome()
         let done = DispatchSemaphore(value: 0)
