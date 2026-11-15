@@ -706,6 +706,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         remote.start()
     }
 
+    /// Test seam: what `server`'s remote launch counts against its bound now.
+    func remoteBytesInFlight(_ server: String) -> Int? {
+        queue.sync { remoteInFlight[server]?.bytes }
+    }
+
     /// The core's restart of a server that went away. Off the gateway
     /// queue, every earlier launch of it is waited for until reaped (a
     /// placeholder server's lease revoked), then it is planned again

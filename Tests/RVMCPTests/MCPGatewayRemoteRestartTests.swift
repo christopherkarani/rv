@@ -27,7 +27,8 @@ private func eventually(_ timeout: TimeInterval = 90, _ condition: @escaping @Se
 struct MCPGatewayRemoteRestartTests {
     static func run(
         _ fixture: RemoteFixture, forwards: ForwardRecords = ForwardRecords(),
-        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes
+        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
+        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds
     ) -> GatewayRun {
         let remote = MCPServerDefinition(
             name: "remote", remote: MCPRemoteServer(url: fixture.url("/mcp")), tools: MCPToolPolicy(allow: ["*"]))
@@ -41,11 +42,61 @@ struct MCPGatewayRemoteRestartTests {
             })
         return GatewayRun(
             core: core, connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))],
-            writeBufferBytes: writeBufferBytes)
+            writeBufferBytes: writeBufferBytes, clientStallSeconds: clientStallSeconds)
     }
 
     static func call(_ id: Int, text: String = "x") -> String {
         #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"echo","arguments":{"text":"\#(text)"}}}"#
+    }
+
+    static func call(_ id: Int, arguments: String) -> String {
+        #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"echo","arguments":\#(arguments)}}"#
+    }
+
+    static func initialize(_ id: Int) throws -> JSONValue {
+        try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":\#(id),"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#.utf8))
+    }
+
+    /// The client's next line answering `id`, read straight from its pipe.
+    /// A line over 1 MiB (an answer the test does not look at) is skipped
+    /// unparsed: `LineClient` would scan it again on every read.
+    static func skim(_ run: GatewayRun, _ id: Int, timeout: TimeInterval = 90) async -> JSONValue? {
+        let fd = run.client.fromGateway.fileHandleForReading.fileDescriptor
+        return await offThePool {
+            var line = Data()
+            var skipping = false
+            var chunk = [UInt8](repeating: 0, count: 1 << 20)
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 200) > 0 else { continue }
+                let n = read(fd, &chunk, chunk.count)
+                if n < 0, errno == EINTR { continue }
+                guard n > 0 else { return nil }
+                var start = 0
+                for index in 0..<n where chunk[index] == 0x0A {
+                    if skipping == false {
+                        line.append(contentsOf: chunk[start..<index])
+                        if let message = try? JSONValue.parse(line), message["id"] == .int(id) { return message }
+                    }
+                    line.removeAll()
+                    skipping = false
+                    start = index + 1
+                }
+                if skipping == false {
+                    line.append(contentsOf: chunk[start..<n])
+                    if line.count > 1 << 20 {
+                        skipping = true
+                        line.removeAll()
+                    }
+                }
+            }
+            return nil
+        }
+    }
+
+    static func ran(_ record: MCPCallRecord) -> Bool {
+        if case .ran = record.outcome { true } else { false }
     }
 
     /// The status of an empty POST to `url`, waited for off the pool.
@@ -129,19 +180,20 @@ struct MCPGatewayRemoteRestartTests {
         #endif
     }
 
-    /// What a remote has not finished taking counts against its bound until
-    /// its POST completes. Past the bound it is stopped, the core hears at
-    /// once, and the next call is refused without being forwarded.
+    /// What a remote has not taken counts against its bound until its
+    /// request body has gone out. Past the bound it is stopped, the core
+    /// hears at once, and the next call is refused without being forwarded.
     @Test(.timeLimit(.minutes(5)))
     func aRemoteThatTakesNothingIsStoppedPastItsBound() async throws {
-        let fixture = try RemoteFixture(["--hang-calls"])
+        let fixture = try RemoteFixture(["--deaf-over", "\(1 << 20)"])
         let forwards = ForwardRecords()
         let run = Self.run(fixture, forwards: forwards, writeBufferBytes: 256 << 10)
         #expect(await run.initialize())
-        let pad = String(repeating: "p", count: 200 << 10)
+        // Far more than the connection's buffers hold, so it never all goes out.
+        let pad = String(repeating: "p", count: 32 << 20)
         run.client.send(Self.call(2, text: pad))
-        #expect(await eventually { fixture.requests().contains("REQ POST /mcp tools/call") })
-        run.client.send(Self.call(3, text: pad))
+        #expect(await eventually { fixture.requests().contains("DEAF POST") })
+        run.client.send(Self.call(3))
         run.client.send(Self.call(4))
         for id in [2, 3] {
             let stopped = await MCPGatewayRestartRuntimeTests.reply(run, id)
@@ -154,6 +206,107 @@ struct MCPGatewayRemoteRestartTests {
         let logs = run.logs
         #expect(await eventually { logs.text.contains("is not reading its input") }, "\(logs.text)")
         #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A request counts against its remote's bound only until its body has
+    /// gone out: calls the server took and has not answered stop nothing,
+    /// however many there are.
+    @Test(.timeLimit(.minutes(5)))
+    func requestsTheServerTookNoLongerCountAgainstItsBound() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let run = Self.run(fixture, writeBufferBytes: 256 << 10)
+        #expect(await run.initialize())
+        let pad = String(repeating: "p", count: 100 << 10)
+        for (index, id) in [2, 3, 4].enumerated() {
+            run.client.send(Self.call(id, text: pad))
+            #expect(await eventually {
+                fixture.requests().components(separatedBy: "REQ POST /mcp tools/call").count - 1 == index + 1
+            }, "\(fixture.requests())")
+            let runtime = run.runtime
+            try #require(await eventually(60) { runtime.remoteBytesInFlight("remote") == 0 },
+                "\(String(describing: runtime.remoteBytesInFlight("remote"))) \(run.logs.text)")
+        }
+        #expect(run.logs.text.contains("is not reading its input") == false, "\(run.logs.text)")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A remote whose answers come faster than the client takes them is
+    /// stopped once more than its bound waits behind what the client has
+    /// not taken: the call it was answering ends saying it may have run,
+    /// and it is started again. The same on every system: its connection
+    /// is never paused.
+    @Test(.timeLimit(.minutes(5)))
+    func aRemoteFasterThanTheClientIsStoppedPastItsBound() async throws {
+        let fixture = try RemoteFixture()
+        let run = Self.run(fixture, writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
+        #expect(await run.initialize())
+        // Not taken yet by the client: what it holds for the client fills
+        // the remote's reader backlog.
+        run.client.send(Self.call(2, arguments: #"{"size":\#(40 << 20)}"#))
+        let audits = run.audits
+        #expect(await eventually { audits.items.withLock { $0.contains(where: Self.ran) } })
+        // A note that has to wait, then the answer behind it: past 256 KiB.
+        run.client.send(Self.call(3, arguments: #"{"noise":\#(30 << 20)}"#))
+        let logs = run.logs
+        #expect(await eventually { logs.text.contains("waits behind the client's output; stopping it") }, "\(logs.text)")
+        let stopped = await Self.skim(run, 3)
+        #expect(stopped?["error"]?["message"]?.stringValue?.contains("may have run") == true, "\(String(describing: stopped))")
+        #expect(audits.items.withLock { $0.filter { $0.tool == "echo" }.map(\.outcome) }.last == .interrupted(grant: nil))
+        #expect(await eventually { logs.text.contains("MCP server remote is back") }, "\(logs.text)")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A reply rv cuts off for its size ends only its own call, with the
+    /// size error: the server is not counted gone, and its session goes on.
+    @Test(.timeLimit(.minutes(5)))
+    func aReplyTooLargeToPassOnEndsOnlyItsCall() async throws {
+        let fixture = try RemoteFixture()
+        let run = Self.run(fixture)
+        #expect(await run.initialize())
+        let size = MCPGatewayRuntime.maximumLineBytes + (1 << 20)
+        // As an event stream, then as a JSON body.
+        for (id, plain) in [(2, false), (3, true)] {
+            run.client.send(Self.call(id, arguments: #"{"size":\#(size),"plain":\#(plain)}"#))
+            let reply = await MCPGatewayRestartRuntimeTests.reply(run, id)
+            #expect(String(describing: reply).contains("larger than"), "\(String(describing: reply)) \(run.logs.text)")
+        }
+        let answer = await MCPGatewayRestartRuntimeTests.echoes(run, from: 4)
+        #expect(answer?["result"] != nil, "\(run.logs.text)")
+        #expect(Self.initializes(fixture) == 1, "\(fixture.requests())")
+        #expect(run.logs.text.contains("could not reach") == false, "\(run.logs.text)")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// While an earlier answer waits to be taken by the gateway, a later
+    /// POST is still let go of: what waits for the gateway holds up none of
+    /// the remote's own bookkeeping, so its bytes stop counting.
+    @Test(.timeLimit(.minutes(5)))
+    func aPostIsLetGoWhileAnEarlierAnswerWaitsToBeTaken() async throws {
+        let fixture = try RemoteFixture()
+        let taking = DispatchSemaphore(value: 0)
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in
+                delivered.items.withLock { $0.append(message) }
+                if message["id"] == .int(1) { _ = taking.wait(timeout: .now() + 120) }
+            },
+            exited: {}, log: { _ in })
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        let over = Mutex(false)
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#.utf8))) {
+            over.withLock { $0 = true }
+        }
+        #expect(await eventually(60) { over.withLock { $0 } })
+        taking.signal()
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } })
+        await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
 
@@ -227,6 +380,52 @@ struct MCPGatewayRemoteRestartTests {
         proceed.signal()
         #expect(await eventually { fixture.requests().contains("REQ POST /mcp notifications/cancelled") }, "\(fixture.requests())")
         // A retry would follow the refresh at once; none comes.
+        let sent = await eventually(5) { fixture.requests().contains("REQ POST /mcp tools/call") }
+        #expect(sent == false, "\(fixture.requests())")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A call cancelled while its retry fetches the new token is not sent:
+    /// the cancel is checked where the retry is made.
+    @Test(.timeLimit(.minutes(5)))
+    func aCallCancelledWhileItsRetryGetsItsTokenIsNotSentAgain() async throws {
+        let fixture = try RemoteFixture(["--token", "good-token"])
+        let token = Mutex("good-token")
+        let armed = Mutex(false)
+        let fetching = DispatchSemaphore(value: 0)
+        let proceed = DispatchSemaphore(value: 0)
+        let authorizer = MCPRemoteAuthorizer(
+            token: {
+                if armed.withLock({ was in defer { was = false }; return was }) {
+                    fetching.signal()
+                    _ = proceed.wait(timeout: .now() + 60)
+                }
+                return token.withLock { $0 }
+            },
+            refresh: { _ in
+                token.withLock { $0 = "good-token" }
+                armed.withLock { $0 = true }
+                return true
+            })
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "auth", url: fixture.url("/mcp")), authorizer: authorizer,
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in })
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        token.withLock { $0 = "stale-token" }
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#.utf8)))
+        #expect(await offThePool { fetching.wait(timeout: .now() + 60) } == .success)
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}"#.utf8)))
+        proceed.signal()
+        #expect(await eventually { fixture.requests().contains("REQ POST /mcp notifications/cancelled") }, "\(fixture.requests())")
+        // Answered only once the retry was made or refused: the delegate
+        // queue is serial.
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#.utf8)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(3) } } })
         let sent = await eventually(5) { fixture.requests().contains("REQ POST /mcp tools/call") }
         #expect(sent == false, "\(fixture.requests())")
         await offThePool { remote.stop() }
