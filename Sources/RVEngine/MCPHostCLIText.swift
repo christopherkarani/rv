@@ -11,8 +11,8 @@ import Foundation
 /// as program text (`textNamesHostMCPMutation`) that holds a stem spends
 /// pieces: at most `maxTokenPieces` in one text and `maxPieces` in all.
 /// Brace and glob spellings spend `spelling` (`SpellingBudget`). A read
-/// begun past `maxWordVisits` counts too, so the work is bounded however
-/// the texts nest.
+/// begun, or a command judged inside one, past `maxWordVisits` counts too,
+/// so the work is bounded however the texts nest.
 struct HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
@@ -25,6 +25,8 @@ struct HostTextReads {
 
     private var remaining = HostTextReads.maxReads
     private var depth = 0
+    /// Reads begun and not yet finished, nested or flat.
+    private var readsInProgress = 0
     private var seen: Set<String> = []
     /// Texts read as command lines so far.
     private(set) var readsDone = 0
@@ -103,9 +105,20 @@ struct HostTextReads {
         unfollowable = true
     }
 
-    /// Counts `count` words visited by one pass of `isHostMCPMutation`.
-    mutating func visit(words count: Int) {
+    /// Counts `count` words visited by one pass of `isHostMCPMutation`;
+    /// false (and `visitsExceeded`) past `maxWordVisits` inside a read,
+    /// where the command counts. Checked per command, not only where a read
+    /// begins: one read launches many commands. The line's own commands,
+    /// judged outside any read, cost only their length and are never
+    /// refused for it.
+    mutating func visit(words count: Int) -> Bool {
         wordVisits += count
+        guard readsInProgress == 0 || wordVisits < Self.maxWordVisits else {
+            exceeded = true
+            visitsExceeded = true
+            return false
+        }
+        return true
     }
 
     /// Whether `text`, read as a command line, runs a host MCP mutation. A
@@ -150,7 +163,9 @@ struct HostTextReads {
         resplit = splitting
         literal = literalReading
         if nested { depth += 1 }
+        readsInProgress += 1
         defer {
+            readsInProgress -= 1
             if nested { depth -= 1 }
             inert = outerInert
             resplit = outerResplit

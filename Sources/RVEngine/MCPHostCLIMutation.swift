@@ -55,7 +55,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     spellings.reserveCapacity(words.count)
     for word in words { spellings.append(spell(word, &reads.spelling)) }
     let later = LaterWords(words, spellings, budget: &reads.spelling)
-    reads.visit(words: 2 * words.count)
+    guard reads.visit(words: 2 * words.count) else { return true }
     // A dynamic word rv cannot read, used as the program at the head or after
     // a runner the parser does not strip (`stdbuf -o0 $c mcp add`), with a
     // group word (literal or a brace/glob spelling) after it: treated like a
@@ -67,7 +67,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     // matching is sound where a match asks, never where it ends a scope that
     // is then skipped.
     for index in words.indices {
-        reads.visit(words: 1)
+        guard reads.visit(words: 1) else { return true }
         if runs(index), later.spelledGroups[index] != 0, wordIsDynamic(words[index]) { return true }
     }
     // argv holds the head's basename; the head as written is judged too, as
@@ -91,7 +91,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     let options = directoryOptions[head]
         ?? (reads.resplit && command.head.hasPrefix("-") ? anyDirectoryOption : [])
     for (index, word, spelling) in judged {
-        reads.visit(words: 1)
+        guard reads.visit(words: 1) else { return true }
         if isConfigInstallerPackage(word) || configInstallerPrograms.contains(commandName(word)) { return true }
         if runs(index), packageNames(word).contains(where: configInstallerNames.contains) { return true }
         // A runner given a command line as one word (`watch 'claude mcp
