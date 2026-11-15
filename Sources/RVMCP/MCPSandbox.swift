@@ -1165,6 +1165,25 @@ public enum MCPSandbox {
                 if let target = absoluteLinkTarget(link) { pending.append(target) }
             }
         }
+        // `directory` and each one above it inside a write root. It has no
+        // `.` or `..`, so each step drops one component and the walk ends at
+        // `/`. (`URL` would append `..` to a `..`.) False past a cap.
+        func walkUp(from directory: String) -> Bool {
+            var parent = directory
+            while parent != "/", insideWriteRoot(parent) {
+                let above = parentDirectory(parent)
+                let resolvedAbove = realPath(above)
+                let name = parent.split(separator: "/").last.map(String.init) ?? ""
+                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
+                guard add(realPath(parent)), add(itself) else { return false }
+                var info = stat()
+                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
+                    pending.append(target)
+                }
+                parent = above
+            }
+            return true
+        }
         var walked = Set<String>()
         var next = 0
         while next < pending.count {
@@ -1172,20 +1191,12 @@ public enum MCPSandbox {
             next += 1
             guard walked.insert(start).inserted else { continue }
             if walked.count > maximumCredentialAncestorWalks { return nil }
-            // No `.` or `..` is left, so each step drops one component and
-            // the walk ends at `/`. (`URL` would append `..` to a `..`.)
-            var parent = parentDirectory(withoutDotComponents(start))
-            while parent != "/", insideWriteRoot(parent) {
-                let above = parentDirectory(parent)
-                let resolvedAbove = realPath(above)
-                let name = parent.split(separator: "/").last.map(String.init) ?? ""
-                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
-                guard add(realPath(parent)), add(itself) else { return nil }
-                var info = stat()
-                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
-                    pending.append(target)
-                }
-                parent = above
+            let spelled = withoutDotComponents(start)
+            guard walkUp(from: parentDirectory(spelled.path)) else { return nil }
+            // A directory a `..` stepped out of decides where the rest
+            // lands: replaced, it moves the credential. Named like the rest.
+            for directory in spelled.steppedOutOf {
+                guard walkUp(from: directory) else { return nil }
             }
         }
         return ancestors
@@ -1193,18 +1204,22 @@ public enum MCPSandbox {
 
     /// `path` with its `.` and `..` taken as `open` takes them: a `..` goes
     /// to the parent of where the path so far resolves, not to the lexical
-    /// parent, which a symlink would make a different directory.
-    static func withoutDotComponents(_ path: String) -> String {
+    /// parent, which a symlink would make a different directory. Also each
+    /// directory a `..` stepped out of, as spelled so far (none of them
+    /// holds a `.` or `..`).
+    static func withoutDotComponents(_ path: String) -> (path: String, steppedOutOf: [String]) {
         var current = "/"
+        var steppedOutOf: [String] = []
         for part in path.split(separator: "/", omittingEmptySubsequences: true) {
             if part == "." { continue }
             if part == ".." {
+                if current != "/" { steppedOutOf.append(current) }
                 current = parentDirectory(realPath(current))
                 continue
             }
             current = current == "/" ? "/" + part : current + "/" + part
         }
-        return current
+        return (current, steppedOutOf)
     }
 
     /// Each ancestor exactly, as a literal in every spelling Seatbelt may
