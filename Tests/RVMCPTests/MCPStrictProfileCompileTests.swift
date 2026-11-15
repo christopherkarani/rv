@@ -126,6 +126,88 @@ extension MCPStrictProfileTests {
         }
     }
 
+    /// A directory link reached through another directory link
+    /// (`~/.ssh -> W/b/keys`, `W/b -> Z/q`, `Z/q -> Y/r`) is named, so the
+    /// inner link `Z/q` cannot be swapped. The dot-dot spelling of the
+    /// outer link (`W/b -> Z/q/..`... here `~/.ssh -> W/b/../keys2`) names
+    /// it too.
+    @Test(.timeLimit(.minutes(1)))
+    func aDirectoryLinkReachedThroughAnotherLinkIsNamed() throws {
+        let root = try MCPStrictProfileTests.resolvedTemporaryRoot("rv-link-to-link")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["tmp", "scratch", "home", "Y/r/keys", "Y/r/keys2", "Z", "W"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let home = root.appendingPathComponent("home").path
+        try #require(symlink(root.path + "/Y/r", root.path + "/Z/q") == 0)
+        try #require(symlink(root.path + "/Z/q", root.path + "/W/b") == 0)
+        try #require(symlink(root.path + "/W/b/keys", home + "/.ssh") == 0)
+        try #require(symlink(root.path + "/W/b/../keys2", home + "/.aws") == 0)
+        let result = try #require(Self.profileWithin30Seconds(
+            home: home, scratch: root.appendingPathComponent("scratch").path,
+            temporary: root.appendingPathComponent("tmp").path), "the profile did not return")
+        let ancestors = try #require(try result.get().split(separator: "\n").first { $0.hasPrefix("(deny file-clone file-write-unlink ") })
+        for path in ["W", "W/b", "Z", "Z/q", "Y", "Y/r"] {
+            #expect(ancestors.contains("(literal \"\(root.path)/\(path)\")"), "\(path)")
+        }
+    }
+
+    /// The whole class the last three findings share: for many seeded link
+    /// trees, EVERY directory `open` passes through on the way to a
+    /// credential is either outside every write root or named in the
+    /// ancestor rule, so none can be swapped to move the credential.
+    @Test(.timeLimit(.minutes(2)))
+    func everyEntryOnACredentialPathInsideAWriteRootIsNamed() throws {
+        for seed in UInt64(1)...40 {
+            var rng = FuzzRandom(seed: seed)
+            let root = try MCPStrictProfileTests.resolvedTemporaryRoot("rv-entries-\(seed)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            for name in ["tmp", "scratch", "home"] {
+                try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+            }
+            // A chain of directories, some replaced by links to the next, all
+            // inside the temp write root, ending in a real key directory.
+            let depth = Int.random(in: 2...6, using: &rng)
+            var realDirs: [String] = []
+            for level in 0..<depth {
+                let dir = root.path + "/d\(level)"
+                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                realDirs.append(dir)
+            }
+            let keys = realDirs.last! + "/keys"
+            try FileManager.default.createDirectory(atPath: keys, withIntermediateDirectories: true)
+            // Build the credential link target by walking the chain, taking
+            // a link hop (to a sibling link that points at the real dir) at
+            // random, sometimes with a `..` detour.
+            var target = keys
+            for level in (0..<depth).reversed() {
+                if Bool.random(using: &rng) {
+                    let link = root.path + "/l\(level)_\(UInt16.random(in: 0...9999, using: &rng))"
+                    try? FileManager.default.removeItem(atPath: link)
+                    let points = Bool.random(using: &rng) ? realDirs[level] + "/../d\(level)" : realDirs[level]
+                    try #require(symlink(points, link) == 0)
+                    target = target.replacingOccurrences(of: realDirs[level], with: link)
+                }
+            }
+            let sshPath = root.path + "/home/.ssh"
+            try? FileManager.default.removeItem(atPath: sshPath)
+            try #require(symlink(target, sshPath) == 0)
+            let result = try #require(Self.profileWithin30Seconds(
+                home: root.path + "/home", scratch: root.path + "/scratch",
+                temporary: root.path + "/tmp"), "seed \(seed): the profile did not return")
+            let ancestors = try #require(try result.get().split(separator: "\n")
+                .first { $0.hasPrefix("(deny file-clone file-write-unlink ") }, "seed \(seed): no ancestor line")
+            let entries = try #require(MCPSandbox.entriesOnPath(sshPath), "seed \(seed): entriesOnPath nil")
+            let inside = MCPSandbox.insideAny([root.path + "/scratch", root.path + "/tmp", "/private/tmp", "/private/var/folders"])
+            for entry in entries where entry != sshPath && entry != keys {
+                guard inside(entry) else { continue }
+                let real = MCPSandbox.realPath(entry)
+                #expect(ancestors.contains("(literal \"\(entry)\")") || ancestors.contains("(literal \"\(real)\")"),
+                    "seed \(seed): \(entry) (real \(real)) not named")
+            }
+        }
+    }
+
     @Test func dotComponentsAreTakenAsOpenTakesThem() throws {
         let root = try MCPStrictProfileTests.resolvedTemporaryRoot("rv-dot-components")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -169,12 +251,16 @@ extension MCPStrictProfileTests {
 
     /// The profile that crashed: a home under the temp directory as
     /// Foundation spells it, through `/var`. It is refused by size, from a
-    /// small stack, without reaching libsandbox.
+    /// small stack, without reaching libsandbox. Two letter-heavy components
+    /// (each under NAME_MAX) carry the home past the raised cap; every
+    /// credential deny repeats the prefix, so the profile clears 384 KiB.
     @Test(.timeLimit(.minutes(2)))
     func aTempSpelledHomeProfileIsRefusedBySizeNotACrash() throws {
-        let root = FileManager.default.temporaryDirectory
+        let long = String(repeating: "Abcdefghij", count: 20)
+        let top = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-oversize-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { try? FileManager.default.removeItem(at: top) }
+        let root = top.appendingPathComponent(long, isDirectory: true).appendingPathComponent(long, isDirectory: true)
         for name in ["tmp", "scratch"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
         }

@@ -267,6 +267,57 @@ struct MCPCageCredentialLiveTests {
         #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("z/q").path)
     }
 
+    /// `~/.ssh -> W/b/keys`, `W/b -> Z/q`, `Z/q -> Y/r`, `Y/r/keys` real,
+    /// all in a write root: the inner link `Z/q`, reached only through the
+    /// outer link `W/b`, is named, so it cannot be removed, renamed or
+    /// replaced to point `~/.ssh` at a directory the cage controls. The key
+    /// stays unread and `Z/q` is unchanged.
+    @Test(.timeLimit(.minutes(1)))
+    func aDirectoryLinkReachedThroughAnotherLinkCannotBeSwapped() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-link-to-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let keys = root.appendingPathComponent("Y/r/keys")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Z"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("W"), withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: keys.appendingPathComponent("id_rsa"))
+        let zq = root.appendingPathComponent("Z/q")
+        try #require(symlink(root.appendingPathComponent("Y/r").path, zq.path) == 0)
+        try #require(symlink(zq.path, root.appendingPathComponent("W/b").path) == 0)
+        try #require(symlink(root.appendingPathComponent("W/b/keys").path, home.appendingPathComponent(".ssh").path) == 0)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/l2l", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; s="$2"; zq="$3"
+            /bin/echo STARTED
+            /bin/cat "$home/.ssh/id_rsa" 2>/dev/null
+            /bin/mkdir -p "$s/mine/r/keys" && /bin/ln -s "$s/mine/r" "$s/newl"
+            /bin/rm "$zq" 2>/dev/null && echo UNLINK_OK
+            /bin/mv "$zq" "$s/moved" 2>/dev/null && echo RENAME_OK
+            replace "$s/newl" "$zq" && echo REPLACE_OK
+            swap "$s/newl" "$zq" && echo SWAP_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, scratch.path, zq.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains(marker) == false, "\(output)")
+        for refused in ["UNLINK_OK", "RENAME_OK", "REPLACE_OK", "SWAP_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(MCPSandbox.readLink(zq.path) == root.appendingPathComponent("Y/r").path)
+    }
+
     /// A missing directory above a credential, inside a write root (here
     /// `~/Library/Application Support/Google` above Chrome's, the home under
     /// the temp directory). Whatever the cage put there would hold the
@@ -301,6 +352,10 @@ struct MCPCageCredentialLiveTests {
             /bin/mkdir -p "$s/dir" && /bin/ln -s "$s/mine" "$s/dir/Chrome" && replace "$s/dir" "$g" && echo DIR_RENAMED
             printf f > "$s/file" && /bin/ln "$s/file" "$g" 2>/dev/null && echo HARDLINK_MADE
             /bin/mkdir "$g" 2>/dev/null && echo MKDIR_MADE
+            for v in GOOGLE google GoOgLe; do
+              /bin/ln -s "$s/mine" "$support/$v" 2>/dev/null && echo "CASE_LINK $v"
+              /bin/mkdir "$support/$v" 2>/dev/null && echo "CASE_MKDIR $v"
+            done
             /bin/mkdir "$support/Other" && echo OTHER_OK
             /bin/mkdir "$support" 2>&1 | /usr/bin/grep -q "File exists" && echo EXISTS_SAID
             echo DONE
@@ -311,10 +366,74 @@ struct MCPCageCredentialLiveTests {
         for refused in ["LINK_CREATED", "LINK_RENAMED", "DIR_RENAMED", "HARDLINK_MADE", "MKDIR_MADE"] {
             #expect(output.contains(refused) == false, "\(refused): \(output)")
         }
+        // On the case-insensitive APFS default, the literal deny matches a
+        // case variant of the missing name too, so none can be planted; on
+        // a case-sensitive volume a variant is a different path, off the
+        // credential's own (case-sensitive) resolution path.
+        #expect(output.contains("CASE_LINK") == false, "\(output)")
+        #expect(output.contains("CASE_MKDIR") == false, "\(output)")
         #expect(output.contains("OTHER_OK"), "\(output)")
         #expect(output.contains("EXISTS_SAID"), "\(output)")
         var info = stat()
         #expect(lstat(google.path, &info) != 0, "something was planted at \(google.path)")
+    }
+
+    /// The same missing-ancestor deny has a first-run cost: when the whole
+    /// home is a write root (`writable` is `["~/"]`) and `~/.config` does not
+    /// exist yet, the cage names `~/.config` and the credential dirs under it
+    /// (`rv`, `gh`, `gcloud`, `opencode`), so a server's own `mkdir -p
+    /// ~/.config/<app>` is refused — it cannot even create the intermediate
+    /// `~/.config`. A directory that is no credential ancestor still creates.
+    /// Creating `~/.config` once outside the cage cures the intermediate, so
+    /// a non-credential app dir under it then creates; a protected credential
+    /// dir (`~/.config/rv`) stays refused by design — the cage never lets a
+    /// server create its own credential directory.
+    @Test(.timeLimit(.minutes(1)))
+    func aFirstRunCannotCreateItsConfigDirectoryUnderAWritableHome() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-firstrun-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/firstrun", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        // The whole home is a write root, and `~/.config` is deliberately absent.
+        func build() throws -> String {
+            try MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: [home.path]), scratch: scratch.path,
+                home: home.path, configDirectory: home.appendingPathComponent(".config/rv").path,
+                temporaryDirectory: tmp.path).get()
+        }
+        let before = """
+            home="$1"
+            /bin/echo STARTED
+            /bin/mkdir -p "$home/.config/rv" 2>/dev/null && echo CONFIG_RV_MADE
+            /bin/mkdir "$home/.config" 2>/dev/null && echo CONFIG_MADE
+            /bin/mkdir -p "$home/Documents/notes" 2>/dev/null && echo DOCS_MADE
+            echo DONE
+            """
+        let first = try #require(try caged(build(), before, [home.path], in: scratch.path))
+        #expect(first.contains("STARTED"), "\(first)")
+        #expect(first.contains("DONE"), "\(first)")
+        #expect(first.contains("CONFIG_RV_MADE") == false, "\(first)")
+        #expect(first.contains("CONFIG_MADE") == false, "\(first)")
+        #expect(first.contains("DOCS_MADE"), "\(first)")
+
+        // Create ~/.config once outside the cage, then rebuild and retry.
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".config"), withIntermediateDirectories: true)
+        let after = """
+            home="$1"
+            /bin/mkdir "$home/.config/someapp" 2>/dev/null && echo APP_MADE
+            /bin/mkdir -p "$home/.config/rv" 2>/dev/null && echo CONFIG_RV_MADE
+            echo DONE
+            """
+        let second = try #require(try caged(build(), after, [home.path], in: scratch.path))
+        #expect(second.contains("DONE"), "\(second)")
+        #expect(second.contains("APP_MADE"), "\(second)")
+        #expect(second.contains("CONFIG_RV_MADE") == false, "\(second)")
     }
 
     /// `~/.config` a link into a dotfiles directory, with `gh` there and
@@ -435,6 +554,52 @@ struct MCPCageCredentialLiveTests {
         #expect(MCPSandbox.readLink(dotConfig.path) == link.appendingPathComponent("config").path)
     }
 
+    /// Asking another process to start something is refused: `open` of a
+    /// file in the scratch (LaunchServices), a read-only Apple event to the
+    /// Finder, and `launchctl submit` of `/usr/bin/true`, which leaves no
+    /// job behind. Each prints its exit status; none may succeed.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func launchServicesAppleEventsAndLaunchdAreRefusedInTheCage() throws {
+        let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(root.path, 0o700) == 0, "could not create \(root.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let tmp = URL(fileURLWithPath: temporary).appendingPathComponent("rv-cage-lsopen-tmp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/opener", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        try Data("note".utf8).write(to: scratch.appendingPathComponent("note.txt"))
+        let label = "dev.rv.mcp-cage-submit-\(getpid())-\(UUID().uuidString.prefix(8))"
+        defer {
+            let cleanup = Process()
+            cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            cleanup.arguments = ["remove", label]
+            cleanup.standardError = FileHandle.nullDevice
+            if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
+        }
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            s="$1"; label="$2"
+            /bin/echo STARTED
+            /usr/bin/open -g -j "$s/note.txt" 2>/dev/null; echo "open rc=$?"
+            /usr/bin/osascript -e 'tell application "Finder" to get name of startup disk' >/dev/null 2>&1; echo "event rc=$?"
+            /bin/launchctl submit -l "$label" -- /usr/bin/true 2>/dev/null; echo "submit rc=$?"
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [scratch.path, label], in: scratch.path))
+        #expect(output.contains("STARTED") && output.contains("DONE"), "\(output)")
+        for route in ["open", "event", "submit"] {
+            #expect(output.contains("\(route) rc=") && output.contains("\(route) rc=0\n") == false, "\(route): \(output)")
+        }
+    }
+
     /// Two servers, each in its own `sandbox-exec` of the same profile, as
     /// serve starts them: the second cannot read the first's arguments and
     /// environment (`KERN_PROCARGS2`, where rv puts a server's `secrets`),
@@ -459,7 +624,7 @@ struct MCPCageCredentialLiveTests {
         // The first server waits on its stdin until the test ends.
         let sibling = Process()
         sibling.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
-        sibling.arguments = ["-p", profile, probe.path, "stderr", "1", "closed"]
+        sibling.arguments = ["-p", profile, probe.path, "hold"]
         sibling.environment = ["HOME": "/rv-procargs-sibling", "PATH": "/usr/bin:/bin"]
         let input = Pipe()
         sibling.standardInput = input
@@ -471,27 +636,33 @@ struct MCPCageCredentialLiveTests {
             if sibling.isRunning { kill(sibling.processIdentifier, SIGKILL) }
             sibling.waitUntilExit()
         }
-        // sandbox-exec execs the probe in place: wait until it has.
+        // sandbox-exec execs the probe in place: wait until it has. Inside
+        // the cage a process that has exited is refused EPERM too, so the
+        // sibling is shown readable from here before and after the caged
+        // read, which is made once.
         let pid = sibling.processIdentifier
-        let deadline = Date().addingTimeInterval(10)
-        var fromHere = ""
-        while Date() < deadline {
-            fromHere = MCPPlaceholderLiveTests.procargsFromHere(probe, pid, in: root)
-            if fromHere.hasSuffix(" home=yes") { break }
-            usleep(50_000)
-        }
-        try #require(fromHere.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(fromHere)")
+        let before = MCPPlaceholderLiveTests.procargsFromHere(probe, readableWithin: 10, pid, in: root)
+        try #require(before.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(before)")
 
+        // The child holds the fifo until the script closes it; its read is
+        // retried until it shows the child's own environment (a child that
+        // has not yet exec'd the probe is refused), 60 times at most.
         let script = """
             p="$1"; sibling="$2"
             echo "sibling: $("$p" procargs "$sibling")"
             echo "self: $("$p" procargs self)"
             /usr/bin/mkfifo "$PWD/hold"
-            HOME=/rv-procargs-child "$p" stderr 1 closed < "$PWD/hold" > /dev/null 2>&1 &
+            HOME=/rv-procargs-child "$p" hold < "$PWD/hold" > /dev/null 2>&1 &
             child=$!
             exec 3> "$PWD/hold"
-            /bin/sleep 0.5
-            echo "child: $("$p" procargs $child)"
+            tries=0
+            while :; do
+              got=$("$p" procargs $child)
+              case "$got" in *" home=yes") break ;; esac
+              tries=$((tries + 1)); [ $tries -ge 60 ] && break
+              /bin/sleep 0.1
+            done
+            echo "child: $got"
             exec 3>&-
             wait $child
             echo DONE
@@ -500,7 +671,10 @@ struct MCPCageCredentialLiveTests {
         #expect(output.contains("DONE"), "\(output)")
         #expect(output.contains("sibling: failed errno=\(EPERM)"), "\(output)")
         #expect(output.contains("self: ok argc="), "\(output)")
-        #expect(output.contains("child: ok argc="), "\(output)")
+        #expect(output.contains("child: ok argc=") && output.contains(" home=yes\n"), "\(output)")
+        let after = MCPPlaceholderLiveTests.procargsFromHere(probe, readableWithin: 10, pid, in: root)
+        #expect(after.hasSuffix(" home=yes"), "\(after)")
+        #expect(sibling.isRunning)
     }
 }
 #endif

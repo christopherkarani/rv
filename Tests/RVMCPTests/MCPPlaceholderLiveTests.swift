@@ -102,7 +102,7 @@ struct MCPPlaceholderLiveTests {
         // with an environment: it waits on its stdin until the test ends.
         let outside = Process()
         outside.executableURL = probe
-        outside.arguments = ["stderr", "1", "closed"]
+        outside.arguments = ["hold"]
         outside.environment = ["HOME": "/rv-procargs-outside", "PATH": "/usr/bin:/bin"]
         let outsideInput = Pipe()
         outside.standardInput = outsideInput
@@ -114,6 +114,10 @@ struct MCPPlaceholderLiveTests {
             if outside.isRunning { kill(outside.processIdentifier, SIGKILL) }
             outside.waitUntilExit()
         }
+        // Readable from here once it runs the probe's image: the cage's
+        // refusal below is then the cage's, not a process still starting.
+        let outsideRead = Self.procargsFromHere(probe, readableWithin: 10, outside.processIdentifier, in: root)
+        try #require(outsideRead.hasSuffix(" home=yes"), "the outside process never showed its environment here: \(outsideRead)")
         let script = """
             out="$1"
             env > "$out/env"; printf '%s %s' "$*" > "$out/argv"; echo $$ > "$out/pid"; echo $PPID > "$out/ppid"
@@ -192,13 +196,17 @@ struct MCPPlaceholderLiveTests {
         // environment of any non-platform process. The cage refuses it for
         // every process outside the server's own sandbox: its parent (this
         // test process, in serve's place) and another of this user's
-        // processes. Its own read still works. The outside process is
-        // readable from here, so its refusal is the cage's.
+        // processes. Its own read still works. Each caged read is made once:
+        // inside the cage a process that has exited is refused EPERM too,
+        // so the outside process is shown readable from here before and
+        // after it, and the parent is this live process.
         #expect(contents(scratch, "procargs") == "failed errno=\(EPERM)", "\(contents(scratch, "procargs"))")
         #expect(contents(scratch, "procargs-outside") == "failed errno=\(EPERM)",
             "\(contents(scratch, "procargs-outside"))")
         #expect(contents(scratch, "procargs-self").hasPrefix("ok argc="), "\(contents(scratch, "procargs-self"))")
-        #expect(Self.procargsFromHere(probe, outside.processIdentifier, in: root).hasSuffix(" home=yes"))
+        let outsideAfter = Self.procargsFromHere(probe, readableWithin: 10, outside.processIdentifier, in: root)
+        #expect(outsideAfter.hasSuffix(" home=yes"), "\(outsideAfter)")
+        #expect(outside.isRunning)
         let environment = contents(scratch, "env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:\(port)/s/OPENAI_API_KEY"))
@@ -257,8 +265,19 @@ struct MCPPlaceholderLiveTests {
         }
     }
 
-    /// Whether `pid` is a child of this process not yet reaped, running or
-    /// a zombie; its id cannot have been reused. Never blocks, reaps nothing.
+    /// `procargsFromHere`, retried every 50 ms until it reads `pid`'s
+    /// environment (` home=yes`) or `seconds` pass; the last answer. Only
+    /// for reads that must succeed: a process still starting answers EINVAL.
+    static func procargsFromHere(_ probe: URL, readableWithin seconds: TimeInterval, _ pid: pid_t, in directory: URL) -> String {
+        let deadline = Date().addingTimeInterval(seconds)
+        var answer = procargsFromHere(probe, pid, in: directory)
+        while answer.hasSuffix(" home=yes") == false, Date() < deadline {
+            usleep(50_000)
+            answer = procargsFromHere(probe, pid, in: directory)
+        }
+        return answer
+    }
+
     /// `rv-mcp-probe procargs <pid>` run uncaged, its answer written to a
     /// file in `directory` (no pipe another test's child could hold open);
     /// empty when it did not finish in 10 s.
@@ -283,6 +302,8 @@ struct MCPPlaceholderLiveTests {
         return contents(directory, output.lastPathComponent)
     }
 
+    /// Whether `pid` is a child of this process not yet reaped, running or
+    /// a zombie; its id cannot have been reused. Never blocks, reaps nothing.
     private static func unreaped(_ pid: pid_t) -> Bool {
         var info = siginfo_t()
         return waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0

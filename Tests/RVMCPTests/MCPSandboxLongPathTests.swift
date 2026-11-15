@@ -70,6 +70,12 @@ struct MCPSandboxLongPathTests {
             path += "/" + String("Straße-ΣIGMA-ﬁle-\(Self.letterHeavy)".prefix(200))
         }
         while path.utf8.count < 1023 { path += "x" }
+        // This path has no symlink, so it emits no opening allows (those need
+        // a real link to redirect a missing name); passing a write root would
+        // not change the output. The deny literals are the long ones here, and
+        // opening literals, when a symlinked path produces them, go through the
+        // same chunker (covered by the live symlink tests that build and
+        // compile real profiles, and by seatbeltStringSplitsWithoutBreakingAnEscape).
         let filters = MCPSandbox.paths([path], denyTargets: true, writable: [])
         let profile = "(version 1)(allow default)(deny file-read* " + filters + ")"
         #expect(Self.longestLiteral(in: profile) <= MCPSandbox.seatbeltLiteralBytes)
@@ -109,11 +115,18 @@ struct MCPSandboxLongPathTests {
     }
 
     /// Live: a home whose credential paths fold far past the reader limit
-    /// still starts the server and still denies the credential.
-    @Test func cagedServerWithALetterHeavyHomeStartsAndStillDeniesCredentials() throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".rv-cage-long-\(Self.letterHeavy)")
+    /// still starts the server and still denies the credential. The home is a
+    /// fresh 0700 directory under `/Users/Shared`, named with the letter-heavy
+    /// component so the credential literals still fold past the reader limit;
+    /// a real home is not needed, only a long path component no profile line
+    /// names.
+    @Test(.enabled(if: FileManager.default.isWritableFile(atPath: "/Users/Shared"), "needs a writable /Users/Shared outside the cage's write roots"))
+    func cagedServerWithALetterHeavyHomeStartsAndStillDeniesCredentials() throws {
+        let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-long-\(Self.letterHeavy)", isDirectory: true)
         try? FileManager.default.removeItem(at: root)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
         let config = home.appendingPathComponent(".config/rv")

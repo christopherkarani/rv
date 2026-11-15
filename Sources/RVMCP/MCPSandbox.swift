@@ -287,6 +287,17 @@ public enum MCPSandbox {
         // (measured on macOS 27; `(target others)` alone did not refuse it).
         lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
         lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
+        // `proc_pidfdinfo` and `proc_pid_rusage` of another process hand back
+        // its open-file paths and socket endpoints (no values). Refuse them
+        // for every process outside this sandbox too; `proc_listpids` stays,
+        // so pid and short command-name enumeration still works.
+        lines.append("(deny process-info-pidfdinfo process-info-rusage (require-not (target same-sandbox)))")
+        // LaunchServices starts what it opens outside the caller's sandbox,
+        // and an Apple event can ask a running app to run a command outside
+        // it (docs/security/runtime-boundary.md): either would undo every
+        // rule above. The macOS guest profile denies the same two.
+        lines.append("(deny lsopen)")
+        lines.append("(deny appleevent-send)")
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
@@ -1050,11 +1061,18 @@ public enum MCPSandbox {
             compile: unsafeBitCast(compile, to: CompileProfile.self), free: unsafeBitCast(free, to: FreeProfile.self))
     }()
 
-    /// The largest profile rv compiles. libsandbox recurses per filter: on a
-    /// 16 MiB stack a 256 KB profile of distinct filters compiles in about
-    /// 0.1 s, and 384 KB is refused as too large (measured, macOS 27). An
-    /// everyday profile is about 24 KB.
-    static let maximumProfileBytes = 256 * 1024
+    /// The largest profile rv compiles. libsandbox's limit is on filter
+    /// count, not bytes: measured on macOS 27 it refuses about 2700 deny
+    /// rules (~5400 filters) as "profile too large", cleanly, on both the
+    /// compile thread and under `sandbox-exec -p`, and the stack it recurses
+    /// on grows with that count. Dense short filters reach the limit at fewer
+    /// bytes than long ones, so the byte cap is set for the densest shape: at
+    /// 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
+    /// 4x inside the 8 MB stack `sandbox-exec -p` recompiles on in the child,
+    /// ~8x inside `profileCompileStackBytes` — and compiles in about 0.7 s. A
+    /// letter-heavy home fills about 274 KB (few, long filters, a far smaller
+    /// peak); an everyday profile is about 24 KB.
+    static let maximumProfileBytes = 288 * 1024
 
     /// The compile's own stack. A 128 KB profile of distinct filters
     /// overflowed a 512 KiB thread (SIGBUS in `expand_logical_conditions`),
@@ -1138,14 +1156,24 @@ public enum MCPSandbox {
     /// Whether a path is one of `writable`, or inside one, under any spelling
     /// Seatbelt checks (each root as given and resolved, `/tmp` and
     /// `/private/tmp`, the Data-volume firmlink). APFS is case-insensitive
-    /// by default, so both sides are folded; folding can only add a path.
+    /// by default, so both sides are case-folded; folding can only add a
+    /// path, so a miss can only drop an opening or an ancestor the cage
+    /// could otherwise reach, never add a write reach.
     static func insideAny(_ writable: [String]) -> (String) -> Bool {
         let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
-            .map { directorySpelling($0).lowercased() })
+            .map { caseFolded(directorySpelling($0)) })
         return { path in
-            let folded = path.lowercased()
+            let folded = caseFolded(path)
             return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
         }
+    }
+
+    /// Full Unicode case folding, as the macOS guest's path comparison folds
+    /// (runtime-boundary.md's `/uſr`): `ß` folds to `ss` and `ſ` to `s`,
+    /// which `lowercased()` leaves apart, so a write root named with one is
+    /// still matched against the path spelled with the other.
+    static func caseFolded(_ path: String) -> String {
+        path.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// Every directory entry `open` passes through for `path`: each
@@ -1207,17 +1235,23 @@ public enum MCPSandbox {
             ancestors.append(ancestor)
             return ancestors.count <= maximumCredentialAncestors
         }
-        var pending: [String] = []
+        // A start to walk up from, and whether the start directory itself is
+        // named. A credential path is not (its leaf is covered by the
+        // credential deny); a directory a link points at is (swapping it
+        // moves the credential), so it is walked from itself.
+        var pending: [(start: String, includeStart: Bool)] = []
         for path in unreadable {
-            pending += [path, deniedRealPath(path)]
+            pending += [(path, false), (deniedRealPath(path), false)]
             for link in symlinkChain(path) {
-                pending.append(link)
-                if let target = absoluteLinkTarget(link) { pending.append(target) }
+                pending.append((link, false))
+                if let target = absoluteLinkTarget(link) { pending.append((target, true)) }
             }
         }
         // `directory` and each one above it inside a write root. It has no
         // `.` or `..`, so each step drops one component and the walk ends at
-        // `/`. (`URL` would append `..` to a `..`.) False past a cap.
+        // `/`. (`URL` would append `..` to a `..`.) False past a cap. A
+        // symlinked directory it passes is queued, to be walked from itself:
+        // its target (a further link's parent) is otherwise never named.
         func walkUp(from directory: String) -> Bool {
             var parent = directory
             while parent != "/", insideWriteRoot(parent) {
@@ -1228,7 +1262,7 @@ public enum MCPSandbox {
                 guard add(realPath(parent)), add(itself) else { return false }
                 var info = stat()
                 if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
-                    pending.append(target)
+                    pending.append((target, true))
                 }
                 parent = above
             }
@@ -1237,12 +1271,14 @@ public enum MCPSandbox {
         var walked = Set<String>()
         var next = 0
         while next < pending.count {
-            let start = pending[next]
+            let (start, includeStart) = pending[next]
             next += 1
-            guard walked.insert(start).inserted else { continue }
+            guard walked.insert("\(includeStart):\(start)").inserted else { continue }
             if walked.count > maximumCredentialAncestorWalks { return nil }
             let spelled = withoutDotComponents(start)
-            guard walkUp(from: parentDirectory(spelled.path)) else { return nil }
+            // A directory-link target is named itself (walk from it); a
+            // credential path is named from its parent up.
+            guard walkUp(from: includeStart ? spelled.path : parentDirectory(spelled.path)) else { return nil }
             // A directory a `..` stepped out of decides where the rest
             // lands: replaced, it moves the credential. Named like the rest.
             for directory in spelled.steppedOutOf {

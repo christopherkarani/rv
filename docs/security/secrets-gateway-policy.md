@@ -546,14 +546,23 @@ in-process), a process outside the cage started with a marker in its
 environment, and a second `sandbox-exec` of the same profile: each fails
 "Operation not permitted", while this process still reads the outside
 one. What the server still reads: its own arguments and environment and
-those of its children, and every process's pid and name (`pgrep` and
-`KERN_PROC_ALL` still list them). The behaviour change: `proc_pidinfo`
-is refused for every process outside the cage, so a tool that asks about
-one by pid gets nothing (`lsof -p` of the parent printed nothing); signals
-still reach them. `ps` already failed
-(it is setuid). Python, Node 22 and git ran unchanged. Other ways to read
-another process (`task_for_pid`, other `proc_info` calls, launchd's
-environment for rvd) were not tested.
+those of its children while they are alive (a child it started is in the
+same sandbox and stays readable until it exits; once it has exited its pid
+is outside every sandbox and reads "Operation not permitted" like any
+other), and every process's pid, parent pid and short command name
+(`pgrep` and `KERN_PROC_ALL` still list them). The behaviour change:
+`proc_pidinfo`, and now `proc_pidfdinfo` and `proc_pid_rusage`, are
+refused for every process outside the cage, so a tool that asks about one
+by pid gets nothing — its open-file paths, socket endpoints and resource
+counters included (`lsof -p` of the parent printed nothing); signals still
+reach them. `proc_listpids` is not denied, so pid and command-name
+enumeration still works. `ps` already failed (it is setuid). Python, Node
+22 and git ran unchanged. Other ways to read another process
+(`task_for_pid`, the remaining `proc_info` calls, launchd's environment
+for rvd) were not tested. This refusal is of the cage's own calls; the
+cage also denies LaunchServices and Apple events (below), so a server
+cannot ask a process started outside the cage to read the arguments for
+it.
 
 How it starts the server:
 
@@ -625,7 +634,16 @@ What it does not:
   plain `mkdir` as the same create as a directory renamed in, so the
   cage cannot `mkdir` one either (`mkdir -p` of a missing
   `~/Library/Application Support/Google` fails when the home is inside
-  those directories, with `sandbox.writable: ["~/"]` for example); making one that exists still fails "File exists". This holds
+  those directories, with `sandbox.writable: ["~/"]` for example); making one that exists still fails "File exists". This has a first-run cost: with
+  the whole home writable and `~/.config` absent, the cage names
+  `~/.config` and the credential directories under it (`rv`, `gh`,
+  `gcloud`, `opencode`), so a server's own `mkdir -p ~/.config/<app>` is
+  refused — it cannot even create the intermediate `~/.config`. Creating
+  `~/.config` once outside the cage cures the intermediate, after which a
+  non-credential app's directory under it creates as usual; a protected
+  credential directory (`~/.config/rv` itself) stays refused, since the
+  cage never lets a server create its own credential directory (live
+  test). This holds
   for the paths the profile names when the server starts; a link an
   uncaged process retargets later is covered below. When a
   credential's path goes through a symlink and a name on it is missing
@@ -635,19 +653,30 @@ What it does not:
   there could send it to, up to `/`: with `~/.config` linked into a
   `sandbox.writable` directory and a credential under it missing, that
   denies `/Users` and the home, and the server cannot use its scratch.
-  Elsewhere the cage cannot create the name (live test: a symlink, a
-  directory, a cloned link, a rename and a hard link onto it all fail),
-  so only the credential paths are denied and such a server runs as
-  usual. File copies and file clones are not affected:
+  Elsewhere the cage cannot create the name by its own calls (live test:
+  a symlink, a directory, a cloned link, a rename and a hard link onto it
+  all fail), so only the credential paths are denied and such a server
+  runs as usual. "By its own calls" is the whole of it only because the
+  cage also denies LaunchServices and Apple events (below): a server
+  cannot hand the create, or a credential read, to a process started
+  outside the cage. File copies and file clones are not affected:
   `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
   tree file by file; only a raw `clonefile(2)` of a directory from
   outside those is refused, so a tool that clones whole package
   directories out of a cache elsewhere (bun's `clonefile` backend, with
   its cache in `~/.bun/install/cache`) gets "Operation not permitted":
-  add that cache to `sandbox.writable`. A profile over 256 KB is refused
+  add that cache to `sandbox.writable`. A profile over 288 KiB is refused
   before launch rather than compiled (an everyday one is about 24 KB; a
-  home under the temporary directory, spelled through `/var`, can pass
-  it). A credential reached through a symlink (the credential itself or
+  letter-heavy home fills about 274 KB, and a home under the temporary
+  directory, spelled through `/var`, can pass the cap). The cap is set for
+  libsandbox's real limit, which is on filter count, not bytes: measured on
+  macOS 27 it refuses about 2700 deny rules as "profile too large", cleanly,
+  on both the compile thread and under `sandbox-exec`, and the stack it
+  recurses on grows with that count. Dense short filters reach the limit at
+  fewer bytes than long ones, so the byte cap is set for the densest shape:
+  at 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
+  4x inside the 8 MB stack `sandbox-exec` recompiles the text on in the
+  child, ~8x inside the compile thread — and compiles in about 0.7 s. A credential reached through a symlink (the credential itself or
   a directory above it) is denied at the link and at the target it
   resolves to when the server starts; if a process outside the cage
   retargets that link while the server runs, the new target stays
@@ -668,6 +697,20 @@ What it does not:
   a provider CLI that reaches one, for the real value. rv's keychain items
   have the default access list, so a first read by another program should
   prompt you; that prompt was not tested, and you can approve it.
+- It denies LaunchServices (`lsopen`) and Apple events
+  (`appleevent-send`), as the macOS guest profile does. LaunchServices
+  starts what it opens outside the caller's sandbox, and an Apple event
+  can ask an already-running app to run a command outside it; either would
+  undo every rule above, so a caged server that writes a tiny `.app` into
+  its scratch and runs `open` on it, or sends an `osascript` event to a
+  running app, could reach an uncaged process. The behaviour change: a
+  caged server can no longer open a browser or any app — `open`, `open -a`
+  and an `osascript` Apple event to a running app are refused, and
+  `launchctl submit`/`bootstrap` was already refused (live test).
+  `launchd` (`launchctl submit`) is refused too, so that route to a fresh
+  process is closed. A narrow, safe allowance would have to name a single
+  helper and confirm LaunchServices runs it inside the same sandbox (it
+  does not by default); this round adds no switch for it.
 - It keeps nothing else from the server: other variables, the server's
   own `secrets`, and files outside the denied directories are as for any
   caged server.
