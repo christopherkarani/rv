@@ -367,8 +367,13 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         case clientNotReading
     }
 
+    /// How a server that went away is started again: its upstream (the
+    /// values to scrub) and connection, planned as at serve start.
+    public typealias Relaunch = @Sendable (String) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError>
+
     private var core: MCPGatewayCore
     private let connections: [MCPUpstreamConnection]
+    private let relaunch: Relaunch?
     private let oauthStore: MCPOAuthTokenStore
     private let input: Int32
     private let output: Int32
@@ -408,6 +413,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         input: Int32 = STDIN_FILENO,
         output: Int32 = STDOUT_FILENO,
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
+        relaunch: Relaunch? = nil,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -415,6 +421,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     ) {
         self.core = core
         self.connections = connections
+        self.relaunch = relaunch
         self.oauthStore = oauthStore
         self.input = input
         self.output = output

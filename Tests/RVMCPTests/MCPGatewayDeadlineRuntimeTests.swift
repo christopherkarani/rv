@@ -62,7 +62,8 @@ final class GatewayRun: Sendable {
     /// `log`, when given, is called after the line is recorded.
     init(
         core: MCPGatewayCore, connections: [MCPUpstreamConnection],
-        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes, log: (@Sendable (String) -> Void)? = nil
+        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes, log: (@Sendable (String) -> Void)? = nil,
+        relaunch: MCPGatewayRuntime.Relaunch? = nil
     ) {
         let client = LineClient()
         let audits = RecordedAudits()
@@ -73,6 +74,7 @@ final class GatewayRun: Sendable {
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
             writeBufferBytes: writeBufferBytes,
+            relaunch: relaunch,
             audit: { record in audits.items.withLock { $0.append(record) } },
             log: { line in
                 logs.lines.withLock { $0.append(line) }
