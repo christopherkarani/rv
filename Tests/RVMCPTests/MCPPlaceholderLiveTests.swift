@@ -237,6 +237,89 @@ struct MCPPlaceholderLiveTests {
         #expect(fixture.auditText.contains(placeholderRealValue) == false)
     }
 
+    /// A bound server that never answers `initialize` is stopped at the start
+    /// deadline: the kill reaches its whole group (a grandchild that ignores
+    /// SIGTERM included) while serve keeps running, and its lease ends.
+    @Test(.enabled(if: hostBindsPlaceholders && MCPSandbox.enforced), .timeLimit(.minutes(3)))
+    func aBoundServerThatNeverAnswersInitializeHasItsWholeGroupKilled() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-placeholder-start-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent("Library/Caches"), withIntermediateDirectories: true)
+        let name = "placeholder-start"
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(name)", isDirectory: true)
+        let fixture = try PlaceholderSecretsFixture()
+        defer { fixture.tearDown() }
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
+        defer { broker.stop() }
+        let script = """
+            out="$1"
+            echo $$ > "$out/pid"
+            /bin/sh -c 'trap "" TERM; /bin/sleep 120' & echo $! > "$out/grandchild"
+            echo ready > "$out/ready"
+            while :; do /bin/sleep 0.05; done
+            """
+        let definition = MCPServerDefinition(
+            name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
+            sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
+        let configuration = MCPConfiguration(servers: [definition])
+        let planned = try MCPLaunchPlanner.plan(
+            servers: [name], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
+            resolver: CountingResolver().resolver, baseEnvironment: ["PATH": "/usr/bin:/bin"], requireSandbox: true,
+            sandbox: Self.cage(home: home, configDirectory: fixture.directory), placeholders: .broker(broker)
+        ).get()
+        guard case .placeholderBound = planned.first?.1 else {
+            Issue.record("not bound: \(String(describing: planned.first?.1))")
+            return
+        }
+        let client = LineClient()
+        let core = MCPGatewayCore(
+            configuration: configuration, upstreams: planned.map { $0.0 },
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true }, deadlines: MCPGatewayDeadlines(start: 1, list: 300))
+        let logged = Mutex<[String]>([])
+        let runtime = MCPGatewayRuntime(
+            core: core, connections: planned.map { $0.1 },
+            input: client.toGateway.fileHandleForReading.fileDescriptor,
+            output: client.fromGateway.fileHandleForWriting.fileDescriptor,
+            audit: { _ in }, log: { line in logged.withLock { $0.append(line) } })
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            runtime.run()
+            done.signal()
+        }
+        // Whatever fails below, nothing outlives the test (see the test above).
+        var served = false
+        var grandchild: pid_t?
+        defer {
+            if served == false {
+                if let leader = pid_t(contents(scratch, "pid")), leader > 1, Self.unreaped(leader) {
+                    _ = kill(-leader, SIGKILL)
+                }
+                try? client.toGateway.fileHandleForWriting.close()
+                _ = done.wait(timeout: .now() + 10)
+            }
+            if let grandchild, kill(grandchild, 0) == 0 { _ = kill(grandchild, SIGKILL) }
+        }
+        try #require(eventually(60) { contents(scratch, "ready") == "ready" }, "the server never got going")
+        let leader = try #require(pid_t(contents(scratch, "pid")))
+        grandchild = try #require(pid_t(contents(scratch, "grandchild")))
+        #expect(getpgid(leader) == leader)
+
+        #expect(eventually(60) { logged.withLock { $0 }.contains { $0.contains("did not answer initialize within 1 s") } },
+            "\(logged.withLock { $0 })")
+        // Serve is still running; the group is gone and the lease with it.
+        #expect(eventually(60) { kill(leader, 0) == -1 && errno == ESRCH })
+        #expect(eventually(60) { grandchild.map { kill($0, 0) == -1 && errno == ESRCH } ?? false })
+        #expect(eventually(60) { broker.broker.liveCount == 0 })
+        try client.toGateway.fileHandleForWriting.close()
+        served = done.wait(timeout: .now() + 30) == .success
+        #expect(served)
+    }
+
     /// The cage `MCPSandbox.apply` builds, for a fake home: apply() takes only
     /// the passwd home (`unreviewedHome`), and a test must not write there.
     /// Same scratch, network reach, profile and launch rewrite.
