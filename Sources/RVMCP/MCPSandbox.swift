@@ -86,9 +86,17 @@ public enum MCPSandbox {
         }
     }
 
-    /// `proxy` is the one `server`'s launch uses now.
+    /// `proxy` is the one `server`'s launch uses now: one planned earlier
+    /// for it (a launch that went away and is being started again) is
+    /// stopped.
     static func track(_ proxy: EgressProxy, server: String) {
-        proxies.withLock { $0.append((server, proxy)) }
+        let earlier = proxies.withLock { running -> [EgressProxy] in
+            let replaced = running.filter { $0.server == server }.map(\.proxy)
+            running.removeAll { $0.server == server }
+            running.append((server, proxy))
+            return replaced
+        }
+        earlier.forEach { $0.stop() }
     }
 
     /// The proxy credential a caged launch carries in its proxy URL, so the

@@ -1215,7 +1215,28 @@ enum MCPRun {
         resolver: SecretResolver, placeholders: MCPPlaceholderLeasing,
         sandbox: @escaping @Sendable () -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>
     ) -> MCPGatewayRuntime.Relaunch {
-        { server in .failure(.unknownServer(server)) }
+        { server in
+            switch MCPLaunchPlanner.plan(
+                servers: [server], configuration: configuration, secrets: secrets, resolver: resolver,
+                baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load,
+                sandbox: sandbox(), placeholders: placeholders)
+            {
+            case .failure(let error):
+                if case .secretUnavailable(let server, let secret, _) = error {
+                    // Only the names, as at serve start.
+                    auditOrLog(
+                        AuditEvent(
+                            time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
+                            reason: "secret refused at relaunch", source: "rv mcp serve",
+                            detail: ["server": server, "secret": secret]),
+                        configDirectory: environment.configDirectory)
+                }
+                return .failure(error)
+            case .success(let planned):
+                guard let first = planned.first else { return .failure(.unknownServer(server)) }
+                return .success(first)
+            }
+        }
     }
 
     /// Every server that will be signed: command, arguments, tool policy, env
@@ -1749,6 +1770,14 @@ struct MCPServe: AsyncParsableCommand {
             core: core,
             connections: planned.map { $0.1 },
             oauthStore: environment.oauthTokens,
+            relaunch: MCPRun.relaunch(
+                configuration: configuration, environment: environment, secrets: secrets,
+                resolver: .live(home: home.rawValue), placeholders: .broker(placeholderBroker),
+                sandbox: {
+                    MCPSandbox.apply(
+                        configDirectory: environment.configDirectory, home: environment.home,
+                        denied: DenialAudit.forwarder(configDirectory: environment.configDirectory))
+                }),
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log,
