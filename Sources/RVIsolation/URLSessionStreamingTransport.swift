@@ -525,13 +525,15 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
     /// cancelled: Darwin answered a Basic challenge by sending the request,
     /// its body and its brokered credential, again, and default handling
     /// may offer the upstream an ambient credential, such as Kerberos.
+    /// corelibs-foundation raises neither of those (libcurl checks the
+    /// certificate itself), so on Linux every challenge is cancelled.
     static func disposition(forAuthenticationMethod method: String) -> URLSession.AuthChallengeDisposition {
-        switch method {
-        case NSURLAuthenticationMethodServerTrust, NSURLAuthenticationMethodClientCertificate:
-            .performDefaultHandling
-        default:
-            .cancelAuthenticationChallenge
-        }
+        #if canImport(Darwin)
+        let handledAsBefore = [NSURLAuthenticationMethodServerTrust, NSURLAuthenticationMethodClientCertificate]
+        #else
+        let handledAsBefore: [String] = []
+        #endif
+        return handledAsBefore.contains(method) ? .performDefaultHandling : .cancelAuthenticationChallenge
     }
 
     /// On Darwin a cancelled challenge ends the task with no response, so
