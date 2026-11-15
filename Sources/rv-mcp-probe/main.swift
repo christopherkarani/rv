@@ -17,6 +17,9 @@
 // `rv-mcp-probe unix-connect <path>` connects to the Unix-domain stream
 // socket at `path` and writes one byte, printing whether it connected or
 // the errno.
+// `rv-mcp-probe unix-dgram <path>` connects one Unix-domain datagram socket
+// to `path` and sends one byte to it from another with `sendto`, printing
+// what each did.
 // `rv-mcp-probe peerinfo <pid>` asks `proc_pidfdinfo` about `pid`'s fd 0
 // and `proc_pid_rusage` about `pid`, printing whether each answered.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
@@ -220,6 +223,42 @@ private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
     return 0
 }
 
+/// `connect` one datagram socket to `path`, and `sendto` one byte to it from
+/// another, printing what each did.
+private func unixDatagram(_ text: String) -> Int32 {
+    let path = Array(text.utf8)
+    var address = sockaddr_un()
+    guard path.count < MemoryLayout.size(ofValue: address.sun_path) else {
+        say("unix-dgram failed path too long")
+        return 2
+    }
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path) }
+    let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+    let connecting = socket(AF_UNIX, SOCK_DGRAM, 0)
+    let sending = socket(AF_UNIX, SOCK_DGRAM, 0)
+    guard connecting >= 0, sending >= 0 else {
+        say("unix-dgram failed socket errno=\(errno)")
+        return 1
+    }
+    defer {
+        close(connecting)
+        close(sending)
+    }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(connecting, $0, size) }
+    }
+    let connectAnswer = connected == 0 ? "dgram-connect ok" : "dgram-connect failed errno=\(errno)"
+    var byte = UInt8(ascii: "y")
+    let sent = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(sending, &byte, 1, 0, $0, size) }
+    }
+    let sendAnswer = sent == 1 ? "dgram-sendto sent=1" : "dgram-sendto failed errno=\(errno)"
+    say(connectAnswer + " " + sendAnswer)
+    return 0
+}
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first ?? "" {
 case "remote-starved":
@@ -308,6 +347,12 @@ case "unix-connect":
     say(sent == 1 ? "unix-connect connected sent=1" : "unix-connect connected send failed errno=\(errno)")
     close(fd)
     exit(0)
+case "unix-dgram":
+    guard arguments.count == 2 else {
+        say("usage: rv-mcp-probe unix-dgram <path>")
+        exit(2)
+    }
+    exit(unixDatagram(arguments[1]))
 case "peerinfo":
     // `proc_pidfdinfo` of `pid`'s fd 0 (a pipe in the tests) and
     // `proc_pid_rusage` of `pid`: whether each answered, never what.
@@ -340,6 +385,6 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | hold | unix-connect <path> | peerinfo <pid> | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
+        + " | hold | unix-connect <path> | unix-dgram <path> | peerinfo <pid> | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
     exit(2)
 }
