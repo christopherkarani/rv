@@ -177,8 +177,9 @@ public final class SecretGateway: @unchecked Sendable {
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
     /// Test seam, nil in production. Runs on the accept loop after a
-    /// connection is accepted and before its socket is set up.
-    var afterAccept: (@Sendable () -> Void)?
+    /// connection is accepted and before its socket is set up, given the
+    /// accepted socket.
+    var afterAccept: (@Sendable (Int32) -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
     /// Seconds a write to a client may block before its connection is cut,
@@ -494,7 +495,7 @@ public final class SecretGateway: @unchecked Sendable {
                 close(client)
                 return
             }
-            afterAccept?()
+            afterAccept?(client)
             // Darwin inherits `O_NONBLOCK` from the listener. A read that
             // races the client's write is `EAGAIN`, and that is not a
             // malformed request. The accepted number is closed once before

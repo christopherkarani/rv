@@ -267,10 +267,14 @@ struct SecretGatewayOutsiderTests {
         let paused = StopFlag()
         let accepted = DispatchSemaphore(value: 0)
         let reset = DispatchSemaphore(value: 0)
-        gateway.afterAccept = {
+        gateway.afterAccept = { client in
             guard paused.raised.exchange(true, ordering: .relaxed) == false else { return }
             accepted.signal()
             _ = reset.wait(timeout: .now() + 10)
+            // The reset has arrived once the socket is readable (its error
+            // pending), instead of after a guessed sleep.
+            var state = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+            _ = poll(&state, 1, 10_000)
         }
         let port = try gateway.start().get()
         defer { gateway.stop() }
@@ -285,7 +289,6 @@ struct SecretGatewayOutsiderTests {
         try dial(resetting, to: port)
         #expect(accepted.wait(timeout: .now() + 10) == .success)
         close(resetting)
-        Thread.sleep(forTimeInterval: 0.1)
         reset.signal()
 
         let member = try boundClient()
