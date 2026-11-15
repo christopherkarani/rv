@@ -1213,17 +1213,23 @@ public enum MCPSandbox {
             ancestors.append(ancestor)
             return ancestors.count <= maximumCredentialAncestors
         }
-        var pending: [String] = []
+        // A start to walk up from, and whether the start directory itself is
+        // named. A credential path is not (its leaf is covered by the
+        // credential deny); a directory a link points at is (swapping it
+        // moves the credential), so it is walked from itself.
+        var pending: [(start: String, includeStart: Bool)] = []
         for path in unreadable {
-            pending += [path, deniedRealPath(path)]
+            pending += [(path, false), (deniedRealPath(path), false)]
             for link in symlinkChain(path) {
-                pending.append(link)
-                if let target = absoluteLinkTarget(link) { pending.append(target) }
+                pending.append((link, false))
+                if let target = absoluteLinkTarget(link) { pending.append((target, true)) }
             }
         }
         // `directory` and each one above it inside a write root. It has no
         // `.` or `..`, so each step drops one component and the walk ends at
-        // `/`. (`URL` would append `..` to a `..`.) False past a cap.
+        // `/`. (`URL` would append `..` to a `..`.) False past a cap. A
+        // symlinked directory it passes is queued, to be walked from itself:
+        // its target (a further link's parent) is otherwise never named.
         func walkUp(from directory: String) -> Bool {
             var parent = directory
             while parent != "/", insideWriteRoot(parent) {
@@ -1234,7 +1240,7 @@ public enum MCPSandbox {
                 guard add(realPath(parent)), add(itself) else { return false }
                 var info = stat()
                 if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
-                    pending.append(target)
+                    pending.append((target, true))
                 }
                 parent = above
             }
@@ -1243,12 +1249,14 @@ public enum MCPSandbox {
         var walked = Set<String>()
         var next = 0
         while next < pending.count {
-            let start = pending[next]
+            let (start, includeStart) = pending[next]
             next += 1
-            guard walked.insert(start).inserted else { continue }
+            guard walked.insert("\(includeStart):\(start)").inserted else { continue }
             if walked.count > maximumCredentialAncestorWalks { return nil }
             let spelled = withoutDotComponents(start)
-            guard walkUp(from: parentDirectory(spelled.path)) else { return nil }
+            // A directory-link target is named itself (walk from it); a
+            // credential path is named from its parent up.
+            guard walkUp(from: includeStart ? spelled.path : parentDirectory(spelled.path)) else { return nil }
             // A directory a `..` stepped out of decides where the rest
             // lands: replaced, it moves the credential. Named like the rest.
             for directory in spelled.steppedOutOf {
