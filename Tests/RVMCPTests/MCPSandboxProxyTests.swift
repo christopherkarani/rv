@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVIsolation
 import Testing
 @testable import RVMCP
