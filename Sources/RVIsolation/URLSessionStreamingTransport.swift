@@ -497,12 +497,46 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
             completionHandler(.cancel)
             return
         }
-        let headers = http.allHeaderFields.compactMap { key, value -> (name: String, value: String)? in
+        exchange.push(.head(status: http.statusCode, headers: Self.headers(of: http)))
+        completionHandler(.allow)
+    }
+
+    /// What a challenge gets. The server's certificate is checked as
+    /// URLSession always checks it, and a server's request for a client
+    /// certificate is handled as before. Every other challenge is
+    /// cancelled: Darwin answered a Basic challenge by sending the request,
+    /// its body and its brokered credential, again, and default handling
+    /// may offer the upstream an ambient credential, such as Kerberos.
+    static func disposition(forAuthenticationMethod method: String) -> URLSession.AuthChallengeDisposition {
+        switch method {
+        case NSURLAuthenticationMethodServerTrust, NSURLAuthenticationMethodClientCertificate:
+            .performDefaultHandling
+        default:
+            .cancelAuthenticationChallenge
+        }
+    }
+
+    /// A cancelled challenge ends the task with no response, so the
+    /// response that carried the challenge is handed on first: the writer
+    /// refuses a 401 to its client, and its audit records the 401.
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let disposition = Self.disposition(forAuthenticationMethod: challenge.protectionSpace.authenticationMethod)
+        if disposition == .cancelAuthenticationChallenge, let exchange = exchange(for: task) {
+            let response = challenge.failureResponse as? HTTPURLResponse
+            exchange.push(.head(status: response?.statusCode ?? 401, headers: response.map(Self.headers(of:)) ?? []))
+        }
+        completionHandler(disposition, nil)
+    }
+
+    private static func headers(of response: HTTPURLResponse) -> [(name: String, value: String)] {
+        response.allHeaderFields.compactMap { key, value -> (name: String, value: String)? in
             guard let name = key as? String, let text = value as? String else { return nil }
             return (name, text)
         }
-        exchange.push(.head(status: http.statusCode, headers: headers))
-        completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

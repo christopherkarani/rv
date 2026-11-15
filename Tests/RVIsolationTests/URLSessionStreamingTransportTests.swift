@@ -644,6 +644,23 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits(method, "/auth/\(challenge)") == 1)
     }
 
+    /// The server's certificate is still checked as URLSession checks it,
+    /// and a request for a client certificate handled as before; every
+    /// credential challenge is cancelled, never answered.
+    @Test
+    func onlyCredentialChallengesAreCancelled() {
+        let decide = URLSessionStreamingDelegate.disposition(forAuthenticationMethod:)
+        #expect(decide(NSURLAuthenticationMethodServerTrust) == .performDefaultHandling)
+        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .performDefaultHandling)
+        for method in [
+            NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodNTLM,
+            NSURLAuthenticationMethodNegotiate, NSURLAuthenticationMethodDefault, NSURLAuthenticationMethodHTMLForm,
+            "an unknown method",
+        ] {
+            #expect(decide(method) == .cancelAuthenticationChallenge, "\(method)")
+        }
+    }
+
     /// Through the gateway, a challenged request reaches the upstream once,
     /// and its client gets the gateway's own refusal, never the challenge.
     @Test(.timeLimit(.minutes(1)), arguments: ["basic", "digest"])
