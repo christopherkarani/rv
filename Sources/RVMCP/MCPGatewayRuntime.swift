@@ -590,6 +590,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 event(item)
             case .log(let text):
                 log(text)
+            case .stopUpstream:
+                break
             }
         }
     }

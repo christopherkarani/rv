@@ -166,6 +166,11 @@ public struct MCPServerDefinition: Sendable, Equatable {
     public var sandbox: MCPSandboxPolicy?
     /// Set instead of `command`; the decoder refuses process keys beside it.
     public var remote: MCPRemoteServer?
+    /// How long one `tools/call` may go unanswered; its progress restarts it.
+    public var callTimeoutSeconds: Int = MCPServerDefinition.defaultCallTimeoutSeconds
+
+    public static let defaultCallTimeoutSeconds = 300
+    public static let callTimeoutRange = 1...86400
 
     public init(name: String, description: String? = nil, remote: MCPRemoteServer, tools: MCPToolPolicy = MCPToolPolicy()) {
         self.init(name: name, description: description, command: "", tools: tools)

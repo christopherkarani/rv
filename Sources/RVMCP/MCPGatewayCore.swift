@@ -7,6 +7,9 @@ public enum MCPGatewayInput: Sendable, Equatable {
     case clientUnparseable
     case upstream(server: String, message: JSONValue)
     case upstreamExited(server: String)
+    /// Time passed: deadlines are checked, as they are on every input. The
+    /// runtime sends one about every second.
+    case tick
 }
 
 public enum MCPGatewayOutput: Sendable, Equatable {
@@ -16,6 +19,24 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Any other audit event (for example a rejected forged grant).
     case event(AuditEvent)
     case log(String)
+    /// Stop this upstream now: kill its process, or close its connection.
+    /// The core already counts it failed; its exit may still be reported.
+    case stopUpstream(server: String)
+}
+
+/// How long the gateway waits for an upstream's `initialize` and for each
+/// `tools/list` page. A `tools/call` waits its server's `callTimeoutSeconds`.
+public struct MCPGatewayDeadlines: Sendable, Equatable {
+    public static let standardStart: TimeInterval = 30
+    public static let standardList: TimeInterval = 30
+
+    public var start: TimeInterval
+    public var list: TimeInterval
+
+    public init(start: TimeInterval = standardStart, list: TimeInterval = standardList) {
+        self.start = start
+        self.list = list
+    }
 }
 
 /// How an `ask` call got its approval.
@@ -252,6 +273,7 @@ public struct MCPGatewayCore {
     /// when it could not be written, and the call is then refused.
     let recordForward: @Sendable (MCPCallRecord) -> Bool
     let clock: () -> Date
+    let deadlines: MCPGatewayDeadlines
     let version: String
 
     /// server → tool → definition hash the user trusted; nil when the pin
@@ -314,7 +336,8 @@ public struct MCPGatewayCore {
         pinning: MCPToolPinning,
         recordForward: @escaping @Sendable (MCPCallRecord) -> Bool,
         version: String = "1",
-        clock: @escaping () -> Date = { Date() }
+        clock: @escaping () -> Date = { Date() },
+        deadlines: MCPGatewayDeadlines = MCPGatewayDeadlines()
     ) {
         self.configuration = configuration
         self.upstreams = Dictionary(upstreams.map { ($0.definition.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -324,6 +347,7 @@ public struct MCPGatewayCore {
         self.pins = pinning.pins
         self.recordForward = recordForward
         self.clock = clock
+        self.deadlines = deadlines
         self.version = version
     }
 
@@ -370,6 +394,7 @@ public struct MCPGatewayCore {
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
+        case .tick: break
         }
         return outputs
     }

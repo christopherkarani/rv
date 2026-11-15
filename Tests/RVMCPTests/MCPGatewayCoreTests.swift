@@ -33,7 +33,9 @@ struct GatewayHarness {
     init(
         _ configuration: MCPConfiguration, secrets: [String: [(name: String, value: String)]] = [:],
         pinning: MCPToolPinning = .unenforced,
-        recordForward: @escaping @Sendable (MCPCallRecord) -> Bool = { _ in true }
+        recordForward: @escaping @Sendable (MCPCallRecord) -> Bool = { _ in true },
+        clock: @escaping () -> Date = { Date() },
+        deadlines: MCPGatewayDeadlines = MCPGatewayDeadlines()
     ) {
         let upstreams = configuration.servers.map {
             MCPGatewayCore.Upstream(definition: $0, secretValues: secrets[$0.name] ?? [])
@@ -41,7 +43,7 @@ struct GatewayHarness {
         let approvals = self.approvals
         core = MCPGatewayCore(
             configuration: configuration, upstreams: upstreams, approvals: approvals.gate, pinning: pinning,
-            recordForward: recordForward, clock: { Date() })
+            recordForward: recordForward, clock: clock, deadlines: deadlines)
     }
 
     /// Starts and answers every upstream initialize.
@@ -70,6 +72,7 @@ extension [MCPGatewayOutput] {
     var toUpstream: [(String, JSONValue)] { compactMap { if case .toUpstream(let s, let m) = $0 { (s, m) } else { nil } } }
     var audits: [MCPCallRecord] { compactMap { if case .audit(let r) = $0 { r } else { nil } } }
     var logs: [String] { compactMap { if case .log(let l) = $0 { l } else { nil } } }
+    var stopped: [String] { compactMap { if case .stopUpstream(let s) = $0 { s } else { nil } } }
 }
 
 @Suite("MCPGatewayCore")
