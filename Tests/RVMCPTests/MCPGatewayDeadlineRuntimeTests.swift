@@ -220,10 +220,15 @@ struct MCPGatewayDeadlineRuntimeTests {
             })
         let run = GatewayRun(core: core, connections: [Self.launch("slow", mode: "answers", in: directory)])
         #expect(await run.initialize())
+        // The same call is forwarded while serving.
+        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        #expect(await run.client.next(timeout: 120)?["id"] == .int(2))
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        #expect(await eventuallyAsync { counted.value.withLock { $0 } == 1 })
         run.runtime.requestShutdown()
         #expect(await run.ended(within: 90))
-        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
-        let handled = await eventuallyAsync(3) { counted.value.withLock { $0 } > 0 }
+        run.client.send(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
+        let handled = await eventuallyAsync(3) { counted.value.withLock { $0 } > 1 }
         #expect(handled == false)
         try? run.client.toGateway.fileHandleForWriting.close()
     }
