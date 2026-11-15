@@ -258,11 +258,13 @@ private final class SignInOutcome: Sendable {
     func get() -> String? { box.withLock { $0 } }
 }
 
-/// Eight knocks that reset after their request line, then the real callback;
-/// returns the code the redirect took.
+/// Three knocks that reset after their request line, then the real
+/// callback; returns the code the redirect took. Darwin keeps a reset
+/// connection queued with its line readable, so each is answered; fewer
+/// than the listen backlog of 8, or the callback is dropped unqueued.
 private func signInPastResetKnocks() -> String? {
     guard let redirect = MCPLoopbackRedirect.open() else { return nil }
-    for _ in 0..<8 {
+    for _ in 0..<3 {
         guard let knock = loopbackClient(port: redirect.port) else { return nil }
         _ = Array("GET /x HTTP/1.1\r\n".utf8).withUnsafeBytes { send(knock, $0.baseAddress, $0.count, 0) }
         var reset = linger(l_onoff: 1, l_linger: 0)
