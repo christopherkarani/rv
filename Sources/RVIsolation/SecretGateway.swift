@@ -864,18 +864,26 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream sent no response"))
             return
         }
+        // The terminator only follows a body whose every byte was written: a
+        // client must never read a cut-off answer as a complete one.
         if framed {
             let rest = scrubber.finish()
             if scrubber.tripped {
                 _ = trip(sending: rest)
                 return
             }
-            _ = writeChunk(rest)
-            _ = write(Array("0\r\n\r\n".utf8))
+            guard writeChunk(rest), write(Array("0\r\n\r\n".utf8)) else {
+                closed = true
+                failure = failure ?? Self.cutShort
+                return
+            }
         }
-        flushHeld()
+        let flushed = flushHeld()
         closed = true
+        if flushed == false { failure = failure ?? Self.cutShort }
     }
+
+    static let cutShort = "the client stopped reading; its answer was cut short"
 
     func fail(_ reason: String) {
         lock.lock()
