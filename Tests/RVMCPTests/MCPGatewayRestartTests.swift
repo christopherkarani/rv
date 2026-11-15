@@ -386,4 +386,197 @@ struct MCPGatewayRestartTests {
         }
         #expect(pinged == 1)
     }
+
+    // MARK: Relaunch edge cases
+
+    static let closeIssue = #"{"name":"close_issue","description":"Close an issue","inputSchema":{"type":"object","properties":{"number":{"type":"integer"}}}}"#
+    static let closeCall = #"{"jsonrpc":"2.0","id":"x","method":"tools/call","params":{"name":"close_issue","arguments":{"number":1}}}"#
+    static let elicits = #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#
+    static let createCall = #"{"jsonrpc":"2.0","id":"p","method":"tools/call","params":{"name":"create_issue","arguments":{"title":"t"}}}"#
+
+    /// Gone, waited out its first delay, and told to start again.
+    static func dueForRelaunch(_ harness: inout GatewayHarness, _ clock: ManualClock) {
+        _ = harness.core.handle(.upstreamExited(server: "github"))
+        clock.advance(1)
+        #expect(harness.core.handle(.tick).restarted == ["github"])
+    }
+
+    /// Started again and initialized: the id of rv's own `tools/list`.
+    static func relaunchToListing(_ harness: inout GatewayHarness) -> Int {
+        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let answered = harness.core.handle(.upstream(server: "github", message: MCPGatewayDeadlineTests.answer(initialize)))
+        return answered.sent("tools/list").first?["id"]?.intValue ?? -1
+    }
+
+    /// A tool rv does not see in the relaunched server's listing is not
+    /// called on what an earlier launch listed: it is refused until this
+    /// launch lists it. Pinned or not, it is never forwarded.
+    @Test(arguments: [true, false])
+    func aToolTheRelaunchDidNotListIsRefusedUntilThisLaunchListsIt(enforced: Bool) {
+        let clock = ManualClock()
+        let pins = ["github": [
+            "list_issues": MCPToolPinTests.hash(Self.listIssues), "close_issue": MCPToolPinTests.hash(Self.closeIssue),
+        ]]
+        var harness = Self.harness(clock, pinning: enforced ? PinRecorder().pinning(pins) : .unenforced)
+        _ = harness.ready()
+        _ = Self.list(&harness, [Self.listIssues, Self.closeIssue])
+        #expect(harness.client(Self.closeCall).sent("tools/call").count == 1)
+
+        _ = Self.crash(&harness, clock, delay: 1, [Self.listIssues])
+        let refused = harness.client(Self.closeCall)
+        #expect(refused.toUpstream.isEmpty, "forwarded a tool the relaunch did not list")
+        #expect(refused.audits.count == 1)
+        #expect(refused.audits.first?.outcome == .notRun)
+        #expect(refused.audits.first?.isError == true)
+        let message = refused.toClient.first { $0["id"] == .string("x") }?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("did not list"), "\(message)")
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty, "asked instead of refusing")
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+
+        // This launch lists it, unchanged: it runs again under `allow`.
+        _ = Self.list(&harness, [Self.listIssues, Self.closeIssue])
+        #expect(harness.client(Self.closeCall).sent("tools/call").count == 1)
+    }
+
+    @Test func aRelistingWhoseCursorCyclesIsNotCompleteAndStopsTheServer() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let first = Self.relaunchToListing(&harness)
+        let page = harness.upstream(
+            "github", #"{"jsonrpc":"2.0","id":\#(first),"result":{"tools":[\#(Self.listIssues)],"nextCursor":"p2"}}"#)
+        let second = page.sent("tools/list").first?["id"]?.intValue ?? -1
+        let cycled = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(second),"result":{"tools":[],"nextCursor":"p2"}}"#)
+        #expect(cycled.stopped == ["github"])
+        #expect(cycled.toClient.isEmpty)
+        let message = harness.client(Self.listCall).toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("rv is restarting it"), "\(message)")
+        _ = Self.crash(&harness, clock, delay: 2)
+    }
+
+    @Test func aRelistingPageThatTimesOutPartwayStopsTheServerAndCounts() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let first = Self.relaunchToListing(&harness)
+        let page = harness.upstream(
+            "github", #"{"jsonrpc":"2.0","id":\#(first),"result":{"tools":[\#(Self.listIssues)],"nextCursor":"p2"}}"#)
+        #expect(page.sent("tools/list").count == 1)
+        clock.advance(MCPGatewayDeadlines.standardList - 0.5)
+        #expect(harness.core.handle(.tick).stopped.isEmpty)
+        clock.advance(0.5)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.stopped == ["github"])
+        #expect(expired.toClient.isEmpty)
+        #expect(harness.client(Self.listCall).toUpstream.isEmpty)
+        _ = Self.crash(&harness, clock, delay: 2)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    @Test func anExitDuringTheRelistingCountsAndLeavesNothingBehind() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let first = Self.relaunchToListing(&harness)
+        let page = harness.upstream(
+            "github", #"{"jsonrpc":"2.0","id":\#(first),"result":{"tools":[\#(Self.listIssues)],"nextCursor":"p2"}}"#)
+        let second = page.sent("tools/list").first?["id"]?.intValue ?? -1
+        let exited = harness.core.handle(.upstreamExited(server: "github"))
+        #expect(exited.toClient.isEmpty)
+        #expect(exited.audits.isEmpty)
+        // A late page of the old listing reaches nothing.
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(second),"result":{"tools":[]}}"#).isEmpty)
+        // Counted: the next delay is 2 s.
+        clock.advance(1.5)
+        #expect(harness.core.handle(.tick).restarted.isEmpty)
+        clock.advance(0.5)
+        #expect(harness.core.handle(.tick).restarted == ["github"])
+        _ = Self.bringBack(&harness)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    @Test func anInitializeErrorAfterARelaunchStopsTheServerAndCounts() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let failed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": initialize, "error": .object(["code": .int(-1), "message": .string("no")]),
+        ])))
+        #expect(failed.stopped == ["github"])
+        #expect(failed.sent("tools/list").isEmpty)
+        #expect(failed.toClient.isEmpty)
+        #expect(failed.logs.contains { $0.contains("failed to initialize") }, "\(failed.logs)")
+        let message = harness.client(Self.listCall).toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("rv is restarting it"), "\(message)")
+        _ = Self.crash(&harness, clock, delay: 2)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    /// Nothing says the server started again: past its
+    /// `startTimeoutSeconds` from the restart, that counts as one more time
+    /// it went away, and the next try waits the doubled delay.
+    @Test func aRelaunchThatNeverStartsRunsOutOfTimeAndCounts() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let start = TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds)
+        clock.advance(start - 0.5)
+        #expect(harness.core.handle(.tick).logs.isEmpty)
+        clock.advance(0.5)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.logs.contains { $0.contains("did not start again within 60 s") }, "\(expired.logs)")
+        #expect(expired.restarted.isEmpty)
+        let message = harness.client(Self.listCall).toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("rv is restarting it"), "\(message)")
+        clock.advance(1.5)
+        #expect(harness.core.handle(.tick).restarted.isEmpty)
+        clock.advance(0.5)
+        #expect(harness.core.handle(.tick).restarted == ["github"])
+        _ = Self.bringBack(&harness)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    /// The start timeout covers planning and `initialize` together: a
+    /// server reported started late has only the rest of it.
+    @Test func aLateStartLeavesInitializeOnlyTheRestOfTheStartTimeout() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds) - 1)
+        #expect(harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").count == 1)
+        clock.advance(1)
+        #expect(harness.core.handle(.tick).stopped == ["github"])
+    }
+
+    /// The prompt cannot run while its server is being brought back: an
+    /// accept ends it declined, with its approval id, and nothing is sent.
+    @Test func aPromptAcceptedWhileItsServerRestartsIsDeclinedAndNotRun() throws {
+        let clock = ManualClock()
+        var harness = Self.harness(clock, callTimeout: 10)
+        _ = harness.client(Self.elicits)
+        _ = harness.ready()
+        let key = try #require(harness.client(Self.createCall).toClient.first?["id"]?.stringValue)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+        clock.advance(10)
+        #expect(harness.core.handle(.tick).sent("ping").count == 1)
+        clock.advance(MCPGatewayCore.pingTimeout)
+        #expect(harness.core.handle(.tick).stopped == ["github"])
+        // Its exit has not been reported yet, so the prompt is still held.
+        let accepted = harness.client(MCPGatewayElicitationTests.answer(key, #"{"action":"accept","content":{"approve":true}}"#))
+        #expect(accepted.toUpstream.isEmpty)
+        #expect(accepted.audits.count == 1)
+        #expect(accepted.audits.first?.outcome == .declined(approvalID: key))
+        #expect(accepted.audits.first?.reason?.hasPrefix("upstream restarting") == true)
+        #expect(accepted.audits.first?.auditEvent().decision == .denied)
+        let message = accepted.toClient.first { $0["id"] == .string("p") }?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("rv is restarting it"), "\(message)")
+        #expect(harness.core.handle(.upstreamExited(server: "github")).audits.isEmpty)
+    }
 }

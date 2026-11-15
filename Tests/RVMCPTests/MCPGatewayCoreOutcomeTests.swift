@@ -100,6 +100,23 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(record?.auditEvent().detail["approval"] == nil)
     }
 
+    /// A prompt the client cancels ends its `awaiting` row, declined with
+    /// its approval id; a late yes runs nothing.
+    @Test func heldPromptTheClientCancelsIsDeclinedOnce() throws {
+        var harness = MCPGatewayElicitationTests.harness(elicitation: "{}")
+        let key = try #require(harness.client(Self.createCall).toClient.first?["id"]?.stringValue)
+        let cancelled = harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":11}}"#)
+        #expect(cancelled.audits.count == 1)
+        #expect(cancelled.audits.first?.outcome == .declined(approvalID: key))
+        #expect(cancelled.audits.first?.reason == "cancelled by client")
+        #expect(cancelled.audits.first?.auditEvent().decision == .denied)
+        #expect(cancelled.toClient.contains { $0["method"] == .string("notifications/cancelled") })
+        let late = harness.client(MCPGatewayElicitationTests.answer(key, #"{"action":"accept","content":{"approve":true}}"#))
+        #expect(late.toUpstream.isEmpty)
+        #expect(late.audits.isEmpty)
+        #expect(harness.core.handle(.gatewayStopping).audits.isEmpty)
+    }
+
     @Test func outOfBandAwaitingIsPending() {
         var harness = MCPGatewayElicitationTests.harness(elicitation: nil)
         let record = harness.client(Self.createCall).audits.first
