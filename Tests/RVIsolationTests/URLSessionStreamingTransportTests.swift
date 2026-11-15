@@ -566,24 +566,26 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits("GET", "/v1/big") == 1)
     }
 
-    /// A client that takes in 1 KiB every 0.25 s, each bit well inside the
-    /// send timeout, is cut off once it has taken in less than the minimum
-    /// over a window of the gateway waiting to write to it. Its upstream
+    /// A client that takes in 8 KiB every 0.25 s, so that every write moves
+    /// well inside the 2 s send timeout, is cut off once it has taken in
+    /// less than the minimum (here 256 KiB) over a window of the gateway
+    /// waiting to write to it. The send timeout alone never cuts it. Its upstream
     /// request is cancelled, everything it held is given back, and what it
     /// still reads is cut short, with no terminator.
     @Test(.timeLimit(.minutes(1)))
     func aClientTakingInTooLittleIsCutOff() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 2)
         defer { under.gateway.stop() }
+        under.gateway.clientMinimumBytes = 256 * 1024
         let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
         defer { close(client) }
         #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
         let trickle = Trickle()
         let stopped = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            var buffer = [UInt8](repeating: 0, count: 1_024)
+            var buffer = [UInt8](repeating: 0, count: 8 * 1_024)
             while trickle.going.load(ordering: .relaxed) {
                 let n = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
                 if n <= 0 { break }
