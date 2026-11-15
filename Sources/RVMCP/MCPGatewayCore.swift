@@ -1631,7 +1631,9 @@ public struct MCPGatewayCore {
             return number.isFinite
         }
         guard let sent = params?["progressToken"],
-            let match = progressTokens.first(where: { $0.value == sent && runs($0.key) }),
+            // A token the client reused on two live calls counts for the
+            // older one, whatever the dictionary's order.
+            let match = progressTokens.filter({ $0.value == sent && runs($0.key) }).min(by: { $0.key < $1.key }),
             let done = params?["progress"], finite(done)
         else { return nil }
         let id = match.key
