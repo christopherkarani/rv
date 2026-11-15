@@ -255,7 +255,12 @@ public enum MCPSandbox {
         // directory is refused. A credential ancestor inside a write root
         // (a home under the temp directory, a target under a cache) is named
         // one by one, refused a clone and a rename, so the credential is
-        // neither copied nor moved out from under its deny.
+        // neither copied nor moved out from under its deny. One that is
+        // missing is refused a create too: a symlink, a link or directory
+        // renamed onto it, or a hard link there would hold the credential
+        // once its owner writes it. A plain `mkdir` there is refused with
+        // them, since Seatbelt checks it as the same create as a directory
+        // renamed in (probed); making one that exists still fails EEXIST.
         //
         // A hard link an uncaged process planted under a write root is not
         // seen by any path rule.
@@ -269,7 +274,7 @@ public enum MCPSandbox {
             "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeAllow + "))))",
         ]
         if ancestors.isEmpty == false {
-            lines.append("(deny file-clone file-write-unlink " + ancestorFilters(ancestors) + ")")
+            lines.append("(deny file-clone file-write-unlink file-write-create file-link " + ancestorFilters(ancestors) + ")")
         }
         lines.append(credentialDeny)
         // `KERN_PROCARGS2` hands a same-uid caller the exec-time arguments and
