@@ -57,9 +57,12 @@ enum DarwinFrameIO {
         return data
     }
 
-    /// Every send's flags. Per send, not only `SO_NOSIGPIPE`: Darwin refuses
-    /// that option on a socket whose peer is already gone, and the request
-    /// such a peer sent is still readable and gets a reply.
+    /// Every send's flags. Per send, not only `SO_NOSIGPIPE`, which Darwin
+    /// refuses to set on a socket whose peer is already gone. Here an
+    /// accepted socket inherits the option from the listening socket, and
+    /// one whose peer is gone when it is accepted has its receive timeout
+    /// refused too and is closed unanswered; the flag keeps a reply from
+    /// raising SIGPIPE if either stops being so.
     static let sendFlags = Int32(MSG_NOSIGNAL)
 
     static func sendAll(fd: Int32, data: Data) throws {
