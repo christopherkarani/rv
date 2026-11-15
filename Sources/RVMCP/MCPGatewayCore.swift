@@ -166,8 +166,11 @@ public struct MCPGatewayCore {
         var approval: Approval?
         var started: Date
         /// Past this the client is told the call timed out. Valid progress
-        /// for the call moves it.
+        /// for the call moves it, never past `ceiling`.
         var deadline: Date
+        /// The total limit: `callTimeoutCeilingFactor` times the server's
+        /// call timeout after `started`, however much progress arrives.
+        var ceiling: Date
     }
 
     /// Every request rv sends upstream, until it is answered or expires.
@@ -446,6 +449,11 @@ public struct MCPGatewayCore {
         return outputs
     }
 
+    /// A call may run at most this many times its server's call timeout in
+    /// all, so an upstream that keeps sending progress cannot hold it open
+    /// forever.
+    static let callTimeoutCeilingFactor: TimeInterval = 10
+
     /// How long a `tools/call` to `server` may go unanswered.
     func callTimeout(_ server: String) -> TimeInterval {
         TimeInterval(upstreams[server]?.definition.callTimeoutSeconds ?? MCPServerDefinition.defaultCallTimeoutSeconds)
@@ -493,20 +501,31 @@ public struct MCPGatewayCore {
         let limit = callTimeout(call.server)
         pending[id] = .cancelled(server: call.server, until: now.addingTimeInterval(limit))
         progressTokens[id] = nil
-        let seconds = Self.seconds(limit)
         let shownServer = MCPDisplayedText.field(call.server)
         let shownTool = MCPDisplayedText.field(call.tool)
+        let reason: String, waited: String, answer: String
+        if call.deadline >= call.ceiling {
+            let total = Self.seconds(call.started.distance(to: call.ceiling))
+            reason = "timed out: total limit of \(total) s reached"
+            waited = total
+            answer = "did not finish tool \(shownTool) within its total limit of \(total) s"
+        } else {
+            let seconds = Self.seconds(limit)
+            reason = "timed out: no answer within \(seconds) s"
+            waited = seconds
+            answer = "did not answer tool \(shownTool) within \(seconds) s"
+        }
         return [
             .audit(MCPCallRecord(
                 server: call.server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
-                argumentKeys: call.keys, isError: true, reason: "timed out: no answer within \(seconds) s",
+                argumentKeys: call.keys, isError: true, reason: reason,
                 outcome: .interrupted(grant: call.approval?.grant))),
             .toUpstream(server: call.server, message: Self.notification("notifications/cancelled", .object([
-                "requestId": .int(id), "reason": .string("rv stopped waiting after \(seconds) s"),
+                "requestId": .int(id), "reason": .string("rv stopped waiting after \(waited) s"),
             ]))),
             .toClient(Self.error(
                 id: call.client, code: -32603,
-                message: "MCP server \(shownServer) did not answer tool \(shownTool) within \(seconds) s; "
+                message: "MCP server \(shownServer) \(answer); "
                     + "rv stopped waiting. The call may still have run, so check before calling it again.")),
         ]
     }
@@ -657,9 +676,11 @@ public struct MCPGatewayCore {
             ]
         }
         let started = clock()
+        let timeout = callTimeout(server)
         let id = allocate(.call(Call(
             client: client, server: server, tool: tool, keys: keys, approval: approval, started: started,
-            deadline: started.addingTimeInterval(callTimeout(server)))))
+            deadline: started.addingTimeInterval(timeout),
+            ceiling: started.addingTimeInterval(timeout * Self.callTimeoutCeilingFactor))))
         if let token = params["_meta"]?["progressToken"] { progressTokens[id] = token }
         return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(params)))]
     }
@@ -1554,7 +1575,7 @@ public struct MCPGatewayCore {
     /// when `progress` (or a `total` that is present) is not a finite number
     /// spelled in at most `maximumProgressNumberBytes`. The token sent on is
     /// the one the client gave, never the upstream's copy of it. Progress
-    /// that is sent on restarts the call's deadline.
+    /// that is sent on restarts the call's deadline, up to its ceiling.
     mutating func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
         func runs(_ id: Int) -> Bool {
             guard case .call(let call)? = pending[id] else { return false }
@@ -1576,7 +1597,7 @@ public struct MCPGatewayCore {
         let total = params?["total"]
         guard total == nil || finite(total) else { return nil }
         if case .call(var call)? = pending[id] {
-            call.deadline = clock().addingTimeInterval(callTimeout(server))
+            call.deadline = min(clock().addingTimeInterval(callTimeout(server)), call.ceiling)
             pending[id] = .call(call)
         }
         var rebuilt = JSONObject()

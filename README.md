@@ -243,7 +243,10 @@ rv is one binary, 25 commands. The rest of the surface:
   listing; a `tools/call` unanswered for the server's
   `"callTimeoutSeconds"` in mcp.json (1 to 86400, default 300; each
   progress notification for the call restarts it) fails with an error,
-  is cancelled on the server and is never sent again.
+  is cancelled on the server and is never sent again. Progress cannot
+  keep a call open past 10 times its `"callTimeoutSeconds"` in all
+  (50 minutes by default); a tool that legitimately runs longer needs a
+  larger `"callTimeoutSeconds"`.
   Each `rv mcp serve` process also warns once at start, on stderr and in
   the audit log, when host configs bypass the gateway, run a server
   mcp.json blocks, or hold unreviewed servers (a host set up by
