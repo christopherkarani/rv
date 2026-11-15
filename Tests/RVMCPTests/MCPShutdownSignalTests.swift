@@ -28,7 +28,8 @@ private func eventuallyOffThePool(_ seconds: TimeInterval = 60, _ condition: @es
 /// its child gets in `<argv[1]>.signals` (and exits on SIGTERM). At start
 /// it writes its SIGHUP disposition to `.start`, then forks a child in its
 /// group and writes both pids to `.pids`. Its one tool, `wait`, is never
-/// answered; a call to it is noted in `.called`.
+/// answered; a call to it is noted in `.called`. It outlives its input, so
+/// only a signal ends it.
 let signalNotingServer = #"""
     import json, os, signal, sys, time
     record = sys.argv[1]
@@ -64,6 +65,7 @@ let signalNotingServer = #"""
         else:
             continue
         print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}), flush=True)
+    time.sleep(600)
     """#
 
 /// One run of `signalNotingServer`: its files are `<directory>/server.*`.
@@ -280,8 +282,10 @@ struct MCPShutdownSignalTests {
         let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP"])
         defer { serve.kill() }
         #expect(await serve.initialize())
+        // Listed first: with pins enforced, a call before the listing is refused.
+        #expect(await serve.listed())
         serve.client.send(NotingServer.call)
-        #expect(await eventuallyOffThePool { server.called }, "the call never reached the server")
+        #expect(await eventuallyOffThePool { server.called }, "the call never reached the server: \(serve.drain())")
         #expect(Darwin.kill(serve.process.processIdentifier, number) == 0)
         #expect(await eventuallyOffThePool { serve.process.isRunning == false }, "serve did not end")
         let process = serve.process
@@ -386,6 +390,21 @@ private final class ProbeServe: @unchecked Sendable {
         let reply = await client.next(timeout: 120)
         client.send(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
         return reply?["result"]?["serverInfo"]?["name"] == .string("rv")
+    }
+
+    func listed() async -> Bool {
+        client.send(#"{"jsonrpc":"2.0","id":10,"method":"tools/list"}"#)
+        while let message = await client.next(timeout: 120) {
+            if message["id"] == .int(10) { return message["result"]?["tools"]?.arrayValue?.count == 1 }
+        }
+        return false
+    }
+
+    /// What serve has written to the client and not yet read, for a failure message.
+    func drain() -> String {
+        var lines: [String] = []
+        while let message = client.receive(timeout: 2) { lines.append("\(message)") }
+        return lines.joined(separator: "\n")
     }
 
     /// Closes serve's input and returns its exit status, or nil if it did
