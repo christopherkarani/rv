@@ -62,9 +62,11 @@ extension MCPCageCredentialLiveTests {
             profile, "\"$1\" unix-connect \"$2\"; \"$1\" unix-dgram \"$3\"; echo DONE",
             [probe.path, streamPath, datagramPath], in: scratch.path))
         #expect(output.contains("DONE"), "\(output)")
-        #expect(output.contains("unix-connect failed errno=\(EPERM)"), "\(output)")
-        #expect(output.contains("dgram-connect failed errno=\(EPERM)"), "\(output)")
-        #expect(output.contains("dgram-sendto failed errno=\(EPERM)"), "\(output)")
+        // Each answer is matched with the delimiter the probe prints after
+        // it, so only errno 1 passes, not 10-19.
+        #expect(output.contains("unix-connect failed errno=\(EPERM)\n"), "\(output)")
+        #expect(output.contains("dgram-connect failed errno=\(EPERM) "), "\(output)")
+        #expect(output.contains("dgram-sendto failed errno=\(EPERM)\n"), "\(output)")
         #expect(output.contains("connected") == false, "\(output)")
         #expect(output.contains(" ok") == false, "\(output)")
         #expect(output.contains("sent=1") == false, "\(output)")
@@ -116,8 +118,8 @@ extension MCPCageCredentialLiveTests {
 
         let output = try #require(try caged(profile, "\"$1\" peerinfo \"$2\"; echo DONE", [probe.path, pid], in: scratch.path))
         #expect(output.contains("DONE"), "\(output)")
-        #expect(output.contains("pidfdinfo failed errno=\(EPERM)"), "\(output)")
-        #expect(output.contains("rusage failed errno=\(EPERM)"), "\(output)")
+        #expect(output.contains("pidfdinfo failed errno=\(EPERM) "), "\(output)")
+        #expect(output.contains("rusage failed errno=\(EPERM)\n"), "\(output)")
 
         let after = Self.fromHere(probe, ["peerinfo", pid], in: root, until: readable, within: 10)
         #expect(readable(after), "\(after)")
