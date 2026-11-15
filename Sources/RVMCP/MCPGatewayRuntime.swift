@@ -697,18 +697,39 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         if remote { perform(core.handle(.upstreamExited(server: server))) }
     }
 
-    /// Kill this server's process or group now, or close its connection,
-    /// never waiting on the gateway queue: its input is closed by its
-    /// writer, and a remote's stop (and its DELETE) runs on its sender. A
-    /// process's exit still reaches the core through its reader or
-    /// supervisor.
+    /// How long a stopped server has between SIGTERM and SIGKILL.
+    static let stopGrace: TimeInterval = 2
+
+    /// Stop this server's process or group, or close its connection, never
+    /// waiting on the gateway queue: SIGTERM now and SIGKILL after
+    /// `stopGrace` if it is still there, from a timer on the queue; its
+    /// input is closed by its writer, and a remote's stop (and its DELETE)
+    /// runs on its sender. A process's exit still reaches the core through
+    /// its reader or supervisor. A plain server's signals go to its own pid
+    /// only, so what it started in a group of its own, or outside rv
+    /// (`docker run`'s container), is not reached; a placeholder server's
+    /// go to its whole group.
     private func stopUpstream(_ server: String) {
         if let writer = upstreamWriters.removeValue(forKey: server) {
             let input = writer.input
             writer.outbox.abandon { try? input.close() }
         }
-        if let process = processes[server], process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        placeholderGroups[server]?.signal(SIGKILL)
+        if let process = processes[server], process.isRunning {
+            let pid = process.processIdentifier
+            kill(pid, SIGTERM)
+            queue.asyncAfter(deadline: .now() + Self.stopGrace) { [self] in
+                // The same process, not one started for this server since.
+                guard let process = processes[server], process.processIdentifier == pid, process.isRunning else { return }
+                kill(pid, SIGKILL)
+            }
+        }
+        if let group = placeholderGroups[server] {
+            group.signal(SIGTERM)
+            queue.asyncAfter(deadline: .now() + Self.stopGrace) {
+                // A leader that exited has its group killed by its supervisor.
+                if group.hasExited == false { group.signal(SIGKILL) }
+            }
+        }
         if let remote = remotes.removeValue(forKey: server) {
             remoteSenders.removeValue(forKey: server)?.abandon { remote.stop() }
         }
