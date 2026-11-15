@@ -164,6 +164,10 @@ private final class LoopbackUpstream: @unchecked Sendable {
             _ = Self.write(client, Array(
                 ("HTTP/1.1 \(code) Interim\r\nLink: </style.css>; rel=preload\r\n\r\n"
                     + "HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n").utf8) + body)
+        } else if path.hasSuffix("/upgrade") {
+            _ = Self.write(client, Array(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nRAWBYTES".utf8))
+            Thread.sleep(forTimeInterval: 0.5)
         } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
@@ -821,6 +825,30 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.status == 200, "\(answer.body)")
         #expect(answer.body == "the final answer")
         #expect(upstream.hits("POST", "/v1/interim/\(code)") == 1)
+    }
+
+    /// An upstream that switches protocols, unasked (the gateway drops
+    /// `Upgrade`): the gateway carries no other protocol, so the request
+    /// fails, naming why, and the client gets `502` with that reason, not
+    /// the `101` head or an answer said to be missing. Darwin reports the
+    /// `101`.
+    @Test(.timeLimit(.minutes(1)))
+    func anUpstreamSwitchingProtocolsIsRefusedNamingWhy() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let why = "the upstream switched protocols, which the gateway does not carry"
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/upgrade"))
+        URLSessionStreamingTransport().send(
+            SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+        #expect(sink.headStatus == nil)
+        #expect(sink.result.ended == "failed: \(why)")
+
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let answer = try gatewayExchange(port: under.port, under.request("/upgrade"))
+        #expect(answer.status == 502, "\(answer.body)")
+        #expect(answer.body.contains(why), "\(answer.body)")
     }
 
     #if canImport(Darwin)
