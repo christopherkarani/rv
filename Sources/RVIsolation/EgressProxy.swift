@@ -1316,11 +1316,9 @@ public final class EgressProxy: @unchecked Sendable {
 
     @discardableResult
     private static func writeAll(_ fd: Int32, bytes: [UInt8]) -> Bool {
-        #if canImport(Darwin)
-        let flags: Int32 = 0
-        #else
+        // On Darwin too: suppressSIGPIPE is refused on a socket whose peer
+        // is already gone, and its result is not checked.
         let flags = Int32(MSG_NOSIGNAL)
-        #endif
         var offset = 0
         while offset < bytes.count {
             let written = bytes.withUnsafeBytes { pointer -> Int in
@@ -1337,7 +1335,7 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// A `send` on a closed peer must fail, not kill the host with SIGPIPE.
-    /// Linux sends with MSG_NOSIGNAL per call instead.
+    /// Best effort on Darwin; every send also passes MSG_NOSIGNAL.
     private static func suppressSIGPIPE(_ fd: Int32) {
         #if canImport(Darwin)
         var one: Int32 = 1
