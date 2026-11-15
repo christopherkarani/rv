@@ -229,11 +229,16 @@ struct MCPPipe {
         return MCPPipe(read: read, write: write)
     }
 
-    /// `count` pipes from `make`, or nil when one of them cannot be made.
+    /// `count` pipes from `make`, or nil when one of them cannot be made;
+    /// then the ones already made are closed, so a failed start (out of
+    /// descriptors) does not use up more of them.
     static func make(_ count: Int, using make: () -> MCPPipe? = { MCPPipe.make() }) -> [MCPPipe]? {
         var pipes: [MCPPipe] = []
         for _ in 0..<count {
-            guard let pipe = make() else { return nil }
+            guard let pipe = make() else {
+                for made in pipes { made.closeBoth() }
+                return nil
+            }
             pipes.append(pipe)
         }
         return pipes
