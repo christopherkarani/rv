@@ -793,7 +793,8 @@ struct URLSessionStreamingTransportTests {
 
     /// An interim answer (`103 Early Hints`, or a `100 Continue` the gateway
     /// did not ask for) is not the answer: the final status and its whole
-    /// body are handed on.
+    /// body are handed on. Only Linux can turn this red: Darwin does not
+    /// report a `100` or a `103`.
     @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
     func anInterimAnswerIsPassedOverForTheFinalOne(code: Int) throws {
         let upstream = try LoopbackUpstream()
@@ -809,6 +810,7 @@ struct URLSessionStreamingTransportTests {
 
     /// Through the gateway: the client gets the final answer whole, also
     /// when it asked for `100 Continue` (which the gateway sends itself).
+    /// Only Linux can turn this red, as above.
     @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
     func aClientGetsTheFinalAnswerPastAnUpstreamInterim(code: Int) throws {
         let upstream = try LoopbackUpstream()
