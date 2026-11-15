@@ -98,10 +98,28 @@ struct MCPPlaceholderLiveTests {
         // and environment (`KERN_PROCARGS2`), which is where a secret read
         // from rv's own environment would be.
         let probe = try mcpProbe()
+        // A process of this user outside the cage, not a platform binary,
+        // with an environment: it waits on its stdin until the test ends.
+        let outside = Process()
+        outside.executableURL = probe
+        outside.arguments = ["stderr", "1", "closed"]
+        outside.environment = ["HOME": "/rv-procargs-outside", "PATH": "/usr/bin:/bin"]
+        let outsideInput = Pipe()
+        outside.standardInput = outsideInput
+        outside.standardOutput = FileHandle.nullDevice
+        outside.standardError = FileHandle.nullDevice
+        try outside.run()
+        defer {
+            try? outsideInput.fileHandleForWriting.close()
+            if outside.isRunning { kill(outside.processIdentifier, SIGKILL) }
+            outside.waitUntilExit()
+        }
         let script = """
             out="$1"
             env > "$out/env"; printf '%s %s' "$*" > "$out/argv"; echo $$ > "$out/pid"; echo $PPID > "$out/ppid"
             "$2" procargs $PPID > "$out/procargs" 2>&1
+            "$2" procargs self > "$out/procargs-self" 2>&1
+            "$2" procargs "$3" > "$out/procargs-outside" 2>&1
             /usr/bin/curl -s --max-time 10 --noproxy '*' -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models" > "$out/status"
             /bin/sh -c 'trap "" TERM; /bin/sleep 60' & echo $! > "$out/grandchild"
@@ -109,7 +127,8 @@ struct MCPPlaceholderLiveTests {
             while :; do /bin/sleep 0.05; done
             """
         let definition = MCPServerDefinition(
-            name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path, probe.path],
+            name: name, command: "/bin/sh",
+            args: ["-c", script, "sh", scratch.path, probe.path, String(outside.processIdentifier)],
             sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
         let configuration = MCPConfiguration(servers: [definition])
         let planned = try MCPLaunchPlanner.plan(
@@ -169,14 +188,17 @@ struct MCPPlaceholderLiveTests {
         let leader = try #require(pid_t(contents(scratch, "pid")))
         #expect(getpgid(leader) == leader)
         #expect(pid_t(contents(scratch, "ppid")) == getpid())
-        // The kernel answers the caged server's read of its parent (here this
-        // test process, in serve rv) with its arguments AND its environment:
-        // KERN_PROCARGS2 hands a same-uid process the exec-time strings of
-        // any non-platform process, and no narrow Seatbelt rule refuses it
-        // (measured; the policy doc names this limit). Only the parse is
-        // checked here, not what the kernel chooses to show.
-        let procargs = contents(scratch, "procargs")
-        #expect(procargs.hasPrefix("ok argc=\(CommandLine.arguments.count) "), "\(procargs)")
+        // KERN_PROCARGS2 hands a same-uid process the arguments and
+        // environment of any non-platform process. The cage refuses it for
+        // every process outside the server's own sandbox: its parent (this
+        // test process, in serve's place) and another of this user's
+        // processes. Its own read still works. The outside process is
+        // readable from here, so its refusal is the cage's.
+        #expect(contents(scratch, "procargs") == "failed errno=\(EPERM)", "\(contents(scratch, "procargs"))")
+        #expect(contents(scratch, "procargs-outside") == "failed errno=\(EPERM)",
+            "\(contents(scratch, "procargs-outside"))")
+        #expect(contents(scratch, "procargs-self").hasPrefix("ok argc="), "\(contents(scratch, "procargs-self"))")
+        #expect(Self.procargsFromHere(probe, outside.processIdentifier, in: root).hasSuffix(" home=yes"))
         let environment = contents(scratch, "env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:\(port)/s/OPENAI_API_KEY"))
@@ -237,6 +259,30 @@ struct MCPPlaceholderLiveTests {
 
     /// Whether `pid` is a child of this process not yet reaped, running or
     /// a zombie; its id cannot have been reused. Never blocks, reaps nothing.
+    /// `rv-mcp-probe procargs <pid>` run uncaged, its answer written to a
+    /// file in `directory` (no pipe another test's child could hold open);
+    /// empty when it did not finish in 10 s.
+    static func procargsFromHere(_ probe: URL, _ pid: pid_t, in directory: URL) -> String {
+        let output = directory.appendingPathComponent("procargs-from-here-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: output.path, contents: nil),
+            let handle = try? FileHandle(forWritingTo: output)
+        else { return "" }
+        defer { try? handle.close() }
+        let reader = Process()
+        reader.executableURL = probe
+        reader.arguments = ["procargs", String(pid)]
+        reader.standardOutput = handle
+        reader.standardError = FileHandle.nullDevice
+        guard (try? reader.run()) != nil else { return "" }
+        let deadline = Date().addingTimeInterval(10)
+        while reader.isRunning, Date() < deadline { usleep(20_000) }
+        if reader.isRunning {
+            kill(reader.processIdentifier, SIGKILL)
+            return ""
+        }
+        return contents(directory, output.lastPathComponent)
+    }
+
     private static func unreaped(_ pid: pid_t) -> Bool {
         var info = siginfo_t()
         return waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0

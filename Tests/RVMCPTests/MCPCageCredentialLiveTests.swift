@@ -217,5 +217,290 @@ struct MCPCageCredentialLiveTests {
         #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("y").path)
         #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
     }
+
+    /// `~/.ssh` → `W/l/../keys`, `l` a symlink to `W/z/q`, all in a write
+    /// root: the key directory is `W/z/keys`, reached through `l`, which the
+    /// `..` drops from the spelling. Replacing `l` with a link to the scratch
+    /// would move `~/.ssh` to `scratch/keys`; `l` cannot be removed,
+    /// renamed, replaced or swapped, and the key stays unread.
+    @Test(.timeLimit(.minutes(1)))
+    func aLinkADotDotDropsFromACredentialTargetCannotBeSwapped() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-dotdot-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let keys = root.appendingPathComponent("z/keys")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("z/q"), withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: keys.appendingPathComponent("id_rsa"))
+        let link = root.appendingPathComponent("l")
+        try #require(symlink(root.appendingPathComponent("z/q").path, link.path) == 0)
+        try #require(symlink(link.path + "/../keys", home.appendingPathComponent(".ssh").path) == 0)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/dotdot", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; s="$2"; l="$3"
+            /bin/echo STARTED
+            /bin/cat "$home/.ssh/id_rsa" 2>/dev/null
+            /bin/mkdir -p "$s/mine/q" "$s/keys" && /bin/ln -s "$s/mine/q" "$s/newl"
+            /bin/rm "$l" 2>/dev/null && echo UNLINK_OK
+            /bin/mv "$l" "$s/moved" 2>/dev/null && echo RENAME_OK
+            replace "$s/newl" "$l" && echo REPLACE_OK
+            swap "$s/newl" "$l" && echo SWAP_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, scratch.path, link.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains(marker) == false, "\(output)")
+        for refused in ["UNLINK_OK", "RENAME_OK", "REPLACE_OK", "SWAP_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("z/q").path)
+    }
+
+    /// A missing directory above a credential, inside a write root (here
+    /// `~/Library/Application Support/Google` above Chrome's, the home under
+    /// the temp directory). Whatever the cage put there would hold the
+    /// credential once its owner writes it: a symlink to the scratch, a
+    /// link renamed onto the path, or a directory of its own renamed there
+    /// with a link inside (`Chrome` → the scratch). All are refused. So is a
+    /// plain `mkdir`: Seatbelt checks it as the same create as a directory
+    /// renamed in. Creating a directory that is no credential ancestor still
+    /// works, and making an ancestor that exists still says it exists.
+    @Test(.timeLimit(.minutes(1)))
+    func aMissingCredentialAncestorCannotBeCreatedByTheCage() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-missing-ancestor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let support = home.appendingPathComponent("Library/Application Support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/planter", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let google = support.appendingPathComponent("Google")
+        let script = """
+            g="$1"; s="$2"; support="$3"
+            /bin/echo STARTED
+            /bin/ln -s "$s/mine" "$g" 2>/dev/null && echo LINK_CREATED
+            /bin/ln -s "$s/mine" "$s/evil" && replace "$s/evil" "$g" && echo LINK_RENAMED
+            /bin/mkdir -p "$s/dir" && /bin/ln -s "$s/mine" "$s/dir/Chrome" && replace "$s/dir" "$g" && echo DIR_RENAMED
+            printf f > "$s/file" && /bin/ln "$s/file" "$g" 2>/dev/null && echo HARDLINK_MADE
+            /bin/mkdir "$g" 2>/dev/null && echo MKDIR_MADE
+            /bin/mkdir "$support/Other" && echo OTHER_OK
+            /bin/mkdir "$support" 2>&1 | /usr/bin/grep -q "File exists" && echo EXISTS_SAID
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [google.path, scratch.path, support.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        for refused in ["LINK_CREATED", "LINK_RENAMED", "DIR_RENAMED", "HARDLINK_MADE", "MKDIR_MADE"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(output.contains("OTHER_OK"), "\(output)")
+        #expect(output.contains("EXISTS_SAID"), "\(output)")
+        var info = stat()
+        #expect(lstat(google.path, &info) != 0, "something was planted at \(google.path)")
+    }
+
+    /// `~/.config` a link into a dotfiles directory, with `gh` there and
+    /// `gcloud` missing, the home outside every write root. The server
+    /// starts in its scratch, `getcwd` works, it writes there and lists the
+    /// home; `gh` stays unread and unwritten through either spelling, and
+    /// `gcloud` cannot be planted (a symlink, a directory, a cloned link).
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func aDotfilesLinkedConfigServerStartsAndItsCredentialsStayDenied() throws {
+        let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(root.path, 0o700) == 0, "could not create \(root.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let config = home.appendingPathComponent("dotfiles/config")
+        try FileManager.default.createDirectory(at: config.appendingPathComponent("gh"), withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: config.appendingPathComponent("gh/hosts.yml"))
+        try #require(symlink(config.path, home.appendingPathComponent(".config").path) == 0)
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let tmp = URL(fileURLWithPath: temporary).appendingPathComponent("rv-cage-dotfiles-tmp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/dotfiles", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; s="$2"; config="$3"
+            /bin/echo STARTED
+            [ "$(/bin/pwd -P 2>/dev/null)" = "$s" ] && echo GETCWD_OK
+            printf ok > "$s/written" && /bin/cat "$s/written" > /dev/null && echo SCRATCH_OK
+            /bin/ls "$home" > /dev/null 2>&1 && echo LIST_HOME_OK
+            /bin/cat "$home/.config/gh/hosts.yml" "$config/gh/hosts.yml" 2>/dev/null
+            printf x > "$home/.config/gh/planted" 2>/dev/null && echo GH_WRITTEN
+            printf x > "$config/gh/planted" 2>/dev/null && echo GH_WRITTEN
+            /bin/ln -s "$s" "$home/.config/gcloud" 2>/dev/null && echo GCLOUD_PLANTED
+            /bin/mkdir "$config/gcloud" 2>/dev/null && echo GCLOUD_PLANTED
+            /bin/ln -s "$s" "$s/link" && /usr/bin/python3 -I -c 'import ctypes,sys; l=ctypes.CDLL(None,use_errno=True); \
+            sys.exit(0 if l.clonefile(sys.argv[1].encode(),sys.argv[2].encode(),1)==0 else 1)' "$s/link" "$config/gcloud" \
+            && echo GCLOUD_PLANTED
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, scratch.path, config.path], in: scratch.path))
+        for expected in ["STARTED", "GETCWD_OK", "SCRATCH_OK", "LIST_HOME_OK", "DONE"] {
+            #expect(output.contains(expected), "\(expected): \(output)")
+        }
+        #expect(output.contains(marker) == false, "\(output)")
+        #expect(output.contains("GH_WRITTEN") == false, "\(output)")
+        #expect(output.contains("GCLOUD_PLANTED") == false, "\(output)")
+        var info = stat()
+        #expect(lstat(config.appendingPathComponent("gcloud").path, &info) != 0, "something was planted at gcloud")
+        #expect(FileManager.default.fileExists(atPath: config.appendingPathComponent("gh/planted").path) == false)
+    }
+
+    /// The swap test above for `~/.config`: `~/.config` → `W/x/config`, `x`
+    /// a link to `W/y`, `W` a `sandbox.writable` directory and `gcloud`
+    /// missing. Neither `x` nor `~/.config` can be removed, renamed,
+    /// replaced or swapped for a link to a directory the cage controls (in
+    /// the temp directory), `gh` stays unread, and the links are the same
+    /// afterwards.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func aSymlinkedConfigThroughALinkInAWriteRootCannotBeSwapped() throws {
+        let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(root.path, 0o700) == 0, "could not create \(root.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let w = root.appendingPathComponent("w")
+        let gh = w.appendingPathComponent("y/config/gh")
+        try FileManager.default.createDirectory(at: gh, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: gh.appendingPathComponent("hosts.yml"))
+        let link = w.appendingPathComponent("x")
+        try #require(symlink(w.appendingPathComponent("y").path, link.path) == 0)
+        let dotConfig = home.appendingPathComponent(".config")
+        try #require(symlink(link.appendingPathComponent("config").path, dotConfig.path) == 0)
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let tmp = URL(fileURLWithPath: temporary).appendingPathComponent("rv-cage-config-swap-tmp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/config-swapper", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: [w.path]), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; t="$2"; x="$3"
+            /bin/echo STARTED
+            /bin/cat "$home/.config/gh/hosts.yml" "$x/config/gh/hosts.yml" 2>/dev/null
+            /bin/mkdir -p "$t/mine/config/gh" && /bin/ln -s "$t/mine" "$t/evil" && /bin/ln -s "$t/mine/config" "$t/evil-config" \
+            && echo PREPARED
+            for target in "$x" "$home/.config"; do
+              /bin/rm "$target" 2>/dev/null && echo UNLINK_OK
+              /bin/mv "$target" "$t/moved" 2>/dev/null && echo RENAME_OK
+            done
+            replace "$t/evil" "$x" && echo REPLACE_OK
+            swap "$t/evil" "$x" && echo SWAP_OK
+            replace "$t/evil-config" "$home/.config" && echo REPLACE_OK
+            swap "$t/evil-config" "$home/.config" && echo SWAP_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, tmp.path, link.path], in: tmp.path))
+        for expected in ["STARTED", "PREPARED", "DONE"] {
+            #expect(output.contains(expected), "\(expected): \(output)")
+        }
+        #expect(output.contains(marker) == false, "\(output)")
+        for refused in ["UNLINK_OK", "RENAME_OK", "REPLACE_OK", "SWAP_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(MCPSandbox.readLink(link.path) == w.appendingPathComponent("y").path)
+        #expect(MCPSandbox.readLink(dotConfig.path) == link.appendingPathComponent("config").path)
+    }
+
+    /// Two servers, each in its own `sandbox-exec` of the same profile, as
+    /// serve starts them: the second cannot read the first's arguments and
+    /// environment (`KERN_PROCARGS2`, where rv puts a server's `secrets`),
+    /// though this process can. It still reads its own, and a child it
+    /// started.
+    @Test(.timeLimit(.minutes(1)))
+    func aCagedServerCannotReadASiblingServersEnvironment() throws {
+        let probe = try mcpProbe()
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-procargs-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/reader", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+
+        // The first server waits on its stdin until the test ends.
+        let sibling = Process()
+        sibling.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
+        sibling.arguments = ["-p", profile, probe.path, "stderr", "1", "closed"]
+        sibling.environment = ["HOME": "/rv-procargs-sibling", "PATH": "/usr/bin:/bin"]
+        let input = Pipe()
+        sibling.standardInput = input
+        sibling.standardOutput = FileHandle.nullDevice
+        sibling.standardError = FileHandle.nullDevice
+        try sibling.run()
+        defer {
+            try? input.fileHandleForWriting.close()
+            if sibling.isRunning { kill(sibling.processIdentifier, SIGKILL) }
+            sibling.waitUntilExit()
+        }
+        // sandbox-exec execs the probe in place: wait until it has.
+        let pid = sibling.processIdentifier
+        let deadline = Date().addingTimeInterval(10)
+        var fromHere = ""
+        while Date() < deadline {
+            fromHere = MCPPlaceholderLiveTests.procargsFromHere(probe, pid, in: root)
+            if fromHere.hasSuffix(" home=yes") { break }
+            usleep(50_000)
+        }
+        try #require(fromHere.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(fromHere)")
+
+        let script = """
+            p="$1"; sibling="$2"
+            echo "sibling: $("$p" procargs "$sibling")"
+            echo "self: $("$p" procargs self)"
+            /usr/bin/mkfifo "$PWD/hold"
+            HOME=/rv-procargs-child "$p" stderr 1 closed < "$PWD/hold" > /dev/null 2>&1 &
+            child=$!
+            exec 3> "$PWD/hold"
+            /bin/sleep 0.5
+            echo "child: $("$p" procargs $child)"
+            exec 3>&-
+            wait $child
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [probe.path, String(pid)], in: scratch.path))
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("sibling: failed errno=\(EPERM)"), "\(output)")
+        #expect(output.contains("self: ok argc="), "\(output)")
+        #expect(output.contains("child: ok argc="), "\(output)")
+    }
 }
 #endif

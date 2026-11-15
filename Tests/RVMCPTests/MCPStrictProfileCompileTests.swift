@@ -57,9 +57,10 @@ extension MCPStrictProfileTests {
 
     /// Credential links whose targets hold `..` (absolute, through a
     /// symlinked directory, after a missing name, relative) and link
-    /// cycles: each profile is built, or refused, in bounded time. Before,
-    /// `URL.deletingLastPathComponent` turned `a/..` into `a/../..` and the
-    /// ancestor walk never reached `/`.
+    /// cycles: each profile is built, in bounded time, with the credential
+    /// deny (none of these is past a cap, so a refusal is a regression).
+    /// Before, `URL.deletingLastPathComponent` turned `a/..` into `a/../..`
+    /// and the ancestor walk never reached `/`.
     @Test(.timeLimit(.minutes(2)))
     func dotDotAndCyclicLinksAboveACredentialEndTheAncestorWalk() throws {
         let root = try MCPStrictProfileTests.resolvedTemporaryRoot("rv-walk-ends")
@@ -83,6 +84,7 @@ extension MCPStrictProfileTests {
             root.path + "/a/keys",
             root.path + "/c/keys",
             root.path + "/real/keys/../../a/../real/keys",
+            root.path + "/c/../real/keys",
         ]
         for shape in shapes {
             try? FileManager.default.removeItem(atPath: home + "/.ssh")
@@ -94,11 +96,33 @@ extension MCPStrictProfileTests {
             switch built {
             case .success(let text):
                 #expect(text.contains("(deny file-read* file-write* file-link file-clone "), "\(shape)")
-            case .failure(.sandbox):
-                break
             case .failure(let error):
-                Issue.record("\(shape): \(error)")
+                Issue.record("\(shape) was refused: \(error)")
             }
+        }
+    }
+
+    /// A directory `..` steps out of decides where the rest of the path
+    /// lands, so `l` in `W/l/../keys` is named like any ancestor: at its
+    /// link path and where it resolves, refused a rename or removal.
+    @Test(.timeLimit(.minutes(1)))
+    func aDirectoryADotDotStepsOutOfIsNamed() throws {
+        let root = try MCPStrictProfileTests.resolvedTemporaryRoot("rv-dotdot-named")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["tmp", "scratch", "home", "z/q", "z/keys", "d"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let home = root.appendingPathComponent("home").path
+        try #require(symlink(root.path + "/z/q", root.path + "/l") == 0)
+        try #require(symlink(root.path + "/l/../keys", home + "/.ssh") == 0)
+        try #require(symlink(root.path + "/d/../z/keys", home + "/.aws") == 0)
+        let result = try #require(Self.profileWithin30Seconds(
+            home: home, scratch: root.appendingPathComponent("scratch").path,
+            temporary: root.appendingPathComponent("tmp").path), "the profile did not return")
+        let text = try result.get()
+        let ancestors = try #require(text.split(separator: "\n").first { $0.hasPrefix("(deny file-clone file-write-unlink ") })
+        for path in ["l", "z/q", "z", "d"] {
+            #expect(ancestors.contains("(literal \"\(root.path)/\(path)\")"), "\(path)")
         }
     }
 
@@ -107,10 +131,17 @@ extension MCPStrictProfileTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root.appendingPathComponent("y/z"), withIntermediateDirectories: true)
         try #require(symlink(root.path + "/y/z", root.path + "/x") == 0)
-        #expect(MCPSandbox.withoutDotComponents(root.path + "/x/../k") == root.path + "/y/k")
-        #expect(MCPSandbox.withoutDotComponents(root.path + "/./y/./z/k") == root.path + "/y/z/k")
-        #expect(MCPSandbox.withoutDotComponents(root.path + "/missing/../k") == root.path + "/k")
-        #expect(MCPSandbox.withoutDotComponents("/../..") == "/")
+        let link = MCPSandbox.withoutDotComponents(root.path + "/x/../k")
+        #expect(link.path == root.path + "/y/k")
+        #expect(link.steppedOutOf == [root.path + "/x"])
+        let plain = MCPSandbox.withoutDotComponents(root.path + "/./y/./z/k")
+        #expect(plain.path == root.path + "/y/z/k")
+        #expect(plain.steppedOutOf.isEmpty)
+        let missing = MCPSandbox.withoutDotComponents(root.path + "/missing/a/../../k")
+        #expect(missing.path == root.path + "/k")
+        #expect(missing.steppedOutOf == [root.path + "/missing/a", root.path + "/missing"])
+        #expect(MCPSandbox.withoutDotComponents("/../..").path == "/")
+        #expect(MCPSandbox.withoutDotComponents("/../..").steppedOutOf.isEmpty)
     }
 
     /// 200 `sandbox.writable` entries: the write allows, the link allow and

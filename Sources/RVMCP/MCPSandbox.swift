@@ -232,13 +232,13 @@ public enum MCPSandbox {
             return .failure(.sandbox(widened))
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
-        let writeAllow = paths(writable, denyTargets: false)
+        let writeAllow = paths(writable, denyTargets: false, writable: writable)
         guard let ancestors = credentialAncestors(unreadable, insideWriteRoots: writable) else {
             return .failure(.sandbox(
                 "more than \(maximumCredentialAncestors) credential ancestors lie inside the write roots"))
         }
         let credentialDeny = "(deny file-read* file-write* file-link file-clone "
-            + paths(unreadable, denyTargets: true) + symlinkDenies(unreadable) + ")"
+            + paths(unreadable, denyTargets: true, writable: writable) + symlinkDenies(unreadable) + ")"
         // `file-write*` does not cover `file-link` or `file-clone`, which
         // `(allow default)` would otherwise allow everywhere. A hard link
         // needs both of its ends allowed (checked live on macOS 27), so links
@@ -255,7 +255,12 @@ public enum MCPSandbox {
         // directory is refused. A credential ancestor inside a write root
         // (a home under the temp directory, a target under a cache) is named
         // one by one, refused a clone and a rename, so the credential is
-        // neither copied nor moved out from under its deny.
+        // neither copied nor moved out from under its deny. One that is
+        // missing is refused a create too: a symlink, a link or directory
+        // renamed onto it, or a hard link there would hold the credential
+        // once its owner writes it. A plain `mkdir` there is refused with
+        // them, since Seatbelt checks it as the same create as a directory
+        // renamed in (probed); making one that exists still fails EEXIST.
         //
         // A hard link an uncaged process planted under a write root is not
         // seen by any path rule.
@@ -269,9 +274,19 @@ public enum MCPSandbox {
             "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeAllow + "))))",
         ]
         if ancestors.isEmpty == false {
-            lines.append("(deny file-clone file-write-unlink " + ancestorFilters(ancestors) + ")")
+            lines.append("(deny file-clone file-write-unlink file-write-create file-link " + ancestorFilters(ancestors) + ")")
         }
         lines.append(credentialDeny)
+        // `KERN_PROCARGS2` hands a same-uid caller the exec-time arguments and
+        // environment of any process that is not a platform binary: rv puts
+        // a server's `secrets` there, and serve's own holds the host's
+        // tokens. The kernel consults both a sysctl check (the name carries
+        // the pid, so only a prefix matches) and a pidinfo check; refusing
+        // both for every process outside this sandbox instance refuses the
+        // read, while the server's own and its children's still work
+        // (measured on macOS 27; `(target others)` alone did not refuse it).
+        lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
+        lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
@@ -404,7 +419,16 @@ public enum MCPSandbox {
     /// Allow filters add a resolved spelling only when it is the same
     /// directory. Deny filters also add a different real path, so a symlink
     /// at `~/.ssh` or the config directory does not leave the target readable.
-    static func paths(_ raw: [String], denyTargets: Bool) -> String {
+    /// A deny also names the openings of a missing name (every directory a
+    /// link created there could send the credential to), but only when the
+    /// cage could create one: some entry on the credential's path lies
+    /// inside `writable`. Everywhere else `(deny file-write*)` and
+    /// `(deny file-link)` already refuse that create, a link, a rename or a
+    /// clone onto it alike, and the openings would deny `/Users` and the
+    /// home for a `~/.config` linked into a dotfiles directory. A path whose
+    /// entries cannot be listed keeps them.
+    static func paths(_ raw: [String], denyTargets: Bool, writable: [String]) -> String {
+        let insideWriteRoot = insideAny(writable)
         // Scalar identity, not String equality. Swift treats NFC and NFD as
         // the same string, and a catalog name in the other form would be dropped.
         var seen = Set<[UInt32]>()
@@ -418,7 +442,8 @@ public enum MCPSandbox {
             if denyTargets {
                 var expanded: [String] = []
                 var roots = spellings + seatbeltSpellings(resolved)
-                for opening in missingSymlinkOpenings(path) {
+                let creatable = entriesOnPath(path).map { $0.contains(where: insideWriteRoot) } ?? true
+                for opening in creatable ? missingSymlinkOpenings(path) : [] {
                     roots.append(opening)
                     roots.append(contentsOf: seatbeltSpellings(opening))
                 }
@@ -1086,7 +1111,7 @@ public enum MCPSandbox {
     #endif
 
     /// Each symlink in a credential chain is denied by a regex built from the
-    /// path Seatbelt checks; `paths(_:denyTargets:)` denies the target the
+    /// path Seatbelt checks; `paths(_:denyTargets:writable:)` denies the target the
     /// chain resolves to at launch. Nothing else is denied: not the link's
     /// parent (for `~/.ssh` that is the whole home, the scratch with it) and
     /// not every read. A link an uncaged process retargets after launch
@@ -1110,6 +1135,52 @@ public enum MCPSandbox {
         return filters.isEmpty ? "" : " " + filters.joined(separator: " ")
     }
 
+    /// Whether a path is one of `writable`, or inside one, under any spelling
+    /// Seatbelt checks (each root as given and resolved, `/tmp` and
+    /// `/private/tmp`, the Data-volume firmlink). APFS is case-insensitive
+    /// by default, so both sides are folded; folding can only add a path.
+    static func insideAny(_ writable: [String]) -> (String) -> Bool {
+        let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
+            .map { directorySpelling($0).lowercased() })
+        return { path in
+            let folded = path.lowercased()
+            return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+        }
+    }
+
+    /// Every directory entry `open` passes through for `path`: each
+    /// component as spelled, then each component of every link target it
+    /// follows, and past a missing name the names after it, spelled on (a
+    /// `..` there drops one). These are the entries the cage would have to
+    /// create, rename or remove to change where `path` resolves. Nil past 32
+    /// links.
+    static func entriesOnPath(_ path: String) -> [String]? {
+        var entries: [String] = []
+        var current = "/"
+        var parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var followsLeft = 32
+        while parts.isEmpty == false {
+            let part = parts.removeFirst()
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(current)
+                continue
+            }
+            let next = current == "/" ? "/" + part : current + "/" + part
+            entries.append(next)
+            if let link = readLink(next) {
+                guard followsLeft > 0 else { return nil }
+                followsLeft -= 1
+                let target = link.hasPrefix("/") ? link : (current == "/" ? "/" + link : current + "/" + link)
+                parts = target.split(separator: "/", omittingEmptySubsequences: true).map(String.init) + parts
+                current = "/"
+                continue
+            }
+            current = next
+        }
+        return entries
+    }
+
     /// Credential ancestors `profile` names one by one; more refuse the profile.
     static let maximumCredentialAncestors = 128
 
@@ -1128,13 +1199,7 @@ public enum MCPSandbox {
     /// list, past `maximumCredentialAncestors` or
     /// `maximumCredentialAncestorWalks`.
     static func credentialAncestors(_ unreadable: [String], insideWriteRoots writable: [String]) -> [String]? {
-        // APFS is case-insensitive by default; folding can only add a path.
-        let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
-            .map { directorySpelling($0).lowercased() })
-        func insideWriteRoot(_ path: String) -> Bool {
-            let folded = path.lowercased()
-            return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
-        }
+        let insideWriteRoot = insideAny(writable)
         var seen = Set<String>()
         var ancestors: [String] = []
         func add(_ ancestor: String) -> Bool {
@@ -1150,6 +1215,25 @@ public enum MCPSandbox {
                 if let target = absoluteLinkTarget(link) { pending.append(target) }
             }
         }
+        // `directory` and each one above it inside a write root. It has no
+        // `.` or `..`, so each step drops one component and the walk ends at
+        // `/`. (`URL` would append `..` to a `..`.) False past a cap.
+        func walkUp(from directory: String) -> Bool {
+            var parent = directory
+            while parent != "/", insideWriteRoot(parent) {
+                let above = parentDirectory(parent)
+                let resolvedAbove = realPath(above)
+                let name = parent.split(separator: "/").last.map(String.init) ?? ""
+                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
+                guard add(realPath(parent)), add(itself) else { return false }
+                var info = stat()
+                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
+                    pending.append(target)
+                }
+                parent = above
+            }
+            return true
+        }
         var walked = Set<String>()
         var next = 0
         while next < pending.count {
@@ -1157,20 +1241,12 @@ public enum MCPSandbox {
             next += 1
             guard walked.insert(start).inserted else { continue }
             if walked.count > maximumCredentialAncestorWalks { return nil }
-            // No `.` or `..` is left, so each step drops one component and
-            // the walk ends at `/`. (`URL` would append `..` to a `..`.)
-            var parent = parentDirectory(withoutDotComponents(start))
-            while parent != "/", insideWriteRoot(parent) {
-                let above = parentDirectory(parent)
-                let resolvedAbove = realPath(above)
-                let name = parent.split(separator: "/").last.map(String.init) ?? ""
-                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
-                guard add(realPath(parent)), add(itself) else { return nil }
-                var info = stat()
-                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
-                    pending.append(target)
-                }
-                parent = above
+            let spelled = withoutDotComponents(start)
+            guard walkUp(from: parentDirectory(spelled.path)) else { return nil }
+            // A directory a `..` stepped out of decides where the rest
+            // lands: replaced, it moves the credential. Named like the rest.
+            for directory in spelled.steppedOutOf {
+                guard walkUp(from: directory) else { return nil }
             }
         }
         return ancestors
@@ -1178,18 +1254,22 @@ public enum MCPSandbox {
 
     /// `path` with its `.` and `..` taken as `open` takes them: a `..` goes
     /// to the parent of where the path so far resolves, not to the lexical
-    /// parent, which a symlink would make a different directory.
-    static func withoutDotComponents(_ path: String) -> String {
+    /// parent, which a symlink would make a different directory. Also each
+    /// directory a `..` stepped out of, as spelled so far (none of them
+    /// holds a `.` or `..`).
+    static func withoutDotComponents(_ path: String) -> (path: String, steppedOutOf: [String]) {
         var current = "/"
+        var steppedOutOf: [String] = []
         for part in path.split(separator: "/", omittingEmptySubsequences: true) {
             if part == "." { continue }
             if part == ".." {
+                if current != "/" { steppedOutOf.append(current) }
                 current = parentDirectory(realPath(current))
                 continue
             }
             current = current == "/" ? "/" + part : current + "/" + part
         }
-        return current
+        return (current, steppedOutOf)
     }
 
     /// Each ancestor exactly, as a literal in every spelling Seatbelt may
