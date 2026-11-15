@@ -14,7 +14,15 @@ struct SystemdUnitTests {
         let text = try String(contentsOf: url, encoding: .utf8)
         #expect(restartValue(in: text) == "always")
         #expect(text.contains("ExecStart=@RVD_PATH@ --socket --idle-exit-seconds=31536000"))
-        let idle = try RVDLaunch.parse(arguments: ["rvd", "--socket", "--idle-exit-seconds=31536000"])
+        // The unit's own arguments. rvd takes `--socket` on Linux alone:
+        // elsewhere it refuses the line, and the idle limit is read without it.
+        let arguments = ["rvd", "--socket", "--idle-exit-seconds=31536000"]
+        #if os(Linux)
+        let idle = try RVDLaunch.parse(arguments: arguments)
+        #else
+        #expect(throws: RVDLaunchError.socketUnsupported) { _ = try RVDLaunch.parse(arguments: arguments) }
+        let idle = try RVDLaunch.parse(arguments: arguments.filter { $0 != "--socket" })
+        #endif
         #expect(idle.idleExitSeconds == 31_536_000)
         #expect(text.contains("WantedBy=default.target"))
         #expect(text.contains("WatchdogSec") == false)
