@@ -23,13 +23,22 @@ let restartingServer = #"""
     if "ignore-term" in options:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     for kind in ("child", "setsid-child"):
-        if kind in options and os.fork() == 0:
+        if kind not in options:
+            continue
+        # The server goes on only once its child's pid is written: a stop
+        # that comes at once (`refuse`) must not kill the child first.
+        written, wait = os.pipe()
+        if os.fork() == 0:
             if kind == "setsid-child":
                 os.setsid()
             with open(launches + ".child", "a") as f:
                 f.write("%d\n" % os.getpid())
+            os.write(wait, b"x")
             time.sleep(600)
             os._exit(0)
+        os.close(wait)
+        os.read(written, 1)
+        os.close(written)
     hung = False
     def send(mid, result):
         print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}), flush=True)
