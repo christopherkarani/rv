@@ -164,6 +164,10 @@ public final class SecretGateway: @unchecked Sendable {
     var beforeListenerPublish: (@Sendable () -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
+    /// Seconds a write to a client may block before its connection is cut.
+    static let clientSendTimeout = 30
+    /// Test seam: the client send timeout. Set before serving.
+    var clientSendTimeout = SecretGateway.clientSendTimeout
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
