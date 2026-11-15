@@ -272,6 +272,16 @@ public enum MCPSandbox {
             lines.append("(deny file-clone file-write-unlink " + ancestorFilters(ancestors) + ")")
         }
         lines.append(credentialDeny)
+        // `KERN_PROCARGS2` hands a same-uid caller the exec-time arguments and
+        // environment of any process that is not a platform binary: rv puts
+        // a server's `secrets` there, and serve's own holds the host's
+        // tokens. The kernel consults both a sysctl check (the name carries
+        // the pid, so only a prefix matches) and a pidinfo check; refusing
+        // both for every process outside this sandbox instance refuses the
+        // read, while the server's own and its children's still work
+        // (measured on macOS 27; `(target others)` alone did not refuse it).
+        lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
+        lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
