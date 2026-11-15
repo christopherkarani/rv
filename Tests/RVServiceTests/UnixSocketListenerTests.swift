@@ -373,10 +373,12 @@ struct UnixSocketListenerTests {
     }
 
     /// A same-user client that sends a request and closes before rvd sets
-    /// up its connection: Darwin refuses `SO_NOSIGPIPE` on a socket whose
-    /// peer is gone, the request is still readable, and a reply sent with
-    /// flags 0 raises SIGPIPE, killing the whole process. The reply must
-    /// fail quietly and the listener must keep serving.
+    /// up its connection: Darwin refuses `SO_NOSIGPIPE` (and every other
+    /// option) on a socket whose peer is gone, yet the request is still
+    /// readable, and a reply sent with flags 0 raises SIGPIPE, killing the
+    /// whole process. Today the refused `SO_RCVTIMEO` closes such a
+    /// connection first; replies also pass MSG_NOSIGNAL so that order is
+    /// not what keeps rvd alive. The listener must keep serving.
     @Test func aClientGoneBeforeItsReplyDoesNotKillTheListener() throws {
         let home = try makeIsolatedHome("pipe")
         defer { try? FileManager.default.removeItem(at: home) }
