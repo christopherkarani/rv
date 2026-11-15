@@ -20,8 +20,9 @@
 // SIGPIPE as serve does (`closed-default` sets it to the default instead,
 // as during planning), then writes one line of `bytes` x's through the
 // gateway's stderr writer: `interrupted` under a 1 ms SIGALRM without
-// SA_RESTART, `closed` and `closed-default` after its stdin ends (the test
-// closes stderr's read end first). Prints "returned" once the write returns.
+// SA_RESTART, `closed` and `closed-default` to a stderr whose read end the
+// probe closed itself, so no other process can hold it open. Prints
+// "returned" once the write returns.
 // `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
 import Darwin
 import Foundation
@@ -193,9 +194,16 @@ private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
         var timer = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 1000), it_value: timeval(tv_sec: 0, tv_usec: 1000))
         setitimer(ITIMER_REAL, &timer, nil)
     case "closed", "closed-default":
-        _ = FileHandle.standardInput.readDataToEndOfFile()
+        var ends: [Int32] = [-1, -1]
+        guard pipe(&ends) == 0, close(ends[0]) == 0, dup2(ends[1], STDERR_FILENO) == STDERR_FILENO else {
+            say("no closed stderr: errno \(errno)")
+            return 1
+        }
+        if ends[1] != STDERR_FILENO { close(ends[1]) }
     case nil: break
-    default: return 2
+    default:
+        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]")
+        return 2
     }
     MCPGatewayRuntime.writeStderrLine(String(repeating: "x", count: count) + "\n")
     var off = itimerval()
@@ -213,13 +221,11 @@ case "remote-starved":
     }
     exit(remoteWhileStarved(url))
 case "stderr":
-    guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0,
-        writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil) == 0
-    else {
+    guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0 else {
         say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]")
         exit(2)
     }
-    exit(0)
+    exit(writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil))
 case "pipe-disposition":
     guard arguments.count == 2 else {
         say("usage: rv-mcp-probe pipe-disposition <file>")
