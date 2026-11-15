@@ -141,8 +141,29 @@ struct MCPGatewayRestartRuntimeTests {
         for pid in children(in: directory) { kill(pid, SIGKILL) }
     }
 
+    /// No such process, or a zombie: exited and waiting only to be reaped,
+    /// which `kill(pid, 0)` still finds and a container's PID 1 may never
+    /// do for an orphan.
     static func gone(_ pid: pid_t) -> Bool {
-        kill(pid, 0) != 0 && errno == ESRCH
+        guard kill(pid, 0) == 0 else { return errno == ESRCH }
+        return isZombie(pid)
+    }
+
+    /// Read without a shell: `proc_pidinfo` on macOS, `/proc/<pid>/stat`'s
+    /// state (the first field after the command's closing parenthesis) on
+    /// Linux.
+    static func isZombie(_ pid: pid_t) -> Bool {
+        #if canImport(Darwin)
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
+        return info.pbi_status == 5  // SZOMB in <sys/proc.h>
+        #else
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+            let close = stat.lastIndex(of: ")")
+        else { return false }
+        return stat[stat.index(after: close)...].split(separator: " ").first == "Z"
+        #endif
     }
 
     static func call(_ id: Int, _ tool: String, text: String = "") -> String {
