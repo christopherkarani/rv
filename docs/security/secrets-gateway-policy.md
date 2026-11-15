@@ -1082,7 +1082,7 @@ the whole process's:
 | | before | macOS | Linux |
 | --- | --- | --- | --- |
 | one 64 MiB answer: most waiting / peak resident | 61 MiB (macOS) / 165–228 MiB | 8.0 MiB / 26 MiB, cut off | 8.0 MiB / 40 MiB, cut off |
-| 16 such answers at once: peak resident | 2.1–2.2 GiB | 91 MiB (38 MiB waiting), all cut off | 126–172 MiB (27–30 MiB waiting), all cut off |
+| 16 such answers at once: peak resident | 2.1–2.2 GiB | 91 MiB (38 MiB waiting), all cut off | 126–172 MiB (25–30 MiB waiting), all cut off |
 | 6–7 MiB answers, reader 1.5 s late | whole; on Linux sent upstream twice in 2 of 6 GETs, with more bytes than the answer | whole, sent once | whole, sent once (10 of 10) |
 
 ## Audit
