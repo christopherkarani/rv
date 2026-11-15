@@ -545,7 +545,11 @@ public struct MCPGatewayCore {
                 outputs.append(.stopUpstream(server: server))
                 outputs += releaseWaiting()
             case .list(let fanout, let server, _):
-                pending[id] = nil
+                // Asked to stop, as a timed-out call is; a late page is dropped.
+                pending[id] = .cancelled(server: server, until: now.addingTimeInterval(deadlines.list))
+                outputs.append(.toUpstream(server: server, message: Self.notification("notifications/cancelled", .object([
+                    "requestId": .int(id), "reason": .string("rv stopped waiting after \(Self.seconds(deadlines.list)) s"),
+                ]))))
                 outputs += listPage(
                     fanout: fanout, server: server, message: .null,
                     failure: "did not list tools within \(Self.seconds(deadlines.list)) s")

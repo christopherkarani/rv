@@ -403,6 +403,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// Each remote's sends and its stop, off the gateway queue: a send may
     /// refresh an OAuth token, and a stop waits for its DELETE.
     private var remoteSenders: [String: MCPOutbox] = [:]
+    /// Bytes each remote launch has been sent whose POST is not over: what
+    /// waits in the HTTP layer counts against `writeBufferBytes` until then.
+    private var remoteInFlight: [String: (generation: Int, bytes: Int)] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
     /// Feeds the core `.tick` on the gateway queue, so deadlines pass with
@@ -651,12 +654,19 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                     }
                 })
         }
+        // Its replies wait on its delegate queue (which stops reading it)
+        // while `readerBacklogBytes` of them are not yet handled.
+        let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
         let remote = MCPRemoteUpstream(
             launch: launch, authorizer: authorizer,
             deliver: { [self] message in
+                let cost = message.compactText.utf8.count
+                backlog.admit(cost)
                 queue.async {
-                    guard self.live[server] == generation else { return }
-                    self.perform(self.core.handle(.upstream(server: server, message: message)))
+                    if self.live[server] == generation {
+                        self.perform(self.core.handle(.upstream(server: server, message: message)))
+                    }
+                    backlog.release(cost)
                 }
             },
             exited: { [self] in
@@ -665,6 +675,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             log: log)
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
+        remoteInFlight[server] = (generation, 0)
         live[server] = generation
         remote.start()
     }
@@ -782,8 +793,22 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             let bytes = Self.line(message)
             let fd = writer.input.fileDescriptor
             admission = writer.outbox.submit(cost: bytes.count) { Self.writeAll(fd, bytes) }
-        } else if let sender = remoteSenders[server], let remote = remotes[server] {
-            admission = sender.submit(cost: message.compactText.utf8.count) { remote.send(message) }
+        } else if let sender = remoteSenders[server], let remote = remotes[server], let flight = remoteInFlight[server] {
+            // Counted from here until its POST is over, not just until sent.
+            let cost = message.compactText.utf8.count
+            if flight.bytes > 0, flight.bytes + cost > writeBufferBytes {
+                admission = .overflow
+            } else {
+                admission = sender.submit(cost: 0) {
+                    remote.send(message) { [self] in
+                        queue.async {
+                            guard let now = self.remoteInFlight[server], now.generation == flight.generation else { return }
+                            self.remoteInFlight[server] = (now.generation, now.bytes - cost)
+                        }
+                    }
+                }
+                if admission == .queued { remoteInFlight[server] = (flight.generation, flight.bytes + cost) }
+            }
         } else {
             return
         }
@@ -825,6 +850,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             writer.outbox.abandon { try? input.close() }
         }
         if let remote = remotes.removeValue(forKey: server) {
+            remoteInFlight[server] = nil
             remoteSenders.removeValue(forKey: server)?.abandon { remote.stop() }
         }
     }
@@ -841,6 +867,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
         remotes = [:]
         remoteSenders = [:]
+        remoteInFlight = [:]
         // Each input closes once what is queued for it is written, or once
         // its process is gone below and the write fails.
         for writer in upstreamWriters.values {
