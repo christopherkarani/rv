@@ -236,34 +236,53 @@ struct MCPOAuthTests {
 
     /// Any local process, of any user, can reach the redirect port. A knock
     /// that resets before its 404 is written must not kill `rv mcp connect`
-    /// with SIGPIPE; the real callback after it is still taken.
-    @Test func aKnockResetBeforeItsAnswerDoesNotEndTheSignIn() throws {
-        guard let redirect = MCPLoopbackRedirect.open() else {
-            Issue.record("the loopback redirect must open")
-            return
-        }
-        for _ in 0..<8 {
-            let knock = try loopbackClient(port: redirect.port)
-            _ = Array("GET /x HTTP/1.1\r\n".utf8).withUnsafeBytes { send(knock, $0.baseAddress, $0.count, 0) }
-            var reset = linger(l_onoff: 1, l_linger: 0)
-            _ = setsockopt(knock, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
-            close(knock)
-        }
-        let browser = try loopbackClient(port: redirect.port)
-        defer { close(browser) }
-        let line = Array("GET /callback?code=c&state=s HTTP/1.1\r\n\r\n".utf8)
-        _ = line.withUnsafeBytes { send(browser, $0.baseAddress, $0.count, 0) }
-        #expect(redirect.wait(timeout: 10, state: "s")?["code"] == "c")
+    /// with SIGPIPE; the real callback after it is still taken. Waits on a
+    /// plain thread, as `rv mcp connect` does from its main thread: Darwin
+    /// does not kill a process for a write from a dispatch worker thread.
+    @Test func aKnockResetBeforeItsAnswerDoesNotEndTheSignIn() {
+        let outcome = SignInOutcome()
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            outcome.set(signInPastResetKnocks())
+            done.signal()
+        }.start()
+        #expect(done.wait(timeout: .now() + 20) == .success)
+        #expect(outcome.get() == "c")
     }
 }
 
-private func loopbackClient(port: Int) throws -> Int32 {
+private final class SignInOutcome: Sendable {
+    private let box = Mutex<String?>(nil)
+
+    func set(_ code: String?) { box.withLock { $0 = code } }
+    func get() -> String? { box.withLock { $0 } }
+}
+
+/// Eight knocks that reset after their request line, then the real callback;
+/// returns the code the redirect took.
+private func signInPastResetKnocks() -> String? {
+    guard let redirect = MCPLoopbackRedirect.open() else { return nil }
+    for _ in 0..<8 {
+        guard let knock = loopbackClient(port: redirect.port) else { return nil }
+        _ = Array("GET /x HTTP/1.1\r\n".utf8).withUnsafeBytes { send(knock, $0.baseAddress, $0.count, 0) }
+        var reset = linger(l_onoff: 1, l_linger: 0)
+        _ = setsockopt(knock, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
+        close(knock)
+    }
+    guard let browser = loopbackClient(port: redirect.port) else { return nil }
+    defer { close(browser) }
+    let line = Array("GET /callback?code=c&state=s HTTP/1.1\r\n\r\n".utf8)
+    _ = line.withUnsafeBytes { send(browser, $0.baseAddress, $0.count, 0) }
+    return redirect.wait(timeout: 10, state: "s")?["code"]
+}
+
+private func loopbackClient(port: Int) -> Int32? {
     #if canImport(Darwin)
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     #else
     let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
     #endif
-    try #require(fd >= 0)
+    guard fd >= 0 else { return nil }
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = UInt16(port).bigEndian
@@ -273,7 +292,10 @@ private func loopbackClient(port: Int) throws -> Int32 {
             connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
         }
     }
-    try #require(connected == 0)
+    guard connected == 0 else {
+        close(fd)
+        return nil
+    }
     return fd
 }
 
