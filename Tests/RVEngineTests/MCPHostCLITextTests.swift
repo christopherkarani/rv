@@ -398,9 +398,11 @@ struct MCPHostCLITextTests {
         }
     }
 
-    /// Past `maxWordVisits` a read counts, so a long payload nested at
+    /// Past `maxWordVisits` a command counts, so a long payload nested at
     /// several depths asks after a bounded amount of work rather than
-    /// running for seconds; the same payload at fewer depths allows.
+    /// running for seconds; the same payload at fewer depths allows. One
+    /// read launches many commands, so a check only where a read begins
+    /// let this ladder visit 133,576 words.
     @Test("reading past the word-visit ceiling asks")
     func wordVisitCeilingAsks() {
         let payload = "watch " + (0..<250).map { "xmcp\($0)" }.joined(separator: " ")
@@ -409,7 +411,8 @@ struct MCPHostCLITextTests {
         #expect(judge(ladder, &reads))
         #expect(reads.visitsExceeded)
         #expect(reads.depthExceeded == false)
-        #expect(reads.wordVisits < 2 * HostTextReads.maxWordVisits, "\(reads.wordVisits)")
+        // One command's words at most past the ceiling, not a whole read's.
+        #expect(reads.wordVisits < HostTextReads.maxWordVisits + 4_096, "\(reads.wordVisits)")
         let small = "watch " + (0..<50).map { "xmcp\($0)" }.joined(separator: " ")
         var under = HostTextReads()
         #expect(judge(ansiNested(small, levels: 4), &under) == false)
