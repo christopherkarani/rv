@@ -51,15 +51,23 @@ public enum AuditLog {
         let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
         let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return false }
-        defer { close(fd) }
         var identity = stat()
-        guard fstat(fd, &identity) == 0 else { return false }
+        guard fstat(fd, &identity) == 0 else {
+            close(fd)
+            return false
+        }
         let log = AppendLock.Log(
             device: UInt64(truncatingIfNeeded: identity.st_dev), inode: UInt64(truncatingIfNeeded: identity.st_ino))
         // This process's lock for the log, then the file's. The first is
         // per log: a thread waiting for a log another process holds, or
         // writing a long line, keeps no other log in this process waiting.
-        return AppendLock.withLock(log, until: deadline) {
+        var entered = false
+        let written = AppendLock.withLock(log, until: deadline) {
+            entered = true
+            // Closed before the log's entry is given up: where `flock` is
+            // counted per process, closing a descriptor that held the lock
+            // drops it for every thread, the next one to take it included.
+            defer { close(fd) }
             guard lock(fd, until: deadline) else { return false }
             defer { _ = flock(fd, LOCK_UN) }
             guard let tail = lastLine(fd) else { return false }
@@ -79,6 +87,9 @@ public enum AuditLog {
             guard writeAll(fd, data) else { return false }
             return sync(fd)
         }
+        // Never entered: this descriptor held no lock.
+        if entered == false { close(fd) }
+        return written
     }
 
     /// The encoded line with every display hazard (ESC, bidi controls, tag
@@ -165,7 +176,7 @@ public enum AuditLog {
             var inode: UInt64
         }
 
-        /// The logs a thread is appending to now.
+        /// The logs a thread holds: waiting for the file's lock, or appending.
         private static let busy = Mutex<Set<Log>>([])
 
         /// `false` when `deadline` passes before `log` is free. Tries at
@@ -182,8 +193,9 @@ public enum AuditLog {
 
     private static let retryMicroseconds: useconds_t = 5_000
 
-    /// Excludes other processes, and this one's other opens of the file.
-    /// Callers already hold the log's `AppendLock`. With a deadline,
+    /// Excludes other processes and, on a local filesystem, this one's
+    /// other opens of the file. Callers already hold the log's
+    /// `AppendLock`. With a deadline,
     /// non-blocking attempts until it passes.
     private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> Bool {
         if let deadline {

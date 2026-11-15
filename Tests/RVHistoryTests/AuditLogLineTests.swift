@@ -55,6 +55,8 @@ struct AuditLogLineTests {
         // Long enough for the waiter to be inside its wait.
         usleep(300_000)
         #expect(AuditLog.append(event("other"), configDirectory: free, lockTimeout: .seconds(2)))
+        // The waiter was waiting all the while.
+        #expect(waited.wait(timeout: .now()) == .timedOut)
         // Free the stuck log so the waiter ends at once, and with its line written.
         _ = flock(holder, LOCK_UN)
         #expect(waited.wait(timeout: .now() + 20) == .success)
@@ -63,30 +65,37 @@ struct AuditLogLineTests {
 
     /// Threads appending to one log, half of them through another spelling
     /// of its path, each get the line before theirs: the chain is whole
-    /// and no line is lost. The in-process lock is by file, not by path.
+    /// and no line is lost. (On a local filesystem the file's own lock
+    /// would keep the two spellings apart too; this is the result both
+    /// locks owe, whichever one gives it.)
     @Test(.timeLimit(.minutes(1)))
     func concurrentAppendsThroughTwoPathsKeepTheChainWhole() throws {
         let dir = try scratch()
         let alias = dir.deletingLastPathComponent().appendingPathComponent("rv-auditline-alias-\(UUID().uuidString)")
-        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: dir)
         defer {
             try? FileManager.default.removeItem(at: alias)
             try? FileManager.default.removeItem(at: dir)
         }
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: dir)
         let threads = 8
         let each = 12
         let done = DispatchSemaphore(value: 0)
         let written = Mutex(0)
+        // Every thread starts appending together, not one after another.
+        let go = Mutex(false)
         for thread in 0..<threads {
             let directory = thread % 2 == 0 ? dir : alias
             let events = (0..<each).map { event("t\(thread)-\($0)") }
             Thread.detachNewThread {
+                while go.withLock({ $0 }) == false { usleep(500) }
                 for event in events where AuditLog.append(event, configDirectory: directory, lockTimeout: .seconds(30)) {
                     written.withLock { $0 += 1 }
                 }
                 done.signal()
             }
         }
+        usleep(50_000)
+        go.withLock { $0 = true }
         for _ in 0..<threads { #expect(done.wait(timeout: .now() + 50) == .success) }
         #expect(written.withLock { $0 } == threads * each)
         let report = try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get()
