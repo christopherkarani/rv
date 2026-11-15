@@ -114,6 +114,9 @@ public final class UnixSocketListener: Sendable {
     public let socketURL: URL
     private let limits: UnixConnectionLimits
     private let slots: UnixConnectionSlots
+    /// Test seam: runs on the accept queue after `accept`, before the
+    /// socket options are set.
+    private let afterAccept: @Sendable () -> Void
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-socket")
     /// Connections serve here, never on `queue`: each `serve` loop blocks in
@@ -139,17 +142,28 @@ public final class UnixSocketListener: Sendable {
         let source: DispatchSourceRead
     }
 
-    public init(
+    public convenience init(
         runtime: ServiceRuntime,
         watchdog: IdleWatchdog,
         socketURL: URL,
         limits: UnixConnectionLimits = .standard
+    ) {
+        self.init(runtime: runtime, watchdog: watchdog, socketURL: socketURL, limits: limits, afterAccept: {})
+    }
+
+    init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        socketURL: URL,
+        limits: UnixConnectionLimits,
+        afterAccept: @escaping @Sendable () -> Void
     ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.socketURL = socketURL
         self.limits = limits
         self.slots = UnixConnectionSlots(limit: limits.maxConnections)
+        self.afterAccept = afterAccept
     }
 
     public func start() throws {
@@ -210,6 +224,7 @@ public final class UnixSocketListener: Sendable {
         let listenFD = state.withLock { $0.listenFD }
         let client = Darwin.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
+        afterAccept()
         guard DarwinFrameIO.peerUID(fd: client) == Darwin.getuid() else {
             Darwin.close(client)
             return
