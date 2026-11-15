@@ -680,8 +680,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                     }
                 })
         }
-        // Its replies wait on its delegate queue (which stops reading it)
-        // while `readerBacklogBytes` of them are not yet handled.
+        // Its messages wait, off its delegate queue, while
+        // `readerBacklogBytes` of them (and of their output for the client)
+        // are not yet handled; its connection goes on reading meanwhile, so
+        // past `writeBufferBytes` more waiting there it is stopped.
         let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
         let remote = MCPRemoteUpstream(
             launch: launch, authorizer: authorizer,
@@ -698,12 +700,26 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             exited: { [self] in
                 queue.async { self.exited(server, generation) }
             },
-            log: log)
+            log: log,
+            deliveryLimit: writeBufferBytes,
+            overflowed: { [self] in
+                queue.async { self.deliveryOverflowed(server, generation) }
+            })
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
         remoteInFlight[server] = (generation, 0)
         live[server] = generation
         remote.start()
+    }
+
+    /// More than `writeBufferBytes` of what this remote launch sent waits
+    /// behind the client's output: it is stopped, which the core hears at
+    /// once, and its calls end as on any exit (they may have run).
+    private func deliveryOverflowed(_ server: String, _ generation: Int) {
+        guard stopping == false, live[server] == generation else { return }
+        log("MCP server \(MCPDisplayedText.field(server)) sent more than \(Self.mebibytes(writeBufferBytes)) MiB "
+            + "that waits behind the client's output; stopping it")
+        stopUpstream(server)
     }
 
     /// Test seam: what `server`'s remote launch counts against its bound now.

@@ -98,6 +98,15 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// session DELETE keep the shared session. On Darwin every request shares
 /// it, connections and all. Exchanges are keyed by their task object, which
 /// no other session could share; task identifiers are numbered per session.
+///
+/// What the server sends goes to `deliver`, and its going away to `exited`,
+/// in the order it came, from a thread of their own: `deliver` may wait for
+/// the gateway, and the delegate queue never waits with it, so a POST is
+/// let go of and its bytes stop counting however far behind the gateway
+/// is. A session goes on reading what a waiting delegate queue leaves
+/// (corelibs on Linux), so the server is never slowed: once more than
+/// `deliveryLimit` bytes of it wait for `deliver`, nothing more is
+/// delivered and `overflowed` is told, once.
 package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
@@ -132,6 +141,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private let deliver: @Sendable (JSONValue) -> Void
     private let exited: @Sendable () -> Void
     private let log: @Sendable (String) -> Void
+    private let overflowed: @Sendable () -> Void
+    /// What waits for `deliver`, by the bytes it came in.
+    private let deliveries: MCPOutbox
     private let lock = NSLock()
     private var session: URLSession?
     private let delegateQueue = MCPHTTPExchange.delegateQueue("rv.mcp.remote")
@@ -154,17 +166,44 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         authorizer: MCPRemoteAuthorizer? = nil,
         deliver: @escaping @Sendable (JSONValue) -> Void,
         exited: @escaping @Sendable () -> Void,
-        log: @escaping @Sendable (String) -> Void
+        log: @escaping @Sendable (String) -> Void,
+        deliveryLimit: Int = MCPGatewayRuntime.writeBufferBytes,
+        overflowed: @escaping @Sendable () -> Void = {}
     ) {
         self.launch = launch
         self.authorizer = authorizer
         self.deliver = deliver
         self.exited = exited
         self.log = log
+        self.overflowed = overflowed
+        self.deliveries = MCPOutbox(limit: deliveryLimit)
         super.init()
     }
 
+    deinit {
+        deliveries.close()
+    }
+
     private var name: String { launch.server }
+
+    /// Queued for the delivery thread, after everything the server sent
+    /// before. Past the limit nothing more is taken.
+    private func hand(cost: Int, _ work: @escaping @Sendable () -> Void) {
+        guard deliveries.submit(cost: cost, work) == .overflow else { return }
+        deliveries.abandon()
+        overflowed()
+    }
+
+    private func hand(_ message: JSONValue, cost: Int) {
+        let deliver = deliver
+        hand(cost: cost) { deliver(message) }
+    }
+
+    /// `exited`, after what the server sent before it went away.
+    private func exit() {
+        let exited = exited
+        hand(cost: 0) { exited() }
+    }
 
     private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
@@ -266,6 +305,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             }
             return (self.session, launch.transport == .http ? sessionID : nil, posts)
         }
+        // What still waits for the gateway is for nobody now.
+        deliveries.abandon()
         posts.forEach { $0.invalidateAndCancel() }
         guard let session else { return }
         if let closing {
@@ -353,14 +394,14 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = ObjectIdentifier(dataTask)
         guard var exchange = locked({ exchanges[id] }) else { return }
-        var incoming: [JSONValue] = []
+        var incoming: [(message: JSONValue, cost: Int)] = []
         var endpointEvent: String?
         if exchange.isEventStream, (200..<300).contains(exchange.status) {
             for event in exchange.events.feed(data) {
                 if event.name == "endpoint" {
                     endpointEvent = event.data
                 } else if event.name == "message", let message = try? JSONValue.parse(Data(event.data.utf8)) {
-                    incoming.append(message)
+                    incoming.append((message, event.data.utf8.count))
                 }
             }
             if exchange.events.overflowed {
@@ -374,10 +415,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             exchange.body = Data()
             dataTask.cancel()
         }
-        for message in incoming { note(message, answering: &exchange) }
+        for item in incoming { note(item.message, answering: &exchange) }
         locked { exchanges[id] = exchange }
         if let endpointEvent { useEndpoint(endpointEvent, stream: dataTask) }
-        incoming.forEach(deliver)
+        for item in incoming { hand(item.message, cost: item.cost) }
     }
 
     package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -403,7 +444,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
                 ? (error.map { "event stream failed: \($0.localizedDescription)" } ?? "event stream closed")
                 : "event stream refused (HTTP \(exchange.status))"
             log("MCP server \(name) \(reason)")
-            exited()
+            exit()
         case .post(let message, let retried):
             // A retry takes the completion over; otherwise this POST is over.
             if completePost(message, exchange: exchange, error: error, retried: retried) == false {
@@ -417,7 +458,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var exchange = exchange
         func fail(_ text: String) {
             if let reply = MCPHTTPExchange.failure(for: message, text) {
-                deliver(reply)
+                hand(reply, cost: text.utf8.count)
             } else {
                 log(text)
             }
@@ -437,7 +478,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             // its answer: the connection to it is gone, and so is it (a call
             // on it may have run).
             log("could not reach MCP server \(name): \(error.localizedDescription)")
-            if MCPHTTPExchange.isRequest(message) { exited() }
+            if MCPHTTPExchange.isRequest(message) { exit() }
             return false
         }
         let status = exchange.status
@@ -455,7 +496,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         if status == 404, launch.transport == .http, locked({ sessionID }) != nil {
             locked { sessionID = nil }
             log("MCP server \(name) ended the session (HTTP 404)")
-            exited()
+            exit()
             return false
         }
         var incoming: [JSONValue] = []
@@ -464,7 +505,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         }
         incoming = incoming.filter { $0["jsonrpc"]?.stringValue == "2.0" }
         for item in incoming { note(item, answering: &exchange) }
-        incoming.forEach(deliver)
+        // A batch is counted at its share of the body.
+        let cost = exchange.body.count / max(incoming.count, 1)
+        for item in incoming { hand(item, cost: cost) }
         guard exchange.answered == false, MCPHTTPExchange.isRequest(message) else { return false }
         switch status {
         case 200..<300:
