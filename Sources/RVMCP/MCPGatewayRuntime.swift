@@ -346,11 +346,14 @@ public enum MCPLaunchPlanner {
 /// owns the core; reader threads only parse lines and enqueue them.
 public final class MCPGatewayRuntime: @unchecked Sendable {
     public static let maximumLineBytes = 64 * 1024 * 1024
-    /// What may wait for one destination (the client, or one upstream)
-    /// before it counts as not reading: two maximum lines.
+    /// What may wait for one upstream before it counts as not reading: two
+    /// maximum lines. The client has no such bound: what waits for it is
+    /// held back at its source (`readerBacklogBytes` per reader), and it is
+    /// not reading once it takes nothing for `clientStallSeconds`.
     public static let writeBufferBytes = 2 * maximumLineBytes
     /// How far one reader (the client's, or one upstream's) may run ahead of
-    /// the gateway queue before it stops reading: one maximum line.
+    /// the gateway queue, and of the client's writer for what its lines
+    /// produced for the client, before it stops reading: one maximum line.
     static let readerBacklogBytes = maximumLineBytes
     /// How long the client may take nothing of what waits for it before it
     /// counts as not reading.
@@ -365,8 +368,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     public enum Ending: Sendable, Equatable {
         /// The client closed its input, or a shutdown was asked for.
         case finished
-        /// The client stopped reading its output: more than the write bound
-        /// waited for it.
+        /// The client stopped reading its output: it took nothing of what
+        /// waited for it for `clientStallSeconds`.
         case clientNotReading
     }
 
@@ -388,6 +391,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let clientStallSeconds: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
+    private let clientProgress = MCPWriteProgress()
+    /// A list_changed waits for the client, not yet being written: another
+    /// adds nothing (the client lists after it either way).
+    private let listChangeWaiting = Mutex(false)
     private var clientNotReading = false
     /// A placeholder server is running bound: its name and what its lease staged.
     private let placeholdersBound: @Sendable (String, [SecretDefinition]) -> Void
@@ -447,7 +454,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.log = { relay.post($0) }
         self.writeBufferBytes = writeBufferBytes
         self.clientStallSeconds = clientStallSeconds
-        self.clientWriter = MCPOutbox(limit: writeBufferBytes)
+        self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
 
@@ -474,6 +481,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             timer.schedule(deadline: .now() + Self.tickInterval, repeating: Self.tickInterval, leeway: .milliseconds(100))
             timer.setEventHandler { [self] in
                 guard stopping == false else { return }
+                if clientNotReading == false, clientProgress.stalled(after: clientStallSeconds) {
+                    clientStopped()
+                    return
+                }
                 perform(core.handle(.tick))
             }
             timer.resume()
@@ -486,7 +497,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 let message: MCPGatewayInput = (try? JSONValue.parse(line)).map { .client($0) } ?? .clientUnparseable
                 backlog.admit(line.count)
                 queue.async {
-                    self.perform(self.core.handle(message))
+                    self.perform(self.core.handle(message), charging: backlog)
                     backlog.release(line.count)
                 }
             }
@@ -638,7 +649,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             backlog.admit(line.count)
             queue.async {
                 if self.live[server] == generation {
-                    self.perform(self.core.handle(.upstream(server: server, message: message)))
+                    self.perform(self.core.handle(.upstream(server: server, message: message)), charging: backlog)
                 }
                 backlog.release(line.count)
             }
@@ -670,7 +681,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 backlog.admit(cost)
                 queue.async {
                     if self.live[server] == generation {
-                        self.perform(self.core.handle(.upstream(server: server, message: message)))
+                        self.perform(self.core.handle(.upstream(server: server, message: message)), charging: backlog)
                     }
                     backlog.release(cost)
                 }
@@ -757,11 +768,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         perform(core.handle(started ? .upstreamRelaunched(server: server) : .upstreamExited(server: server)))
     }
 
-    private func perform(_ outputs: [MCPGatewayOutput]) {
+    /// `charging`: the reader whose line produced `outputs`, held back until
+    /// what they send the client is written. rv's own (deadlines, exits,
+    /// restarts) is charged to no reader and always queued.
+    private func perform(_ outputs: [MCPGatewayOutput], charging backlog: MCPBacklog? = nil) {
         for item in outputs {
             switch item {
             case .toClient(let message):
-                sendToClient(message)
+                sendToClient(message, charging: backlog)
             case .toUpstream(let server, let message):
                 sendUpstream(server, message)
             case .audit(let record):
@@ -778,16 +792,36 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
-    /// Queued for the client's writer. Past its bound the client is not
-    /// reading: serving stops, `run` says why, and nothing more is written.
-    private func sendToClient(_ message: JSONValue) {
+    /// Queued for the client's writer, its written (escaped) bytes charged
+    /// to `backlog` until written. A list_changed is dropped while another
+    /// waits.
+    private func sendToClient(_ message: JSONValue, charging backlog: MCPBacklog?) {
         guard clientNotReading == false else { return }
+        let listChange = message["id"] == nil && message["method"]?.stringValue == "notifications/tools/list_changed"
+        if listChange, listChangeWaiting.withLock({ waiting in defer { waiting = true }; return waiting }) { return }
         let bytes = Self.line(message)
         let fd = output
-        guard clientWriter.submit(cost: bytes.count, { Self.writeAll(fd, bytes) }) == .overflow else { return }
+        let progress = clientProgress
+        backlog?.charge(bytes.count)
+        progress.queued()
+        let admission = clientWriter.submit(cost: bytes.count) { [self] in
+            if listChange { listChangeWaiting.withLock { $0 = false } }
+            Self.writeAll(fd, bytes, wrote: progress.wrote)
+            progress.finished()
+            backlog?.release(bytes.count)
+        }
+        if admission != .queued {
+            progress.finished()
+            backlog?.release(bytes.count)
+        }
+    }
+
+    /// The client took nothing for `clientStallSeconds`: serving stops, `run`
+    /// says why, and nothing more is written.
+    private func clientStopped() {
         clientNotReading = true
         clientWriter.abandon()
-        log("the MCP client is not reading its output (more than \(Self.mebibytes(writeBufferBytes)) MiB waiting); stopping")
+        log("the MCP client is not reading its output (nothing taken for \(Int(clientStallSeconds)) s); stopping")
         finished.signal()
     }
 
@@ -938,7 +972,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     /// Blocks until every byte is written or the write fails (a reader that
     /// is gone): only ever on a writer's own thread.
-    static func writeAll(_ fd: Int32, _ bytes: [UInt8]) {
+    /// `wrote` is told after each part of `bytes` is written.
+    static func writeAll(_ fd: Int32, _ bytes: [UInt8], wrote: (() -> Void)? = nil) {
         var written = 0
         while written < bytes.count {
             let n = bytes.withUnsafeBytes { raw -> Int in
@@ -948,6 +983,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             if n < 0, errno == EINTR { continue }
             guard n > 0 else { return }
             written += n
+            wrote?()
         }
     }
 

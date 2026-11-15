@@ -186,4 +186,46 @@ final class MCPBacklog: @unchecked Sendable {
         behind -= bytes
         condition.broadcast()
     }
+
+    /// Adds `bytes` without waiting: what the reader's lines produced for a
+    /// destination it waits on, until `release`d once written.
+    func charge(_ bytes: Int) {
+        condition.lock()
+        defer { condition.unlock() }
+        behind += bytes
+    }
+}
+
+/// Whether a writer is getting anywhere: it is stalled once something has
+/// waited for it, with no byte written, for a while. Time is measured on a
+/// clock that stops while the machine sleeps.
+final class MCPWriteProgress: Sendable {
+    private struct State {
+        var pending = 0
+        var last = SuspendingClock.now
+    }
+
+    private let state = Mutex(State())
+
+    func queued() {
+        state.withLock {
+            if $0.pending == 0 { $0.last = .now }
+            $0.pending += 1
+        }
+    }
+
+    func wrote() {
+        state.withLock { $0.last = .now }
+    }
+
+    func finished() {
+        state.withLock {
+            $0.pending -= 1
+            $0.last = .now
+        }
+    }
+
+    func stalled(after seconds: TimeInterval) -> Bool {
+        state.withLock { $0.pending > 0 && SuspendingClock.now - $0.last >= .milliseconds(Int64(seconds * 1000)) }
+    }
 }
