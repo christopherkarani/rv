@@ -136,7 +136,8 @@ struct MCPGatewayRemoteRestartTests {
         let message = refused?["error"]?["message"]?.stringValue ?? ""
         #expect(message.contains("rv is restarting it"), "\(message)")
         #expect(forwards.items.withLock { $0.count } == 2)
-        #expect(run.logs.text.contains("is not reading its input"), "\(run.logs.text)")
+        let logs = run.logs
+        #expect(await eventually { logs.text.contains("is not reading its input") }, "\(logs.text)")
         #expect(await run.finish())
         _ = await offThePool { fixture.stop() }
     }
