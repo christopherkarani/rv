@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVHistory
 
@@ -21,6 +22,43 @@ struct AuditLogLineTests {
         AuditEvent(
             time: Date(timeIntervalSince1970: 1_791_900_000), kind: .mcpCall, decision: .allowed, subject: subject,
             reason: reason, source: "mcp-gateway", detail: detail)
+    }
+
+    /// An append waiting on one log's file lock must not hold up an append
+    /// to another log: this process's own lock is taken only once the file
+    /// is. (It was held through the wait, so one stuck log stalled every
+    /// other log in the process for as long as the first append would wait.)
+    @Test(.timeLimit(.minutes(1)))
+    func anAppendWaitingOnOneLogDoesNotHoldUpAnother() async throws {
+        let stuck = try scratch()
+        let free = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: stuck)
+            try? FileManager.default.removeItem(at: free)
+        }
+        #expect(AuditLog.append(event("first"), configDirectory: stuck))
+        let holder = open(AuditLog.fileURL(configDirectory: stuck).path, O_RDWR | O_CLOEXEC)
+        try #require(holder >= 0 && flock(holder, LOCK_EX | LOCK_NB) == 0)
+        defer {
+            _ = flock(holder, LOCK_UN)
+            close(holder)
+        }
+        // A thread of its own waits three seconds for the stuck log.
+        let waiting = Mutex(false)
+        let waited = DispatchSemaphore(value: 0)
+        let stuckEvent = event("stuck")
+        Thread.detachNewThread {
+            waiting.withLock { $0 = true }
+            _ = AuditLog.append(stuckEvent, configDirectory: stuck, lockTimeout: .seconds(3))
+            waited.signal()
+        }
+        while waiting.withLock({ $0 }) == false { usleep(1_000) }
+        // Well inside that wait, and long enough for the waiter to be in it.
+        usleep(300_000)
+        let began = ContinuousClock.now
+        #expect(AuditLog.append(event("other"), configDirectory: free, lockTimeout: .seconds(1)))
+        #expect(ContinuousClock.now - began < .seconds(1))
+        _ = waited.wait(timeout: .now() + 10)
     }
 
     /// M4: a line the verifier would reject is never written.

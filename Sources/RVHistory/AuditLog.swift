@@ -47,12 +47,19 @@ public enum AuditLog {
         }
         let url = fileURL(configDirectory: configDirectory)
         let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
-        return AppendLock.withLock(until: deadline) {
-            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
-            guard fd >= 0 else { return false }
-            defer { close(fd) }
-            guard lock(fd, until: deadline) else { return false }
-            defer { _ = flock(fd, LOCK_UN) }
+        let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var identity = stat()
+        guard fstat(fd, &identity) == 0 else { return false }
+        let log = AppendLock.Log(
+            device: UInt64(truncatingIfNeeded: identity.st_dev), inode: UInt64(truncatingIfNeeded: identity.st_ino))
+        // The file's lock first, this process's own second, and that one
+        // per log: a thread waiting for a log another process holds, or
+        // writing a long line, keeps no other log in this process waiting.
+        guard lock(fd, until: deadline) else { return false }
+        defer { _ = flock(fd, LOCK_UN) }
+        return AppendLock.withLock(log, until: deadline) {
             guard let tail = lastLine(fd) else { return false }
             var chained = event
             chained.prev = tail.hash
@@ -145,26 +152,35 @@ public enum AuditLog {
         return bytes
     }
 
-    /// Threads in this process. macOS `flock` does not exclude them.
+    /// Threads in this process appending to one log; macOS `flock` does not
+    /// exclude them. One lock per log, named by the file's device and inode
+    /// (so by the file, however its path was spelled).
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
     private enum AppendLock {
-        private static let mutex = Mutex<Void>(())
+        struct Log: Hashable {
+            var device: UInt64
+            var inode: UInt64
+        }
 
-        /// `false` when `deadline` passes before the lock is free.
-        static func withLock(until deadline: ContinuousClock.Instant?, _ body: () -> Bool) -> Bool {
-            guard let deadline else { return mutex.withLock { _ in body() } }
-            while true {
-                if let result = mutex.withLockIfAvailable({ _ in body() }) { return result }
-                guard ContinuousClock.now < deadline else { return false }
+        /// The logs a thread is appending to now.
+        private static let busy = Mutex<Set<Log>>([])
+
+        /// `false` when `deadline` passes before `log` is free. Tries at
+        /// least once, whatever the deadline.
+        static func withLock(_ log: Log, until deadline: ContinuousClock.Instant?, _ body: () -> Bool) -> Bool {
+            while busy.withLock({ $0.insert(log).inserted }) == false {
+                if let deadline, ContinuousClock.now >= deadline { return false }
                 usleep(retryMicroseconds)
             }
+            defer { busy.withLock { _ = $0.remove(log) } }
+            return body()
         }
     }
 
     private static let retryMicroseconds: useconds_t = 5_000
 
-    /// Excludes other processes. Callers already hold `AppendLock`. With a
-    /// deadline, non-blocking attempts until it passes.
+    /// Excludes other processes. Taken before `AppendLock`, never while
+    /// holding it. With a deadline, non-blocking attempts until it passes.
     private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> Bool {
         if let deadline {
             while true {
