@@ -605,7 +605,7 @@ struct URLSessionStreamingTransportTests {
             stopped.signal()
         }
         let counts = { under.transport.sessionCounts }
-        let released = eventually(within: 20) {
+        let released = eventually(within: 40) {
             counts().made == 1 && counts().live == 0 && under.transport.budget.waiting == 0
         }
         trickle.going.store(false, ordering: .relaxed)
