@@ -94,9 +94,11 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        // The log is named by its directory, so the file is neither opened
-        // nor created before this process's lock for it is held: an append
-        // that times out there leaves nothing behind.
+        // The log's first entry is named by its directory, so the file is
+        // neither opened nor created before that entry is held: an append
+        // that times out on the directory's entry leaves nothing behind.
+        // One that times out on the file's entry has opened the file, which
+        // another thread then has open, so it existed already.
         var identity = stat()
         guard stat(configDirectory.path, &identity) == 0 else { return false }
         let log = AppendLock.Log(identity, .directory)
@@ -127,7 +129,13 @@ public enum AuditLog {
                 defer { close(fd) }
                 return appendLine(event, to: fd, wait: wait, encoder: encoder)
             }
-            // Never entered: this descriptor held no lock.
+            // Never entered: this descriptor took no lock. Closing it is
+            // harmless where each open has its own `flock` (local Darwin and
+            // Linux filesystems). Where locks are counted per process (some
+            // network filesystems), a waiter that timed out here, through a
+            // second directory, can drop the holder's lock by closing it:
+            // narrower than before the file's entry, when both would have
+            // written.
             if entered == false { close(fd) }
             return written
         }
