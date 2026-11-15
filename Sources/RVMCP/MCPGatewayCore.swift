@@ -1068,9 +1068,13 @@ public struct MCPGatewayCore {
             let reason = MCPCallRecord.bounded(
                 MCPDisplayedText.field(scrubText(raw, for: server)), Self.maximumInitializeErrorBytes)
             // The upstream's text goes to stderr only: a server's error is
-            // not a channel to the client or the model.
+            // not a channel to the client or the model. It is stopped, as
+            // one that never answers is.
             phases[server] = .failed("it failed to initialize")
-            return [.log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)")] + releaseWaiting()
+            return [
+                .log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)"),
+                .stopUpstream(server: server),
+            ] + releaseWaiting()
         case .list(let fanout, _, _):
             return listPage(fanout: fanout, server: server, message: message)
         case .call(let call):
