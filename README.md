@@ -267,7 +267,9 @@ rv is one binary, 25 commands. The rest of the surface:
   it (a changed tool asks, and old approvals do not carry over), and the
   client is told its tools changed. A call in flight is never sent again:
   it fails saying it may have run, and a call made while the server is
-  coming back is refused at once. A client that takes nothing rv writes
+  coming back is refused at once. On Linux each POST to a remote server
+  goes on a connection of its own, since libcurl would send a request
+  again when a kept-alive connection drops before its answer. A client that takes nothing rv writes
   for 30 s ends `rv mcp serve` with exit status 1.
   Each `rv mcp serve` process also warns once at start, on stderr and in
   the audit log, when host configs bypass the gateway, run a server
