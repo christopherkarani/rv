@@ -1294,12 +1294,14 @@ That was so before outsiders were told apart first as well (the test
 passed on that code once the kernel's drops were told apart from the
 gateway's answers), so a flood is not what turned runtimes away before. A connection reset while it
 waits there still holds its place until the gateway accepts and closes it. Refusals from
-outside every runtime that present no live placeholder (`malformed`,
-`requestTimeout`, `unknownRoute`, and any refusal of a request naming a
-secret, a made-up one included) are recorded at most once a second, with
-how many were left out since the record before; one that presents a live
-placeholder is always recorded, raw, percent-encoded or inside `Basic`
-credentials, the forms substitution itself finds. The last refusal left
+outside every runtime are recorded at most once a second, with how many
+were left out since the record before: every `malformed` or
+`requestTimeout` refusal, whatever its head holds, since it is refused
+before its head is checked for a live placeholder, and an `unknownRoute`
+refusal or any refusal of a request naming a secret, a made-up one
+included, unless its head presents a live placeholder. One whose parsed
+head presents a live placeholder is always recorded, raw, percent-encoded
+or inside `Basic` credentials, the forms substitution itself finds. The last refusal left
 out is written when the gateway stops, saying how many came before it;
 with neither a later refusal nor a stop, that count is not written. A
 refusal still being made as the gateway stops is written as it comes, and
