@@ -169,6 +169,8 @@ public final class SecretGateway: @unchecked Sendable {
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let outsiderSlots = DispatchSemaphore(value: SecretGateway.outsiderConnections)
     private let classifiers = DispatchSemaphore(value: SecretGateway.classifyingConnections)
+    /// Bounds the audit records of outsiders' nameless refusals.
+    let outsiderAudit = GatewayOutsiderAudit()
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
@@ -584,12 +586,14 @@ public final class SecretGateway: @unchecked Sendable {
             let head = GatewayRequestHead.parse(headBytes)
         else {
             let refusal: GatewayRefusal = reader.timedOut ? .requestTimeout : .malformed
-            refuse(client, refusal, method: "?", path: "?", secret: nil, started: started)
+            refuse(client, refusal, method: "?", path: "?", secret: nil, outsider: outsider, started: started)
             return
         }
         let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
-            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil, started: started)
+            refuse(
+                client, .unknownRoute, method: head.method, path: path, secret: nil, outsider: outsider,
+                started: started)
             return
         }
         // Every live entry the request names, so a refusal can name the
@@ -845,16 +849,21 @@ public final class SecretGateway: @unchecked Sendable {
 
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
-        runtime: String? = nil, started: DispatchTime
+        runtime: String? = nil, outsider: Bool = false, started: DispatchTime
     ) {
         GatewaySocket.writeAll(
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
+        var reason = refusal.reason
+        if outsider, secret == nil {
+            guard let leftOut = outsiderAudit.admit() else { return }
+            if leftOut > 0 { reason += " (\(leftOut) more from outside the runtimes since the last record)" }
+        }
         _ = audit(SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
             activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
-            refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            refusal: refusal, reason: reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }

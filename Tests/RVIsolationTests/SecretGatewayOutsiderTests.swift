@@ -228,6 +228,36 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.count == 20)
     }
 
+    /// Malformed heads from outside every runtime, one after another: the
+    /// first is recorded and the rest only counted until the interval has
+    /// passed; the next record says how many were left out.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersNamelessRefusalsAreRecordedOncePerInterval() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, _) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        func sendGarbage() throws -> String {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array("not http\r\n\r\n".utf8)))
+            return answer(client.fd)
+        }
+        for _ in 0..<10 { #expect(try sendGarbage().hasPrefix("HTTP/1.1 4")) }
+        let malformed = { audit.items.withLock { $0.filter { $0.refusal?.code == "malformed" } } }
+        #expect(malformed().count == 1)
+        gateway.outsiderAudit.interval = 0
+        _ = try sendGarbage()
+        #expect(malformed().count == 2)
+        let reason = malformed().last?.reason ?? ""
+        #expect(reason.contains("(9 more from outside the runtimes since the last record)"), "\(reason)")
+        #expect(upstream.requests.isEmpty)
+    }
+
     /// Outside every runtime when it connected, inside one by the time its
     /// placeholder is checked: still refused, and nothing is forwarded.
     @Test(.timeLimit(.minutes(1)))
