@@ -18,6 +18,10 @@ struct PolicyStoreInputs: Sendable {
     /// Nil when typed rules failed to load: the door fails closed.
     let policy: EffectiveActionPolicy?
     let safety: SafetyLevel
+    /// Non-nil while rv's MCP gateway is in use (`MCPHostConfigDoor`):
+    /// the shell door's probed context carries it so host MCP config
+    /// writes deny.
+    var mcpHostConfigGuard: MCPHostConfigGuard? = nil
 
     /// Read order matches the pre-T6 door: allow-paths, typed rules, safety.
     /// Typed rules: machine from `$HOME/.config/rv`, repo from `<cwd>/.rv`;
@@ -30,7 +34,9 @@ struct PolicyStoreInputs: Sendable {
         )
         // The organization's gate can only raise safety to strict.
         let safety = ManagedGate.safety(SafetyStore.loadEffective(home: home, workspace: workspace), home: home)
-        return PolicyStoreInputs(allowPaths: allowPaths, policy: policy, safety: safety)
+        return PolicyStoreInputs(
+            allowPaths: allowPaths, policy: policy, safety: safety,
+            mcpHostConfigGuard: MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home)))
     }
 }
 

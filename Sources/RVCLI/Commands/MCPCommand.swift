@@ -355,8 +355,9 @@ enum MCPRun {
     /// Governed local servers `rv mcp serve` will refuse. Where the cage
     /// is enforced every local server needs an explicit sandbox, and a
     /// sandbox reaches the network only through `sandbox.hosts`.
-    /// Elsewhere there is no cage yet: bare servers serve, sandboxed
-    /// ones are refused. Blocked servers are refused either way.
+    /// Elsewhere there is no cage yet: bare servers are named as uncaged,
+    /// sandboxed ones (every one under the organization's
+    /// `requireSandbox`) are refused. Blocked servers are refused either way.
     static func sandboxProblems(
         _ configuration: MCPConfiguration, configDirectory: URL, requireSandbox: Bool = MCPSandbox.enforced
     ) -> [Problem] {
@@ -376,10 +377,12 @@ enum MCPRun {
                 }
                 return nil
             }
-            guard server.sandbox != nil else { return nil }
-            return Problem(
-                path: path,
-                message: "\(server.name) asks for a sandbox, which rv supports only on macOS")
+            let message = configuration.managed?.mcp.requireSandbox == true
+                ? MCPPlatformSupport.organizationSandboxUnenforced(server: server.name)
+                : server.sandbox == nil
+                    ? MCPPlatformSupport.runsUncaged(server: server.name)
+                    : MCPPlatformSupport.sandboxUnenforced(server: server.name)
+            return Problem(path: path, message: message)
         }
     }
 
@@ -439,15 +442,23 @@ enum MCPRun {
     /// Grants one pending call; `always` also adds the tool to the server's allow list.
     /// The person approving must prove presence first, so an agent's shell cannot approve.
     static func approve(id: String, always: Bool, environment: MCPEnvironment) async -> Result<String, CommandFailure> {
+        if environment.approvalSigning.custodyIsSameUser { return .failure(CommandFailure(MCPPlatformSupport.approvalsUnavailable)) }
         let store = environment.approvals
         guard let request = store.pending().first(where: { $0.id == id }) else {
             return .failure("no pending MCP approval has id \(reviewField(id)) (see `rv mcp pending`)")
         }
+        // A tool that asks because its definition is not trusted keeps
+        // asking whatever mcp.json says; `rv mcp trust` is what pins it.
+        let pinAsks = request.binding.pinStatus != .pinned
         var allowed: MCPConfiguration?
+        var policyAllows = false
         if always {
-            switch allowListed(request, environment: environment) {
-            case .failure(let failure): return .failure(failure)
-            case .success(let result): allowed = result
+            policyAllows = pinAsks && policyAllowsAlready(request, environment: environment)
+            if policyAllows == false {
+                switch allowListed(request, environment: environment) {
+                case .failure(let failure): return .failure(failure)
+                case .success(let result): allowed = result
+                }
             }
         }
         guard store.argumentKeysAreBound(request) else {
@@ -457,8 +468,9 @@ enum MCPRun {
             ? "no arguments"
             : displayedArgumentKeys(request.argumentKeys)
         let reason = "rv: approve \(reviewField(request.server)) tool \(reviewField(request.tool)) "
+            + pinWarning(request.binding)
             + "arguments \(request.argumentsHash) keys \(shownKeys) "
-            + (always ? "always" : "once")
+            + (always && policyAllows == false ? "always" : "once")
         let codeChecked = Mutex(false)
         let outcome = await environment.presence.confirm(reason, .printedCode { typed in
             let ok = store.verifyCode(id: id, typed: typed)
@@ -478,7 +490,7 @@ enum MCPRun {
         }
         guard store.grant(
             id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
-            argumentKeys: request.argumentKeys
+            argumentKeys: request.argumentKeys, binding: request.binding
         ) != nil else {
             audit(request, decision: .denied, reason: "approval changed before it was signed", method: method,
                   always: always, configDirectory: environment.configDirectory)
@@ -494,11 +506,45 @@ enum MCPRun {
                 return .failure("mcp.json changed while it was being signed")
             }
         }
-        audit(request, decision: .allowed, reason: nil, method: method, always: always,
+        audit(request, decision: .allowed, reason: nil, method: method, always: always && policyAllows == false,
               configDirectory: environment.configDirectory)
+        let shown = "\(reviewField(request.server)) \(reviewField(request.tool))"
+        let untrusted = "its tool definition is not trusted (\(pinStatusText(request.binding.pinStatus)))"
+        if always, pinAsks {
+            return .success(policyAllows
+                ? "approved \(shown) once; mcp.json already allows it: it asks because \(untrusted). Run `rv mcp trust` to review and pin it\n"
+                : "approved \(shown) once and added it to its allow list in mcp.json; it still asks because \(untrusted). Run `rv mcp trust` to review and pin it\n")
+        }
         return .success(always
-            ? "approved \(reviewField(request.server)) \(reviewField(request.tool)) always (added to its allow list in mcp.json)\n"
-            : "approved \(reviewField(request.server)) \(reviewField(request.tool)) once; the agent can retry the same call\n")
+            ? "approved \(shown) always (added to its allow list in mcp.json)\n"
+            : "approved \(shown) once; the agent can retry the same call\n")
+    }
+
+    /// The approval prompt's note for a tool that asks because of pinning.
+    static func pinWarning(_ binding: MCPToolBinding) -> String {
+        switch binding.pinStatus {
+        case .pinned: ""
+        case .changed, .new:
+            "(\(pinStatusText(binding.pinStatus)); definition sha256 \(binding.definitionHash.isEmpty ? "unknown" : binding.definitionHash)) "
+        case .unverified: "(\(pinStatusText(binding.pinStatus))) "
+        }
+    }
+
+    static func pinStatusText(_ status: MCPToolPinStatus) -> String {
+        switch status {
+        case .pinned: "trusted"
+        case .changed: "CHANGED since you trusted it"
+        case .new: "not yet trusted"
+        case .unverified: "not checked against your trusted tools"
+        }
+    }
+
+    /// Whether mcp.json already allows the request's tool, so only pinning asks.
+    static func policyAllowsAlready(_ request: MCPApprovalRequest, environment: MCPEnvironment) -> Bool {
+        guard case .success(let bound) = boundConfiguration(environment), bound.integrity.problem == nil,
+            let server = bound.configuration.servers.first(where: { $0.name == request.server })
+        else { return false }
+        return bound.configuration.decision(server: server, tool: request.tool) == .allow
     }
 
     /// mcp.json with the request's tool moved to the allow list.
@@ -552,13 +598,18 @@ enum MCPRun {
             configDirectory: configDirectory)
     }
 
-    /// Why a signing operation failed, in the operator's terms. On macOS
-    /// the key lives in the approvals custodian; when it cannot be
-    /// reached, approvals stay disabled and the message says so.
+    /// Why a signing operation failed, in the operator's terms. The key
+    /// lives in the approvals custodian; when it cannot be reached,
+    /// approvals stay disabled and the message says so.
     static func signingFailureText(status: MCPApprovalKeyStatus) -> String {
         #if os(macOS)
         if status == .unavailable {
             return "rv's approvals custodian is unavailable — reinstall rv or run `rv setup`; MCP approvals stay disabled until it is reachable"
+        }
+        #elseif os(Linux)
+        if status == .unavailable {
+            return "rv's approvals custodian is not answering (systemctl status rv-mcp-custodian); MCP approvals "
+                + "stay disabled until it is"
         }
         #endif
         return status == .enrolled
@@ -570,6 +621,7 @@ enum MCPRun {
     static func trust(
         environment: MCPEnvironment, show: @Sendable (String) -> Void
     ) async -> Result<String, CommandFailure> {
+        if environment.approvalSigning.custodyIsSameUser { return .failure(CommandFailure(MCPPlatformSupport.trustUnavailable)) }
         let url = MCPConfiguration.fileURL(configDirectory: environment.configDirectory)
         let data: Data
         switch OwnerOnlyFile.read(url, maximumBytes: MCPConfiguration.maximumBytes) {
@@ -584,18 +636,43 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
-        if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted {
-            return .success("mcp.json already matches rv's signature; nothing to trust\n")
+        let configTrusted = MCPIntegrity.status(
+            of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted
+        let pinStore = MCPToolPinStore(configDirectory: environment.configDirectory, signing: environment.approvalSigning)
+        // Where `rv mcp serve` cannot rely on pins (see `MCPToolPinStore.pinning`), there is nothing to pin.
+        var tools = ToolTrustReview()
+        // Pins that cannot be read are left alone; mcp.json can still be
+        // signed, and the owner is told pinning was skipped.
+        var pinningSkipped: String?
+        if environment.approvalSigning.honorsGrants {
+            switch toolTrustReview(pinStore, servers: configuration.servers.map(\.name)) {
+            case .failure(let failure) where configTrusted: return .failure(CommandFailure("\(failure.reason); nothing trusted"))
+            case .failure(let failure): pinningSkipped = "MCP tool pinning skipped: \(failure.reason)"
+            case .success(let review): tools = review
+            }
+        }
+        if configTrusted, tools.isEmpty {
+            return .success("mcp.json already matches rv's signature; nothing to trust\n" + tools.waitingHint)
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
-        let review = trustReview(configuration) + "\nsha256 \(digest)"
-        guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
-            return .failure("trust review omitted a literal value; nothing signed")
+        var review = ""
+        var prompt = ""
+        if configTrusted == false {
+            review = trustReview(configuration) + "\nsha256 \(digest)"
+            guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
+                return .failure("trust review omitted a literal value; nothing signed")
+            }
+            prompt = "rv: trust mcp.json sha256 \(digest)\n\(review)"
         }
+        if tools.isEmpty == false {
+            review += (review.isEmpty ? "" : "\n") + tools.text
+            prompt += (prompt.isEmpty ? "" : "\n") + "rv: trust MCP tool definitions sha256 \(tools.digest)\n\(tools.summary)"
+        }
+        if let pinningSkipped { review += "\n" + pinningSkipped }
         show(review + "\n")
         // The reason-bearing confirmation is the authentication: the
         // custodian's key prompt carries no context about what is trusted.
-        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
+        let outcome = await environment.presence.confirm(prompt, .deviceOwner)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not trusted: \(refusal)"))
@@ -604,19 +681,125 @@ enum MCPRun {
         // custodian's key context; end that window so signing prompts for
         // itself, after this review rather than before it.
         environment.approvalSigning.beginFreshAuth()
-        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
-            return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
+        var done: [String] = []
+        if configTrusted == false {
+            guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
+                return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
+            }
+            guard environment.integrity == .trusted else {
+                return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
+            }
+            auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
+                    reason: "mcp.json trusted", source: "rv mcp trust",
+                    detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
+                configDirectory: environment.configDirectory)
+            done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
-        guard environment.integrity == .trusted else {
-            return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
+        if tools.isEmpty == false {
+            switch pinStore.trust(
+                reviewed: tools.reviewed, expectedPins: tools.expectedPins, configured: Set(configuration.servers.map(\.name))
+            ) {
+            case .trusted:
+                break
+            case .changedDuringReview:
+                return .failure(CommandFailure(
+                    (done.isEmpty ? "" : done.joined(separator: "\n") + "\n")
+                        + "\(MCPToolPinStore.fileName) changed during review; nothing pinned. Run `rv mcp trust` again"))
+            case .failed:
+                return .failure(CommandFailure(
+                    (done.isEmpty ? "" : done.joined(separator: "\n") + "\n")
+                        + "could not pin the reviewed MCP tool definitions in \(MCPToolPinStore.fileName)"))
+            }
+            auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPToolPinStore.fileName,
+                    reason: "MCP tool definitions trusted", source: "rv mcp trust",
+                    detail: ["method": method, "sha256": tools.digest, "tools": tools.names.joined(separator: ",")]),
+                configDirectory: environment.configDirectory)
+            done.append("pinned \(tools.names.count) MCP tool definitions; rv serves them unchanged as trusted")
+            done.append(Self.restartNotice)
         }
-        auditOrLog(
-            AuditEvent(
-                time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
-                reason: "mcp.json trusted", source: "rv mcp trust",
-                detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
-            configDirectory: environment.configDirectory)
-        return .success("trusted mcp.json; rv signs it again on every change it makes\n")
+        if let pinningSkipped { done.append(pinningSkipped) }
+        return .success(done.joined(separator: "\n") + "\n" + (tools.isEmpty ? tools.waitingHint : ""))
+    }
+
+    /// Pins are read once, when `rv mcp serve` starts.
+    static let restartNotice =
+        "a running `rv mcp serve` keeps the pins it started with; restart your MCP host so it uses these"
+
+    /// Tool definitions `rv mcp serve` saw that are not pinned, for the owner
+    /// to review and pin exactly as shown.
+    struct ToolTrustReview {
+        var reviewed: [String: [String: RVMCP.JSONValue]] = [:]
+        /// The verified pins the review was built on (nil: they did not
+        /// verify). Trust pins nothing if the store no longer holds them.
+        var expectedPins: [String: [String: String]]? = [:]
+        /// The pins on disk do not verify; trusting starts them over.
+        var resetsPins = false
+        /// Configured servers with no pins and nothing queued for review.
+        var serversWithoutPins: [String] = []
+        var names: [String] = []
+        var text = ""
+        var summary = ""
+        var digest = ""
+
+        var isEmpty: Bool { reviewed.isEmpty && resetsPins == false }
+
+        /// rv never pins on its own: a server's tools are queued for review
+        /// only once `rv mcp serve` has listed them.
+        var waitingHint: String {
+            guard serversWithoutPins.isEmpty == false else { return "" }
+            return "no tools of \(MCPRun.capped(serversWithoutPins.map(MCPRun.visible))) are trusted or waiting for review; "
+                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n"
+        }
+    }
+
+    /// Every queued definition of a configured server, field by field. The
+    /// pin covers the whole tool object, so the review shows every field,
+    /// each as display-escaped JSON (a literal `\n` and a line break read
+    /// differently); `name` is in the header line.
+    static func toolTrustReview(
+        _ store: MCPToolPinStore, servers: [String]
+    ) -> Result<ToolTrustReview, MCPToolPinStore.LoadFailure> {
+        let contents: MCPToolPinStore.Contents
+        switch store.contents() {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): contents = loaded
+        }
+        var review = ToolTrustReview()
+        review.expectedPins = contents.pins
+        review.resetsPins = contents.pins == nil
+        var lines: [String] = []
+        var summary: [String] = []
+        if review.resetsPins {
+            let reset = "\(MCPToolPinStore.fileName) does not verify; trusting starts every server's tool pins over, "
+                + "and tools not shown here ask until you review them"
+            lines.append(reset)
+            summary.append(reset)
+        }
+        for server in servers.sorted() {
+            let queued = contents.changed[server] ?? [:]
+            if queued.isEmpty, contents.pins?[server]?.isEmpty ?? true { review.serversWithoutPins.append(server) }
+            for (tool, definition) in queued.sorted(by: { $0.key < $1.key }) {
+                let hash = MCPToolPinStore.hash(definition)
+                let state = contents.pins?[server]?[tool] == nil ? "new" : "changed"
+                let name = "\(visible(server))/\(visible(tool))"
+                lines.append("MCP tool \(name) (\(state)) sha256 \(hash)")
+                for (key, value) in definition.objectValue?.entries ?? [] where key != "name" {
+                    lines.append("    \(visible(key)): \(visible(value.canonicalText))")
+                }
+                summary.append("\(name) sha256 \(hash)")
+                review.reviewed[server, default: [:]][tool] = definition
+                review.names.append("\(server)/\(tool)")
+            }
+        }
+        guard review.isEmpty == false else { return .success(review) }
+        review.text = lines.joined(separator: "\n")
+        review.summary = summary.joined(separator: "\n")
+        review.digest = RVDigest.sha256Hex(Array(review.summary.utf8))
+        return .success(review)
     }
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
@@ -788,6 +971,28 @@ enum MCPRun {
         auditOrLog(record.auditEvent(), configDirectory: configDirectory)
     }
 
+    /// The `mcp.call` record written before a call goes upstream. False
+    /// when the audit log cannot hold it: the gateway then refuses the call.
+    static func recordForward(_ record: MCPCallRecord, configDirectory: URL) -> Bool {
+        AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
+    }
+
+    /// The gateway `rv mcp serve` runs: approvals from the approval store,
+    /// and each call's forward record written to this environment's audit
+    /// log before the call goes upstream.
+    static func serveCore(
+        configuration: MCPConfiguration, upstreams: [MCPGatewayCore.Upstream], environment: MCPEnvironment,
+        pinning: MCPToolPinning
+    ) -> MCPGatewayCore {
+        let configDirectory = environment.configDirectory
+        return MCPGatewayCore(
+            configuration: configuration,
+            upstreams: upstreams,
+            approvals: .store(environment.approvals),
+            pinning: pinning,
+            recordForward: { recordForward($0, configDirectory: configDirectory) })
+    }
+
     static func reviewField(_ text: String) -> String {
         MCPDisplayedText.field(text)
     }
@@ -833,7 +1038,7 @@ enum MCPRun {
 
     /// Sandbox network and writable paths, or `no sandbox` when the
     /// server declares none (serve refuses it where the cage is
-    /// enforced; elsewhere it runs uncaged until the Linux cage lands).
+    /// enforced; on a host without one it runs uncaged).
     static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
         let writable = quotedReviewFields(
@@ -1286,7 +1491,7 @@ struct MCP: AsyncParsableCommand {
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
             MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPOnboard.self, MCPServe.self,
-            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
+            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self, MCPCustodian.self,
         ],
         defaultSubcommand: MCPList.self
     )
@@ -1390,10 +1595,23 @@ struct MCPServe: AsyncParsableCommand {
         let log: @Sendable (String) -> Void = { message in
             FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
         }
-        let core = MCPGatewayCore(
-            configuration: configuration,
-            upstreams: planned.map { $0.0 },
-            approvals: .store(environment.approvals))
+        // Read and verified once, beside the mcp.json check above. An
+        // unreadable or unverifiable store pins nothing: every tool asks.
+        let (pinning, pinFailure) = MCPToolPinStore(
+            configDirectory: configDirectory, signing: environment.approvalSigning
+        ).pinning()
+        if pinFailure == .unprotected {
+            log("\(MCPToolPinStore.LoadFailure.unprotected.reason); every MCP tool asks")
+        } else if let pinFailure {
+            log("\(pinFailure.reason); every MCP tool asks until `rv mcp trust`")
+            MCPRun.auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpToolChanged, decision: .failed, subject: MCPToolPinStore.fileName,
+                    reason: pinFailure.reason, source: "mcp-gateway", detail: ["status": "unverified"]),
+                configDirectory: configDirectory)
+        }
+        let core = MCPRun.serveCore(
+            configuration: configuration, upstreams: planned.map { $0.0 }, environment: environment, pinning: pinning)
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },
