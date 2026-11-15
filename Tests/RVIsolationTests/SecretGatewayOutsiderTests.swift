@@ -405,6 +405,58 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.isEmpty)
     }
 
+    /// A live placeholder in a form the gateway itself recognises, inside
+    /// `Basic` credentials or percent-encoded, counts as presented: an
+    /// outsider's refusal is recorded every time, on an echo method, on an
+    /// encoded placeholder and on an unknown route. The same shapes holding
+    /// a made-up value stay bounded.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersPresentingAnEncodedLivePlaceholderAreAlwaysRecorded() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        func send(_ head: String) throws -> String {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array(head.utf8)))
+            return answer(client.fd)
+        }
+        func shapes(_ text: String, secret: String) -> [String] {
+            let basic = Data("user:\(text)".utf8).base64EncodedString()
+            let encoded = text.replacingOccurrences(of: "rvph_", with: "rvph%5f")
+            return [
+                "TRACE /s/\(secret)/models HTTP/1.1\r\nAuthorization: Basic \(basic)\r\n\r\n",
+                "GET /s/\(secret)/models HTTP/1.1\r\nAuthorization: Bearer \(encoded)\r\n\r\n",
+                "GET /elsewhere?key=\(encoded) HTTP/1.1\r\n\r\n",
+            ]
+        }
+        let named = { audit.items.withLock { $0.filter { $0.secret == "MADE_UP" } } }
+        let brokered = { audit.items.withLock { $0.filter { $0.secret == "OPENAI_API_KEY" } } }
+        let unrouted = { audit.items.withLock { $0.filter { $0.refusal?.code == "unknownRoute" } } }
+        // The interval's first record, so every bounded one after it is only counted.
+        #expect(try send("GET /s/MADE_UP/models HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 4"))
+        #expect(named().count == 1)
+
+        for head in shapes(placeholder.text, secret: "OPENAI_API_KEY") {
+            for _ in 0..<2 { #expect(try send(head).hasPrefix("HTTP/1.1 4")) }
+        }
+        #expect(eventually { brokered().count == 4 }, "\(brokered().map { $0.refusal?.code ?? "-" })")
+        #expect(eventually { unrouted().count == 2 })
+
+        let madeUp = "sk-rvph_\(String(repeating: "0", count: 32))"
+        for head in shapes(madeUp, secret: "MADE_UP") {
+            for _ in 0..<2 { #expect(try send(head).hasPrefix("HTTP/1.1 4")) }
+        }
+        #expect(named().count == 1)
+        #expect(unrouted().count == 2)
+        #expect(upstream.requests.isEmpty)
+    }
+
     /// A peer that could not be placed when it connected waits as an
     /// outsider, and the full check after its head decides: placed in the
     /// runtime, it is forwarded; still unplaced, it is refused.

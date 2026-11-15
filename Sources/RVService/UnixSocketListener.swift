@@ -57,15 +57,17 @@ enum DarwinFrameIO {
         return data
     }
 
+    /// Every send's flags. Per send, not only `SO_NOSIGPIPE`: Darwin refuses
+    /// that option on a socket whose peer is already gone, and the request
+    /// such a peer sent is still readable and gets a reply.
+    static let sendFlags = Int32(MSG_NOSIGNAL)
+
     static func sendAll(fd: Int32, data: Data) throws {
         var offset = 0
         try data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { throw DarwinFrameError.eof }
             while offset < data.count {
-                // Per send, not only SO_NOSIGPIPE: Darwin refuses that option
-                // on a socket whose peer is already gone, and the request
-                // such a peer sent is still readable and gets a reply.
-                let n = Darwin.send(fd, base + offset, data.count - offset, Int32(MSG_NOSIGNAL))
+                let n = Darwin.send(fd, base + offset, data.count - offset, sendFlags)
                 if n < 0 {
                     if errno == EINTR { continue }
                     throw DarwinFrameError.eof
