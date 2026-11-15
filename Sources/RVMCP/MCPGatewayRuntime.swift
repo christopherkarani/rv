@@ -984,17 +984,21 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     static func mebibytes(_ bytes: Int) -> Int { bytes >> 20 }
 
+    /// The most one `write` is given, so a reader that takes a long line
+    /// slowly but steadily is seen to make progress while it does.
+    static let writeChunkBytes = 1 << 20
+
     /// Blocks until every byte is written or the write fails (a reader that
     /// is gone, or any error other than an interrupt): only ever on a
     /// writer's own thread. A non-blocking descriptor that is full is waited
     /// on, so a line is never left half written. `wrote` is told after each
-    /// part of `bytes` is written.
+    /// part of `bytes` is written, at most `writeChunkBytes` at a time.
     static func writeAll(_ fd: Int32, _ bytes: [UInt8], wrote: (() -> Void)? = nil) {
         var written = 0
         while written < bytes.count {
             let n = bytes.withUnsafeBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
-                return write(fd, base + written, raw.count - written)
+                return write(fd, base + written, min(raw.count - written, writeChunkBytes))
             }
             if n < 0, errno == EINTR { continue }
             if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {
