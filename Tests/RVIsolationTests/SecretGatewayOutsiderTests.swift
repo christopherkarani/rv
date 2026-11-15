@@ -328,6 +328,35 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.isEmpty)
     }
 
+    /// Refusals left out and never followed by a record are not lost when
+    /// the gateway stops: the last one is written then, with how many were
+    /// left out before it.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersRefusalsLeftOutAreRecordedWhenTheGatewayStops() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, _) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        for _ in 0..<10 {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array("not http\r\n\r\n".utf8)))
+            #expect(answer(client.fd).hasPrefix("HTTP/1.1 4"))
+        }
+        let malformed = { audit.items.withLock { $0.filter { $0.refusal?.code == "malformed" } } }
+        #expect(eventually { malformed().count == 1 })
+        gateway.stop()
+        #expect(malformed().count == 2)
+        let reason = malformed().last?.reason ?? ""
+        #expect(reason.contains("(8 more from outside the runtimes since the last record)"), "\(reason)")
+        gateway.stop()
+        #expect(malformed().count == 2)
+    }
+
     /// Naming a secret does not lift the bound: an outsider hammering a
     /// made-up name is recorded once per interval like a nameless one. An
     /// outsider presenting a live placeholder is recorded every time, also
