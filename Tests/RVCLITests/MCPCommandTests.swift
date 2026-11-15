@@ -5554,6 +5554,56 @@ struct MCPCommandTests {
         #expect(refused == .unknownServer("other"))
     }
 
+    /// A relaunch gets the cage its first launch got: the sandbox step sees
+    /// the same definition and reach, and the executable, arguments,
+    /// environment and working directory that come out of it are the same.
+    @Test func aRelaunchKeepsTheCageWorkingDirectoryAndEnvironment() throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(
+                name: "fs", command: "fs-mcp", args: ["--root", "/data"], environment: ["MODE": "fast"],
+                secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
+        ]))
+        let environment = fixture.environment()
+        let configuration = try MCPRun.configuration(environment).get()
+        let resolver = SecretResolver { _ in .success(SecretValue("fresh-value")!) }
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
+        ])
+        let seen = Mutex<[String]>([])
+        let sandbox: @Sendable () -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = {
+            { definition, launch, reach in
+                seen.withLock { $0.append("\(definition.name) \(reach)") }
+                var caged = launch
+                caged.executable = "/cage/exec"
+                caged.arguments = ["-p", "profile-for-\(definition.name)", launch.executable] + launch.arguments
+                caged.environment["CAGED"] = "yes"
+                caged.workingDirectory = "/cage/\(definition.name)"
+                return .success(caged)
+            }
+        }
+        let first = try MCPRun.upstreamLaunches(
+            names: ["fs"], configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            sandbox: sandbox()
+        ).get()
+        let relaunch = MCPRun.relaunch(
+            configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            placeholders: .unavailable, sandbox: sandbox)
+        let again = try relaunch("fs").get()
+        guard case .process(let started)? = first.first?.1, case .process(let relaunched) = again.1 else {
+            Issue.record("expected process launches")
+            return
+        }
+        #expect(relaunched == started)
+        #expect(relaunched.executable == "/cage/exec")
+        #expect(relaunched.arguments == ["-p", "profile-for-fs", MCPLaunchPlanner.envPath, "fs-mcp", "--root", "/data"])
+        #expect(relaunched.workingDirectory == "/cage/fs")
+        #expect(relaunched.environment["CAGED"] == "yes")
+        #expect(relaunched.environment["MODE"] == "fast")
+        #expect(relaunched.environment["TOKEN"] == "fresh-value")
+        #expect(seen.withLock { $0 } == ["fs standard", "fs standard"])
+    }
+
     @Test func organizationSecretRefusalsAreAudited() throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [

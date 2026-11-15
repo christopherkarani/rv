@@ -391,6 +391,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let clientStallSeconds: TimeInterval
     /// `MCPGatewayRuntime.stopGrace`, unless a test widens it.
     private let stopGrace: TimeInterval
+    /// How long a restart waits for the last process to be reaped:
+    /// `stopGrace + restartReapGrace`, unless a test shortens it.
+    private let restartWait: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private let clientProgress = MCPWriteProgress()
@@ -439,6 +442,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         relaunch: Relaunch? = nil,
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
         stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
+        restartWait: TimeInterval? = nil,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -458,6 +462,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.writeBufferBytes = writeBufferBytes
         self.clientStallSeconds = clientStallSeconds
         self.stopGrace = stopGrace
+        self.restartWait = restartWait ?? stopGrace + Self.restartReapGrace
         self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
@@ -716,7 +721,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
         Thread.detachNewThread { [self] in
-            let deadline = Date().addingTimeInterval(self.stopGrace + Self.restartReapGrace)
+            let deadline = Date().addingTimeInterval(self.restartWait)
             let planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
             if earlier.allSatisfy({ $0.waitUntilFinished(until: deadline) }) == false {
                 planned = .failure(MCPStartFailure("its last process did not exit"))
@@ -775,6 +780,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             started = false
         }
         perform(core.handle(started ? .upstreamRelaunched(server: server) : .upstreamExited(server: server)))
+    }
+
+    /// Runs `outputs` on the gateway queue as if the core had produced them:
+    /// for tests that drive the runtime past what the core asks of it.
+    func performOnQueue(_ outputs: [MCPGatewayOutput]) {
+        queue.sync { perform(outputs) }
     }
 
     /// `charging`: the reader whose line produced `outputs`, held back until

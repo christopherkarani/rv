@@ -6,15 +6,16 @@ import Glibc
 import Foundation
 import RVDomain
 import RVIsolation
+import Synchronization
 import Testing
 @testable import RVMCP
 
 @Suite("MCPSandbox proxies")
 struct MCPSandboxProxyTests {
-    static func proxy() -> EgressProxy {
+    static func proxy(credential: String = MCPSandbox.proxyCredential()) -> EgressProxy {
         EgressProxy(
             policy: EgressHostPolicy(allowedHosts: ["example.com"], relaysLoopback: false), record: { _ in },
-            clientCredential: MCPSandbox.proxyCredential())
+            clientCredential: credential)
     }
 
     /// Whether something accepts a TCP connection on loopback `port`.
@@ -58,5 +59,38 @@ struct MCPSandboxProxyTests {
         #expect(Self.accepts(firstPort) == false)
         #expect(Self.accepts(secondPort))
         #expect(MCPSandbox.proxies.withLock { $0.filter { $0.server == server }.count } <= 1)
+    }
+
+    /// A plan that fails after a server's proxy started (here because a
+    /// later server it names is not in mcp.json) stops that proxy and
+    /// forgets it: nothing it planned runs, so nothing uses it.
+    @Test func aPlanThatFailsStopsTheProxiesItStarted() throws {
+        let server = "proxy-plan-\(UUID().uuidString)"
+        let definition = MCPServerDefinition(
+            name: server, command: "true", sandbox: MCPSandboxPolicy(network: false, hosts: ["example.com"]))
+        let started = Mutex<(proxy: EgressProxy, port: Int)?>(nil)
+        defer { started.withLock { $0?.proxy.stop() } }
+        let planned = MCPLaunchPlanner.plan(
+            servers: [server, "missing-\(server)"], configuration: MCPConfiguration(servers: [definition]),
+            secrets: SecretsConfiguration(), resolver: SecretResolver { _ in .failure(.notFound("none")) },
+            baseEnvironment: ["PATH": "/usr/bin:/bin"], requireSandbox: false,
+            sandbox: { definition, launch, _ in
+                // As `MCPSandbox.apply` plans a server with `sandbox.hosts`.
+                let credential = MCPSandbox.proxyCredential()
+                let proxy = Self.proxy(credential: credential)
+                guard case .success(let port) = proxy.start() else { return .failure(.sandbox("no proxy")) }
+                MCPSandbox.track(proxy, server: definition.name)
+                started.withLock { $0 = (proxy, port) }
+                var caged = launch
+                caged.environment = MCPSandbox.proxyEnvironment(launch.environment, port: port, credential: credential)
+                return .success(caged)
+            })
+        guard case .failure(.unknownServer) = planned else {
+            Issue.record("expected the plan to fail: \(planned)")
+            return
+        }
+        let port = try #require(started.withLock { $0?.port })
+        #expect(Self.accepts(port) == false)
+        #expect(MCPSandbox.proxies.withLock { $0.contains { $0.server == server } } == false)
     }
 }
