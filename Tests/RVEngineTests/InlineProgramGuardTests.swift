@@ -268,6 +268,20 @@ struct InlineProgramGuardTests {
         #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
     }
 
+    /// A segment holding an ANSI-C word is read whole: `\'` inside `$'…'`
+    /// does not close it, so a `;` there is no list operator. `|&` pipes
+    /// like `|`.
+    static let ansiCAndPipeAmpWriters: [String] = [
+        #"sh -c $'echo \'import subprocess\'; echo ok' | python3"#,
+        #"cd repo && sh -c $'echo \'import subprocess\'; echo ok' | python3"#,
+        "echo 'import subprocess' |& python3",
+    ]
+
+    @Test("an ANSI-C writer or a |& pipe is read", arguments: ansiCAndPipeAmpWriters)
+    func ansiCAndPipeAmpWritersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
     static let benignStdinSources: [String] = [
         "awk -f - <<< 'BEGIN { print 1 }'",
         "awk -f prog.awk < data.txt",

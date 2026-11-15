@@ -348,6 +348,32 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// A name written as a `$'…'` or `$"…"` word is the name, not a `$NAME`
+    /// read; any `$'…'` operand of an assigning builtin may build one from
+    /// escapes; zsh's `${NAME::=…}` and an element's `${name[1]:=…}` assign;
+    /// GNU `env` takes `--split` for `--split-string`.
+    @Test("the operand list backs off where a quoted or expanded name may assign", arguments: [
+        #"export $'PATH'=./bin; ls mcp $X"#, #"declare $"PATH"=./bin; ls mcp $X"#,
+        #"typeset $'PATH'=./bin; ls mcp $X"#, #"local $'PATH'=./bin; ls mcp $X"#,
+        #"readonly $"PATH"=./bin; ls mcp $X"#, #"printf -v $'PATH' %s ./bin; ls mcp $X"#,
+        #"unset $'PATH'; ls mcp $X"#, #"read $'PATH'; ls mcp $X"#,
+        #"export $'PA\x54H'=./bin; ls mcp $X"#, #"unset $'PA\x54H'; ls mcp $X"#,
+        #"printf -v $'PA\x54H' %s ./bin; ls mcp $X"#,
+        ": ${PATH::=./bin}; ls mcp $X", ": ${path[1]:=./bin}; ls mcp $X",
+        "env --split 'ls mcp $X'", "env --s 'ls mcp $X'", "env --split-str='ls mcp $X'",
+    ])
+    func spelledLookupChangeAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    @Test("the operand list holds where an expansion only reads a lookup variable", arguments: [
+        "ls mcp $X ${PATH:-/usr/bin}", "ls mcp $X ${PATH: -3}", "ls mcp $X ${PATH:0:3}", "ls mcp $X ${#PATH}",
+        "ls mcp $X ${PATH#*:}", "ls mcp $X ${PATH/x/y}", "printf '%s\\n' x; ls mcp $X",
+    ])
+    func expandedLookupReadAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
     /// Reading a lookup variable, or a word that only contains its name,
     /// changes nothing: the operand list still holds.
     @Test("the operand list holds where a lookup variable is only read", arguments: [
