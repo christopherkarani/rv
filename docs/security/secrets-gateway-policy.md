@@ -1294,9 +1294,13 @@ outside every runtime that present no live placeholder (`malformed`,
 `requestTimeout`, `unknownRoute`, and any refusal of a request naming a
 secret, a made-up one included) are recorded at most once a second, with
 how many were left out since the record before; one that presents a live
-placeholder is always recorded. The last refusal left out is written when
-the gateway stops, saying how many came before it; with neither a later
-refusal nor a stop, that count is not written.
+placeholder is always recorded, raw, percent-encoded or inside `Basic`
+credentials, the forms substitution itself finds. The last refusal left
+out is written when the gateway stops, saying how many came before it;
+with neither a later refusal nor a stop, that count is not written. A
+refusal still being made as the gateway stops is written as it comes, and
+a gateway started again bounds afresh, never writing an earlier run's
+count.
 
 A client that resets its connection before the gateway accepts it ends
 only that connection. On Darwin, one that resets it just after, before
