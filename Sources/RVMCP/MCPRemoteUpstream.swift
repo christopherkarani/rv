@@ -211,6 +211,11 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         tasks.forEach { $0.cancel() }
     }
 
+    /// Whether a cancel of `target` closes the POST that carried `request`.
+    static func closes(_ request: JSONValue, cancelling target: JSONValue) -> Bool {
+        request["id"] == target
+    }
+
     package func stop() {
         let (session, closing): (URLSession?, String?) = locked {
             stopped = true

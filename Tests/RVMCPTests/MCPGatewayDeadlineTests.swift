@@ -457,6 +457,10 @@ struct MCPGatewayDeadlineTests {
         #expect(names == ["github__list_issues"])
         #expect(expired.logs.contains { $0.contains("notes") && $0.contains("did not list tools") })
         #expect(expired.stopped.isEmpty)
+        // Asked to stop, as a call that timed out is (a remote's quiet POST is closed then).
+        let cancels = expired.toUpstream.filter { $0.1["method"]?.stringValue == "notifications/cancelled" }
+        #expect(cancels.map(\.0) == ["notes"])
+        #expect(cancels.first?.1["params"]?["requestId"] == .int(notesID))
         #expect(harness.upstream("notes", #"{"jsonrpc":"2.0","id":\#(notesID),"result":{"tools":[{"name":"write"}]}}"#).isEmpty)
 
         // The server stays ready: its calls still go upstream.

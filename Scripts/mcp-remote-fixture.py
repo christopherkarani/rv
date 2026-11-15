@@ -15,6 +15,9 @@ With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
 metadata, RFC 8414 metadata, RFC 7591 registration, PKCE S256, refresh
 rotation); MCP requests need a token it issued. POST /auth/expire revokes
 every access token so the next call must refresh.
+With --reset-calls a streamable HTTP tools/call is read and its connection
+reset with no reply ("RESET call <id>" is logged). POST /expire-sessions
+forgets every streamable HTTP session, so the next request on one gets 404.
 """
 import argparse
 import base64
@@ -24,6 +27,7 @@ import queue
 import select
 import socket
 import socketserver
+import struct
 import sys
 import threading
 import uuid
@@ -84,6 +88,7 @@ class Handler(BaseHTTPRequestHandler):
     token = None
     oauth = False
     hang_calls = False
+    reset_calls = False
 
     def origin(self):
         return "http://" + self.headers.get("Host")
@@ -205,6 +210,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.oauth_post(path.path)
         if path.path == "/mcp":
             return self.streamable()
+        if path.path == "/expire-sessions":
+            with STATE["lock"]:
+                STATE["sessions"].clear()
+            log("EXPIRED every session")
+            return self.send_json(200, {})
         if path.path in ("/sse", "/messages"):
             return self.legacy_post(path.path, parse_qs(path.query).get("session", [""])[0])
         self.send(404)
@@ -253,6 +263,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(202)
         if method == "tools/call" and self.hang_calls:
             return self.hang(msg.get("id"))
+        if method == "tools/call" and self.reset_calls:
+            log("RESET call %s" % msg.get("id"))
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            self.close_connection = True
+            return
         reply = answer(msg, self.headers)
         if method == "tools/call":
             note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "working"}}
@@ -334,10 +349,12 @@ def main():
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--oauth", action="store_true")
     parser.add_argument("--hang-calls", action="store_true")
+    parser.add_argument("--reset-calls", action="store_true")
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
     Handler.hang_calls = options.hang_calls
+    Handler.reset_calls = options.reset_calls
     server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)
