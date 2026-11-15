@@ -284,6 +284,52 @@ struct URLSessionStreamingTransportTests {
         #expect(Array(received.suffix(5)) != Array("0\r\n\r\n".utf8), "a cut-off answer ended like a complete one")
     }
 
+    /// A client that reads, slowly, gets the whole of a large answer: the
+    /// upstream is paused while the client falls behind and resumed as it
+    /// catches up, with nothing lost or repeated.
+    @Test(.timeLimit(.minutes(1)))
+    func aSlowReaderGetsTheWholeLargeAnswer() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let client = try connectGateway(under.port)
+        defer { close(client) }
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        var received: [UInt8] = []
+        received.reserveCapacity(LoopbackUpstream.bigBytes + (1 << 20))
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        var last = 0
+        while true {
+            last = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
+            if last <= 0 { break }
+            received += buffer.prefix(last)
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        #expect(last == 0)
+        let separator = Array("\r\n\r\n".utf8)
+        let headEnd = try #require((0...(min(received.count, 4096) - separator.count)).first {
+            Array(received[$0..<($0 + separator.count)]) == separator
+        })
+        #expect(String(decoding: received[..<headEnd], as: UTF8.self).lowercased().contains("transfer-encoding: chunked"))
+        var cursor = headEnd + separator.count
+        var body = 0
+        var ended = false
+        while cursor < received.count, let lineEnd = received[cursor...].firstIndex(of: 13) {
+            let size = try #require(Int(String(decoding: received[cursor..<lineEnd], as: UTF8.self), radix: 16))
+            cursor = lineEnd + 2 + size + 2
+            if size == 0 {
+                ended = true
+                break
+            }
+            body += size
+        }
+        #expect(ended)
+        #expect(body == LoopbackUpstream.bigBytes)
+    }
+
     #if os(macOS)
     /// Every thread of GCD's shared pool held: requests through the gateway
     /// are still served and answered. Its connection handlers ran on that
