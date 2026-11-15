@@ -381,8 +381,9 @@ struct MCPHostSpellingTests {
 
     /// A name written as a `$'…'` or `$"…"` word is the name, not a `$NAME`
     /// read; an operand of an assigning builtin whose name holds `$` or a
-    /// backtick may build one from escapes or expansions; zsh's `${NAME::=…}` and an element's `${name[1]:=…}` assign;
-    /// GNU `env` takes `--split` for `--split-string`.
+    /// backtick may build one from escapes or expansions; zsh's
+    /// `${NAME::=…}` and an element's `${name[1]:=…}` assign; GNU `env`
+    /// takes `--split` for `--split-string`.
     @Test("the operand list backs off where a quoted or expanded name may assign", arguments: [
         #"export $'PATH'=./bin; ls mcp $X"#, #"declare $"PATH"=./bin; ls mcp $X"#,
         #"typeset $'PATH'=./bin; ls mcp $X"#, #"local $'PATH'=./bin; ls mcp $X"#,
