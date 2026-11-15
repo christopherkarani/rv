@@ -762,6 +762,15 @@ struct URLSessionStreamingTransportTests {
         }
     }
 
+    /// The upstream sessions keep no credential store: no stored credential
+    /// can be offered to an upstream.
+    @Test
+    func upstreamSessionsHaveNoCredentialStorage() {
+        let upstream = URLSessionStreamingSession(onInvalidated: {})
+        defer { upstream.session.invalidateAndCancel() }
+        #expect(upstream.session.configuration.urlCredentialStorage == nil)
+    }
+
     /// Through the gateway, a challenged request reaches the upstream once,
     /// and its client gets the gateway's own refusal, never the challenge.
     @Test(.timeLimit(.minutes(1)), arguments: ["basic", "digest"])
