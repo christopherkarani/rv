@@ -287,6 +287,12 @@ public enum MCPSandbox {
         // (measured on macOS 27; `(target others)` alone did not refuse it).
         lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
         lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
+        // LaunchServices starts what it opens outside the caller's sandbox,
+        // and an Apple event can ask a running app to run a command outside
+        // it (docs/security/runtime-boundary.md): either would undo every
+        // rule above. The macOS guest profile denies the same two.
+        lines.append("(deny lsopen)")
+        lines.append("(deny appleevent-send)")
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
