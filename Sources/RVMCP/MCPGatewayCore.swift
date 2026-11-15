@@ -7,6 +7,8 @@ public enum MCPGatewayInput: Sendable, Equatable {
     case clientUnparseable
     case upstream(server: String, message: JSONValue)
     case upstreamExited(server: String)
+    /// The runtime started this server again after `restartUpstream`.
+    case upstreamRelaunched(server: String)
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
@@ -22,6 +24,8 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Stop this upstream now: kill its process, or close its connection.
     /// The core already counts it failed; its exit may still be reported.
     case stopUpstream(server: String)
+    /// Start this server again, as it was started at serve start.
+    case restartUpstream(server: String)
 }
 
 /// How long the gateway waits for each `tools/list` page. An `initialize`
@@ -441,6 +445,7 @@ public struct MCPGatewayCore {
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
+        case .upstreamRelaunched: break
         case .tick: break
         }
         return outputs
@@ -472,6 +477,10 @@ public struct MCPGatewayCore {
     /// all, so an upstream that keeps sending progress cannot hold it open
     /// forever.
     static let callTimeoutCeilingFactor: TimeInterval = 10
+
+    static let restartWindow: TimeInterval = 600
+    static let pingTimeout: TimeInterval = 10
+    static func restartDelay(afterRelaunches count: Int) -> TimeInterval { 0 }
 
     /// How long `server` may take to answer `initialize`.
     func startTimeout(_ server: String) -> TimeInterval {
