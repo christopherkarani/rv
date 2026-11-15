@@ -516,10 +516,17 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
             completionHandler(.cancel)
             return
         }
+        // The gateway drops `Upgrade`, so a `101` is unasked, and it carries
+        // no other protocol: the request fails, naming why. Darwin reports it.
+        guard http.statusCode != 101 else {
+            exchange.push(.fail(Self.switchedProtocols))
+            completionHandler(.cancel)
+            return
+        }
         // corelibs-foundation hands on an interim answer (`103 Early Hints`,
         // an unasked `100 Continue`) as if it were the answer, and the
         // exchange keeps only the first head: wait for the final one.
-        // Darwin never reports these.
+        // Darwin does not report these two.
         guard (100..<200).contains(http.statusCode) == false else {
             completionHandler(.allow)
             return
@@ -527,6 +534,8 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
         exchange.push(.head(status: http.statusCode, headers: Self.headers(of: http)))
         completionHandler(.allow)
     }
+
+    static let switchedProtocols = "the upstream switched protocols, which the gateway does not carry"
 
     /// What a challenge gets. The server's certificate is checked as
     /// URLSession always checks it. A server's request for a client

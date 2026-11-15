@@ -9,11 +9,16 @@ import Testing
 @testable import RVIsolation
 
 /// A peer is a member of the runtime only when its client port was marked.
+/// Every port the gateway checked is kept in `seen`.
 private final class MarkedPorts: Sendable {
     let ports = Mutex<Set<UInt16>>([])
+    let seen = Mutex<Set<UInt16>>([])
 
     var check: GatewayPeerCheck {
-        GatewayPeerCheck { peer, _ in self.ports.withLock { $0.contains(peer.port) } ? .member : .outsider }
+        GatewayPeerCheck { peer, _ in
+            self.seen.withLock { _ = $0.insert(peer.port) }
+            return self.ports.withLock { $0.contains(peer.port) } ? .member : .outsider
+        }
     }
 }
 
@@ -69,6 +74,9 @@ private func dialAgainWhileRefused(_ port: Int, marked: MarkedPorts) throws -> (
     while Date() < deadline {
         let member = try boundClient()
         marked.ports.withLock { _ = $0.insert(member.port) }
+        // A hammer's earlier connection may have used this port; none can
+        // while the member holds it.
+        marked.seen.withLock { _ = $0.remove(member.port) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = UInt16(port).bigEndian
@@ -221,8 +229,10 @@ struct SecretGatewayOutsiderTests {
     /// Outsiders connecting and hanging up as fast as they can, while a
     /// member sends one request after another: every one is served. They
     /// can fill the listen backlog, and the kernel then refuses the member's
-    /// connection before the gateway sees it, so the member dials again;
-    /// the gateway itself never turns it away.
+    /// connection before the gateway sees it, or drops it after the member's
+    /// `connect` returned (the member then reads nothing), so the member
+    /// dials again. A connection the gateway checked and did not answer,
+    /// or any answer but 200, fails: the gateway itself never turns it away.
     @Test(.timeLimit(.minutes(1)))
     func outsidersHammeringTheGatewayNeverTurnAwayAMember() throws {
         let marked = MarkedPorts()
@@ -241,12 +251,20 @@ struct SecretGatewayOutsiderTests {
             }
         }
         var statuses: [String] = []
-        for _ in 0..<20 {
+        var dropped = 0
+        let deadline = Date().addingTimeInterval(30)
+        while statuses.count < 20, Date() < deadline {
             let member = try dialAgainWhileRefused(port, marked: marked)
-            #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
-            statuses.append(String(answer(member.fd).prefix(12)))
+            _ = GatewaySocket.writeAll(member.fd, bearer(placeholder))
+            let status = String(answer(member.fd).prefix(12))
             close(member.fd)
+            if status.isEmpty, marked.seen.withLock({ $0.contains(member.port) }) == false {
+                dropped += 1
+                continue
+            }
+            statuses.append(status.isEmpty ? "checked, unanswered" : status)
         }
+        #expect(statuses.count == 20, "\(dropped) dropped by the kernel")
         stop.raised.store(true, ordering: .relaxed)
         _ = hammers.wait(timeout: .now() + 10)
         #expect(statuses.allSatisfy { $0 == "HTTP/1.1 200" }, "\(statuses)")
@@ -364,6 +382,42 @@ struct SecretGatewayOutsiderTests {
         #expect(malformed().count == 2)
     }
 
+    /// Connection threads are not joined at stop, so a refusal can come
+    /// after the drain: it is written then, not kept for a later stop. A
+    /// gateway started again bounds afresh and never writes an earlier
+    /// run's count.
+    @Test(.timeLimit(.minutes(1)))
+    func aRefusalAfterTheStopIsWrittenAndARestartBoundsAfresh() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, _) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        func sendGarbage(_ port: Int) throws {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array("not http\r\n\r\n".utf8)))
+            #expect(answer(client.fd).hasPrefix("HTTP/1.1 4"))
+        }
+        let malformed = { audit.items.withLock { $0.filter { $0.refusal?.code == "malformed" } } }
+        let first = try gateway.start().get()
+        for _ in 0..<3 { try sendGarbage(first) }
+        #expect(eventually { malformed().count == 1 })
+        gateway.stop()
+        #expect(malformed().count == 2)
+        let late = try #require(malformed().last)
+        #expect(gateway.outsiderAudit.admit(late) != nil, "a refusal after the drain was kept")
+
+        let second = try gateway.start().get()
+        defer { gateway.stop() }
+        for _ in 0..<2 { try sendGarbage(second) }
+        #expect(eventually { malformed().count == 3 })
+        let reason = malformed().last?.reason ?? ""
+        #expect(reason.contains("more from outside") == false, "\(reason)")
+        #expect(malformed().count == 3, "the second run's refusals were not bounded")
+    }
+
     /// Naming a secret does not lift the bound: an outsider hammering a
     /// made-up name is recorded once per interval like a nameless one. An
     /// outsider presenting a live placeholder is recorded every time, also
@@ -402,6 +456,58 @@ struct SecretGatewayOutsiderTests {
         #expect(eventually { named().count == 2 })
         let reason = named().last?.reason ?? ""
         #expect(reason.contains("(9 more from outside the runtimes since the last record)"), "\(reason)")
+        #expect(upstream.requests.isEmpty)
+    }
+
+    /// A live placeholder in a form the gateway itself recognises, inside
+    /// `Basic` credentials or percent-encoded, counts as presented: an
+    /// outsider's refusal is recorded every time, on an echo method, on an
+    /// encoded placeholder and on an unknown route. The same shapes holding
+    /// a made-up value stay bounded.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersPresentingAnEncodedLivePlaceholderAreAlwaysRecorded() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        func send(_ head: String) throws -> String {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array(head.utf8)))
+            return answer(client.fd)
+        }
+        func shapes(_ text: String, secret: String) -> [String] {
+            let basic = Data("user:\(text)".utf8).base64EncodedString()
+            let encoded = text.replacingOccurrences(of: "rvph_", with: "rvph%5f")
+            return [
+                "TRACE /s/\(secret)/models HTTP/1.1\r\nAuthorization: Basic \(basic)\r\n\r\n",
+                "GET /s/\(secret)/models HTTP/1.1\r\nAuthorization: Bearer \(encoded)\r\n\r\n",
+                "GET /elsewhere?key=\(encoded) HTTP/1.1\r\n\r\n",
+            ]
+        }
+        let named = { audit.items.withLock { $0.filter { $0.secret == "MADE_UP" } } }
+        let brokered = { audit.items.withLock { $0.filter { $0.secret == "OPENAI_API_KEY" } } }
+        let unrouted = { audit.items.withLock { $0.filter { $0.refusal?.code == "unknownRoute" } } }
+        // The interval's first record, so every bounded one after it is only counted.
+        #expect(try send("GET /s/MADE_UP/models HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 4"))
+        #expect(named().count == 1)
+
+        for head in shapes(placeholder.text, secret: "OPENAI_API_KEY") {
+            for _ in 0..<2 { #expect(try send(head).hasPrefix("HTTP/1.1 4")) }
+        }
+        #expect(eventually { brokered().count == 4 }, "\(brokered().map { $0.refusal?.code ?? "-" })")
+        #expect(eventually { unrouted().count == 2 })
+
+        let madeUp = "sk-rvph_\(String(repeating: "0", count: 32))"
+        for head in shapes(madeUp, secret: "MADE_UP") {
+            for _ in 0..<2 { #expect(try send(head).hasPrefix("HTTP/1.1 4")) }
+        }
+        #expect(named().count == 1)
+        #expect(unrouted().count == 2)
         #expect(upstream.requests.isEmpty)
     }
 

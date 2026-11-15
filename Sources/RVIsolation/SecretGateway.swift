@@ -398,6 +398,7 @@ public final class SecretGateway: @unchecked Sendable {
         if flags >= 0 {
             _ = fcntl(listener, F_SETFL, flags | O_NONBLOCK)
         }
+        outsiderAudit.reopen()
         acceptQueue.async { [weak self] in
             self?.acceptLoop(listener)
             exited.signal()
@@ -612,7 +613,7 @@ public final class SecretGateway: @unchecked Sendable {
         guard let route = GatewayRoute(target: head.target) else {
             refuse(
                 client, .unknownRoute, method: head.method, path: path, secret: nil,
-                outsider: outsider && presentsLiveEntry(headBytes) == false, started: started)
+                outsider: outsider && presentsLiveEntry(headBytes, headers: head.headers) == false, started: started)
             return
         }
         // Every live entry the request names, so a refusal can name the
@@ -622,7 +623,7 @@ public final class SecretGateway: @unchecked Sendable {
             // The route's name is the sender's to choose: an outsider's
             // refusal is bounded unless it presented a live placeholder,
             // also one refused before any substitution.
-            let bounded = outsider && presented.isEmpty && presentsLiveEntry(headBytes) == false
+            let bounded = outsider && presented.isEmpty && presentsLiveEntry(headBytes, headers: head.headers) == false
             refuse(
                 client, refusal, method: head.method, path: path, secret: route.secret,
                 runtime: runtime, outsider: bounded, started: started)
@@ -879,9 +880,19 @@ public final class SecretGateway: @unchecked Sendable {
         return verdict
     }
 
-    /// True when the raw head carries a placeholder this gateway holds.
-    private func presentsLiveEntry(_ head: [UInt8]) -> Bool {
-        SecretPlaceholder.occurrences(in: head).contains { entry($0.token) != nil }
+    /// True when the head carries a placeholder this gateway holds in a form
+    /// substitution recognises: raw, percent-encoded, or inside `Basic`
+    /// credentials. The head is capped, and each form is decoded once.
+    private func presentsLiveEntry(_ head: [UInt8], headers: [(name: String, value: String)]) -> Bool {
+        var forms = [head, GatewaySubstitution.percentDecoded(head)]
+        for header in headers {
+            if let credentials = GatewaySubstitution.basicCredentials(header.value) {
+                forms.append(GatewaySubstitution.percentDecoded(credentials))
+            }
+        }
+        return forms.contains { form in
+            SecretPlaceholder.occurrences(in: form).contains { entry($0.token) != nil }
+        }
     }
 
     /// `outsider`: the record is bounded by `outsiderAudit`.

@@ -164,6 +164,10 @@ private final class LoopbackUpstream: @unchecked Sendable {
             _ = Self.write(client, Array(
                 ("HTTP/1.1 \(code) Interim\r\nLink: </style.css>; rel=preload\r\n\r\n"
                     + "HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n").utf8) + body)
+        } else if path.hasSuffix("/upgrade") {
+            _ = Self.write(client, Array(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nRAWBYTES".utf8))
+            Thread.sleep(forTimeInterval: 0.5)
         } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
@@ -222,6 +226,18 @@ private final class Answers: Sendable {
 private final class Trickle: Sendable {
     let going = Atomic<Bool>(true)
     let received = Mutex<[UInt8]>([])
+}
+
+/// Every peer is a member; counts how many the gateway has checked.
+private final class CountedMembers: Sendable {
+    let checked = Atomic<Int>(0)
+
+    var check: GatewayPeerCheck {
+        GatewayPeerCheck { _, _ in
+            self.checked.add(1, ordering: .relaxed)
+            return .member
+        }
+    }
 }
 
 /// Collects what one `send` delivered.
@@ -409,12 +425,12 @@ private struct GatewayUnderTest {
 
     init(
         upstreamPort: Int, limits: URLSessionStreamingTransport.Limits = .init(), clientSendTimeout: Int? = nil,
-        headDeadline: TimeInterval? = nil, bodyDeadline: TimeInterval? = nil
+        headDeadline: TimeInterval? = nil, bodyDeadline: TimeInterval? = nil, peers: GatewayPeerCheck = .fixed(.member)
     ) throws {
         transport = URLSessionStreamingTransport(limits: limits)
         gateway = SecretGateway(
             transport: loopbackTransport(transport, port: upstreamPort),
-            peers: .fixed(.member), audit: { _ in true })
+            peers: peers, audit: { _ in true })
         if let clientSendTimeout { gateway.clientSendTimeout = clientSendTimeout }
         if let headDeadline { gateway.requestHeadDeadline = headDeadline }
         if let bodyDeadline { gateway.requestBodyDeadline = bodyDeadline }
@@ -789,7 +805,8 @@ struct URLSessionStreamingTransportTests {
 
     /// An interim answer (`103 Early Hints`, or a `100 Continue` the gateway
     /// did not ask for) is not the answer: the final status and its whole
-    /// body are handed on.
+    /// body are handed on. Only Linux can turn this red: Darwin does not
+    /// report a `100` or a `103`.
     @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
     func anInterimAnswerIsPassedOverForTheFinalOne(code: Int) throws {
         let upstream = try LoopbackUpstream()
@@ -805,6 +822,7 @@ struct URLSessionStreamingTransportTests {
 
     /// Through the gateway: the client gets the final answer whole, also
     /// when it asked for `100 Continue` (which the gateway sends itself).
+    /// Only Linux can turn this red, as above.
     @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
     func aClientGetsTheFinalAnswerPastAnUpstreamInterim(code: Int) throws {
         let upstream = try LoopbackUpstream()
@@ -821,6 +839,30 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.status == 200, "\(answer.body)")
         #expect(answer.body == "the final answer")
         #expect(upstream.hits("POST", "/v1/interim/\(code)") == 1)
+    }
+
+    /// An upstream that switches protocols, unasked (the gateway drops
+    /// `Upgrade`): the gateway carries no other protocol, so the request
+    /// fails, naming why, and the client gets `502` with that reason, not
+    /// the `101` head or an answer said to be missing. Darwin reports the
+    /// `101`.
+    @Test(.timeLimit(.minutes(1)))
+    func anUpstreamSwitchingProtocolsIsRefusedNamingWhy() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let why = "the upstream switched protocols, which the gateway does not carry"
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/upgrade"))
+        URLSessionStreamingTransport().send(
+            SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+        #expect(sink.headStatus == nil)
+        #expect(sink.result.ended == "failed: \(why)")
+
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let answer = try gatewayExchange(port: under.port, under.request("/upgrade"))
+        #expect(answer.status == 502, "\(answer.body)")
+        #expect(answer.body.contains(why), "\(answer.body)")
     }
 
     #if canImport(Darwin)
@@ -875,26 +917,32 @@ struct URLSessionStreamingTransportTests {
     }
 
     /// Without a hand-off, a reader that keeps up with an upstream sending
-    /// about 8 MiB a second gets all of an answer three times `perRequest`,
-    /// sent once. It starts 0.3 s late and pauses after each read, so more
-    /// than 512 KiB waits for it before it catches up.
+    /// at most about 4 MiB a second gets all of an answer one and a half
+    /// times `perRequest`, sent once. It starts 1 s late and pauses after
+    /// each read, so more than 512 KiB waits for it past the sockets'
+    /// buffers (0.3 s late, only 256 KiB sometimes did), and several MiB
+    /// more can wait on a starved host before 8 MiB does. Half the 8 MiB a
+    /// second it had: what waits is read by the gateway's own scrubber too,
+    /// about 8 to 9 MB a second in a debug build, and starved under the full
+    /// suite it fell 8 MiB behind. Only a reader cut while it keeps up turns
+    /// this red.
     @Test(.timeLimit(.minutes(1)))
     func aLiveReaderGetsTheWholeOfAnAnswerLargerThanTheCap() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let limits = URLSessionStreamingTransport.Limits(perRequest: 4 << 20, total: .max, handoff: nil)
+        let limits = URLSessionStreamingTransport.Limits(perRequest: 8 << 20, total: .max, handoff: nil)
         let under = try GatewayUnderTest(upstreamPort: upstream.port, limits: limits)
         defer { under.gateway.stop() }
         let size = 12 << 20
         let client = try connectGateway(under.port)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/8").utf8)))
-        let answer = try ChunkedAnswer(reading: client, pause: 0.3, perRead: 0.001)
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/16").utf8)))
+        let answer = try ChunkedAnswer(reading: client, pause: 1, perRead: 0.001)
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
-        #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/16") == 1)
         #expect(under.transport.peakQueuedBytes > 512 << 10, "\(under.transport.peakQueuedBytes)")
     }
 
@@ -1080,10 +1128,15 @@ struct URLSessionStreamingTransportTests {
     func clientsThatTrickleTheirHeadsAreDroppedAtTheDeadline() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let under = try GatewayUnderTest(upstreamPort: upstream.port, headDeadline: 1)
+        let members = CountedMembers()
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, headDeadline: 1, peers: members.check)
         defer { under.gateway.stop() }
         let tricklers = try (0..<SecretGateway.maximumConnections).map { _ in try connectGateway(under.port) }
         defer { tricklers.forEach { close($0) } }
+        // Each connection takes its slot on its own thread once checked: the
+        // first further request waits until every trickler has been, or it
+        // could take a slot one of them was about to.
+        #expect(eventually { members.checked.load(ordering: .relaxed) >= tricklers.count })
         let head = Array(under.request("/trickle").utf8)
         let trickled = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
