@@ -298,7 +298,7 @@ struct MCPHostSpellingTests {
     @Test("a spelled operand of a program that may run still asks", arguments: [
         "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "stdbuf -o0 ls mcp $DIR", "/bin/ls mcp $DIR",
         "git -C . add mcp *", "ls mcp install", "ls 'chronic mcp install x'",
-        "git add mcp install",
+        "git add mcp install", "ls 'npx install-m[x]cp srv'", "grep 'npx install-m[x]cp srv' docs/",
     ])
     func runnableSpelledOperandAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
