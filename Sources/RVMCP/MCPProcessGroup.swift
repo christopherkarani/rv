@@ -205,6 +205,13 @@ final class MCPProcessGroup: MCPSupervisedGroup {
     #endif
 }
 
+#if !canImport(Darwin)
+/// glibc's `pipe2`, which the Glibc module does not export (it is declared
+/// only under `_GNU_SOURCE`).
+@_silgen_name("pipe2")
+private func systemPipe2(_ fds: UnsafeMutablePointer<Int32>, _ flags: Int32) -> Int32
+#endif
+
 /// One pipe, both ends close-on-exec and numbered above 2, so a spawn can
 /// always `dup2` them onto a child's standard descriptors.
 struct MCPPipe {
@@ -216,7 +223,7 @@ struct MCPPipe {
         #if canImport(Darwin)
         guard pipe(&fds) == 0 else { return nil }
         #else
-        guard pipe2(&fds, Int32(O_CLOEXEC)) == 0 else { return nil }
+        guard fds.withUnsafeMutableBufferPointer({ systemPipe2($0.baseAddress!, Int32(O_CLOEXEC)) }) == 0 else { return nil }
         #endif
         guard let read = lifted(fds[0]) else {
             close(fds[1])
