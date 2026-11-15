@@ -436,13 +436,18 @@ private let spellingTableWords: [String] = Array(Set(hostMCPTableWords())).sorte
 /// expanded, be a word the host CLI checks match, or run a program of that
 /// name (`m?p`, `m[c]p`, `mc{o..p}`, `src/clau*`): such text may hold no
 /// stem (`holdsHostMCPStem`). A word is also judged in the pieces between its
-/// `$` and backtick characters (`m?p${IFS}install`). Spends `budget`; each
-/// distinct word is judged once.
+/// `$` and backtick characters (`m?p${IFS}install`), and without zsh's
+/// leading `=`. Spends `budget`; each distinct word is judged once.
+///
+/// Words are split at blanks and `;|&()<>`, except inside a `{…}` or `[…]`
+/// span (`spelledWordCandidates`): quoted, `'{clau?e,x y}'` and
+/// `'cl[;a]ude'` stay one word, which the guard spells whole. A word the
+/// full judgement matches is thus never lost to the split.
 func spellsHostMCPTableWord(_ text: String, budget: inout SpellingBudget) -> Bool {
     guard text.contains(where: { "*?[{".contains($0) }) else { return false }
-    let words = text.split(whereSeparator: { $0.isWhitespace || ";|&()<>".contains($0) })
-    for raw in words {
-        var candidates = [String(raw)]
+    for raw in spelledWordCandidates(text) {
+        var candidates = [raw]
+        if raw.hasPrefix("=") { candidates.append(String(raw.dropFirst())) }
         if raw.contains("$") || raw.contains("`") {
             candidates += raw.split(whereSeparator: { "$`".contains($0) }).map(String.init)
         }
@@ -451,16 +456,79 @@ func spellsHostMCPTableWord(_ text: String, budget: inout SpellingBudget) -> Boo
                 if known { return true }
                 continue
             }
-            let spelling = WordSpelling.of(word, budget: &budget)
-            var spells = false
-            for literal in spellingTableWords
-            where spelling.mayBe(literal, budget: &budget) || spelling.nameMayBe(literal, budget: &budget) {
-                spells = true
-                break
-            }
+            let spells = spellingMayNameTableWord(WordSpelling.of(word, budget: &budget), budget: &budget)
             budget.tableWordAnswers[word] = spells
             if spells { return true }
         }
     }
     return false
+}
+
+/// Whether some word `spelling` yields may be a word the host CLI checks
+/// match (`hostMCPTableWords`), or run a program of that name.
+func spellingMayNameTableWord(_ spelling: WordSpelling, budget: inout SpellingBudget) -> Bool {
+    for literal in spellingTableWords
+    where spelling.mayBe(literal, budget: &budget) || spelling.nameMayBe(literal, budget: &budget) {
+        return true
+    }
+    return false
+}
+
+/// The words of `text` split at blanks and `;|&()<>`, then each run of them
+/// that a `{…}` or `[…]` span holding such a character joins (`{clau?e,x
+/// y}`, `cl[;a]ude`), as one more word: the shell keeps a quoted span one
+/// word. Braces nest; a class closes at the first `]` after its first
+/// character (and after a leading `!` or `^`).
+private func spelledWordCandidates(_ text: String) -> [String] {
+    let chars = Array(text)
+    let splits = { (char: Character) in char.isWhitespace || ";|&()<>".contains(char) }
+    var pieces: [Range<Int>] = []
+    var pieceAt = [Int](repeating: -1, count: chars.count)
+    var start: Int?
+    for index in 0...chars.count {
+        if index < chars.count, splits(chars[index]) == false {
+            if start == nil { start = index }
+            pieceAt[index] = pieces.count
+        } else if let open = start {
+            pieces.append(open..<index)
+            start = nil
+        }
+    }
+    // The first `]` at or after each offset, so a run of `[` stays linear.
+    var nextClose = [Int](repeating: chars.count, count: chars.count + 2)
+    for index in chars.indices.reversed() {
+        nextClose[index] = chars[index] == "]" ? index : nextClose[index + 1]
+    }
+    var spans: [ClosedRange<Int>] = []
+    var opens: [Int] = []
+    for (index, char) in chars.enumerated() {
+        if char == "{" {
+            opens.append(index)
+        } else if char == "}", let open = opens.popLast() {
+            spans.append(open...index)
+        } else if char == "[" {
+            var from = index + 2
+            if index + 1 < chars.count, "!^".contains(chars[index + 1]) { from += 1 }
+            let close = nextClose[min(from, chars.count)]
+            if close < chars.count { spans.append(index...close) }
+        }
+    }
+    // Split characters before each offset, so each span is tested at once.
+    var splitsBefore = [0]
+    for char in chars { splitsBefore.append(splitsBefore[splitsBefore.count - 1] + (splits(char) ? 1 : 0)) }
+    var joined: [ClosedRange<Int>] = []
+    for span in spans where splitsBefore[span.upperBound + 1] > splitsBefore[span.lowerBound] {
+        joined.append(pieceAt[span.lowerBound]...pieceAt[span.upperBound])
+    }
+    joined.sort { $0.lowerBound < $1.lowerBound }
+    var merged: [ClosedRange<Int>] = []
+    for run in joined {
+        if let last = merged.last, run.lowerBound <= last.upperBound {
+            merged[merged.count - 1] = last.lowerBound...max(last.upperBound, run.upperBound)
+        } else {
+            merged.append(run)
+        }
+    }
+    return pieces.map { String(chars[$0]) }
+        + merged.map { String(chars[pieces[$0.lowerBound].lowerBound..<pieces[$0.upperBound].upperBound]) }
 }

@@ -227,6 +227,12 @@ func launchedRunHostMCPMutation(_ launched: [LaunchedCommand], reads: inout Host
 /// Whether some word of `command` may name a host MCP word: the prefilter
 /// `launchedRunHostMCPMutation` puts before judging a speculative command.
 /// `named` caches each distinct word's answer.
+///
+/// Invariant: it never says no where `isHostMCPMutation` matches the
+/// command, as `mayNameHostMCP` never says no for text launching a command
+/// it matches (`prefilterCoversFullJudgement`). Each word is tested as text
+/// and also spelled whole as the full judgement spells it
+/// (`judgedSpellingMayName`), so splitting text never drops a word.
 func commandMayNameHostMCP(
     _ command: LaunchedCommand, budget: inout SpellingBudget, named: inout [String: Bool]
 ) -> Bool {
@@ -235,10 +241,22 @@ func commandMayNameHostMCP(
         if let known = named[word] {
             answer = known
         } else {
-            answer = mayNameHostMCP(word, budget: &budget)
+            answer = mayNameHostMCP(word, budget: &budget) || judgedSpellingMayName(word, budget: &budget)
             named[word] = answer
         }
         if answer { return true }
+    }
+    return false
+}
+
+/// Whether the spelling `isHostMCPMutation` gives `word` (folded, and
+/// without zsh's leading `=`) may be a word the host CLI checks match, or
+/// may be any words.
+private func judgedSpellingMayName(_ word: String, budget: inout SpellingBudget) -> Bool {
+    let folded = foldedWord(word)
+    for name in folded.hasPrefix("=") ? [folded, String(folded.dropFirst())] : [folded] {
+        let spelling = WordSpelling.of(name, budget: &budget)
+        if spelling.expansions == nil || spellingMayNameTableWord(spelling, budget: &budget) { return true }
     }
     return false
 }
