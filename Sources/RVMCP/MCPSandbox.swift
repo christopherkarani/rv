@@ -287,6 +287,11 @@ public enum MCPSandbox {
         // (measured on macOS 27; `(target others)` alone did not refuse it).
         lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
         lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
+        // `proc_pidfdinfo` and `proc_pid_rusage` of another process hand back
+        // its open-file paths and socket endpoints (no values). Refuse them
+        // for every process outside this sandbox too; `proc_listpids` stays,
+        // so pid and short command-name enumeration still works.
+        lines.append("(deny process-info-pidfdinfo process-info-rusage (require-not (target same-sandbox)))")
         // LaunchServices starts what it opens outside the caller's sandbox,
         // and an Apple event can ask a running app to run a command outside
         // it (docs/security/runtime-boundary.md): either would undo every
@@ -1056,11 +1061,18 @@ public enum MCPSandbox {
             compile: unsafeBitCast(compile, to: CompileProfile.self), free: unsafeBitCast(free, to: FreeProfile.self))
     }()
 
-    /// The largest profile rv compiles. libsandbox recurses per filter: on a
-    /// 16 MiB stack a 256 KB profile of distinct filters compiles in about
-    /// 0.1 s, and 384 KB is refused as too large (measured, macOS 27). An
-    /// everyday profile is about 24 KB.
-    static let maximumProfileBytes = 256 * 1024
+    /// The largest profile rv compiles. libsandbox's limit is on filter
+    /// count, not bytes: measured on macOS 27 it refuses about 2700 deny
+    /// rules (~5400 filters) as "profile too large", cleanly, on both the
+    /// compile thread and under `sandbox-exec -p`, and the stack it recurses
+    /// on grows with that count. Dense short filters reach the limit at fewer
+    /// bytes than long ones, so the byte cap is set for the densest shape: at
+    /// 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
+    /// 4x inside the 8 MB stack `sandbox-exec -p` recompiles on in the child,
+    /// ~8x inside `profileCompileStackBytes` — and compiles in about 0.7 s. A
+    /// letter-heavy home fills about 274 KB (few, long filters, a far smaller
+    /// peak); an everyday profile is about 24 KB.
+    static let maximumProfileBytes = 288 * 1024
 
     /// The compile's own stack. A 128 KB profile of distinct filters
     /// overflowed a 512 KiB thread (SIGBUS in `expand_logical_conditions`),
@@ -1144,14 +1156,24 @@ public enum MCPSandbox {
     /// Whether a path is one of `writable`, or inside one, under any spelling
     /// Seatbelt checks (each root as given and resolved, `/tmp` and
     /// `/private/tmp`, the Data-volume firmlink). APFS is case-insensitive
-    /// by default, so both sides are folded; folding can only add a path.
+    /// by default, so both sides are case-folded; folding can only add a
+    /// path, so a miss can only drop an opening or an ancestor the cage
+    /// could otherwise reach, never add a write reach.
     static func insideAny(_ writable: [String]) -> (String) -> Bool {
         let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
-            .map { directorySpelling($0).lowercased() })
+            .map { caseFolded(directorySpelling($0)) })
         return { path in
-            let folded = path.lowercased()
+            let folded = caseFolded(path)
             return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
         }
+    }
+
+    /// Full Unicode case folding, as the macOS guest's path comparison folds
+    /// (runtime-boundary.md's `/uſr`): `ß` folds to `ss` and `ſ` to `s`,
+    /// which `lowercased()` leaves apart, so a write root named with one is
+    /// still matched against the path spelled with the other.
+    static func caseFolded(_ path: String) -> String {
+        path.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// Every directory entry `open` passes through for `path`: each
