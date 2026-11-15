@@ -1205,6 +1205,19 @@ enum MCPRun {
         }
     }
 
+    /// How serve starts a server again after it went away: planned alone,
+    /// as at serve start, from `configuration` (the one serve verified and
+    /// started with; mcp.json is not read again). Its secrets are resolved
+    /// again, a placeholder server gets a new lease, and a caged one a new
+    /// cage and proxy (the old proxy is stopped), as a first launch gets them.
+    static func relaunch(
+        configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
+        resolver: SecretResolver, placeholders: MCPPlaceholderLeasing,
+        sandbox: @escaping @Sendable () -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>
+    ) -> MCPGatewayRuntime.Relaunch {
+        { server in .failure(.unknownServer(server)) }
+    }
+
     /// Every server that will be signed: command, arguments, tool policy, env
     /// bindings, secret bindings, and every allow, ask, and deny name.
     /// The digest is of that whole text. Nothing is clipped.

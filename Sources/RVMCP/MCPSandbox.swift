@@ -74,15 +74,21 @@ public enum MCPSandbox {
         "~/Library/Application Support/Claude", "~/.netrc", "~/.npmrc", "~/.pypirc",
     ]
 
-    /// Allowlist proxies for `sandbox.hosts`; they live as long as `rv mcp serve`.
-    static let proxies = Mutex<[EgressProxy]>([])
+    /// Allowlist proxies for `sandbox.hosts`, by server; they live as long
+    /// as `rv mcp serve`, or until the server is planned again.
+    static let proxies = Mutex<[(server: String, proxy: EgressProxy)]>([])
 
     /// Stops every proxy this process started; called when serve exits.
     public static func stopProxies() {
         proxies.withLock { running in
-            running.forEach { $0.stop() }
+            running.forEach { $0.proxy.stop() }
             running = []
         }
+    }
+
+    /// `proxy` is the one `server`'s launch uses now.
+    static func track(_ proxy: EgressProxy, server: String) {
+        proxies.withLock { $0.append((server, proxy)) }
     }
 
     /// The proxy credential a caged launch carries in its proxy URL, so the
@@ -134,7 +140,7 @@ public enum MCPSandbox {
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
-                proxies.withLock { $0.append(proxy) }
+                track(proxy, server: server)
                 proxied = (port, credential)
             }
             let network = cageNetwork(launch.environment, proxy: proxied, reach: reach)

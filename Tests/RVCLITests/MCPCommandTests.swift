@@ -5505,6 +5505,46 @@ struct MCPCommandTests {
         #expect(launch.arguments.contains("evil-binary") == false)
     }
 
+    /// A server started again is planned from the configuration serve
+    /// started with: an mcp.json changed on disk since is not read, and its
+    /// secrets are resolved again as at its first launch.
+    @Test func aRelaunchIsPlannedFromTheServeStartConfiguration() throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
+        ]))
+        let environment = fixture.environment()
+        let configuration = try MCPRun.configuration(environment).get()
+        let path = ".config/rv/mcp.json"
+        try fixture.write(path, fixture.text(path).replacingOccurrences(of: "fs-mcp", with: "evil-binary"))
+        chmod(fixture.home.appendingPathComponent(path).path, 0o600)
+        let calls = Mutex(0)
+        let resolver = SecretResolver { _ in
+            calls.withLock { $0 += 1 }
+            return .success(SecretValue("fresh-value")!)
+        }
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
+        ])
+        let relaunch = MCPRun.relaunch(
+            configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            placeholders: .unavailable, sandbox: { { _, launch, _ in .success(launch) } })
+        let (upstream, connection) = try relaunch("fs").get()
+        guard case .process(let launch) = connection else {
+            Issue.record("expected a process launch")
+            return
+        }
+        #expect(launch.arguments.first == "fs-mcp")
+        #expect(launch.environment["TOKEN"] == "fresh-value")
+        #expect(upstream.secretValues.map(\.value) == ["fresh-value"])
+        #expect(calls.withLock { $0 } == 1)
+        guard case .failure(let refused) = relaunch("other") else {
+            Issue.record("expected an unknown server to be refused")
+            return
+        }
+        #expect(refused == .unknownServer("other"))
+    }
+
     @Test func organizationSecretRefusalsAreAudited() throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [

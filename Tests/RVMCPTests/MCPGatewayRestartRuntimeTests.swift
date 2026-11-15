@@ -235,8 +235,10 @@ struct MCPGatewayRestartRuntimeTests {
             writeBufferBytes: 256 << 10)
         defer { Self.killChildren(in: directory) }
         #expect(await run.initialize())
-        // The first line is taken whole and blocks on the full pipe; the
-        // second passes the bound.
+        // Listed, it stops reading. The first line is then taken whole and
+        // blocks on the full pipe; the second passes the bound.
+        run.client.send(#"{"jsonrpc":"2.0","id":10,"method":"tools/list"}"#)
+        #expect(await Self.reply(run, 10)?["result"] != nil)
         let pad = String(repeating: "p", count: 4 << 20)
         run.client.send(Self.call(2, "echo", text: pad))
         run.client.send(Self.call(3, "echo", text: pad))
