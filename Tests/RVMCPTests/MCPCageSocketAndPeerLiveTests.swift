@@ -12,13 +12,17 @@ private struct ListenerFailed: Error {}
 /// listener and its own probe process are touched, all under the resolved
 /// temp directory.
 extension MCPCageCredentialLiveTests {
-    /// `(deny network*)` refuses an AF_UNIX connect as well as TCP and UDP.
-    /// The socket file is in the cage's own temporary write root, so file
-    /// permissions are not what stops it. An uncaged connect to the same
-    /// listener succeeds before and after the caged one, so the refusal cannot
-    /// come from a dead listener; the caged connect is made once.
-    @Test(.timeLimit(.minutes(1)))
-    func aNetworkFalseCageCannotConnectToAUnixSocket() throws {
+    /// `(deny network*)` refuses an AF_UNIX stream connect and a datagram
+    /// `connect` and `sendto`, as well as TCP and UDP: on its own, and with
+    /// the loopback allow every placeholder server gets on top of it (port 9
+    /// is only named in the profile, never dialled). The sockets are in the
+    /// cage's own temporary write root, so file permissions are not what
+    /// stops them. An uncaged probe reaches the same listeners before and
+    /// after the caged one, so the refusal cannot come from a dead listener;
+    /// the caged attempts are made once. Worst case about 82 s of bounded
+    /// waits, inside the limit.
+    @Test(.timeLimit(.minutes(2)), arguments: [[], [9]] as [[Int]])
+    func aNetworkFalseCageCannotConnectToAUnixSocket(loopbackPorts: [Int]) throws {
         let probe = try mcpProbe()
         let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
@@ -29,34 +33,54 @@ extension MCPCageCredentialLiveTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/unix", isDirectory: true)
         #expect(MCPSandbox.createCheckedDirectory(scratch.path))
-        let socketPath = tmp.appendingPathComponent("s").path
-        let listener = try Self.unixListener(at: socketPath)
-        defer { close(listener) }
+        let streamPath = tmp.appendingPathComponent("s").path
+        let datagramPath = tmp.appendingPathComponent("d").path
+        let stream = try Self.unixListener(at: streamPath, type: SOCK_STREAM)
+        defer { close(stream) }
+        let datagram = try Self.unixListener(at: datagramPath, type: SOCK_DGRAM)
+        defer { close(datagram) }
         let profile = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
-            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path,
+            loopbackPorts: loopbackPorts).get()
         #expect(profile.contains("(deny network*)"))
+        for port in loopbackPorts {
+            #expect(profile.contains("(allow network-outbound (remote tcp \"localhost:\(port)\"))"))
+        }
 
-        let before = Self.fromHere(probe, ["unix-connect", socketPath], in: root)
-        try #require(before.contains("unix-connect connected sent=1"), "uncaged control: \(before)")
-        try #require(Self.pending(listener, within: 5) == Array("x".utf8), "the listener did not get the control byte")
+        func controlReaches() throws {
+            let connected = Self.fromHere(probe, ["unix-connect", streamPath], in: root)
+            try #require(connected.contains("unix-connect connected sent=1"), "uncaged stream control: \(connected)")
+            try #require(Self.pending(stream, within: 5) == Array("x".utf8), "the stream listener did not get the control byte")
+            let sent = Self.fromHere(probe, ["unix-dgram", datagramPath], in: root)
+            try #require(sent.contains("dgram-connect ok dgram-sendto sent=1"), "uncaged datagram control: \(sent)")
+            try #require(Self.datagram(datagram, within: 5) == Array("y".utf8), "the datagram listener did not get the control byte")
+        }
+        try controlReaches()
 
-        let output = try #require(try caged(profile, "\"$1\" unix-connect \"$2\"; echo DONE", [probe.path, socketPath], in: scratch.path))
+        let output = try #require(try caged(
+            profile, "\"$1\" unix-connect \"$2\"; \"$1\" unix-dgram \"$3\"; echo DONE",
+            [probe.path, streamPath, datagramPath], in: scratch.path))
         #expect(output.contains("DONE"), "\(output)")
         #expect(output.contains("unix-connect failed errno=\(EPERM)"), "\(output)")
+        #expect(output.contains("dgram-connect failed errno=\(EPERM)"), "\(output)")
+        #expect(output.contains("dgram-sendto failed errno=\(EPERM)"), "\(output)")
         #expect(output.contains("connected") == false, "\(output)")
-        #expect(Self.pending(listener, within: 1) == nil, "a caged connection reached the listener")
+        #expect(output.contains(" ok") == false, "\(output)")
+        #expect(output.contains("sent=1") == false, "\(output)")
+        #expect(Self.pending(stream, within: 1) == nil, "a caged connection reached the stream listener")
+        #expect(Self.datagram(datagram, within: 1) == nil, "a caged datagram reached the listener")
 
-        let after = Self.fromHere(probe, ["unix-connect", socketPath], in: root)
-        #expect(after.contains("unix-connect connected sent=1"), "uncaged control: \(after)")
-        #expect(Self.pending(listener, within: 5) == Array("x".utf8))
+        try controlReaches()
     }
 
     /// `proc_pidfdinfo` (of the neighbour's stdin, a pipe) and
     /// `proc_pid_rusage` of a live process outside the cage are refused. The
     /// neighbour is shown readable from here before and after, and still
-    /// running; the caged read is made once.
-    @Test(.timeLimit(.minutes(1)))
+    /// running; the caged read is made once. Worst case about 60 s of
+    /// bounded waits (two 20 s controls and the 20 s caged run), inside the
+    /// limit, so a starved run fails on a message rather than the limit.
+    @Test(.timeLimit(.minutes(2)))
     func aCagedServerCannotReadAPeersFileOrResourceInfo() throws {
         let probe = try mcpProbe()
         let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
@@ -100,10 +124,11 @@ extension MCPCageCredentialLiveTests {
         #expect(neighbour.isRunning)
     }
 
-    /// A listening, non-blocking AF_UNIX stream socket bound at `path`.
-    static func unixListener(at path: String) throws -> Int32 {
+    /// A non-blocking AF_UNIX socket of `type` bound at `path`, listening
+    /// when it is a stream socket.
+    static func unixListener(at path: String, type: Int32) throws -> Int32 {
         try #require(path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path), "socket path too long: \(path)")
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, type, 0)
         try #require(fd >= 0, "socket: errno \(errno)")
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -112,7 +137,7 @@ extension MCPCageCredentialLiveTests {
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        guard bound == 0, listen(fd, 8) == 0, fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else {
+        guard bound == 0, type != SOCK_STREAM || listen(fd, 8) == 0, fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else {
             let failure = errno
             close(fd)
             Issue.record("listener at \(path): errno \(failure)")
@@ -133,6 +158,16 @@ extension MCPCageCredentialLiveTests {
         _ = poll(&readable, 1, 2000)
         var buffer = [UInt8](repeating: 0, count: 16)
         let count = read(connection, &buffer, buffer.count)
+        return count > 0 ? Array(buffer[0..<count]) : []
+    }
+
+    /// The bytes of one datagram waiting on `socket` within `seconds`, or nil
+    /// when none arrived.
+    static func datagram(_ socket: Int32, within seconds: Int32) -> [UInt8]? {
+        var ready = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
+        guard poll(&ready, 1, seconds * 1000) == 1 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: 16)
+        let count = recv(socket, &buffer, buffer.count, 0)
         return count > 0 ? Array(buffer[0..<count]) : []
     }
 

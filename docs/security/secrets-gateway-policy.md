@@ -551,9 +551,11 @@ same sandbox and stays readable until it exits; once it has exited its pid
 is outside every sandbox and reads "Operation not permitted" like any
 other), and every process's pid, parent pid and short command name
 (`pgrep` and `KERN_PROC_ALL` still list them). `task_name_for_pid` stays
-allowed too: it returns a task's name port, which identifies the task but
-gives no access to its memory, threads or arguments (from the Mach API's
-definition; not probed here). The behaviour change:
+allowed too: it returns a task's name port, which gives no access to its
+memory, threads or arguments but may still yield `task_info` basic
+counters (sizes and times), the kind of resource counters the rusage
+deny below hides (from the Mach API; not probed here). The behaviour
+change:
 `proc_pidinfo`, and now `proc_pidfdinfo` and `proc_pid_rusage`, are
 refused for every process outside the cage, so a tool that asks about one
 by pid gets nothing — its open-file paths, socket endpoints and resource
@@ -664,11 +666,15 @@ What it does not:
   runs as usual. "By its own calls" leans on the cage also denying
   LaunchServices and Apple events (below), so a server cannot have either
   start or drive a process outside the cage to make the create, or a
-  credential read, for it. That is the whole of it for a `network` false
-  server (every placeholder server), which cannot connect to any Unix
-  socket either, but for XPC services, which no caged server is denied; a
-  `network` true server can also ask a daemon outside the cage through
-  its socket (below). File copies and file clones are not affected:
+  credential read, for it. Of the routes we know of, that leaves XPC
+  services, which no caged server is denied, for a `network` false server
+  (every placeholder server), which cannot connect to a Unix socket
+  either; a `network` true server can also ask a daemon outside the cage
+  through its socket (below). That rests on Seatbelt's behaviour and the
+  routes tested, not on a proof that no other route exists, and it does
+  not cover a later one: an uncaged tool of yours that afterwards uses
+  what the caged server wrote into a shared write root (the package
+  caches, the temporary directory, `sandbox.writable`). File copies and file clones are not affected:
   `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
   tree file by file; only a raw `clonefile(2)` of a directory from
   outside those is refused, so a tool that clones whole package
@@ -725,19 +731,22 @@ What it does not:
   only launch routes the cage closes, and a `network` true server (no
   `sandbox.hosts`) has no socket deny at all: besides the internet it can
   connect to the Unix-domain control sockets of daemons running outside
-  the cage, and each of them acts outside it — a tmux or screen server
-  (runs any command it is sent), the Docker socket (starts containers,
-  host mounts included), ssh-agent (signs with your keys), gpg-agent and a
-  password manager's agent. XPC services reached by Mach lookup (the
+  the cage (by reading the profile; not probed), and each of them acts
+  outside it — a tmux or screen server (runs any command it is sent), the
+  Docker socket (starts containers, host mounts included), ssh-agent
+  (signs with your keys), gpg-agent and a password manager's agent over
+  its socket (one reached over XPC stays reachable from any cage). XPC services reached by Mach lookup (the
   Shortcuts runner, `nsurlsessiond` and the rest) are not denied for any
   caged server (above) and were not probed. A `network` false server, and
   so every placeholder server, is not affected by the socket route:
-  `(deny network*)` refuses an AF_UNIX connect as well as TCP and UDP, and
-  the only allow on top of it is TCP to the gateway's (and proxy's)
-  loopback port. Live test: a caged connect to a socket the test itself
-  listens on, inside the cage's own temporary write root, fails
-  "Operation not permitted" and delivers nothing, while an uncaged connect
-  to the same listener before and after it succeeds. rv adds no socket
+  `(deny network*)` refuses AF_UNIX as well as TCP and UDP (the rule has
+  no path or socket-type filter), and the only allow on top of it is TCP
+  to the gateway's (and proxy's) loopback port. Live test, with and
+  without that loopback allow: a caged stream `connect`, datagram
+  `connect` and datagram `sendto` to sockets the test itself listens on,
+  inside the cage's own temporary write root, each fail "Operation not
+  permitted" and deliver nothing, while uncaged ones to the same
+  listeners before and after succeed. rv adds no socket
   deny for `network` true, since a server such as a Docker MCP server
   needs its socket. An opt-in "no local sockets" setting would add a deny
   of outbound Unix-socket connects to a `network` true profile, with an
