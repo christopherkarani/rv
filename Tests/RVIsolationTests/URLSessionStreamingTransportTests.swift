@@ -566,10 +566,13 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits("GET", "/v1/big") == 1)
     }
 
-    /// A client that takes in 8 KiB every 0.25 s, so that every write moves
+    /// A client that takes in 16 KiB every 0.05 s, so that every write moves
     /// well inside the 2 s send timeout, is cut off once it has taken in
-    /// less than the minimum (here 256 KiB) over a window of the gateway
-    /// waiting to write to it. The send timeout alone never cuts it. Its upstream
+    /// less than the minimum (here 1 MiB) over a window of the gateway
+    /// waiting to write to it. The send timeout alone never cuts it: Darwin
+    /// wakes a blocked write only once much of its buffer is free, so a
+    /// reader slower than this, such as 8 KiB every 0.25 s, already let a
+    /// write block past 2 s. Its upstream
     /// request is cancelled, everything it held is given back, and what it
     /// still reads is cut short, with no terminator.
     @Test(.timeLimit(.minutes(1)))
@@ -578,19 +581,19 @@ struct URLSessionStreamingTransportTests {
         defer { upstream.stop() }
         let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 2)
         defer { under.gateway.stop() }
-        under.gateway.clientMinimumBytes = 256 * 1024
+        under.gateway.clientMinimumBytes = 1 << 20
         let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
         defer { close(client) }
         #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
         let trickle = Trickle()
         let stopped = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            var buffer = [UInt8](repeating: 0, count: 8 * 1_024)
+            var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
             while trickle.going.load(ordering: .relaxed) {
                 let n = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
                 if n <= 0 { break }
                 trickle.received.withLock { $0 += buffer.prefix(n) }
-                Thread.sleep(forTimeInterval: 0.25)
+                Thread.sleep(forTimeInterval: 0.05)
             }
             stopped.signal()
         }
