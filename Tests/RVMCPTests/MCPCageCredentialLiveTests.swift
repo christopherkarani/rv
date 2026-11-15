@@ -218,6 +218,56 @@ struct MCPCageCredentialLiveTests {
         #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
     }
 
+    /// A missing directory above a credential, inside a write root (here
+    /// `~/Library/Application Support/Google` above Chrome's, the home under
+    /// the temp directory). Whatever the cage put there would hold the
+    /// credential once its owner writes it: a symlink to the scratch, a
+    /// link renamed onto the path, or a directory of its own renamed there
+    /// with a link inside (`Chrome` → the scratch). All are refused. So is a
+    /// plain `mkdir`: Seatbelt checks it as the same create as a directory
+    /// renamed in. Creating a directory that is no credential ancestor still
+    /// works, and making an ancestor that exists still says it exists.
+    @Test(.timeLimit(.minutes(1)))
+    func aMissingCredentialAncestorCannotBeCreatedByTheCage() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-missing-ancestor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let support = home.appendingPathComponent("Library/Application Support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/planter", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let google = support.appendingPathComponent("Google")
+        let script = """
+            g="$1"; s="$2"; support="$3"
+            /bin/echo STARTED
+            /bin/ln -s "$s/mine" "$g" 2>/dev/null && echo LINK_CREATED
+            /bin/ln -s "$s/mine" "$s/evil" && replace "$s/evil" "$g" && echo LINK_RENAMED
+            /bin/mkdir -p "$s/dir" && /bin/ln -s "$s/mine" "$s/dir/Chrome" && replace "$s/dir" "$g" && echo DIR_RENAMED
+            printf f > "$s/file" && /bin/ln "$s/file" "$g" 2>/dev/null && echo HARDLINK_MADE
+            /bin/mkdir "$g" 2>/dev/null && echo MKDIR_MADE
+            /bin/mkdir "$support/Other" && echo OTHER_OK
+            /bin/mkdir "$support" 2>&1 | /usr/bin/grep -q "File exists" && echo EXISTS_SAID
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [google.path, scratch.path, support.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        for refused in ["LINK_CREATED", "LINK_RENAMED", "DIR_RENAMED", "HARDLINK_MADE", "MKDIR_MADE"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(output.contains("OTHER_OK"), "\(output)")
+        #expect(output.contains("EXISTS_SAID"), "\(output)")
+        var info = stat()
+        #expect(lstat(google.path, &info) != 0, "something was planted at \(google.path)")
+    }
+
     /// Two servers, each in its own `sandbox-exec` of the same profile, as
     /// serve starts them: the second cannot read the first's arguments and
     /// environment (`KERN_PROCARGS2`, where rv puts a server's `secrets`),
