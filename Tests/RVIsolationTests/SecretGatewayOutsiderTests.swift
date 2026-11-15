@@ -364,6 +364,42 @@ struct SecretGatewayOutsiderTests {
         #expect(malformed().count == 2)
     }
 
+    /// Connection threads are not joined at stop, so a refusal can come
+    /// after the drain: it is written then, not kept for a later stop. A
+    /// gateway started again bounds afresh and never writes an earlier
+    /// run's count.
+    @Test(.timeLimit(.minutes(1)))
+    func aRefusalAfterTheStopIsWrittenAndARestartBoundsAfresh() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, _) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        func sendGarbage(_ port: Int) throws {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array("not http\r\n\r\n".utf8)))
+            #expect(answer(client.fd).hasPrefix("HTTP/1.1 4"))
+        }
+        let malformed = { audit.items.withLock { $0.filter { $0.refusal?.code == "malformed" } } }
+        let first = try gateway.start().get()
+        for _ in 0..<3 { try sendGarbage(first) }
+        #expect(eventually { malformed().count == 1 })
+        gateway.stop()
+        #expect(malformed().count == 2)
+        let late = try #require(malformed().last)
+        #expect(gateway.outsiderAudit.admit(late) != nil, "a refusal after the drain was kept")
+
+        let second = try gateway.start().get()
+        defer { gateway.stop() }
+        for _ in 0..<2 { try sendGarbage(second) }
+        #expect(eventually { malformed().count == 3 })
+        let reason = malformed().last?.reason ?? ""
+        #expect(reason.contains("more from outside") == false, "\(reason)")
+        #expect(malformed().count == 3, "the second run's refusals were not bounded")
+    }
+
     /// Naming a secret does not lift the bound: an outsider hammering a
     /// made-up name is recorded once per interval like a nameless one. An
     /// outsider presenting a live placeholder is recorded every time, also
