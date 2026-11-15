@@ -33,6 +33,7 @@ enum ProgramKind {
     case shellQuoting // perl, ruby, php: backticks run a shell
     case plain // python, node, lua
     case awk
+    case appleScript // osascript: `do shell script`, JXA `doShellScript`
 }
 
 enum InlineProgram {
@@ -73,7 +74,7 @@ func inlineProgram(_ argv: [String]) -> InlineProgram? {
     return nil
 }
 
-private let awkNames: Set<String> = ["awk", "gawk", "mawk", "nawk"]
+let awkNames: Set<String> = ["awk", "gawk", "mawk", "nawk"]
 private let sedNames: Set<String> = ["sed", "gsed"]
 
 /// `-e`, `-ne`, `-lane`, `-ecode`: a single-dash word carrying one of `letters`.
@@ -148,6 +149,9 @@ func scriptIsRisky(_ source: String, kind: ProgramKind, secrets: SecretPathCatal
         if text.contains("`") || text.contains("%x") { return true }
     case .awk:
         if awkPipesCommand(text) { return true }
+    case .appleScript:
+        let folded = text.lowercased()
+        if folded.contains("do shell script") || folded.contains("doshellscript") { return true }
     case .plain:
         break
     }

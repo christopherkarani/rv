@@ -109,11 +109,24 @@ struct HostTextReads {
     /// false (and `visitsExceeded`) past `maxWordVisits` inside a read,
     /// where the command counts. Checked per command, not only where a read
     /// begins: one read launches many commands. The line's own commands,
-    /// judged outside any read, cost only their length and are never
-    /// refused for it.
+    /// judged outside any read, are never refused here: its written ones
+    /// cost their length, and its speculative ones (a dynamic program's
+    /// operand suffixes, quadratic in them) are judged only while under the
+    /// ceiling (`admitsSpeculative`).
     mutating func visit(words count: Int) -> Bool {
         wordVisits += count
         guard readsInProgress == 0 || wordVisits < Self.maxWordVisits else {
+            exceeded = true
+            visitsExceeded = true
+            return false
+        }
+        return true
+    }
+
+    /// Whether one more speculative command may be judged: false (and
+    /// `visitsExceeded`) at the ceiling, where the command counts.
+    mutating func admitsSpeculative() -> Bool {
+        guard wordVisits < Self.maxWordVisits else {
             exceeded = true
             visitsExceeded = true
             return false
@@ -183,14 +196,43 @@ struct HostTextReads {
         if launched.contains(where: { $0.truncated || (literalReading == false && isUnscannedLaunch($0)) }) {
             return true
         }
-        for command in launched {
-            if isHostMCPMutation(command, reads: &self) { return true }
-        }
+        if launchedRunHostMCPMutation(launched, reads: &self) { return true }
         guard nested else { return false }
         // Words carried inside this text are not re-splits.
         resplit = false
         return carriesHostMCPText(launched, reads: &self)
     }
+}
+
+/// Whether some command of `launched` is a host MCP mutation
+/// (`isHostMCPMutation`). A speculative one (`launchedCommandHeads`: a
+/// dynamic program as every suffix of its operands, a spaced operand
+/// re-parsed) is judged only when some word of it may name a host MCP word
+/// (`mayNameHostMCP`, the test every read begins with), each distinct word
+/// tested once, and only below the ceiling (`admitsSpeculative`), which
+/// asks. A dynamic program's plain operands then cost their length, not
+/// its square.
+func launchedRunHostMCPMutation(_ launched: [LaunchedCommand], reads: inout HostTextReads) -> Bool {
+    var named: [String: Bool] = [:]
+    let mayName = { (word: String, reads: inout HostTextReads) -> Bool in
+        if let known = named[word] { return known }
+        let answer = mayNameHostMCP(word, budget: &reads.spelling)
+        named[word] = answer
+        return answer
+    }
+    for command in launched {
+        if command.speculative, command.truncated == false {
+            var matters = false
+            for word in [command.head] + command.guardArgv where mayName(word, &reads) {
+                matters = true
+                break
+            }
+            guard matters else { continue }
+            guard reads.admitsSpeculative() else { return true }
+        }
+        if isHostMCPMutation(command, reads: &reads) { return true }
+    }
+    return false
 }
 
 /// The heads `launchedCommandHeads` reports for `unscannableSegment`, which
@@ -221,6 +263,14 @@ func isUnscannedLaunch(_ command: LaunchedCommand) -> Bool {
 /// redirect, here-string, substitution or parenthesis (`isInertLine`).
 func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextReads, line: String? = nil) -> Bool {
     let lineInert = line.map { isInertLine($0, launched) } ?? false
+    // Output rv cannot read may reach the reader of a printer's text and
+    // define a command there (`{ cat ./defs.sh; echo 'ls mcp $X'; } | sh`):
+    // beside such a command, a printer's text is never read as plain names.
+    let opaqueWriter = launched.contains {
+        $0.speculative == false && printers.contains(commandName($0.head)) == false
+    }
+    let outerPlain = reads.commandsArePlain
+    defer { reads.commandsArePlain = outerPlain }
     var printed: [String] = []
     for command in launched where command.speculative == false && command.truncated == false {
         let args = Array(command.argv.dropFirst())
@@ -229,6 +279,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         }
         let name = commandName(command.head)
         let isPrinter = printers.contains(name)
+        reads.commandsArePlain = outerPlain && (isPrinter == false || opaqueWriter == false)
         // Text nothing runs: a plain operand of a non-executor on an inert line.
         let dataOnly = lineInert && isNonExecutor(command)
         // A non-executor that is no printer (`grep`, `rg`, `git commit`):
@@ -265,6 +316,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         }
     }
     guard printed.isEmpty == false else { return false }
+    reads.commandsArePlain = outerPlain && opaqueWriter == false
     return joinedReadsRun(printed, &reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
 }
 

@@ -419,6 +419,45 @@ struct MCPHostCLITextTests {
         #expect(under.wordVisits < HostTextReads.maxWordVisits, "\(under.wordVisits)")
     }
 
+    /// A dynamic program is also judged as every suffix of its operands
+    /// (`launchedCommandHeads`), which is quadratic in them: `$x` and 511
+    /// plain words visited 527,360 words. A long line naming no host costs
+    /// its length, and it no longer spends the ceiling that its carried
+    /// text is read under (`echo 'see mcp docs' | cat` asked for it).
+    @Test("a dynamic program's plain operands cost their length")
+    func dynamicOperandsCostTheirLength() {
+        let operands = Array(repeating: "a", count: 511).joined(separator: " ")
+        var plain = HostTextReads()
+        #expect(judge("$x " + operands, &plain) == false)
+        #expect(plain.wordVisits < 16 * 512, "\(plain.wordVisits)")
+        var carried = HostTextReads()
+        #expect(judge("$x \(operands); echo 'see mcp docs' | cat", &carried) == false)
+        #expect(carried.visitsExceeded == false)
+        #expect(carried.wordVisits < 16 * 512, "\(carried.wordVisits)")
+    }
+
+    /// Suffixes whose words may name a host are still judged, the line's
+    /// own up to the ceiling, which asks: work stays bounded on a line with
+    /// a host word in every operand.
+    @Test("a dynamic program's many host-like operands ask at the ceiling")
+    func dynamicHostOperandsAskAtCeiling() {
+        let operands = Array(repeating: "claude-x", count: 511).joined(separator: " ")
+        var reads = HostTextReads()
+        #expect(judge("$x " + operands, &reads))
+        #expect(reads.visitsExceeded)
+        #expect(reads.wordVisits < HostTextReads.maxWordVisits + 4_096, "\(reads.wordVisits)")
+    }
+
+    /// An operand suffix that runs a host installer still asks.
+    @Test("a dynamic program's operand suffix that installs still asks", arguments: [
+        "$x a fastmcp install cursor", "$x nice fastmcp install cursor", "$x a uvx fastmcp install cursor",
+        "$x a b npx @smithery/cli install s", "$x a env FOO=1 fastmcp install cursor",
+        "$x a $y m?p add s -- x", "l? $y m?p add s -- x",
+    ])
+    func dynamicSuffixInstallerAsks(_ line: String) {
+        #expect(judge(line), "\(line)")
+    }
+
     /// `eval` and `sh -c` parse a payload as written and decoded; the
     /// commands come out in that fixed order (as written first), so the
     /// joined output of their printers, and the verdict on it, is the same

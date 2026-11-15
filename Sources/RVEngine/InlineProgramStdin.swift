@@ -18,17 +18,16 @@ func stdinProgramRequiresJudge(_ raw: String, secrets: SecretPathCatalog) -> Boo
         if read.heredoc, let body, scriptIsRisky(body, kind: read.kind, secrets: secrets) { return true }
     }
 
-    // No launched command is picked by position: any command the consumer
-    // segment launches may be the interpreter reading the pipe, and any
-    // command the producer segment launches may write to it (an `eval` or
-    // `sh -c` payload launches each view, as written and decoded, and a
-    // group or payload may run several commands).
+    // Any command the consumer segment launches may be the interpreter
+    // reading the pipe, and any command the producer segment launches inside
+    // a group or payload may write to it (an `eval` or `sh -c` payload
+    // launches each view, as written and decoded): `pipeWriters`.
     let pipes = splitTopLevelPipes(header)
     for index in pipes.indices.dropFirst() {
         let reads = launchedCommands(pipes[index]).compactMap(stdinRead).filter {
             $0.hereString == nil && $0.heredoc == false && $0.fileRedirect == false
         }
-        let producers = launchedCommands(pipes[index - 1])
+        let producers = pipeWriters(pipes[index - 1])
         guard reads.isEmpty == false, producers.isEmpty == false else { continue }
         var programs: [String] = []
         for producer in producers {
@@ -44,6 +43,75 @@ func stdinProgramRequiresJudge(_ raw: String, secrets: SecretPathCatalog) -> Boo
     return false
 }
 
+/// The commands of `segment` that may write into the pipe after it. At its
+/// top level only the last list element does: what follows its last `;`,
+/// `&&`, `||`, `&` or newline (`cd repo && echo … |`). A segment holding a
+/// group, subshell, substitution or compound command (`{ a; b; }`, `( … )`,
+/// `if …; fi`), which this scan does not parse, is read whole, as is one
+/// whose last element launches nothing. The segment's last launched
+/// command is always one of them.
+private func pipeWriters(_ segment: String) -> [[String]] {
+    let all = launchedCommands(segment)
+    guard let tail = lastListElement(segment) else { return all }
+    var writers = launchedCommands(tail)
+    guard writers.isEmpty == false else { return all }
+    if let last = all.last, writers.contains(last) == false { writers.append(last) }
+    return writers
+}
+
+private let compoundWords: Set<String> = [
+    "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "in", "case", "esac", "select",
+    "function", "coproc", "[[", "]]", "!", "time",
+]
+
+/// The text after the last top-level list operator of `segment`, or nil
+/// when it holds a group, subshell, substitution, backtick or compound
+/// command word outside quotes. A `&` next to `<` or `>` is a redirect.
+private func lastListElement(_ segment: String) -> String? {
+    let chars = Array(segment)
+    // Each quoted or escaped character masked to `x`.
+    var masked = chars
+    var quote: Character?
+    var index = 0
+    while index < chars.count {
+        let char = chars[index]
+        if char == "\\", quote != "'" {
+            masked[index] = "x"
+            if index + 1 < chars.count { masked[index + 1] = "x" }
+            index += 2
+            continue
+        }
+        if let open = quote {
+            masked[index] = "x"
+            if char == open { quote = nil }
+        } else if char == "'" || char == "\"" {
+            masked[index] = "x"
+            quote = char
+        }
+        index += 1
+    }
+    if masked.contains(where: { "{}()`".contains($0) }) { return nil }
+    let words = String(masked).split(whereSeparator: { $0.isWhitespace || ";&|<>".contains($0) })
+    if words.contains(where: { compoundWords.contains(String($0)) }) { return nil }
+    var start = 0
+    for (position, char) in masked.enumerated() {
+        let before = position > 0 ? masked[position - 1] : nil
+        let after = position + 1 < masked.count ? masked[position + 1] : nil
+        switch char {
+        case ";", "\n":
+            start = position + 1
+        case "&" where before != ">" && before != "<" && after != ">":
+            start = position + 1
+        case "|" where after == "|" || before == "|":
+            start = position + 1
+        default:
+            continue
+        }
+    }
+    let tail = String(chars[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return tail.isEmpty ? nil : tail
+}
+
 private struct StdinRead {
     var kind: ProgramKind
     var hereString: String?
@@ -52,12 +120,32 @@ private struct StdinRead {
 }
 
 /// How an interpreter argv takes its program from stdin, or nil when it
-/// runs a script file or an inline program instead.
-private func stdinRead(_ argv: [String]) -> StdinRead? {
-    guard let program = argv.first?.lowercased(), let kind = stdinProgramKind(program),
-          inlineProgram(argv) == nil
+/// runs a script file or an inline program instead. The head counts as the
+/// program it decodes to (`$'python3'`). Words after `-` or `/dev/stdin`
+/// are the program's arguments, not a script. deno and bun read one only
+/// given `-`; awk only from `-f -`; `xargs` running an interpreter with no
+/// script operand feeds it the pipe as its program (`xargs python3 -c`).
+private func stdinRead(_ written: [String]) -> StdinRead? {
+    guard let first = written.first else { return nil }
+    let program = commandName(first.ansiCDecodedIfMarked).lowercased()
+    var argv = [program] + written.dropFirst()
+    if program == "xargs" { return xargsStdinRead(argv) }
+    if program == "osascript" { return osascriptStdinRead(argv) }
+    if awkNames.contains(program) {
+        let readsStdin = argv.indices.dropFirst().contains { index in
+            let arg = argv[index]
+            if arg == "--file=-" || arg == "--file=/dev/stdin" || arg == "-f-" { return true }
+            return (arg == "-f" || arg == "--file") && index + 1 < argv.count
+                && (argv[index + 1] == "-" || argv[index + 1] == "/dev/stdin")
+        }
+        return readsStdin ? StdinRead(kind: .awk) : nil
+    }
+    let explicitOnly = program == "deno" || program == "bun"
+    if explicitOnly, argv.count > 1, argv[1] == "run" { argv.remove(at: 1) }
+    guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(argv) == nil
     else { return nil }
     var read = StdinRead(kind: kind)
+    var sawStdin = false
     var index = 1
     while index < argv.count {
         let arg = argv[index]
@@ -77,13 +165,61 @@ private func stdinRead(_ argv: [String]) -> StdinRead? {
             index += 1
         } else if arg.hasPrefix("<"), arg.hasPrefix("<(") == false {
             read.fileRedirect = true
-        } else if arg == "-" || arg == "/dev/stdin" || arg.hasPrefix("-") || arg.contains(">") {
+        } else if arg == "-" || arg == "/dev/stdin" {
+            sawStdin = true
+        } else if sawStdin || arg.contains(">") {
             continue
+        } else if arg.hasPrefix("-") {
+            // Python's `-W ignore`, `-X dev`: the value is no script.
+            if kind == .plain, isPythonExecutable(program), arg == "-W" || arg == "-X" { index += 1 }
         } else {
             return nil
         }
     }
+    if explicitOnly, sawStdin == false, read.hereString == nil, read.heredoc == false, read.fileRedirect == false {
+        return nil
+    }
     return read
+}
+
+/// `xargs` running an interpreter given no script operand after it (only
+/// options and `{}`): the words it reads from the pipe reach the
+/// interpreter as its program or the inline program's text.
+private func xargsStdinRead(_ argv: [String]) -> StdinRead? {
+    for index in argv.indices.dropFirst() {
+        let name = commandName(argv[index].ansiCDecodedIfMarked).lowercased()
+        let kind: ProgramKind? = awkNames.contains(name) ? .awk
+            : (name == "deno" || name == "bun") ? .plain : stdinProgramKind(name)
+        guard let kind else { continue }
+        let rest = argv[(index + 1)...].filter { ($0 == "run" && (name == "deno" || name == "bun")) == false }
+        let scriptless = rest.allSatisfy { $0.hasPrefix("-") || $0.contains("{}") }
+        return scriptless ? StdinRead(kind: kind) : nil
+    }
+    return nil
+}
+
+/// `osascript` with no script file, or `-`, and no `-e`: it runs stdin.
+private func osascriptStdinRead(_ argv: [String]) -> StdinRead? {
+    var index = 1
+    while index < argv.count {
+        let arg = argv[index]
+        index += 1
+        if arg == "-e" { return nil }
+        // Any input redirect is read as an opaque program.
+        if arg.hasPrefix("<") {
+            var read = StdinRead(kind: .appleScript)
+            read.fileRedirect = true
+            return read
+        }
+        if arg == "-l" || arg == "-s" || arg == ">" || arg == ">>" {
+            index += 1
+        } else if arg.contains(">") {
+            continue
+        } else if arg != "-", arg.hasPrefix("-") == false {
+            return nil
+        }
+    }
+    return StdinRead(kind: .appleScript)
 }
 
 private func stdinProgramKind(_ program: String) -> ProgramKind? {
