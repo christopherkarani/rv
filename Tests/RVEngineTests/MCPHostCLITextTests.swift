@@ -395,6 +395,32 @@ struct MCPHostCLITextTests {
         print("DEEPERCOPY alone asks=\(aloneAsks) books=\(books(alone))")
     }
 
+    /// `eval` and `sh -c` parse a payload as written and decoded; the
+    /// commands come out in that fixed order (as written first), so the
+    /// joined output of their printers, and the verdict on it, is the same
+    /// in every process. A hash seed used to order them.
+    @Test("eval and sh -c views launch in a fixed order", arguments: [
+        "eval $'echo\\x20mcp\\x20add\\x20x;' 'echo claude'", "sh -c $'echo\\x20mcp\\x20add\\x20x;echo claude'",
+    ])
+    func payloadViewsLaunchInOrder(_ line: String) throws {
+        let argvs = launchedCommandHeads(line).map(\.argv)
+        let written = try #require(argvs.firstIndex(of: ["echo", "claude"]), "\(argvs)")
+        let decoded = try #require(argvs.firstIndex(of: ["echo", "mcp", "add", "x"]), "\(argvs)")
+        #expect(written < decoded, "\(argvs)")
+    }
+
+    /// The written view prints `claude` before the decoded view prints `mcp
+    /// add x`: their joined output names a host mutation, so these ask.
+    @Test("printers across eval and sh -c views are joined in a fixed order", arguments: [
+        "eval $'echo\\x20mcp\\x20add\\x20x;' 'echo claude' | sh",
+        "eval $'printf\\x20mcp\\x20add\\x20x;' 'printf claude' | sh",
+        "eval $'echo\\tmcp\\tadd\\tx;' 'echo claude' | sh", "sh -c $'echo\\x20mcp\\x20add\\x20x;echo claude' | sh",
+        "sh -c $'printf\\x20\\x27mcp add x\\x27;printf claude' | sh",
+    ])
+    func crossViewPrintersAsk(_ line: String) {
+        #expect(judge(line), "\(line)")
+    }
+
     /// Through the guard, long text is judged by what it names, not its
     /// size: past the piece caps, text with no stem stays allowed and text
     /// that names a host mutation, plain or encoded, still asks.
