@@ -228,6 +228,51 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.count == 20)
     }
 
+    /// A client that resets its connection after the gateway accepted it
+    /// but before it was set up. Darwin then refuses `SO_NOSIGPIPE` on that
+    /// socket, and any answer written to it raised SIGPIPE, which killed the
+    /// gateway's whole process. It is closed unanswered, unaudited, and the
+    /// next client is served.
+    @Test(.timeLimit(.minutes(1)))
+    func aClientResetBeforeItsConnectionIsSetUpIsClosedUnanswered() throws {
+        let marked = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(marked.check, upstream: upstream, audit: audit)
+        let paused = StopFlag()
+        let accepted = DispatchSemaphore(value: 0)
+        let reset = DispatchSemaphore(value: 0)
+        gateway.afterAccept = {
+            guard paused.raised.exchange(true, ordering: .relaxed) == false else { return }
+            accepted.signal()
+            _ = reset.wait(timeout: .now() + 10)
+        }
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        #if canImport(Darwin)
+        let resetting = socket(AF_INET, SOCK_STREAM, 0)
+        #else
+        let resetting = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
+        try #require(resetting >= 0)
+        var abort = linger(l_onoff: 1, l_linger: 0)
+        _ = setsockopt(resetting, SOL_SOCKET, SO_LINGER, &abort, socklen_t(MemoryLayout<linger>.size))
+        try dial(resetting, to: port)
+        #expect(accepted.wait(timeout: .now() + 10) == .success)
+        close(resetting)
+        Thread.sleep(forTimeInterval: 0.1)
+        reset.signal()
+
+        let member = try boundClient()
+        defer { close(member.fd) }
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        try dial(member.fd, to: port)
+        #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+        #expect(answer(member.fd).hasPrefix("HTTP/1.1 200"))
+        #expect(upstream.requests.count == 1)
+        #expect(audit.items.withLock { $0.allSatisfy { $0.refusal == nil } })
+    }
+
     /// Malformed heads from outside every runtime, one after another: the
     /// first is recorded and the rest only counted until the interval has
     /// passed; the next record says how many were left out.
