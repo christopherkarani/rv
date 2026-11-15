@@ -112,9 +112,7 @@ func mcpHostConfigUnmodeledWrite(
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
     reads.commandsArePlain = commandsMayBeRedefined(raw, launched) == false
-    for command in launched {
-        if isHostMCPMutation(command, reads: &reads) { return true }
-    }
+    if launchedRunHostMCPMutation(launched, reads: &reads) { return true }
     // Input the launcher parser stopped following, or a segment the splitter
     // could not scan (`{claude,zzqx} mcp add`), may hide a host CLI.
     if launched.contains(where: { $0.truncated || isUnscannedLaunch($0) }),
