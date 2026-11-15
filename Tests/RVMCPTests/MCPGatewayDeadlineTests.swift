@@ -277,6 +277,29 @@ struct MCPGatewayDeadlineTests {
         #expect(harness.core.phases["notes"] != .ready)
     }
 
+    @Test func initializeAnsweredWithAnErrorStopsTheServer() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(), MCPGatewayCoreTests.notes], clock: clock)
+        let started = harness.core.start().toUpstream
+        let notesInit = try #require(started.first { $0.0 == "notes" }?.1["id"])
+        let failed = harness.core.handle(.upstream(server: "notes", message: .object([
+            "jsonrpc": .string("2.0"), "id": notesInit,
+            "error": .object(["code": .int(-1), "message": .string("no")]),
+        ])))
+        #expect(failed.stopped == ["notes"])
+        // An answer that is not an error but carries no result object fails
+        // the same way.
+        let githubInit = try #require(started.first { $0.0 == "github" }?.1["id"])
+        let odd = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": githubInit, "result": .string("ok"),
+        ])))
+        #expect(odd.stopped == ["github"])
+        // The exit that follows keeps the reason.
+        _ = harness.core.handle(.upstreamExited(server: "notes"))
+        let call = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"notes__write"}}"#)
+        #expect(call.toClient.first?["error"]?["message"]?.stringValue?.contains("it failed to initialize") == true)
+    }
+
     @Test func initializeDeadlineIsInjectable() throws {
         let clock = ManualClock()
         var harness = GatewayHarness(
