@@ -868,7 +868,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     }
 
     /// How long a stopped server has between SIGTERM and SIGKILL.
-    static let stopGrace: TimeInterval = 2
+    public static let stopGrace: TimeInterval = 2
 
     /// Stops this server's process group, or closes its connection, never
     /// waiting on the gateway queue: SIGTERM to the whole group now and
