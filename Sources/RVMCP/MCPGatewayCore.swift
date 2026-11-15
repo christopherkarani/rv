@@ -151,6 +151,19 @@ public struct MCPGatewayCore {
         case starting
         case ready
         case failed(String)
+        /// It was ready this session, then went away for `reason`; it is
+        /// being brought back. Settled: a call gets an error at once.
+        case restarting(String, RestartStage)
+    }
+
+    enum RestartStage: Equatable {
+        /// rv stopped it; its exit has not been seen yet.
+        case stopping
+        /// Its exit was seen; it is started again at this time.
+        case waiting(until: Date)
+        /// `restartUpstream` was sent: it is being started, initialized,
+        /// then listed again.
+        case launching
     }
 
     struct Approval {
@@ -183,12 +196,15 @@ public struct MCPGatewayCore {
         /// Cancelled by the client, or timed out: a late answer is dropped.
         /// Forgotten at `until`, or when its server exits.
         case cancelled(server: String, until: Date)
+        /// rv's own `ping`, sent after a call to this server timed out. Its
+        /// answer is taken here, never forwarded.
+        case ping(server: String, deadline: Date)
 
         /// The upstream that owns this request; nil once cancelled. A reply
         /// from any other upstream must not consume the entry.
         var owner: String? {
             switch self {
-            case .initialize(let server, _), .list(_, let server, _): server
+            case .initialize(let server, _), .list(_, let server, _), .ping(let server, _): server
             case .call(let call): call.server
             case .cancelled: nil
             }
@@ -196,7 +212,7 @@ public struct MCPGatewayCore {
 
         var deadline: Date {
             switch self {
-            case .initialize(_, let deadline), .list(_, _, let deadline): deadline
+            case .initialize(_, let deadline), .list(_, _, let deadline), .ping(_, let deadline): deadline
             case .call(let call): call.deadline
             case .cancelled(_, let until): until
             }
@@ -216,6 +232,11 @@ public struct MCPGatewayCore {
         /// Each server's listed tools, held until its listing ends so they
         /// are checked against its pins as one listing.
         var listed: [String: [JSONValue]] = [:]
+        /// The server rv lists again itself after a relaunch, before any call
+        /// reaches it; nobody gets this listing.
+        var relaunch: String?
+        /// Servers whose listing ended without a result.
+        var failed: Set<String> = []
     }
 
     /// Pagination bounds for one `tools/list` fanout.
@@ -356,6 +377,13 @@ public struct MCPGatewayCore {
     /// pending call id → the `progressToken` the client sent with it.
     var progressTokens: [Int: JSONValue] = [:]
     var phases: [String: UpstreamPhase] = [:]
+    /// Servers that answered `initialize` this session: only these restart.
+    var everReady: Set<String> = []
+    /// server → when it was relaunched, within the last `restartWindow`.
+    var relaunches: [String: [Date]] = [:]
+    /// A `tools/list` answer gave the client at least one tool, so a server
+    /// going or coming back changes what it was told.
+    var clientToldTools = false
     var pending: [Int: Pending] = [:]
     var fanouts: [Int: ListFanout] = [:]
     var waiting: [JSONValue] = []
@@ -422,13 +450,18 @@ public struct MCPGatewayCore {
     public mutating func start() -> [MCPGatewayOutput] {
         order.map { server in
             phases[server] = .starting
-            let id = allocate(.initialize(server: server, deadline: deadlineClock().addingTimeInterval(startTimeout(server))))
-            return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
-                "protocolVersion": .string(Self.upstreamVersion),
-                "capabilities": .object([:]),
-                "clientInfo": .object(["name": .string("rv-mcp-gateway"), "version": .string(version)]),
-            ])))
+            return initialize(server)
         }
+    }
+
+    /// `initialize`, waited for up to the server's `startTimeoutSeconds`.
+    mutating func initialize(_ server: String) -> MCPGatewayOutput {
+        let id = allocate(.initialize(server: server, deadline: deadlineClock().addingTimeInterval(startTimeout(server))))
+        return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
+            "protocolVersion": .string(Self.upstreamVersion),
+            "capabilities": .object([:]),
+            "clientInfo": .object(["name": .string("rv-mcp-gateway"), "version": .string(version)]),
+        ])))
     }
 
     public mutating func handle(_ input: MCPGatewayInput) -> [MCPGatewayOutput] {
@@ -437,15 +470,15 @@ public struct MCPGatewayCore {
         // and expiring first would drop it silently.
         if case .client(let message) = input, message["method"] == nil,
             let key = message["id"]?.stringValue, held[key] != nil {
-            return clientMessage(message) + expireHeld() + expireDeadlines()
+            return clientMessage(message) + expireHeld() + expireDeadlines() + dueRestarts()
         }
-        var outputs = expireHeld() + expireDeadlines()
+        var outputs = expireHeld() + expireDeadlines() + dueRestarts()
         switch input {
         case .client(let message): outputs += clientMessage(message)
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
-        case .upstreamRelaunched: break
+        case .upstreamRelaunched(let server): outputs += upstreamRelaunched(server)
         case .tick: break
         }
         return outputs
@@ -478,10 +511,6 @@ public struct MCPGatewayCore {
     /// forever.
     static let callTimeoutCeilingFactor: TimeInterval = 10
 
-    static let restartWindow: TimeInterval = 600
-    static let pingTimeout: TimeInterval = 10
-    static func restartDelay(afterRelaunches count: Int) -> TimeInterval { 0 }
-
     /// How long `server` may take to answer `initialize`.
     func startTimeout(_ server: String) -> TimeInterval {
         TimeInterval(upstreams[server]?.definition.startTimeoutSeconds ?? MCPServerDefinition.defaultStartTimeoutSeconds)
@@ -509,7 +538,7 @@ public struct MCPGatewayCore {
             case .initialize(let server, _):
                 pending[id] = nil
                 let limit = Self.seconds(startTimeout(server))
-                phases[server] = .failed("it did not answer initialize within \(limit) s (its startTimeoutSeconds)")
+                outputs += stopped(server, "it did not answer initialize within \(limit) s (its startTimeoutSeconds)")
                 outputs.append(.log(
                     "MCP server \(MCPDisplayedText.field(server)) did not answer initialize within \(limit) s; stopping it "
                         + "(raise its startTimeoutSeconds in mcp.json if it needs longer to start)"))
@@ -521,9 +550,12 @@ public struct MCPGatewayCore {
                     fanout: fanout, server: server, message: .null,
                     failure: "did not list tools within \(Self.seconds(deadlines.list)) s")
             case .call(let call):
-                outputs += callTimedOut(id, call, now: now)
+                outputs += callTimedOut(id, call, now: now) + ping(call.server, now: now)
             case .cancelled:
                 pending[id] = nil
+            case .ping(let server, _):
+                pending[id] = nil
+                outputs += pingUnanswered(server)
             }
         }
         return outputs
@@ -1048,6 +1080,10 @@ public struct MCPGatewayCore {
         client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
         approved: Bool
     ) -> [MCPGatewayOutput] {
+        if case .restarting(let why, _)? = phases[server] {
+            return restarting(
+                client: client, server: server, tool: tool, decision: decision, keys: keys, approved: approved, reason: why)
+        }
         let reason: String
         if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
         return [
@@ -1107,9 +1143,13 @@ public struct MCPGatewayCore {
         switch entry {
         case .initialize:
             if message["result"]?.objectValue != nil {
+                let initialized = MCPGatewayOutput.toUpstream(
+                    server: server, message: Self.notification("notifications/initialized", nil))
+                // Relaunched: listed again before any call reaches it.
+                if case .restarting(_, .launching)? = phases[server] { return [initialized] + relist(server) }
                 phases[server] = .ready
-                return [.toUpstream(server: server, message: Self.notification("notifications/initialized", nil))]
-                    + releaseWaiting()
+                everReady.insert(server)
+                return [initialized] + releaseWaiting()
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
             let reason = MCPCallRecord.bounded(
@@ -1117,8 +1157,7 @@ public struct MCPGatewayCore {
             // The upstream's text goes to stderr only: a server's error is
             // not a channel to the client or the model. It is stopped, as
             // one that never answers is.
-            phases[server] = .failed("it failed to initialize")
-            return [
+            return stopped(server, "it failed to initialize") + [
                 .log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)"),
                 .stopUpstream(server: server),
             ] + releaseWaiting()
@@ -1148,7 +1187,7 @@ public struct MCPGatewayCore {
                     outcome: .ran(durationMilliseconds: max(0, duration), grant: approval?.grant))),
                 .toClient(reply),
             ]
-        case .cancelled:
+        case .cancelled, .ping:
             return []
         }
     }
@@ -1180,6 +1219,7 @@ public struct MCPGatewayCore {
             }
         } else {
             outputs.append(.log("MCP server \(server) \(failure)"))
+            state.failed.insert(server)
         }
         if let upstream = upstreams[server] {
             let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
@@ -1192,6 +1232,10 @@ public struct MCPGatewayCore {
             return outputs
         }
         fanouts[fanout] = nil
+        if let relaunched = state.relaunch {
+            return outputs + relisted(relaunched, failed: state.failed.contains(relaunched))
+        }
+        if state.search == nil, state.tools.isEmpty == false { clientToldTools = true }
         if let search = state.search {
             return outputs + [
                 .audit(MCPCallRecord(
@@ -1674,15 +1718,19 @@ public struct MCPGatewayCore {
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {
         guard upstreams[server] != nil else { return [] }
+        // Gone already, waiting out its delay: nothing of it is left.
+        if case .restarting(_, .waiting)? = phases[server] { return [] }
         let wasStarting = phases[server] == .starting
-        // A server already failed keeps its first reason (a start that
-        // timed out, then the stopped process's exit).
-        if case .failed? = phases[server] {} else { phases[server] = .failed("process exited") }
         var outputs: [MCPGatewayOutput] = [.log("MCP server \(server) exited")]
+        outputs += afterExit(server)
         for (id, entry) in pending.sorted(by: { $0.key < $1.key }) {
             switch entry {
-            case .initialize(let owner, _) where owner == server:
+            case .initialize(let owner, _) where owner == server, .ping(let owner, _) where owner == server:
                 pending[id] = nil
+            case .list(let fanout, let owner, _) where owner == server && fanouts[fanout]?.relaunch != nil:
+                // rv's own listing after a relaunch: nobody waits for it.
+                pending[id] = nil
+                fanouts[fanout] = nil
             case .list(let fanout, let owner, _) where owner == server:
                 pending[id] = nil
                 outputs += listPage(fanout: fanout, server: server, message: .null)
@@ -1693,7 +1741,10 @@ public struct MCPGatewayCore {
                     server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
                     argumentKeys: call.keys, isError: true, reason: "upstream exited",
                     outcome: .interrupted(grant: call.approval?.grant))))
-                outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
+                outputs.append(.toClient(Self.error(
+                    id: call.client, code: -32603,
+                    message: "MCP server \(server) exited before answering tool \(MCPDisplayedText.field(call.tool)). "
+                        + "The call may have run, so check before calling it again.")))
             case .cancelled(let owner, _) where owner == server:
                 pending[id] = nil
             default:

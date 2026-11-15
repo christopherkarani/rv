@@ -56,8 +56,10 @@ struct MCPGatewayDeadlineTests {
         #expect(record.isError)
         #expect(record.reason?.contains("timed out") == true)
         #expect(record.argumentKeys == ["query"])
-        // Cancelled upstream; never sent again.
-        #expect(expired.toUpstream.count == 1)
+        // Cancelled upstream, never sent again; then pinged (MCPGatewayRestartTests).
+        #expect(expired.toUpstream.count == 2)
+        #expect(expired.sent("tools/call").isEmpty)
+        #expect(expired.sent("ping").count == 1)
         #expect(expired.toUpstream.first?.0 == "github")
         #expect(expired.toUpstream.first?.1["method"] == .string("notifications/cancelled"))
         #expect(expired.toUpstream.first?.1["params"]?["requestId"] == .int(id))

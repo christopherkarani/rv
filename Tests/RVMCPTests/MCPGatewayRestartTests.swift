@@ -378,7 +378,10 @@ struct MCPGatewayRestartTests {
         var pinged = 0
         for step in 1...20 {
             clock.advance(5)
-            _ = harness.upstream("github", #"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"t","progress":\#(step)}}"#)
+            // Deadlines are checked on every input, the progress one too.
+            pinged += harness.upstream(
+                "github", #"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"t","progress":\#(step)}}"#
+            ).sent("ping").count
             pinged += harness.core.handle(.tick).sent("ping").count
         }
         #expect(pinged == 1)
