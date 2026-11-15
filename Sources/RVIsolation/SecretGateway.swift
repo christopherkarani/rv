@@ -521,7 +521,8 @@ public final class SecretGateway: @unchecked Sendable {
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
-            refuse(client, .malformed, method: "?", path: "?", secret: nil, started: started)
+            let refusal: GatewayRefusal = reader.timedOut ? .requestTimeout : .malformed
+            refuse(client, refusal, method: "?", path: "?", secret: nil, started: started)
             return
         }
         let path = SecretPlaceholder.redactedPath(head.target)
@@ -602,7 +603,7 @@ public final class SecretGateway: @unchecked Sendable {
         }
         reader.deadline = .now() + requestBodyDeadline
         guard let body = readBody(reader, head: head) else {
-            deny(.tooLarge)
+            deny(reader.timedOut ? .requestTimeout : .tooLarge)
             return
         }
         if let refusal = approval(
@@ -993,6 +994,9 @@ enum GatewaySocket {
         /// client sending a byte at a time would otherwise hold its slot
         /// for as long as it liked. Nil waits only `idleMilliseconds` a read.
         var deadline: DispatchTime?
+        /// A read failed because no bytes came in time, not because the
+        /// client closed or sent too much.
+        private(set) var timedOut = false
 
         init(fd: Int32) {
             self.fd = fd
@@ -1004,7 +1008,10 @@ enum GatewaySocket {
                 var wait = Self.idleMilliseconds
                 if let deadline {
                     let now = DispatchTime.now()
-                    guard now < deadline else { return false }
+                    guard now < deadline else {
+                        timedOut = true
+                        return false
+                    }
                     let left = (deadline.uptimeNanoseconds - now.uptimeNanoseconds + 999_999) / 1_000_000
                     wait = Int(min(UInt64(wait), left))
                 }
@@ -1012,6 +1019,7 @@ enum GatewaySocket {
                 var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
                 let waited = poll(&state, 1, Int32(wait))
                 if waited < 0, errno == EINTR { continue }
+                if waited == 0 { timedOut = true }
                 guard waited > 0 else { return false }
                 let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
                 if n < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
