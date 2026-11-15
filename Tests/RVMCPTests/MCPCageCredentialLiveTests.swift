@@ -352,6 +352,10 @@ struct MCPCageCredentialLiveTests {
             /bin/mkdir -p "$s/dir" && /bin/ln -s "$s/mine" "$s/dir/Chrome" && replace "$s/dir" "$g" && echo DIR_RENAMED
             printf f > "$s/file" && /bin/ln "$s/file" "$g" 2>/dev/null && echo HARDLINK_MADE
             /bin/mkdir "$g" 2>/dev/null && echo MKDIR_MADE
+            for v in GOOGLE google GoOgLe; do
+              /bin/ln -s "$s/mine" "$support/$v" 2>/dev/null && echo "CASE_LINK $v"
+              /bin/mkdir "$support/$v" 2>/dev/null && echo "CASE_MKDIR $v"
+            done
             /bin/mkdir "$support/Other" && echo OTHER_OK
             /bin/mkdir "$support" 2>&1 | /usr/bin/grep -q "File exists" && echo EXISTS_SAID
             echo DONE
@@ -362,10 +366,74 @@ struct MCPCageCredentialLiveTests {
         for refused in ["LINK_CREATED", "LINK_RENAMED", "DIR_RENAMED", "HARDLINK_MADE", "MKDIR_MADE"] {
             #expect(output.contains(refused) == false, "\(refused): \(output)")
         }
+        // On the case-insensitive APFS default, the literal deny matches a
+        // case variant of the missing name too, so none can be planted; on
+        // a case-sensitive volume a variant is a different path, off the
+        // credential's own (case-sensitive) resolution path.
+        #expect(output.contains("CASE_LINK") == false, "\(output)")
+        #expect(output.contains("CASE_MKDIR") == false, "\(output)")
         #expect(output.contains("OTHER_OK"), "\(output)")
         #expect(output.contains("EXISTS_SAID"), "\(output)")
         var info = stat()
         #expect(lstat(google.path, &info) != 0, "something was planted at \(google.path)")
+    }
+
+    /// The same missing-ancestor deny has a first-run cost: when the whole
+    /// home is a write root (`writable` is `["~/"]`) and `~/.config` does not
+    /// exist yet, the cage names `~/.config` and the credential dirs under it
+    /// (`rv`, `gh`, `gcloud`, `opencode`), so a server's own `mkdir -p
+    /// ~/.config/<app>` is refused — it cannot even create the intermediate
+    /// `~/.config`. A directory that is no credential ancestor still creates.
+    /// Creating `~/.config` once outside the cage cures the intermediate, so
+    /// a non-credential app dir under it then creates; a protected credential
+    /// dir (`~/.config/rv`) stays refused by design — the cage never lets a
+    /// server create its own credential directory.
+    @Test(.timeLimit(.minutes(1)))
+    func aFirstRunCannotCreateItsConfigDirectoryUnderAWritableHome() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-firstrun-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/firstrun", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        // The whole home is a write root, and `~/.config` is deliberately absent.
+        func build() throws -> String {
+            try MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: [home.path]), scratch: scratch.path,
+                home: home.path, configDirectory: home.appendingPathComponent(".config/rv").path,
+                temporaryDirectory: tmp.path).get()
+        }
+        let before = """
+            home="$1"
+            /bin/echo STARTED
+            /bin/mkdir -p "$home/.config/rv" 2>/dev/null && echo CONFIG_RV_MADE
+            /bin/mkdir "$home/.config" 2>/dev/null && echo CONFIG_MADE
+            /bin/mkdir -p "$home/Documents/notes" 2>/dev/null && echo DOCS_MADE
+            echo DONE
+            """
+        let first = try #require(try caged(build(), before, [home.path], in: scratch.path))
+        #expect(first.contains("STARTED"), "\(first)")
+        #expect(first.contains("DONE"), "\(first)")
+        #expect(first.contains("CONFIG_RV_MADE") == false, "\(first)")
+        #expect(first.contains("CONFIG_MADE") == false, "\(first)")
+        #expect(first.contains("DOCS_MADE"), "\(first)")
+
+        // Create ~/.config once outside the cage, then rebuild and retry.
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".config"), withIntermediateDirectories: true)
+        let after = """
+            home="$1"
+            /bin/mkdir "$home/.config/someapp" 2>/dev/null && echo APP_MADE
+            /bin/mkdir -p "$home/.config/rv" 2>/dev/null && echo CONFIG_RV_MADE
+            echo DONE
+            """
+        let second = try #require(try caged(build(), after, [home.path], in: scratch.path))
+        #expect(second.contains("DONE"), "\(second)")
+        #expect(second.contains("APP_MADE"), "\(second)")
+        #expect(second.contains("CONFIG_RV_MADE") == false, "\(second)")
     }
 
     /// `~/.config` a link into a dotfiles directory, with `gh` there and

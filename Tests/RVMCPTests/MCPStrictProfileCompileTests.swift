@@ -251,12 +251,16 @@ extension MCPStrictProfileTests {
 
     /// The profile that crashed: a home under the temp directory as
     /// Foundation spells it, through `/var`. It is refused by size, from a
-    /// small stack, without reaching libsandbox.
+    /// small stack, without reaching libsandbox. Two letter-heavy components
+    /// (each under NAME_MAX) carry the home past the raised cap; every
+    /// credential deny repeats the prefix, so the profile clears 384 KiB.
     @Test(.timeLimit(.minutes(2)))
     func aTempSpelledHomeProfileIsRefusedBySizeNotACrash() throws {
-        let root = FileManager.default.temporaryDirectory
+        let long = String(repeating: "Abcdefghij", count: 20)
+        let top = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-oversize-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { try? FileManager.default.removeItem(at: top) }
+        let root = top.appendingPathComponent(long, isDirectory: true).appendingPathComponent(long, isDirectory: true)
         for name in ["tmp", "scratch"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
         }
