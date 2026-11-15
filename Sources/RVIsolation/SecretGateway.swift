@@ -488,12 +488,18 @@ public final class SecretGateway: @unchecked Sendable {
                 continue
             }
             let clientFD = held
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // A thread of the gateway's own, at most `maximumConnections` of
+            // them: each blocks until its answer is through, and on GCD's
+            // shared pool a burst of them held every thread that pool had.
+            let handler = Thread { [weak self] in
                 defer { close(clientFD) }
                 guard let self else { return }
                 defer { self.slots.signal() }
                 self.handle(clientFD)
             }
+            handler.name = "rv.secret-gateway.connection"
+            handler.qualityOfService = .userInitiated
+            handler.start()
         }
     }
 
