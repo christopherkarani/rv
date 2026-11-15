@@ -346,6 +346,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// What may wait for one destination (the client, or one upstream)
     /// before it counts as not reading: two maximum lines.
     public static let writeBufferBytes = 2 * maximumLineBytes
+    /// How far one reader (the client's, or one upstream's) may run ahead of
+    /// the gateway queue before it stops reading: one maximum line.
+    static let readerBacklogBytes = maximumLineBytes
+    /// `log` text that may wait for stderr; later lines are counted and dropped.
+    static let logBacklogBytes = 1 << 20
+    /// How long `run` lets the client and stderr take what waits for them
+    /// once serving stops, and remote connections close.
+    static let drainGrace: TimeInterval = 2
 
     /// How `run` returned.
     public enum Ending: Sendable, Equatable {
@@ -364,13 +372,22 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let audit: @Sendable (MCPCallRecord) -> Void
     private let event: @Sendable (AuditEvent) -> Void
     private let log: @Sendable (String) -> Void
+    private let logRelay: MCPLogRelay
+    private let writeBufferBytes: Int
+    /// The client's output, written off the gateway queue.
+    private let clientWriter: MCPOutbox
+    private var clientNotReading = false
     /// A placeholder server is running bound: its name and what its lease staged.
     private let placeholdersBound: @Sendable (String, [SecretDefinition]) -> Void
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
     private var processes: [String: Process] = [:]
     private var placeholderGroups: [String: SecretPlaceholderGroup] = [:]
-    private var upstreamInputs: [String: FileHandle] = [:]
+    /// Each stdio upstream's input, written off the gateway queue.
+    private var upstreamWriters: [String: (outbox: MCPOutbox, input: FileHandle)] = [:]
     private var remotes: [String: MCPRemoteUpstream] = [:]
+    /// Each remote's sends and its stop, off the gateway queue: a send may
+    /// refresh an OAuth token, and a stop waits for its DELETE.
+    private var remoteSenders: [String: MCPOutbox] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
     /// Feeds the core `.tick` on the gateway queue, so deadlines pass with
@@ -400,7 +417,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.output = output
         self.audit = audit
         self.event = event
-        self.log = log
+        let relay = MCPLogRelay(limit: Self.logBacklogBytes, sink: log)
+        self.logRelay = relay
+        self.log = { relay.post($0) }
+        self.writeBufferBytes = writeBufferBytes
+        self.clientWriter = MCPOutbox(limit: writeBufferBytes)
         self.placeholdersBound = placeholdersBound
     }
 
@@ -434,20 +455,33 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
         let clientInput = input
         Thread.detachNewThread { [self] in
+            let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
             Self.readLines(clientInput) { line in
                 let message: MCPGatewayInput = (try? JSONValue.parse(line)).map { .client($0) } ?? .clientUnparseable
-                queue.async { self.perform(self.core.handle(message)) }
+                backlog.admit(line.count)
+                queue.async {
+                    self.perform(self.core.handle(message))
+                    backlog.release(line.count)
+                }
             }
             queue.async { self.finished.signal() }
         }
         finished.wait()
-        queue.sync {
+        let ending: Ending = queue.sync {
             stopping = true
             ticker?.cancel()
             ticker = nil
             stopUpstreams()
+            return clientNotReading ? .clientNotReading : .finished
         }
-        return .finished
+        // What waits for the client goes out, unless it stopped reading;
+        // nothing more is taken.
+        clientWriter.close()
+        if ending == .finished {
+            _ = clientWriter.waitUntilDone(until: Date().addingTimeInterval(hurried ? 0 : Self.drainGrace))
+        }
+        _ = logRelay.finish(until: Date().addingTimeInterval(hurried ? 0 : Self.drainGrace))
+        return ending
     }
 
     /// `run` stops every upstream and returns, as when the client closes its
@@ -487,17 +521,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             return false
         }
         processes[launch.server] = process
-        upstreamInputs[launch.server] = stdin.fileHandleForWriting
+        upstreamWriters[launch.server] = (MCPOutbox(limit: writeBufferBytes), stdin.fileHandleForWriting)
         let server = launch.server
         let reader = stdout.fileHandleForReading
         Thread.detachNewThread { [self] in
-            Self.readLines(reader.fileDescriptor) { line in
-                guard let message = try? JSONValue.parse(line) else {
-                    self.log("MCP server \(server) wrote a line that is not JSON; ignored")
-                    return
-                }
-                queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
-            }
+            readUpstream(server, reader.fileDescriptor)
             queue.async {
                 guard self.stopping == false else { return }
                 self.perform(self.core.handle(.upstreamExited(server: server)))
@@ -546,7 +574,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         try? stdout.fileHandleForWriting.close()
         try? stderr.fileHandleForWriting.close()
         placeholderGroups[server] = group
-        upstreamInputs[server] = stdin.fileHandleForWriting
+        upstreamWriters[server] = (MCPOutbox(limit: writeBufferBytes), stdin.fileHandleForWriting)
         placeholdersBound(server, binding.lease.definitions)
         let stderrReader = stderr.fileHandleForReading
         Thread.detachNewThread {
@@ -556,13 +584,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
         let reader = stdout.fileHandleForReading
         Thread.detachNewThread { [self] in
-            Self.readLines(reader.fileDescriptor) { line in
-                guard let message = try? JSONValue.parse(line) else {
-                    self.log("MCP server \(server) wrote a line that is not JSON; ignored")
-                    return
-                }
-                queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
-            }
+            readUpstream(server, reader.fileDescriptor)
             // It can answer nothing more. Ending its group ends its lease; the
             // exit is reported when the supervisor reaps it.
             queue.async {
@@ -571,6 +593,23 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             }
         }
         return true
+    }
+
+    /// Hands each line `server` writes to the gateway queue, waiting while
+    /// `readerBacklogBytes` of them are not yet handled. Returns at EOF.
+    private func readUpstream(_ server: String, _ fd: Int32) {
+        let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
+        Self.readLines(fd) { line in
+            guard let message = try? JSONValue.parse(line) else {
+                log("MCP server \(server) wrote a line that is not JSON; ignored")
+                return
+            }
+            backlog.admit(line.count)
+            queue.async {
+                self.perform(self.core.handle(.upstream(server: server, message: message)))
+                backlog.release(line.count)
+            }
+        }
     }
 
     private func connect(_ launch: MCPRemoteLaunch) {
@@ -599,6 +638,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             },
             log: log)
         remotes[server] = remote
+        remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
         remote.start()
     }
 
@@ -606,13 +646,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         for item in outputs {
             switch item {
             case .toClient(let message):
-                Self.writeLine(output, message)
+                sendToClient(message)
             case .toUpstream(let server, let message):
-                if let handle = upstreamInputs[server] {
-                    Self.writeLine(handle.fileDescriptor, message)
-                } else {
-                    remotes[server]?.send(message)
-                }
+                sendUpstream(server, message)
             case .audit(let record):
                 audit(record)
             case .event(let item):
@@ -625,20 +661,77 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
-    /// The core gave up on this server (it never finished starting): kill
-    /// its process or group now, or close its connection. A process's exit
-    /// still reaches the core through its reader or supervisor.
+    /// Queued for the client's writer. Past its bound the client is not
+    /// reading: serving stops, `run` says why, and nothing more is written.
+    private func sendToClient(_ message: JSONValue) {
+        guard clientNotReading == false else { return }
+        let bytes = Self.line(message)
+        let fd = output
+        guard clientWriter.submit(cost: bytes.count, { Self.writeAll(fd, bytes) }) == .overflow else { return }
+        clientNotReading = true
+        clientWriter.abandon()
+        log("the MCP client is not reading its output (more than \(Self.mebibytes(writeBufferBytes)) MiB waiting); stopping")
+        finished.signal()
+    }
+
+    /// Queued for the upstream's writer or remote sender. Past its bound the
+    /// upstream is not reading: it is stopped, and its exit reaches the core
+    /// as any exit does.
+    private func sendUpstream(_ server: String, _ message: JSONValue) {
+        let admission: MCPOutbox.Admission
+        if let writer = upstreamWriters[server] {
+            let bytes = Self.line(message)
+            let fd = writer.input.fileDescriptor
+            admission = writer.outbox.submit(cost: bytes.count) { Self.writeAll(fd, bytes) }
+        } else if let sender = remoteSenders[server], let remote = remotes[server] {
+            admission = sender.submit(cost: message.compactText.utf8.count) { remote.send(message) }
+        } else {
+            return
+        }
+        guard admission == .overflow else { return }
+        log("MCP server \(MCPDisplayedText.field(server)) is not reading its input "
+            + "(more than \(Self.mebibytes(writeBufferBytes)) MiB waiting); stopping it")
+        let remote = remotes[server] != nil
+        stopUpstream(server)
+        // A stopped connection reports no exit of its own.
+        if remote { perform(core.handle(.upstreamExited(server: server))) }
+    }
+
+    /// Kill this server's process or group now, or close its connection,
+    /// never waiting on the gateway queue: its input is closed by its
+    /// writer, and a remote's stop (and its DELETE) runs on its sender. A
+    /// process's exit still reaches the core through its reader or
+    /// supervisor.
     private func stopUpstream(_ server: String) {
+        if let writer = upstreamWriters.removeValue(forKey: server) {
+            let input = writer.input
+            writer.outbox.abandon { try? input.close() }
+        }
         if let process = processes[server], process.isRunning { kill(process.processIdentifier, SIGKILL) }
         placeholderGroups[server]?.signal(SIGKILL)
-        remotes.removeValue(forKey: server)?.stop()
+        if let remote = remotes.removeValue(forKey: server) {
+            remoteSenders.removeValue(forKey: server)?.abandon { remote.stop() }
+        }
     }
 
     private func stopUpstreams() {
-        for remote in remotes.values { remote.stop() }
+        // Remote stops (each DELETE waits at most 2 s) run on their senders,
+        // side by side, while the processes stop.
+        var closing: [MCPOutbox] = []
+        for (server, remote) in remotes {
+            guard let sender = remoteSenders[server] else { continue }
+            sender.close { remote.stop() }
+            closing.append(sender)
+        }
         remotes = [:]
-        for handle in upstreamInputs.values { try? handle.close() }
-        upstreamInputs = [:]
+        remoteSenders = [:]
+        // Each input closes once what is queued for it is written, or once
+        // its process is gone below and the write fails.
+        for writer in upstreamWriters.values {
+            let input = writer.input
+            writer.outbox.close { try? input.close() }
+        }
+        upstreamWriters = [:]
         let deadline = Date().addingTimeInterval(2)
         for process in processes.values {
             while process.isRunning, Date() < deadline, hurried == false { usleep(20_000) }
@@ -651,6 +744,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
         processes = [:]
         stopPlaceholderGroups()
+        let closed = Date().addingTimeInterval(hurried ? 0 : Self.drainGrace + 1)
+        for sender in closing { _ = sender.waitUntilDone(until: closed) }
     }
 
     /// Signals each placeholder server's whole group as
@@ -693,8 +788,15 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         StderrWriter.write(data)
     }
 
-    static func writeLine(_ fd: Int32, _ message: JSONValue) {
-        let bytes = Array((message.compactText + "\n").utf8)
+    static func line(_ message: JSONValue) -> [UInt8] {
+        Array((message.compactText + "\n").utf8)
+    }
+
+    static func mebibytes(_ bytes: Int) -> Int { bytes >> 20 }
+
+    /// Blocks until every byte is written or the write fails (a reader that
+    /// is gone): only ever on a writer's own thread.
+    static func writeAll(_ fd: Int32, _ bytes: [UInt8]) {
         var written = 0
         while written < bytes.count {
             let n = bytes.withUnsafeBytes { raw -> Int in

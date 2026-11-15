@@ -1752,10 +1752,12 @@ struct MCPServe: AsyncParsableCommand {
             throw ExitCode(128 + number)
         }
         signals?.forward { runtime.requestShutdown() }
-        runtime.run()
+        let ending = runtime.run()
         signals?.cancel()
         MCPSandbox.stopProxies()
         if let number = signals?.first { throw ExitCode(128 + number) }
+        // The runtime has said why on stderr.
+        if ending == .clientNotReading { throw ExitCode(1) }
     }
 }
 
