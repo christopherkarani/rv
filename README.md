@@ -304,10 +304,14 @@ rv is one binary, 25 commands. The rest of the surface:
   install` and `stdbuf -o0 ls mcp $DIR` ask), unless the line, or the
   carried text being read, may define or redefine a command (a function,
   alias or hash entry; `PATH`, zsh's `path`, `FPATH`/`fpath`,
-  `module_path`, `BASH_ENV`, `ENV` or `ZDOTDIR` named anywhere but where
-  it is only read, such as `$PATH`, `${PATH%%:*}`, `find -path` or
-  `~/path/x`, after quotes and line continuations are removed; `env -P`
-  or `-S`; a function flag such as `typeset -fu`; `source`/`.`, `eval`,
+  `module_path`, `BASH_ENV`, `ENV` or `ZDOTDIR` named as written anywhere
+  but where it is only read, such as `$PATH`, `${PATH%%:*}`, `${PATH:-…}`,
+  `find -path` or `~/path/x`, once line continuations, a `$` opening a
+  quote, and quotes are removed (`export $'PATH'=…` and zsh's
+  `${PATH::=…}` count); a name built from escapes (`$'PA\x54H'`) is not
+  recognised, so instead any `$'…'` operand of an assigning builtin
+  counts; `env -P` or `-S`, or `--split-string` or an abbreviation such
+  as `--split`; a function flag such as `typeset -fu`; `source`/`.`, `eval`,
   `trap`, `autoload` or a dynamic program: `ls() { "$@"; }; ls mcp $X`,
   `: "${PATH:=./bin}"; ls mcp $X` and `echo 'alias ls=eval; ls mcp $X' |
   sh` ask, as does a printer's text read beside output rv cannot read,
@@ -317,7 +321,9 @@ rv is one binary, 25 commands. The rest of the surface:
   look like a group, such as `{claude}mcp` or `{claude,codex}-helper
   --version`.
   Carried text is read when it holds a host stem or such a word (`watch
-  'chronic m?p install srv'`). Where nothing runs the word (a `grep` or
+  'chronic m?p install srv'`), a brace or class holding a blank or
+  separator spelled whole as the guard spells it (`watch "'cl[;a]ude'
+  'm[;c]p' add s -- x"`). Where nothing runs the word (a `grep` or
   `rg` operand, a commit message) and in text such a command carries,
   only literal words count (`grep -rn claude * | head` allows). A
   variable or substitution rv cannot read (`$c`, `"$SUB"`, `${x}`,
