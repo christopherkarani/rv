@@ -298,17 +298,25 @@ struct MCPGatewayWriterRuntimeTests {
             MCPGatewayRuntime.writeAll(writer, bytes)
             close(writer)
         }
+        // A ceiling, so a write that never finishes fails this test instead
+        // of holding the suite. The reader stays open then: closing it would
+        // raise SIGPIPE in the writer.
         let received: [UInt8] = await offThePool {
             var all: [UInt8] = []
             var chunk = [UInt8](repeating: 0, count: 4096)
-            while true {
+            let deadline = Date().addingTimeInterval(60)
+            while Date() < deadline {
+                var poller = pollfd(fd: reader, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 200) > 0 else { continue }
                 usleep(200)
                 let n = read(reader, &chunk, chunk.count)
                 if n < 0, errno == EINTR { continue }
-                guard n > 0 else { break }
+                guard n > 0 else {
+                    close(reader)
+                    break
+                }
                 all += chunk[0..<n]
             }
-            close(reader)
             return all
         }
         #expect(received.count == bytes.count)
