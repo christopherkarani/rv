@@ -343,6 +343,18 @@ public enum MCPLaunchPlanner {
 /// owns the core; reader threads only parse lines and enqueue them.
 public final class MCPGatewayRuntime: @unchecked Sendable {
     public static let maximumLineBytes = 64 * 1024 * 1024
+    /// What may wait for one destination (the client, or one upstream)
+    /// before it counts as not reading: two maximum lines.
+    public static let writeBufferBytes = 2 * maximumLineBytes
+
+    /// How `run` returned.
+    public enum Ending: Sendable, Equatable {
+        /// The client closed its input, or a shutdown was asked for.
+        case finished
+        /// The client stopped reading its output: more than the write bound
+        /// waited for it.
+        case clientNotReading
+    }
 
     private var core: MCPGatewayCore
     private let connections: [MCPUpstreamConnection]
@@ -375,6 +387,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         oauthStore: MCPOAuthTokenStore = .none,
         input: Int32 = STDIN_FILENO,
         output: Int32 = STDOUT_FILENO,
+        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -392,7 +405,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     }
 
     /// Blocks until the client closes its input, then stops every upstream.
-    public func run() {
+    @discardableResult
+    public func run() -> Ending {
         signal(SIGPIPE, SIG_IGN)
         queue.sync {
             var failed: [String] = []
@@ -433,6 +447,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             ticker = nil
             stopUpstreams()
         }
+        return .finished
     }
 
     /// `run` stops every upstream and returns, as when the client closes its

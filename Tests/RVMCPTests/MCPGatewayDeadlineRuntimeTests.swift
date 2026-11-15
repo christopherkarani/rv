@@ -50,9 +50,20 @@ final class GatewayRun: Sendable {
     let audits: RecordedAudits
     let logs: RecordedLogs
     let runtime: MCPGatewayRuntime
+    private final class EndingBox: Sendable {
+        let value = Mutex<MCPGatewayRuntime.Ending?>(nil)
+    }
+
+    private let endingBox = EndingBox()
+    /// How `run` returned, once it has.
+    var ending: MCPGatewayRuntime.Ending? { endingBox.value.withLock { $0 } }
     private let done: DispatchSemaphore
 
-    init(core: MCPGatewayCore, connections: [MCPUpstreamConnection]) {
+    /// `log`, when given, is called after the line is recorded.
+    init(
+        core: MCPGatewayCore, connections: [MCPUpstreamConnection],
+        writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes, log: (@Sendable (String) -> Void)? = nil
+    ) {
         let client = LineClient()
         let audits = RecordedAudits()
         let logs = RecordedLogs()
@@ -61,17 +72,31 @@ final class GatewayRun: Sendable {
             core: core, connections: connections,
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
+            writeBufferBytes: writeBufferBytes,
             audit: { record in audits.items.withLock { $0.append(record) } },
-            log: { line in logs.lines.withLock { $0.append(line) } })
+            log: { line in
+                logs.lines.withLock { $0.append(line) }
+                log?(line)
+            })
         self.client = client
         self.audits = audits
         self.logs = logs
         self.done = done
         self.runtime = runtime
+        let box = endingBox
         Thread.detachNewThread {
-            runtime.run()
+            let how = runtime.run()
+            box.value.withLock { $0 = how }
             done.signal()
         }
+    }
+
+    /// Waits for `run` to return without closing the client's input.
+    func ended(within seconds: TimeInterval = 60) async -> Bool {
+        let done = done
+        guard await offThePool({ done.wait(timeout: .now() + seconds) }) == .success else { return false }
+        done.signal()
+        return true
     }
 
     static func core(_ servers: [MCPServerDefinition], deadlines: MCPGatewayDeadlines) -> MCPGatewayCore {
