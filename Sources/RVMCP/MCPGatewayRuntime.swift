@@ -645,25 +645,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         placeholderGroups = [:]
     }
 
-    private static let stderrLock = NSLock()
-
     /// Serialized raw-fd stderr write shared by every upstream relay thread.
     /// `FileHandle.write` raises on EPIPE/closed fd, which would crash the
-    /// gateway if a child writes after stderr closes; `write(2)` just fails.
+    /// gateway if a child writes after stderr closes; `StderrWriter` just
+    /// fails, whatever the SIGPIPE disposition.
     static func writeStderr(_ data: Data) {
-        let bytes = [UInt8](data)
-        stderrLock.lock()
-        defer { stderrLock.unlock() }
-        var written = 0
-        while written < bytes.count {
-            let n = bytes.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return write(STDERR_FILENO, base + written, raw.count - written)
-            }
-            if n < 0, errno == EINTR { continue }
-            guard n > 0 else { return }
-            written += n
-        }
+        StderrWriter.write(data)
     }
 
     static func writeLine(_ fd: Int32, _ message: JSONValue) {
