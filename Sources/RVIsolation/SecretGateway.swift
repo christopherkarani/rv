@@ -429,6 +429,8 @@ public final class SecretGateway: @unchecked Sendable {
         for fd in fds where fd >= 0 {
             close(fd)
         }
+        // Outsiders' refusals left out since the last record are not lost.
+        if let leftOut = outsiderAudit.drain() { _ = audit(leftOut) }
     }
 
     /// A loopback connect makes `poll` see the listener so the accept loop
@@ -889,18 +891,18 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
-        var reason = refusal.reason
-        if outsider {
-            guard let leftOut = outsiderAudit.admit() else { return }
-            if leftOut > 0 { reason += " (\(leftOut) more from outside the runtimes since the last record)" }
-        }
-        _ = audit(SecretUseRecord(
+        let record = SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
             activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
-            refusal: refusal, reason: reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
-        ))
+        )
+        guard outsider else {
+            _ = audit(record)
+            return
+        }
+        if let admitted = outsiderAudit.admit(record) { _ = audit(admitted) }
     }
 }
 
