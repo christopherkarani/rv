@@ -476,9 +476,13 @@ func mayNameHostMCP(_ text: String) -> Bool {
 
 /// Whether some decoding of `text` holds a `hostMCPStems` stem as written,
 /// brace and glob words judged as their own text: the prefilter for a read
-/// that judges literal words only (`HostTextReads.literal`).
+/// that judges literal words only (`HostTextReads.literal`). A literal word
+/// is still read past its `[…]` extras (`packageNames`), so a stem broken
+/// only by them counts (`holdsPastExtras`).
 func holdsHostMCPStem(_ text: String) -> Bool {
-    decodedLayersMayName(text) { folded in hostMCPStems.contains(where: { folded.contains($0) }) }
+    decodedLayersMayName(text) { folded in
+        hostMCPStems.contains(where: { folded.contains($0) }) || holdsPastExtras(folded, hostMCPStems)
+    }
 }
 
 /// `test` on each quote-free, `%XX`-decoded and case-folded ANSI-C decoding
