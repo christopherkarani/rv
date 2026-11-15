@@ -228,6 +228,18 @@ private final class Trickle: Sendable {
     let received = Mutex<[UInt8]>([])
 }
 
+/// Every peer is a member; counts how many the gateway has checked.
+private final class CountedMembers: Sendable {
+    let checked = Atomic<Int>(0)
+
+    var check: GatewayPeerCheck {
+        GatewayPeerCheck { _, _ in
+            self.checked.add(1, ordering: .relaxed)
+            return .member
+        }
+    }
+}
+
 /// Collects what one `send` delivered.
 private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     private let lock = NSLock()
@@ -413,12 +425,12 @@ private struct GatewayUnderTest {
 
     init(
         upstreamPort: Int, limits: URLSessionStreamingTransport.Limits = .init(), clientSendTimeout: Int? = nil,
-        headDeadline: TimeInterval? = nil, bodyDeadline: TimeInterval? = nil
+        headDeadline: TimeInterval? = nil, bodyDeadline: TimeInterval? = nil, peers: GatewayPeerCheck = .fixed(.member)
     ) throws {
         transport = URLSessionStreamingTransport(limits: limits)
         gateway = SecretGateway(
             transport: loopbackTransport(transport, port: upstreamPort),
-            peers: .fixed(.member), audit: { _ in true })
+            peers: peers, audit: { _ in true })
         if let clientSendTimeout { gateway.clientSendTimeout = clientSendTimeout }
         if let headDeadline { gateway.requestHeadDeadline = headDeadline }
         if let bodyDeadline { gateway.requestBodyDeadline = bodyDeadline }
@@ -1114,10 +1126,15 @@ struct URLSessionStreamingTransportTests {
     func clientsThatTrickleTheirHeadsAreDroppedAtTheDeadline() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let under = try GatewayUnderTest(upstreamPort: upstream.port, headDeadline: 1)
+        let members = CountedMembers()
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, headDeadline: 1, peers: members.check)
         defer { under.gateway.stop() }
         let tricklers = try (0..<SecretGateway.maximumConnections).map { _ in try connectGateway(under.port) }
         defer { tricklers.forEach { close($0) } }
+        // Each connection takes its slot on its own thread once checked: the
+        // first further request waits until every trickler has been, or it
+        // could take a slot one of them was about to.
+        #expect(eventually { members.checked.load(ordering: .relaxed) >= tricklers.count })
         let head = Array(under.request("/trickle").utf8)
         let trickled = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
