@@ -22,6 +22,23 @@ struct GatewayResponseWriterTests {
         #expect(writer.failure == GatewayResponseWriter.cutShort)
     }
 
+    /// A client write that fails mid-body, or on the head, cuts the answer:
+    /// its audit says so and why, whatever the upstream does next.
+    @Test(arguments: ["finish", "fail"])
+    func aClientWriteThatFailsRecordsTheAnswerAsCut(then ending: String) {
+        let chunk = Array("5\r\nhello\r\n".utf8)
+        let (writer, _) = Self.writer { $0 != chunk }
+        writer.head(status: 200, headers: [(name: "Content-Type", value: "text/plain")])
+        #expect(writer.body(Data("hello".utf8)) == false)
+        if ending == "finish" { writer.finish() } else { writer.fail("upstream request cancelled") }
+        #expect(writer.failure == GatewayResponseWriter.cutShort)
+
+        let (headless, _) = Self.writer { _ in false }
+        headless.head(status: 200, headers: [(name: "Content-Type", value: "text/plain")])
+        if ending == "finish" { headless.finish() } else { headless.fail("upstream request cancelled") }
+        #expect(headless.failure == GatewayResponseWriter.cutShort)
+    }
+
     /// The same body, its tail written, ends with the terminator.
     @Test
     func aTailThatIsWrittenIsFollowedByTheTerminator() {
