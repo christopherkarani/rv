@@ -5505,6 +5505,15 @@ struct MCPCommandTests {
         #expect(launch.arguments.contains("evil-binary") == false)
     }
 
+    /// Serve exits 1 when the client stopped reading, as killed by a signal
+    /// it heard (whatever the ending), and successfully otherwise.
+    @Test func serveExitsOneWhenTheClientStoppedReading() {
+        #expect(MCPServe.exitCode(.clientNotReading, signal: nil) == 1)
+        #expect(MCPServe.exitCode(.finished, signal: nil) == nil)
+        #expect(MCPServe.exitCode(.finished, signal: SIGTERM) == 128 + SIGTERM)
+        #expect(MCPServe.exitCode(.clientNotReading, signal: SIGINT) == 128 + SIGINT)
+    }
+
     /// A server started again is planned from the configuration serve
     /// started with: an mcp.json changed on disk since is not read, and its
     /// secrets are resolved again as at its first launch.

@@ -1797,9 +1797,15 @@ struct MCPServe: AsyncParsableCommand {
         let ending = runtime.run()
         signals?.cancel()
         MCPSandbox.stopProxies()
-        if let number = signals?.first { throw ExitCode(128 + number) }
-        // The runtime has said why on stderr.
-        if ending == .clientNotReading { throw ExitCode(1) }
+        if let code = Self.exitCode(ending, signal: signals?.first) { throw ExitCode(code) }
+    }
+
+    /// How serve exits once the runtime returns: as killed by a signal it
+    /// heard, 1 when the client stopped reading (the runtime said why on
+    /// stderr), otherwise successfully (nil).
+    static func exitCode(_ ending: MCPGatewayRuntime.Ending, signal: Int32?) -> Int32? {
+        if let signal { return 128 + signal }
+        return ending == .clientNotReading ? 1 : nil
     }
 }
 
