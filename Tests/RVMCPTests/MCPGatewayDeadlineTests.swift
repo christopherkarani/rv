@@ -130,6 +130,51 @@ struct MCPGatewayDeadlineTests {
         #expect(progress(#"{"progressToken":7,"progress":3}"#).isEmpty)
     }
 
+    @Test func progressCannotHoldACallPastItsTotalLimit() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":7}}}"#)
+        let id = try #require(call.toUpstream.first?.1["id"]?.intValue)
+        // Progress every 8 s keeps the idle deadline moving, up to the total
+        // limit of 10 × 10 s from the forward.
+        for step in 1...12 {
+            clock.advance(8)
+            let sent = harness.upstream(
+                "github", #"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":7,"progress":\#(step)}}"#)
+            #expect(sent.toClient.count == 1)
+        }
+        clock.advance(3)
+        #expect(harness.core.handle(.tick).isEmpty)
+        clock.advance(2)
+        let expired = harness.core.handle(.tick)
+
+        let record = try #require(expired.audits.first)
+        #expect(record.outcome == .interrupted(grant: nil))
+        #expect(record.reason?.contains("total limit of 100 s") == true)
+        #expect(expired.toUpstream.first?.1["method"] == .string("notifications/cancelled"))
+        #expect(expired.toUpstream.first?.1["params"]?["requestId"] == .int(id))
+        let message = try #require(expired.toClient.first?["error"]?["message"]?.stringValue)
+        #expect(expired.toClient.first?["id"] == .string("c"))
+        #expect(message.contains("github") && message.contains("list_issues") && message.contains("total limit of 100 s"))
+    }
+
+    /// An answer that arrives after the deadline but before the tick that
+    /// would have caught it is too late: the deadline check runs first.
+    @Test func answerAfterTheDeadlineButBeforeATickIsDropped() throws {
+        let clock = ManualClock()
+        var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let id = try #require(call.toUpstream.first?.1["id"]?.intValue)
+        clock.advance(11)
+        let late = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#)
+        #expect(late.toClient.count == 1)
+        #expect(late.toClient.first?["error"]?["code"] == .int(-32603))
+        #expect(late.toClient.first?["result"] == nil)
+        #expect(late.audits.map(\.outcome) == [.interrupted(grant: nil)])
+    }
+
     @Test func progressFromAnotherServerDoesNotResetTheDeadline() throws {
         let clock = ManualClock()
         var harness = Self.harness([Self.github(callTimeout: 10), MCPGatewayCoreTests.notes], clock: clock)
