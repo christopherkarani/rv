@@ -63,9 +63,10 @@ private func dial(_ fd: Int32, to port: Int) throws {
 }
 
 /// A member's connection, marked before it dials, dialled again while the
-/// kernel refuses it (a full listen backlog), at most 200 times.
+/// kernel refuses it (a full listen backlog), for up to 20 s.
 private func dialAgainWhileRefused(_ port: Int, marked: MarkedPorts) throws -> (fd: Int32, port: UInt16) {
-    for _ in 0..<200 {
+    let deadline = Date().addingTimeInterval(20)
+    while Date() < deadline {
         let member = try boundClient()
         marked.ports.withLock { _ = $0.insert(member.port) }
         var address = sockaddr_in()
