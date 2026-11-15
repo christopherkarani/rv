@@ -169,7 +169,8 @@ public final class SecretGateway: @unchecked Sendable {
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let outsiderSlots = DispatchSemaphore(value: SecretGateway.outsiderConnections)
     private let classifiers = DispatchSemaphore(value: SecretGateway.classifyingConnections)
-    /// Bounds the audit records of outsiders' nameless refusals.
+    /// Bounds the audit records of outsiders' refusals that present no live
+    /// placeholder.
     let outsiderAudit = GatewayOutsiderAudit()
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
@@ -607,17 +608,21 @@ public final class SecretGateway: @unchecked Sendable {
         let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
             refuse(
-                client, .unknownRoute, method: head.method, path: path, secret: nil, outsider: outsider,
-                started: started)
+                client, .unknownRoute, method: head.method, path: path, secret: nil,
+                outsider: outsider && presentsLiveEntry(headBytes) == false, started: started)
             return
         }
         // Every live entry the request names, so a refusal can name the
         // runtime the placeholder was leased to.
         var presented: [Entry] = []
         func deny(_ refusal: GatewayRefusal, runtime: String? = presented.first?.runtime) {
+            // The route's name is the sender's to choose: an outsider's
+            // refusal is bounded unless it presented a live placeholder,
+            // also one refused before any substitution.
+            let bounded = outsider && presented.isEmpty && presentsLiveEntry(headBytes) == false
             refuse(
                 client, refusal, method: head.method, path: path, secret: route.secret,
-                runtime: runtime, started: started)
+                runtime: runtime, outsider: bounded, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
             deny(.echoMethod)
@@ -871,6 +876,12 @@ public final class SecretGateway: @unchecked Sendable {
         return verdict
     }
 
+    /// True when the raw head carries a placeholder this gateway holds.
+    private func presentsLiveEntry(_ head: [UInt8]) -> Bool {
+        SecretPlaceholder.occurrences(in: head).contains { entry($0.token) != nil }
+    }
+
+    /// `outsider`: the record is bounded by `outsiderAudit`.
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
         runtime: String? = nil, outsider: Bool = false, started: DispatchTime
@@ -879,7 +890,7 @@ public final class SecretGateway: @unchecked Sendable {
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
         var reason = refusal.reason
-        if outsider, secret == nil {
+        if outsider {
             guard let leftOut = outsiderAudit.admit() else { return }
             if leftOut > 0 { reason += " (\(leftOut) more from outside the runtimes since the last record)" }
         }
