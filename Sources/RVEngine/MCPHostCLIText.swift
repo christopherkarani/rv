@@ -40,12 +40,12 @@ struct HostTextReads {
     /// message): only literal words count there, as they did before brace
     /// and glob spellings were resolved.
     private(set) var literal = false
-    /// No command on the line may be defined or redefined (no function,
-    /// alias, `PATH` change, sourced file, `eval` or dynamic program:
-    /// `commandsMayBeRedefined`), so a plain command name is the program it
-    /// names. Until the guard has checked the line it is false, and the
-    /// operand list (`leavesOperandsAlone`) and a runner's own operands
-    /// (`runnerOwnOperands`) do not apply.
+    /// No command on the line, nor in the text being read, may be defined
+    /// or redefined (no function, alias, `PATH` change, sourced file,
+    /// `eval` or dynamic program: `commandsMayBeRedefined`), so a plain
+    /// command name is the program it names. Until the guard has checked
+    /// the line it is false, and the operand list (`leavesOperandsAlone`)
+    /// does not apply.
     var commandsArePlain = false
     /// The work budget for brace and glob spellings, across every read.
     var spelling = SpellingBudget()
@@ -136,6 +136,7 @@ struct HostTextReads {
         let outerInert = inert
         let outerResplit = resplit
         let outerLiteral = literal
+        let outerPlain = commandsArePlain
         inert = reading
         resplit = splitting
         literal = literalReading
@@ -145,8 +146,12 @@ struct HostTextReads {
             inert = outerInert
             resplit = outerResplit
             literal = outerLiteral
+            commandsArePlain = outerPlain
         }
         let launched = launchedCommandHeads(text)
+        // Carried text may define a command its own heads show and the
+        // line's do not (`watch 'alias ls=eval; ls mcp $X'`).
+        commandsArePlain = outerPlain && commandsMayBeRedefined(text, launched) == false
         // Text the parser stopped following, or a segment the splitter could
         // not scan (`watch '{claude,x} mcp add'`), may hide a host CLI. A
         // literal read judges words as written, and an unscanned segment
