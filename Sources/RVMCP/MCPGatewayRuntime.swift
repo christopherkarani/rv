@@ -389,6 +389,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let logRelay: MCPLogRelay
     private let writeBufferBytes: Int
     private let clientStallSeconds: TimeInterval
+    /// `MCPGatewayRuntime.stopGrace`, unless a test widens it.
+    private let stopGrace: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private let clientProgress = MCPWriteProgress()
@@ -436,6 +438,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
         relaunch: Relaunch? = nil,
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
+        stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -454,6 +457,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.log = { relay.post($0) }
         self.writeBufferBytes = writeBufferBytes
         self.clientStallSeconds = clientStallSeconds
+        self.stopGrace = stopGrace
         self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
@@ -712,7 +716,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
         Thread.detachNewThread { [self] in
-            let deadline = Date().addingTimeInterval(Self.stopGrace + Self.restartReapGrace)
+            let deadline = Date().addingTimeInterval(self.stopGrace + Self.restartReapGrace)
             let planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
             if earlier.allSatisfy({ $0.waitUntilFinished(until: deadline) }) == false {
                 planned = .failure(MCPStartFailure("its last process did not exit"))
@@ -878,7 +882,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         for entry in groups.values where entry.server == server {
             let group = entry.group
             group.signal(SIGTERM)
-            queue.asyncAfter(deadline: .now() + Self.stopGrace) {
+            queue.asyncAfter(deadline: .now() + stopGrace) {
                 if group.hasExited == false { group.signal(SIGKILL) }
             }
         }

@@ -64,7 +64,8 @@ final class GatewayRun: Sendable {
         core: MCPGatewayCore, connections: [MCPUpstreamConnection],
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes, log: (@Sendable (String) -> Void)? = nil,
         relaunch: MCPGatewayRuntime.Relaunch? = nil,
-        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds
+        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
+        stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace
     ) {
         let client = LineClient()
         let audits = RecordedAudits()
@@ -77,6 +78,7 @@ final class GatewayRun: Sendable {
             writeBufferBytes: writeBufferBytes,
             relaunch: relaunch,
             clientStallSeconds: clientStallSeconds,
+            stopGrace: stopGrace,
             audit: { record in audits.items.withLock { $0.append(record) } },
             log: { line in
                 logs.lines.withLock { $0.append(line) }
@@ -275,8 +277,10 @@ struct MCPGatewayDeadlineRuntimeTests {
         try Data(script.utf8).write(to: directory.appendingPathComponent("stubborn.py"))
         let marker = directory.appendingPathComponent("term")
         let stubborn = MCPServerDefinition(name: "stubborn", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
+        // A grace wider than serve's 2 s, so a loaded machine still runs the
+        // handler before the SIGKILL.
         let run = GatewayRun(
-            core: GatewayRun.core([stubborn], startTimeout: 300),
+            core: GatewayRun.core([stubborn], startTimeout: 300), stopGrace: 10,
             connections: [.process(MCPUpstreamLaunch(
                 server: "stubborn", executable: "/usr/bin/env",
                 arguments: ["python3", "-u", directory.appendingPathComponent("stubborn.py").path, marker.path],
@@ -340,6 +344,30 @@ struct MCPGatewayDeadlineRuntimeTests {
         _ = await offThePool { fixture.stop() }
     }
 
+    /// A client's cancel of a call in flight is passed on and closes the
+    /// call's quiet POST then, not at the HTTP layer's limit.
+    @Test(.timeLimit(.minutes(5)))
+    func aClientCancelClosesTheCallsRequest() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let remote = MCPServerDefinition(
+            name: "remote", remote: MCPRemoteServer(url: fixture.url("/mcp")), tools: MCPToolPolicy(allow: ["*"]))
+        let run = GatewayRun(
+            core: GatewayRun.core([remote], startTimeout: 300),
+            connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
+        #expect(await eventuallyAsync { fixture.requests().contains("REQ POST /mcp tools/call") })
+        run.client.send(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#)
+        #expect(await eventuallyAsync(60) {
+            let requests = fixture.requests()
+            return requests.contains("REQ POST /mcp notifications/cancelled") && requests.contains("CLOSED call")
+        }, "\(fixture.requests())")
+        let audits = run.audits
+        #expect(await eventuallyAsync { audits.items.withLock { $0.contains { $0.reason == "cancelled by client" } } })
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
     /// The HTTP layer giving up on a quiet request is not the server's
     /// answer: nothing is delivered for it, so it is never recorded as run;
     /// the core's own, shorter deadline ends it.
@@ -348,7 +376,9 @@ struct MCPGatewayDeadlineRuntimeTests {
         let delivered = RecordedMessages()
         let logs = RecordedLogs()
         let remote = MCPRemoteUpstream(
-            launch: MCPRemoteLaunch(server: "quiet", url: fixture.url("/mcp"), answerTimeout: 1),
+            // Also the limit on initialize (and its connect), so not 1 s on
+            // a loaded machine; the call hangs until rv closes it.
+            launch: MCPRemoteLaunch(server: "quiet", url: fixture.url("/mcp"), answerTimeout: 5),
             deliver: { message in delivered.items.withLock { $0.append(message) } },
             exited: {},
             log: { line in logs.lines.withLock { $0.append(line) } })
