@@ -317,6 +317,44 @@ struct AuditLogLineTests {
         #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get().lines == 1)
     }
 
+    /// One `audit.jsonl` hard-linked into a second directory is still one
+    /// log in this process: while an append holds the file (its entry is
+    /// in the set), an append through either directory gives up on its own
+    /// deadline with nothing written, without counting on `flock`, which a
+    /// network filesystem may count per process. The holder's entry stays.
+    @Test func oneFileThroughTwoDirectoriesIsOneLog() throws {
+        let first = try scratch()
+        let second = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        #expect(AuditLog.append(event("first"), configDirectory: first))
+        let file = AuditLog.fileURL(configDirectory: first)
+        try FileManager.default.linkItem(at: file, to: AuditLog.fileURL(configDirectory: second))
+        let log = try key(file)
+        try #require(try key(AuditLog.fileURL(configDirectory: second)) == log)
+        let before = try Data(contentsOf: file)
+        try whileBusy(log) {
+            for directory in [second, first] {
+                let ticks = Ticks()
+                let base = ContinuousClock.now
+                let wait = AuditLog.LockWait(
+                    timeout: 0.05,
+                    now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+                    pause: { _ = ticks.increment() }
+                )
+                #expect(AuditLog.append(event("through"), configDirectory: directory, wait: wait) == false)
+                #expect(ticks.value == 5)
+                #expect(isBusy(log), "the waiter took the holder's entry away")
+            }
+        }
+        #expect(try Data(contentsOf: file) == before)
+        // Free again: an append through the second directory chains on.
+        #expect(AuditLog.append(event("after"), configDirectory: second))
+        #expect(try AuditChain.verify(fileURL: file).get().lines == 2)
+    }
+
     /// The key `AuditLog.append` takes in this process for `url`: a log's
     /// directory, or the log file itself.
     private func key(_ url: URL) throws -> AuditLog.AppendLock.Log {

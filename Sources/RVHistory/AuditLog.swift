@@ -100,36 +100,60 @@ public enum AuditLog {
         var identity = stat()
         guard stat(configDirectory.path, &identity) == 0 else { return false }
         let log = AppendLock.Log(identity)
-        // This process's lock for the log, then the file's, both against
-        // `wait`'s one deadline. The first is per log: a thread waiting for
-        // a log another process holds, or writing a long line, keeps no
-        // other log in this process waiting.
+        // This process's locks for the log (its directory's, then its
+        // file's), then the file's own lock, all against `wait`'s one
+        // deadline. They are per log: a thread waiting for a log another
+        // process holds, or writing a long line, keeps no other log in this
+        // process waiting.
         return AppendLock.withLock(log, wait) {
             let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
-            // Closed before the log's entry is given up: where `flock` is
-            // counted per process, closing a descriptor that held the lock
-            // drops it for every thread, the next one to take it included.
-            defer { close(fd) }
-            guard lock(fd, wait) else { return false }
-            defer { _ = flock(fd, LOCK_UN) }
-            guard let tail = lastLine(fd) else { return false }
-            var chained = event
-            chained.prev = tail.hash
-            chained.chainHead = nil
-            guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
-            // A line the verifier or the next append's tail scan would
-            // reject is never written: refusing keeps the chain usable. The
-            // scan reads at most `maximumLineBytes` back from the end, which
-            // must include the newline before the last line.
-            guard encoded.count < AuditChain.maximumLineBytes else { return false }
-            var data = Data()
-            if tail.isTorn { data.append(UInt8(ascii: "\n")) }
-            data.append(encoded)
-            data.append(UInt8(ascii: "\n"))
-            guard writeAll(fd, data) else { return false }
-            return sync(fd)
+            // The file reached through another directory (a hard link, or
+            // this one swapped since the `stat`) is still one log: its own
+            // entry, always taken second, so a thread holding a file's
+            // entry never waits for a directory's.
+            var file = stat()
+            guard fstat(fd, &file) == 0 else {
+                close(fd)
+                return false
+            }
+            var entered = false
+            let written = AppendLock.withLock(AppendLock.Log(file), wait) {
+                entered = true
+                // Closed before either entry is given up: where `flock` is
+                // counted per process, closing a descriptor that held the
+                // lock drops it for every thread, the next one to take it
+                // included.
+                defer { close(fd) }
+                return appendLine(event, to: fd, wait: wait, encoder: encoder)
+            }
+            // Never entered: this descriptor held no lock.
+            if entered == false { close(fd) }
+            return written
         }
+    }
+
+    /// The locked part of `append`: the file's lock, the chained line, and
+    /// its `fsync`. Callers hold both of the log's entries.
+    private static func appendLine(_ event: AuditEvent, to fd: Int32, wait: LockWait, encoder: JSONEncoder) -> Bool {
+        guard lock(fd, wait) else { return false }
+        defer { _ = flock(fd, LOCK_UN) }
+        guard let tail = lastLine(fd) else { return false }
+        var chained = event
+        chained.prev = tail.hash
+        chained.chainHead = nil
+        guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
+        // A line the verifier or the next append's tail scan would
+        // reject is never written: refusing keeps the chain usable. The
+        // scan reads at most `maximumLineBytes` back from the end, which
+        // must include the newline before the last line.
+        guard encoded.count < AuditChain.maximumLineBytes else { return false }
+        var data = Data()
+        if tail.isTorn { data.append(UInt8(ascii: "\n")) }
+        data.append(encoded)
+        data.append(UInt8(ascii: "\n"))
+        guard writeAll(fd, data) else { return false }
+        return sync(fd)
     }
 
     /// The encoded line with every display hazard (ESC, bidi controls, tag
@@ -206,9 +230,14 @@ public enum AuditLog {
     }
 
     /// Threads in this process appending to one log, for a filesystem
-    /// whose `flock` would not exclude them. One lock per log, named by its
-    /// directory's device and inode (so by the log, however its path was
-    /// spelled).
+    /// whose `flock` would not exclude them. Two entries per append: the
+    /// directory's device and inode (so the log however its path was
+    /// spelled, taken before the file exists), then, inside it, the open
+    /// file's (so one file reached through two directories is one log).
+    /// Always directory then file, and a thread holding a file's entry
+    /// waits only for `flock`, never for another entry: two directories
+    /// reaching one file both wait on the file's entry, never on each
+    /// other's, so no two appends can wait on each other in a cycle.
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
     enum AppendLock {
         struct Log: Hashable {
