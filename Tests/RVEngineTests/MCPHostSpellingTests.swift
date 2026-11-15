@@ -271,6 +271,35 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// Any construct that names a lookup variable (`PATH`, zsh `path`,
+    /// `fpath`, `module_path`, `BASH_ENV`, `ENV`, `ZDOTDIR`) other than a
+    /// plain `$NAME` read, `env` told to search elsewhere or split a string,
+    /// an autoload, or text a shell reads beside output rv cannot read.
+    @Test("the operand list backs off wherever a lookup may change", arguments: [
+        "env -P ./bin ls mcp $X", "env -P./bin ls mcp $X", "env -P ./bin ls {claude,mcp} add evil -- x",
+        "env -iP ./bin ls mcp $X", "env -S 'ls mcp $X'",
+        "unset PATH; : \"${PATH:=./bin}\"; ls mcp $X", ": ${PATH=./bin}; ls mcp $X", "unset PATH; ls mcp $X",
+        "path=./bin; ls mcp $X", "PATH[1,0]=./bin:; ls mcp $X", "for path (./bin) ls mcp $X",
+        "fpath+=./fn; typeset -fu ls; ls mcp $X", "typeset -fu ls; ls mcp $X", "module_path+=./m; ls mcp $X",
+        "declare -n p=PATH; p=./bin:$PATH; ls mcp $X", "mapfile -t PATH <<< ./bin; ls mcp $X",
+        "readarray -t PATH < ./p; ls mcp $X", "read -a PATH <<< ./bin; ls mcp $X",
+        "{ cat ./defs.sh; echo 'ls mcp $X'; } | sh", "PA\\\nTH=./bin:$PATH; ls mcp $X",
+        "printf -vPATH %s ./bin; ls mcp $X", "let 'PATH = 1'; ls mcp $X", "(( PATH = 1 )); ls mcp $X",
+    ])
+    func lookupChangeAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Reading a lookup variable, or a word that only contains its name,
+    /// changes nothing: the operand list still holds.
+    @Test("the operand list holds where a lookup variable is only read", arguments: [
+        "echo \"$PATH\"; ls mcp $X", "ls mcp $X ${PATH%%:*}", "cp -r mcp $OUTPUT_PATH",
+        "ls mcp $X ~/path/to", "env ls mcp $X", "env -i ls mcp $X",
+    ])
+    func lookupReadAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
     /// Text the line carries and rv reads again as a command line is
     /// checked for redefinitions on its own: its heads are not the line's.
     @Test("the operand list backs off where carried text may define commands", arguments: [
