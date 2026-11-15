@@ -18,15 +18,28 @@ func stdinProgramRequiresJudge(_ raw: String, secrets: SecretPathCatalog) -> Boo
         if read.heredoc, let body, scriptIsRisky(body, kind: read.kind, secrets: secrets) { return true }
     }
 
+    // No launched command is picked by position: any command the consumer
+    // segment launches may be the interpreter reading the pipe, and any
+    // command the producer segment launches may write to it (an `eval` or
+    // `sh -c` payload launches each view, as written and decoded, and a
+    // group or payload may run several commands).
     let pipes = splitTopLevelPipes(header)
     for index in pipes.indices.dropFirst() {
-        guard let consumer = launchedCommands(pipes[index]).first,
-              let read = stdinRead(consumer),
-              read.hereString == nil, read.heredoc == false, read.fileRedirect == false,
-              let producer = launchedCommands(pipes[index - 1]).last
-        else { continue }
-        guard let program = visibleProgram(from: producer, heredocBody: body) else { return true }
-        if scriptIsRisky(program, kind: read.kind, secrets: secrets) { return true }
+        let reads = launchedCommands(pipes[index]).compactMap(stdinRead).filter {
+            $0.hereString == nil && $0.heredoc == false && $0.fileRedirect == false
+        }
+        let producers = launchedCommands(pipes[index - 1])
+        guard reads.isEmpty == false, producers.isEmpty == false else { continue }
+        var programs: [String] = []
+        for producer in producers {
+            guard let program = visibleProgram(from: producer, heredocBody: body) else { return true }
+            programs.append(program)
+        }
+        let texts = programs.count == 1 ? programs : programs + [programs.joined(separator: "\n")]
+        let risky = reads.contains { read in
+            texts.contains { scriptIsRisky($0, kind: read.kind, secrets: secrets) }
+        }
+        if risky { return true }
     }
     return false
 }
