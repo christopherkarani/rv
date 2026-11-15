@@ -766,11 +766,19 @@ public struct MCPGatewayCore {
             waiting.remove(at: index)
             return []
         }
-        if let key = held.first(where: { $0.value.client == target })?.key {
+        // A prompt still shown: its `awaiting` row ends declined, and the
+        // client's prompt is withdrawn.
+        if let entry = held.first(where: { $0.value.client == target }) {
+            let key = entry.key, call = entry.value
             held[key] = nil
-            return [.toClient(Self.notification("notifications/cancelled", .object([
-                "requestId": .string(key), "reason": .string("the tool call was cancelled"),
-            ])))]
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
+                    isError: true, reason: "cancelled by client", outcome: .declined(approvalID: key))),
+                .toClient(Self.notification("notifications/cancelled", .object([
+                    "requestId": .string(key), "reason": .string("the tool call was cancelled"),
+                ]))),
+            ]
         }
         for (id, entry) in pending {
             guard case .call(let call) = entry, call.client == target else { continue }
