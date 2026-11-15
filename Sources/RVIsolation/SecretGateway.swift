@@ -164,6 +164,10 @@ public final class SecretGateway: @unchecked Sendable {
     var beforeListenerPublish: (@Sendable () -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
+    /// Seconds a write to a client may block before its connection is cut.
+    static let clientSendTimeout = 30
+    /// Test seam: the client send timeout. Set before serving.
+    var clientSendTimeout = SecretGateway.clientSendTimeout
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
@@ -473,18 +477,29 @@ public final class SecretGateway: @unchecked Sendable {
             #endif
             var timeout = timeval(tv_sec: 30, tv_usec: 0)
             _ = setsockopt(held, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            // A client that stops reading fails the write that blocks past
+            // this; its answer is cut there and the connection closed, never
+            // finished as if whole.
+            var sendTimeout = timeval(tv_sec: clientSendTimeout, tv_usec: 0)
+            _ = setsockopt(held, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
             guard slots.wait(timeout: .now()) == .success else {
                 GatewaySocket.writeAll(held, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
                 close(held)
                 continue
             }
             let clientFD = held
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // A thread of the gateway's own, at most `maximumConnections` of
+            // them: each blocks until its answer is through, and on GCD's
+            // shared pool a burst of them held every thread that pool had.
+            let handler = Thread { [weak self] in
                 defer { close(clientFD) }
                 guard let self else { return }
                 defer { self.slots.signal() }
                 self.handle(clientFD)
             }
+            handler.name = "rv.secret-gateway.connection"
+            handler.qualityOfService = .userInitiated
+            handler.start()
         }
     }
 
@@ -1034,94 +1049,5 @@ enum GatewaySocket {
                 body.append(chunk)
             }
         }
-    }
-}
-
-/// URLSession upstream with streaming delivery, no cookies, cache, or redirects.
-final class URLSessionStreamingTransport: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private var sinks: [Int: (sink: SecretResponseSink, done: DispatchSemaphore)] = [:]
-    private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.urlCache = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 300
-        configuration.timeoutIntervalForResource = 3_600
-        // Each request's handler blocks a global-queue thread until a
-        // callback here signals it; on the shared pool those callbacks could
-        // wait behind the very handlers waiting for them.
-        return URLSession(
-            configuration: configuration, delegate: self,
-            delegateQueue: URLSessionDelegateQueue.serial("rv.secrets.gateway.upstream"))
-    }()
-
-    func send(_ request: SecretUpstreamRequest, sink: SecretResponseSink) {
-        var urlRequest = URLRequest(url: request.url)
-        urlRequest.httpMethod = request.method
-        for header in request.headers {
-            urlRequest.addValue(header.value, forHTTPHeaderField: header.name)
-        }
-        if request.body.isEmpty == false || ["POST", "PUT", "PATCH"].contains(request.method) {
-            urlRequest.httpBody = request.body
-        }
-        let done = DispatchSemaphore(value: 0)
-        let task = session.dataTask(with: urlRequest)
-        lock.lock()
-        sinks[task.taskIdentifier] = (sink, done)
-        lock.unlock()
-        task.resume()
-        done.wait()
-    }
-
-    private func sink(for task: URLSessionTask) -> SecretResponseSink? {
-        lock.lock()
-        defer { lock.unlock() }
-        return sinks[task.taskIdentifier]?.sink
-    }
-
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
-
-    func urlSession(
-        _ session: URLSession, dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        guard let http = response as? HTTPURLResponse, let sink = sink(for: dataTask) else {
-            completionHandler(.cancel)
-            return
-        }
-        let headers = http.allHeaderFields.compactMap { key, value -> (name: String, value: String)? in
-            guard let name = key as? String, let text = value as? String else { return nil }
-            return (name, text)
-        }
-        sink.head(status: http.statusCode, headers: headers)
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard let sink = sink(for: dataTask) else { return }
-        if sink.body(data) == false { dataTask.cancel() }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        lock.lock()
-        let entry = sinks.removeValue(forKey: task.taskIdentifier)
-        lock.unlock()
-        guard let entry else { return }
-        if let error {
-            entry.sink.fail(error.localizedDescription)
-        } else {
-            entry.sink.finish()
-        }
-        entry.done.signal()
     }
 }

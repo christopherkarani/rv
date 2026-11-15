@@ -16,7 +16,10 @@ import Foundation
 /// (measured: a thread that blocks it still ends the process), so only the
 /// descriptor can stop it: `F_SETNOSIGPIPE` on stderr. That flag belongs to
 /// the open file, so another process writing to the same stderr also gets
-/// EPIPE instead of SIGPIPE once rv has written there. Linux sends it to the
+/// EPIPE instead of SIGPIPE once rv has written there, and keeps doing so:
+/// the flag is never cleared (a contained workspace agent that inherited
+/// rv's stderr, or the MCP client whose stderr serve inherited, and that
+/// client's other children). Linux sends it to the
 /// writing thread, which blocks it around the write and takes back the one
 /// the write raised.
 package enum StderrWriter {
