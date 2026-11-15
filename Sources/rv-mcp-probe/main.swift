@@ -13,16 +13,20 @@
 // `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
 // work that never ends, then sends `initialize` to the MCP server at `url`
-// through `MCPRemoteUpstream` and a GET through `MCPOAuthHTTP.live`, and
-// prints how long each took to answer ("none" after 10 s).
-// `rv-mcp-probe stderr <bytes> [interrupted|closed]` ignores SIGPIPE as serve
-// does, then writes one line of `bytes` x's through the gateway's stderr
-// writer: `interrupted` under a 1 ms SIGALRM without SA_RESTART, `closed`
-// after its stdin ends (the test closes stderr's read end first). Prints
+// through `MCPRemoteUpstream` and a GET through the secrets gateway's
+// upstream transport, and prints how long each took to answer ("none"
+// after 10 s).
+// `rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]` ignores
+// SIGPIPE as serve does (`closed-default` sets it to the default instead,
+// as during planning), then writes one line of `bytes` x's through the
+// gateway's stderr writer: `interrupted` under a 1 ms SIGALRM without
+// SA_RESTART, `closed` and `closed-default` to a stderr whose read end the
+// probe closed itself, so no other process can hold it open. Prints
 // "returned" once the write returns.
 // `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
 import Darwin
 import Foundation
+import RVIsolation
 import RVMCP
 import Synchronization
 
@@ -144,11 +148,29 @@ private func remoteWhileStarved(_ url: URL) -> Int32 {
     upstream.send(message)
     say("upstream " + elapsed(start, answered.wait(timeout: .now() + 10) == .success))
 
+
+    // The secrets gateway's upstream transport, as a gateway connection
+    // handler calls it: blocking, on a thread of its own.
+    let sink = GatewaySink()
+    let transport = SecretUpstreamTransport.urlSession
+    let request = SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data())
     start = Date()
-    let status = MCPOAuthHTTP.live(URLRequest(url: url, timeoutInterval: 10))?.status
-    say("live " + elapsed(start, status != nil) + " status \(status.map { String($0) } ?? "none")")
+    Thread.detachNewThread { transport.send(request, sink) }
+    let finished = sink.done.wait(timeout: .now() + 10) == .success
+    let gatewayStatus = sink.status.withLock { $0 }
+    say("gateway " + elapsed(start, finished) + " status \(gatewayStatus.map { String($0) } ?? "none")")
     // The held work never ends; exit rather than return to it.
     exit(0)
+}
+
+private final class GatewaySink: SecretResponseSink, Sendable {
+    let done = DispatchSemaphore(value: 0)
+    let status = Mutex<Int?>(nil)
+
+    func head(status: Int, headers: [(name: String, value: String)]) { self.status.withLock { $0 = status } }
+    func body(_ data: Data) -> Bool { true }
+    func finish() { done.signal() }
+    func fail(_ reason: String) { done.signal() }
 }
 
 /// `pipe-disposition`: what this process got for SIGPIPE.
@@ -161,7 +183,7 @@ private func pipeDisposition() -> String {
 }
 
 private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
-    signal(SIGPIPE, SIG_IGN)
+    signal(SIGPIPE, mode == "closed-default" ? SIG_DFL : SIG_IGN)
     switch mode {
     case "interrupted":
         var action = sigaction()
@@ -171,10 +193,17 @@ private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
         sigaction(SIGALRM, &action, nil)
         var timer = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 1000), it_value: timeval(tv_sec: 0, tv_usec: 1000))
         setitimer(ITIMER_REAL, &timer, nil)
-    case "closed":
-        _ = FileHandle.standardInput.readDataToEndOfFile()
+    case "closed", "closed-default":
+        var ends: [Int32] = [-1, -1]
+        guard pipe(&ends) == 0, close(ends[0]) == 0, dup2(ends[1], STDERR_FILENO) == STDERR_FILENO else {
+            say("no closed stderr: errno \(errno)")
+            return 1
+        }
+        if ends[1] != STDERR_FILENO { close(ends[1]) }
     case nil: break
-    default: return 2
+    default:
+        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]")
+        return 2
     }
     MCPGatewayRuntime.writeStderrLine(String(repeating: "x", count: count) + "\n")
     var off = itimerval()
@@ -192,13 +221,11 @@ case "remote-starved":
     }
     exit(remoteWhileStarved(url))
 case "stderr":
-    guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0,
-        writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil) == 0
-    else {
-        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed]")
+    guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0 else {
+        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed|closed-default]")
         exit(2)
     }
-    exit(0)
+    exit(writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil))
 case "pipe-disposition":
     guard arguments.count == 2 else {
         say("usage: rv-mcp-probe pipe-disposition <file>")
@@ -245,6 +272,6 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | remote-starved <url> | stderr <bytes> [interrupted|closed] | pipe-disposition <file>")
+        + " | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
     exit(2)
 }

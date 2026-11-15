@@ -18,8 +18,12 @@ private func killLater(_ process: Process) {
     }
 }
 
-/// Pipe ends this test holds are never inherited by a child another test
-/// starts meanwhile, which would keep a closed read end open.
+/// Pipe ends this test holds are not inherited by a child another test
+/// spawns later without POSIX_SPAWN_CLOEXEC_DEFAULT (Foundation's `Process`
+/// passes none on macOS, measured). Darwin has no pipe2, so a spawn between
+/// `Pipe()` and this call can still inherit an end; here that only delays
+/// EOF until that child exits. The closed-stderr tests do not depend on it:
+/// the probe makes and closes its own stderr.
 private func closeOnExec(_ pipe: Pipe) {
     _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
     _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
@@ -59,24 +63,32 @@ struct MCPGatewayStderrTests {
     /// which ended the process.
     @Test(.timeLimit(.minutes(1)))
     func aClosedStderrReturnsInsteadOfRaising() throws {
+        try Self.expectReturnsOnAClosedStderr("closed")
+    }
+
+    /// With SIGPIPE at its default, as while serve plans its servers, the
+    /// write still fails and returns: the writer does not depend on the
+    /// process's disposition, so a closed stderr cannot end serve there.
+    @Test(.timeLimit(.minutes(1)))
+    func aClosedStderrReturnsWithSIGPIPEAtItsDefault() throws {
+        try Self.expectReturnsOnAClosedStderr("closed-default")
+    }
+
+    static func expectReturnsOnAClosedStderr(_ mode: String) throws {
         let process = Process()
         process.executableURL = try mcpProbe()
-        process.arguments = ["stderr", String(1 << 20), "closed"]
-        let input = Pipe(), output = Pipe(), errors = Pipe()
-        closeOnExec(input)
+        process.arguments = ["stderr", String(1 << 20), mode]
+        let output = Pipe()
         closeOnExec(output)
-        closeOnExec(errors)
-        process.standardInput = input
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
-        process.standardError = errors
+        process.standardError = FileHandle.nullDevice
         try process.run()
         killLater(process)
-        try errors.fileHandleForReading.close()
-        try input.fileHandleForWriting.close()
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
-        #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(text)")
-        #expect(text == "returned\n")
+        #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(mode): \(text)")
+        #expect(text == "returned\n", "\(mode)")
     }
 }
 #endif
