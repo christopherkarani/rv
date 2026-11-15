@@ -1176,11 +1176,15 @@ struct URLSessionStreamingTransportTests {
         // could take a slot one of them was about to.
         #expect(eventually { members.checked.load(ordering: .relaxed) >= tricklers.count })
         let head = Array(under.request("/trickle").utf8)
+        let trickle = Trickle()
         let trickled = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            // 8 s of trickling, far past the 1 s deadline; a connection the
-            // gateway has answered gets nothing more.
-            for index in 0..<40 {
+            // A byte every 0.2 s to each, never a whole head, until this test
+            // has looked: it stops only when told to or out of bytes, far past
+            // the 1 s deadline. A connection the gateway has answered gets
+            // nothing more.
+            for index in 0..<(head.count - 1) {
+                guard trickle.going.load(ordering: .relaxed) else { break }
                 for fd in tricklers where readable(fd) == false { _ = GatewaySocket.writeAll(fd, [head[index]]) }
                 Thread.sleep(forTimeInterval: 0.2)
             }
@@ -1195,6 +1199,7 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.status == 200)
         #expect(answer.body == "ok:/v1/after")
         #expect(trickled.wait(timeout: .now()) == .timedOut, "answered only once the trickling had stopped")
+        trickle.going.store(false, ordering: .relaxed)
         let answers = tricklers.map(plainAnswer)
         let timedOut = answers.filter { $0.hasPrefix("HTTP/1.1 408") && $0.contains("the request did not arrive in time") }
         #expect(timedOut.count == tricklers.count, "\(answers.filter { $0.hasPrefix("HTTP/1.1 408") == false }.prefix(3))")
