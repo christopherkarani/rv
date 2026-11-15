@@ -298,7 +298,11 @@ public struct MCPGatewayCore {
     /// Writes the `mcp.call` record for a call about to go upstream; false
     /// when it could not be written, and the call is then refused.
     let recordForward: @Sendable (MCPCallRecord) -> Bool
+    /// Wall time; stamps audit events.
     let clock: () -> Date
+    /// Deadlines, held prompts and call durations: a monotonic timeline on
+    /// which only differences mean anything.
+    let deadlineClock: () -> Date
     let deadlines: MCPGatewayDeadlines
     let version: String
 
@@ -363,6 +367,7 @@ public struct MCPGatewayCore {
         recordForward: @escaping @Sendable (MCPCallRecord) -> Bool,
         version: String = "1",
         clock: @escaping () -> Date = { Date() },
+        deadlineClock: @escaping () -> Date = MCPGatewayCore.uptime,
         deadlines: MCPGatewayDeadlines = MCPGatewayDeadlines()
     ) {
         self.configuration = configuration
@@ -373,9 +378,25 @@ public struct MCPGatewayCore {
         self.pins = pinning.pins
         self.recordForward = recordForward
         self.clock = clock
+        self.deadlineClock = deadlineClock
         self.deadlines = deadlines
         self.version = version
     }
+
+    /// Time since the gateway first looked, on `SuspendingClock`
+    /// (CLOCK_UPTIME_RAW on Darwin, CLOCK_MONOTONIC on Linux), as a `Date`
+    /// that is never compared with wall time. Setting the wall clock does
+    /// not move it, so a step back cannot hold a call open; it stands still
+    /// while the machine sleeps, so waking does not time out every call at
+    /// once: each gets the rest of its time.
+    public static let uptime: @Sendable () -> Date = {
+        let origin = SuspendingClock.Instant.now
+        return {
+            let elapsed = origin.duration(to: .now).components
+            return Date(timeIntervalSinceReferenceDate:
+                TimeInterval(elapsed.seconds) + TimeInterval(elapsed.attoseconds) / 1e18)
+        }
+    }()
 
     /// A value the upstream holds from now on (a refreshed OAuth token), scrubbed like the rest.
     public mutating func addSecret(server: String, name: String, value: String) {

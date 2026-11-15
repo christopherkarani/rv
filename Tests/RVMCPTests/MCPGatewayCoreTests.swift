@@ -35,6 +35,7 @@ struct GatewayHarness {
         pinning: MCPToolPinning = .unenforced,
         recordForward: @escaping @Sendable (MCPCallRecord) -> Bool = { _ in true },
         clock: @escaping () -> Date = { Date() },
+        deadlineClock: (() -> Date)? = nil,
         deadlines: MCPGatewayDeadlines = MCPGatewayDeadlines()
     ) {
         let upstreams = configuration.servers.map {
@@ -43,7 +44,7 @@ struct GatewayHarness {
         let approvals = self.approvals
         core = MCPGatewayCore(
             configuration: configuration, upstreams: upstreams, approvals: approvals.gate, pinning: pinning,
-            recordForward: recordForward, clock: clock, deadlines: deadlines)
+            recordForward: recordForward, clock: clock, deadlineClock: deadlineClock ?? clock, deadlines: deadlines)
     }
 
     /// Starts and answers every upstream initialize.

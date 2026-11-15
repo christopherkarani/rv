@@ -356,6 +356,41 @@ struct MCPGatewayDeadlineTests {
         #expect(call.toClient.first?["error"]?["message"]?.stringValue?.contains("it failed to initialize") == true)
     }
 
+    /// Deadlines run on their own clock: the wall clock only stamps audit
+    /// events, so stepping it either way neither times out nor holds open.
+    @Test func deadlinesFollowTheirOwnClockNotTheWallClock() throws {
+        let wall = ManualClock()
+        let deadlines = ManualClock()
+        var harness = GatewayHarness(
+            MCPConfiguration(servers: [Self.github(callTimeout: 10)]), clock: { wall.now }, deadlineClock: { deadlines.now })
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        wall.advance(86_400)
+        #expect(harness.core.handle(.tick).isEmpty)
+        wall.advance(-2 * 86_400)
+        deadlines.advance(9)
+        #expect(harness.core.handle(.tick).isEmpty)
+        deadlines.advance(2)
+        #expect(harness.core.handle(.tick).audits.count == 1)
+        // An initialize waits on the same clock.
+        var starting = GatewayHarness(
+            MCPConfiguration(servers: [Self.github()]), clock: { wall.now }, deadlineClock: { deadlines.now })
+        _ = starting.core.start()
+        wall.advance(86_400)
+        #expect(starting.core.handle(.tick).stopped.isEmpty)
+        deadlines.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds + 1))
+        #expect(starting.core.handle(.tick).stopped == ["github"])
+    }
+
+    @Test func theDefaultDeadlineClockNeverGoesBack() {
+        var last = MCPGatewayCore.uptime()
+        for _ in 0..<1000 {
+            let next = MCPGatewayCore.uptime()
+            #expect(next >= last)
+            last = next
+        }
+    }
+
     @Test func initializeWaitsItsOwnServersStartTimeout() throws {
         let clock = ManualClock()
         var quick = Self.github()
@@ -368,13 +403,16 @@ struct MCPGatewayDeadlineTests {
         let expired = harness.core.handle(.tick)
         #expect(expired.stopped == ["github"])
         #expect(expired.logs.contains { $0.contains("within 2 s") && $0.contains("startTimeoutSeconds") }, "\(expired.logs)")
-        let call = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github__list_issues"}}"#)
-        #expect(call.toClient.first?["error"]?["message"]?.stringValue?.contains("startTimeoutSeconds") == true)
+        // The call waits for every server to settle.
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github__list_issues"}}"#).isEmpty)
         // The other server waits its own default.
         clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds - 4))
         #expect(harness.core.handle(.tick).stopped.isEmpty)
         clock.advance(2)
-        #expect(harness.core.handle(.tick).stopped == ["notes"])
+        let released = harness.core.handle(.tick)
+        #expect(released.stopped == ["notes"])
+        let message = released.toClient.first { $0["id"] == .int(2) }?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("startTimeoutSeconds"), "\(message)")
     }
 
     // MARK: tools/list
