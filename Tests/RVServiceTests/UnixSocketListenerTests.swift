@@ -377,8 +377,10 @@ struct UnixSocketListenerTests {
     /// option) on a socket whose peer is gone, yet the request is still
     /// readable, and a reply sent with flags 0 raises SIGPIPE, killing the
     /// whole process. Today the refused `SO_RCVTIMEO` closes such a
-    /// connection first; replies also pass MSG_NOSIGNAL so that order is
-    /// not what keeps rvd alive. The listener must keep serving.
+    /// connection first, and replies are sent from dispatch worker threads,
+    /// where Darwin 27 was measured not to kill the process for it; replies
+    /// also pass MSG_NOSIGNAL so neither is what keeps rvd alive. The
+    /// listener must keep serving.
     @Test func aClientGoneBeforeItsReplyDoesNotKillTheListener() throws {
         let home = try makeIsolatedHome("pipe")
         defer { try? FileManager.default.removeItem(at: home) }
