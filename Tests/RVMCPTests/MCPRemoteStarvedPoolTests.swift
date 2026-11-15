@@ -14,6 +14,9 @@ struct MCPRemoteStarvedPoolTests {
     /// that never finish take every global-queue thread. The remote upstream
     /// and the secrets gateway's upstream transport still hear their
     /// answers; on a plain serial `OperationQueue` neither did.
+    /// `MCPOAuthHTTP.live` is not checked: it used a nil delegate queue,
+    /// which was never starved when measured, so no check of it could fail
+    /// before its own queue; that queue is kept as a precaution only.
     @Test(.timeLimit(.minutes(1)))
     func remoteAnswersArriveWhileTheSharedPoolIsExhausted() throws {
         let fixture = try RemoteFixture()
@@ -33,7 +36,6 @@ struct MCPRemoteStarvedPoolTests {
         }
         #expect(process.terminationReason == .exit && process.terminationStatus == 0, "\(text)")
         #expect(lines["upstream"].flatMap { Int($0) } != nil, "upstream answered: \(text); fixture: \(requests)")
-        #expect(lines["live"]?.hasSuffix(" status 405") == true, "live answered: \(text)")
         #expect(lines["gateway"]?.hasSuffix(" status 405") == true, "gateway answered: \(text)")
         #expect(requests.contains("REQ POST /mcp initialize"), "\(requests)")
     }

@@ -13,9 +13,9 @@
 // `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
 // work that never ends, then sends `initialize` to the MCP server at `url`
-// through `MCPRemoteUpstream`, a GET through `MCPOAuthHTTP.live` and one
-// through the secrets gateway's upstream transport, and prints how long
-// each took to answer ("none" after 10 s).
+// through `MCPRemoteUpstream` and a GET through the secrets gateway's
+// upstream transport, and prints how long each took to answer ("none"
+// after 10 s).
 // `rv-mcp-probe stderr <bytes> [interrupted|closed]` ignores SIGPIPE as serve
 // does, then writes one line of `bytes` x's through the gateway's stderr
 // writer: `interrupted` under a 1 ms SIGALRM without SA_RESTART, `closed`
@@ -146,9 +146,6 @@ private func remoteWhileStarved(_ url: URL) -> Int32 {
     upstream.send(message)
     say("upstream " + elapsed(start, answered.wait(timeout: .now() + 10) == .success))
 
-    start = Date()
-    let status = MCPOAuthHTTP.live(URLRequest(url: url, timeoutInterval: 10))?.status
-    say("live " + elapsed(start, status != nil) + " status \(status.map { String($0) } ?? "none")")
 
     // The secrets gateway's upstream transport, as a gateway connection
     // handler calls it: blocking, on a thread of its own.
