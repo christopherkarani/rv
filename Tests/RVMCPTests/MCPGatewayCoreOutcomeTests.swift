@@ -87,7 +87,8 @@ struct MCPGatewayCoreOutcomeTests {
         var core = MCPGatewayCore(
             configuration: MCPConfiguration(servers: [MCPGatewayCoreTests.github]),
             upstreams: [.init(definition: MCPGatewayCoreTests.github, secretValues: [])],
-            approvals: FakeApprovals().gate, pinning: .unenforced, recordForward: { _ in true }, clock: { box.value })
+            approvals: FakeApprovals().gate, pinning: .unenforced, recordForward: { _ in true }, clock: { box.value },
+            deadlineClock: { box.value })
         for case .toUpstream(_, let message) in core.start() {
             _ = core.handle(.upstream(server: "github", message: .object([
                 "jsonrpc": .string("2.0"), "id": message["id"] ?? .null, "result": .object([:]),
