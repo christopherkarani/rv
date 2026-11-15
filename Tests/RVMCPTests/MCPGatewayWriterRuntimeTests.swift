@@ -88,7 +88,7 @@ struct MCPGatewayWriterRuntimeTests {
     }
 
     static func core(_ servers: [MCPServerDefinition]) -> MCPGatewayCore {
-        GatewayRun.core(servers, deadlines: MCPGatewayDeadlines(start: 300, list: 300))
+        GatewayRun.core(servers, startTimeout: 300)
     }
 
     static func pid(_ server: String, in directory: URL) -> pid_t? {
@@ -204,7 +204,7 @@ struct MCPGatewayWriterRuntimeTests {
         let gate = LogGate()
         let silent = Self.server("silent")
         let run = GatewayRun(
-            core: GatewayRun.core([silent], deadlines: MCPGatewayDeadlines(start: 1, list: 300)),
+            core: GatewayRun.core([silent], startTimeout: 1),
             connections: [Self.launch("silent", mode: "silent", in: directory)],
             log: { _ in gate.pass() })
         #expect(await run.initialize())

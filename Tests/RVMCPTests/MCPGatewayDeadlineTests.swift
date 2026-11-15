@@ -309,12 +309,12 @@ struct MCPGatewayDeadlineTests {
         _ = harness.core.handle(.upstream(server: "github", message: Self.answer(githubInit)))
         #expect(harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).isEmpty)
 
-        clock.advance(MCPGatewayDeadlines.standardStart - 1)
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds - 1))
         #expect(harness.core.handle(.tick).isEmpty)
         clock.advance(2)
         let expired = harness.core.handle(.tick)
         #expect(expired.stopped == ["notes"])
-        #expect(expired.logs.contains { $0.contains("notes") && $0.contains("initialize") && $0.contains("30 s") })
+        #expect(expired.logs.contains { $0.contains("notes") && $0.contains("initialize") && $0.contains("60 s") })
         // The waiting listing goes out to the server that is ready.
         #expect(expired.toUpstream.map(\.0) == ["github"])
         #expect(expired.toUpstream.first?.1["method"] == .string("tools/list"))

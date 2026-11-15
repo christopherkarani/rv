@@ -24,17 +24,15 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     case stopUpstream(server: String)
 }
 
-/// How long the gateway waits for an upstream's `initialize` and for each
-/// `tools/list` page. A `tools/call` waits its server's `callTimeoutSeconds`.
+/// How long the gateway waits for each `tools/list` page. An `initialize`
+/// waits its server's `startTimeoutSeconds`, a `tools/call` its
+/// `callTimeoutSeconds`.
 public struct MCPGatewayDeadlines: Sendable, Equatable {
-    public static let standardStart: TimeInterval = 30
     public static let standardList: TimeInterval = 30
 
-    public var start: TimeInterval
     public var list: TimeInterval
 
-    public init(start: TimeInterval = standardStart, list: TimeInterval = standardList) {
-        self.start = start
+    public init(list: TimeInterval = standardList) {
         self.list = list
     }
 }
@@ -399,7 +397,7 @@ public struct MCPGatewayCore {
     public mutating func start() -> [MCPGatewayOutput] {
         order.map { server in
             phases[server] = .starting
-            let id = allocate(.initialize(server: server, deadline: clock().addingTimeInterval(deadlines.start)))
+            let id = allocate(.initialize(server: server, deadline: clock().addingTimeInterval(startTimeout(server))))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
                 "protocolVersion": .string(Self.upstreamVersion),
                 "capabilities": .object([:]),
@@ -454,6 +452,11 @@ public struct MCPGatewayCore {
     /// forever.
     static let callTimeoutCeilingFactor: TimeInterval = 10
 
+    /// How long `server` may take to answer `initialize`.
+    func startTimeout(_ server: String) -> TimeInterval {
+        TimeInterval(upstreams[server]?.definition.startTimeoutSeconds ?? MCPServerDefinition.defaultStartTimeoutSeconds)
+    }
+
     /// How long a `tools/call` to `server` may go unanswered.
     func callTimeout(_ server: String) -> TimeInterval {
         TimeInterval(upstreams[server]?.definition.callTimeoutSeconds ?? MCPServerDefinition.defaultCallTimeoutSeconds)
@@ -475,10 +478,11 @@ public struct MCPGatewayCore {
             switch entry {
             case .initialize(let server, _):
                 pending[id] = nil
-                let limit = Self.seconds(deadlines.start)
-                phases[server] = .failed("it did not answer initialize within \(limit) s")
+                let limit = Self.seconds(startTimeout(server))
+                phases[server] = .failed("it did not answer initialize within \(limit) s (its startTimeoutSeconds)")
                 outputs.append(.log(
-                    "MCP server \(MCPDisplayedText.field(server)) did not answer initialize within \(limit) s; stopping it"))
+                    "MCP server \(MCPDisplayedText.field(server)) did not answer initialize within \(limit) s; stopping it "
+                        + "(raise its startTimeoutSeconds in mcp.json if it needs longer to start)"))
                 outputs.append(.stopUpstream(server: server))
                 outputs += releaseWaiting()
             case .list(let fanout, let server, _):

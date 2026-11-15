@@ -386,6 +386,9 @@ public struct MCPConfiguration: Sendable, Equatable {
         if server.callTimeoutSeconds != MCPServerDefinition.defaultCallTimeoutSeconds {
             object["callTimeoutSeconds"] = .int(server.callTimeoutSeconds)
         }
+        if server.startTimeoutSeconds != MCPServerDefinition.defaultStartTimeoutSeconds {
+            object["startTimeoutSeconds"] = .int(server.startTimeoutSeconds)
+        }
         return .object(object)
     }
 
@@ -453,16 +456,21 @@ enum MCPConfigurationDecoding {
                 throw MCPConfigurationError.invalid("\(context) is remote; placeholders are only for local (command) servers")
             }
             try allowOnly(
-                object, ["name", "description", "url", "headers", "transport", "tools", "callTimeoutSeconds"], context)
+                object, ["name", "description", "url", "headers", "transport", "tools", "callTimeoutSeconds", "startTimeoutSeconds"],
+                context)
             var definition = MCPServerDefinition(name: name, remote: try remote(object, context))
             definition.description = try description(object, context)
             if let raw = object["tools"] { definition.tools = try tools(raw, context) }
             definition.callTimeoutSeconds = try callTimeout(object, context)
+            definition.startTimeoutSeconds = try startTimeout(object, context)
             return definition
         }
         try allowOnly(
             object,
-            ["name", "description", "command", "args", "env", "secrets", "placeholders", "tools", "sandbox", "callTimeoutSeconds"],
+            [
+                "name", "description", "command", "args", "env", "secrets", "placeholders", "tools", "sandbox",
+                "callTimeoutSeconds", "startTimeoutSeconds",
+            ],
             context)
         guard let command = object["command"]?.stringValue, command.isEmpty == false, command.contains("\0") == false else {
             throw MCPConfigurationError.invalid("\(context) needs a command")
@@ -498,16 +506,30 @@ enum MCPConfigurationDecoding {
         if let raw = object["tools"] { definition.tools = try tools(raw, context) }
         if let raw = object["sandbox"] { definition.sandbox = try sandbox(raw, context) }
         definition.callTimeoutSeconds = try callTimeout(object, context)
+        definition.startTimeoutSeconds = try startTimeout(object, context)
         return definition
     }
 
-    /// Whole seconds in `MCPServerDefinition.callTimeoutRange`; absent is the default.
     private static func callTimeout(_ object: JSONObject, _ context: String) throws -> Int {
-        guard let raw = object["callTimeoutSeconds"] else { return MCPServerDefinition.defaultCallTimeoutSeconds }
-        let range = MCPServerDefinition.callTimeoutRange
+        try seconds(
+            object, "callTimeoutSeconds", MCPServerDefinition.callTimeoutRange,
+            default: MCPServerDefinition.defaultCallTimeoutSeconds, context)
+    }
+
+    private static func startTimeout(_ object: JSONObject, _ context: String) throws -> Int {
+        try seconds(
+            object, "startTimeoutSeconds", MCPServerDefinition.startTimeoutRange,
+            default: MCPServerDefinition.defaultStartTimeoutSeconds, context)
+    }
+
+    /// Whole seconds in `range`; absent is the default.
+    private static func seconds(
+        _ object: JSONObject, _ key: String, _ range: ClosedRange<Int>, default fallback: Int, _ context: String
+    ) throws -> Int {
+        guard let raw = object[key] else { return fallback }
         guard let seconds = raw.intValue, range.contains(seconds) else {
             throw MCPConfigurationError.invalid(
-                "\(context) callTimeoutSeconds must be a whole number of seconds from \(range.lowerBound) to \(range.upperBound)")
+                "\(context) \(key) must be a whole number of seconds from \(range.lowerBound) to \(range.upperBound)")
         }
         return seconds
     }

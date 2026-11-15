@@ -262,9 +262,10 @@ struct MCPPlaceholderLiveTests {
             echo ready > "$out/ready"
             while :; do /bin/sleep 0.05; done
             """
-        let definition = MCPServerDefinition(
+        var definition = MCPServerDefinition(
             name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
             sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
+        definition.startTimeoutSeconds = 1
         let configuration = MCPConfiguration(servers: [definition])
         let planned = try MCPLaunchPlanner.plan(
             servers: [name], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
@@ -279,7 +280,7 @@ struct MCPPlaceholderLiveTests {
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
-            pinning: .unenforced, recordForward: { _ in true }, deadlines: MCPGatewayDeadlines(start: 1, list: 300))
+            pinning: .unenforced, recordForward: { _ in true }, deadlines: MCPGatewayDeadlines(list: 300))
         let logged = Mutex<[String]>([])
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },

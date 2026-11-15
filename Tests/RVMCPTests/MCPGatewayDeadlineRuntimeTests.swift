@@ -99,12 +99,18 @@ final class GatewayRun: Sendable {
         return true
     }
 
-    static func core(_ servers: [MCPServerDefinition], deadlines: MCPGatewayDeadlines) -> MCPGatewayCore {
-        MCPGatewayCore(
+    /// Every server gets `startTimeout` as its `startTimeoutSeconds`.
+    static func core(_ servers: [MCPServerDefinition], startTimeout: Int) -> MCPGatewayCore {
+        let servers = servers.map { server in
+            var server = server
+            server.startTimeoutSeconds = startTimeout
+            return server
+        }
+        return MCPGatewayCore(
             configuration: MCPConfiguration(servers: servers),
             upstreams: servers.map { MCPGatewayCore.Upstream(definition: $0) },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
-            pinning: .unenforced, recordForward: { _ in true }, deadlines: deadlines)
+            pinning: .unenforced, recordForward: { _ in true }, deadlines: MCPGatewayDeadlines(list: 300))
     }
 
     func initialize() async -> Bool {
@@ -151,7 +157,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         var slow = MCPServerDefinition(name: "slow", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
         slow.callTimeoutSeconds = 1
         let run = GatewayRun(
-            core: GatewayRun.core([slow], deadlines: MCPGatewayDeadlines(start: 300, list: 300)),
+            core: GatewayRun.core([slow], startTimeout: 300),
             connections: [Self.launch("slow", mode: "answers", in: directory)])
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
@@ -173,7 +179,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let silent = MCPServerDefinition(name: "silent", command: "python3", tools: MCPToolPolicy(allow: ["*"]))
         let run = GatewayRun(
-            core: GatewayRun.core([silent], deadlines: MCPGatewayDeadlines(start: 1, list: 300)),
+            core: GatewayRun.core([silent], startTimeout: 1),
             connections: [Self.launch("silent", mode: "silent", in: directory)])
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
@@ -196,7 +202,7 @@ struct MCPGatewayDeadlineRuntimeTests {
             tools: MCPToolPolicy(allow: ["*"]))
         legacy.callTimeoutSeconds = 1
         let run = GatewayRun(
-            core: GatewayRun.core([legacy], deadlines: MCPGatewayDeadlines(start: 300, list: 300)),
+            core: GatewayRun.core([legacy], startTimeout: 300),
             connections: [.remote(MCPRemoteLaunch(server: "legacy", url: fixture.url("/sse"), transport: .sse))])
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
