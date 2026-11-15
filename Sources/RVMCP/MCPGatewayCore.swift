@@ -418,7 +418,7 @@ public struct MCPGatewayCore {
     public mutating func start() -> [MCPGatewayOutput] {
         order.map { server in
             phases[server] = .starting
-            let id = allocate(.initialize(server: server, deadline: clock().addingTimeInterval(startTimeout(server))))
+            let id = allocate(.initialize(server: server, deadline: deadlineClock().addingTimeInterval(startTimeout(server))))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
                 "protocolVersion": .string(Self.upstreamVersion),
                 "capabilities": .object([:]),
@@ -449,7 +449,7 @@ public struct MCPGatewayCore {
     /// Fails held elicitations nobody answered in time, so prompts cannot
     /// pin their arguments — or the 64 slots — for the whole session.
     mutating func expireHeld() -> [MCPGatewayOutput] {
-        let cutoff = clock().addingTimeInterval(-Self.heldLifetime)
+        let cutoff = deadlineClock().addingTimeInterval(-Self.heldLifetime)
         let expired = held.filter { $0.value.heldAt < cutoff }.sorted { $0.key < $1.key }
         guard expired.isEmpty == false else { return [] }
         var outputs: [MCPGatewayOutput] = []
@@ -493,7 +493,7 @@ public struct MCPGatewayCore {
     /// cancelled upstream, never sent again), and a cancelled entry is
     /// forgotten.
     mutating func expireDeadlines() -> [MCPGatewayOutput] {
-        let now = clock()
+        let now = deadlineClock()
         var outputs: [MCPGatewayOutput] = []
         for (id, entry) in pending.filter({ $0.value.deadline <= now }).sorted(by: { $0.key < $1.key }) {
             switch entry {
@@ -700,7 +700,7 @@ public struct MCPGatewayCore {
                     message: "rv could not write the audit record for \(shownServer) tool \(shownTool); the call was not run")),
             ]
         }
-        let started = clock()
+        let started = deadlineClock()
         let timeout = callTimeout(server)
         let id = allocate(.call(Call(
             client: client, server: server, tool: tool, keys: keys, approval: approval, started: started,
@@ -727,7 +727,7 @@ public struct MCPGatewayCore {
         for (id, entry) in pending {
             guard case .call(let call) = entry, call.client == target else { continue }
             let server = call.server
-            pending[id] = .cancelled(server: server, until: clock().addingTimeInterval(callTimeout(server)))
+            pending[id] = .cancelled(server: server, until: deadlineClock().addingTimeInterval(callTimeout(server)))
             progressTokens[id] = nil
             var forwarded = JSONObject()
             forwarded["requestId"] = .int(id)
@@ -760,7 +760,7 @@ public struct MCPGatewayCore {
         let fanout = nextID
         nextID += 1
         fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [], search: search)
-        let deadline = clock().addingTimeInterval(deadlines.list)
+        let deadline = deadlineClock().addingTimeInterval(deadlines.list)
         return ready.map { server in
             let id = allocate(.list(fanout: fanout, server: server, deadline: deadline))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))
@@ -907,7 +907,7 @@ public struct MCPGatewayCore {
             nextID += 1
             held[key] = HeldCall(
                 client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys,
-                binding: binding, shown: message, heldAt: clock())
+                binding: binding, shown: message, heldAt: deadlineClock())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: false,
@@ -1131,7 +1131,7 @@ public struct MCPGatewayCore {
                     message: "MCP server \(MCPDisplayedText.field(server)) answered with neither a result nor an error")
             }
             let isError = message["result"] == nil || message["result"]?["isError"]?.boolValue == true
-            let duration = Int((clock().timeIntervalSince(started) * 1000).rounded())
+            let duration = Int((deadlineClock().timeIntervalSince(started) * 1000).rounded())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
@@ -1164,7 +1164,7 @@ public struct MCPGatewayCore {
                     state.seenCursors.insert(key)
                     fanouts[fanout] = state
                     let id = allocate(.list(
-                        fanout: fanout, server: server, deadline: clock().addingTimeInterval(deadlines.list)))
+                        fanout: fanout, server: server, deadline: deadlineClock().addingTimeInterval(deadlines.list)))
                     return outputs + [.toUpstream(server: server, message: Self.request(
                         id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
                 }
@@ -1639,7 +1639,7 @@ public struct MCPGatewayCore {
         let total = params?["total"]
         guard total == nil || finite(total) else { return nil }
         if case .call(var call)? = pending[id] {
-            call.deadline = min(clock().addingTimeInterval(callTimeout(server)), call.ceiling)
+            call.deadline = min(deadlineClock().addingTimeInterval(callTimeout(server)), call.ceiling)
             pending[id] = .call(call)
         }
         var rebuilt = JSONObject()
