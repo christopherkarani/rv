@@ -122,6 +122,8 @@ check_value_types() {
   #            MCPShutdownSignals itself holds the signal sources and the
   #            dispositions it replaced, has one owner (serve, or the
   #            probe) and is cancelled once by it.
+  #   rv-mcp-probe GatewaySink — the secrets gateway's `SecretResponseSink`
+  #            is an `AnyObject` protocol, so the probe's sink is a class.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/package/internal/…/final) must not hide a declaration, so
   # we match the keyword on a line that may start with any run of those tokens.
@@ -136,6 +138,7 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
     | grep -vE 'Sources/RVMCP/MCPShutdownSignals.swift:[0-9]+:\s*(package |private )final class (MCPShutdownSignals|Heard)[: ]' \
     | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class Count' \
+    | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class GatewaySink: SecretResponseSink' \
     | grep -v 'Sources/RVMCP/CustodianSocketClient.swift:' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
