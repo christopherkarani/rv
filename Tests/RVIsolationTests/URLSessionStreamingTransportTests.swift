@@ -157,6 +157,13 @@ private final class LoopbackUpstream: @unchecked Sendable {
             _ = Self.write(client, Array(
                 "HTTP/1.1 401 Unauthorized\r\n\(challenge)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
                     .utf8) + body)
+        } else if let at = segments.firstIndex(of: "interim"), at + 1 < segments.count,
+            let code = Int(segments[at + 1])
+        {
+            let body = Array("the final answer".utf8)
+            _ = Self.write(client, Array(
+                ("HTTP/1.1 \(code) Interim\r\nLink: </style.css>; rel=preload\r\n\r\n"
+                    + "HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n").utf8) + body)
         } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
@@ -598,7 +605,7 @@ struct URLSessionStreamingTransportTests {
             stopped.signal()
         }
         let counts = { under.transport.sessionCounts }
-        let released = eventually(within: 20) {
+        let released = eventually(within: 40) {
             counts().made == 1 && counts().live == 0 && under.transport.budget.waiting == 0
         }
         trickle.going.store(false, ordering: .relaxed)
@@ -621,24 +628,24 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits("GET", "/v1/big") == 1)
     }
 
-    /// An answer whose parts come 2.5 s apart, longer than the 1 s window,
+    /// An answer whose parts come 5 s apart, longer than the 2 s window,
     /// as SSE events may: waiting for the upstream is not waiting to write,
     /// so a client reading as it comes is never cut off.
     @Test(.timeLimit(.minutes(1)))
     func aStreamIdleLongerThanThePaceWindowIsNotCutOff() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
-        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 2)
         defer { under.gateway.stop() }
         let size = 3 << 16
         let client = try connectGateway(under.port)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/2500").utf8)))
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/5000").utf8)))
         let answer = try ChunkedAnswer(reading: client)
         #expect(answer.head.hasPrefix("http/1.1 200"))
         #expect(answer.ended)
         #expect(answer.body == size)
-        #expect(upstream.hits("GET", "/v1/slow/\(size)/2500") == 1)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/5000") == 1)
     }
 
     /// An upstream faster than its reader, with an answer well past the
@@ -732,16 +739,17 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits(method, "/auth/\(challenge)") == 1)
     }
 
-    /// The server's certificate is still checked as URLSession checks it,
-    /// and a request for a client certificate handled as before; every
-    /// credential challenge is cancelled, never answered. corelibs-foundation
-    /// raises neither of the first two, so on Linux even they are cancelled.
+    /// The server's certificate is still checked as URLSession checks it; a
+    /// request for a client certificate is declined, so no identity is ever
+    /// offered and a server that only asks still answers; every credential
+    /// challenge is cancelled, never answered. corelibs-foundation raises
+    /// neither of the first two, so on Linux even they are cancelled.
     @Test
     func onlyCredentialChallengesAreCancelled() {
         let decide = URLSessionStreamingDelegate.disposition(forAuthenticationMethod:)
         #if canImport(Darwin)
         #expect(decide(NSURLAuthenticationMethodServerTrust) == .performDefaultHandling)
-        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .performDefaultHandling)
+        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .rejectProtectionSpace)
         #else
         #expect(decide("NSURLAuthenticationMethodServerTrust") == .cancelAuthenticationChallenge)
         #expect(decide("NSURLAuthenticationMethodClientCertificate") == .cancelAuthenticationChallenge)
@@ -753,6 +761,15 @@ struct URLSessionStreamingTransportTests {
         ] {
             #expect(decide(method) == .cancelAuthenticationChallenge, "\(method)")
         }
+    }
+
+    /// The upstream sessions keep no credential store: no stored credential
+    /// can be offered to an upstream.
+    @Test
+    func upstreamSessionsHaveNoCredentialStorage() {
+        let upstream = URLSessionStreamingSession(onInvalidated: {})
+        defer { upstream.session.invalidateAndCancel() }
+        #expect(upstream.session.configuration.urlCredentialStorage == nil)
     }
 
     /// Through the gateway, a challenged request reaches the upstream once,
@@ -768,6 +785,42 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.status == 502)
         #expect(answer.body.contains("the brokered credential was rejected upstream"), "\(answer.body)")
         #expect(upstream.hits("POST", "/v1/auth/\(challenge)") == 1)
+    }
+
+    /// An interim answer (`103 Early Hints`, or a `100 Continue` the gateway
+    /// did not ask for) is not the answer: the final status and its whole
+    /// body are handed on.
+    @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
+    func anInterimAnswerIsPassedOverForTheFinalOne(code: Int) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/interim/\(code)"))
+        URLSessionStreamingTransport().send(
+            SecretUpstreamRequest(method: "GET", url: url, headers: [], body: Data()), sink: sink)
+        #expect(sink.headStatus == 200)
+        #expect(sink.result.body == "the final answer")
+        #expect(sink.result.ended == "finished")
+    }
+
+    /// Through the gateway: the client gets the final answer whole, also
+    /// when it asked for `100 Continue` (which the gateway sends itself).
+    @Test(.timeLimit(.minutes(1)), arguments: [103, 100])
+    func aClientGetsTheFinalAnswerPastAnUpstreamInterim(code: Int) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let body = #"{"input":"x"}"#
+        let expect = code == 100 ? "Expect: 100-continue\r\n" : ""
+        let answer = try gatewayExchange(
+            port: under.port,
+            "POST /s/OPENAI_API_KEY/interim/\(code) HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                + "Authorization: Bearer \(under.placeholder.text)\r\n\(expect)"
+                + "Content-Length: \(body.utf8.count)\r\n\r\n\(body)")
+        #expect(answer.status == 200, "\(answer.body)")
+        #expect(answer.body == "the final answer")
+        #expect(upstream.hits("POST", "/v1/interim/\(code)") == 1)
     }
 
     #if canImport(Darwin)

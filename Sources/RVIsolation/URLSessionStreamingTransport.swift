@@ -153,6 +153,7 @@ final class URLSessionStreamingSession: @unchecked Sendable {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 300
         configuration.timeoutIntervalForResource = 3_600
@@ -515,25 +516,33 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
             completionHandler(.cancel)
             return
         }
+        // corelibs-foundation hands on an interim answer (`103 Early Hints`,
+        // an unasked `100 Continue`) as if it were the answer, and the
+        // exchange keeps only the first head: wait for the final one.
+        // Darwin never reports these.
+        guard (100..<200).contains(http.statusCode) == false else {
+            completionHandler(.allow)
+            return
+        }
         exchange.push(.head(status: http.statusCode, headers: Self.headers(of: http)))
         completionHandler(.allow)
     }
 
     /// What a challenge gets. The server's certificate is checked as
-    /// URLSession always checks it, and a server's request for a client
-    /// certificate is handled as before. Every other challenge is
-    /// cancelled: Darwin answered a Basic challenge by sending the request,
+    /// URLSession always checks it. A server's request for a client
+    /// certificate is declined: default handling could offer an identity
+    /// from the keychain, and a loopback server that only asks for one (not
+    /// requires it) answered as before. Every other challenge is cancelled: Darwin answered a Basic challenge by sending the request,
     /// its body and its brokered credential, again, and default handling
     /// may offer the upstream an ambient credential, such as Kerberos.
     /// corelibs-foundation raises neither of those (libcurl checks the
     /// certificate itself), so on Linux every challenge is cancelled.
     static func disposition(forAuthenticationMethod method: String) -> URLSession.AuthChallengeDisposition {
         #if canImport(Darwin)
-        let handledAsBefore = [NSURLAuthenticationMethodServerTrust, NSURLAuthenticationMethodClientCertificate]
-        #else
-        let handledAsBefore: [String] = []
+        if method == NSURLAuthenticationMethodServerTrust { return .performDefaultHandling }
+        if method == NSURLAuthenticationMethodClientCertificate { return .rejectProtectionSpace }
         #endif
-        return handledAsBefore.contains(method) ? .performDefaultHandling : .cancelAuthenticationChallenge
+        return .cancelAuthenticationChallenge
     }
 
     /// On Darwin a cancelled challenge ends the task with no response, so

@@ -1245,8 +1245,10 @@ may take:
   write that moved a few bytes started the 30 s timeout again, so a client
   taking 1 KiB every 29 s held all of that for as long as it liked. The
   windows are counted one after another, so a client is cut at most two
-  windows after it slowed down, and the slowest client kept takes in about
-  546 bytes a second.
+  windows after it slowed down. A window is checked only when a write
+  returns, and one write can block for the whole 30 s send timeout, so a
+  window can run out to about 60 s: the slowest client kept takes in about
+  273 bytes a second.
 
 Any local process can connect, and a head deadline alone does not stop one
 that reconnects: 64 connections opened again every 10 s would keep every
@@ -1273,7 +1275,13 @@ another process in between is refused as before.
 Outsiders can still keep each other out, and they can slow the runtimes
 down. The gateway no longer turns a runtime away for them: a runtime's
 connection waits behind the outsiders being checked, never holds a slot
-they hold, and is never answered `503` for them. A check lists the host's
+they hold, and is not answered `503` for them, with one exception: a
+runtime's connection whose process cannot be placed when it connects
+waits as an outsider, in one of the 8 outsider slots with their 2 s head
+deadline, and gets `503 gateway busy` while 8 outsiders hold them. A
+burst of a runtime's own connections also waits behind the checks, 8 at
+a time, before taking a slot; the cost of one check was not measured. A
+check lists the host's
 processes and walks each registered runtime's, once per runtime for an
 outsider, so a flood of outsiders delays each runtime's connection by up
 to that many checks, 8 at a time. The kernel can still turn one away:
@@ -1281,10 +1289,14 @@ past the 128 waiting in the backlog, it refuses new connections, the
 runtimes' included, until there is room. Sixteen threads connecting and
 resetting as fast as they could filled it on macOS, and a runtime's
 `connect` failed until it dialled again. A connection reset while it
-waits there still holds its place until the gateway accepts and closes it. Refusals that
-name no secret (`malformed`, `requestTimeout`, `unknownRoute`) from outside
-every runtime are recorded at most once a second, with how many were left
-out since the record before; one that names a secret is always recorded.
+waits there still holds its place until the gateway accepts and closes it. Refusals from
+outside every runtime that present no live placeholder (`malformed`,
+`requestTimeout`, `unknownRoute`, and any refusal of a request naming a
+secret, a made-up one included) are recorded at most once a second, with
+how many were left out since the record before; one that presents a live
+placeholder is always recorded. The last refusal left out is written when
+the gateway stops, saying how many came before it; with neither a later
+refusal nor a stop, that count is not written.
 
 A client that resets its connection before the gateway accepts it ends
 only that connection. On Darwin, one that resets it just after, before
@@ -1294,8 +1306,11 @@ it raised SIGPIPE, which ends any process that does not ignore that signal.
 On Linux every write passes `MSG_NOSIGNAL`, and such a connection is an
 outsider whose head cannot be read, refused as one.
 A local process connecting and resetting at once could end it that way.
-rvd and `rv mcp serve` ignore SIGPIPE, so this ended the test process,
-where it was found.
+The gateway runs in rv-workspace-host and `rv mcp`, which ignore SIGPIPE,
+and in the `rv` process of `rv run --secret`, which does not and could be
+ended this way; it ended the test process, where it was found. rvd does
+not host the gateway. Every send on the gateway's sockets now also passes
+`MSG_NOSIGNAL` on Darwin, as on Linux.
 
 ### Answers larger than the client takes in
 
@@ -1364,15 +1379,22 @@ answered a `Basic` or `Digest` challenge by sending the request again, for
 every method, body and brokered credential included; a `Bearer` challenge
 or a bare `401` was sent once, and Linux sent each once. The gateway's
 sessions now cancel every credential challenge (Basic, Digest, NTLM,
-Negotiate and any other), which also keeps default handling from offering
-the upstream an ambient credential such as a Kerberos ticket. The server's
-certificate is still checked as URLSession always checks it, and a
-server's request for a client certificate is handled as before. Measured:
+Negotiate, a proxy's `407` and any other), which also keeps default
+handling from offering the upstream an ambient credential such as a
+Kerberos ticket, and they keep no credential storage. The server's
+certificate is still checked as URLSession always checks it. A server's
+request for a client certificate is declined (`rejectProtectionSpace`),
+so no keychain identity is offered: against a loopback server that only
+asks for one, the request completed as it did with default handling;
+against one that requires one, both fail the handshake. Measured:
 after the cancel, Darwin delivers no response and ends the request
 cancelled; corelibs-foundation delivers the `401` first. Either way the
 `401` that carried the challenge reaches the response writer, which, as
 for any `401`, answers its client `502` ("the brokered credential was
-rejected upstream") and records the upstream's `401`. Counted at the
+rejected upstream") and records the upstream's `401`. When Darwin gives a
+cancelled challenge no failure response, the gateway hands the writer a
+`401` of its own making: the client still gets the `502`, and the audit
+records an upstream `401` the upstream may not have sent. Counted at the
 upstream, each of GET, POST with a body and PUT, against Basic, Digest,
 Bearer and bare `401`s, now arrives once on both systems.
 

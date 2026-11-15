@@ -169,15 +169,17 @@ public final class SecretGateway: @unchecked Sendable {
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let outsiderSlots = DispatchSemaphore(value: SecretGateway.outsiderConnections)
     private let classifiers = DispatchSemaphore(value: SecretGateway.classifyingConnections)
-    /// Bounds the audit records of outsiders' nameless refusals.
+    /// Bounds the audit records of outsiders' refusals that present no live
+    /// placeholder.
     let outsiderAudit = GatewayOutsiderAudit()
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
     /// Test seam, nil in production. Runs on the accept loop after a
-    /// connection is accepted and before its socket is set up.
-    var afterAccept: (@Sendable () -> Void)?
+    /// connection is accepted and before its socket is set up, given the
+    /// accepted socket.
+    var afterAccept: (@Sendable (Int32) -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
     /// Seconds a write to a client may block before its connection is cut,
@@ -428,6 +430,8 @@ public final class SecretGateway: @unchecked Sendable {
         for fd in fds where fd >= 0 {
             close(fd)
         }
+        // Outsiders' refusals left out since the last record are not lost.
+        if let leftOut = outsiderAudit.drain() { _ = audit(leftOut) }
     }
 
     /// A loopback connect makes `poll` see the listener so the accept loop
@@ -491,7 +495,7 @@ public final class SecretGateway: @unchecked Sendable {
                 close(client)
                 return
             }
-            afterAccept?()
+            afterAccept?(client)
             // Darwin inherits `O_NONBLOCK` from the listener. A read that
             // races the client's write is `EAGAIN`, and that is not a
             // malformed request. The accepted number is closed once before
@@ -507,9 +511,9 @@ public final class SecretGateway: @unchecked Sendable {
             }
             _ = fcntl(held, F_SETFD, FD_CLOEXEC)
             #if canImport(Darwin)
-            // Darwin refuses this on a connection its client already reset,
-            // and a write to that socket raises SIGPIPE in the gateway's
-            // process: such a connection is closed unanswered.
+            // Darwin refuses this on a connection its client already reset.
+            // Sends pass MSG_NOSIGNAL as well, but there is no one left to
+            // answer: such a connection is closed unanswered.
             var one: Int32 = 1
             guard setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
                 close(held)
@@ -607,17 +611,21 @@ public final class SecretGateway: @unchecked Sendable {
         let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
             refuse(
-                client, .unknownRoute, method: head.method, path: path, secret: nil, outsider: outsider,
-                started: started)
+                client, .unknownRoute, method: head.method, path: path, secret: nil,
+                outsider: outsider && presentsLiveEntry(headBytes) == false, started: started)
             return
         }
         // Every live entry the request names, so a refusal can name the
         // runtime the placeholder was leased to.
         var presented: [Entry] = []
         func deny(_ refusal: GatewayRefusal, runtime: String? = presented.first?.runtime) {
+            // The route's name is the sender's to choose: an outsider's
+            // refusal is bounded unless it presented a live placeholder,
+            // also one refused before any substitution.
+            let bounded = outsider && presented.isEmpty && presentsLiveEntry(headBytes) == false
             refuse(
                 client, refusal, method: head.method, path: path, secret: route.secret,
-                runtime: runtime, started: started)
+                runtime: runtime, outsider: bounded, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
             deny(.echoMethod)
@@ -871,6 +879,12 @@ public final class SecretGateway: @unchecked Sendable {
         return verdict
     }
 
+    /// True when the raw head carries a placeholder this gateway holds.
+    private func presentsLiveEntry(_ head: [UInt8]) -> Bool {
+        SecretPlaceholder.occurrences(in: head).contains { entry($0.token) != nil }
+    }
+
+    /// `outsider`: the record is bounded by `outsiderAudit`.
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
         runtime: String? = nil, outsider: Bool = false, started: DispatchTime
@@ -878,18 +892,18 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
-        var reason = refusal.reason
-        if outsider, secret == nil {
-            guard let leftOut = outsiderAudit.admit() else { return }
-            if leftOut > 0 { reason += " (\(leftOut) more from outside the runtimes since the last record)" }
-        }
-        _ = audit(SecretUseRecord(
+        let record = SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
             activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
-            refusal: refusal, reason: reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
-        ))
+        )
+        guard outsider else {
+            _ = audit(record)
+            return
+        }
+        if let admitted = outsiderAudit.admit(record) { _ = audit(admitted) }
     }
 }
 
@@ -999,7 +1013,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         }
         text += "Connection: close\r\n\r\n"
         if watching { held = [] }
-        closed = write(Array(text.utf8)) == false
+        if write(Array(text.utf8)) == false {
+            closed = true
+            failure = failure ?? Self.cutShort
+        }
     }
 
     func body(_ data: Data) -> Bool {
@@ -1063,7 +1080,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         guard bytes.isEmpty == false else { return true }
         bytesWritten += bytes.count
         let frame = Self.chunk(bytes)
-        if write(frame) == false { closed = true }
+        if write(frame) == false {
+            closed = true
+            failure = failure ?? Self.cutShort
+        }
         return closed == false
     }
 
@@ -1104,11 +1124,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
 }
 
 enum GatewaySocket {
-    #if canImport(Darwin)
-    static let sendFlags: Int32 = 0
-    #else
+    /// Every send, on both platforms: Darwin's SO_NOSIGPIPE is only as good
+    /// as the setsockopt that set it, and that is refused once the peer is
+    /// gone.
     static let sendFlags = Int32(MSG_NOSIGNAL)
-    #endif
 
     @discardableResult
     static func writeAll(_ fd: Int32, _ bytes: [UInt8]) -> Bool {
