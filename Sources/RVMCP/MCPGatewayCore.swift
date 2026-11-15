@@ -467,6 +467,7 @@ public struct MCPGatewayCore {
     }
 
     public mutating func handle(_ input: MCPGatewayInput) -> [MCPGatewayOutput] {
+        if case .gatewayStopping = input { return gatewayStopping() }
         // An elicitation answer dispatches before expiry runs: on an idle
         // gateway the user's own (possibly late) answer is the next input,
         // and expiring first would drop it silently.
@@ -1768,6 +1769,29 @@ public struct MCPGatewayCore {
             outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
         }
         return wasStarting ? outputs + releaseWaiting() : outputs
+    }
+
+    /// Serving ends: each call in flight gets its last record (it may still
+    /// have run), and each prompt still shown ends declined. Nothing is
+    /// sent: the runtime stops every upstream next.
+    mutating func gatewayStopping() -> [MCPGatewayOutput] {
+        var outputs: [MCPGatewayOutput] = []
+        for (id, entry) in pending.sorted(by: { $0.key < $1.key }) {
+            guard case .call(let call) = entry else { continue }
+            pending[id] = nil
+            progressTokens[id] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                argumentKeys: call.keys, isError: true, reason: "gateway stopped; the call may still have run",
+                outcome: .interrupted(grant: call.approval?.grant))))
+        }
+        for (key, call) in held.sorted(by: { $0.key < $1.key }) {
+            held[key] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
+                isError: true, reason: "gateway stopped", outcome: .declined(approvalID: key))))
+        }
+        return outputs
     }
 
     mutating func releaseWaiting() -> [MCPGatewayOutput] {

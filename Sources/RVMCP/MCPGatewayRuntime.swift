@@ -508,6 +508,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             stopping = true
             ticker?.cancel()
             ticker = nil
+            perform(core.handle(.gatewayStopping))
             stopUpstreams()
             return clientNotReading ? .clientNotReading : .finished
         }
