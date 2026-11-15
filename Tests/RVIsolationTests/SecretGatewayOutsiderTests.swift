@@ -17,6 +17,11 @@ private final class MarkedPorts: Sendable {
     }
 }
 
+/// Set once the hammering threads should stop.
+private final class StopFlag: Sendable {
+    let raised = Atomic<Bool>(false)
+}
+
 /// A loopback client socket bound before it connects, so its port is known first.
 private func boundClient() throws -> (fd: Int32, port: UInt16) {
     #if canImport(Darwin)
@@ -55,6 +60,48 @@ private func dial(_ fd: Int32, to port: Int) throws {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
     }
     try #require(connected == 0)
+}
+
+/// A member's connection, marked before it dials, dialled again while the
+/// kernel refuses it (a full listen backlog), at most 200 times.
+private func dialAgainWhileRefused(_ port: Int, marked: MarkedPorts) throws -> (fd: Int32, port: UInt16) {
+    for _ in 0..<200 {
+        let member = try boundClient()
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(member.fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        if connected == 0 { return member }
+        close(member.fd)
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+    throw POSIXError(.ECONNREFUSED)
+}
+
+/// Connects and resets the connection at once, recording nothing when
+/// either fails. A reset leaves no port waiting out TIME_WAIT, and one
+/// that lands before the gateway accepts makes its `accept` fail.
+private func connectAndHangUp(_ port: Int) {
+    #if canImport(Darwin)
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+    guard fd >= 0 else { return }
+    defer { close(fd) }
+    var reset = linger(l_onoff: 1, l_linger: 0)
+    _ = setsockopt(fd, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = UInt16(port).bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    _ = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
 }
 
 /// What the gateway wrote before it closed the connection.
@@ -135,6 +182,180 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.count == 1)
         #expect(outsiders.filter(readable).count == turnedAway, "an outsider holding a slot was answered")
         #expect(audit.items.withLock { $0.allSatisfy { $0.refusal == nil } })
+    }
+
+    /// Outsiders that take long to tell apart hold every classifier, and
+    /// more wait behind them: a member that connects meanwhile waits its
+    /// turn and is served. It never takes a slot an outsider could hold.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersSlowToTellApartDelayAMemberButNeverTurnItAway() throws {
+        let marked = MarkedPorts()
+        let slow = GatewayPeerCheck { peer, _ in
+            if marked.ports.withLock({ $0.contains(peer.port) }) { return .member }
+            Thread.sleep(forTimeInterval: 0.2)
+            return .outsider
+        }
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(slow, upstream: upstream, audit: audit)
+        gateway.outsiderHeadDeadline = 30
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let outsiders = try (0..<SecretGateway.maximumConnections).map { _ in try boundClient().fd }
+        defer { outsiders.forEach { close($0) } }
+        for fd in outsiders { try dial(fd, to: port) }
+        let member = try boundClient()
+        defer { close(member.fd) }
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        try dial(member.fd, to: port)
+        #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+        let served = answer(member.fd)
+        #expect(served.hasPrefix("HTTP/1.1 200"), "\(served.prefix(80))")
+        #expect(upstream.requests.count == 1)
+    }
+
+    /// Outsiders connecting and hanging up as fast as they can, while a
+    /// member sends one request after another: every one is served. They
+    /// can fill the listen backlog, and the kernel then refuses the member's
+    /// connection before the gateway sees it, so the member dials again;
+    /// the gateway itself never turns it away.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersHammeringTheGatewayNeverTurnAwayAMember() throws {
+        let marked = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(marked.check, upstream: upstream, audit: audit)
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let stop = StopFlag()
+        let hammers = DispatchGroup()
+        for _ in 0..<16 {
+            hammers.enter()
+            Thread.detachNewThread {
+                defer { hammers.leave() }
+                while stop.raised.load(ordering: .relaxed) == false { connectAndHangUp(port) }
+            }
+        }
+        var statuses: [String] = []
+        for _ in 0..<20 {
+            let member = try dialAgainWhileRefused(port, marked: marked)
+            #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+            statuses.append(String(answer(member.fd).prefix(12)))
+            close(member.fd)
+        }
+        stop.raised.store(true, ordering: .relaxed)
+        _ = hammers.wait(timeout: .now() + 10)
+        #expect(statuses.allSatisfy { $0 == "HTTP/1.1 200" }, "\(statuses)")
+        #expect(upstream.requests.count == 20)
+    }
+
+    /// A client that resets its connection after the gateway accepted it
+    /// but before it was set up. Darwin then refuses `SO_NOSIGPIPE` on that
+    /// socket, and any answer written to it raised SIGPIPE, which killed the
+    /// gateway's whole process. It is closed unanswered, unaudited on Darwin,
+    /// and the next client is served.
+    @Test(.timeLimit(.minutes(1)))
+    func aClientResetBeforeItsConnectionIsSetUpIsClosedUnanswered() throws {
+        let marked = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(marked.check, upstream: upstream, audit: audit)
+        let paused = StopFlag()
+        let accepted = DispatchSemaphore(value: 0)
+        let reset = DispatchSemaphore(value: 0)
+        gateway.afterAccept = {
+            guard paused.raised.exchange(true, ordering: .relaxed) == false else { return }
+            accepted.signal()
+            _ = reset.wait(timeout: .now() + 10)
+        }
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        #if canImport(Darwin)
+        let resetting = socket(AF_INET, SOCK_STREAM, 0)
+        #else
+        let resetting = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
+        try #require(resetting >= 0)
+        var abort = linger(l_onoff: 1, l_linger: 0)
+        _ = setsockopt(resetting, SOL_SOCKET, SO_LINGER, &abort, socklen_t(MemoryLayout<linger>.size))
+        try dial(resetting, to: port)
+        #expect(accepted.wait(timeout: .now() + 10) == .success)
+        close(resetting)
+        Thread.sleep(forTimeInterval: 0.1)
+        reset.signal()
+
+        let member = try boundClient()
+        defer { close(member.fd) }
+        marked.ports.withLock { _ = $0.insert(member.port) }
+        try dial(member.fd, to: port)
+        #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
+        #expect(answer(member.fd).hasPrefix("HTTP/1.1 200"))
+        #expect(upstream.requests.count == 1)
+        // Linux sends with MSG_NOSIGNAL and has no such step: there the reset
+        // connection is an outsider whose head cannot be read, refused as one.
+        #if canImport(Darwin)
+        #expect(audit.items.withLock { $0.allSatisfy { $0.refusal == nil } })
+        #endif
+    }
+
+    /// Malformed heads from outside every runtime, one after another: the
+    /// first is recorded and the rest only counted until the interval has
+    /// passed; the next record says how many were left out.
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersNamelessRefusalsAreRecordedOncePerInterval() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, _) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        func sendGarbage() throws -> String {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array("not http\r\n\r\n".utf8)))
+            return answer(client.fd)
+        }
+        for _ in 0..<10 { #expect(try sendGarbage().hasPrefix("HTTP/1.1 4")) }
+        let malformed = { audit.items.withLock { $0.filter { $0.refusal?.code == "malformed" } } }
+        #expect(malformed().count == 1)
+        gateway.outsiderAudit.interval = 0
+        _ = try sendGarbage()
+        #expect(malformed().count == 2)
+        let reason = malformed().last?.reason ?? ""
+        #expect(reason.contains("(9 more from outside the runtimes since the last record)"), "\(reason)")
+        #expect(upstream.requests.isEmpty)
+    }
+
+    /// A peer that could not be placed when it connected waits as an
+    /// outsider, and the full check after its head decides: placed in the
+    /// runtime, it is forwarded; still unplaced, it is refused.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
+    func aPeerUnplacedAtFirstIsDecidedByTheFullCheck(placedLater: Bool) throws {
+        let checked = MarkedPorts()
+        let settles = GatewayPeerCheck { peer, _ in
+            let first = checked.ports.withLock { $0.insert(peer.port).inserted }
+            return first || placedLater == false ? .unverifiable : .member
+        }
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(settles, upstream: upstream, audit: audit)
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        let client = try boundClient()
+        defer { close(client.fd) }
+        try dial(client.fd, to: port)
+        #expect(GatewaySocket.writeAll(client.fd, bearer(placeholder)))
+        let served = answer(client.fd)
+        if placedLater {
+            #expect(served.hasPrefix("HTTP/1.1 200"), "\(served.prefix(80))")
+            #expect(upstream.requests.count == 1)
+        } else {
+            #expect(served.hasPrefix("HTTP/1.1 403"), "\(served.prefix(80))")
+            #expect(upstream.requests.isEmpty)
+            #expect(audit.items.withLock { $0.last?.refusal?.code } == "runtimeUnverified")
+        }
     }
 
     /// Outside every runtime when it connected, inside one by the time its

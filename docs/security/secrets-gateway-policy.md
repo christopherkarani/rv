@@ -1174,27 +1174,68 @@ may take:
   at the deadline.
 - **Request body:** 60 s from the moment the head is accepted, answered
   `408` the same way past it.
-- **Writing the answer:** a write to the client that blocks for 30 s closes
-  the connection. A write that moves a few bytes before its timeout starts
-  the next one, so a client that does not read is cut off after more than
-  one timeout: with a 3 s timeout, a client that never read was cut off
-  after 11.2 s on macOS.
+- **Writing the answer:** a client the gateway has bytes waiting for must
+  take in at least 16 KiB over every 30 s the gateway spends writing to it,
+  or it is cut off: its answer ends without the chunked terminator, its
+  upstream request is cancelled, and its slot, threads, session and
+  upstream connection are given back. A write that blocks for 30 s with
+  nothing taken in is cut the same way. Time spent waiting for the
+  upstream does not count, so a stream with nothing to send, such as SSE
+  between events, stays open as long as its upstream does. Before, each
+  write that moved a few bytes started the 30 s timeout again, so a client
+  taking 1 KiB every 29 s held all of that for as long as it liked. The
+  windows are counted one after another, so a client is cut at most two
+  windows after it slowed down, and the slowest client kept takes in about
+  546 bytes a second.
 
 Any local process can connect, and a head deadline alone does not stop one
 that reconnects: 64 connections opened again every 10 s would keep every
 runtime's request waiting for a slot, an outage for as long as it kept
-going. So before reading a byte, the gateway checks the connecting process
-against every registered runtime, as it does a placeholder's runtime after
-the head. A connection from none of them (or whose process cannot be
-placed, or that arrives while no runtime is registered) gives its slot back
-at once and takes one of 8 slots of its own, with 2 s for its head; past
+going. So before reading a byte, and before it takes any slot, the gateway
+checks the connecting process against every registered runtime, as it does
+a placeholder's runtime after the head. At most 8 connections are checked
+at once; the next waits, unread, and those after it wait in the listen
+backlog of 128. Only a connection found inside a runtime takes one of the
+64 slots. One from none of them, or that arrives while no runtime is
+registered, takes one of 8 slots of its own, with 2 s for its head; past
 those 8 it gets `503 gateway busy` unread, and no audit record. Its head is
 still read, so a placeholder spent from outside is refused as
 `runtimeMismatch` naming its runtime. It is never forwarded: if its process
 passes the check after its head is read, it is refused as
-`runtimeUnverified`. Such processes can still keep each other out, but not
-the runtimes. The check runs again after the head for every connection, so
-a socket handed to another process in between is refused as before.
+`runtimeUnverified`. A connection whose process cannot be placed at all
+(the kernel could not answer, or some runtime could not be read) waits
+the same way, and the full check after its head decides: placed in the
+runtime its placeholder names, it moves to one of the 64 slots and is
+forwarded; still unplaced, it is refused as `runtimeUnverified`. The check
+runs again after the head for every connection, so a socket handed to
+another process in between is refused as before.
+
+Outsiders can still keep each other out, and they can slow the runtimes
+down. The gateway no longer turns a runtime away for them: a runtime's
+connection waits behind the outsiders being checked, never holds a slot
+they hold, and is never answered `503` for them. A check lists the host's
+processes and walks each registered runtime's, once per runtime for an
+outsider, so a flood of outsiders delays each runtime's connection by up
+to that many checks, 8 at a time. The kernel can still turn one away:
+past the 128 waiting in the backlog, it refuses new connections, the
+runtimes' included, until there is room. Sixteen threads connecting and
+resetting as fast as they could filled it on macOS, and a runtime's
+`connect` failed until it dialled again. A connection reset while it
+waits there still holds its place until the gateway accepts and closes it. Refusals that
+name no secret (`malformed`, `requestTimeout`, `unknownRoute`) from outside
+every runtime are recorded at most once a second, with how many were left
+out since the record before; one that names a secret is always recorded.
+
+A client that resets its connection before the gateway accepts it ends
+only that connection. On Darwin, one that resets it just after, before
+the gateway has set it up, is closed unanswered and unaudited: the socket
+of such a connection refuses `SO_NOSIGPIPE`, and the gateway's answer to
+it raised SIGPIPE, which ends any process that does not ignore that signal.
+On Linux every write passes `MSG_NOSIGNAL`, and such a connection is an
+outsider whose head cannot be read, refused as one.
+A local process connecting and resetting at once could end it that way.
+rvd and `rv mcp serve` ignore SIGPIPE, so this ended the test process,
+where it was found.
 
 ### Answers larger than the client takes in
 
@@ -1210,9 +1251,12 @@ one request's wait never holds up another's.
 **macOS.** Darwin's session stops reading while its delegate's callback has
 not returned. The callback waits while more than 256 KiB waits for the
 client, so a slow client slows its upstream to its own pace, and an answer
-of any size reaches a client that keeps reading at any pace, sent once.
-Each request holds about one of Darwin's bodies (up to 4 MiB) and 256 KiB
-at most. A session that served its request to the end is kept, up to 64,
+of any size reaches a client that keeps reading, sent once, within three
+limits, each a visible cut (no terminator): the session's request timeout
+fires while the callback waits, so a client that takes more than 300 s
+over 256 KiB is cut; the minimum pace above applies; and no transfer
+lasts more than 3600 s (`timeoutIntervalForResource`). Each request holds
+about one of Darwin's bodies (up to 4 MiB) and 256 KiB at most. A session that served its request to the end is kept, up to 64,
 so requests one after another share one upstream connection and TLS
 handshake; requests at the same time each have their own (16 at once used
 15 connections).
@@ -1242,18 +1286,40 @@ its own connection and TLS handshake.
 
 The terminator is written only after every byte before it, so a client never
 reads a cut-off answer as a complete one. A client may take several minutes
-over a long answer, which streaming answers such as SSE depend on, so no
-overall time limit applies.
+over a long answer, which streaming answers such as SSE depend on; on
+macOS the 3600 s limit above is the only overall one.
 
 ### Requests sent again
 
 Counted at a loopback upstream that closes the connection without
 answering, on a fresh connection and on one an earlier request left open:
 on Linux every method, with or without a body, is sent once. On macOS a
-POST, PUT, PATCH, DELETE or OPTIONS is sent once, and a GET or HEAD three
-times, its credential with it each time: Darwin's URLSession retries those
-on a dropped connection whatever the request says (`Connection: close`
-included), and has no setting to stop it.
+POST, PUT, PATCH, DELETE or OPTIONS is sent once, and a GET or HEAD up to
+three times, its credential with it each time: Darwin's URLSession retries
+those on a dropped connection whatever the request says (`Connection:
+close` included), and has no setting to stop it.
+
+An upstream that answers `401` with a challenge: Darwin's URLSession
+answered a `Basic` or `Digest` challenge by sending the request again, for
+every method, body and brokered credential included; a `Bearer` challenge
+or a bare `401` was sent once, and Linux sent each once. The gateway's
+sessions now cancel every credential challenge (Basic, Digest, NTLM,
+Negotiate and any other), which also keeps default handling from offering
+the upstream an ambient credential such as a Kerberos ticket. The server's
+certificate is still checked as URLSession always checks it, and a
+server's request for a client certificate is handled as before. Measured:
+after the cancel, Darwin delivers no response and ends the request
+cancelled; corelibs-foundation delivers the `401` first. Either way the
+`401` that carried the challenge reaches the response writer, which, as
+for any `401`, answers its client `502` ("the brokered credential was
+rejected upstream") and records the upstream's `401`. Counted at the
+upstream, each of GET, POST with a body and PUT, against Basic, Digest,
+Bearer and bare `401`s, now arrives once on both systems.
+
+The title of commit a4d6069a, "nothing is sent twice", was wrong: a macOS
+GET or HEAD is sent up to three times on a dropped connection, and before
+this change a request challenged with Basic or Digest was sent twice.
+History is not rewritten.
 
 ### Measurements
 

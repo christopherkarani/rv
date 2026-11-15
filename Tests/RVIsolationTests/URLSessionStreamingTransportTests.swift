@@ -17,8 +17,9 @@ import Testing
 /// with a Content-Length, `/bytes/N` answers N x's, and `/slow/N/ms`
 /// answers N x's in 64 KiB blocks `ms` milliseconds apart. A path with
 /// `/ka/` answers `ok:<path>` and keeps the connection open for the next
-/// request; one with `/drop/` closes it unanswered. Any other path answers
-/// `ok:<path>`. A request body is read before the answer.
+/// request; one with `/drop/` closes it unanswered. `/auth/<kind>` answers
+/// 401 with a `basic`, `digest` or `bearer` challenge, or `none`. Any other
+/// path answers `ok:<path>`. A request body is read before the answer.
 private final class LoopbackUpstream: @unchecked Sendable {
     static let bigBytes = 64 << 20
     let port: Int
@@ -146,7 +147,17 @@ private final class LoopbackUpstream: @unchecked Sendable {
 
     private func answer(_ client: Int32, _ path: String) {
         let segments = path.split(separator: "/").map(String.init)
-        if path.hasSuffix("/big") {
+        if let at = segments.firstIndex(of: "auth"), at + 1 < segments.count {
+            let challenge = [
+                "basic": "WWW-Authenticate: Basic realm=\"rv\"\r\n",
+                "digest": "WWW-Authenticate: Digest realm=\"rv\", nonce=\"0123abcd\", qop=\"auth\"\r\n",
+                "bearer": "WWW-Authenticate: Bearer realm=\"rv\"\r\n",
+            ][segments[at + 1]] ?? ""
+            let body = Array("denied".utf8)
+            _ = Self.write(client, Array(
+                "HTTP/1.1 401 Unauthorized\r\n\(challenge)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+                    .utf8) + body)
+        } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
             Self.stream(client, bytes: size, pause: 0)
@@ -200,13 +211,24 @@ private final class Answers: Sendable {
     let items = Mutex<[Int: String]>([:])
 }
 
+/// What a reader thread has read, and whether it should go on.
+private final class Trickle: Sendable {
+    let going = Atomic<Bool>(true)
+    let received = Mutex<[UInt8]>([])
+}
+
 /// Collects what one `send` delivered.
 private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     private let lock = NSLock()
     private var bytes = Data()
     private var ended: String?
+    private var status: Int?
 
-    func head(status: Int, headers: [(name: String, value: String)]) {}
+    func head(status: Int, headers: [(name: String, value: String)]) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.status = status
+    }
     func body(_ data: Data) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -226,6 +248,13 @@ private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return (String(decoding: bytes, as: UTF8.self), ended)
+    }
+
+    /// The status the transport handed on, nil before any.
+    var headStatus: Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return status
     }
 }
 
@@ -537,6 +566,81 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits("GET", "/v1/big") == 1)
     }
 
+    /// A client that takes in 16 KiB every 0.05 s, so that every write moves
+    /// well inside the 2 s send timeout, is cut off once it has taken in
+    /// less than the minimum (here 1 MiB) over a window of the gateway
+    /// waiting to write to it. The send timeout alone never cuts it: Darwin
+    /// wakes a blocked write only once much of its buffer is free, so a
+    /// reader slower than this, such as 8 KiB every 0.25 s, already let a
+    /// write block past 2 s. Its upstream
+    /// request is cancelled, everything it held is given back, and what it
+    /// still reads is cut short, with no terminator.
+    @Test(.timeLimit(.minutes(1)))
+    func aClientTakingInTooLittleIsCutOff() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 2)
+        defer { under.gateway.stop() }
+        under.gateway.clientMinimumBytes = 1 << 20
+        let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        let trickle = Trickle()
+        let stopped = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
+            while trickle.going.load(ordering: .relaxed) {
+                let n = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
+                if n <= 0 { break }
+                trickle.received.withLock { $0 += buffer.prefix(n) }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            stopped.signal()
+        }
+        let counts = { under.transport.sessionCounts }
+        let released = eventually(within: 20) {
+            counts().made == 1 && counts().live == 0 && under.transport.budget.waiting == 0
+        }
+        trickle.going.store(false, ordering: .relaxed)
+        _ = stopped.wait(timeout: .now() + 5)
+        #expect(released, "still served after \(trickle.received.withLock { $0.count }) bytes: \(counts())")
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var all = trickle.received.withLock { $0 }
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        var last = 0
+        while true {
+            last = buffer.withUnsafeMutableBytes { read(client, $0.baseAddress, $0.count) }
+            if last <= 0 { break }
+            all += buffer.prefix(last)
+        }
+        #expect(last == 0, "the connection was not closed")
+        #expect(String(decoding: all.prefix(512), as: UTF8.self).lowercased().hasPrefix("http/1.1 200"))
+        #expect(all.count < LoopbackUpstream.bigBytes)
+        #expect(Array(all.suffix(5)) != Array("0\r\n\r\n".utf8), "a cut-off answer ended like a complete one")
+        #expect(upstream.hits("GET", "/v1/big") == 1)
+    }
+
+    /// An answer whose parts come 2.5 s apart, longer than the 1 s window,
+    /// as SSE events may: waiting for the upstream is not waiting to write,
+    /// so a client reading as it comes is never cut off.
+    @Test(.timeLimit(.minutes(1)))
+    func aStreamIdleLongerThanThePaceWindowIsNotCutOff() throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port, clientSendTimeout: 1)
+        defer { under.gateway.stop() }
+        let size = 3 << 16
+        let client = try connectGateway(under.port)
+        defer { close(client) }
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/2500").utf8)))
+        let answer = try ChunkedAnswer(reading: client)
+        #expect(answer.head.hasPrefix("http/1.1 200"))
+        #expect(answer.ended)
+        #expect(answer.body == size)
+        #expect(upstream.hits("GET", "/v1/slow/\(size)/2500") == 1)
+    }
+
     /// An upstream faster than its reader, with an answer well past the
     /// 1 MiB mark: the whole answer arrives once, and the upstream saw the
     /// request once. corelibs-foundation restarts a task it suspends, so a
@@ -560,6 +664,13 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits(method, "/v1/bytes/\(size)") == 1)
+        // The reader really fell behind: Darwin's callback waited for it,
+        // and elsewhere more than 1 MiB waited for it.
+        #if canImport(Darwin)
+        #expect(under.transport.budget.paced > 0)
+        #else
+        #expect(under.transport.peakQueuedBytes > 1 << 20, "\(under.transport.peakQueuedBytes)")
+        #endif
     }
 
     /// The upstream drops the connection without answering, on a fresh
@@ -571,7 +682,7 @@ struct URLSessionStreamingTransportTests {
     /// method once.
     @Test(
         .timeLimit(.minutes(1)),
-        arguments: ["GET", "HEAD", "DELETE", "POST", "PUT", "PATCH", "POST-empty"], [false, true])
+        arguments: ["GET", "HEAD", "OPTIONS", "DELETE", "POST", "PUT", "PATCH", "POST-empty"], [false, true])
     func aDroppedRequestIsNotSentAgain(method label: String, reused: Bool) throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
@@ -598,27 +709,92 @@ struct URLSessionStreamingTransportTests {
         #expect(sent == 1)
     }
 
+    /// The upstream answers 401 with each kind of challenge. Counted where
+    /// the request arrives, it arrives once, body and credential with it,
+    /// and the transport hands on the 401. Darwin's URLSession answered a
+    /// Basic challenge by sending the request again, for every method.
+    @Test(
+        .timeLimit(.minutes(1)),
+        arguments: ["basic", "digest", "bearer", "none"], ["GET", "POST", "PUT"])
+    func aChallengedRequestIsNotSentAgain(challenge: String, method: String) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let transport = URLSessionStreamingTransport()
+        let body = method == "GET" ? Data() : Data(#"{"input":"x"}"#.utf8)
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/auth/\(challenge)"))
+        transport.send(
+            SecretUpstreamRequest(
+                method: method, url: url, headers: [("Authorization", "Bearer sk-live-REAL-0123456789")], body: body),
+            sink: sink)
+        #expect(sink.result.ended != nil)
+        #expect(sink.headStatus == 401, "\(sink.result.ended ?? "never ended")")
+        #expect(upstream.hits(method, "/auth/\(challenge)") == 1)
+    }
+
+    /// The server's certificate is still checked as URLSession checks it,
+    /// and a request for a client certificate handled as before; every
+    /// credential challenge is cancelled, never answered. corelibs-foundation
+    /// raises neither of the first two, so on Linux even they are cancelled.
+    @Test
+    func onlyCredentialChallengesAreCancelled() {
+        let decide = URLSessionStreamingDelegate.disposition(forAuthenticationMethod:)
+        #if canImport(Darwin)
+        #expect(decide(NSURLAuthenticationMethodServerTrust) == .performDefaultHandling)
+        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .performDefaultHandling)
+        #else
+        #expect(decide("NSURLAuthenticationMethodServerTrust") == .cancelAuthenticationChallenge)
+        #expect(decide("NSURLAuthenticationMethodClientCertificate") == .cancelAuthenticationChallenge)
+        #endif
+        for method in [
+            NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodNTLM,
+            NSURLAuthenticationMethodNegotiate, NSURLAuthenticationMethodDefault, NSURLAuthenticationMethodHTMLForm,
+            "an unknown method",
+        ] {
+            #expect(decide(method) == .cancelAuthenticationChallenge, "\(method)")
+        }
+    }
+
+    /// Through the gateway, a challenged request reaches the upstream once,
+    /// and its client gets the gateway's own refusal, never the challenge.
+    @Test(.timeLimit(.minutes(1)), arguments: ["basic", "digest"])
+    func aChallengedRequestIsRefusedToItsClientAfterOneSend(challenge: String) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let answer = try gatewayExchange(
+            port: under.port, under.request("/auth/\(challenge)", method: "POST", body: #"{"input":"x"}"#))
+        #expect(answer.status == 502)
+        #expect(answer.body.contains("the brokered credential was rejected upstream"), "\(answer.body)")
+        #expect(upstream.hits("POST", "/v1/auth/\(challenge)") == 1)
+    }
+
     #if canImport(Darwin)
     /// Darwin's session stops reading while its callback waits, so a reader
-    /// that pauses slows the upstream down instead of being cut off: a
-    /// 64 MiB answer arrives whole and sent once, and about one of Darwin's
-    /// bodies, up to 4 MiB, waits for it at most.
+    /// that pauses slows the upstream down instead of being cut off: an
+    /// answer twice the old 8 MiB cut-off arrives whole and sent once, its
+    /// callback waited for the reader, and about one of Darwin's bodies, up
+    /// to 4 MiB, waits for it at most. 16 MiB, not 64: a debug build's
+    /// scrubber moved 8 to 9 MB/s on a loaded host.
     @Test(.timeLimit(.minutes(1)))
     func aReaderThatPausesSlowsTheUpstreamInsteadOfBeingCutOff() throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
         let under = try GatewayUnderTest(upstreamPort: upstream.port)
         defer { under.gateway.stop() }
+        let size = 16 << 20
         let client = try connectGateway(under.port, receiveBuffer: 16 * 1024)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/big").utf8)))
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/bytes/\(size)").utf8)))
         let answer = try ChunkedAnswer(reading: client, pause: 3)
         #expect(answer.head.hasPrefix("http/1.1 200"))
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
-        #expect(answer.body == LoopbackUpstream.bigBytes)
+        #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
-        #expect(upstream.hits("GET", "/v1/big") == 1)
+        #expect(upstream.hits("GET", "/v1/bytes/\(size)") == 1)
+        #expect(under.transport.budget.paced > 0)
         #expect(under.transport.peakQueuedBytes <= 8 << 20, "\(under.transport.peakQueuedBytes)")
     }
     #endif
@@ -647,7 +823,8 @@ struct URLSessionStreamingTransportTests {
 
     /// Without a hand-off, a reader that keeps up with an upstream sending
     /// about 8 MiB a second gets all of an answer three times `perRequest`,
-    /// sent once.
+    /// sent once. It starts 0.3 s late and pauses after each read, so more
+    /// than 512 KiB waits for it before it catches up.
     @Test(.timeLimit(.minutes(1)))
     func aLiveReaderGetsTheWholeOfAnAnswerLargerThanTheCap() throws {
         let upstream = try LoopbackUpstream()
@@ -659,12 +836,13 @@ struct URLSessionStreamingTransportTests {
         let client = try connectGateway(under.port)
         defer { close(client) }
         #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/8").utf8)))
-        let answer = try ChunkedAnswer(reading: client)
+        let answer = try ChunkedAnswer(reading: client, pause: 0.3, perRead: 0.001)
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits("GET", "/v1/slow/\(size)/8") == 1)
+        #expect(under.transport.peakQueuedBytes > 512 << 10, "\(under.transport.peakQueuedBytes)")
     }
 
     /// The total counts only what each request holds beyond its exempt

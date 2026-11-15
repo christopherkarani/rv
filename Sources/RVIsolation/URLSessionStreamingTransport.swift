@@ -192,6 +192,7 @@ final class URLSessionStreamingBudget: @unchecked Sendable {
     /// Sum over requests of what each holds beyond `limits.exempt`.
     private var counted = 0
     private var peakQueued = 0
+    private var pacedBodies = 0
 
     init(_ limits: URLSessionStreamingTransport.Limits) {
         self.limits = limits
@@ -250,6 +251,19 @@ final class URLSessionStreamingBudget: @unchecked Sendable {
         return peakQueued
     }
 
+    /// Bodies whose callback waited for a sink that had fallen behind.
+    var paced: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pacedBodies
+    }
+
+    func notePaced() {
+        lock.lock()
+        pacedBodies += 1
+        lock.unlock()
+    }
+
     private func excess(_ held: Int) -> Int {
         max(held - limits.exempt, 0)
     }
@@ -281,6 +295,8 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
     /// Bodies are no longer taken: the sink refused one, or the request overflowed.
     private var dropping = false
     private var overflowed = false
+    /// corelibs-foundation hands on a challenged 401 and then the challenge.
+    private var headed = false
 
     init(task: URLSessionDataTask, budget: URLSessionStreamingBudget, handoff: Int?) {
         self.task = task
@@ -301,11 +317,13 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         condition.lock()
         switch event {
         case .head:
-            append(event)
+            if headed == false { append(event) }
+            headed = true
         case .body(let data):
             cancel = takeBody(data)
             // Queued first, so a blocked callback holds no second body.
-            if let handoff {
+            if let handoff, dropping == false, queuedBytes > handoff {
+                budget.notePaced()
                 while dropping == false, queuedBytes > handoff { condition.wait() }
             }
         case .finish, .fail:
@@ -497,12 +515,50 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
             completionHandler(.cancel)
             return
         }
-        let headers = http.allHeaderFields.compactMap { key, value -> (name: String, value: String)? in
+        exchange.push(.head(status: http.statusCode, headers: Self.headers(of: http)))
+        completionHandler(.allow)
+    }
+
+    /// What a challenge gets. The server's certificate is checked as
+    /// URLSession always checks it, and a server's request for a client
+    /// certificate is handled as before. Every other challenge is
+    /// cancelled: Darwin answered a Basic challenge by sending the request,
+    /// its body and its brokered credential, again, and default handling
+    /// may offer the upstream an ambient credential, such as Kerberos.
+    /// corelibs-foundation raises neither of those (libcurl checks the
+    /// certificate itself), so on Linux every challenge is cancelled.
+    static func disposition(forAuthenticationMethod method: String) -> URLSession.AuthChallengeDisposition {
+        #if canImport(Darwin)
+        let handledAsBefore = [NSURLAuthenticationMethodServerTrust, NSURLAuthenticationMethodClientCertificate]
+        #else
+        let handledAsBefore: [String] = []
+        #endif
+        return handledAsBefore.contains(method) ? .performDefaultHandling : .cancelAuthenticationChallenge
+    }
+
+    /// On Darwin a cancelled challenge ends the task with no response, so
+    /// the response that carried the challenge is handed on first: the
+    /// writer refuses a 401 to its client, and its audit records the 401.
+    /// corelibs-foundation hands on the 401 before the challenge; the
+    /// exchange keeps only the first head.
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let disposition = Self.disposition(forAuthenticationMethod: challenge.protectionSpace.authenticationMethod)
+        if disposition == .cancelAuthenticationChallenge, let exchange = exchange(for: task) {
+            let response = challenge.failureResponse as? HTTPURLResponse
+            exchange.push(.head(status: response?.statusCode ?? 401, headers: response.map(Self.headers(of:)) ?? []))
+        }
+        completionHandler(disposition, nil)
+    }
+
+    private static func headers(of response: HTTPURLResponse) -> [(name: String, value: String)] {
+        response.allHeaderFields.compactMap { key, value -> (name: String, value: String)? in
             guard let name = key as? String, let text = value as? String else { return nil }
             return (name, text)
         }
-        exchange.push(.head(status: http.statusCode, headers: headers))
-        completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

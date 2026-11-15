@@ -135,6 +135,9 @@ public final class SecretGateway: @unchecked Sendable {
     /// may read a request head at once. They hold none of the
     /// `maximumConnections` slots; past this they are turned away unread.
     static let outsiderConnections = 8
+    /// Connections whose peer is being checked against the runtimes at
+    /// once, before either kind of slot is taken. The next waits, unread.
+    static let classifyingConnections = 8
     /// Seconds such a connection has for its request head.
     static let outsiderHeadDeadline: TimeInterval = 2
     /// Above the spawn floors (8 and 16). Gateway sockets must not remain
@@ -165,16 +168,26 @@ public final class SecretGateway: @unchecked Sendable {
     private var lifecycleGeneration = 0
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let outsiderSlots = DispatchSemaphore(value: SecretGateway.outsiderConnections)
+    private let classifiers = DispatchSemaphore(value: SecretGateway.classifyingConnections)
+    /// Bounds the audit records of outsiders' nameless refusals.
+    let outsiderAudit = GatewayOutsiderAudit()
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
+    /// Test seam, nil in production. Runs on the accept loop after a
+    /// connection is accepted and before its socket is set up.
+    var afterAccept: (@Sendable () -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
-    /// Seconds a write to a client may block before its connection is cut.
+    /// Seconds a write to a client may block before its connection is cut,
+    /// and the window over which a client the gateway has bytes waiting for
+    /// must take in `clientMinimumBytes` (`GatewayClientPace`).
     static let clientSendTimeout = 30
-    /// Test seam: the client send timeout. Set before serving.
+    /// Test seam: the client send timeout and pace window. Set before serving.
     var clientSendTimeout = SecretGateway.clientSendTimeout
+    /// Test seam: what a client must take in over that window. Set before serving.
+    var clientMinimumBytes = GatewayClientPace.minimumBytes
     /// Seconds from accepting a connection to the end of its request head.
     static let requestHeadDeadline: TimeInterval = 10
     /// Test seam: the request head deadline. Set before serving.
@@ -343,7 +356,8 @@ public final class SecretGateway: @unchecked Sendable {
             close(listener)
             return .failure(.bindFailed(errno: code))
         }
-        guard listen(listener, 64) == 0 else {
+        // Room for connections waiting for a classifier.
+        guard listen(listener, 128) == 0 else {
             let code = errno
             close(listener)
             return .failure(.listenFailed(errno: code))
@@ -465,7 +479,9 @@ public final class SecretGateway: @unchecked Sendable {
             if polled == 0 { continue }
             let client = accept(fd, nil, nil)
             if client < 0 {
-                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                // A client that reset its connection before it was accepted
+                // ends only that connection, never the listener.
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED { continue }
                 return
             }
             lock.lock()
@@ -475,6 +491,7 @@ public final class SecretGateway: @unchecked Sendable {
                 close(client)
                 return
             }
+            afterAccept?()
             // Darwin inherits `O_NONBLOCK` from the listener. A read that
             // races the client's write is `EAGAIN`, and that is not a
             // malformed request. The accepted number is closed once before
@@ -490,8 +507,14 @@ public final class SecretGateway: @unchecked Sendable {
             }
             _ = fcntl(held, F_SETFD, FD_CLOEXEC)
             #if canImport(Darwin)
+            // Darwin refuses this on a connection its client already reset,
+            // and a write to that socket raises SIGPIPE in the gateway's
+            // process: such a connection is closed unanswered.
             var one: Int32 = 1
-            _ = setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+            guard setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                close(held)
+                continue
+            }
             #endif
             var timeout = timeval(tv_sec: 30, tv_usec: 0)
             _ = setsockopt(held, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
@@ -500,21 +523,27 @@ public final class SecretGateway: @unchecked Sendable {
             // finished as if whole.
             var sendTimeout = timeval(tv_sec: clientSendTimeout, tv_usec: 0)
             _ = setsockopt(held, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
-            guard slots.wait(timeout: .now()) == .success else {
-                GatewaySocket.writeAll(held, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+            // Told apart before any slot is taken, a few at a time. While
+            // every classifier is busy the next connection waits here, and
+            // those after it in the listen backlog: a member is delayed
+            // behind outsiders being classified, never refused for them.
+            guard waitForClassifier(listening: fd) else {
                 close(held)
-                continue
+                return
             }
             let clientFD = held
-            // A thread of the gateway's own, at most `maximumConnections` of
-            // them: each blocks until its answer is through, and on GCD's
-            // shared pool a burst of them held every thread that pool had.
+            let classifiers = classifiers
+            // A thread of the gateway's own, at most `classifyingConnections`
+            // plus `maximumConnections` plus `outsiderConnections` of them:
+            // each blocks until its answer is through, and on GCD's shared
+            // pool a burst of them held every thread that pool had.
             let handler = Thread { [weak self] in
                 defer { close(clientFD) }
-                guard let self else { return }
-                let slot = GatewaySlot(self.slots)
-                defer { slot.release() }
-                self.handle(clientFD, slot: slot)
+                guard let self else {
+                    classifiers.signal()
+                    return
+                }
+                self.serve(clientFD)
             }
             handler.name = "rv.secret-gateway.connection"
             handler.qualityOfService = .userInitiated
@@ -522,34 +551,64 @@ public final class SecretGateway: @unchecked Sendable {
         }
     }
 
-    func handle(_ client: Int32, slot: GatewaySlot? = nil) {
-        let started = DispatchTime.now()
-        // Any local process can connect. Before a byte is read, the peer is
-        // checked against every registered runtime: one in none of them, or
-        // one that cannot be placed, gives its slot back, has a short head
-        // deadline, and is never forwarded. Its head is still read, so a
-        // placeholder spent from outside is refused naming its runtime.
-        let outsider = insideARuntime(client) == false
-        if outsider {
-            slot?.release()
-            guard outsiderSlots.wait(timeout: .now()) == .success else {
-                GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
-                return
-            }
+    /// Waits for a classifier, giving up once the listener has been closed.
+    private func waitForClassifier(listening fd: Int32) -> Bool {
+        while classifiers.wait(timeout: .now() + .milliseconds(200)) == .timedOut {
+            lock.lock()
+            let live = listenFDs.contains(fd)
+            lock.unlock()
+            if live == false { return false }
         }
-        defer { if outsider { outsiderSlots.signal() } }
+        return true
+    }
+
+    /// Runs on a connection's own thread, holding a classifier. Any local
+    /// process can connect. Before a byte is read, the peer is checked
+    /// against every registered runtime, and only one found inside a runtime
+    /// takes one of the `maximumConnections` slots. Any other takes one of
+    /// the `outsiderConnections` slots, past which it is answered `503`
+    /// unread and has a short head deadline. It is never forwarded, unless
+    /// it could not be placed at all and the full check after its head
+    /// places it in a runtime.
+    func serve(_ client: Int32) {
+        let started = DispatchTime.now()
+        let early = classify(client)
+        classifiers.signal()
+        let pool = early == .member ? slots : outsiderSlots
+        guard pool.wait(timeout: .now()) == .success else {
+            GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+            return
+        }
+        let slot = GatewaySlot(pool)
+        defer { slot.release() }
+        handle(client, early: early, slot: slot, started: started)
+    }
+
+    /// `early` is what the peer was found to be before its head was read.
+    /// Its head is still read when it is not `.member`, so a placeholder
+    /// spent from outside is refused naming its runtime.
+    func handle(
+        _ client: Int32, early: GatewayPeerVerdict = .member, slot: GatewaySlot? = nil,
+        started: DispatchTime = .now()
+    ) {
+        let outsider = early != .member
+        // Taken once the full check places an `.unverifiable` peer in a runtime.
+        var promoted: GatewaySlot?
+        defer { promoted?.release() }
         let reader = GatewaySocket.Reader(fd: client)
         reader.deadline = started + (outsider ? min(requestHeadDeadline, outsiderHeadDeadline) : requestHeadDeadline)
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
             let refusal: GatewayRefusal = reader.timedOut ? .requestTimeout : .malformed
-            refuse(client, refusal, method: "?", path: "?", secret: nil, started: started)
+            refuse(client, refusal, method: "?", path: "?", secret: nil, outsider: outsider, started: started)
             return
         }
         let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
-            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil, started: started)
+            refuse(
+                client, .unknownRoute, method: head.method, path: path, secret: nil, outsider: outsider,
+                started: started)
             return
         }
         // Every live entry the request names, so a refusal can name the
@@ -593,10 +652,22 @@ public final class SecretGateway: @unchecked Sendable {
                 deny(failure.refusal, runtime: failure.entry?.runtime)
                 return
             }
-            // Outside every runtime a moment ago: refused even if it passed now.
-            if outsider {
+            switch early {
+            case .member:
+                break
+            case .outsider:
+                // Outside every runtime a moment ago: refused even if it passed now.
                 deny(.runtimeUnverified)
                 return
+            case .unverifiable:
+                // Could not be placed a moment ago, placed now by the full
+                // check, which decides: the request moves to a runtime's slot.
+                guard slots.wait(timeout: .now()) == .success else {
+                    GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+                    return
+                }
+                promoted = GatewaySlot(slots)
+                slot?.release()
             }
             if let refusal = prepare(result.used.token) {
                 deny(refusal)
@@ -699,7 +770,8 @@ public final class SecretGateway: @unchecked Sendable {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
             } + echoes,
             // A call that mints credentials answers with a new key the scrubber has never seen.
-            tripwires: live.signingBinding?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
+            tripwires: live.signingBinding?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : [],
+            pace: GatewayClientPace(window: TimeInterval(clientSendTimeout), minimumBytes: clientMinimumBytes)
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         headers.append(GatewayHeaders.identityEncoding)
@@ -777,31 +849,45 @@ public final class SecretGateway: @unchecked Sendable {
         return nil
     }
 
-    /// Whether a registered runtime holds this connection. False when none
-    /// does, none is registered, or the peer cannot be told.
-    private func insideARuntime(_ client: Int32) -> Bool {
-        guard let peer = GatewayPeer.of(client) else { return false }
+    /// `.member` when a registered runtime holds this connection;
+    /// `.outsider` when none is registered or each says it does not; else
+    /// `.unverifiable`: the peer, or some runtime, could not be read.
+    private func classify(_ client: Int32) -> GatewayPeerVerdict {
+        guard let peer = GatewayPeer.of(client) else { return .unverifiable }
         lock.lock()
         var groups: [ProcessGroupFact] = []
         for group in entries.values.compactMap(\.processGroup) where groups.contains(group) == false {
             groups.append(group)
         }
         lock.unlock()
-        return groups.contains { peers.verify(peer, $0) == .member }
+        var verdict = GatewayPeerVerdict.outsider
+        for group in groups {
+            switch peers.verify(peer, group) {
+            case .member: return .member
+            case .unverifiable: verdict = .unverifiable
+            case .outsider: continue
+            }
+        }
+        return verdict
     }
 
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
-        runtime: String? = nil, started: DispatchTime
+        runtime: String? = nil, outsider: Bool = false, started: DispatchTime
     ) {
         GatewaySocket.writeAll(
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
+        var reason = refusal.reason
+        if outsider, secret == nil {
+            guard let leftOut = outsiderAudit.admit() else { return }
+            if leftOut > 0 { reason += " (\(leftOut) more from outside the runtimes since the last record)" }
+        }
         _ = audit(SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
             activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
-            refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            refusal: refusal, reason: reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }
@@ -854,10 +940,13 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     /// Test seam: how bytes reach the client socket. Set before the first write.
     var transmit: (Int32, [UInt8]) -> Bool = { GatewaySocket.writeAll($0, $1) }
 
+    /// With a `pace`, a client too slow to take in its answer is cut off.
     init(
-        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []
+        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = [],
+        pace: GatewayClientPace? = nil
     ) {
         self.fd = fd
+        if let pace { transmit = { pace.write($0, $1) } }
         self.method = method
         let watching = tripwires.isEmpty == false
         self.watching = watching
