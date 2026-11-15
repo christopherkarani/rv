@@ -303,11 +303,15 @@ rv is one binary, 25 commands. The rest of the surface:
   `cp -r packages/mcp "$DEST"`, `touch {a..z}{0..9}` allow; `ls mcp
   install` and `stdbuf -o0 ls mcp $DIR` ask), unless the line, or the
   carried text being read, may define or redefine a command (a function,
-  alias or hash entry, a `PATH` change, zsh's `path` array, `PATH` set
-  through `read`, `printf -v`, `for` or a quoted name, `BASH_ENV`, `ENV`
-  or `ZDOTDIR`, `source`/`.`, `eval`, `trap`, `autoload` or a dynamic
-  program: `ls() { "$@"; }; ls mcp $X` and `echo 'alias ls=eval; ls mcp
-  $X' | sh` ask). A segment rv's splitter cannot scan
+  alias or hash entry; `PATH`, zsh's `path`, `FPATH`/`fpath`,
+  `module_path`, `BASH_ENV`, `ENV` or `ZDOTDIR` named anywhere but where
+  it is only read, such as `$PATH`, `${PATH%%:*}`, `find -path` or
+  `~/path/x`, after quotes and line continuations are removed; `env -P`
+  or `-S`; a function flag such as `typeset -fu`; `source`/`.`, `eval`,
+  `trap`, `autoload` or a dynamic program: `ls() { "$@"; }; ls mcp $X`,
+  `: "${PATH:=./bin}"; ls mcp $X` and `echo 'alias ls=eval; ls mcp $X' |
+  sh` ask, as does a printer's text read beside output rv cannot read,
+  `{ cat ./defs.sh; echo 'ls mcp $X'; } | sh`). A segment rv's splitter cannot scan
   (a head still `{` or `(` that does not peel, such as `{claude,zzqx} mcp
   add`) asks when its line may name a host CLI; so do odd heads that only
   look like a group, such as `{claude}mcp` or `{claude,codex}-helper
