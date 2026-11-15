@@ -1645,8 +1645,14 @@ struct MCPServe: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp serve", json: false, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
         let environment = MCPEnvironment.live(home: home)
+        // Through the gateway's stderr writer, so a closed stderr cannot end
+        // serve by SIGPIPE before it says why it stops; a test's captured
+        // output still gets the line.
         func fail(_ message: String) throws -> Never {
-            try ctx.emit(stdout: "", stderr: "rv mcp serve: \(message)\n", exitCode: 1)
+            let line = "rv mcp serve: \(message)\n"
+            guard CLIProcess.context?.output == nil else { try ctx.emit(stdout: "", stderr: line, exitCode: 1) }
+            MCPGatewayRuntime.writeStderrLine(line)
+            throw ExitCode(1)
         }
         let configuration: MCPConfiguration
         switch MCPRun.configuration(environment) {
@@ -1688,12 +1694,13 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let result): planned = result
         }
         let configDirectory = environment.configDirectory
-        // As `MCPGatewayRuntime.run` does, but before the pin-store and
-        // host-check lines below: a host that closed its stderr reader must
-        // not kill serve with SIGPIPE from here on. Not before planning,
-        // whose children (the capability probe, lease helpers) keep the
-        // default, so a Linux cage notice written there still can. Upstreams
-        // are spawned later, by `run`, as before.
+        // As `MCPGatewayRuntime.run` does, before the pin-store and
+        // host-check lines below. Lines through the gateway's stderr writer
+        // no longer need it (a closed stderr fails their write whatever the
+        // disposition, during planning too); anything else serve writes
+        // does. Not before planning: a child it starts with raw
+        // `posix_spawn` (unlike Foundation `Process`) would inherit it.
+        // Upstreams are spawned later, by `run`, as before.
         signal(SIGPIPE, SIG_IGN)
         let log: @Sendable (String) -> Void = { message in
             MCPGatewayRuntime.writeStderrLine("rv mcp: \(message)\n")

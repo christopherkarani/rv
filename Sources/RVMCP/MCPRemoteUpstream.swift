@@ -144,8 +144,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var request = MCPHTTPExchange.request(
             url: launch.url, method: "GET", headers: sent, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
-        // Create under the lock stop() holds while invalidating: a task
-        // created on an invalidated session raises instead of failing.
+        // Create under the lock, after checking `stopped`: stop() sets it
+        // under this lock before it invalidates the session, so a task made
+        // here comes first. One made on an invalidated session raises
+        // instead of failing.
         let task: URLSessionDataTask? = locked {
             guard stopped == false, self.session === session else { return nil }
             let task = session.dataTask(with: request)
@@ -194,18 +196,22 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         return (headers, token)
     }
 
+    /// Also called from the delegate queue (a 401 retry, the SSE endpoint
+    /// flush), so it can race `stop()`: the task is created under the lock,
+    /// as `openStream` does.
     private func post(_ message: JSONValue, to url: URL, retried: Bool) {
-        let (session, sessionID, version): (URLSession?, String?, String?) = locked {
-            (stopped ? nil : self.session, launch.transport == .http ? self.sessionID : nil, protocolVersion)
-        }
-        guard let session else { return }
         let (sent, token) = headers()
-        let request = MCPHTTPExchange.request(
-            url: url, method: "POST", headers: sent, sessionID: sessionID, protocolVersion: version,
-            body: Data(message.compactText.utf8))
-        let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token) }
-        task.resume()
+        let body = Data(message.compactText.utf8)
+        let task: URLSessionDataTask? = locked {
+            guard stopped == false, let session = self.session else { return nil }
+            let request = MCPHTTPExchange.request(
+                url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
+                protocolVersion: protocolVersion, body: body)
+            let task = session.dataTask(with: request)
+            exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token)
+            return task
+        }
+        task?.resume()
     }
 
     // MARK: URLSessionDataDelegate (serial delegate queue)

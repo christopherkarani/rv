@@ -75,7 +75,7 @@ let terminalProbeTargets: [Target] = [
     .executableTarget(name: "rv-run-probe", dependencies: ["RVIsolation"]),
     // RVMCPTests' child: signal dispositions out of the test process, and
     // what a caged server can read of its parent.
-    .executableTarget(name: "rv-mcp-probe", dependencies: ["RVMCP"]),
+    .executableTarget(name: "rv-mcp-probe", dependencies: ["RVMCP", "RVIsolation"]),
 ]
 let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-probe"] + mcpTestHelperDependencies
 #else

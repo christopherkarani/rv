@@ -64,6 +64,14 @@ public struct SecretUpstreamRequest: Sendable {
     public var url: URL
     public var headers: [(name: String, value: String)]
     public var body: Data
+
+    /// For the package's out-of-process test probe; the gateway builds its own.
+    package init(method: String, url: URL, headers: [(name: String, value: String)], body: Data) {
+        self.method = method
+        self.url = url
+        self.headers = headers
+        self.body = body
+    }
 }
 
 /// Receives one upstream response. `body` returns false once the client is gone.
@@ -1041,9 +1049,12 @@ final class URLSessionStreamingTransport: NSObject, URLSessionDataDelegate, @unc
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 300
         configuration.timeoutIntervalForResource = 3_600
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        // Each request's handler blocks a global-queue thread until a
+        // callback here signals it; on the shared pool those callbacks could
+        // wait behind the very handlers waiting for them.
+        return URLSession(
+            configuration: configuration, delegate: self,
+            delegateQueue: URLSessionDelegateQueue.serial("rv.secrets.gateway.upstream"))
     }()
 
     func send(_ request: SecretUpstreamRequest, sink: SecretResponseSink) {

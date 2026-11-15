@@ -1245,8 +1245,9 @@ public final class EgressProxy: @unchecked Sendable {
         }
     }
 
+    /// Through `StderrWriter`: `FileHandle.write` raised on a closed stderr.
     private static func complain(_ text: String) {
-        FileHandle.standardError.write(Data((text + "\n").utf8))
+        StderrWriter.write(Data((text + "\n").utf8))
     }
 
     /// Module-visible so the supervisor can chain review-queue intake
