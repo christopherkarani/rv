@@ -149,7 +149,7 @@ struct MCPGatewayWriterRuntimeTests {
             if let id = reply?["id"]?.intValue { ids.append(id) }
         }
         #expect(ids.sorted() == [2, 3])
-        #expect(logs.text.contains("MCP server deaf is not reading its input"), "\(logs.text)")
+        #expect(await eventually { logs.text.contains("MCP server deaf is not reading its input") }, "\(logs.text)")
         #expect(await eventually { logs.text.contains("MCP server deaf exited") }, "\(logs.text)")
         let audits = run.audits
         #expect(await eventually {

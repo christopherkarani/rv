@@ -238,10 +238,17 @@ struct MCPGatewayDeadlineTests {
     /// A client that reuses one token on two live calls to one server gets
     /// that server's progress counted for the older call, every run.
     @Test func progressForATokenTwoCallsShareMovesTheOlderCall() throws {
-        for _ in 0..<20 {
+        // Each round first spends a different number of rv's ids, so the two
+        // calls sit at different places in the pending table.
+        for skipped in 0..<20 {
             let clock = ManualClock()
             var harness = Self.harness([Self.github(callTimeout: 10)], clock: clock)
             _ = harness.ready()
+            for extra in 0..<skipped {
+                let sent = harness.client(#"{"jsonrpc":"2.0","id":\#(100 + extra),"method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+                let id = sent.toUpstream.first?.1["id"]?.intValue ?? -1
+                _ = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#)
+            }
             for client in [5, 6] {
                 _ = harness.client(#"{"jsonrpc":"2.0","id":\#(client),"method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":7}}}"#)
             }

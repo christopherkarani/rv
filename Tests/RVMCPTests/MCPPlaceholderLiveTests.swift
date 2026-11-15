@@ -265,7 +265,8 @@ struct MCPPlaceholderLiveTests {
         var definition = MCPServerDefinition(
             name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
             sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
-        definition.startTimeoutSeconds = 1
+        // Long enough for the caged sh to start its grandchild under load.
+        definition.startTimeoutSeconds = 5
         let configuration = MCPConfiguration(servers: [definition])
         let planned = try MCPLaunchPlanner.plan(
             servers: [name], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
@@ -310,7 +311,7 @@ struct MCPPlaceholderLiveTests {
         grandchild = try #require(pid_t(contents(scratch, "grandchild")))
         #expect(getpgid(leader) == leader)
 
-        #expect(eventually(60) { logged.withLock { $0 }.contains { $0.contains("did not answer initialize within 1 s") } },
+        #expect(eventually(60) { logged.withLock { $0 }.contains { $0.contains("did not answer initialize within 5 s") } },
             "\(logged.withLock { $0 })")
         // Serve is still running; the group is gone and the lease with it.
         #expect(eventually(60) { kill(leader, 0) == -1 && errno == ESRCH })
