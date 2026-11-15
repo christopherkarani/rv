@@ -739,16 +739,17 @@ struct URLSessionStreamingTransportTests {
         #expect(upstream.hits(method, "/auth/\(challenge)") == 1)
     }
 
-    /// The server's certificate is still checked as URLSession checks it,
-    /// and a request for a client certificate handled as before; every
-    /// credential challenge is cancelled, never answered. corelibs-foundation
-    /// raises neither of the first two, so on Linux even they are cancelled.
+    /// The server's certificate is still checked as URLSession checks it; a
+    /// request for a client certificate is declined, so no identity is ever
+    /// offered and a server that only asks still answers; every credential
+    /// challenge is cancelled, never answered. corelibs-foundation raises
+    /// neither of the first two, so on Linux even they are cancelled.
     @Test
     func onlyCredentialChallengesAreCancelled() {
         let decide = URLSessionStreamingDelegate.disposition(forAuthenticationMethod:)
         #if canImport(Darwin)
         #expect(decide(NSURLAuthenticationMethodServerTrust) == .performDefaultHandling)
-        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .performDefaultHandling)
+        #expect(decide(NSURLAuthenticationMethodClientCertificate) == .rejectProtectionSpace)
         #else
         #expect(decide("NSURLAuthenticationMethodServerTrust") == .cancelAuthenticationChallenge)
         #expect(decide("NSURLAuthenticationMethodClientCertificate") == .cancelAuthenticationChallenge)
