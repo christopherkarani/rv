@@ -229,7 +229,7 @@ private func mayDefineCommands(_ raw: String) -> Bool {
 /// `autoload`, a dynamic program).
 func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
     if mayDefineCommands(raw) || namesLookupVariable(raw) || envMayMoveLookup(raw) { return true }
-    if launched.contains(where: setsFunctionFlag) { return true }
+    if launched.contains(where: setsFunctionFlag) || assignsAnsiCName(raw, launched) { return true }
     let unblanked = raw.filter { $0.isWhitespace == false }
     if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
     let spaced = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
@@ -264,6 +264,26 @@ private func setsLookupVariable(_ command: LaunchedCommand) -> Bool {
 
 private let variableSetters: Set<String> = ["read", "printf", "export", "declare", "typeset", "local", "readonly"]
 
+/// Whether `raw` holds an ANSI-C `$'…'` word and some command of
+/// `launched` is a builtin that assigns its operands (`variableSetters`
+/// but `printf` only with `-v`, and `unset`, `mapfile`, `readarray`) given
+/// a `$` word: `export $'PA\x54H'=./bin` builds a name from escapes, which
+/// `namesLookupVariable` does not decode. The tokenizer gives an ANSI-C
+/// word as `$` and its raw text.
+private func assignsAnsiCName(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
+    guard raw.contains("$'") else { return false }
+    let assigners: Set<String> = [
+        "read", "export", "declare", "typeset", "local", "readonly", "unset", "mapfile", "readarray",
+    ]
+    return launched.contains { command in
+        let head = commandName(command.head)
+        let operands = command.guardArgv.dropFirst()
+        guard assigners.contains(head) || (head == "printf" && operands.contains(where: { $0.hasPrefix("-v") }))
+        else { return false }
+        return operands.contains { $0.hasPrefix("$") && $0.hasPrefix("$(") == false && $0.hasPrefix("${") == false }
+    }
+}
+
 /// Names that move which program a plain name runs or which file a shell
 /// runs first, as each shell spells them (zsh ties `path`, `fpath` and
 /// `module_path` to their upper-case forms).
@@ -272,17 +292,21 @@ private let lookupNames: Set<String> = [
 ]
 
 /// Whether `text` names a lookup variable anywhere but where it can only be
-/// read, quotes, backslashes and line continuations removed first (`env
-/// 'PA'TH=…`, `PA\<newline>TH=…`). Only these count as reads: `$NAME`,
-/// `${NAME…}` other than `${NAME=…}` and `${NAME:=…}`, an option word
-/// (`find -path`), and a path component or file name (`~/path/x`,
-/// `os.path`). Everything else does not, whatever the construct: an
-/// assignment in any form (`path=`, `PATH[1,0]=`, `fpath+=`, `let 'PATH =
-/// 1'`, `(( PATH = 1 ))`), a setter's operand (`unset`, `read -a`,
-/// `mapfile`, `readarray`, `declare -n p=PATH`), a loop variable, and a
-/// name glued to a short option (`printf -vPATH`).
+/// read, once line continuations, a `$` opening a quote (`$'PATH'`,
+/// `$"PATH"`), quotes and backslashes are removed (`env 'PA'TH=…`,
+/// `PA\<newline>TH=…`). Only these count as reads: `$NAME`, `${NAME…}`
+/// where a read's operator follows the name (`lookupNameIsRead`), an option
+/// word (`find -path`), and a path component or file name (`~/path/x`,
+/// `os.path`). Any other mention of the name as written counts as a change:
+/// an assignment (`path=`, `PATH[1,0]=`, `fpath+=`, `let 'PATH = 1'`, `((
+/// PATH = 1 ))`), a setter's operand (`unset`, `read -a`, `mapfile`,
+/// `readarray`, `declare -n p=PATH`), a loop variable, and a name glued to
+/// a short option (`printf -vPATH`). A name built from escapes
+/// (`$'PA\x54H'`) is not recognised here (`assignsAnsiCName`).
 private func namesLookupVariable(_ text: String) -> Bool {
-    let chars = Array(text.replacingOccurrences(of: "\\\n", with: "").filter { "'\"\\".contains($0) == false })
+    let unquoted = text.replacingOccurrences(of: "\\\n", with: "")
+        .replacingOccurrences(of: "$'", with: "'").replacingOccurrences(of: "$\"", with: "\"")
+    let chars = Array(unquoted.filter { "'\"\\".contains($0) == false })
     let isWordChar = { (char: Character) in char == "_" || (char.isASCII && (char.isLetter || char.isNumber)) }
     var index = 0
     while index < chars.count {
@@ -311,23 +335,31 @@ private func lookupNameIsRead(_ chars: [Character], start: Int, end: Int) -> Boo
     if before == "$" || before == "-" || before == "/" || before == "." || after == "/" || after == "." {
         return true
     }
-    // `${NAME…}`, `${#NAME}`, `${!NAME}`: a read unless it assigns.
+    // `${NAME…}`, `${#NAME}`, `${!NAME}`: a read only where a read's
+    // operator follows the name (`}`, `%`, `#`, `/`, `-`, `+`, `?`, `^`,
+    // `,`, `@`, and `:` before `-`, `+`, `?`, a digit or a blank). Anything
+    // else may assign (`${NAME:=…}`, zsh `${NAME::=…}`, `${name[1]:=…}`).
     let brace = before == "{" ? start - 1 : (before == "#" || before == "!") ? start - 2 : nil
-    guard let brace, brace >= 1, chars[brace] == "{", chars[brace - 1] == "$" else { return false }
-    let rest = String(chars[end..<min(end + 2, chars.count)])
-    return rest.hasPrefix("=") == false && rest.hasPrefix(":=") == false
+    guard let brace, brace >= 1, chars[brace] == "{", chars[brace - 1] == "$", let after else { return false }
+    if "}%#/-+?^,@".contains(after) { return true }
+    guard after == ":", end + 1 < chars.count else { return false }
+    let next = chars[end + 1]
+    return "-+?".contains(next) || next.isWhitespace || (next.isASCII && next.isNumber)
 }
 
 /// Whether an `env` on the line may be told to search another path or
 /// split a string into a command (`env -P ./bin`, `env -P./bin`, `env -iS
 /// '…'`, `--split-string`): any later short-option word holding `P` or
-/// `S`, or `--split-string`.
+/// `S`, or `--split-string` or a GNU abbreviation of it (`--split`, `--s`).
 private func envMayMoveLookup(_ raw: String) -> Bool {
     let words = raw.filter { "'\"\\".contains($0) == false }
         .split(whereSeparator: { $0.isWhitespace || ";&|(){}".contains($0) }).map(String.init)
     guard let first = words.firstIndex(where: { commandName($0) == "env" }) else { return false }
     return words[(first + 1)...].contains { word in
-        if word.hasPrefix("--") { return word.hasPrefix("--split-string") }
+        if word.hasPrefix("--") {
+            let option = word.prefix { $0 != "=" }
+            return word.hasPrefix("--split-string") || (option.count >= 3 && "--split-string".hasPrefix(option))
+        }
         return word.hasPrefix("-") && (word.contains("P") || word.contains("S"))
     }
 }
