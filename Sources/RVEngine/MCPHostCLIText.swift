@@ -10,12 +10,18 @@ import Foundation
 /// (`hasUnfollowableShellText`) that may name one counts too. Text scanned
 /// as program text (`textNamesHostMCPMutation`) that holds a stem spends
 /// pieces: at most `maxTokenPieces` in one text and `maxPieces` in all.
-/// Brace and glob spellings spend `spelling` (`SpellingBudget`).
+/// Brace and glob spellings spend `spelling` (`SpellingBudget`). A read
+/// begun past `maxWordVisits` counts too, so the work is bounded however
+/// the texts nest.
 struct HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
     static let maxTokenPieces = 4_096
     static let maxPieces = 65_536
+    /// Measured: no command in the test corpora (85,397 lines) visits more
+    /// than 440 words; a visit costs about 6 to 9 microseconds on a loaded
+    /// machine, so this ends the worst nested lines in about half a second.
+    static let maxWordVisits = 65_536
 
     private var remaining = HostTextReads.maxReads
     private var depth = 0
@@ -28,6 +34,8 @@ struct HostTextReads {
     private(set) var exceeded = false
     /// The cap reached was the nesting depth.
     private(set) var depthExceeded = false
+    /// The cap reached was `maxWordVisits`.
+    private(set) var visitsExceeded = false
     /// Some text counted because the tokenizer cannot follow it.
     private(set) var unfollowable = false
     /// The read in progress is text nothing runs (`dataOnly`).
@@ -122,9 +130,10 @@ struct HostTextReads {
             + (literalReading ? "l" : "e") + String(depth) + ":" + text
         let mayName = literalReading ? holdsHostMCPStem(text) : mayNameHostMCP(text, budget: &spelling)
         guard mayName, seen.insert(key).inserted else { return false }
-        guard remaining > 0, depth < Self.maxDepth else {
+        guard remaining > 0, depth < Self.maxDepth, wordVisits < Self.maxWordVisits else {
             exceeded = true
             if depth >= Self.maxDepth { depthExceeded = true }
+            if wordVisits >= Self.maxWordVisits { visitsExceeded = true }
             return true
         }
         if reading == false, hasUnfollowableShellText(text) {
