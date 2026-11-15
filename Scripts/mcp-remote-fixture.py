@@ -18,6 +18,9 @@ every access token so the next call must refresh.
 With --reset-calls a streamable HTTP tools/call is read and its connection
 reset with no reply ("RESET call <id>" is logged). POST /expire-sessions
 forgets every streamable HTTP session, so the next request on one gets 404.
+With --log-connections every POST is logged as it arrives, before its body is
+read ("ENTER POST <path> port=<client port>"), so a request sent again
+without its body still shows.
 """
 import argparse
 import base64
@@ -89,6 +92,7 @@ class Handler(BaseHTTPRequestHandler):
     oauth = False
     hang_calls = False
     reset_calls = False
+    log_connections = False
 
     def origin(self):
         return "http://" + self.headers.get("Host")
@@ -206,6 +210,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path)
+        if self.log_connections:
+            log("ENTER POST %s port=%s" % (path.path, self.client_address[1]))
         if self.oauth and (path.path.startswith("/auth/")):
             return self.oauth_post(path.path)
         if path.path == "/mcp":
@@ -351,11 +357,13 @@ def main():
     parser.add_argument("--oauth", action="store_true")
     parser.add_argument("--hang-calls", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
+    parser.add_argument("--log-connections", action="store_true")
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
     Handler.hang_calls = options.hang_calls
     Handler.reset_calls = options.reset_calls
+    Handler.log_connections = options.log_connections
     server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)

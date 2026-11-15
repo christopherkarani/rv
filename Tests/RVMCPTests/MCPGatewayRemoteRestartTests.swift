@@ -96,22 +96,37 @@ struct MCPGatewayRemoteRestartTests {
 
     /// A connection that fails under a call is not the server's answer: the
     /// call is recorded as interrupted (it may have run), never as run, and
-    /// the server is connected again.
+    /// the server is connected again. It ends as soon as its connection
+    /// fails, not at its deadline, and the call is never sent again: on
+    /// Linux libcurl sends a request again, without its body, when a reused
+    /// connection drops before an answer, so no request POST goes out on a
+    /// reused connection there.
     @Test(.timeLimit(.minutes(5)))
     func aCallWhoseConnectionFailsMayHaveRunAndTheServerComesBack() async throws {
-        let fixture = try RemoteFixture(["--reset-calls"])
+        let fixture = try RemoteFixture(["--reset-calls", "--log-connections"])
         let run = Self.run(fixture)
         #expect(await run.initialize())
         run.client.send(Self.call(2))
-        let failed = await MCPGatewayRestartRuntimeTests.reply(run, 2)
-        #expect(failed?["error"]?["message"]?.stringValue?.contains("may have run") == true, "\(String(describing: failed))")
+        // Far inside the call's 300 s limit.
+        let failed = await MCPGatewayRestartRuntimeTests.reply(run, 2, timeout: 30)
+        #expect(failed?["error"]?["message"]?.stringValue?.contains("may have run") == true, "\(String(describing: failed)) \(fixture.requests())")
         let audits = run.audits
         #expect(await eventually { audits.items.withLock { $0.contains { $0.tool == "echo" } } })
         #expect(audits.items.withLock { $0.filter { $0.tool == "echo" }.map(\.outcome) } == [.interrupted(grant: nil)])
         let logs = run.logs
         #expect(await eventually { logs.text.contains("MCP server remote is back") }, "\(logs.text)")
         #expect(await run.finish())
-        _ = await offThePool { fixture.stop() }
+        let requests = await offThePool { fixture.stop() }
+        let lines = requests.components(separatedBy: "\n")
+        let entered = lines.filter { $0.contains("ENTER POST /mcp ") }
+        // The call reached the server once, and every POST that arrived
+        // carried its request: none came again without its body.
+        #expect(lines.filter { $0.contains("REQ POST /mcp tools/call") }.count == 1, "\(requests)")
+        #expect(entered.count == lines.filter { $0.contains("REQ POST /mcp ") }.count, "\(requests)")
+        #if canImport(FoundationNetworking)
+        let ports = entered.compactMap { $0.components(separatedBy: "port=").last }
+        #expect(Set(ports).count == ports.count, "a POST went out on a reused connection: \(requests)")
+        #endif
     }
 
     /// What a remote has not finished taking counts against its bound until
