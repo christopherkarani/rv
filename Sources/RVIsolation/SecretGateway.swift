@@ -477,6 +477,11 @@ public final class SecretGateway: @unchecked Sendable {
             #endif
             var timeout = timeval(tv_sec: 30, tv_usec: 0)
             _ = setsockopt(held, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            // A client that stops reading fails the write that blocks past
+            // this; its answer is cut there and the connection closed, never
+            // finished as if whole.
+            var sendTimeout = timeval(tv_sec: clientSendTimeout, tv_usec: 0)
+            _ = setsockopt(held, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
             guard slots.wait(timeout: .now()) == .success else {
                 GatewaySocket.writeAll(held, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
                 close(held)
