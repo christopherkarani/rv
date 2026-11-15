@@ -5,6 +5,9 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Synchronization
 import Testing
 @testable import RVIsolation
@@ -685,7 +688,7 @@ struct URLSessionStreamingTransportTests {
     }
 
     /// The asker holding the most of a full total is refused itself; a
-    /// smaller holder is never failed for it.
+    /// smaller holder is never failed for it, and a smaller asker names it.
     @Test
     func theLargestHolderAskingForMoreIsRefusedItself() {
         let budget = URLSessionStreamingBudget(.init(perRequest: 100, total: 4, exempt: 0))
@@ -693,7 +696,7 @@ struct URLSessionStreamingTransportTests {
         #expect(budget.admit(3, for: a).taken)
         #expect(budget.admit(1, for: b).taken)
         #expect(budget.admit(1, for: a).refused)
-        #expect(budget.admit(1, for: b).refused, "b holds no more than a")
+        #expect(budget.admit(1, for: b).victim === a, "a holds more than b")
     }
 
     /// The total full, the request holding the most fails, though its
@@ -758,7 +761,11 @@ struct URLSessionStreamingTransportTests {
             done.leave()
         }
         #expect(eventually { stalled.result.bytes > 0 })
-        let live = GatedSink(DispatchSemaphore(value: 1))
+        // Created at 0 and opened: libdispatch traps when a semaphore is
+        // freed below the value it was created with.
+        let open = DispatchSemaphore(value: 0)
+        open.signal()
+        let live = GatedSink(open)
         let liveURL = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/bytes/\(size + 1)"))
         transport.send(SecretUpstreamRequest(method: "GET", url: liveURL, headers: [], body: Data()), sink: live)
         #expect(live.result.ended == "finished")
@@ -835,8 +842,9 @@ struct URLSessionStreamingTransportTests {
 
     /// Clients that send their request heads a byte at a time hold their
     /// slots only until the head deadline. With every slot held that way, a
-    /// further request waits for a slot and is answered while they are still
-    /// trickling, and each of them is answered 408.
+    /// further request is turned away busy, then answered once the deadline
+    /// has freed the slots, while they are still trickling; each of them is
+    /// answered 408.
     @Test(.timeLimit(.minutes(1)))
     func clientsThatTrickleTheirHeadsAreDroppedAtTheDeadline() throws {
         let upstream = try LoopbackUpstream()
@@ -856,7 +864,12 @@ struct URLSessionStreamingTransportTests {
             }
             trickled.signal()
         }
-        let answer = try gatewayExchange(port: under.port, under.request("/after"))
+        let until = Date().addingTimeInterval(6)
+        var answer = try gatewayExchange(port: under.port, under.request("/after"))
+        while answer.status == 503, Date() < until {
+            Thread.sleep(forTimeInterval: 0.1)
+            answer = try gatewayExchange(port: under.port, under.request("/after"))
+        }
         #expect(answer.status == 200)
         #expect(answer.body == "ok:/v1/after")
         #expect(trickled.wait(timeout: .now()) == .timedOut, "answered only once the trickling had stopped")
