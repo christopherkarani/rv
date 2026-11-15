@@ -11,6 +11,9 @@
 // through `sysctl` `KERN_PROCARGS2`, as a caged server could, and prints what
 // it got back: never the values, only counts and whether `HOME=` was there.
 // `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
+// `rv-mcp-probe hold` reads its stdin until it ends, then exits: a process
+// whose arguments and environment stay there to read for as long as the
+// test holds that stdin open.
 // `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
 // work that never ends, then sends `initialize` to the MCP server at `url`
 // through `MCPRemoteUpstream` and a GET through the secrets gateway's
@@ -258,6 +261,17 @@ case "procargs":
     }
     say(procargs(pid))
     exit(0)
+case "hold":
+    guard arguments.count == 1 else {
+        say("usage: rv-mcp-probe hold")
+        exit(2)
+    }
+    var byte: UInt8 = 0
+    while true {
+        let count = read(STDIN_FILENO, &byte, 1)
+        if count == 0 || (count < 0 && errno != EINTR) { break }
+    }
+    exit(0)
 case "procargs-bytes":
     // A hand-built buffer, hex encoded, for layouts no real process makes.
     let hex = arguments.count == 2 ? Array(arguments[1].utf8) : []
@@ -272,6 +286,6 @@ case "procargs-bytes":
     exit(0)
 default:
     say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
-        + " | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
+        + " | hold | remote-starved <url> | stderr <bytes> [interrupted|closed|closed-default] | pipe-disposition <file>")
     exit(2)
 }

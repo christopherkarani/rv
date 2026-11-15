@@ -505,7 +505,7 @@ struct MCPCageCredentialLiveTests {
         // The first server waits on its stdin until the test ends.
         let sibling = Process()
         sibling.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
-        sibling.arguments = ["-p", profile, probe.path, "stderr", "1", "closed"]
+        sibling.arguments = ["-p", profile, probe.path, "hold"]
         sibling.environment = ["HOME": "/rv-procargs-sibling", "PATH": "/usr/bin:/bin"]
         let input = Pipe()
         sibling.standardInput = input
@@ -517,27 +517,33 @@ struct MCPCageCredentialLiveTests {
             if sibling.isRunning { kill(sibling.processIdentifier, SIGKILL) }
             sibling.waitUntilExit()
         }
-        // sandbox-exec execs the probe in place: wait until it has.
+        // sandbox-exec execs the probe in place: wait until it has. Inside
+        // the cage a process that has exited is refused EPERM too, so the
+        // sibling is shown readable from here before and after the caged
+        // read, which is made once.
         let pid = sibling.processIdentifier
-        let deadline = Date().addingTimeInterval(10)
-        var fromHere = ""
-        while Date() < deadline {
-            fromHere = MCPPlaceholderLiveTests.procargsFromHere(probe, pid, in: root)
-            if fromHere.hasSuffix(" home=yes") { break }
-            usleep(50_000)
-        }
-        try #require(fromHere.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(fromHere)")
+        let before = MCPPlaceholderLiveTests.procargsFromHere(probe, readableWithin: 10, pid, in: root)
+        try #require(before.hasSuffix(" home=yes"), "the sibling never showed its environment here: \(before)")
 
+        // The child holds the fifo until the script closes it; its read is
+        // retried until it shows the child's own environment (a child that
+        // has not yet exec'd the probe is refused), 60 times at most.
         let script = """
             p="$1"; sibling="$2"
             echo "sibling: $("$p" procargs "$sibling")"
             echo "self: $("$p" procargs self)"
             /usr/bin/mkfifo "$PWD/hold"
-            HOME=/rv-procargs-child "$p" stderr 1 closed < "$PWD/hold" > /dev/null 2>&1 &
+            HOME=/rv-procargs-child "$p" hold < "$PWD/hold" > /dev/null 2>&1 &
             child=$!
             exec 3> "$PWD/hold"
-            /bin/sleep 0.5
-            echo "child: $("$p" procargs $child)"
+            tries=0
+            while :; do
+              got=$("$p" procargs $child)
+              case "$got" in *" home=yes") break ;; esac
+              tries=$((tries + 1)); [ $tries -ge 60 ] && break
+              /bin/sleep 0.1
+            done
+            echo "child: $got"
             exec 3>&-
             wait $child
             echo DONE
@@ -546,7 +552,10 @@ struct MCPCageCredentialLiveTests {
         #expect(output.contains("DONE"), "\(output)")
         #expect(output.contains("sibling: failed errno=\(EPERM)"), "\(output)")
         #expect(output.contains("self: ok argc="), "\(output)")
-        #expect(output.contains("child: ok argc="), "\(output)")
+        #expect(output.contains("child: ok argc=") && output.contains(" home=yes\n"), "\(output)")
+        let after = MCPPlaceholderLiveTests.procargsFromHere(probe, readableWithin: 10, pid, in: root)
+        #expect(after.hasSuffix(" home=yes"), "\(after)")
+        #expect(sibling.isRunning)
     }
 }
 #endif
