@@ -120,7 +120,10 @@ public enum MCPLaunchPlanner {
                     return candidate
                 }
                 let launch = MCPRemoteLaunch(
-                    server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens)
+                    server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens,
+                    answerTimeout: MCPRemoteLaunch.answerTimeout(
+                        callTimeoutSeconds: definition.callTimeoutSeconds,
+                        startTimeoutSeconds: definition.startTimeoutSeconds))
                 let scrubbed = named(resolved) + (tokens.map(MCPGatewayCore.oauthSecrets) ?? [])
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue

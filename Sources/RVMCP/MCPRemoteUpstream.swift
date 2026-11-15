@@ -12,7 +12,8 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
     public var transport: MCPRemoteTransport
     /// From `rv mcp connect`; only for servers without an Authorization header.
     public var oauth: MCPOAuthTokens?
-    /// How long a request may go without a byte of its reply.
+    /// How long a request may go without a byte of its reply before the
+    /// HTTP layer gives up on it; see `answerTimeout(callTimeoutSeconds:startTimeoutSeconds:)`.
     public var answerTimeout: TimeInterval
 
     public init(
@@ -30,8 +31,15 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
         self.answerTimeout = answerTimeout
     }
 
+    /// Past every limit the gateway core sets for this server (a call's
+    /// total limit, `initialize`, a `tools/list` page) by a minute, so the
+    /// core's deadline is the one that fires: it records the call as timed
+    /// out, tells the client why and asks the server to cancel.
     public static func answerTimeout(callTimeoutSeconds: Int, startTimeoutSeconds: Int) -> TimeInterval {
-        MCPHTTPExchange.requestTimeout
+        let core = max(
+            TimeInterval(callTimeoutSeconds) * MCPGatewayCore.callTimeoutCeilingFactor,
+            TimeInterval(startTimeoutSeconds), MCPGatewayDeadlines.standardList)
+        return core + 60
     }
 }
 
@@ -95,6 +103,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var events = MCPEventStream()
         var answered = false
         var token: String?
+        var task: URLSessionDataTask?
+        /// rv cancelled the request and closed this POST itself.
+        var closed = false
     }
 
     let launch: MCPRemoteLaunch
@@ -141,7 +152,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = MCPHTTPExchange.requestTimeout
+        configuration.timeoutIntervalForRequest = launch.answerTimeout
         let session = URLSession(
             configuration: configuration, delegate: self, delegateQueue: MCPHTTPExchange.delegateQueue("rv.mcp.remote"))
         locked { self.session = session }
@@ -178,6 +189,26 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             return endpoint
         }
         if let target { post(message, to: target, retried: false) }
+        closeCancelled(message)
+    }
+
+    /// A request rv cancelled gets no more of its reply, so its POST, if it
+    /// is still open, is closed: a quiet one would otherwise hold a
+    /// connection until `answerTimeout`.
+    private func closeCancelled(_ message: JSONValue) {
+        guard message["method"]?.stringValue == "notifications/cancelled", let target = message["params"]?["requestId"] else {
+            return
+        }
+        let tasks: [URLSessionDataTask] = locked {
+            var tasks: [URLSessionDataTask] = []
+            for (id, exchange) in exchanges {
+                guard case .post(let request, _) = exchange.kind, request["id"] == target, let task = exchange.task else { continue }
+                exchanges[id]?.closed = true
+                tasks.append(task)
+            }
+            return tasks
+        }
+        tasks.forEach { $0.cancel() }
     }
 
     package func stop() {
@@ -214,11 +245,12 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         let body = Data(message.compactText.utf8)
         let task: URLSessionDataTask? = locked {
             guard stopped == false, let session = self.session else { return nil }
-            let request = MCPHTTPExchange.request(
+            var request = MCPHTTPExchange.request(
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
+            request.timeoutInterval = launch.answerTimeout
             let task = session.dataTask(with: request)
-            exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token)
+            exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token, task: task)
             return task
         }
         task?.resume()
@@ -319,6 +351,18 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             }
         }
         if let error, exchange.answered == false {
+            // Neither is the server's answer. rv closed this one after
+            // cancelling it; the HTTP layer gives up only after the core's
+            // own deadline has ended the request, and a failure delivered
+            // for it would be recorded as the tool having run.
+            if exchange.closed { return }
+            if MCPHTTPExchange.isRequest(message), (error as NSError).domain == NSURLErrorDomain,
+                (error as NSError).code == NSURLErrorTimedOut
+            {
+                log("MCP server \(name) sent nothing on a request for \(Int(launch.answerTimeout)) s; "
+                    + "rv stopped waiting at the HTTP level")
+                return
+            }
             fail("could not reach MCP server \(name): \(error.localizedDescription)")
             return
         }
