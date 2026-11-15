@@ -7,8 +7,9 @@ public enum MCPGatewayInput: Sendable, Equatable {
     case clientUnparseable
     case upstream(server: String, message: JSONValue)
     case upstreamExited(server: String)
-    /// The runtime started this server again after `restartUpstream`.
-    case upstreamRelaunched(server: String)
+    /// The runtime started this server again after `restartUpstream` for
+    /// this `launch`.
+    case upstreamRelaunched(server: String, launch: Int)
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
@@ -26,8 +27,9 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Stop this upstream now: kill its process, or close its connection.
     /// The core already counts it failed; its exit may still be reported.
     case stopUpstream(server: String)
-    /// Start this server again, as it was started at serve start.
-    case restartUpstream(server: String)
+    /// Start this server again, as it was started at serve start. `launch`
+    /// numbers this try; the core waits for no other (`awaitsRelaunch`).
+    case restartUpstream(server: String, launch: Int)
 }
 
 /// How long the gateway waits for each `tools/list` page. An `initialize`
@@ -163,9 +165,14 @@ public struct MCPGatewayCore {
         case stopping
         /// Its exit was seen; it is started again at this time.
         case waiting(until: Date)
-        /// `restartUpstream` was sent: it is being started, initialized,
+        /// `restartUpstream` was sent for this launch: it is being planned
+        /// and started. Past `until` (its `startTimeoutSeconds` after the
+        /// restart) it counts as gone again, and a late start of this
+        /// launch is not taken.
+        case launching(Int, until: Date)
+        /// The runtime started it: it is initialized (by the same `until`),
         /// then listed again.
-        case launching
+        case relisting
     }
 
     struct Approval {
@@ -461,9 +468,11 @@ public struct MCPGatewayCore {
         }
     }
 
-    /// `initialize`, waited for up to the server's `startTimeoutSeconds`.
-    mutating func initialize(_ server: String) -> MCPGatewayOutput {
-        let id = allocate(.initialize(server: server, deadline: deadlineClock().addingTimeInterval(startTimeout(server))))
+    /// `initialize`, waited for up to the server's `startTimeoutSeconds`,
+    /// or until `deadline` when one is given.
+    mutating func initialize(_ server: String, by deadline: Date? = nil) -> MCPGatewayOutput {
+        let deadline = deadline ?? deadlineClock().addingTimeInterval(startTimeout(server))
+        let id = allocate(.initialize(server: server, deadline: deadline))
         return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
             "protocolVersion": .string(Self.upstreamVersion),
             "capabilities": .object([:]),
@@ -478,15 +487,15 @@ public struct MCPGatewayCore {
         // and expiring first would drop it silently.
         if case .client(let message) = input, message["method"] == nil,
             let key = message["id"]?.stringValue, held[key] != nil {
-            return clientMessage(message) + expireHeld() + expireDeadlines() + dueRestarts()
+            return clientMessage(message) + expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         }
-        var outputs = expireHeld() + expireDeadlines() + dueRestarts()
+        var outputs = expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         switch input {
         case .client(let message): outputs += clientMessage(message)
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
-        case .upstreamRelaunched(let server): outputs += upstreamRelaunched(server)
+        case .upstreamRelaunched(let server, let launch): outputs += upstreamRelaunched(server, launch: launch)
         case .tick, .gatewayStopping: break
         }
         return outputs
@@ -1194,7 +1203,7 @@ public struct MCPGatewayCore {
                 let initialized = MCPGatewayOutput.toUpstream(
                     server: server, message: Self.notification("notifications/initialized", nil))
                 // Relaunched: listed again before any call reaches it.
-                if case .restarting(_, .launching)? = phases[server] { return [initialized] + relist(server) }
+                if case .restarting(_, .relisting)? = phases[server] { return [initialized] + relist(server) }
                 phases[server] = .ready
                 everReady.insert(server)
                 return [initialized] + releaseWaiting()

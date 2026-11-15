@@ -76,18 +76,46 @@ extension MCPGatewayCore {
         var outputs: [MCPGatewayOutput] = []
         for server in order {
             guard case .restarting(let reason, .waiting(let until))? = phases[server], until <= now else { continue }
-            phases[server] = .restarting(reason, .launching)
+            let launch = nextID
+            nextID += 1
+            phases[server] = .restarting(reason, .launching(launch, until: now.addingTimeInterval(startTimeout(server))))
             relaunches[server, default: []].append(now)
             launchListed[server] = []
-            outputs.append(.restartUpstream(server: server))
+            outputs.append(.restartUpstream(server: server, launch: launch))
         }
         return outputs
     }
 
-    /// The runtime started it again: it is initialized as at serve start.
-    mutating func upstreamRelaunched(_ server: String) -> [MCPGatewayOutput] {
-        guard case .restarting(_, .launching)? = phases[server] else { return [] }
-        return [initialize(server)]
+    /// Whether the core still waits for this launch of `server` to start.
+    /// The runtime starts nothing for a launch it no longer waits for.
+    func awaitsRelaunch(server: String, launch: Int) -> Bool {
+        guard case .restarting(_, .launching(let awaited, _))? = phases[server] else { return false }
+        return awaited == launch
+    }
+
+    /// The runtime started it again: it is initialized as at serve start,
+    /// within what is left of its start timeout. A start of any other
+    /// launch is ignored.
+    mutating func upstreamRelaunched(_ server: String, launch: Int) -> [MCPGatewayOutput] {
+        guard case .restarting(let reason, .launching(let awaited, let until))? = phases[server], awaited == launch else {
+            return []
+        }
+        phases[server] = .restarting(reason, .relisting)
+        return [initialize(server, by: until)]
+    }
+
+    /// A launch the runtime has not reported started by its `until` counts
+    /// as one more time the server went away; a late start of it is ignored.
+    mutating func expireLaunches() -> [MCPGatewayOutput] {
+        let now = deadlineClock()
+        var outputs: [MCPGatewayOutput] = []
+        for server in order {
+            guard case .restarting(_, .launching(_, let until))? = phases[server], until <= now else { continue }
+            let reason = "it did not start again within \(Self.seconds(startTimeout(server))) s"
+            phases[server] = .restarting(reason, .stopping)
+            outputs += afterExit(server)
+        }
+        return outputs
     }
 
     /// rv's own listing of a relaunched server; nobody gets its answer.
@@ -113,7 +141,7 @@ extension MCPGatewayCore {
     /// Listed again after a relaunch: ready, or stopped when its listing
     /// failed (which counts as one more time it went away).
     mutating func relisted(_ server: String, failed: Bool) -> [MCPGatewayOutput] {
-        guard case .restarting(let reason, .launching)? = phases[server] else { return [] }
+        guard case .restarting(let reason, .relisting)? = phases[server] else { return [] }
         let shown = MCPDisplayedText.field(server)
         guard failed == false else {
             return setPhase(server, .restarting(reason, .stopping)) + [

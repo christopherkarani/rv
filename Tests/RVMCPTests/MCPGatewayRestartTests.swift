@@ -4,7 +4,8 @@ import Testing
 @testable import RVMCP
 
 extension [MCPGatewayOutput] {
-    var restarted: [String] { compactMap { if case .restartUpstream(let s) = $0 { s } else { nil } } }
+    var restarted: [String] { compactMap { if case .restartUpstream(let s, _) = $0 { s } else { nil } } }
+    var launches: [Int] { compactMap { if case .restartUpstream(_, let launch) = $0 { launch } else { nil } } }
     var listChanged: Int {
         toClient.filter { $0["method"] == .string("notifications/tools/list_changed") }.count
     }
@@ -39,10 +40,21 @@ struct MCPGatewayRestartTests {
         return harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[\#(tools.joined(separator: ","))]}}"#)
     }
 
+    /// The launch the core waits for, or -1 when it waits for none.
+    static func launch(_ harness: GatewayHarness) -> Int {
+        guard case .restarting(_, .launching(let launch, _))? = harness.core.phases["github"] else { return -1 }
+        return launch
+    }
+
+    /// The runtime reports the launch the core waits for started.
+    static func relaunched(_ harness: inout GatewayHarness) -> [MCPGatewayOutput] {
+        harness.core.handle(.upstreamRelaunched(server: "github", launch: launch(harness)))
+    }
+
     /// The runtime has started the server again: it answers `initialize`
     /// and then the listing the gateway asks for itself.
     static func bringBack(_ harness: inout GatewayHarness, _ tools: [String] = [listIssues]) -> [MCPGatewayOutput] {
-        var outputs = harness.core.handle(.upstreamRelaunched(server: "github"))
+        var outputs = Self.relaunched(&harness)
         let initialize = outputs.sent("initialize").first?["id"] ?? .null
         let answered = harness.core.handle(.upstream(server: "github", message: MCPGatewayDeadlineTests.answer(initialize)))
         outputs += answered
@@ -136,7 +148,7 @@ struct MCPGatewayRestartTests {
         _ = harness.core.handle(.upstreamExited(server: "github"))
         clock.advance(1)
         #expect(harness.core.handle(.tick).restarted == ["github"])
-        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize")
+        let initialize = Self.relaunched(&harness).sent("initialize")
         #expect(initialize.count == 1)
         clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds))
         #expect(harness.core.handle(.tick).stopped == ["github"])
@@ -151,7 +163,7 @@ struct MCPGatewayRestartTests {
         _ = harness.core.handle(.upstreamExited(server: "github"))
         clock.advance(1)
         _ = harness.core.handle(.tick)
-        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let initialize = Self.relaunched(&harness).sent("initialize").first?["id"] ?? .null
         let answered = harness.core.handle(.upstream(server: "github", message: MCPGatewayDeadlineTests.answer(initialize)))
         let listID = answered.sent("tools/list").first?["id"]?.intValue ?? -1
         let failed = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(listID),"error":{"code":-1,"message":"no"}}"#)
@@ -164,10 +176,10 @@ struct MCPGatewayRestartTests {
         let clock = ManualClock()
         var harness = Self.harness(clock)
         _ = harness.ready()
-        #expect(harness.core.handle(.upstreamRelaunched(server: "github")).isEmpty)
+        #expect(harness.core.handle(.upstreamRelaunched(server: "github", launch: 1)).isEmpty)
         _ = harness.core.handle(.upstreamExited(server: "github"))
         // Still waiting out its delay.
-        #expect(harness.core.handle(.upstreamRelaunched(server: "github")).isEmpty)
+        #expect(harness.core.handle(.upstreamRelaunched(server: "github", launch: 1)).isEmpty)
     }
 
     // MARK: Never re-send
@@ -207,7 +219,7 @@ struct MCPGatewayRestartTests {
         clock.advance(1)
         _ = harness.core.handle(.tick)
         expectRefused(harness.client(Self.listCall), "while it is started again")
-        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let initialize = Self.relaunched(&harness).sent("initialize").first?["id"] ?? .null
         let answered = harness.core.handle(.upstream(server: "github", message: MCPGatewayDeadlineTests.answer(initialize)))
         expectRefused(harness.client(Self.listCall), "while it is listed again")
         let listID = answered.sent("tools/list").first?["id"]?.intValue ?? -1
@@ -403,7 +415,7 @@ struct MCPGatewayRestartTests {
 
     /// Started again and initialized: the id of rv's own `tools/list`.
     static func relaunchToListing(_ harness: inout GatewayHarness) -> Int {
-        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let initialize = Self.relaunched(&harness).sent("initialize").first?["id"] ?? .null
         let answered = harness.core.handle(.upstream(server: "github", message: MCPGatewayDeadlineTests.answer(initialize)))
         return answered.sent("tools/list").first?["id"]?.intValue ?? -1
     }
@@ -503,7 +515,7 @@ struct MCPGatewayRestartTests {
         var harness = Self.harness(clock)
         _ = harness.ready()
         Self.dueForRelaunch(&harness, clock)
-        let initialize = harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").first?["id"] ?? .null
+        let initialize = Self.relaunched(&harness).sent("initialize").first?["id"] ?? .null
         let failed = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "id": initialize, "error": .object(["code": .int(-1), "message": .string("no")]),
         ])))
@@ -550,9 +562,38 @@ struct MCPGatewayRestartTests {
         _ = harness.ready()
         Self.dueForRelaunch(&harness, clock)
         clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds) - 1)
-        #expect(harness.core.handle(.upstreamRelaunched(server: "github")).sent("initialize").count == 1)
+        #expect(Self.relaunched(&harness).sent("initialize").count == 1)
         clock.advance(1)
         #expect(harness.core.handle(.tick).stopped == ["github"])
+    }
+
+    /// The core stopped waiting for a launch that ran out of time: a late
+    /// start of it is not taken, by the core or (through `awaitsRelaunch`)
+    /// by the runtime, before or after the next launch is under way.
+    @Test func aLateStartOfALaunchThatRanOutOfTimeIsIgnored() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        _ = harness.core.handle(.upstreamExited(server: "github"))
+        clock.advance(1)
+        let due = harness.core.handle(.tick)
+        let first = Self.launch(harness)
+        #expect(due.launches == [first])
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: first))
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds))
+        _ = harness.core.handle(.tick)
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: first) == false)
+        #expect(harness.core.handle(.upstreamRelaunched(server: "github", launch: first)).isEmpty)
+        clock.advance(2)
+        let next = harness.core.handle(.tick)
+        let second = Self.launch(harness)
+        #expect(next.launches == [second])
+        #expect(second != first)
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: first) == false)
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: second))
+        #expect(harness.core.handle(.upstreamRelaunched(server: "github", launch: first)).isEmpty)
+        #expect(Self.relaunched(&harness).sent("initialize").count == 1)
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: second) == false)
     }
 
     /// The prompt cannot run while its server is being brought back: an
