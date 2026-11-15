@@ -525,24 +525,35 @@ but the last two have passed.
 
 A `hostEnvironment` source is refused because its value sits in the
 environment rv was started with, which the MCP client that started rv
-also holds and may pass to every other server it starts. What the cage
-itself allows, as measured on macOS 27: `/bin/ps eww -p $PPID` fails with
-"Operation not permitted" (`ps` is setuid), but `sysctl` `KERN_PROCARGS2`
-answers a same-user caller, caged or not, with the arguments and the
-whole exec-time environment of any of your processes that is not an
-Apple platform binary (plain, ad hoc signed and hardened-runtime
-programs alike; `/bin/sh` and the other binaries macOS ships show none).
-That includes `rv mcp serve`, the MCP client that started it, and every
-other program you run, so a caged server can read every variable they
-were started with. The cage does not stop it: `(deny process-info*
-(target others))` and `sysctl-read` or `sysctl*` denies by the name
-`kern.procargs2`, a name prefix or a regex all left it readable; only
-denying every `sysctl-read` and `process-info*` did, which also refuses
-the server's own reads (the workspace cage's runtime boundary records
-the same limit as R4). The live test checks only that the server's read
-of its parent (the test process, running serve's runtime in-process)
-parses. Other ways to read rv's memory (`task_for_pid` and the like) were
-not tested; the refusal does not depend on them.
+also holds and may pass to every other server it starts.
+
+Other processes' arguments and environment, as measured on macOS 27.
+Uncaged, `sysctl` `KERN_PROCARGS2` answers a same-user caller with the
+arguments and the whole exec-time environment of any of your processes
+that is not an Apple platform binary. That includes `rv mcp serve` (whose
+environment holds the host's tokens that the server's own environment is
+stripped of), the MCP client that started it, and every other server
+serve starts, whose environment and arguments hold the real values of
+its `secrets` and `${secret:}` arguments. The cage refuses it: the
+profile denies `sysctl-read` of names starting `kern.procargs` and
+`process-info-pidinfo` of every process outside the server's own
+sandbox, and the kernel needs both. Each `sandbox-exec` is a sandbox of
+its own, so another caged server is outside it too. Neither rule alone
+refused the read, nor did `(target others)` in place of
+`(require-not (target same-sandbox))`. The live tests read, from inside
+the cage, its parent (the test process, running serve's runtime
+in-process), a process outside the cage started with a marker in its
+environment, and a second `sandbox-exec` of the same profile: each fails
+"Operation not permitted", while this process still reads the outside
+one. What the server still reads: its own arguments and environment and
+those of its children, and every process's pid and name (`pgrep` and
+`KERN_PROC_ALL` still list them). The behaviour change: `proc_pidinfo`
+is refused for every process outside the cage, so a tool that asks about
+one by pid gets nothing (`lsof -p` of the parent printed nothing); signals
+still reach them. `ps` already failed
+(it is setuid). Python, Node 22 and git ran unchanged. Other ways to read
+another process (`task_for_pid`, other `proc_info` calls, launchd's
+environment for rvd) were not tested.
 
 How it starts the server:
 
@@ -604,9 +615,30 @@ What it does not:
   those, reads, writes, links and clones of credential directories and
   rv's config directory, and the network but for the gateway (and proxy)
   port. An ancestor that is a symlink is named at the link itself as well
-  as where it resolves, since a rename or removal acts on the link: it
-  can be neither moved, removed, renamed over nor swapped for another
-  link (live test). File copies and file clones are not affected:
+  as where it resolves, since a rename or removal acts on the link, and
+  so is a link a `..` in a credential link's target steps out of (`l` in
+  `~/.ssh` → `W/l/../keys`): the cage can neither move, remove, rename
+  over nor swap one for another link (live tests). An ancestor inside
+  those that is missing cannot be created by the cage at all: not as a
+  symlink, a link or directory renamed onto it, or a hard link, which
+  would hold the credential once its owner writes it. Seatbelt checks a
+  plain `mkdir` as the same create as a directory renamed in, so the
+  cage cannot `mkdir` one either (`mkdir -p` of a missing
+  `~/Library/Application Support/Google` fails when the home is inside
+  those directories, with `sandbox.writable: ["~/"]` for example); making one that exists still fails "File exists". This holds
+  for the paths the profile names when the server starts; a link an
+  uncaged process retargets later is covered below. When a
+  credential's path goes through a symlink and a name on it is missing
+  (`~/.config` linked to `~/dotfiles/config` without `gcloud`), and the
+  cage could create that name (an entry on the path lies inside those
+  directories), the profile also denies every directory a link created
+  there could send it to, up to `/`: with `~/.config` linked into a
+  `sandbox.writable` directory and a credential under it missing, that
+  denies `/Users` and the home, and the server cannot use its scratch.
+  Elsewhere the cage cannot create the name (live test: a symlink, a
+  directory, a cloned link, a rename and a hard link onto it all fail),
+  so only the credential paths are denied and such a server runs as
+  usual. File copies and file clones are not affected:
   `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
   tree file by file; only a raw `clonefile(2)` of a directory from
   outside those is refused, so a tool that clones whole package
@@ -642,8 +674,9 @@ What it does not:
 - Tested (macOS, live test through the real planner, sandbox hook and
   `sandbox-exec`): the server's environment and arguments hold the
   placeholder and not the real value; the placeholder is spent from the
-  server and refused from outside its group; its read of its parent's
-  `KERN_PROCARGS2` parses (the environment comes back too, see above);
+  server and refused from outside its group; its `KERN_PROCARGS2` read
+  of its parent and of a process outside the cage fails "Operation not
+  permitted" while its read of itself parses (see above);
   the whole group ends with
   serve. Not tested: keychain or provider access from inside the cage,
   `task_for_pid`, and `nsurlsessiond` or other XPC services reached from
