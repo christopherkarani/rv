@@ -70,7 +70,7 @@ struct MCPSandboxLongPathTests {
             path += "/" + String("Straße-ΣIGMA-ﬁle-\(Self.letterHeavy)".prefix(200))
         }
         while path.utf8.count < 1023 { path += "x" }
-        let filters = MCPSandbox.paths([path], denyTargets: true)
+        let filters = MCPSandbox.paths([path], denyTargets: true, writable: [])
         let profile = "(version 1)(allow default)(deny file-read* " + filters + ")"
         #expect(Self.longestLiteral(in: profile) <= MCPSandbox.seatbeltLiteralBytes)
         #expect(MCPSandbox.seatbeltLiteralBytes < Self.readerLimit)
