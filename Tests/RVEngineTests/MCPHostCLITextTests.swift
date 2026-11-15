@@ -332,19 +332,18 @@ struct MCPHostCLITextTests {
 
     /// The variants of a word or tail (as written, ANSI-C decoded, `echo -e`
     /// decoded) are read in a fixed order, so every process keeps the same
-    /// books: judged again in one process, the deep line gives the same
-    /// verdict and counters each time, and the depth cap is what asks.
-    @Test("deep quoting is judged with the same books every time", arguments: ["watch xmcp end", "claude mcp add x -- y"])
+    /// books: the deep line gives the counters another process measured,
+    /// and the depth cap is what asks. A hash seed once varied them per
+    /// process, which repeating the judgement in one process cannot show.
+    @Test("deep quoting is judged with the same books in every process", arguments: ["watch xmcp end", "claude mcp add x -- y"])
     func deepQuotingKeepsTheSameBooks(bottom: String) {
         let command = ansiNested(bottom, levels: HostTextReads.maxDepth + 2)
-        var first = HostTextReads()
-        #expect(judge(command, &first))
-        #expect(first.depthExceeded, "\(bottom)")
-        for _ in 0..<10 {
-            var again = HostTextReads()
-            #expect(judge(command, &again))
-            #expect(books(again) == books(first), "\(bottom)")
-        }
+        var reads = HostTextReads()
+        #expect(judge(command, &reads))
+        let measured = Books(
+            depthExceeded: true, unfollowable: false, exceeded: true, readsDone: 6, piecesExamined: 0,
+            wordVisits: 56, spellingSteps: 0)
+        #expect(books(reads) == measured, "\(bottom)")
     }
 
     /// Whatever order the variants are read in (`variantOrderSeed` shuffles
@@ -365,34 +364,85 @@ struct MCPHostCLITextTests {
         for input in inputs {
             var fixed = HostTextReads()
             let verdict = judge(input.line, &fixed)
-            var seen: Set<String> = []
             for seed in UInt64(1)...64 {
                 var shuffled = HostTextReads()
                 shuffled.variantOrderSeed = seed
                 #expect(judge(input.line, &shuffled) == verdict, "\(input.label) seed \(seed)")
-                seen.insert(books(shuffled).description)
+                // The counters may differ by order; what asks may not. A
+                // harmless bottom asks only at the depth cap.
+                #expect(shuffled.unfollowable == false, "\(input.label) seed \(seed)")
+                #expect(shuffled.readsDone < HostTextReads.maxReads, "\(input.label) seed \(seed)")
+                if input.label != "deep-mutation" {
+                    #expect(shuffled.depthExceeded, "\(input.label) seed \(seed)")
+                }
             }
-            print("VARIANTORDER \(input.label) verdict=\(verdict) fixed=\(books(fixed)) orders=\(seen.sorted())")
         }
     }
 
     /// The same text reached through one more level of quoting is read
-    /// again at that depth: a line naming a text both directly and inside
-    /// one more `watch $'…'` asks at the cap in either operand order, rather
-    /// than allowing when the shallower copy happens to be read first.
+    /// again at that depth. Four levels of `watch $'…'` allow alone; beside
+    /// a copy one level deeper, which reads them again one level down, the
+    /// line reaches the cap and asks in either operand order. Read once at
+    /// whatever depth came first, the deeper copy would be skipped and the
+    /// line would allow.
     @Test("a text read again one level deeper still reaches the cap")
     func deeperCopyStillReachesTheCap() {
-        let shallow = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth - 1)
-        let deeper = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth)
+        let shallow = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth - 2)
+        let deeper = ansiNested("watch xmcp end", levels: HostTextReads.maxDepth - 1)
+        #expect(judge("watch " + ansiQuoted(shallow)) == false)
         for line in ["watch " + ansiQuoted(shallow) + " " + ansiQuoted(deeper),
                      "watch " + ansiQuoted(deeper) + " " + ansiQuoted(shallow)] {
             var reads = HostTextReads()
             #expect(judge(line, &reads), "\(line.prefix(40))")
-            print("DEEPERCOPY \(line.prefix(12)) books=\(books(reads))")
+            #expect(reads.depthExceeded, "\(line.prefix(40))")
         }
-        var alone = HostTextReads()
-        let aloneAsks = judge("watch " + ansiQuoted(shallow), &alone)
-        print("DEEPERCOPY alone asks=\(aloneAsks) books=\(books(alone))")
+    }
+
+    /// Past `maxWordVisits` a command counts, so a long payload nested at
+    /// several depths asks after a bounded amount of work rather than
+    /// running for seconds; the same payload at fewer depths allows. One
+    /// read launches many commands, so a check only where a read begins
+    /// let this ladder visit 133,576 words.
+    @Test("reading past the word-visit ceiling asks")
+    func wordVisitCeilingAsks() {
+        let payload = "watch " + (0..<250).map { "xmcp\($0)" }.joined(separator: " ")
+        let ladder = "watch " + (0..<5).map { ansiQuoted(ansiNested(payload, levels: $0)) }.joined(separator: " ")
+        var reads = HostTextReads()
+        #expect(judge(ladder, &reads))
+        #expect(reads.visitsExceeded)
+        #expect(reads.depthExceeded == false)
+        // One command's words at most past the ceiling, not a whole read's.
+        #expect(reads.wordVisits < HostTextReads.maxWordVisits + 4_096, "\(reads.wordVisits)")
+        let small = "watch " + (0..<50).map { "xmcp\($0)" }.joined(separator: " ")
+        var under = HostTextReads()
+        #expect(judge(ansiNested(small, levels: 4), &under) == false)
+        #expect(under.wordVisits < HostTextReads.maxWordVisits, "\(under.wordVisits)")
+    }
+
+    /// `eval` and `sh -c` parse a payload as written and decoded; the
+    /// commands come out in that fixed order (as written first), so the
+    /// joined output of their printers, and the verdict on it, is the same
+    /// in every process. A hash seed used to order them.
+    @Test("eval and sh -c views launch in a fixed order", arguments: [
+        "eval $'echo\\x20mcp\\x20add\\x20x;' 'echo claude'", "sh -c $'echo\\x20mcp\\x20add\\x20x;echo claude'",
+    ])
+    func payloadViewsLaunchInOrder(_ line: String) throws {
+        let argvs = launchedCommandHeads(line).map(\.argv)
+        let written = try #require(argvs.firstIndex(of: ["echo", "claude"]), "\(argvs)")
+        let decoded = try #require(argvs.firstIndex(of: ["echo", "mcp", "add", "x"]), "\(argvs)")
+        #expect(written < decoded, "\(argvs)")
+    }
+
+    /// The written view prints `claude` before the decoded view prints `mcp
+    /// add x`: their joined output names a host mutation, so these ask.
+    @Test("printers across eval and sh -c views are joined in a fixed order", arguments: [
+        "eval $'echo\\x20mcp\\x20add\\x20x;' 'echo claude' | sh",
+        "eval $'printf\\x20mcp\\x20add\\x20x;' 'printf claude' | sh",
+        "eval $'echo\\tmcp\\tadd\\tx;' 'echo claude' | sh", "sh -c $'echo\\x20mcp\\x20add\\x20x;echo claude' | sh",
+        "sh -c $'printf\\x20\\x27mcp add x\\x27;printf claude' | sh",
+    ])
+    func crossViewPrintersAsk(_ line: String) {
+        #expect(judge(line), "\(line)")
     }
 
     /// Through the guard, long text is judged by what it names, not its

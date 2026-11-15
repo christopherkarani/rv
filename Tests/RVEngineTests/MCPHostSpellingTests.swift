@@ -256,6 +256,32 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// A redefinition rv already parsed but the line's text does not spell
+    /// as `PATH=`: zsh's tied `path` array, a quoted name given to `env`,
+    /// a shell startup file (`BASH_ENV`, `ENV`, `ZDOTDIR`), and `PATH` set
+    /// by `read`, `printf -v` or a `for` loop.
+    @Test("the operand list backs off where a parsed assignment may move a command", arguments: [
+        "path=(./bin $path); ls mcp $X", "path+=(./bin); ls mcp $X", "path[1]=./bin; ls mcp $X",
+        "env 'PA'TH=./bin:$PATH ls mcp $X", "BASH_ENV=./x.sh bash -c 'ls mcp $X'",
+        "ENV=./x.sh sh -c 'ls mcp $X'", "ZDOTDIR=./z zsh -c 'ls mcp $X'", "export BASH_ENV=./x.sh; bash -c 'ls mcp $X'",
+        "export 'PA'TH=./bin; ls mcp $X",
+        "read PATH; ls mcp $X", "printf -v PATH %s ./bin; ls mcp $X", "for PATH in ./bin; do ls mcp $X; done",
+    ])
+    func parsedRedefinitionAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Text the line carries and rv reads again as a command line is
+    /// checked for redefinitions on its own: its heads are not the line's.
+    @Test("the operand list backs off where carried text may define commands", arguments: [
+        "watch 'source ./lib.sh; find \"$C\" mcp add evil -- x'", "echo 'alias ls=eval; ls mcp $X' | sh",
+        "watch $'ls\\x28\\x29 { eval \"$@\"; }; ls mcp $X'", "watch 'alias ls=eval; ls mcp $X'",
+        "echo 'source ./lib.sh; ls mcp $X' | sh",
+    ])
+    func carriedRedefinitionAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
     @Test("the operand list holds on a line that defines nothing", arguments: [
         "ls mcp $X", "ls -la mcp $X", "cd \"$DIR\" && ls mcp $X",
     ])
@@ -263,11 +289,28 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command) == false, "\(command)")
     }
 
-    /// `find` runs only the words of its `-exec`, `-execdir`, `-ok` and
-    /// `-okdir` clauses; `xargs` and `watch` take their options' values
-    /// before the program. A dynamic word in a runs position still asks;
-    /// one of those operands does not, by its plain name on a line that
-    /// defines nothing.
+    /// A dynamic word after `find`, `xargs` or `watch`, with a group word
+    /// later, asks wherever it stands. rv's words lost their quoting, so
+    /// `"$N"` may be an unquoted `$N` that splits into an `-exec` clause or
+    /// a program (`N='4 claude'`), and a quoted `'\;'` reads as the `;`
+    /// that ends a clause though `find` keeps going.
+    @Test("a dynamic operand of find, xargs or watch may be a program and asks", arguments: [
+        "c=claude; o=-exec; find . $o $c mcp add evil -- x \\;",
+        "D='-exec claude'; find . $D mcp add evil -exec cat {} \\;",
+        "find . -maxdepth \"$DEPTH\" -name config", "find . -maxdepth \"$DEPTH\" -name mcp -delete",
+        "find . -newer \"$REF\" -name plugin -print", "find . -maxdepth \"$DEPTH\" -name config -exec cat {} \\;",
+        "c=claude; find . -exec sh -c 'shift; exec \"$@\"' sh '\\;' $c mcp add evil -- x \\;",
+        "c=claude; find . -exec sh -c 'shift; exec \"$@\"' sh \"\\;\" $c mcp add evil -- x \\;",
+        "c=claude; find . -ok sh -c 'exec \"$@\"' sh {} + $c mcp add evil -- x \\;",
+        "N='4 claude'; echo x | xargs -P $N mcp add evil -- x", "xargs --max-procs $N mcp add evil -- x",
+        "xargs -P \"$N\" grep -l config", "xargs -n \"$BATCH\" grep -l extensions",
+        "xargs -I {} -P \"$N\" grep -l config {}",
+        "S='1 claude'; watch -n $S mcp add evil -- x", "watch -n \"$SECS\" cat config",
+    ])
+    func runnerDynamicOperandAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
     @Test("a dynamic word a runner really runs still asks", arguments: [
         "find \"$DIR\" -exec $c mcp add evil -- x \\;", "find . -name x -exec claude mcp add evil -- x \\;",
         "find . -exec stdbuf -o0 $c mcp add evil -- x \\;", "find . -okdir $c mcp add evil -- x {} +",
@@ -281,28 +324,26 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
-    @Test("a dynamic operand a runner never runs allows", arguments: [
-        "find $ROOT -type f -name '*.json'", "find . -maxdepth \"$DEPTH\" -name config",
-        "find . -maxdepth \"$DEPTH\" -name mcp -delete", "find . -newer \"$REF\" -name plugin -print",
-        "find . -maxdepth \"$DEPTH\" -name config -exec cat {} \\;", "xargs -P \"$N\" grep -l config",
-        "xargs -n \"$BATCH\" grep -l extensions", "xargs -I {} -P \"$N\" grep -l config {}",
-        "watch -n \"$SECS\" cat config", "timeout \"$SECS\" npm run config",
+    /// Bounds, not pins: these allow because no group word follows the
+    /// dynamic word (`*.json` cannot be one) or the parser drops it (a
+    /// `timeout` duration), as they did before any runner operand was read.
+    @Test("a dynamic word with no group word after it allows", arguments: [
+        "find $ROOT -type f -name '*.json'", "timeout \"$SECS\" npm run config",
     ])
-    func runnerOwnOperandAllows(_ command: String) {
+    func dynamicWordWithoutGroupAllows(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
     }
 
-    /// A dynamic start path still asks: `carriesHostMCPText` re-reads
-    /// `find`'s operands joined as a command line (`$DIR -name config`),
-    /// whose dynamic head is given a group word. That read is 2dda1e48's;
-    /// only the dynamic-word pass over `find`'s own words is narrowed.
-    @Test("a dynamic find start path asks through its joined operands")
+    /// A dynamic start path asks from `find`'s own words, and again through
+    /// `carriesHostMCPText`'s re-read of its operands joined as a command
+    /// line (`$DIR -name config`), whose dynamic head is given a group word.
+    @Test("a dynamic find start path asks from its words and its joined operands")
     func dynamicFindStartPathAsksThroughJoinedOperands() throws {
         for command in ["find \"$DIR\" -name config", "find \"$DIR\" -name mcp -delete"] {
             let find = try #require(launchedCommandHeads(command).first { commandName($0.head) == "find" })
             var plain = HostTextReads()
             plain.commandsArePlain = true
-            #expect(isHostMCPMutation(find, reads: &plain) == false, "\(command)")
+            #expect(isHostMCPMutation(find, reads: &plain), "\(command)")
             var joined = HostTextReads()
             let tail = find.argv.dropFirst().joined(separator: " ")
             let joinedAsks = joined.runsHostMCPMutation(tail, nested: false, resplit: true)
@@ -405,10 +446,10 @@ struct MCPHostSpellingTests {
         // A dynamic word after a program that may run it, with a group word
         // later: it may be a host CLI (`$VAR` is now read as dynamic).
         ("node \"$ENTRY\" mcp list", true),
-        // `find`, `xargs` and `watch` never run their own operands; a dynamic
-        // start path still asks through the joined operands, as at 2dda1e48.
-        ("find \"$DIR\" -name config", true), ("find . -maxdepth \"$DEPTH\" -name config", false),
-        ("xargs -P \"$N\" grep -l config", false), ("watch -n \"$SECS\" cat config", false),
+        // A dynamic operand of `find`, `xargs` or `watch` with a group word
+        // later asks: unquoted, it may split into a program.
+        ("find \"$DIR\" -name config", true), ("find . -maxdepth \"$DEPTH\" -name config", true),
+        ("xargs -P \"$N\" grep -l config", true), ("watch -n \"$SECS\" cat config", true),
         ("timeout \"$SECS\" npm run config", false),
         // A brace word at a may-run operand: expanded within the cap, and
         // past `SpellingBudget.maxWordLength` it may be any words.

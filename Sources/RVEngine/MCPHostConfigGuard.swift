@@ -224,17 +224,46 @@ private func mayDefineCommands(_ raw: String) -> Bool {
 /// Whether a plain command name on `raw` may run something other than the
 /// program it names: a function definition (`ls() …`, `ls ( ) …`,
 /// `function ls …`), an alias or hash entry (`alias`, `BASH_ALIASES[ls]=`,
-/// zsh `aliases[ls]=`), a `PATH` change, or a command whose effect on the
-/// shell rv does not read (`source`, `.`, `eval`, `trap`, `autoload`, a
-/// dynamic program).
-private func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
+/// zsh `aliases[ls]=`), a `PATH` change (zsh's tied `path` too, an
+/// assignment rv parsed under a quoted name, `read`, `printf -v`, `for`), a
+/// shell startup file (`BASH_ENV`, `ENV`, `ZDOTDIR`), or a command whose
+/// effect on the shell rv does not read (`source`, `.`, `eval`, `trap`,
+/// `autoload`, a dynamic program).
+func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
     if mayDefineCommands(raw) { return true }
     let unblanked = raw.filter { $0.isWhitespace == false }
     if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
-    return launched.contains { $0.headIsDynamic || redefiningCommands.contains(commandName($0.head)) }
+    let spaced = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+    if loopOverLookupVariable.contains(where: { spaced.contains($0) }) { return true }
+    return launched.contains {
+        $0.headIsDynamic || redefiningCommands.contains(commandName($0.head)) || setsLookupVariable($0)
+    }
 }
 
-private let redefiningText = ["aliases[", "functions[", "commands[", "BASH_ALIASES", "BASH_CMDS", "BASH_FUNC_"]
+private let redefiningText = [
+    "aliases[", "functions[", "commands[", "BASH_ALIASES", "BASH_CMDS", "BASH_FUNC_", "path=(", "path+=(", "path[",
+]
+
+/// Variables that move which program a plain name runs, or make a shell run
+/// a file first, compared case-folded (zsh ties `path` to `PATH`).
+private let lookupVariables: Set<String> = ["path", "bash_env", "env", "zdotdir"]
+
+private let loopOverLookupVariable = ["for path in", "select path in"]
+
+/// Whether `command` sets a `lookupVariables` name: as an assignment rv
+/// parsed (`env 'PA'TH=…`, `BASH_ENV=… bash -c …`), or as an operand of a
+/// builtin that assigns it (`read PATH`, `printf -v PATH`, `export
+/// BASH_ENV=…`).
+private func setsLookupVariable(_ command: LaunchedCommand) -> Bool {
+    let names: (String) -> Bool = { word in
+        let name = unescapeBackslashPairs(word).prefix { $0 != "=" && $0 != "[" }
+        return lookupVariables.contains(String(name.hasSuffix("+") ? name.dropLast() : name).lowercased())
+    }
+    if command.assignments.contains(where: names) { return true }
+    return variableSetters.contains(commandName(command.head)) && command.guardArgv.dropFirst().contains(where: names)
+}
+
+private let variableSetters: Set<String> = ["read", "printf", "export", "declare", "typeset", "local", "readonly"]
 
 private let redefiningCommands: Set<String> = [
     "alias", "function", "hash", "enable", "source", ".", "eval", "trap", "autoload", "functions",

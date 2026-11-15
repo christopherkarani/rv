@@ -10,15 +10,23 @@ import Foundation
 /// (`hasUnfollowableShellText`) that may name one counts too. Text scanned
 /// as program text (`textNamesHostMCPMutation`) that holds a stem spends
 /// pieces: at most `maxTokenPieces` in one text and `maxPieces` in all.
-/// Brace and glob spellings spend `spelling` (`SpellingBudget`).
+/// Brace and glob spellings spend `spelling` (`SpellingBudget`). A read
+/// begun, or a command judged inside one, past `maxWordVisits` counts too,
+/// so the work is bounded however the texts nest.
 struct HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
     static let maxTokenPieces = 4_096
     static let maxPieces = 65_536
+    /// Measured: no command in the test corpora (85,397 lines) visits more
+    /// than 440 words; a visit costs about 6 to 9 microseconds on a loaded
+    /// machine, so this ends the worst nested lines in about half a second.
+    static let maxWordVisits = 65_536
 
     private var remaining = HostTextReads.maxReads
     private var depth = 0
+    /// Reads begun and not yet finished, nested or flat.
+    private var readsInProgress = 0
     private var seen: Set<String> = []
     /// Texts read as command lines so far.
     private(set) var readsDone = 0
@@ -28,6 +36,8 @@ struct HostTextReads {
     private(set) var exceeded = false
     /// The cap reached was the nesting depth.
     private(set) var depthExceeded = false
+    /// The cap reached was `maxWordVisits`.
+    private(set) var visitsExceeded = false
     /// Some text counted because the tokenizer cannot follow it.
     private(set) var unfollowable = false
     /// The read in progress is text nothing runs (`dataOnly`).
@@ -40,12 +50,12 @@ struct HostTextReads {
     /// message): only literal words count there, as they did before brace
     /// and glob spellings were resolved.
     private(set) var literal = false
-    /// No command on the line may be defined or redefined (no function,
-    /// alias, `PATH` change, sourced file, `eval` or dynamic program:
-    /// `commandsMayBeRedefined`), so a plain command name is the program it
-    /// names. Until the guard has checked the line it is false, and the
-    /// operand list (`leavesOperandsAlone`) and a runner's own operands
-    /// (`runnerOwnOperands`) do not apply.
+    /// No command on the line, nor in the text being read, may be defined
+    /// or redefined (no function, alias, `PATH` change, sourced file,
+    /// `eval` or dynamic program: `commandsMayBeRedefined`), so a plain
+    /// command name is the program it names. Until the guard has checked
+    /// the line it is false, and the operand list (`leavesOperandsAlone`)
+    /// does not apply.
     var commandsArePlain = false
     /// The work budget for brace and glob spellings, across every read.
     var spelling = SpellingBudget()
@@ -64,8 +74,8 @@ struct HostTextReads {
     /// they are read in is fixed, so the verdict and these counters are the
     /// same in every process (`variantOrderSeed` aside).
     mutating func ordered(_ variants: [String]) -> [String] {
-        var kept: Set<String> = []
-        var out = variants.filter { kept.insert($0).inserted }
+        var out: [String] = []
+        for variant in variants where out.contains(variant) == false { out.append(variant) }
         guard var state = variantOrderSeed, out.count > 1 else { return out }
         for index in stride(from: out.count - 1, to: 0, by: -1) {
             // SplitMix64.
@@ -95,9 +105,20 @@ struct HostTextReads {
         unfollowable = true
     }
 
-    /// Counts `count` words visited by one pass of `isHostMCPMutation`.
-    mutating func visit(words count: Int) {
+    /// Counts `count` words visited by one pass of `isHostMCPMutation`;
+    /// false (and `visitsExceeded`) past `maxWordVisits` inside a read,
+    /// where the command counts. Checked per command, not only where a read
+    /// begins: one read launches many commands. The line's own commands,
+    /// judged outside any read, cost only their length and are never
+    /// refused for it.
+    mutating func visit(words count: Int) -> Bool {
         wordVisits += count
+        guard readsInProgress == 0 || wordVisits < Self.maxWordVisits else {
+            exceeded = true
+            visitsExceeded = true
+            return false
+        }
+        return true
     }
 
     /// Whether `text`, read as a command line, runs a host MCP mutation. A
@@ -122,9 +143,10 @@ struct HostTextReads {
             + (literalReading ? "l" : "e") + String(depth) + ":" + text
         let mayName = literalReading ? holdsHostMCPStem(text) : mayNameHostMCP(text, budget: &spelling)
         guard mayName, seen.insert(key).inserted else { return false }
-        guard remaining > 0, depth < Self.maxDepth else {
+        guard remaining > 0, depth < Self.maxDepth, wordVisits < Self.maxWordVisits else {
             exceeded = true
             if depth >= Self.maxDepth { depthExceeded = true }
+            if wordVisits >= Self.maxWordVisits { visitsExceeded = true }
             return true
         }
         if reading == false, hasUnfollowableShellText(text) {
@@ -136,17 +158,24 @@ struct HostTextReads {
         let outerInert = inert
         let outerResplit = resplit
         let outerLiteral = literal
+        let outerPlain = commandsArePlain
         inert = reading
         resplit = splitting
         literal = literalReading
         if nested { depth += 1 }
+        readsInProgress += 1
         defer {
+            readsInProgress -= 1
             if nested { depth -= 1 }
             inert = outerInert
             resplit = outerResplit
             literal = outerLiteral
+            commandsArePlain = outerPlain
         }
         let launched = launchedCommandHeads(text)
+        // Carried text may define a command its own heads show and the
+        // line's do not (`watch 'alias ls=eval; ls mcp $X'`).
+        commandsArePlain = outerPlain && commandsMayBeRedefined(text, launched) == false
         // Text the parser stopped following, or a segment the splitter could
         // not scan (`watch '{claude,x} mcp add'`), may hide a host CLI. A
         // literal read judges words as written, and an unscanned segment
