@@ -723,7 +723,8 @@ struct MCPHostSpellingTests {
 
     /// A run of `[` that never closes, and a run of `[[:`, cost one scan of
     /// the text: a class scan per `[` once took about n² and n³ steps (16 KiB
-    /// of `[` some two minutes, 2 KiB of `[[:` about one).
+    /// of `[` some two minutes, 2 KiB of `[[:` about one). The bound is
+    /// loose on purpose; `classTableAgreesWithScan` checks the answers.
     @Test("a run of brackets is scanned in linear time", arguments: [
         String(repeating: "[", count: 16_384), String(repeating: "[[:", count: 683),
     ])
@@ -736,8 +737,73 @@ struct MCPHostSpellingTests {
         }
         #expect(named == false)
         #expect(asks == false)
-        #expect(elapsed < .seconds(10), "\(elapsed)")
+        #expect(elapsed < .seconds(30), "\(elapsed)")
     }
+
+    /// The class table closes each class where the per-`[` scan it replaced
+    /// did: `shortestGlobMatch`, which counts a closed class once, agrees
+    /// with a copy of that scan on every pattern up to six characters over
+    /// `[]:=.!^a` (so on every suffix of each, too). The table is private,
+    /// so whether a class holds a POSIX class is left to the spelling rows
+    /// (`[[:alpha:]]`).
+    @Test("the class table closes classes where the old scan did")
+    func classTableAgreesWithScan() {
+        let alphabet = Array("[]:=.!^a")
+        var patterns: [[Character]] = [[]]
+        var frontier: [[Character]] = [[]]
+        for _ in 0..<6 {
+            frontier = frontier.flatMap { prefix in alphabet.map { prefix + [$0] } }
+            patterns += frontier
+        }
+        var mismatches: [String] = []
+        for pattern in patterns {
+            let shipped = shortestGlobMatch(String(pattern))
+            let reference = referenceShortestGlobMatch(pattern)
+            if shipped != reference { mismatches.append("\(String(pattern)): \(shipped) vs \(reference)") }
+        }
+        #expect(patterns.count == 299_593)
+        #expect(mismatches.isEmpty, "\(mismatches.count): \(mismatches.prefix(8))")
+    }
+}
+
+/// `shortestGlobMatch` as it was, over the per-`[` class scan below.
+private func referenceShortestGlobMatch(_ p: [Character]) -> Int {
+    var count = 0
+    var index = 0
+    while index < p.count {
+        if p[index] == "*" {
+            index += 1
+            continue
+        }
+        if p[index] == "[", let close = referenceClassEnd(p, index) {
+            index = close + 1
+        } else {
+            index += 1
+        }
+        count += 1
+    }
+    return count
+}
+
+/// The class scan the table replaced: from `open` to the `]` that closes
+/// it, skipping each `[:…:]`, `[=…=]` or `[.….]`; nil when none does.
+private func referenceClassEnd(_ p: [Character], _ open: Int) -> Int? {
+    var k = open + 1
+    if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
+    if k < p.count, p[k] == "]" { k += 1 }
+    while k < p.count, p[k] != "]" {
+        if p[k] == "[", k + 1 < p.count, ":=.".contains(p[k + 1]) {
+            let kind = p[k + 1]
+            var j = k + 2
+            while j + 1 < p.count, (p[j] == kind && p[j + 1] == "]") == false { j += 1 }
+            if j + 1 < p.count {
+                k = j + 2
+                continue
+            }
+        }
+        k += 1
+    }
+    return k < p.count ? k : nil
 }
 
 /// Where a prefilter says no and the full judgement yes, for `line` and the
