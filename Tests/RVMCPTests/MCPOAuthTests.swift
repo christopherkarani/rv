@@ -238,7 +238,10 @@ struct MCPOAuthTests {
     /// that resets before its 404 is written must not kill `rv mcp connect`
     /// with SIGPIPE; the real callback after it is still taken.
     @Test func aKnockResetBeforeItsAnswerDoesNotEndTheSignIn() throws {
-        let redirect = try #require(MCPLoopbackRedirect.open())
+        guard let redirect = MCPLoopbackRedirect.open() else {
+            Issue.record("the loopback redirect must open")
+            return
+        }
         for _ in 0..<8 {
             let knock = try loopbackClient(port: redirect.port)
             _ = Array("GET /x HTTP/1.1\r\n".utf8).withUnsafeBytes { send(knock, $0.baseAddress, $0.count, 0) }
