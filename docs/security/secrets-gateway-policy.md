@@ -1106,10 +1106,12 @@ every runtime are recorded at most once a second, with how many were left
 out since the record before; one that names a secret is always recorded.
 
 A client that resets its connection before the gateway accepts it ends
-only that connection. One that resets it just after, before the gateway
-has set it up, is closed unanswered and unaudited. On Darwin the socket of
-such a connection refuses `SO_NOSIGPIPE`, and the gateway's answer to it
-raised SIGPIPE, which ends any process that does not ignore that signal.
+only that connection. On Darwin, one that resets it just after, before
+the gateway has set it up, is closed unanswered and unaudited: the socket
+of such a connection refuses `SO_NOSIGPIPE`, and the gateway's answer to
+it raised SIGPIPE, which ends any process that does not ignore that signal.
+On Linux every write passes `MSG_NOSIGNAL`, and such a connection is an
+outsider whose head cannot be read, refused as one.
 A local process connecting and resetting at once could end it that way.
 rvd and `rv mcp serve` ignore SIGPIPE, so this ended the test process,
 where it was found.
