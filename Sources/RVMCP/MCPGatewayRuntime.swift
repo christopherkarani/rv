@@ -419,8 +419,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// its exit reach the core, and its exit only once.
     private var live: [String: Int] = [:]
     /// Every stdio server's process group not yet reaped (and, for a
-    /// placeholder server, its lease not yet revoked), by launch.
-    private var groups: [Int: (server: String, group: any MCPSupervisedGroup, bound: Bool)] = [:]
+    /// placeholder server, its lease not yet revoked), by launch, with the
+    /// end a restart waits for.
+    private var groups: [Int: (server: String, group: any MCPSupervisedGroup, bound: Bool, ended: MCPLaunchEnd)] = [:]
     /// Each stdio upstream's input, written off the gateway queue.
     private var upstreamWriters: [String: (outbox: MCPOutbox, input: FileHandle)] = [:]
     private var remotes: [String: MCPRemoteUpstream] = [:]
@@ -613,9 +614,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         let gate = MCPExitGate { [self] in
             queue.async { self.exited(server, generation) }
         }
+        let ended = MCPLaunchEnd()
         let started = body(
             [STDIN_FILENO: stdin.read, STDOUT_FILENO: stdout.write, STDERR_FILENO: stderr.write],
             { [self] _ in
+                ended.end()
                 queue.async { self.groups[generation] = nil }
                 gate.reaped()
             })
@@ -633,7 +636,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             return false
         case .success(let running): group = running
         }
-        groups[generation] = (server, group, bound)
+        groups[generation] = (server, group, bound, ended)
         live[server] = generation
         upstreamWriters[server] = (MCPOutbox(limit: writeBufferBytes), FileHandle(fileDescriptor: stdin.write, closeOnDealloc: true))
         let stderrReader = stderr.read
@@ -742,22 +745,25 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             return
         }
         restarting.insert(server)
-        let earlier = groups.values.filter { $0.server == server }.map { $0.group }
+        let earlier = groups.values.filter { $0.server == server }.map { $0.ended }
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
+        let deadline = SuspendingClock.now.advanced(by: .seconds(restartWait))
         Thread.detachNewThread { [self] in
-            let deadline = Date().addingTimeInterval(self.restartWait)
             let planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
-            if earlier.allSatisfy({ $0.waitUntilFinished(until: deadline) }) == false {
-                planned = .failure(MCPStartFailure("its last process did not exit"))
-            } else if self.stoppingRestarts.load(ordering: .sequentiallyConsistent) {
-                planned = .failure(MCPStartFailure("serve is stopping"))
-            } else if let relaunch {
-                planned = relaunch(server)
-                    .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }
-                    .mapError { MCPStartFailure($0.message) }
-            } else {
-                planned = Self.reused(original)
+            switch MCPLaunchEnd.wait(
+                for: earlier, until: deadline, abandoned: { self.stoppingRestarts.load(ordering: .sequentiallyConsistent) })
+            {
+            case .timedOut: planned = .failure(MCPStartFailure("its last process did not exit"))
+            case .abandoned: planned = .failure(MCPStartFailure("serve is stopping"))
+            case .ended:
+                if let relaunch {
+                    planned = relaunch(server)
+                        .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }
+                        .mapError { MCPStartFailure($0.message) }
+                } else {
+                    planned = Self.reused(original)
+                }
             }
             queue.async { self.relaunched(server, planned) }
         }
