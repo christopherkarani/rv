@@ -89,6 +89,15 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// from the server go to `deliver`; a request that gets no answer (network
 /// error, HTTP error, closed stream) is answered with a JSON-RPC error, so the
 /// gateway core needs no transport knowledge. Redirects are never followed.
+///
+/// On Linux each POST has a session of its own, invalidated once the POST is
+/// over, so none goes out on a reused connection: libcurl sends a request
+/// again, on a new connection, when a reused connection drops before an
+/// answer, and without its body, so a `tools/call` would reach the server a
+/// second time (or hang until `answerTimeout`). The event stream and the
+/// session DELETE keep the shared session. On Darwin every request shares
+/// it, connections and all. Exchanges are keyed by their task object, which
+/// no other session could share; task identifiers are numbered per session.
 package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
@@ -108,7 +117,15 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var closed = false
         /// Told once this POST (and any retry of it) is over.
         var completed: (@Sendable () -> Void)?
+        /// This POST's own session, on Linux; invalidated when it is over.
+        var ownSession: URLSession?
     }
+
+    #if canImport(Darwin)
+    static let sessionPerPost = false
+    #else
+    static let sessionPerPost = true
+    #endif
 
     let launch: MCPRemoteLaunch
     private let authorizer: MCPRemoteAuthorizer?
@@ -117,7 +134,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private let log: @Sendable (String) -> Void
     private let lock = NSLock()
     private var session: URLSession?
-    private var exchanges: [Int: Exchange] = [:]
+    private let delegateQueue = MCPHTTPExchange.delegateQueue("rv.mcp.remote")
+    private var exchanges: [ObjectIdentifier: Exchange] = [:]
+    /// POST sessions made and not yet invalidated (a test seam).
+    private var liveSessions = 0
     private var sessionID: String?
     private var protocolVersion: String?
     private var initializeID: JSONValue?
@@ -153,18 +173,25 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     }
 
     package func start() {
+        let session = makeSession()
+        locked { self.session = session }
+        guard launch.transport == .sse else { return }
+        openStream(session: session, retried: false)
+    }
+
+    /// Every session of this upstream calls back on one serial queue.
+    private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = launch.answerTimeout
-        let session = URLSession(
-            configuration: configuration, delegate: self, delegateQueue: MCPHTTPExchange.delegateQueue("rv.mcp.remote"))
-        locked { self.session = session }
-        guard launch.transport == .sse else { return }
-        openStream(session: session, retried: false)
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
     }
+
+    /// Test seam: POST sessions made and not yet invalidated.
+    var postSessionsLive: Int { locked { liveSessions } }
 
     private func openStream(session: URLSession, retried: Bool) {
         let (sent, token) = headers()
@@ -178,7 +205,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         let task: URLSessionDataTask? = locked {
             guard stopped == false, self.session === session else { return nil }
             let task = session.dataTask(with: request)
-            exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token)
+            exchanges[ObjectIdentifier(task)] = Exchange(kind: .stream(retried: retried), token: token, task: task)
             return task
         }
         task?.resume()
@@ -229,10 +256,17 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     }
 
     package func stop() {
-        let (session, closing): (URLSession?, String?) = locked {
+        let (session, closing, posts): (URLSession?, String?, [URLSession]) = locked {
             stopped = true
-            return (self.session, launch.transport == .http ? sessionID : nil)
+            // Taken out, so the completions that follow do not invalidate them again.
+            var posts: [URLSession] = []
+            for key in Array(exchanges.keys) {
+                if let own = exchanges[key]?.ownSession { posts.append(own) }
+                exchanges[key]?.ownSession = nil
+            }
+            return (self.session, launch.transport == .http ? sessionID : nil, posts)
         }
+        posts.forEach { $0.invalidateAndCancel() }
         guard let session else { return }
         if let closing {
             let request = MCPHTTPExchange.request(
@@ -261,14 +295,16 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         let (sent, token) = headers()
         let body = Data(message.compactText.utf8)
         let task: URLSessionDataTask? = locked {
-            guard stopped == false, let session = self.session else { return nil }
+            guard stopped == false, let shared = self.session else { return nil }
             var request = MCPHTTPExchange.request(
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
             request.timeoutInterval = launch.answerTimeout
-            let task = session.dataTask(with: request)
-            exchanges[task.taskIdentifier] = Exchange(
-                kind: .post(message, retried: retried), token: token, task: task, completed: completed)
+            let own = Self.sessionPerPost ? makeSession() : nil
+            if own != nil { liveSessions += 1 }
+            let task = (own ?? shared).dataTask(with: request)
+            exchanges[ObjectIdentifier(task)] = Exchange(
+                kind: .post(message, retried: retried), token: token, task: task, completed: completed, ownSession: own)
             return task
         }
         guard let task else {
@@ -279,6 +315,12 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     }
 
     // MARK: URLSessionDataDelegate (serial delegate queue)
+
+    package func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        locked {
+            if session !== self.session { liveSessions -= 1 }
+        }
+    }
 
     package func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -297,8 +339,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         }
         let contentType = MCPHTTPExchange.header(http, "Content-Type")?.lowercased() ?? ""
         locked {
-            exchanges[dataTask.taskIdentifier]?.status = http.statusCode
-            exchanges[dataTask.taskIdentifier]?.isEventStream = contentType.hasPrefix("text/event-stream")
+            exchanges[ObjectIdentifier(dataTask)]?.status = http.statusCode
+            exchanges[ObjectIdentifier(dataTask)]?.isEventStream = contentType.hasPrefix("text/event-stream")
             if launch.transport == .http, (200..<300).contains(http.statusCode),
                 let assigned = MCPHTTPExchange.header(http, "Mcp-Session-Id"), MCPHTTPExchange.isSessionID(assigned)
             {
@@ -309,7 +351,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     }
 
     package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let id = dataTask.taskIdentifier
+        let id = ObjectIdentifier(dataTask)
         guard var exchange = locked({ exchanges[id] }) else { return }
         var incoming: [JSONValue] = []
         var endpointEvent: String?
@@ -339,8 +381,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     }
 
     package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let id = task.taskIdentifier
+        let id = ObjectIdentifier(task)
         guard let exchange = locked({ exchanges.removeValue(forKey: id) }) else { return }
+        // Its connection goes with it; a retry gets a session of its own.
+        exchange.ownSession?.finishTasksAndInvalidate()
         guard locked({ stopped }) == false else {
             exchange.completed?()
             return

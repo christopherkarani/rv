@@ -167,6 +167,32 @@ struct MCPGatewayRemoteRestartTests {
         #expect(MCPRemoteUpstream.closes(response, cancelling: .int(7)) == false)
     }
 
+    /// A POST's own session (Linux) is let go once the POST is over, and one
+    /// still open when the server is stopped is let go with it.
+    @Test(.timeLimit(.minutes(5)))
+    func postSessionsAreLetGoWhenTheirPostIsOverOrTheServerStops() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in })
+        remote.start()
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#.utf8)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#.utf8)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } })
+        #expect(await eventually { remote.postSessionsLive == 0 }, "\(remote.postSessionsLive)")
+        remote.send(try JSONValue.parse(Data(Self.call(3).utf8)))
+        #expect(await eventually { fixture.requests().contains("REQ POST /mcp tools/call") })
+        #if canImport(FoundationNetworking)
+        #expect(remote.postSessionsLive == 1)
+        #endif
+        await offThePool { remote.stop() }
+        #expect(await eventually { remote.postSessionsLive == 0 }, "\(remote.postSessionsLive)")
+        _ = await offThePool { fixture.stop() }
+    }
+
     /// A call cancelled while its POST waits on a token refresh is not sent
     /// again with the new token.
     @Test(.timeLimit(.minutes(5)))
