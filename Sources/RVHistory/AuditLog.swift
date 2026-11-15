@@ -99,8 +99,7 @@ public enum AuditLog {
         // that times out there leaves nothing behind.
         var identity = stat()
         guard stat(configDirectory.path, &identity) == 0 else { return false }
-        let log = AppendLock.Log(
-            device: UInt64(truncatingIfNeeded: identity.st_dev), inode: UInt64(truncatingIfNeeded: identity.st_ino))
+        let log = AppendLock.Log(identity)
         // This process's lock for the log, then the file's, both against
         // `wait`'s one deadline. The first is per log: a thread waiting for
         // a log another process holds, or writing a long line, keeps no
@@ -215,18 +214,25 @@ public enum AuditLog {
         struct Log: Hashable {
             var device: UInt64
             var inode: UInt64
+
+            /// The key for what `info` describes (`stat` or `fstat`).
+            init(_ info: stat) {
+                device = UInt64(truncatingIfNeeded: info.st_dev)
+                inode = UInt64(truncatingIfNeeded: info.st_ino)
+            }
         }
 
         /// The logs a thread holds: waiting for the file's lock, or
-        /// appending. Held only to read or change the set; a thread that
-        /// holds it longer (a test) keeps every log from being taken.
+        /// appending. Held only to insert or remove one, never across a
+        /// wait, so taking it outright costs no deadline.
         static let mutex = Mutex<Set<Log>>([])
 
         /// `body` under `log`'s lock, or false when the lock is not free
         /// before `wait`'s deadline. Tries at least once, whatever the
-        /// deadline; never blocks on another thread holding the set.
+        /// deadline; only `log` being held makes it pause, never another
+        /// thread changing the set at the same moment.
         static func withLock(_ log: Log, _ wait: LockWait, _ body: () -> Bool) -> Bool {
-            while mutex.withLockIfAvailable({ $0.insert(log).inserted }) != true {
+            while mutex.withLock({ $0.insert(log).inserted }) == false {
                 guard wait.expired == false else { return false }
                 wait.pause()
             }

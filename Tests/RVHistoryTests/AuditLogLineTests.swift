@@ -197,8 +197,8 @@ struct AuditLogLineTests {
     }
 
     /// A1: one deadline, fixed when the append starts, covers the
-    /// in-process lock and the file lock. Another thread holds the
-    /// in-process lock until the whole 0.1 s budget (10 fake pauses) is
+    /// in-process lock and the file lock. Another append of this process
+    /// holds the log until the whole 0.1 s budget (10 fake pauses) is
     /// spent; the file lock is held throughout. The append then gives up at
     /// once instead of starting a fresh 0.1 s wait for the file lock (which
     /// would take 20 pauses). No wall-clock timing is asserted.
@@ -212,18 +212,11 @@ struct AuditLogLineTests {
         #expect(flock(holder, LOCK_EX) == 0)
         defer { _ = flock(holder, LOCK_UN) }
 
-        let held = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        let released = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            AuditLog.AppendLock.mutex.withLock { _ in
-                held.signal()
-                _ = release.wait(timeout: .now() + 10)
-            }
-            released.signal()
-        }
-        #expect(held.wait(timeout: .now() + 10) == .success)
-        defer { release.signal() }
+        // The log is busy in this process, as another thread's append
+        // would make it, until the whole budget is spent.
+        let log = try key(dir)
+        try #require(AuditLog.AppendLock.mutex.withLock { $0.insert(log).inserted })
+        defer { AuditLog.AppendLock.mutex.withLock { _ = $0.remove(log) } }
 
         let ticks = Ticks()
         let base = ContinuousClock.now
@@ -231,31 +224,23 @@ struct AuditLogLineTests {
             timeout: 0.1,
             now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
             pause: {
+                // The other append lets the log go.
                 guard ticks.increment() == 10 else { return }
-                release.signal()
-                _ = released.wait(timeout: .now() + 10)
+                AuditLog.AppendLock.mutex.withLock { _ = $0.remove(log) }
             }
         )
         #expect(AuditLog.append(event("late"), configDirectory: dir, wait: wait) == false)
         #expect(ticks.value == 10, "the file lock must not get a fresh budget")
         #expect(try Data(contentsOf: file).isEmpty)
+        #expect(isBusy(log) == false, "the append gave the log up again")
     }
 
-    /// A1: a thread queued behind a stuck in-process lock gives up on its
-    /// own deadline, without the holder ever letting go.
+    /// A1: a thread queued behind a log another thread of this process
+    /// holds gives up on its own deadline, without the holder ever letting
+    /// go: nothing is written, no file is made, and the holder's entry stays.
     @Test func aHeldInProcessLockTimesOutWithoutBeingReleased() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let held = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            AuditLog.AppendLock.mutex.withLock { _ in
-                held.signal()
-                _ = release.wait(timeout: .now() + 10)
-            }
-        }
-        #expect(held.wait(timeout: .now() + 10) == .success)
-        defer { release.signal() }
         let ticks = Ticks()
         let base = ContinuousClock.now
         let wait = AuditLog.LockWait(
@@ -263,8 +248,99 @@ struct AuditLogLineTests {
             now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
             pause: { _ = ticks.increment() }
         )
-        #expect(AuditLog.append(event("queued"), configDirectory: dir, wait: wait) == false)
+        let log = try key(dir)
+        try whileBusy(log) {
+            #expect(AuditLog.append(event("queued"), configDirectory: dir, wait: wait) == false)
+            #expect(isBusy(log), "the waiter took the holder's entry away")
+        }
         #expect(ticks.value == 5)
         #expect(FileManager.default.fileExists(atPath: AuditLog.fileURL(configDirectory: dir).path) == false)
+    }
+
+    /// One log busy in this process: an append to it gives up on its own
+    /// deadline (5 pauses of 10 fake ms against 50 ms), leaving no file and
+    /// the holder's entry in place, while an append to another log of this
+    /// process, made from inside that wait, is written.
+    @Test func aBusyLogTimesOutWhileAnotherLogIsWritten() throws {
+        let busy = try scratch()
+        let other = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: busy)
+            try? FileManager.default.removeItem(at: other)
+        }
+        let otherEvent = event("other")
+        let otherWritten = Outcome()
+        let ticks = Ticks()
+        let base = ContinuousClock.now
+        let wait = AuditLog.LockWait(
+            timeout: 0.05,
+            now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+            pause: {
+                guard ticks.increment() == 2 else { return }
+                otherWritten.set(AuditLog.append(otherEvent, configDirectory: other))
+            }
+        )
+        let log = try key(busy)
+        try whileBusy(log) {
+            #expect(AuditLog.append(event("queued"), configDirectory: busy, wait: wait) == false)
+            #expect(isBusy(log), "the waiter took the holder's entry away")
+        }
+        #expect(ticks.value == 5)
+        #expect(FileManager.default.fileExists(atPath: AuditLog.fileURL(configDirectory: busy).path) == false)
+        #expect(otherWritten.value == true, "the other log waited behind the busy one")
+        #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: other)).get().lines == 1)
+    }
+
+    /// The busy set's own mutex is held only to change the set: an append
+    /// that meets another thread inside it waits for that thread, and does
+    /// not take it for its log being busy. With its budget already spent (a
+    /// zero timeout) it would otherwise fail with its log free.
+    @Test(.timeLimit(.minutes(1)))
+    func aThreadInsideTheBusySetIsNotTakenForABusyLog() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let inside = DispatchSemaphore(value: 0)
+        let left = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            AuditLog.AppendLock.mutex.withLock { _ in
+                inside.signal()
+                usleep(200_000)
+            }
+            left.signal()
+        }
+        #expect(inside.wait(timeout: .now() + 10) == .success)
+        let paused = Ticks()
+        let wait = AuditLog.LockWait(timeout: 0, pause: { _ = paused.increment() })
+        #expect(AuditLog.append(event("free"), configDirectory: dir, wait: wait), "a free log was taken for a busy one")
+        #expect(paused.value == 0)
+        #expect(left.wait(timeout: .now() + 10) == .success)
+        #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get().lines == 1)
+    }
+
+    /// The key `AuditLog.append` takes in this process for `url`: a log's
+    /// directory, or the log file itself.
+    private func key(_ url: URL) throws -> AuditLog.AppendLock.Log {
+        var info = stat()
+        try #require(stat(url.path, &info) == 0)
+        return AuditLog.AppendLock.Log(info)
+    }
+
+    /// `body` with `log` marked busy in this process, as an append holding
+    /// it marks it; the mark is taken out after.
+    private func whileBusy(_ log: AuditLog.AppendLock.Log, _ body: () throws -> Void) throws {
+        try #require(AuditLog.AppendLock.mutex.withLock { $0.insert(log).inserted })
+        defer { AuditLog.AppendLock.mutex.withLock { _ = $0.remove(log) } }
+        try body()
+    }
+
+    private func isBusy(_ log: AuditLog.AppendLock.Log) -> Bool {
+        AuditLog.AppendLock.mutex.withLock { $0.contains(log) }
+    }
+
+    /// What an append made from inside a wait returned (nil: never made).
+    private final class Outcome: Sendable {
+        private let stored = Mutex<Bool?>(nil)
+        var value: Bool? { stored.withLock { $0 } }
+        func set(_ value: Bool) { stored.withLock { $0 = value } }
     }
 }
