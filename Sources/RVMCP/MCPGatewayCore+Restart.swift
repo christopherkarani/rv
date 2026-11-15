@@ -134,16 +134,17 @@ extension MCPGatewayCore {
         ]
     }
 
-    /// A call that arrives while its server is being brought back: refused
-    /// now, never queued, and audited as not forwarded.
+    /// A call that arrives while its server is being brought back, or a
+    /// prompt accepted then: refused now, never queued, and audited as not
+    /// forwarded (a prompt declined with its approval id).
     func restarting(
-        client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String], approved: Bool,
-        reason: String
+        client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
+        approvalID: String?, reason: String
     ) -> [MCPGatewayOutput] {
         [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
-                reason: "upstream restarting: \(reason)", outcome: approved ? .interrupted(grant: nil) : .notRun)),
+                reason: "upstream restarting: \(reason)", outcome: Self.notForwarded(approvalID))),
             .toClient(Self.error(
                 id: client, code: -32603,
                 message: "MCP server \(server) is unavailable: \(reason); rv is restarting it. "

@@ -697,7 +697,7 @@ public struct MCPGatewayCore {
         }
         guard phases[call.server] == .ready else {
             return unavailable(
-                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approved: true)
+                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
@@ -904,7 +904,7 @@ public struct MCPGatewayCore {
             ]
         }
         guard phases[server] == .ready else {
-            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approved: false)
+            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -1091,22 +1091,30 @@ public struct MCPGatewayCore {
         ]
     }
 
+    /// A call whose server is not ready. Nothing is forwarded: a prompt the
+    /// user accepted (`approvalID`) ends declined, any other call `notRun`.
     func unavailable(
         client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
-        approved: Bool
+        approvalID: String?
     ) -> [MCPGatewayOutput] {
         if case .restarting(let why, _)? = phases[server] {
             return restarting(
-                client: client, server: server, tool: tool, decision: decision, keys: keys, approved: approved, reason: why)
+                client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: approvalID, reason: why)
         }
         let reason: String
         if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
         return [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
-                reason: "upstream unavailable: \(reason)", outcome: approved ? .interrupted(grant: nil) : .notRun)),
+                reason: "upstream unavailable: \(reason)", outcome: Self.notForwarded(approvalID))),
             .toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) is unavailable: \(reason)")),
         ]
+    }
+
+    /// The outcome of a call that never went upstream: declined with its
+    /// prompt's approval id, or `notRun` when nothing was asked.
+    static func notForwarded(_ approvalID: String?) -> MCPCallRecord.Outcome {
+        approvalID.map { .declined(approvalID: $0) } ?? .notRun
     }
 
     /// Longest configured `<server>__` prefix. A tie (two exposed names that

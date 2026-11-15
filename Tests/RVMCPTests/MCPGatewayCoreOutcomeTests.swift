@@ -92,12 +92,16 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(record?.auditEvent().decision == .denied)
     }
 
-    @Test func approvedElicitationThatFindsTheUpstreamUnavailableIsAllowed() {
+    /// Nothing went upstream, so an accepted prompt that finds its server
+    /// unavailable ends declined, with its approval id.
+    @Test func acceptedPromptThatFindsTheUpstreamUnavailableIsDeclined() {
         let harness = GatewayHarness(MCPConfiguration(servers: [MCPGatewayCoreTests.github]))
         let record = harness.core.unavailable(
-            client: .int(1), server: "github", tool: "create_issue", decision: .ask, keys: [], approved: true).audits.first
-        #expect(record?.auditEvent().decision == .allowed)
-        #expect(record?.auditEvent().detail["approval"] == nil)
+            client: .int(1), server: "github", tool: "create_issue", decision: .ask, keys: [],
+            approvalID: "rv-approval-1").audits.first
+        #expect(record?.outcome == .declined(approvalID: "rv-approval-1"))
+        #expect(record?.auditEvent().decision == .denied)
+        #expect(record?.auditEvent().detail["approval"] == "rv-approval-1")
     }
 
     /// A prompt the client cancels ends its `awaiting` row, declined with
