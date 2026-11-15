@@ -230,7 +230,8 @@ private func mayDefineCommands(_ raw: String) -> Bool {
 /// effect on the shell rv does not read (`source`, `.`, `eval`, `trap`,
 /// `autoload`, a dynamic program).
 func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
-    if mayDefineCommands(raw) { return true }
+    if mayDefineCommands(raw) || namesLookupVariable(raw) || envMayMoveLookup(raw) { return true }
+    if launched.contains(where: setsFunctionFlag) { return true }
     let unblanked = raw.filter { $0.isWhitespace == false }
     if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
     let spaced = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
@@ -264,6 +265,84 @@ private func setsLookupVariable(_ command: LaunchedCommand) -> Bool {
 }
 
 private let variableSetters: Set<String> = ["read", "printf", "export", "declare", "typeset", "local", "readonly"]
+
+/// Names that move which program a plain name runs or which file a shell
+/// runs first, as each shell spells them (zsh ties `path`, `fpath` and
+/// `module_path` to their upper-case forms).
+private let lookupNames: Set<String> = [
+    "PATH", "path", "FPATH", "fpath", "MODULE_PATH", "module_path", "BASH_ENV", "ENV", "ZDOTDIR",
+]
+
+/// Whether `text` names a lookup variable anywhere but where it can only be
+/// read, quotes, backslashes and line continuations removed first (`env
+/// 'PA'TH=…`, `PA\<newline>TH=…`). Only these count as reads: `$NAME`,
+/// `${NAME…}` other than `${NAME=…}` and `${NAME:=…}`, an option word
+/// (`find -path`), and a path component or file name (`~/path/x`,
+/// `os.path`). Everything else does not, whatever the construct: an
+/// assignment in any form (`path=`, `PATH[1,0]=`, `fpath+=`, `let 'PATH =
+/// 1'`, `(( PATH = 1 ))`), a setter's operand (`unset`, `read -a`,
+/// `mapfile`, `readarray`, `declare -n p=PATH`), a loop variable, and a
+/// name glued to a short option (`printf -vPATH`).
+private func namesLookupVariable(_ text: String) -> Bool {
+    let chars = Array(text.replacingOccurrences(of: "\\\n", with: "").filter { "'\"\\".contains($0) == false })
+    let isWordChar = { (char: Character) in char == "_" || (char.isASCII && (char.isLetter || char.isNumber)) }
+    var index = 0
+    while index < chars.count {
+        guard isWordChar(chars[index]) else {
+            index += 1
+            continue
+        }
+        let start = index
+        while index < chars.count, isWordChar(chars[index]) { index += 1 }
+        let run = String(chars[start..<index])
+        if lookupNames.contains(run) {
+            if lookupNameIsRead(chars, start: start, end: index) == false { return true }
+        } else if start > 0, chars[start - 1] == "-", start < 2 || chars[start - 2] != "-",
+                  lookupNames.contains(where: { run.hasSuffix($0) && run.count - $0.count <= 3 })
+        {
+            return true
+        }
+    }
+    return false
+}
+
+/// Whether the lookup name at `start..<end` of `chars` can only be read.
+private func lookupNameIsRead(_ chars: [Character], start: Int, end: Int) -> Bool {
+    let before = start > 0 ? chars[start - 1] : nil
+    let after = end < chars.count ? chars[end] : nil
+    if before == "$" || before == "-" || before == "/" || before == "." || after == "/" || after == "." {
+        return true
+    }
+    // `${NAME…}`, `${#NAME}`, `${!NAME}`: a read unless it assigns.
+    let brace = before == "{" ? start - 1 : (before == "#" || before == "!") ? start - 2 : nil
+    guard let brace, brace >= 1, chars[brace] == "{", chars[brace - 1] == "$" else { return false }
+    let rest = String(chars[end..<min(end + 2, chars.count)])
+    return rest.hasPrefix("=") == false && rest.hasPrefix(":=") == false
+}
+
+/// Whether an `env` on the line may be told to search another path or
+/// split a string into a command (`env -P ./bin`, `env -P./bin`, `env -iS
+/// '…'`, `--split-string`): any later short-option word holding `P` or
+/// `S`, or `--split-string`.
+private func envMayMoveLookup(_ raw: String) -> Bool {
+    let words = raw.filter { "'\"\\".contains($0) == false }
+        .split(whereSeparator: { $0.isWhitespace || ";&|(){}".contains($0) }).map(String.init)
+    guard let first = words.firstIndex(where: { commandName($0) == "env" }) else { return false }
+    return words[(first + 1)...].contains { word in
+        if word.hasPrefix("--") { return word.hasPrefix("--split-string") }
+        return word.hasPrefix("-") && (word.contains("P") || word.contains("S"))
+    }
+}
+
+/// A builtin given a function flag (`typeset -fu ls`, zsh's autoload;
+/// `declare -f`, `export -f`): it may load or define a command.
+private func setsFunctionFlag(_ command: LaunchedCommand) -> Bool {
+    let setters: Set<String> = ["typeset", "declare", "local", "export", "readonly", "functions"]
+    guard setters.contains(commandName(command.head)) else { return false }
+    return command.guardArgv.dropFirst().contains { word in
+        (word.hasPrefix("-") || word.hasPrefix("+")) && word.hasPrefix("--") == false && word.contains("f")
+    }
+}
 
 private let redefiningCommands: Set<String> = [
     "alias", "function", "hash", "enable", "source", ".", "eval", "trap", "autoload", "functions",

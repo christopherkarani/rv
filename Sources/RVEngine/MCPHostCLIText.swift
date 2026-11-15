@@ -221,6 +221,14 @@ func isUnscannedLaunch(_ command: LaunchedCommand) -> Bool {
 /// redirect, here-string, substitution or parenthesis (`isInertLine`).
 func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextReads, line: String? = nil) -> Bool {
     let lineInert = line.map { isInertLine($0, launched) } ?? false
+    // Output rv cannot read may reach the reader of a printer's text and
+    // define a command there (`{ cat ./defs.sh; echo 'ls mcp $X'; } | sh`):
+    // beside such a command, a printer's text is never read as plain names.
+    let opaqueWriter = launched.contains {
+        $0.speculative == false && printers.contains(commandName($0.head)) == false
+    }
+    let outerPlain = reads.commandsArePlain
+    defer { reads.commandsArePlain = outerPlain }
     var printed: [String] = []
     for command in launched where command.speculative == false && command.truncated == false {
         let args = Array(command.argv.dropFirst())
@@ -229,6 +237,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         }
         let name = commandName(command.head)
         let isPrinter = printers.contains(name)
+        reads.commandsArePlain = outerPlain && (isPrinter == false || opaqueWriter == false)
         // Text nothing runs: a plain operand of a non-executor on an inert line.
         let dataOnly = lineInert && isNonExecutor(command)
         // A non-executor that is no printer (`grep`, `rg`, `git commit`):
@@ -265,6 +274,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         }
     }
     guard printed.isEmpty == false else { return false }
+    reads.commandsArePlain = outerPlain && opaqueWriter == false
     return joinedReadsRun(printed, &reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
 }
 
