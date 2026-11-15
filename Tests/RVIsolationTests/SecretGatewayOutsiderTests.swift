@@ -17,6 +17,11 @@ private final class MarkedPorts: Sendable {
     }
 }
 
+/// Set once the hammering threads should stop.
+private final class StopFlag: Sendable {
+    let raised = Atomic<Bool>(false)
+}
+
 /// A loopback client socket bound before it connects, so its port is known first.
 private func boundClient() throws -> (fd: Int32, port: UInt16) {
     #if canImport(Darwin)
@@ -199,13 +204,13 @@ struct SecretGatewayOutsiderTests {
         let (gateway, placeholder) = try gateway(marked.check, upstream: upstream, audit: audit)
         let port = try gateway.start().get()
         defer { gateway.stop() }
-        let stop = Atomic<Bool>(false)
+        let stop = StopFlag()
         let hammers = DispatchGroup()
         for _ in 0..<16 {
             hammers.enter()
             Thread.detachNewThread {
                 defer { hammers.leave() }
-                while stop.load(ordering: .relaxed) == false { connectAndHangUp(port) }
+                while stop.raised.load(ordering: .relaxed) == false { connectAndHangUp(port) }
             }
         }
         var statuses: [String] = []
@@ -217,7 +222,7 @@ struct SecretGatewayOutsiderTests {
             statuses.append(String(answer(member.fd).prefix(12)))
             close(member.fd)
         }
-        stop.store(true, ordering: .relaxed)
+        stop.raised.store(true, ordering: .relaxed)
         _ = hammers.wait(timeout: .now() + 10)
         #expect(statuses.allSatisfy { $0 == "HTTP/1.1 200" }, "\(statuses)")
         #expect(upstream.requests.count == 20)
