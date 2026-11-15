@@ -74,6 +74,8 @@ struct MCPGatewayDeadlineTests {
         // A late answer is dropped: the client already has its error.
         let late = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#)
         #expect(late.isEmpty)
+        let ping = try #require(expired.sent("ping").first?["id"]?.intValue)
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(ping),"result":{}}"#).isEmpty)
         clock.advance(1000)
         #expect(harness.core.handle(.tick).isEmpty)
     }
@@ -299,7 +301,8 @@ struct MCPGatewayDeadlineTests {
         _ = harness.ready()
         _ = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues"}}"#)
         clock.advance(11)
-        _ = harness.core.handle(.tick)
+        let ping = try #require(harness.core.handle(.tick).sent("ping").first?["id"]?.intValue)
+        _ = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(ping),"result":{}}"#)
         #expect(harness.core.pending.count == 1)
         clock.advance(11)
         #expect(harness.core.handle(.tick).isEmpty)
