@@ -690,6 +690,24 @@ struct MCPHostSpellingTests {
         #expect(lineReads.spelling.steps <= SpellingBudget.maxSteps)
         #expect(lineReads.readsDone <= HostTextReads.maxReads)
     }
+
+    /// A run of `[` that never closes, and a run of `[[:`, cost one scan of
+    /// the text: a class scan per `[` once took about n² and n³ steps (16 KiB
+    /// of `[` some two minutes, 2 KiB of `[[:` about one).
+    @Test("a run of brackets is scanned in linear time", arguments: [
+        String(repeating: "[", count: 16_384), String(repeating: "[[:", count: 683),
+    ])
+    func bracketRunIsLinear(_ run: String) {
+        var named = true
+        var asks = true
+        let elapsed = ContinuousClock().measure {
+            named = mayNameHostMCP(run)
+            asks = judgeSpelling("watch '\(run)'")
+        }
+        #expect(named == false)
+        #expect(asks == false)
+        #expect(elapsed < .seconds(10), "\(elapsed)")
+    }
 }
 
 /// Where a prefilter says no and the full judgement yes, for `line` and the
