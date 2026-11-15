@@ -247,5 +247,75 @@ struct MCPGatewayDeadlineRuntimeTests {
         #expect(await run.finish())
         let requests = await offThePool { fixture.stop() }
         #expect(requests.contains("REQ POST /sse tools/call"), "\(requests)")
+        #expect(requests.contains("REQ POST /sse notifications/cancelled"), "\(requests)")
     }
+
+    /// The core's deadline fires, not the HTTP layer's: the call fails with
+    /// the gateway's own answer and audit record, the server is asked to
+    /// cancel, and the call's quiet POST is closed then, not held open.
+    @Test func streamableHTTPCallNeverAnsweredFailsCancelsAndClosesItsRequest() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        var remote = MCPServerDefinition(
+            name: "remote", remote: MCPRemoteServer(url: fixture.url("/mcp")), tools: MCPToolPolicy(allow: ["*"]))
+        remote.callTimeoutSeconds = 1
+        let run = GatewayRun(
+            core: GatewayRun.core([remote], startTimeout: 300),
+            connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))])
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
+        let reply = await run.client.next(timeout: 120)
+        #expect(reply?["id"] == .int(3))
+        #expect(reply?["error"]?["message"]?.stringValue?.contains("did not answer tool echo within 1 s") == true,
+            "\(String(describing: reply))")
+        let audits = run.audits
+        #expect(await eventuallyAsync {
+            audits.items.withLock { $0.contains { $0.outcome == .interrupted(grant: nil) && $0.reason?.contains("timed out") == true } }
+        })
+        #expect(await eventuallyAsync(60) {
+            let requests = fixture.requests()
+            return requests.contains("REQ POST /mcp notifications/cancelled") && requests.contains("CLOSED call")
+        }, "\(fixture.requests())")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// The HTTP layer giving up on a quiet request is not the server's
+    /// answer: nothing is delivered for it, so it is never recorded as run;
+    /// the core's own, shorter deadline ends it.
+    @Test func aRequestTheHTTPLayerGivesUpOnGetsNoAnswer() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let delivered = RecordedMessages()
+        let logs = RecordedLogs()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "quiet", url: fixture.url("/mcp"), answerTimeout: 1),
+            deliver: { message in delivered.items.withLock { $0.append(message) } },
+            exited: {},
+            log: { line in logs.lines.withLock { $0.append(line) } })
+        remote.start()
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#.utf8)))
+        #expect(await eventuallyAsync { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#.utf8)))
+        #expect(await eventuallyAsync(60) { logs.text.contains("rv stopped waiting at the HTTP level") }, "\(logs.text)")
+        #expect(delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } == false)
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    @Test func theHTTPLayerOutwaitsEveryGatewayLimit() {
+        for (call, start) in [(1, 600), (300, 60), (86_400, 1), (1, 1)] {
+            let timeout = MCPRemoteLaunch.answerTimeout(callTimeoutSeconds: call, startTimeoutSeconds: start)
+            #expect(timeout > TimeInterval(call) * MCPGatewayCore.callTimeoutCeilingFactor)
+            #expect(timeout > TimeInterval(start))
+            #expect(timeout > MCPGatewayDeadlines.standardList)
+        }
+        #expect(MCPRemoteLaunch(server: "s", url: URL(string: "https://a.example/mcp")!).answerTimeout
+            == MCPRemoteLaunch.answerTimeout(
+                callTimeoutSeconds: MCPServerDefinition.defaultCallTimeoutSeconds,
+                startTimeoutSeconds: MCPServerDefinition.defaultStartTimeoutSeconds))
+    }
+}
+
+final class RecordedMessages: Sendable {
+    let items = Mutex<[JSONValue]>([])
 }

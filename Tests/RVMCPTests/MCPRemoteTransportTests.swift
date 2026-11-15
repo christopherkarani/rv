@@ -205,12 +205,31 @@ final class RemoteFixture: @unchecked Sendable {
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)\(path)")! }
 
-    /// Stops the server and returns its request log. SIGKILL: a child of the
-    /// test runner can inherit a mask that blocks SIGTERM.
+    private let logged = Mutex(Data())
+
+    /// The request log so far, the server left running.
+    func requests() -> String {
+        let fd = errors.fileHandleForReading.fileDescriptor
+        return logged.withLock { data in
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            while true {
+                var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 0) > 0, poller.revents & Int16(POLLIN) != 0 else { break }
+                let n = read(fd, &chunk, chunk.count)
+                guard n > 0 else { break }
+                data.append(contentsOf: chunk[0..<n])
+            }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    /// Stops the server and returns its whole request log. SIGKILL: a child
+    /// of the test runner can inherit a mask that blocks SIGTERM.
     func stop() -> String {
         if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         process.waitUntilExit()
-        return String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let rest = errors.fileHandleForReading.readDataToEndOfFile()
+        return logged.withLock { String(decoding: $0 + rest, as: UTF8.self) }
     }
 }
 

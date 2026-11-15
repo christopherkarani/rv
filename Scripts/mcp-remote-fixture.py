@@ -8,7 +8,9 @@ on stderr. Routes:
   GET /sse, POST /sse        legacy HTTP+SSE; the message endpoint is that same URL
   GET /sse-foreign       legacy stream whose endpoint is on another origin
 With --token T every MCP request needs "Authorization: Bearer T".
-With --hang-calls a legacy SSE tools/call is accepted (202) and never answered.
+With --hang-calls a tools/call is never answered: a legacy SSE one is accepted
+(202), a streamable HTTP one gets an event stream held open, with nothing on
+it, until the client closes it ("CLOSED call <id>" is logged).
 With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
 metadata, RFC 8414 metadata, RFC 7591 registration, PKCE S256, refresh
 rotation); MCP requests need a token it issued. POST /auth/expire revokes
@@ -19,6 +21,8 @@ import base64
 import hashlib
 import json
 import queue
+import select
+import socket
 import socketserver
 import sys
 import threading
@@ -247,6 +251,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, b'{"error":"bad MCP-Protocol-Version"}')
         if "id" not in msg:
             return self.send(202)
+        if method == "tools/call" and self.hang_calls:
+            return self.hang(msg.get("id"))
         reply = answer(msg, self.headers)
         if method == "tools/call":
             note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "working"}}
@@ -254,6 +260,24 @@ class Handler(BaseHTTPRequestHandler):
                 json.dumps(note), json.dumps(reply))).encode()
             return self.send(200, body, content_type="text/event-stream")
         self.send(200, json.dumps(reply).encode())
+
+    def hang(self, mid):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.flush()
+        while True:
+            readable, _, _ = select.select([self.connection], [], [], 0.2)
+            if not readable:
+                continue
+            try:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    break
+            except OSError:
+                break
+            select.select([], [], [], 0.2)
+        log("CLOSED call %s" % mid)
+        self.close_connection = True
 
     def legacy_stream(self, foreign):
         if not self.authorized():

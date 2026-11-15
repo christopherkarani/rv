@@ -12,16 +12,26 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
     public var transport: MCPRemoteTransport
     /// From `rv mcp connect`; only for servers without an Authorization header.
     public var oauth: MCPOAuthTokens?
+    /// How long a request may go without a byte of its reply.
+    public var answerTimeout: TimeInterval
 
     public init(
         server: String, url: URL, headers: [String: String] = [:], transport: MCPRemoteTransport = .http,
-        oauth: MCPOAuthTokens? = nil
+        oauth: MCPOAuthTokens? = nil,
+        answerTimeout: TimeInterval = MCPRemoteLaunch.answerTimeout(
+            callTimeoutSeconds: MCPServerDefinition.defaultCallTimeoutSeconds,
+            startTimeoutSeconds: MCPServerDefinition.defaultStartTimeoutSeconds)
     ) {
         self.server = server
         self.url = url
         self.headers = headers
         self.transport = transport
         self.oauth = oauth
+        self.answerTimeout = answerTimeout
+    }
+
+    public static func answerTimeout(callTimeoutSeconds: Int, startTimeoutSeconds: Int) -> TimeInterval {
+        MCPHTTPExchange.requestTimeout
     }
 }
 
