@@ -1101,6 +1101,15 @@ name no secret (`malformed`, `requestTimeout`, `unknownRoute`) from outside
 every runtime are recorded at most once a second, with how many were left
 out since the record before; one that names a secret is always recorded.
 
+A client that resets its connection before the gateway accepts it ends
+only that connection. One that resets it just after, before the gateway
+has set it up, is closed unanswered and unaudited. On Darwin the socket of
+such a connection refuses `SO_NOSIGPIPE`, and the gateway's answer to it
+raised SIGPIPE, which ends any process that does not ignore that signal.
+A local process connecting and resetting at once could end it that way.
+rvd and `rv mcp serve` ignore SIGPIPE, so this ended the test process,
+where it was found.
+
 ### Answers larger than the client takes in
 
 What the upstream has sent and the client has not yet taken waits in
