@@ -295,6 +295,8 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
     /// Bodies are no longer taken: the sink refused one, or the request overflowed.
     private var dropping = false
     private var overflowed = false
+    /// corelibs-foundation hands on a challenged 401 and then the challenge.
+    private var headed = false
 
     init(task: URLSessionDataTask, budget: URLSessionStreamingBudget, handoff: Int?) {
         self.task = task
@@ -315,7 +317,8 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         condition.lock()
         switch event {
         case .head:
-            append(event)
+            if headed == false { append(event) }
+            headed = true
         case .body(let data):
             cancel = takeBody(data)
             // Queued first, so a blocked callback holds no second body.
@@ -531,9 +534,11 @@ final class URLSessionStreamingDelegate: NSObject, URLSessionDataDelegate, @unch
         }
     }
 
-    /// A cancelled challenge ends the task with no response, so the
-    /// response that carried the challenge is handed on first: the writer
-    /// refuses a 401 to its client, and its audit records the 401.
+    /// On Darwin a cancelled challenge ends the task with no response, so
+    /// the response that carried the challenge is handed on first: the
+    /// writer refuses a 401 to its client, and its audit records the 401.
+    /// corelibs-foundation hands on the 401 before the challenge; the
+    /// exchange keeps only the first head.
     func urlSession(
         _ session: URLSession, task: URLSessionTask,
         didReceive challenge: URLAuthenticationChallenge,
