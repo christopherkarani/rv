@@ -1216,12 +1216,16 @@ struct URLSessionStreamingTransportTests {
         let bytes = Array(full.utf8)
         let headLength = bytes.count - 64
         #expect(GatewaySocket.writeAll(client, Array(bytes[..<headLength])))
+        let trickle = Trickle()
         let trickled = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            // 12 s of trickling, and never the whole body.
-            for index in headLength..<(headLength + 60) {
-                guard readable(client) == false else { break }
-                _ = GatewaySocket.writeAll(client, [bytes[index]])
+            // A byte every 0.2 s, never the whole body, until this test has
+            // looked: it stops only when told to or out of bytes, 12.6 s on.
+            // Once answered it writes nothing more, so no reset can cut the
+            // answer short, but that does not stop it.
+            for index in headLength..<(headLength + 63) {
+                guard trickle.going.load(ordering: .relaxed) else { break }
+                if readable(client) == false { _ = GatewaySocket.writeAll(client, [bytes[index]]) }
                 Thread.sleep(forTimeInterval: 0.2)
             }
             trickled.signal()
@@ -1229,6 +1233,7 @@ struct URLSessionStreamingTransportTests {
         var state = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
         let ready = poll(&state, 1, 10_000)
         let stillSending = trickled.wait(timeout: .now()) == .timedOut
+        trickle.going.store(false, ordering: .relaxed)
         #expect(ready == 1, "the trickling client was still held after 10 s")
         #expect(stillSending, "answered only once the trickling had stopped")
         let answer = plainAnswer(client)
