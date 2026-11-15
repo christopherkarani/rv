@@ -49,10 +49,14 @@ struct ProcFSParseTests {
         #expect(stat.startTicks == 9)
     }
 
-    /// Each is a whole line as the kernel prints one but for the one thing
-    /// wrong with it, so it is that thing which is refused.
+    /// The first three are not lines at all. Each of the rest is a whole
+    /// line as the kernel prints one but for the one thing wrong with it,
+    /// so it is that thing which is refused.
     static let malformed: [String] = [
-        "", "1 (x)", "1 (x) S 0 1 1", "1 x) S 0 1 1\n",
+        "", "1 (x)", "1 (x) S 0 1 1",
+        // No opening parenthesis; none closes before one opens.
+        padded("1 x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
+        padded("1 )x( S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
         padded("x (y) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
         padded("1(x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),
         padded("1 (x)S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5", 30),

@@ -262,6 +262,11 @@ The check is the same scan; only the reads differ.
   field 22, clock ticks after boot). The `comm` field is read from the last
   `)`, as bytes, so a process cannot forge the fields after its name. A
   `stat` that does not end in a newline is a read cut short and is refused.
+  So is one with fewer than the 50 fields Linux prints after the name
+  (since 3.5): a name may hold a newline, and the kernel prints at most 63
+  bytes of one, too few to hold 50 fields of its own. An emulator that
+  prints a shorter `stat` (QEMU user-mode prints 44 fields for the process
+  itself) is refused the same way, and `rv run` does not start there.
 - Descendants come from one pass over every process's `stat`, so every
   `stat` on the host must be readable.
 - Each candidate's `stat` is read before and after its descriptors. A
