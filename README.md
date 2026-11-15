@@ -330,9 +330,9 @@ rv is one binary, 25 commands. The rest of the surface:
   'm[;c]p' add s -- x"`). Text where two such runs cross (share a piece
   without one holding the other, `'{c?aude,x y}{,a b}'`), whose joined
   words pass four times its length, or whose brace word expands past 64
-  words counts as naming a host; an integer range in a word with no glob
-  character is the exception, judged as one word, since only its digits
-  differ (`touch f{1..100}`). These are guesses at the shell's words once
+  words counts as naming a host. The 64-word rule has one exception: an
+  integer range in a word with no glob character is judged as one word,
+  since only its digits differ (`touch f{1..100}`). These are guesses at the shell's words once
   quotes are gone, and classes are closed on the text as written, before
   braces expand. Where nothing runs the word (a `grep` or
   `rg` operand, a commit message) and in text such a command carries,
