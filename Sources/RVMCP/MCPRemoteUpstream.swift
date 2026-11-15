@@ -124,6 +124,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var task: URLSessionDataTask?
         /// rv cancelled the request and closed this POST itself.
         var closed = false
+        /// rv cut the reply off itself: it passed `maximumBodyBytes`.
+        var oversized = false
         /// Told once this POST (and any retry of it) is over.
         var completed: (@Sendable () -> Void)?
         /// This POST's own session, on Linux; invalidated when it is over.
@@ -406,6 +408,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             }
             if exchange.events.overflowed {
                 log("MCP server \(name) sent an event larger than \(MCPEventStream.maximumEventBytes) bytes; closing the stream")
+                exchange.oversized = true
                 dataTask.cancel()
             }
         } else if exchange.body.count + data.count <= MCPHTTPExchange.maximumBodyBytes {
@@ -413,6 +416,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         } else {
             log("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes; dropped")
             exchange.body = Data()
+            exchange.oversized = true
             dataTask.cancel()
         }
         for item in incoming { note(item.message, answering: &exchange) }
@@ -469,6 +473,13 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             // own deadline has ended the request, and a failure delivered
             // for it would be recorded as the tool having run.
             if exchange.closed { return false }
+            // The server answered, too large to pass on: this request ends
+            // with that error, and the session is left as it is.
+            if exchange.oversized {
+                fail("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes, "
+                    + "which rv does not pass on")
+                return false
+            }
             if MCPHTTPExchange.isRequest(message), (error as? URLError)?.code == .timedOut {
                 log("MCP server \(name) sent nothing on a request for \(Int(launch.answerTimeout)) s; "
                     + "rv stopped waiting at the HTTP level")
