@@ -290,7 +290,9 @@ struct MCPGatewayDeadlineRuntimeTests {
         let logs = run.logs
         #expect(await eventuallyAsync { logs.text.contains("MCP server stubborn exited") }, "\(logs.text)")
         #expect(logs.text.contains("failed to initialize"))
-        #expect((try? String(contentsOf: marker, encoding: .utf8)) == "term")
+        // A stop is reported at once, when SIGTERM is sent, so the handler
+        // may not have run yet.
+        #expect(await eventuallyAsync { (try? String(contentsOf: marker, encoding: .utf8)) == "term" })
         #expect(await run.finish())
     }
 
