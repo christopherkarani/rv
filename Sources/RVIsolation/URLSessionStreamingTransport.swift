@@ -19,18 +19,12 @@ import FoundationNetworking
 /// whose reader falls further behind than that fails, and its sink hears
 /// `fail`, never `finish`.
 ///
-/// On Darwin a task with more than `highWater` bytes waiting is also
-/// suspended until its sink is back under `lowWater`. That only slows the
-/// upstream: the session goes on delivering what it had already read, so it
-/// is not the bound. Elsewhere tasks are never suspended:
-/// corelibs-foundation's `suspend` drops the transfer and `resume` sends the
-/// request again, with its credential.
+/// Tasks are never suspended. corelibs-foundation's `suspend` drops the
+/// transfer and its `resume` sends the request again, credential and all.
+/// Darwin's session goes on reading a suspended task, so it bounded nothing,
+/// and it held more memory, outside these limits, while suspended: 16
+/// stalled 64 MiB answers peaked at 311 MiB resident with it, 91 MiB without.
 final class URLSessionStreamingTransport: @unchecked Sendable {
-    /// On Darwin, bytes waiting for one sink past which its task is suspended.
-    static let highWater = 1 << 20
-    /// On Darwin, bytes waiting at or under which a suspended task resumes.
-    static let lowWater = highWater / 2
-
     /// How many bytes may wait for sinks before requests fail.
     struct Limits: Sendable {
         /// Waiting for one sink; past this its request fails.
@@ -162,7 +156,6 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
     private var events: [Event] = []
     /// Admitted to the budget and not yet given back: queued, or being handed to the sink.
     private var queuedBytes = 0
-    private var suspended = false
     /// Bodies are no longer taken: the sink refused one, or the request overflowed.
     private var dropping = false
     private var overflowed = false
@@ -194,13 +187,6 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
             }
             queuedBytes += data.count
             events.append(event)
-            #if canImport(Darwin)
-            // Under the lock, so a resume never overtakes the suspend it undoes.
-            if queuedBytes > URLSessionStreamingTransport.highWater, suspended == false {
-                suspended = true
-                task.suspend()
-            }
-            #endif
         case .finish, .fail:
             events.append(overflowed ? .fail(overflowReason) : event)
         }
@@ -267,12 +253,6 @@ final class URLSessionStreamingExchange: @unchecked Sendable {
         defer { condition.unlock() }
         budget.release(count, holding: queuedBytes)
         queuedBytes -= count
-        #if canImport(Darwin)
-        if suspended, dropping == false, queuedBytes <= URLSessionStreamingTransport.lowWater {
-            suspended = false
-            task.resume()
-        }
-        #endif
     }
 
     private func releaseAll() {

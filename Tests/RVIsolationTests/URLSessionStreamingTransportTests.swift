@@ -465,8 +465,9 @@ struct URLSessionStreamingTransportTests {
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
         #expect(upstream.hits(method, "/v1/bytes/\(size)") == 1)
-        // The reader really fell behind: more than the mark waited at once.
-        #expect(under.transport.peakQueuedBytes > URLSessionStreamingTransport.highWater)
+        // The reader really fell behind: more than the 1 MiB at which the
+        // transport used to pause waited at once.
+        #expect(under.transport.peakQueuedBytes > 1 << 20)
     }
 
     /// A reader that falls more than 8 MiB behind a fast upstream is cut
