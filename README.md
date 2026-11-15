@@ -308,9 +308,11 @@ rv is one binary, 25 commands. The rest of the surface:
   but where it is only read, such as `$PATH`, `${PATH%%:*}`, `${PATH:-…}`,
   `find -path` or `~/path/x`, once line continuations, a `$` opening a
   quote, and quotes are removed (`export $'PATH'=…` and zsh's
-  `${PATH::=…}` count); a name built from escapes (`$'PA\x54H'`) is not
-  recognised, so instead any `$'…'` operand of an assigning builtin
-  counts; `env -P` or `-S`, or `--split-string` or an abbreviation such
+  `${PATH::=…}` count); a name built from escapes or expansions is not
+  recognised, so instead any operand of an assigning builtin, or
+  `printf -v` name, whose name before `=` or `[` holds `$` or a backtick
+  counts (`export P$'\x41'TH=…`, `export ${N}TH=…`; `export FOO=$BAR`
+  does not); `env -P` or `-S`, or `--split-string` or an abbreviation such
   as `--split`; a function flag such as `typeset -fu`; `source`/`.`, `eval`,
   `trap`, `autoload` or a dynamic program: `ls() { "$@"; }; ls mcp $X`,
   `: "${PATH:=./bin}"; ls mcp $X` and `echo 'alias ls=eval; ls mcp $X' |
@@ -320,10 +322,16 @@ rv is one binary, 25 commands. The rest of the surface:
   add`) asks when its line may name a host CLI; so do odd heads that only
   look like a group, such as `{claude}mcp` or `{claude,codex}-helper
   --version`.
-  Carried text is read when it holds a host stem or such a word (`watch
-  'chronic m?p install srv'`), a brace or class holding a blank or
-  separator spelled whole as the guard spells it (`watch "'cl[;a]ude'
-  'm[;c]p' add s -- x"`). Where nothing runs the word (a `grep` or
+  Carried text is read when it holds a host stem (also one broken only by
+  `[…]` extras a package spec drops, `install-m[x]cp`) or such a word
+  (`watch 'chronic m?p install srv'`). The text is split at blanks and
+  `;|&()<>`; where a brace or class span (closed as the guard closes it)
+  holds one of those, each run of pieces the span joins, and each chain
+  of overlapping runs, is spelled as one more word (`watch "'cl[;a]ude'
+  'm[;c]p' add s -- x"`), and text whose joined words pass four times its
+  length, or whose brace word expands past 64 words, counts as naming a
+  host. These are guesses at the shell's words once quotes are gone, so
+  a word joined some other way may be missed. Where nothing runs the word (a `grep` or
   `rg` operand, a commit message) and in text such a command carries,
   only literal words count (`grep -rn claude * | head` allows). A
   variable or substitution rv cannot read (`$c`, `"$SUB"`, `${x}`,
