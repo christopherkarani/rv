@@ -63,7 +63,8 @@ final class GatewayRun: Sendable {
     init(
         core: MCPGatewayCore, connections: [MCPUpstreamConnection],
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes, log: (@Sendable (String) -> Void)? = nil,
-        relaunch: MCPGatewayRuntime.Relaunch? = nil
+        relaunch: MCPGatewayRuntime.Relaunch? = nil,
+        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds
     ) {
         let client = LineClient()
         let audits = RecordedAudits()
@@ -75,6 +76,7 @@ final class GatewayRun: Sendable {
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
             writeBufferBytes: writeBufferBytes,
             relaunch: relaunch,
+            clientStallSeconds: clientStallSeconds,
             audit: { record in audits.items.withLock { $0.append(record) } },
             log: { line in
                 logs.lines.withLock { $0.append(line) }

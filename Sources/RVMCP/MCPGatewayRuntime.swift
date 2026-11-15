@@ -352,6 +352,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// How far one reader (the client's, or one upstream's) may run ahead of
     /// the gateway queue before it stops reading: one maximum line.
     static let readerBacklogBytes = maximumLineBytes
+    /// How long the client may take nothing of what waits for it before it
+    /// counts as not reading.
+    public static let clientStallSeconds: TimeInterval = 30
     /// `log` text that may wait for stderr; later lines are counted and dropped.
     static let logBacklogBytes = 1 << 20
     /// How long `run` lets the client and stderr take what waits for them
@@ -382,6 +385,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let log: @Sendable (String) -> Void
     private let logRelay: MCPLogRelay
     private let writeBufferBytes: Int
+    private let clientStallSeconds: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private var clientNotReading = false
@@ -424,6 +428,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         output: Int32 = STDOUT_FILENO,
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
         relaunch: Relaunch? = nil,
+        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -441,6 +446,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.logRelay = relay
         self.log = { relay.post($0) }
         self.writeBufferBytes = writeBufferBytes
+        self.clientStallSeconds = clientStallSeconds
         self.clientWriter = MCPOutbox(limit: writeBufferBytes)
         self.placeholdersBound = placeholdersBound
     }

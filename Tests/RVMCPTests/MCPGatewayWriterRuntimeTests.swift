@@ -11,8 +11,9 @@ import Testing
 /// A stdio MCP server for write stalls; its pid goes to argv[2]. `deaf`:
 /// answers initialize, then stops reading its input (for at most 300 s, so
 /// a failing run leaves nothing behind). `big`: answers initialize, and each
-/// tools/call with a text of `arguments.size` bytes. `silent`: answers
-/// nothing.
+/// tools/call with a text of `arguments.size` bytes (of `arguments.char`, or
+/// "x"). `flood`: answers each tools/call after 20000 list_changed
+/// notifications. `silent`: answers nothing.
 let writerServer = #"""
     import json, os, sys, time
     mode, pidfile = sys.argv[1], sys.argv[2]
@@ -30,8 +31,13 @@ let writerServer = #"""
             time.sleep(300)
             sys.exit(0)
         elif method == "tools/call" and mode == "big":
-            size = msg["params"].get("arguments", {}).get("size", 1)
-            result = {"content": [{"type": "text", "text": "x" * size}]}
+            arguments = msg["params"].get("arguments", {})
+            size = arguments.get("size", 1)
+            result = {"content": [{"type": "text", "text": arguments.get("char", "x") * size}]}
+        elif method == "tools/call" and mode == "flood":
+            changed = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}) + "\n"
+            sys.stdout.write(changed * 20000)
+            result = {"content": []}
         else:
             continue
         print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}), flush=True)
@@ -152,10 +158,32 @@ struct MCPGatewayWriterRuntimeTests {
         #expect(await run.finish())
     }
 
-    /// Past its bound, a client that is not reading ends the gateway on its
-    /// own, with one line saying why, and `run` says so.
+    /// A client that takes nothing of what waits for it, for its stall
+    /// time, ends the gateway on its own, with one line saying why, and
+    /// `run` says so.
     @Test(.timeLimit(.minutes(5)))
-    func aClientPastItsBoundEndsTheGateway() async throws {
+    func aClientThatStopsReadingEndsTheGateway() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let run = GatewayRun(
+            core: Self.core([Self.server("big")]),
+            connections: [Self.launch("big", mode: "big", in: directory)],
+            clientStallSeconds: 1)
+        #expect(await run.initialize())
+        // Never read: the answer fills the pipe, and nothing more is taken.
+        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":4194304}}}"#)
+        #expect(await run.ended(within: 90))
+        #expect(run.ending == .clientNotReading)
+        let lines = run.logs.lines.withLock { $0 }.filter { $0.contains("MCP client is not reading") }
+        #expect(lines.count == 1, "\(run.logs.text)")
+        try? run.client.toGateway.fileHandleForWriting.close()
+    }
+
+    /// What an upstream sends counts against its own reader, not against
+    /// the client: an answer far past the write bound, queued behind
+    /// another (and six times its size once escaped), still goes out.
+    @Test(.timeLimit(.minutes(5)))
+    func largeAnswersQueuedForASlowClientAllGoOut() async throws {
         let directory = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let run = GatewayRun(
@@ -163,18 +191,55 @@ struct MCPGatewayWriterRuntimeTests {
             connections: [Self.launch("big", mode: "big", in: directory)],
             writeBufferBytes: 256 << 10)
         #expect(await run.initialize())
-        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":4194304}}}"#)
-        // Its record is written as its answer is handed on, so the pings
-        // below are handled after it.
+        let size = 1 << 20
+        for id in [2, 3] {
+            run.client.send(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"echo","arguments":{"size":\#(size),"char":"\u007f"}}}"#)
+        }
+        // Both answers are handed on before the client reads anything.
+        let audits = run.audits
+        #expect(await eventually {
+            audits.items.withLock { $0.filter { if case .ran = $0.outcome { true } else { false } }.count == 2 }
+        })
+        for id in [2, 3] {
+            let reply = await run.client.next(timeout: 90)
+            #expect(reply?["id"] == .int(id), "\(String(describing: reply?["error"]))")
+            let text = reply?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue
+            #expect(text?.unicodeScalars.count == size)
+        }
+        #expect(run.ending == nil)
+        #expect(await run.finish())
+    }
+
+    /// An upstream's flood of list_changed reaches a slow client as at most
+    /// one waiting notification, and ends nothing.
+    @Test(.timeLimit(.minutes(5)))
+    func aFloodOfListChangesIsCoalescedForASlowClient() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let run = GatewayRun(
+            core: Self.core([Self.server("flood")]),
+            connections: [Self.launch("flood", mode: "flood", in: directory)],
+            writeBufferBytes: 256 << 10)
+        #expect(await run.initialize())
+        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#)
+        // Its answer follows the flood on the same pipe, so once it is handed
+        // on every notification before it was handled.
         let audits = run.audits
         #expect(await eventually { audits.items.withLock { $0.contains { if case .ran = $0.outcome { true } else { false } } } })
-        // Never read: the answer above fills the pipe, these overflow.
-        for id in 3..<40 { run.client.send(#"{"jsonrpc":"2.0","id":\#(id),"method":"ping"}"#) }
-        #expect(await run.ended(within: 90))
-        #expect(run.ending == .clientNotReading)
-        let lines = run.logs.lines.withLock { $0 }.filter { $0.contains("MCP client is not reading") }
-        #expect(lines.count == 1, "\(run.logs.text)")
-        try? run.client.toGateway.fileHandleForWriting.close()
+        var changes = 0
+        var answered = false
+        while let line = await run.client.next(timeout: 60) {
+            if line["id"] == .int(2) {
+                answered = true
+                break
+            }
+            if line["method"] == .string("notifications/tools/list_changed") { changes += 1 }
+        }
+        #expect(answered, "\(run.logs.text)")
+        // What the pipe to the client held, and one more.
+        #expect(changes >= 1 && changes < 5000, "\(changes)")
+        #expect(run.ending == nil)
+        #expect(await run.finish())
     }
 
     /// A shutdown gets through while the client's writer is stalled.
