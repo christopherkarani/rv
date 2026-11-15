@@ -1010,7 +1010,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         }
         text += "Connection: close\r\n\r\n"
         if watching { held = [] }
-        closed = write(Array(text.utf8)) == false
+        if write(Array(text.utf8)) == false {
+            closed = true
+            failure = failure ?? Self.cutShort
+        }
     }
 
     func body(_ data: Data) -> Bool {
@@ -1074,7 +1077,10 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         guard bytes.isEmpty == false else { return true }
         bytesWritten += bytes.count
         let frame = Self.chunk(bytes)
-        if write(frame) == false { closed = true }
+        if write(frame) == false {
+            closed = true
+            failure = failure ?? Self.cutShort
+        }
         return closed == false
     }
 
