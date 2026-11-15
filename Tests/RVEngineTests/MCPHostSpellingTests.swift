@@ -208,11 +208,26 @@ struct MCPHostSpellingTests {
         "watch 'npx install-m[x]cp srv'", "$x \"npx ge[x]mini-cli m?p add s\"", "watch 'xargs npx ge[x]mini-cli'",
         #"watch "'{c?aude,x y}{,a b}' 'm[;c]p' add s -- x""#,
         #"watch "echo [; '{c?aude,x y}{,a b}' 'm[;c]p' add s -- x ]""#,
+        // A class crossing a brace whose `}` lies past the quoted word: the
+        // word is the class and the inner group, which no chain of runs is.
+        #"watch "'cl[;x{;{y;a]ude,;}' $g add s -- x }""#,
     ]
 
     @Test("a spelling with a blank or separator inside a span still asks", arguments: brokenSpanSpellings)
     func brokenSpanSpellingAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// The prefilter closes classes on the text as written; the guard
+    /// expands braces first, so an alternative that supplies a `]` closes a
+    /// class (`cl[];a]ude`) the written text closes earlier. Asking wherever
+    /// a comma group holds a bracket made everyday `jq` and `awk` programs
+    /// ask, so this stays a known limit.
+    @Test("a class a brace alternative closes is a known limit")
+    func braceClosedClassIsKnownLimit() {
+        withKnownIssue("a class closed by a brace alternative") {
+            #expect(judgeSpelling(#"watch "'cl[{],x};a]ude' 'm[{],x};c]p' add s -- x""#))
+        }
     }
 
     /// Each payload word, alone and all at once, inside a span holding a
