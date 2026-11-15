@@ -17,8 +17,9 @@ import Testing
 /// with a Content-Length, `/bytes/N` answers N x's, and `/slow/N/ms`
 /// answers N x's in 64 KiB blocks `ms` milliseconds apart. A path with
 /// `/ka/` answers `ok:<path>` and keeps the connection open for the next
-/// request; one with `/drop/` closes it unanswered. Any other path answers
-/// `ok:<path>`. A request body is read before the answer.
+/// request; one with `/drop/` closes it unanswered. `/auth/<kind>` answers
+/// 401 with a `basic`, `digest` or `bearer` challenge, or `none`. Any other
+/// path answers `ok:<path>`. A request body is read before the answer.
 private final class LoopbackUpstream: @unchecked Sendable {
     static let bigBytes = 64 << 20
     let port: Int
@@ -146,7 +147,17 @@ private final class LoopbackUpstream: @unchecked Sendable {
 
     private func answer(_ client: Int32, _ path: String) {
         let segments = path.split(separator: "/").map(String.init)
-        if path.hasSuffix("/big") {
+        if let at = segments.firstIndex(of: "auth"), at + 1 < segments.count {
+            let challenge = [
+                "basic": "WWW-Authenticate: Basic realm=\"rv\"\r\n",
+                "digest": "WWW-Authenticate: Digest realm=\"rv\", nonce=\"0123abcd\", qop=\"auth\"\r\n",
+                "bearer": "WWW-Authenticate: Bearer realm=\"rv\"\r\n",
+            ][segments[at + 1]] ?? ""
+            let body = Array("denied".utf8)
+            _ = Self.write(client, Array(
+                "HTTP/1.1 401 Unauthorized\r\n\(challenge)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+                    .utf8) + body)
+        } else if path.hasSuffix("/big") {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
             Self.stream(client, bytes: size, pause: 0)
@@ -205,8 +216,13 @@ private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
     private let lock = NSLock()
     private var bytes = Data()
     private var ended: String?
+    private var status: Int?
 
-    func head(status: Int, headers: [(name: String, value: String)]) {}
+    func head(status: Int, headers: [(name: String, value: String)]) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.status = status
+    }
     func body(_ data: Data) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -226,6 +242,13 @@ private final class CollectingSink: SecretResponseSink, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return (String(decoding: bytes, as: UTF8.self), ended)
+    }
+
+    /// The status the transport handed on, nil before any.
+    var headStatus: Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return status
     }
 }
 
@@ -571,7 +594,7 @@ struct URLSessionStreamingTransportTests {
     /// method once.
     @Test(
         .timeLimit(.minutes(1)),
-        arguments: ["GET", "HEAD", "DELETE", "POST", "PUT", "PATCH", "POST-empty"], [false, true])
+        arguments: ["GET", "HEAD", "OPTIONS", "DELETE", "POST", "PUT", "PATCH", "POST-empty"], [false, true])
     func aDroppedRequestIsNotSentAgain(method label: String, reused: Bool) throws {
         let upstream = try LoopbackUpstream()
         defer { upstream.stop() }
@@ -596,6 +619,44 @@ struct URLSessionStreamingTransportTests {
         }
         #endif
         #expect(sent == 1)
+    }
+
+    /// The upstream answers 401 with each kind of challenge. Counted where
+    /// the request arrives, it arrives once, body and credential with it,
+    /// and the transport hands on the 401. Darwin's URLSession answered a
+    /// Basic challenge by sending the request again, for every method.
+    @Test(
+        .timeLimit(.minutes(1)),
+        arguments: ["basic", "digest", "bearer", "none"], ["GET", "POST", "PUT"])
+    func aChallengedRequestIsNotSentAgain(challenge: String, method: String) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let transport = URLSessionStreamingTransport()
+        let body = method == "GET" ? Data() : Data(#"{"input":"x"}"#.utf8)
+        let sink = CollectingSink()
+        let url = try #require(URL(string: "http://127.0.0.1:\(upstream.port)/auth/\(challenge)"))
+        transport.send(
+            SecretUpstreamRequest(
+                method: method, url: url, headers: [("Authorization", "Bearer sk-live-REAL-0123456789")], body: body),
+            sink: sink)
+        #expect(sink.result.ended != nil)
+        #expect(sink.headStatus == 401, "\(sink.result.ended ?? "never ended")")
+        #expect(upstream.hits(method, "/auth/\(challenge)") == 1)
+    }
+
+    /// Through the gateway, a challenged request reaches the upstream once,
+    /// and its client gets the gateway's own refusal, never the challenge.
+    @Test(.timeLimit(.minutes(1)), arguments: ["basic", "digest"])
+    func aChallengedRequestIsRefusedToItsClientAfterOneSend(challenge: String) throws {
+        let upstream = try LoopbackUpstream()
+        defer { upstream.stop() }
+        let under = try GatewayUnderTest(upstreamPort: upstream.port)
+        defer { under.gateway.stop() }
+        let answer = try gatewayExchange(
+            port: under.port, under.request("/auth/\(challenge)", method: "POST", body: #"{"input":"x"}"#))
+        #expect(answer.status == 502)
+        #expect(answer.body.contains("the brokered credential was rejected upstream"), "\(answer.body)")
+        #expect(upstream.hits("POST", "/v1/auth/\(challenge)") == 1)
     }
 
     #if canImport(Darwin)
