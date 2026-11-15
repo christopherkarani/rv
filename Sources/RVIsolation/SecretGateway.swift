@@ -507,8 +507,14 @@ public final class SecretGateway: @unchecked Sendable {
             }
             _ = fcntl(held, F_SETFD, FD_CLOEXEC)
             #if canImport(Darwin)
+            // Darwin refuses this on a connection its client already reset,
+            // and a write to that socket raises SIGPIPE in the gateway's
+            // process: such a connection is closed unanswered.
             var one: Int32 = 1
-            _ = setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+            guard setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                close(held)
+                continue
+            }
             #endif
             var timeout = timeval(tv_sec: 30, tv_usec: 0)
             _ = setsockopt(held, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
