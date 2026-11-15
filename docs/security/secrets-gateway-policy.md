@@ -1290,9 +1290,13 @@ runtimes' included, until there is room, and it can drop one after its
 `connect` returned, which then reads nothing. Sixteen threads connecting
 and resetting as fast as they could filled it on macOS, and a runtime
 dialled again; every connection the gateway itself took was answered.
-That was so before outsiders were told apart first as well (the test
-passed on that code once the kernel's drops were told apart from the
-gateway's answers), so a flood is not what turned runtimes away before. A connection reset while it
+The same test passed on the code from before outsiders were told apart
+first too (5 of 5, once the kernel's drops were told apart from the
+gateway's answers), so a flood was not shown to turn runtimes away
+before. It cannot show either way: its 16 threads each hold at most one
+connection at a time and cannot hold the 64 slots, so it shows only that
+a runtime is answered through such a flood now. Outsiders slow to tell
+apart did turn a runtime away on that code. A connection reset while it
 waits there still holds its place until the gateway accepts and closes it. Refusals from
 outside every runtime are recorded at most once a second, with how many
 were left out since the record before: every `malformed` or
