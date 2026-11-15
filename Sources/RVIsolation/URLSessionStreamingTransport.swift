@@ -153,6 +153,7 @@ final class URLSessionStreamingSession: @unchecked Sendable {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 300
         configuration.timeoutIntervalForResource = 3_600
