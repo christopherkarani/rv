@@ -126,8 +126,12 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var closed = false
         /// rv cut the reply off itself: it passed `maximumBodyBytes`.
         var oversized = false
-        /// Told once this POST (and any retry of it) is over.
+        /// Told once, when this POST's body has all gone out or the POST
+        /// is over, whichever is first (a 401 retry takes it over if it is
+        /// not told yet).
         var completed: (@Sendable () -> Void)?
+        /// The size of this POST's body.
+        var bodyBytes = 0
         /// This POST's own session, on Linux; invalidated when it is over.
         var ownSession: URLSession?
     }
@@ -252,8 +256,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         task?.resume()
     }
 
-    /// Sends `message`; `completed` is told once its POST is over (answered,
-    /// failed, or closed), so what waits in the HTTP layer can be bounded.
+    /// Sends `message`; `completed` is told once its body has all gone out,
+    /// or its POST is over (answered, failed, or closed) before that, so
+    /// what waits in the HTTP layer for the server to take it can be bounded.
     package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) {
         let target: URL? = locked {
             if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
@@ -347,11 +352,14 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
             request.timeoutInterval = launch.answerTimeout
+            // An upload task: corelibs reports a body's progress only for one.
+            request.httpBody = nil
             let own = Self.sessionPerPost ? makeSession() : nil
             if own != nil { liveSessions += 1 }
-            let task = (own ?? shared).dataTask(with: request)
+            let task = (own ?? shared).uploadTask(with: request, from: body)
             exchanges[ObjectIdentifier(task)] = Exchange(
-                kind: .post(message, retried: retried), token: token, task: task, completed: completed, ownSession: own)
+                kind: .post(message, retried: retried), token: token, task: task, completed: completed,
+                bodyBytes: body.count, ownSession: own)
             return task
         }
         guard let task else {
@@ -374,6 +382,21 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
+    }
+
+    /// A POST whose body has all gone out no longer counts against the
+    /// bound, answered or not.
+    package func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        let id = ObjectIdentifier(task)
+        let taken: (@Sendable () -> Void)? = locked {
+            guard let exchange = exchanges[id], totalBytesSent >= Int64(exchange.bodyBytes) else { return nil }
+            exchanges[id]?.completed = nil
+            return exchange.completed
+        }
+        taken?()
     }
 
     package func urlSession(

@@ -416,8 +416,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// Each remote's sends and its stop, off the gateway queue: a send may
     /// refresh an OAuth token, and a stop waits for its DELETE.
     private var remoteSenders: [String: MCPOutbox] = [:]
-    /// Bytes each remote launch has been sent whose POST is not over: what
-    /// waits in the HTTP layer counts against `writeBufferBytes` until then.
+    /// Bytes each remote launch has been sent whose POST body has not all
+    /// gone out (and whose POST is not over): what waits in the HTTP layer
+    /// for the server to take it counts against `writeBufferBytes`.
     private var remoteInFlight: [String: (generation: Int, bytes: Int)] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
@@ -864,7 +865,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             let fd = writer.input.fileDescriptor
             admission = writer.outbox.submit(cost: bytes.count) { Self.writeAll(fd, bytes) }
         } else if let sender = remoteSenders[server], let remote = remotes[server], let flight = remoteInFlight[server] {
-            // Counted from here until its POST is over, not just until sent.
+            // Counted from here until its body has gone out, not until answered.
             let cost = message.compactText.utf8.count
             if flight.bytes > 0, flight.bytes + cost > writeBufferBytes {
                 admission = .overflow
