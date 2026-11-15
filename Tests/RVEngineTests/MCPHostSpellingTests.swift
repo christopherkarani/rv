@@ -206,6 +206,8 @@ struct MCPHostSpellingTests {
         #"watch "echo {; env '{clau?e,x y}' '{m?p,x y}' add s -- x }""#,
         #"$x "echo [; env 'cl[!;]ude' 'm[[:alpha:]|]p' add s -- x ]""#,
         "watch 'npx install-m[x]cp srv'", "$x \"npx ge[x]mini-cli m?p add s\"", "watch 'xargs npx ge[x]mini-cli'",
+        #"watch "'{c?aude,x y}{,a b}' 'm[;c]p' add s -- x""#,
+        #"watch "echo [; '{c?aude,x y}{,a b}' 'm[;c]p' add s -- x ]""#,
     ]
 
     @Test("a spelling with a blank or separator inside a span still asks", arguments: brokenSpanSpellings)
