@@ -244,10 +244,12 @@ struct MCPGatewayDeadlineRuntimeTests {
         let reply = await run.client.next(timeout: 120)
         #expect(reply?["id"] == .int(3))
         #expect(reply?["error"]?["message"]?.stringValue?.contains("within 1 s") == true, "\(String(describing: reply))")
+        // Before the stop, which would cancel a POST still on its way.
+        #expect(await eventuallyAsync(60) { fixture.requests().contains("REQ POST /sse notifications/cancelled") },
+            "\(fixture.requests())")
         #expect(await run.finish())
         let requests = await offThePool { fixture.stop() }
         #expect(requests.contains("REQ POST /sse tools/call"), "\(requests)")
-        #expect(requests.contains("REQ POST /sse notifications/cancelled"), "\(requests)")
     }
 
     /// The core's deadline fires, not the HTTP layer's: the call fails with
