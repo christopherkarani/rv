@@ -25,7 +25,8 @@ private final class LoopbackUpstream: @unchecked Sendable {
     static let bigBytes = 64 << 20
     let port: Int
     /// Set by a test: `/paced/N` sends each block only once this returns
-    /// true. A block held back 10 s is sent anyway, and no later one waits.
+    /// true. A block held back 30 s, past a `ChunkedAnswer`'s 15 s read
+    /// timeout, is sent anyway, and no later one waits.
     let pace = Mutex<(@Sendable () -> Bool)?>(nil)
     /// Body bytes `/paced/N` has sent.
     let pacedSent = Atomic<Int>(0)
@@ -216,7 +217,7 @@ private final class LoopbackUpstream: @unchecked Sendable {
         var sent = 0
         while sent < bytes {
             if asking, let ready {
-                let deadline = Date().addingTimeInterval(10)
+                let deadline = Date().addingTimeInterval(30)
                 while asking, ready() == false {
                     if Date() >= deadline { asking = false } else { usleep(1_000) }
                 }
