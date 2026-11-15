@@ -214,7 +214,7 @@ struct AuditLogLineTests {
 
         // The log is busy in this process, as another thread's append
         // would make it, until the whole budget is spent.
-        let log = try key(dir)
+        let log = try key(dir, .directory)
         try #require(AuditLog.AppendLock.mutex.withLock { $0.insert(log).inserted })
         defer { AuditLog.AppendLock.mutex.withLock { _ = $0.remove(log) } }
 
@@ -248,7 +248,7 @@ struct AuditLogLineTests {
             now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
             pause: { _ = ticks.increment() }
         )
-        let log = try key(dir)
+        let log = try key(dir, .directory)
         try whileBusy(log) {
             #expect(AuditLog.append(event("queued"), configDirectory: dir, wait: wait) == false)
             #expect(isBusy(log), "the waiter took the holder's entry away")
@@ -280,7 +280,7 @@ struct AuditLogLineTests {
                 otherWritten.set(AuditLog.append(otherEvent, configDirectory: other))
             }
         )
-        let log = try key(busy)
+        let log = try key(busy, .directory)
         try whileBusy(log) {
             #expect(AuditLog.append(event("queued"), configDirectory: busy, wait: wait) == false)
             #expect(isBusy(log), "the waiter took the holder's entry away")
@@ -332,8 +332,8 @@ struct AuditLogLineTests {
         #expect(AuditLog.append(event("first"), configDirectory: first))
         let file = AuditLog.fileURL(configDirectory: first)
         try FileManager.default.linkItem(at: file, to: AuditLog.fileURL(configDirectory: second))
-        let log = try key(file)
-        try #require(try key(AuditLog.fileURL(configDirectory: second)) == log)
+        let log = try key(file, .file)
+        try #require(try key(AuditLog.fileURL(configDirectory: second), .file) == log)
         let before = try Data(contentsOf: file)
         try whileBusy(log) {
             for directory in [second, first] {
@@ -355,12 +355,41 @@ struct AuditLogLineTests {
         #expect(try AuditChain.verify(fileURL: file).get().lines == 2)
     }
 
+    /// A directory's entry and a file's with the same numbers are two
+    /// entries: an append holding the one never waits for the other, so a
+    /// filesystem that numbers a directory and its file alike cannot make
+    /// an append wait on itself.
+    @Test(.timeLimit(.minutes(1)))
+    func aDirectoryAndAFileNumberedAlikeAreTwoEntries() throws {
+        let directory = AuditLog.AppendLock.Log(device: .max, inode: .max - 7, kind: .directory)
+        let file = AuditLog.AppendLock.Log(device: .max, inode: .max - 7, kind: .file)
+        let ticks = Ticks()
+        let base = ContinuousClock.now
+        let wait = AuditLog.LockWait(
+            timeout: 0.05,
+            now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+            pause: { _ = ticks.increment() }
+        )
+        var nested = false
+        let entered = AuditLog.AppendLock.withLock(directory, wait) {
+            AuditLog.AppendLock.withLock(file, wait) {
+                nested = true
+                return true
+            }
+        }
+        #expect(entered)
+        #expect(nested)
+        #expect(ticks.value == 0, "the file's entry waited on the directory's")
+        #expect(isBusy(directory) == false)
+        #expect(isBusy(file) == false)
+    }
+
     /// The key `AuditLog.append` takes in this process for `url`: a log's
     /// directory, or the log file itself.
-    private func key(_ url: URL) throws -> AuditLog.AppendLock.Log {
+    private func key(_ url: URL, _ kind: AuditLog.AppendLock.Log.Kind) throws -> AuditLog.AppendLock.Log {
         var info = stat()
         try #require(stat(url.path, &info) == 0)
-        return AuditLog.AppendLock.Log(info)
+        return AuditLog.AppendLock.Log(info, kind)
     }
 
     /// `body` with `log` marked busy in this process, as an append holding

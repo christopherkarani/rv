@@ -99,7 +99,7 @@ public enum AuditLog {
         // that times out there leaves nothing behind.
         var identity = stat()
         guard stat(configDirectory.path, &identity) == 0 else { return false }
-        let log = AppendLock.Log(identity)
+        let log = AppendLock.Log(identity, .directory)
         // This process's locks for the log (its directory's, then its
         // file's), then the file's own lock, all against `wait`'s one
         // deadline. They are per log: a thread waiting for a log another
@@ -118,7 +118,7 @@ public enum AuditLog {
                 return false
             }
             var entered = false
-            let written = AppendLock.withLock(AppendLock.Log(file), wait) {
+            let written = AppendLock.withLock(AppendLock.Log(file, .file), wait) {
                 entered = true
                 // Closed before either entry is given up: where `flock` is
                 // counted per process, closing a descriptor that held the
@@ -241,18 +241,21 @@ public enum AuditLog {
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
     enum AppendLock {
         struct Log: Hashable {
+            /// Part of the key, so a directory's entry and a file's are never
+            /// equal, even where a filesystem gives both the same numbers:
+            /// an append would otherwise wait on its own directory entry.
+            enum Kind: Hashable {
+                case directory
+                case file
+            }
+
             var device: UInt64
             var inode: UInt64
-
-            /// The key for what `info` describes (`stat` or `fstat`).
-            init(_ info: stat) {
-                device = UInt64(truncatingIfNeeded: info.st_dev)
-                inode = UInt64(truncatingIfNeeded: info.st_ino)
-            }
+            var kind: Kind
         }
 
-        /// The logs a thread holds: waiting for the file's lock, or
-        /// appending. Held only to insert or remove one, never across a
+        /// The entries threads hold, directories' and files': waiting for
+        /// the file's lock, or appending. Held only to insert or remove one, never across a
         /// wait, so taking it outright costs no deadline.
         static let mutex = Mutex<Set<Log>>([])
 
@@ -318,5 +321,13 @@ public enum AuditLog {
             }
         }
         return false
+    }
+}
+
+extension AuditLog.AppendLock.Log {
+    /// The key of `kind` for what `info` describes (`stat` or `fstat`).
+    init(_ info: stat, _ kind: Kind) {
+        self.init(
+            device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino), kind: kind)
     }
 }
