@@ -9,9 +9,11 @@ import Synchronization
 
 /// Native writer for `audit.jsonl`: one `AuditEvent` per line, owner-only.
 ///
-/// An in-process lock is taken before `flock` because macOS `flock` does not
-/// exclude another thread in this process. The line is `fsync`ed before
-/// success, so a crash cannot drop an append that already returned true.
+/// An in-process lock for the log is taken before `flock`, so the append
+/// does not rest on `flock` excluding another thread of this process (it
+/// does between separate opens on a local filesystem; a network one may
+/// count the lock per process). The line is `fsync`ed before success, so a
+/// crash cannot drop an append that already returned true.
 public enum AuditLog {
     public static func fileURL(configDirectory: URL) -> URL {
         configDirectory.appendingPathComponent(AuditLedger.Source.audit.rawValue, isDirectory: false)
@@ -54,12 +56,12 @@ public enum AuditLog {
         guard fstat(fd, &identity) == 0 else { return false }
         let log = AppendLock.Log(
             device: UInt64(truncatingIfNeeded: identity.st_dev), inode: UInt64(truncatingIfNeeded: identity.st_ino))
-        // The file's lock first, this process's own second, and that one
+        // This process's lock for the log, then the file's. The first is
         // per log: a thread waiting for a log another process holds, or
         // writing a long line, keeps no other log in this process waiting.
-        guard lock(fd, until: deadline) else { return false }
-        defer { _ = flock(fd, LOCK_UN) }
         return AppendLock.withLock(log, until: deadline) {
+            guard lock(fd, until: deadline) else { return false }
+            defer { _ = flock(fd, LOCK_UN) }
             guard let tail = lastLine(fd) else { return false }
             var chained = event
             chained.prev = tail.hash
@@ -105,7 +107,7 @@ public enum AuditLog {
     /// its newline. Scans back for the line start, then hashes forward.
     /// The scan is bounded: a tail longer than the verifier's line cap is
     /// already a break, and rescanning it on every append (under the
-    /// global lock) would stall all writers — appends refuse instead.
+    /// log's locks) would stall its writers — appends refuse instead.
     private static func lastLine(_ fd: Int32) -> (hash: String, isTorn: Bool)? {
         var info = stat()
         guard fstat(fd, &info) == 0 else { return nil }
@@ -152,9 +154,10 @@ public enum AuditLog {
         return bytes
     }
 
-    /// Threads in this process appending to one log; macOS `flock` does not
-    /// exclude them. One lock per log, named by the file's device and inode
-    /// (so by the file, however its path was spelled).
+    /// Threads in this process appending to one log, for a filesystem
+    /// whose `flock` would not exclude them. One lock per log, named by the
+    /// file's device and inode (so by the file, however its path was
+    /// spelled).
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
     private enum AppendLock {
         struct Log: Hashable {
@@ -179,8 +182,9 @@ public enum AuditLog {
 
     private static let retryMicroseconds: useconds_t = 5_000
 
-    /// Excludes other processes. Taken before `AppendLock`, never while
-    /// holding it. With a deadline, non-blocking attempts until it passes.
+    /// Excludes other processes, and this one's other opens of the file.
+    /// Callers already hold the log's `AppendLock`. With a deadline,
+    /// non-blocking attempts until it passes.
     private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> Bool {
         if let deadline {
             while true {
