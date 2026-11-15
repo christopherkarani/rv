@@ -558,8 +558,9 @@ deny below hides (from the Mach API; not probed here). The behaviour
 change:
 `proc_pidinfo`, and now `proc_pidfdinfo` and `proc_pid_rusage`, are
 refused for every process outside the cage, so a tool that asks about one
-by pid gets nothing — its open-file paths, socket endpoints and resource
-counters included (`lsof -p` of the parent printed nothing); signals still
+by pid through those calls gets nothing — its open-file paths, socket
+endpoints and resource counters included (`lsof -p` of the parent printed
+nothing); signals still
 reach them. `proc_listpids` is not denied, so pid and command-name
 enumeration still works. `ps` already failed (it is setuid). Python, Node
 22 and git ran unchanged. Other ways to read another process
@@ -674,10 +675,11 @@ What it does not:
   routes tested, not on a proof that no other route exists, and it does
   not cover a later one: an uncaged tool of yours that afterwards uses
   what the caged server wrote into a shared write root (the package
-  caches, the temporary directory, `sandbox.writable`). File copies and file clones are not affected:
-  `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
-  tree file by file; only a raw `clonefile(2)` of a directory from
-  outside those is refused, so a tool that clones whole package
+  caches, the temporary directory, `sandbox.writable`). File copies and
+  file clones are not affected: `cp -c -R`, uv, Rust's `std::fs::copy`
+  and Node's `fs.cpSync` copy a tree file by file; only a raw
+  `clonefile(2)` of a directory from outside those is refused, so a tool
+  that clones whole package
   directories out of a cache elsewhere (bun's `clonefile` backend, with
   its cache in `~/.bun/install/cache`) gets "Operation not permitted":
   add that cache to `sandbox.writable`. A profile over 288 KiB is refused
@@ -735,8 +737,9 @@ What it does not:
   outside it — a tmux or screen server (runs any command it is sent), the
   Docker socket (starts containers, host mounts included), ssh-agent
   (signs with your keys), gpg-agent and a password manager's agent over
-  its socket (one reached over XPC stays reachable from any cage). XPC services reached by Mach lookup (the
-  Shortcuts runner, `nsurlsessiond` and the rest) are not denied for any
+  its socket (one reached over XPC stays reachable from any cage). XPC
+  services reached by Mach lookup (the Shortcuts runner, `nsurlsessiond`
+  and the rest) are not denied for any
   caged server (above) and were not probed. A `network` false server, and
   so every placeholder server, is not affected by the socket route:
   `(deny network*)` refuses AF_UNIX as well as TCP and UDP (the rule has
