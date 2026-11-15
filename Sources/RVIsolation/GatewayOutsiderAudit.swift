@@ -7,7 +7,10 @@ import Foundation
 /// written, with how many were left out since the one before it; the rest
 /// are only counted, the last of them kept: the gateway writes it when it
 /// stops, saying how many were left out before it. With no later refusal
-/// and no stop, that count is not written. A refusal that presents a live
+/// and no stop, that count is not written. The drain is final: a refusal
+/// from a connection still being refused as the gateway stops is written
+/// as it comes, and there are at most as many as the gateway's connection
+/// threads. A start bounds afresh. A refusal that presents a live
 /// placeholder, such as one spent from outside, is always written.
 final class GatewayOutsiderAudit: @unchecked Sendable {
     static let interval: TimeInterval = 1
@@ -17,6 +20,8 @@ final class GatewayOutsiderAudit: @unchecked Sendable {
     private var leftOut = 0
     private var last: SecretUseRecord?
     private var gap = GatewayOutsiderAudit.interval
+    /// Set by `drain`, cleared by `reopen`: nothing is kept meanwhile.
+    private var drained = false
 
     /// Test seam: seconds between records written.
     var interval: TimeInterval {
@@ -28,6 +33,7 @@ final class GatewayOutsiderAudit: @unchecked Sendable {
     /// the record to write, saying how many were left out before it.
     func admit(_ record: SecretUseRecord, at now: DispatchTime = .now()) -> SecretUseRecord? {
         lock.withLock {
+            if drained { return record }
             if let written, now < written + gap {
                 leftOut += 1
                 last = record
@@ -41,12 +47,19 @@ final class GatewayOutsiderAudit: @unchecked Sendable {
 
     /// The last refusal left out, saying how many were left out before it;
     /// nil when none waits.
+    /// Final until `reopen`.
     func drain() -> SecretUseRecord? {
         lock.withLock {
+            drained = true
             guard let record = last else { return nil }
             defer { (leftOut, last) = (0, nil) }
             return Self.saying(leftOut - 1, before: record)
         }
+    }
+
+    /// A gateway starting: bounds afresh, with nothing of an earlier run.
+    func reopen() {
+        lock.withLock { (written, leftOut, last, drained) = (nil, 0, nil, false) }
     }
 
     private static func saying(_ count: Int, before record: SecretUseRecord) -> SecretUseRecord {

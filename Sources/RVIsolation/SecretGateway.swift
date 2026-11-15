@@ -398,6 +398,7 @@ public final class SecretGateway: @unchecked Sendable {
         if flags >= 0 {
             _ = fcntl(listener, F_SETFL, flags | O_NONBLOCK)
         }
+        outsiderAudit.reopen()
         acceptQueue.async { [weak self] in
             self?.acceptLoop(listener)
             exited.signal()
