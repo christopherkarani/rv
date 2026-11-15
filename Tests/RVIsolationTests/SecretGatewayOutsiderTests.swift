@@ -252,8 +252,8 @@ struct SecretGatewayOutsiderTests {
     /// A client that resets its connection after the gateway accepted it
     /// but before it was set up. Darwin then refuses `SO_NOSIGPIPE` on that
     /// socket, and any answer written to it raised SIGPIPE, which killed the
-    /// gateway's whole process. It is closed unanswered, unaudited, and the
-    /// next client is served.
+    /// gateway's whole process. It is closed unanswered, unaudited on Darwin,
+    /// and the next client is served.
     @Test(.timeLimit(.minutes(1)))
     func aClientResetBeforeItsConnectionIsSetUpIsClosedUnanswered() throws {
         let marked = MarkedPorts()
@@ -291,7 +291,11 @@ struct SecretGatewayOutsiderTests {
         #expect(GatewaySocket.writeAll(member.fd, bearer(placeholder)))
         #expect(answer(member.fd).hasPrefix("HTTP/1.1 200"))
         #expect(upstream.requests.count == 1)
+        // Linux sends with MSG_NOSIGNAL and has no such step: there the reset
+        // connection is an outsider whose head cannot be read, refused as one.
+        #if canImport(Darwin)
         #expect(audit.items.withLock { $0.allSatisfy { $0.refusal == nil } })
+        #endif
     }
 
     /// Malformed heads from outside every runtime, one after another: the
