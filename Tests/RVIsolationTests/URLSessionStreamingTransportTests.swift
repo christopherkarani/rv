@@ -15,7 +15,8 @@ import Testing
 /// Loopback HTTP/1.1 upstream, one thread per connection, counting the
 /// requests it receives by method and path. `/big` answers `bigBytes` x's
 /// with a Content-Length, `/bytes/N` answers N x's, and `/slow/N/ms`
-/// answers N x's in 64 KiB blocks `ms` milliseconds apart. A path with
+/// answers N x's in 64 KiB blocks `ms` milliseconds apart, and `/paced/N`
+/// in 64 KiB blocks each sent when `pace` says so. A path with
 /// `/ka/` answers `ok:<path>` and keeps the connection open for the next
 /// request; one with `/drop/` closes it unanswered. `/auth/<kind>` answers
 /// 401 with a `basic`, `digest` or `bearer` challenge, or `none`. Any other
@@ -23,6 +24,11 @@ import Testing
 private final class LoopbackUpstream: @unchecked Sendable {
     static let bigBytes = 64 << 20
     let port: Int
+    /// Set by a test: `/paced/N` sends each block only once this returns
+    /// true. A block held back 10 s is sent anyway, and no later one waits.
+    let pace = Mutex<(@Sendable () -> Bool)?>(nil)
+    /// Body bytes `/paced/N` has sent.
+    let pacedSent = Atomic<Int>(0)
     private let listenFD: Int32
     private let lock = NSLock()
     private var hits: [String: Int] = [:]
@@ -172,6 +178,8 @@ private final class LoopbackUpstream: @unchecked Sendable {
             Self.stream(client, bytes: Self.bigBytes, pause: 0)
         } else if let at = segments.firstIndex(of: "bytes"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
             Self.stream(client, bytes: size, pause: 0)
+        } else if let at = segments.firstIndex(of: "paced"), at + 1 < segments.count, let size = Int(segments[at + 1]) {
+            streamPaced(client, bytes: size)
         } else if let at = segments.firstIndex(of: "slow"), at + 2 < segments.count,
             let size = Int(segments[at + 1]), let pause = Int(segments[at + 2])
         {
@@ -193,6 +201,30 @@ private final class LoopbackUpstream: @unchecked Sendable {
             guard write(client, Array(block.prefix(next))) else { return }
             sent += next
             if milliseconds > 0 { Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000) }
+        }
+    }
+
+    private func streamPaced(_ client: Int32, bytes: Int) {
+        // So little of the answer waits between here and the session.
+        var small: Int32 = 64 << 10
+        _ = setsockopt(client, SOL_SOCKET, SO_SNDBUF, &small, socklen_t(MemoryLayout<Int32>.size))
+        guard Self.write(client, Array("HTTP/1.1 200 OK\r\nContent-Length: \(bytes)\r\nConnection: close\r\n\r\n".utf8))
+        else { return }
+        let ready = pace.withLock { $0 }
+        var asking = ready != nil
+        let block = [UInt8](repeating: UInt8(ascii: "x"), count: 65_536)
+        var sent = 0
+        while sent < bytes {
+            if asking, let ready {
+                let deadline = Date().addingTimeInterval(10)
+                while asking, ready() == false {
+                    if Date() >= deadline { asking = false } else { usleep(1_000) }
+                }
+            }
+            let next = min(block.count, bytes - sent)
+            guard Self.write(client, Array(block.prefix(next))) else { return }
+            sent += next
+            pacedSent.store(sent, ordering: .relaxed)
         }
     }
 
@@ -916,16 +948,17 @@ struct URLSessionStreamingTransportTests {
         #expect(under.transport.peakQueuedBytes <= limits.perRequest)
     }
 
-    /// Without a hand-off, a reader that keeps up with an upstream sending
-    /// at most about 4 MiB a second gets all of an answer one and a half
-    /// times `perRequest`, sent once. It starts 1 s late and pauses after
-    /// each read, so more than 512 KiB waits for it past the sockets'
-    /// buffers (0.3 s late, only 256 KiB sometimes did), and several MiB
-    /// more can wait on a starved host before 8 MiB does. Half the 8 MiB a
-    /// second it had: what waits is read by the gateway's own scrubber too,
-    /// about 8 to 9 MB a second in a debug build, and starved under the full
-    /// suite it fell 8 MiB behind. Only a reader cut while it keeps up turns
-    /// this red.
+    /// Without a hand-off, a reader that keeps up gets all of an answer one
+    /// and a half times `perRequest`, sent once, after more than 512 KiB
+    /// waited for it. How much waits cannot be timed: nothing here makes
+    /// the upstream wait, so what waits is what the upstream got ahead of
+    /// the sockets between the gateway and the reader, which the kernel
+    /// sizes itself (macOS up to 4 MiB each way), and a starved upstream
+    /// gets ahead of none of it. So the reader starts only once more than
+    /// 512 KiB waits, and the upstream sends each block only while at most
+    /// 1 MiB does: what waits stays far under the 8 MiB cap at any pace. A
+    /// reader cut while it keeps up turns this red, as does a budget that
+    /// never gives back what was handed on.
     @Test(.timeLimit(.minutes(1)))
     func aLiveReaderGetsTheWholeOfAnAnswerLargerThanTheCap() throws {
         let upstream = try LoopbackUpstream()
@@ -933,17 +966,21 @@ struct URLSessionStreamingTransportTests {
         let limits = URLSessionStreamingTransport.Limits(perRequest: 8 << 20, total: .max, handoff: nil)
         let under = try GatewayUnderTest(upstreamPort: upstream.port, limits: limits)
         defer { under.gateway.stop() }
+        let budget = under.transport.budget
+        upstream.pace.withLock { $0 = { budget.waiting <= 1 << 20 } }
         let size = 12 << 20
         let client = try connectGateway(under.port)
         defer { close(client) }
-        #expect(GatewaySocket.writeAll(client, Array(under.request("/slow/\(size)/16").utf8)))
-        let answer = try ChunkedAnswer(reading: client, pause: 1, perRead: 0.001)
+        #expect(GatewaySocket.writeAll(client, Array(under.request("/paced/\(size)").utf8)))
+        try #require(
+            eventually { budget.peak > 512 << 10 },
+            "\(budget.peak) waited after \(upstream.pacedSent.load(ordering: .relaxed)) sent")
+        let answer = try ChunkedAnswer(reading: client)
         #expect(answer.closed, "the answer never ended")
         #expect(answer.ended)
         #expect(answer.body == size)
         #expect(answer.bodyIsAllX)
-        #expect(upstream.hits("GET", "/v1/slow/\(size)/16") == 1)
-        #expect(under.transport.peakQueuedBytes > 512 << 10, "\(under.transport.peakQueuedBytes)")
+        #expect(upstream.hits("GET", "/v1/paced/\(size)") == 1)
     }
 
     /// The total counts only what each request holds beyond its exempt
