@@ -280,11 +280,12 @@ struct MCPGatewayDeadlineRuntimeTests {
         // A grace wider than serve's 2 s, so a loaded machine still runs the
         // handler before the SIGKILL.
         let run = GatewayRun(
-            core: GatewayRun.core([stubborn], startTimeout: 300), stopGrace: 10,
+            core: GatewayRun.core([stubborn], startTimeout: 300),
             connections: [.process(MCPUpstreamLaunch(
                 server: "stubborn", executable: "/usr/bin/env",
                 arguments: ["python3", "-u", directory.appendingPathComponent("stubborn.py").path, marker.path],
-                environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"]))])
+                environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"]))],
+            stopGrace: 10)
         #expect(await run.initialize())
         let logs = run.logs
         #expect(await eventuallyAsync { logs.text.contains("MCP server stubborn exited") }, "\(logs.text)")
