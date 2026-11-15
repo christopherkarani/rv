@@ -191,6 +191,29 @@ struct MCPStrictProfileTests {
         #endif
     }
 
+    /// LaunchServices and Apple events reach processes outside the cage, so
+    /// both are denied, after `(allow default)`, and nothing allows them.
+    @Test(.timeLimit(.minutes(1))) func launchServicesAndAppleEventsAreDenied() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-lsopen-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: true), scratch: root.appendingPathComponent("scratch").path,
+            home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let lines = text.split(separator: "\n").map(String.init)
+        let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
+        for deny in ["(deny lsopen)", "(deny appleevent-send)"] {
+            let index = try #require(lines.firstIndex(of: deny), "\(deny) missing")
+            #expect(index > allowDefault, "\(deny)")
+        }
+        #expect(lines.contains { $0.hasPrefix("(allow lsopen") || $0.hasPrefix("(allow appleevent") } == false)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
     /// The link and clone rules in Seatbelt's last-match order: links are
     /// denied, then allowed among the write roots; a clone of a directory
     /// outside the write roots is denied (the kernel copies the whole tree

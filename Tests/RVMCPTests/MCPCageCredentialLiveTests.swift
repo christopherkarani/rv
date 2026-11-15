@@ -435,6 +435,52 @@ struct MCPCageCredentialLiveTests {
         #expect(MCPSandbox.readLink(dotConfig.path) == link.appendingPathComponent("config").path)
     }
 
+    /// Asking another process to start something is refused: `open` of a
+    /// file in the scratch (LaunchServices), a read-only Apple event to the
+    /// Finder, and `launchctl submit` of `/usr/bin/true`, which leaves no
+    /// job behind. Each prints its exit status; none may succeed.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func launchServicesAppleEventsAndLaunchdAreRefusedInTheCage() throws {
+        let root = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(root.path, 0o700) == 0, "could not create \(root.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let tmp = URL(fileURLWithPath: temporary).appendingPathComponent("rv-cage-lsopen-tmp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/opener", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        try Data("note".utf8).write(to: scratch.appendingPathComponent("note.txt"))
+        let label = "dev.rv.mcp-cage-submit-\(getpid())-\(UUID().uuidString.prefix(8))"
+        defer {
+            let cleanup = Process()
+            cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            cleanup.arguments = ["remove", label]
+            cleanup.standardError = FileHandle.nullDevice
+            if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
+        }
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            s="$1"; label="$2"
+            /bin/echo STARTED
+            /usr/bin/open -g -j "$s/note.txt" 2>/dev/null; echo "open rc=$?"
+            /usr/bin/osascript -e 'tell application "Finder" to get name of startup disk' >/dev/null 2>&1; echo "event rc=$?"
+            /bin/launchctl submit -l "$label" -- /usr/bin/true 2>/dev/null; echo "submit rc=$?"
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [scratch.path, label], in: scratch.path))
+        #expect(output.contains("STARTED") && output.contains("DONE"), "\(output)")
+        for route in ["open", "event", "submit"] {
+            #expect(output.contains("\(route) rc=") && output.contains("\(route) rc=0\n") == false, "\(route): \(output)")
+        }
+    }
+
     /// Two servers, each in its own `sandbox-exec` of the same profile, as
     /// serve starts them: the second cannot read the first's arguments and
     /// environment (`KERN_PROCARGS2`, where rv puts a server's `secrets`),
