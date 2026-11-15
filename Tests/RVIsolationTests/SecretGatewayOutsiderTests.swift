@@ -328,6 +328,47 @@ struct SecretGatewayOutsiderTests {
         #expect(upstream.requests.isEmpty)
     }
 
+    /// Naming a secret does not lift the bound: an outsider hammering a
+    /// made-up name is recorded once per interval like a nameless one. An
+    /// outsider presenting a live placeholder is recorded every time, also
+    /// when it is refused before any substitution (an echo method).
+    @Test(.timeLimit(.minutes(1)))
+    func outsidersNamingASecretAreBoundedUnlessTheyPresentALivePlaceholder() throws {
+        let nobody = MarkedPorts()
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, placeholder) = try gateway(nobody.check, upstream: upstream, audit: audit)
+        gateway.outsiderAudit.interval = 60
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+        func send(_ head: String) throws -> String {
+            let client = try boundClient()
+            defer { close(client.fd) }
+            try dial(client.fd, to: port)
+            #expect(GatewaySocket.writeAll(client.fd, Array(head.utf8)))
+            return answer(client.fd)
+        }
+        let madeUp = "GET /s/MADE_UP/models HTTP/1.1\r\nAuthorization: Bearer sk-rvph_\(String(repeating: "0", count: 32))\r\n\r\n"
+        for _ in 0..<10 { #expect(try send(madeUp).hasPrefix("HTTP/1.1 4")) }
+        let named = { audit.items.withLock { $0.filter { $0.secret == "MADE_UP" } } }
+        #expect(named().count == 1)
+
+        let live = String(decoding: bearer(placeholder), as: UTF8.self)
+        let echo = live.replacingOccurrences(of: "GET ", with: "TRACE ")
+        for _ in 0..<3 { #expect(try send(live).hasPrefix("HTTP/1.1 403")) }
+        for _ in 0..<2 { #expect(try send(echo).hasPrefix("HTTP/1.1 4")) }
+        let brokered = { audit.items.withLock { $0.filter { $0.secret == "OPENAI_API_KEY" } } }
+        #expect(eventually { brokered().count == 5 }, "\(brokered().map { $0.refusal?.code ?? "-" })")
+        #expect(named().count == 1)
+
+        gateway.outsiderAudit.interval = 0
+        _ = try send(madeUp)
+        #expect(eventually { named().count == 2 })
+        let reason = named().last?.reason ?? ""
+        #expect(reason.contains("(9 more from outside the runtimes since the last record)"), "\(reason)")
+        #expect(upstream.requests.isEmpty)
+    }
+
     /// A peer that could not be placed when it connected waits as an
     /// outsider, and the full check after its head decides: placed in the
     /// runtime, it is forwarded; still unplaced, it is refused.
