@@ -17,6 +17,8 @@
 // one `<tool> <outcome>` line per audit record to `<directory>/audit`, and
 // exits as serve would. `plan-hangs` makes its planning never return
 // (it writes `<directory>/planning` first), as a hung secret provider would.
+// `long-grace` gives each server 60 s, not 2, to exit at shutdown before
+// its SIGTERM.
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -121,6 +123,7 @@ private func outcomeName(_ outcome: MCPCallRecord.Outcome) -> String {
 private func serveUnderSignals(_ directory: String, _ script: String, _ flags: ArraySlice<String>) -> Int32 {
     let names: [String: Int32] = ["INT": SIGINT, "TERM": SIGTERM, "HUP": SIGHUP]
     var planHangs = false
+    var shutdownGrace: TimeInterval?
     for flag in flags {
         if flag == "CHLD-ignored" {
             signal(SIGCHLD, SIG_IGN)
@@ -128,6 +131,10 @@ private func serveUnderSignals(_ directory: String, _ script: String, _ flags: A
         }
         if flag == "plan-hangs" {
             planHangs = true
+            continue
+        }
+        if flag == "long-grace" {
+            shutdownGrace = 60
             continue
         }
         guard let number = names[flag], setDefault(number) else { return 2 }
@@ -157,7 +164,7 @@ private func serveUnderSignals(_ directory: String, _ script: String, _ flags: A
         recordForward: { _ in true })
     let audit = directory + "/audit"
     let runtime = MCPGatewayRuntime(
-        core: core, connections: [.process(planned)],
+        core: core, connections: [.process(planned)], shutdownGrace: shutdownGrace,
         audit: { record in append("\(record.tool) \(outcomeName(record.outcome))", to: audit) },
         log: { _ in })
     if let number = signals.first { return 128 + number }
@@ -168,7 +175,7 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first ?? "" {
 case "serve":
     guard arguments.count >= 3 else {
-        say("usage: rv-mcp-signal-probe serve <directory> <script> [INT] [TERM] [HUP] [CHLD-ignored] [plan-hangs]")
+        say("usage: rv-mcp-signal-probe serve <directory> <script> [INT] [TERM] [HUP] [CHLD-ignored] [plan-hangs] [long-grace]")
         exit(2)
     }
     exit(serveUnderSignals(arguments[1], arguments[2], arguments.dropFirst(3)))

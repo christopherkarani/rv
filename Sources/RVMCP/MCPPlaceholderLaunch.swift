@@ -200,22 +200,25 @@ struct MCPPlaceholderShutdown: Equatable {
     static let terminateGrace: TimeInterval = 1
 
     let started: Date
+    /// `grace`, unless a test widens it.
+    let quiet: TimeInterval
     private(set) var step = Step.waiting
 
-    init(started: Date) {
+    init(started: Date, grace: TimeInterval = Self.grace) {
         self.started = started
+        quiet = grace
     }
 
     /// When serve stops waiting for this group and leaves it to the broker's stop.
     var giveUp: Date {
-        started.addingTimeInterval(Self.grace + Self.terminateGrace + 2)
+        started.addingTimeInterval(quiet + Self.terminateGrace + 2)
     }
 
     mutating func signal(exited: Bool, now: Date) -> Int32? {
         guard exited == false else { return nil }
         switch step {
         case .waiting:
-            guard now.timeIntervalSince(started) >= Self.grace else { return nil }
+            guard now.timeIntervalSince(started) >= quiet else { return nil }
             step = .terminated(at: now)
             return SIGTERM
         case .terminated(let sent):

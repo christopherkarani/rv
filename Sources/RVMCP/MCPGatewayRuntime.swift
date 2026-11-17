@@ -402,6 +402,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// How long a restart waits for the last process to be reaped:
     /// `stopGrace + restartReapGrace`, unless a test shortens it.
     private let restartWait: TimeInterval
+    /// How long serve's own stop leaves each server to exit before SIGTERM:
+    /// `MCPPlaceholderShutdown.grace`, unless a test widens it.
+    private let shutdownGrace: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private let clientProgress = MCPWriteProgress()
@@ -460,6 +463,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
         stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
         restartWait: TimeInterval? = nil,
+        shutdownGrace: TimeInterval? = nil,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -480,6 +484,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.clientStallSeconds = clientStallSeconds
         self.stopGrace = stopGrace
         self.restartWait = restartWait ?? stopGrace + Self.restartReapGrace
+        self.shutdownGrace = shutdownGrace ?? MCPPlaceholderShutdown.grace
         self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
@@ -1075,7 +1080,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             return Date(timeIntervalSinceReferenceDate: TimeInterval(seconds) + TimeInterval(attoseconds) * 1e-18)
         }
         let started = elapsed()
-        var shutdowns = groups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
+        var shutdowns = groups.mapValues { _ in MCPPlaceholderShutdown(started: started, grace: shutdownGrace) }
         func waiting(_ now: Date) -> Bool {
             groups.contains { launch, entry in
                 entry.group.hasExited == false && now < (shutdowns[launch]?.giveUp ?? now)

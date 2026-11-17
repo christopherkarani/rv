@@ -417,18 +417,18 @@ struct MCPShutdownSignalTests {
     }
 
     /// A second signal ends serve at once: a server that outlives SIGTERM
-    /// is killed without the grace (it never gets rv's SIGTERM), and serve
-    /// exits as killed by the first signal.
+    /// is killed without the grace (it never gets rv's SIGTERM, due 60 s
+    /// after the first signal), and serve exits as killed by the first one.
     @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
     func aSecondRealSignalKillsWhatIsLeftAtOnce() async throws {
         let server = try NotingServer(ignoringTerm: true)
         defer { server.remove() }
-        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP"])
+        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP", "long-grace"])
         defer { serve.kill() }
         #expect(await serve.initialize())
         #expect(await eventuallyOffThePool { server.pids.count == 2 })
         #expect(kill(serve.process.processIdentifier, SIGINT) == 0)
-        // Well inside the 2 s serve gives a server before its SIGTERM.
+        // Far inside the 60 s serve gives a server before its SIGTERM.
         try await Task.sleep(nanoseconds: 500_000_000)
         #expect(kill(serve.process.processIdentifier, SIGTERM) == 0)
         let process = serve.process
