@@ -224,7 +224,7 @@ struct MCPGatewayRemoteRestartTests {
         #expect(remote.send(try Self.cancel(100)))
         let waited = await Self.secondsUntilIdle(remote)
         #expect(waited != nil && (waited ?? 0) >= 1.5, "\(String(describing: waited))")
-        #expect(await eventually(30) { fixture.requests().contains("CLOSED notification notifications/cancelled") })
+        #expect(await eventually(30) { fixture.requests().contains("CLOSED notification notifications/cancelled") }, "\(fixture.requests()) live post sessions: \(remote.postSessionsLive)")
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
@@ -623,7 +623,14 @@ struct MCPGatewayRemoteRestartTests {
         }
         // Each reply is cut off once (nothing more of it is read), and each
         // call ends once.
-        let logged = run.logs.text
+        // rv's log lines reach the sink through its relay, after the replies.
+        let logs = run.logs
+        #expect(await eventually(30) {
+            logs.text.components(separatedBy: "sent an event larger than").count == 2
+                && logs.text.components(separatedBy: "bytes; dropped").count == 2
+        }, "\(logs.text)")
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let logged = logs.text
         #expect(logged.components(separatedBy: "sent an event larger than").count == 2, "\(logged)")
         #expect(logged.components(separatedBy: "bytes; dropped").count == 2, "\(logged)")
         #expect(run.audits.items.withLock { $0.filter { $0.tool == "echo" }.count } == 2)
