@@ -46,6 +46,12 @@ struct MCPGatewayRestartTests {
         return launch
     }
 
+    /// The runtime reports the earlier launch reaped: from here the launch's
+    /// start timeout counts.
+    static func reaped(_ harness: inout GatewayHarness) {
+        #expect(harness.core.handle(.upstreamReaped(server: "github", launch: launch(harness))).isEmpty)
+    }
+
     /// The runtime reports the launch the core waits for started.
     static func relaunched(_ harness: inout GatewayHarness) -> [MCPGatewayOutput] {
         harness.core.handle(.upstreamRelaunched(server: "github", launch: launch(harness)))
@@ -530,13 +536,15 @@ struct MCPGatewayRestartTests {
     }
 
     /// Nothing says the server started again: past its
-    /// `startTimeoutSeconds` from the restart, that counts as one more time
-    /// it went away, and the next try waits the doubled delay.
+    /// `startTimeoutSeconds` from the reap of its last process, that counts
+    /// as one more time it went away, and the next try waits the doubled
+    /// delay.
     @Test func aRelaunchThatNeverStartsRunsOutOfTimeAndCounts() {
         let clock = ManualClock()
         var harness = Self.harness(clock)
         _ = harness.ready()
         Self.dueForRelaunch(&harness, clock)
+        Self.reaped(&harness)
         let start = TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds)
         clock.advance(start - 0.5)
         #expect(harness.core.handle(.tick).logs.isEmpty)
@@ -561,10 +569,38 @@ struct MCPGatewayRestartTests {
         var harness = Self.harness(clock)
         _ = harness.ready()
         Self.dueForRelaunch(&harness, clock)
+        Self.reaped(&harness)
         clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds) - 1)
         #expect(Self.relaunched(&harness).sent("initialize").count == 1)
         clock.advance(1)
         #expect(harness.core.handle(.tick).stopped == ["github"])
+    }
+
+    /// rv's own wait for the last process to be reaped is not the launch's
+    /// start time: no deadline runs during it (the runtime bounds it), and
+    /// the whole `startTimeoutSeconds` counts from the reap. A reap of
+    /// another launch, or a second one, changes nothing.
+    @Test func theWaitForTheLastProcessDoesNotUseUpTheStartTimeout() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        let launch = Self.launch(harness)
+        let start = TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds)
+        clock.advance(start + 30)
+        #expect(harness.core.handle(.tick).logs.isEmpty)
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: launch))
+        #expect(harness.core.handle(.upstreamReaped(server: "github", launch: launch + 1)).isEmpty)
+        clock.advance(start)
+        #expect(harness.core.handle(.tick).logs.isEmpty)
+        Self.reaped(&harness)
+        clock.advance(start - 0.5)
+        Self.reaped(&harness)
+        #expect(harness.core.handle(.tick).logs.isEmpty)
+        clock.advance(0.5)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.logs.contains { $0.contains("did not start again within 60 s") }, "\(expired.logs)")
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: launch) == false)
     }
 
     /// The core stopped waiting for a launch that ran out of time: a late
@@ -580,6 +616,7 @@ struct MCPGatewayRestartTests {
         let first = Self.launch(harness)
         #expect(due.launches == [first])
         #expect(harness.core.awaitsRelaunch(server: "github", launch: first))
+        Self.reaped(&harness)
         clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds))
         _ = harness.core.handle(.tick)
         #expect(harness.core.awaitsRelaunch(server: "github", launch: first) == false)

@@ -765,6 +765,16 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private func restart(_ server: String, launch: Int) {
         if let busy = restartRefusal(server) {
             log("not starting MCP server \(MCPDisplayedText.field(server)) again: \(busy)")
+            // The core waits for this launch: it hears that it did not
+            // start, as one more time the server went away (a launch still
+            // running is stopped, which tells it).
+            if core.awaitsRelaunch(server: server, launch: launch) {
+                if live[server] != nil {
+                    stopUpstream(server)
+                } else {
+                    perform(core.handle(.upstreamExited(server: server)))
+                }
+            }
             return
         }
         restarting.insert(server)
@@ -780,6 +790,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             case .timedOut: planned = .failure(MCPStartFailure("its last process did not exit"))
             case .abandoned: planned = .failure(MCPStartFailure("serve is stopping"))
             case .ended:
+                // From here the launch's start timeout counts.
+                queue.async {
+                    if self.stopping == false { self.perform(self.core.handle(.upstreamReaped(server: server, launch: launch))) }
+                }
                 if let relaunch {
                     planned = relaunch(server)
                         .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }

@@ -10,6 +10,10 @@ public enum MCPGatewayInput: Sendable, Equatable {
     /// The runtime started this server again after `restartUpstream` for
     /// this `launch`.
     case upstreamRelaunched(server: String, launch: Int)
+    /// Every earlier launch of this server has ended (reaped, a placeholder
+    /// server's lease revoked): the runtime now plans and starts `launch`,
+    /// and its `startTimeoutSeconds` counts from here.
+    case upstreamReaped(server: String, launch: Int)
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
@@ -165,11 +169,12 @@ public struct MCPGatewayCore {
         case stopping
         /// Its exit was seen; it is started again at this time.
         case waiting(until: Date)
-        /// `restartUpstream` was sent for this launch: it is being planned
-        /// and started. Past `until` (its `startTimeoutSeconds` after the
-        /// restart) it counts as gone again, and a late start of this
-        /// launch is not taken.
-        case launching(Int, until: Date)
+        /// `restartUpstream` was sent for this launch: rv waits for its last
+        /// process to be reaped (no deadline here: the runtime bounds that
+        /// wait and reports an exit past it), then plans and starts it.
+        /// Past `until` (its `startTimeoutSeconds` after the reap) it counts
+        /// as gone again, and a late start of this launch is not taken.
+        case launching(Int, until: Date?)
         /// The runtime started it: it is initialized (by the same `until`),
         /// then listed again.
         case relisting
@@ -496,6 +501,7 @@ public struct MCPGatewayCore {
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
         case .upstreamRelaunched(let server, let launch): outputs += upstreamRelaunched(server, launch: launch)
+        case .upstreamReaped(let server, let launch): upstreamReaped(server, launch: launch)
         case .tick, .gatewayStopping: break
         }
         return outputs

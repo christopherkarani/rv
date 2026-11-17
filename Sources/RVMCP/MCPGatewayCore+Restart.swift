@@ -78,7 +78,7 @@ extension MCPGatewayCore {
             guard case .restarting(let reason, .waiting(let until))? = phases[server], until <= now else { continue }
             let launch = nextID
             nextID += 1
-            phases[server] = .restarting(reason, .launching(launch, until: now.addingTimeInterval(startTimeout(server))))
+            phases[server] = .restarting(reason, .launching(launch, until: nil))
             relaunches[server, default: []].append(now)
             launchListed[server] = []
             outputs.append(.restartUpstream(server: server, launch: launch))
@@ -93,9 +93,17 @@ extension MCPGatewayCore {
         return awaited == launch
     }
 
+    /// rv's wait for the server's last process is over: the launch's start
+    /// timeout counts from now, so that wait never uses it up. Any other
+    /// launch, or a second report, is ignored.
+    mutating func upstreamReaped(_ server: String, launch: Int) {
+        guard case .restarting(let reason, .launching(let awaited, .none))? = phases[server], awaited == launch else { return }
+        phases[server] = .restarting(reason, .launching(launch, until: deadlineClock().addingTimeInterval(startTimeout(server))))
+    }
+
     /// The runtime started it again: it is initialized as at serve start,
-    /// within what is left of its start timeout. A start of any other
-    /// launch is ignored.
+    /// within what is left of its start timeout (all of it, when no reap
+    /// was reported). A start of any other launch is ignored.
     mutating func upstreamRelaunched(_ server: String, launch: Int) -> [MCPGatewayOutput] {
         guard case .restarting(let reason, .launching(let awaited, let until))? = phases[server], awaited == launch else {
             return []
@@ -110,7 +118,7 @@ extension MCPGatewayCore {
         let now = deadlineClock()
         var outputs: [MCPGatewayOutput] = []
         for server in order {
-            guard case .restarting(_, .launching(_, let until))? = phases[server], until <= now else { continue }
+            guard case .restarting(_, .launching(_, let until?))? = phases[server], until <= now else { continue }
             let reason = "it did not start again within \(Self.seconds(startTimeout(server))) s"
             phases[server] = .restarting(reason, .stopping)
             outputs += afterExit(server)
