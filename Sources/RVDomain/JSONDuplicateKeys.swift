@@ -104,15 +104,24 @@ public enum JSONDuplicateKeys {
             return true
         }
 
-        /// A key token's text between its quotes. Without a backslash it is
-        /// the UTF-8 bytes as they stand; otherwise `JSONDecoder` unescapes it.
+        /// A key token's text between its quotes: the UTF-8 bytes as they
+        /// stand, or unescaped by `JSONDecoder` when it has a backslash. Nil
+        /// (the scan fails) for a key holding U+FEFF, raw or escaped: Darwin
+        /// `JSONSerialization` drops a leading one and `JSONDecoder` keeps
+        /// it, so the parsers disagree on whether two such keys collide.
         private func key(_ body: ArraySlice<UInt8>) -> String? {
-            guard body.contains(UInt8(ascii: "\\")) else {
-                return String(bytes: body, encoding: .utf8)
+            let text: String?
+            if body.contains(UInt8(ascii: "\\")) {
+                let token = [UInt8(ascii: "["), UInt8(ascii: "\"")] + body + [UInt8(ascii: "\""), UInt8(ascii: "]")]
+                text = (try? decoder.decode([String].self, from: Data(token)))?.first
+            } else {
+                text = String(validating: body, as: UTF8.self)
             }
-            let token = [UInt8(ascii: "["), UInt8(ascii: "\"")] + body + [UInt8(ascii: "\""), UInt8(ascii: "]")]
-            return (try? decoder.decode([String].self, from: Data(token)))?.first
+            guard let text, !text.unicodeScalars.contains(Self.byteOrderMark) else { return nil }
+            return text
         }
+
+        private static let byteOrderMark = Unicode.Scalar(0xFEFF)!
 
         /// Bytes of numbers and of `true`, `false`, `null`.
         private static let scalarBytes = Set("0123456789+-.eEtrufalsn".utf8)

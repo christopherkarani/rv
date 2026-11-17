@@ -78,6 +78,25 @@ struct GuardConfigJSONDataTests {
         #expect(!Self.distinct(#"{"b":"# + objects + "}"))
     }
 
+    /// Darwin `JSONSerialization` drops a leading U+FEFF from a key and
+    /// `JSONDecoder` keeps it, so a key holding one fails the scan.
+    @Test("a key holding U+FEFF reads as empty", arguments: [
+        "{\"\u{FEFF}guard.mode\":\"enforce\",\"guard.mode\":\"observe\"}",
+        "{\"\u{FEFF}guard\":{\"mode\":\"enforce\"},\"guard\":{\"mode\":\"observe\"}}",
+        #"{"\uFEFFguard.mode":"enforce","guard.mode":"observe"}"#,
+        "{\"\u{FEFF}guard.mode\":\"observe\",\"" + #"\uFEFFguard.mode":"enforce"}"#,
+        "{\"guard.mode\":\"observe\",\"x\u{FEFF}\":1}",
+    ])
+    func byteOrderMarkInKey(_ json: String) {
+        #expect(!Self.distinct(json))
+        #expect(GuardConfig(jsonData: Data(json.utf8)) == .empty)
+    }
+
+    @Test("U+FEFF in a value is fine")
+    func byteOrderMarkInValue() {
+        #expect(Self.distinct("{\"x\":\"\u{FEFF}\"}"))
+    }
+
     @Test("UTF-16 and UTF-32 text fails closed")
     func wideEncodings() throws {
         let json = #"{"guard.mode": "observe"}"#

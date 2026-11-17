@@ -110,6 +110,10 @@ struct GuardConfigEquivalenceTests {
         Document("duplicate guard, object then string", #"{"guard": {"mode": "enforce"}, "guard": "x", "guard.mode": "observe"}"#),
         Document("duplicate guard, string then object", #"{"guard": "x", "guard": {"mode": "observe"}}"#),
         Document("duplicate in an unrelated object", #"{"guard.mode": "observe", "analytics": {"enabled": true, "enabled": false}}"#),
+        // U+FEFF in a key: Darwin JSONSerialization drops a leading one.
+        Document("BOM-prefixed flat mode key", "{\"\u{FEFF}guard.mode\": \"enforce\", \"guard.mode\": \"observe\"}"),
+        Document("BOM-prefixed guard key", "{\"\u{FEFF}guard\": {\"mode\": \"enforce\"}, \"guard\": {\"mode\": \"observe\"}}"),
+        Document("raw and escaped BOM keys", "{\"\u{FEFF}guard.mode\": \"observe\", " + #""\uFEFFguard.mode": "enforce"}"#),
         // Integers beyond 2^53.
         Document("mode big int, flat observe", #"{"guard": {"mode": 9007199254740993}, "guard.mode": "observe"}"#),
         Document("mode huge uint, flat observe", #"{"guard": {"mode": 18446744073709551615}, "guard.mode": "observe"}"#),
@@ -246,7 +250,8 @@ struct GuardConfigEquivalenceTests {
     ///   flat key.
     /// - Duplicate keys: Darwin keeps the first, swift-corelibs
     ///   `JSONSerialization` the last. `GuardConfig(jsonData:)` rejects any
-    ///   duplicate.
+    ///   duplicate, and any key holding U+FEFF (Darwin drops a leading one,
+    ///   so `"\u{FEFF}guard"` and `"guard"` collide there).
     /// - Validity: Darwin legacy accepts arrays nested 512 deep and
     ///   `-1e309`; Linux legacy accepts UTF-32LE with a BOM; both accept
     ///   UTF-16, which the duplicate-key scan cannot vouch for, and nesting
@@ -263,6 +268,9 @@ struct GuardConfigEquivalenceTests {
         "duplicate guard, object then string",
         "duplicate guard, string then object",
         "duplicate in an unrelated object",
+        "BOM-prefixed flat mode key",
+        "BOM-prefixed guard key",
+        "raw and escaped BOM keys",
         "mode big int, flat observe",
         "mode huge uint, flat observe",
         "engine big int, flat ft",
