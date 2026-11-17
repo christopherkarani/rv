@@ -730,6 +730,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             deliveryLimit: writeBufferBytes,
             overflowed: { [self] in
                 queue.async { self.deliveryOverflowed(server, generation) }
+            },
+            recharge: { [self] cost in
+                // A 401 retry's body counts as its first try's did.
+                queue.async { self.chargeRemote(server, generation, cost) }
+                return { [self] in queue.async { self.chargeRemote(server, generation, -cost) } }
             })
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
@@ -746,6 +751,13 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         log("MCP server \(MCPDisplayedText.field(server)) sent more than \(Self.mebibytes(writeBufferBytes)) MiB "
             + "that waits behind the client's output; stopping it")
         stopUpstream(server)
+    }
+
+    /// Adds `bytes` (or takes them off) to what this remote launch counts
+    /// against its bound; a later launch's count is not touched.
+    private func chargeRemote(_ server: String, _ generation: Int, _ bytes: Int) {
+        guard let now = remoteInFlight[server], now.generation == generation else { return }
+        remoteInFlight[server] = (now.generation, now.bytes + bytes)
     }
 
     /// Test seam: what `server`'s remote launch counts against its bound now.

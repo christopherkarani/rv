@@ -124,14 +124,18 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var task: URLSessionDataTask?
         /// rv cancelled the request and closed this POST itself.
         var closed = false
-        /// rv cut the reply off itself: it passed `maximumBodyBytes`.
-        var oversized = false
+        /// rv cut the reply off itself, past this limit (what it names: an
+        /// event, or a reply body, larger than so many bytes).
+        var oversized: String?
         /// Told once, when this POST's body has all gone out or the POST
         /// is over, whichever is first (a 401 retry takes it over if it is
-        /// not told yet).
+        /// not told yet, or counts its body again through `recharge`).
         var completed: (@Sendable () -> Void)?
         /// The size of this POST's body.
         var bodyBytes = 0
+        /// How much of it has gone out, summed from each report, so no
+        /// running total the HTTP layer may or may not keep is relied on.
+        var sentBytes: Int64 = 0
         /// This POST's own session, on Linux; invalidated when it is over.
         var ownSession: URLSession?
     }
@@ -398,9 +402,13 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     ) {
         let id = ObjectIdentifier(task)
         let taken: (@Sendable () -> Void)? = locked {
-            guard let exchange = exchanges[id], totalBytesSent >= Int64(exchange.bodyBytes) else { return nil }
-            exchanges[id]?.completed = nil
-            return exchange.completed
+            guard var exchange = exchanges[id] else { return nil }
+            exchange.sentBytes += max(0, bytesSent)
+            let done = exchange.sentBytes >= Int64(exchange.bodyBytes)
+            let completed = done ? exchange.completed : nil
+            if done { exchange.completed = nil }
+            exchanges[id] = exchange
+            return completed
         }
         taken?()
     }
@@ -430,8 +438,14 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         let id = ObjectIdentifier(dataTask)
         // A reply rv cut off for its size: what still comes of it is dropped
         // (corelibs goes on delivering what it already read after a cancel).
-        guard var exchange = locked({ exchanges[id] }), exchange.oversized == false else { return }
-        // Test seam: what runs while this reply's part is read, as a racing cancel would.
+        // Taken out with its buffers left behind empty, so what is appended
+        // here copies nothing; put back below, keeping a close made meanwhile.
+        guard var exchange = locked({ () -> Exchange? in
+            guard let taken = exchanges[id], taken.oversized == nil else { return nil }
+            exchanges[id]?.body = Data()
+            exchanges[id]?.events = MCPEventStream()
+            return taken
+        }) else { return }
         if case .post(let message, _) = exchange.kind { whileReceiving(message) }
         var incoming: [(message: JSONValue, cost: Int)] = []
         var endpointEvent: String?
@@ -445,7 +459,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             }
             if exchange.events.overflowed {
                 log("MCP server \(name) sent an event larger than \(MCPEventStream.maximumEventBytes) bytes; closing the stream")
-                exchange.oversized = true
+                exchange.oversized = "an event larger than \(MCPEventStream.maximumEventBytes) bytes"
                 dataTask.cancel()
             }
         } else if exchange.body.count + data.count <= MCPHTTPExchange.maximumBodyBytes {
@@ -453,11 +467,16 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         } else {
             log("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes; dropped")
             exchange.body = Data()
-            exchange.oversized = true
+            exchange.oversized = "a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes"
             dataTask.cancel()
         }
         for item in incoming { note(item.message, answering: &exchange) }
-        locked { exchanges[id] = exchange }
+        locked {
+            // Gone meanwhile (stopped): not put back.
+            guard let current = exchanges[id] else { return }
+            exchange.closed = exchange.closed || current.closed
+            exchanges[id] = exchange
+        }
         if let endpointEvent { useEndpoint(endpointEvent, stream: dataTask) }
         for item in incoming { hand(item.message, cost: item.cost) }
     }
@@ -508,9 +527,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         // that error, and the session is left as it is. Whether the cancel
         // rv made ends the task with an error or (on corelibs, which had
         // already read the whole reply) without one.
-        if exchange.oversized, exchange.answered == false, exchange.closed == false {
-            fail("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes, "
-                + "which rv does not pass on")
+        if let oversized = exchange.oversized, exchange.answered == false, exchange.closed == false {
+            fail("MCP server \(name) sent \(oversized), which rv does not pass on")
             return false
         }
         if let error, exchange.answered == false {
@@ -535,7 +553,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         if status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token) {
             // `post` sends nothing for a request cancelled meanwhile.
             guard let target = locked({ launch.transport == .sse ? endpoint : launch.url }) else { return false }
-            post(message, to: target, retried: true, completed: exchange.completed)
+            // Its body goes out again, and counts again as the first did.
+            post(message, to: target, retried: true, completed: exchange.completed ?? recharge(exchange.bodyBytes))
             return true
         }
         // The server ended the session: it is gone for rv, which starts a
