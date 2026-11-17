@@ -268,7 +268,7 @@ private func mcpShutdownSignalHandler(_ number: Int32) {
 /// `result` is behind its lock.
 private final class MCPPlanning<T>: @unchecked Sendable {
     private let body: () -> T
-    private let done = Mutex(false)
+    private let lock = NSLock()
     private var value: T?
     let wake = DispatchSemaphore(value: 0)
 
@@ -278,14 +278,15 @@ private final class MCPPlanning<T>: @unchecked Sendable {
 
     func run() {
         let result = body()
-        done.withLock { finished in
-            value = result
-            finished = true
-        }
+        lock.lock()
+        value = result
+        lock.unlock()
         wake.signal()
     }
 
     var result: T? {
-        done.withLock { finished in finished ? value : nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
