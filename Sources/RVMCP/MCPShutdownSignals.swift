@@ -101,6 +101,19 @@ package final class MCPShutdownSignals {
             sigemptyset(&handler.sa_mask)
             if sigaction(number, &handler, nil) == 0 { previous.append((number, before)) }
         }
+        Self.unblock(previous.map(\.number) + (catching ? [] : numbers))
+    }
+
+    /// A process started with these signals blocked (a parent's thread
+    /// mask passes to its children) would never hear them: they are
+    /// unblocked in this thread (and, on Linux, in the relay's thread, which
+    /// lives as long as the process), and left so.
+    static func unblock(_ numbers: [Int32]) {
+        guard numbers.isEmpty == false else { return }
+        var set = sigset_t()
+        sigemptyset(&set)
+        for number in numbers { sigaddset(&set, number) }
+        _ = pthread_sigmask(SIG_UNBLOCK, &set, nil)
     }
 
     /// The first signal heard, if any: serve exits 128 plus it.
@@ -235,6 +248,9 @@ private enum MCPSignalRelay {
             return false
         }
         Thread.detachNewThread {
+            // A thread that is sure to take serve's signals, whatever mask
+            // the process started with.
+            MCPShutdownSignals.unblock(MCPShutdownSignals.handled)
             var numbers = [UInt8](repeating: 0, count: 64)
             while true {
                 let count = read(readEnd, &numbers, numbers.count)
