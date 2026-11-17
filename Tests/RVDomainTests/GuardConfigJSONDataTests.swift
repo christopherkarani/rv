@@ -48,6 +48,17 @@ struct GuardConfigJSONDataTests {
         #expect(Self.distinct(testCase.json) == testCase.distinct)
     }
 
+    /// Regression: each key insert used to copy the whole key set (40,000
+    /// keys took ~33 s in release). Linear now, so this runs in well under
+    /// a second even in debug.
+    @Test("many keys in one object scan in linear time")
+    func manyKeys() {
+        let count = 50_000
+        let members = (0..<count).map { #""k\#($0)": \#($0)"# }.joined(separator: ",")
+        #expect(Self.distinct("{" + members + "}"))
+        #expect(!Self.distinct("{" + members + #","k0": 0}"#))
+    }
+
     @Test("UTF-16 and UTF-32 text fails closed")
     func wideEncodings() throws {
         let json = #"{"guard.mode": "observe"}"#

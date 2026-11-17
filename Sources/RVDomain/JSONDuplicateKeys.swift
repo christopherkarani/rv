@@ -86,12 +86,23 @@ public enum JSONDuplicateKeys {
             guard end < bytes.count else { return false }
             defer { index = end + 1 }
             guard case .object(var keys, true) = stack.last else { return true }
-            let token = [UInt8(ascii: "[")] + bytes[index...end] + [UInt8(ascii: "]")]
-            guard let key = (try? decoder.decode([String].self, from: Data(token)))?.first,
-                  keys.insert(key).inserted
-            else { return false }
+            guard let key = key(bytes[(index + 1)..<end]) else { return false }
+            // Drop the stack's reference first, so `insert` grows the set in
+            // place instead of copying it for every key.
+            stack[stack.count - 1] = .array
+            guard keys.insert(key).inserted else { return false }
             stack[stack.count - 1] = .object(keys: keys, expectingKey: true)
             return true
+        }
+
+        /// A key token's text between its quotes. Without a backslash it is
+        /// the UTF-8 bytes as they stand; otherwise `JSONDecoder` unescapes it.
+        private func key(_ body: ArraySlice<UInt8>) -> String? {
+            guard body.contains(UInt8(ascii: "\\")) else {
+                return String(bytes: body, encoding: .utf8)
+            }
+            let token = [UInt8(ascii: "["), UInt8(ascii: "\"")] + body + [UInt8(ascii: "\""), UInt8(ascii: "]")]
+            return (try? decoder.decode([String].self, from: Data(token)))?.first
         }
 
         /// Bytes of numbers and of `true`, `false`, `null`.
