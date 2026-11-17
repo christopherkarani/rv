@@ -261,7 +261,7 @@ struct MCPShutdownSignalTests {
 
     /// Planning is not waited on once a signal is heard: a plan that never
     /// returns (a hung secret provider) still ends at the first signal, and
-    /// one heard before planning ends it before it starts.
+    /// after one heard before planning, no plan starts at all.
     @Test(.timeLimit(.minutes(1)))
     func aSignalEndsPlanningThatNeverReturns() {
         let signals = MCPShutdownSignals([SIGURG], catching: false)
@@ -282,7 +282,14 @@ struct MCPShutdownSignalTests {
         }
         #expect(planned == nil)
         #expect(signals.first == SIGURG)
-        #expect(signals.plan { 1 } == nil, "a plan after a signal was used")
+        let ran = Mutex(false)
+        let late: Int? = signals.plan {
+            ran.withLock { $0 = true }
+            return 1
+        }
+        #expect(late == nil, "a plan after a signal was used")
+        usleep(200_000)
+        #expect(ran.withLock { $0 } == false, "a plan started after a signal was heard")
         let quiet = MCPShutdownSignals([SIGURG], catching: false)
         defer { quiet.cancel() }
         #expect(quiet.plan { 7 } == 7)
