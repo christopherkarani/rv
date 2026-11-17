@@ -173,12 +173,19 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private var cancelledIDs: [JSONValue] = []
     static let cancelledMemory = 256
 
-    /// The most requests (POSTs of any kind) one remote has in flight. On
-    /// Linux each is a session and a connection of its own, so this bounds
-    /// rv's descriptors whatever the server does. 160: the 64 calls the
-    /// gateway lets a remote have (`MCPGatewayCore.maximumRemoteCallsInFlight`),
-    /// a cancel for each, and 32 for listings, pings and notifications.
+    /// The most requests (POSTs of any kind) one remote server has in
+    /// flight; each remote has its own. On Linux each is a session and a
+    /// connection of its own, so this bounds what one remote holds of rv's
+    /// descriptors whatever it does (several remotes add up). 160: the 64
+    /// calls the gateway lets a remote have
+    /// (`MCPGatewayCore.maximumRemoteCallsInFlight`), a cancel for each, and
+    /// 32 for listings, pings and notifications. `send` checks it; a 401
+    /// retry or the legacy SSE endpoint's flush posts from the delegate
+    /// queue meanwhile, so the count can pass it by those for a moment.
     package static let maximumRequestsInFlight = 160
+    /// How long a notification's POST is waited on for its response head:
+    /// a list page's time.
+    static let notificationTimeout = MCPGatewayDeadlines.standardList
     private let requestLimit: Int
 
     package init(
@@ -292,8 +299,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     /// False when `requestLimit` requests are already in flight: then
     /// nothing is posted (`completed` is told at once, and a line logged),
     /// though a cancel still closes the request it names. Only the remote's
-    /// one sender calls this, so the count cannot change under it but by
-    /// requests ending.
+    /// one sender calls this; a 401 retry or the SSE endpoint's flush can
+    /// post meanwhile from the delegate queue, so the count can pass the
+    /// limit by those for a moment.
     @discardableResult
     package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) -> Bool {
         let target: Result<URL?, Never>? = locked {
@@ -396,7 +404,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             var request = MCPHTTPExchange.request(
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
-            request.timeoutInterval = launch.answerTimeout
+            // A notification (or a reply) is owed no answer: its POST is let
+            // go once its response head is in, or after a list page's time.
+            request.timeoutInterval = MCPHTTPExchange.isRequest(message) ? launch.answerTimeout : Self.notificationTimeout
             // An upload task: corelibs reports a body's progress only for one.
             request.httpBody = nil
             let own = Self.sessionPerPost ? makeSession() : nil
@@ -457,16 +467,25 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             return
         }
         let contentType = MCPHTTPExchange.header(http, "Content-Type")?.lowercased() ?? ""
-        locked {
-            exchanges[ObjectIdentifier(dataTask)]?.status = http.statusCode
-            exchanges[ObjectIdentifier(dataTask)]?.isEventStream = contentType.hasPrefix("text/event-stream")
+        let notification: Bool = locked {
+            let id = ObjectIdentifier(dataTask)
+            exchanges[id]?.status = http.statusCode
+            exchanges[id]?.isEventStream = contentType.hasPrefix("text/event-stream")
             if launch.transport == .http, (200..<300).contains(http.statusCode),
                 let assigned = MCPHTTPExchange.header(http, "Mcp-Session-Id"), MCPHTTPExchange.isSessionID(assigned)
             {
                 sessionID = assigned
             }
+            // The head is all a notification's POST is owed (a 401 is
+            // refreshed and sent again, a 404 ends the session, as before).
+            guard case .post(let message, _)? = exchanges[id]?.kind, MCPHTTPExchange.isRequest(message) == false,
+                http.statusCode != 401, http.statusCode != 404
+            else { return false }
+            exchanges[id]?.closed = true
+            return true
         }
         completionHandler(.allow)
+        if notification { dataTask.cancel() }
     }
 
     package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
