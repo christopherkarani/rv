@@ -65,6 +65,7 @@ let terminalProbeProducts: [Product] = [
     .executable(name: "rv-pty-claim", targets: ["rv-pty-claim"]),
     .executable(name: "rv-run-probe", targets: ["rv-run-probe"]),
     .executable(name: "rv-mcp-probe", targets: ["rv-mcp-probe"]),
+    .executable(name: "rv-mcp-signal-probe", targets: ["rv-mcp-signal-probe"]),
 ]
 let terminalProbeTargets: [Target] = [
     .executableTarget(
@@ -78,12 +79,20 @@ let terminalProbeTargets: [Target] = [
     // RVMCPTests' child: signal dispositions out of the test process, and
     // what a caged server can read of its parent.
     .executableTarget(name: "rv-mcp-probe", dependencies: ["RVMCP", "RVIsolation"]),
+    // RVMCPTests' child for serve's real signals, on macOS and Linux.
+    .executableTarget(name: "rv-mcp-signal-probe", dependencies: ["RVMCP"]),
 ]
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-probe"] + mcpTestHelperDependencies
+let mcpTestDependencies: [Target.Dependency] =
+    ["RVMCP", "RVIsolation", "rv-mcp-probe", "rv-mcp-signal-probe"] + mcpTestHelperDependencies
 #else
-let terminalProbeProducts: [Product] = []
-let terminalProbeTargets: [Target] = []
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation"] + mcpTestHelperDependencies
+let terminalProbeProducts: [Product] = [
+    .executable(name: "rv-mcp-signal-probe", targets: ["rv-mcp-signal-probe"]),
+]
+let terminalProbeTargets: [Target] = [
+    // RVMCPTests' child for serve's real signals, on macOS and Linux.
+    .executableTarget(name: "rv-mcp-signal-probe", dependencies: ["RVMCP"]),
+]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-signal-probe"] + mcpTestHelperDependencies
 #endif
 
 let coreLibraryTargets: [Target] = [

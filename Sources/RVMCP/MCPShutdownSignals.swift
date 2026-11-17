@@ -17,7 +17,7 @@ package final class MCPShutdownSignals {
 
     /// The signals heard, in order, and where each goes. The one part the
     /// signal deliveries share; it is behind its own lock.
-    fileprivate final class Heard: Sendable {
+    final class Heard: Sendable {
         struct State {
             var numbers: [Int32] = []
             var action: (@Sendable () -> Void)?
@@ -36,6 +36,10 @@ package final class MCPShutdownSignals {
 
     private let heard = Heard()
     private var previous: [(number: Int32, action: sigaction)] = []
+    /// Whether signals are heard at all. False only on Linux when the relay
+    /// pipe could not be made: then nothing was installed, and serve must
+    /// not run (a signal would end rv with every server still running).
+    package private(set) var installed = true
     #if canImport(Darwin)
     private var sources: [any DispatchSourceSignal] = []
     #endif
@@ -58,11 +62,22 @@ package final class MCPShutdownSignals {
     /// the default, and left so by `cancel`: an ignored SIGCHLD reaps each
     /// child by itself, and a server's supervisor could then neither kill
     /// what is left of its group nor learn how it ended.
-    package init(_ numbers: [Int32], catching: Bool) {
-        if catching { Self.defaultChildSignal() }
-        #if !canImport(Darwin)
-        guard MCPSignalRelay.listen(heard) else { return }
+    package convenience init(_ numbers: [Int32], catching: Bool) {
+        #if canImport(Darwin)
+        self.init(numbers, catching: catching, relay: { _ in true })
+        #else
+        self.init(numbers, catching: catching, relay: MCPSignalRelay.listen)
         #endif
+    }
+
+    /// `relay`: what makes signals heard on Linux (`MCPSignalRelay`); a
+    /// test passes one that fails.
+    init(_ numbers: [Int32], catching: Bool, relay: (Heard) -> Bool) {
+        if catching { Self.defaultChildSignal() }
+        guard relay(heard) else {
+            installed = false
+            return
+        }
         for number in numbers {
             var before = sigaction()
             guard sigaction(number, nil, &before) == 0 else { continue }
@@ -121,6 +136,40 @@ package final class MCPShutdownSignals {
         #endif
     }
 
+    /// Runs `body` (planning) on a thread of its own and returns what it
+    /// returned, or nil as soon as a signal is heard, before or while it
+    /// runs: serve then ends at once, however long a secret provider or
+    /// prompt holds the plan. A plan still running then is left to finish
+    /// on its own, and nothing it returns is used.
+    package func plan<T>(_ body: @escaping () -> T) -> T? {
+        let planning = MCPPlanning(body)
+        forward { planning.wake.signal() }
+        Thread.detachNewThread { planning.run() }
+        while true {
+            planning.wake.wait()
+            if first != nil { return nil }
+            if let result = planning.result { return result }
+        }
+    }
+
+    /// Serves `runtime` until it returns: each signal asks it to shut down
+    /// (from the second on it hurries), then the signals are cancelled.
+    /// Returns serve's exit status (`exitCode`).
+    package func serve(_ runtime: MCPGatewayRuntime) -> Int32? {
+        forward { runtime.requestShutdown() }
+        let ending = runtime.run()
+        cancel()
+        return Self.exitCode(ending, signal: first)
+    }
+
+    /// How serve exits once the runtime returns: as killed by the first
+    /// signal it heard, 1 when the client stopped reading (the runtime said
+    /// why on stderr), otherwise successfully (nil).
+    package static func exitCode(_ ending: MCPGatewayRuntime.Ending, signal: Int32?) -> Int32? {
+        if let signal { return 128 + signal }
+        return ending == .clientNotReading ? 1 : nil
+    }
+
     private static func defaultChildSignal() {
         var current = sigaction()
         guard sigaction(SIGCHLD, nil, &current) == 0, ignores(current) else { return }
@@ -176,13 +225,13 @@ private enum MCPSignalRelay {
     private static func start() -> Bool {
         var ends: [Int32] = [-1, -1]
         guard pipe(&ends) == 0 else { return false }
-        let (readEnd, writeEnd) = (ends[0], ends[1])
+        let (readEnd, writing) = (ends[0], ends[1])
         // Never inherited. A full pipe drops a signal instead of blocking its handler.
-        guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) == 0, fcntl(writeEnd, F_SETFD, FD_CLOEXEC) == 0,
-            fcntl(writeEnd, F_SETFL, O_NONBLOCK) == 0
+        guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) == 0, fcntl(writing, F_SETFD, FD_CLOEXEC) == 0,
+            fcntl(writing, F_SETFL, O_NONBLOCK) == 0
         else {
             _ = close(readEnd)
-            _ = close(writeEnd)
+            _ = close(writing)
             return false
         }
         Thread.detachNewThread {
@@ -196,7 +245,7 @@ private enum MCPSignalRelay {
                 for number in numbers.prefix(count) { heard.record(Int32(number)) }
             }
         }
-        self.writeEnd.store(writeEnd, ordering: .sequentiallyConsistent)
+        writeEnd.store(writing, ordering: .sequentiallyConsistent)
         return true
     }
 }
@@ -212,3 +261,31 @@ private func mcpShutdownSignalHandler(_ number: Int32) {
     errno = saved
 }
 #endif
+
+/// One plan run off serve's thread for `MCPShutdownSignals.plan`: its
+/// result once it returns, and the wake-up serve waits on (the plan ending,
+/// or a signal). Unchecked: `body` runs only on the planning thread, and
+/// `result` is behind its lock.
+private final class MCPPlanning<T>: @unchecked Sendable {
+    private let body: () -> T
+    private let done = Mutex(false)
+    private var value: T?
+    let wake = DispatchSemaphore(value: 0)
+
+    init(_ body: @escaping () -> T) {
+        self.body = body
+    }
+
+    func run() {
+        let result = body()
+        done.withLock { finished in
+            value = result
+            finished = true
+        }
+        wake.signal()
+    }
+
+    var result: T? {
+        done.withLock { finished in finished ? value : nil }
+    }
+}

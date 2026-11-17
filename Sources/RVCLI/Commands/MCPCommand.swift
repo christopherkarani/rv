@@ -1723,10 +1723,15 @@ struct MCPServe: AsyncParsableCommand {
         // last group is reaped. Every server runs in a process group of its
         // own, which a terminal's or a host's signal no longer reaches, so
         // every serve catches them. A second signal kills what is left at
-        // once. Planning itself is not interruptible: a signal during it,
-        // first or second, is held and acted on once planning returns.
+        // once. A signal while planning ends serve at once, however long a
+        // secret provider holds the plan: no server runs yet, the proxies
+        // planning started are stopped, and its leases end with the broker.
         let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
         defer { signals.cancel() }
+        guard signals.installed else {
+            try fail("rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; "
+                + "not serving")
+        }
         // Its gateway serves only the servers that list `placeholders`, each
         // lease bound to that server's process group; it stops with serve.
         let placeholderBroker = SecretPlaceholderBroker(
@@ -1736,14 +1741,20 @@ struct MCPServe: AsyncParsableCommand {
         // `upstreamLaunches` makes: from the configuration it verified for
         // these launches, never the read above.
         let plan: MCPServePlan
-        switch MCPRun.upstreamLaunches(
-            names: names, configuration: configuration, environment: environment, secrets: secrets,
-            resolver: .live(home: home.rawValue),
-            sandbox: MCPSandbox.apply(
-                configDirectory: environment.configDirectory, home: environment.home,
-                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)),
-            placeholders: .broker(placeholderBroker))
-        {
+        let outcome = signals.plan {
+            MCPRun.upstreamLaunches(
+                names: names, configuration: configuration, environment: environment, secrets: secrets,
+                resolver: .live(home: home.rawValue),
+                sandbox: MCPSandbox.apply(
+                    configDirectory: environment.configDirectory, home: environment.home,
+                    denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)),
+                placeholders: .broker(placeholderBroker))
+        }
+        guard let outcome, signals.first == nil else {
+            MCPSandbox.stopProxies()
+            throw ExitCode(128 + (signals.first ?? SIGTERM))
+        }
+        switch outcome {
         case .failure(let failure): try fail(failure.message)
         case .success(let result): plan = result
         }
@@ -1801,25 +1812,22 @@ struct MCPServe: AsyncParsableCommand {
             placeholdersBound: { server, definitions in
                 for line in MCPRun.placeholderBindingLog(server: server, definitions: definitions) { log(line) }
             })
-        // Heard while planning: nothing was spawned, and the leases end with
+        // Heard since planning: nothing was spawned, and the leases end with
         // the broker. Exits as a signal-killed serve would report it.
         if let number = signals.first {
             MCPSandbox.stopProxies()
             throw ExitCode(128 + number)
         }
-        signals.forward { runtime.requestShutdown() }
-        let ending = runtime.run()
-        signals.cancel()
+        let code = signals.serve(runtime)
         MCPSandbox.stopProxies()
-        if let code = Self.exitCode(ending, signal: signals.first) { throw ExitCode(code) }
+        if let code { throw ExitCode(code) }
     }
 
     /// How serve exits once the runtime returns: as killed by a signal it
     /// heard, 1 when the client stopped reading (the runtime said why on
     /// stderr), otherwise successfully (nil).
     static func exitCode(_ ending: MCPGatewayRuntime.Ending, signal: Int32?) -> Int32? {
-        if let signal { return 128 + signal }
-        return ending == .clientNotReading ? 1 : nil
+        MCPShutdownSignals.exitCode(ending, signal: signal)
     }
 }
 
