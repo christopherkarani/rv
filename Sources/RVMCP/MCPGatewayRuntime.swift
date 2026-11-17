@@ -711,7 +711,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// placeholder server's lease revoked), then it is planned again
     /// (`relaunch`, or its serve-start connection); back on the queue it is
     /// started and the core told, or the core hears it went away again.
-    private func restart(_ server: String) {
+    private func restart(_ server: String, launch: Int) {
         let earlier = groups.values.filter { $0.server == server }.map { $0.group }
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
@@ -727,7 +727,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             } else {
                 planned = Self.reused(original)
             }
-            queue.async { self.relaunched(server, planned) }
+            queue.async { self.relaunched(server, launch: launch, planned) }
         }
     }
 
@@ -745,9 +745,13 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
-    private func relaunched(_ server: String, _ planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>) {
+    private func relaunched(
+        _ server: String, launch: Int, _ planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
+    ) {
         let shown = MCPDisplayedText.field(server)
-        guard stopping == false else {
+        // Serving ends, or the core stopped waiting for this launch (it ran
+        // out of time): nothing is started, and the core is not told.
+        guard stopping == false, core.awaitsRelaunch(server: server, launch: launch) else {
             if case .success((_, .placeholderBound(_, let binding))) = planned { binding.lease.revoke() }
             return
         }
@@ -774,7 +778,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             log("not starting MCP server \(shown) again: \(refusal.message)")
             started = false
         }
-        perform(core.handle(started ? .upstreamRelaunched(server: server) : .upstreamExited(server: server)))
+        perform(core.handle(started ? .upstreamRelaunched(server: server, launch: launch) : .upstreamExited(server: server)))
     }
 
     /// `charging`: the reader whose line produced `outputs`, held back until
@@ -795,8 +799,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 log(text)
             case .stopUpstream(let server):
                 stopUpstream(server)
-            case .restartUpstream(let server):
-                restart(server)
+            case .restartUpstream(let server, let launch):
+                restart(server, launch: launch)
             }
         }
     }

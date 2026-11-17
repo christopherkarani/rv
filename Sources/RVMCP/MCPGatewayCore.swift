@@ -7,8 +7,9 @@ public enum MCPGatewayInput: Sendable, Equatable {
     case clientUnparseable
     case upstream(server: String, message: JSONValue)
     case upstreamExited(server: String)
-    /// The runtime started this server again after `restartUpstream`.
-    case upstreamRelaunched(server: String)
+    /// The runtime started this server again after `restartUpstream` for
+    /// this `launch`.
+    case upstreamRelaunched(server: String, launch: Int)
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
@@ -26,8 +27,9 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Stop this upstream now: kill its process, or close its connection.
     /// The core already counts it failed; its exit may still be reported.
     case stopUpstream(server: String)
-    /// Start this server again, as it was started at serve start.
-    case restartUpstream(server: String)
+    /// Start this server again, as it was started at serve start. `launch`
+    /// numbers this try; the core waits for no other (`awaitsRelaunch`).
+    case restartUpstream(server: String, launch: Int)
 }
 
 /// How long the gateway waits for each `tools/list` page. An `initialize`
@@ -163,9 +165,14 @@ public struct MCPGatewayCore {
         case stopping
         /// Its exit was seen; it is started again at this time.
         case waiting(until: Date)
-        /// `restartUpstream` was sent: it is being started, initialized,
+        /// `restartUpstream` was sent for this launch: it is being planned
+        /// and started. Past `until` (its `startTimeoutSeconds` after the
+        /// restart) it counts as gone again, and a late start of this
+        /// launch is not taken.
+        case launching(Int, until: Date)
+        /// The runtime started it: it is initialized (by the same `until`),
         /// then listed again.
-        case launching
+        case relisting
     }
 
     struct Approval {
@@ -383,6 +390,11 @@ public struct MCPGatewayCore {
     var everReady: Set<String> = []
     /// server → when it was relaunched, within the last `restartWindow`.
     var relaunches: [String: [Date]] = [:]
+    /// server → the tool names its current launch listed, for a server rv
+    /// started again this session. A call to any other tool of it is
+    /// refused: what an earlier launch listed says nothing about this one.
+    /// At most `maximumListedTools` names; a name past that is refused.
+    var launchListed: [String: Set<String>] = [:]
     /// A `tools/list` answer gave the client at least one tool, so a server
     /// going or coming back changes what it was told.
     var clientToldTools = false
@@ -456,9 +468,11 @@ public struct MCPGatewayCore {
         }
     }
 
-    /// `initialize`, waited for up to the server's `startTimeoutSeconds`.
-    mutating func initialize(_ server: String) -> MCPGatewayOutput {
-        let id = allocate(.initialize(server: server, deadline: deadlineClock().addingTimeInterval(startTimeout(server))))
+    /// `initialize`, waited for up to the server's `startTimeoutSeconds`,
+    /// or until `deadline` when one is given.
+    mutating func initialize(_ server: String, by deadline: Date? = nil) -> MCPGatewayOutput {
+        let deadline = deadline ?? deadlineClock().addingTimeInterval(startTimeout(server))
+        let id = allocate(.initialize(server: server, deadline: deadline))
         return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
             "protocolVersion": .string(Self.upstreamVersion),
             "capabilities": .object([:]),
@@ -473,15 +487,15 @@ public struct MCPGatewayCore {
         // and expiring first would drop it silently.
         if case .client(let message) = input, message["method"] == nil,
             let key = message["id"]?.stringValue, held[key] != nil {
-            return clientMessage(message) + expireHeld() + expireDeadlines() + dueRestarts()
+            return clientMessage(message) + expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         }
-        var outputs = expireHeld() + expireDeadlines() + dueRestarts()
+        var outputs = expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         switch input {
         case .client(let message): outputs += clientMessage(message)
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
-        case .upstreamRelaunched(let server): outputs += upstreamRelaunched(server)
+        case .upstreamRelaunched(let server, let launch): outputs += upstreamRelaunched(server, launch: launch)
         case .tick, .gatewayStopping: break
         }
         return outputs
@@ -697,7 +711,7 @@ public struct MCPGatewayCore {
         }
         guard phases[call.server] == .ready else {
             return unavailable(
-                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approved: true)
+                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
@@ -766,11 +780,19 @@ public struct MCPGatewayCore {
             waiting.remove(at: index)
             return []
         }
-        if let key = held.first(where: { $0.value.client == target })?.key {
+        // A prompt still shown: its `awaiting` row ends declined, and the
+        // client's prompt is withdrawn.
+        if let entry = held.first(where: { $0.value.client == target }) {
+            let key = entry.key, call = entry.value
             held[key] = nil
-            return [.toClient(Self.notification("notifications/cancelled", .object([
-                "requestId": .string(key), "reason": .string("the tool call was cancelled"),
-            ])))]
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
+                    isError: true, reason: "cancelled by client", outcome: .declined(approvalID: key))),
+                .toClient(Self.notification("notifications/cancelled", .object([
+                    "requestId": .string(key), "reason": .string("the tool call was cancelled"),
+                ]))),
+            ]
         }
         for (id, entry) in pending {
             guard case .call(let call) = entry, call.client == target else { continue }
@@ -896,7 +918,10 @@ public struct MCPGatewayCore {
             ]
         }
         guard phases[server] == .ready else {
-            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approved: false)
+            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
+        }
+        if let listed = launchListed[server], listed.contains(tool) == false {
+            return notListedSinceRestart(client: client, server: server, tool: tool, exposed: exposed, keys: keys)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -1083,22 +1108,47 @@ public struct MCPGatewayCore {
         ]
     }
 
+    /// A call whose server is not ready. Nothing is forwarded: a prompt the
+    /// user accepted (`approvalID`) ends declined, any other call `notRun`.
     func unavailable(
         client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
-        approved: Bool
+        approvalID: String?
     ) -> [MCPGatewayOutput] {
         if case .restarting(let why, _)? = phases[server] {
             return restarting(
-                client: client, server: server, tool: tool, decision: decision, keys: keys, approved: approved, reason: why)
+                client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: approvalID, reason: why)
         }
         let reason: String
         if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
         return [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
-                reason: "upstream unavailable: \(reason)", outcome: approved ? .interrupted(grant: nil) : .notRun)),
+                reason: "upstream unavailable: \(reason)", outcome: Self.notForwarded(approvalID))),
             .toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) is unavailable: \(reason)")),
         ]
+    }
+
+    /// A call to a tool the server's current launch has not listed since rv
+    /// started it again: refused, never forwarded, until a listing of this
+    /// launch names it.
+    func notListedSinceRestart(
+        client: JSONValue, server: String, tool: String, exposed: String, keys: [String]
+    ) -> [MCPGatewayOutput] {
+        [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                reason: "the server has not listed this tool since rv restarted it", outcome: .notRun)),
+            .toClient(Self.error(
+                id: client, code: -32602,
+                message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
+                    + "did not list it after rv restarted it; the call was not run.")),
+        ]
+    }
+
+    /// The outcome of a call that never went upstream: declined with its
+    /// prompt's approval id, or `notRun` when nothing was asked.
+    static func notForwarded(_ approvalID: String?) -> MCPCallRecord.Outcome {
+        approvalID.map { .declined(approvalID: $0) } ?? .notRun
     }
 
     /// Longest configured `<server>__` prefix. A tie (two exposed names that
@@ -1153,7 +1203,7 @@ public struct MCPGatewayCore {
                 let initialized = MCPGatewayOutput.toUpstream(
                     server: server, message: Self.notification("notifications/initialized", nil))
                 // Relaunched: listed again before any call reaches it.
-                if case .restarting(_, .launching)? = phases[server] { return [initialized] + relist(server) }
+                if case .restarting(_, .relisting)? = phases[server] { return [initialized] + relist(server) }
                 phases[server] = .ready
                 everReady.insert(server)
                 return [initialized] + releaseWaiting()
@@ -1215,6 +1265,8 @@ public struct MCPGatewayCore {
                 let key = server + "\0" + cursor
                 if state.seenCursors.contains(key) || state.pages[server, default: 0] >= Self.maximumListPagesPerServer {
                     outputs.append(.log("MCP server \(server) cycled or over-paged its tool list; stopping pagination"))
+                    // rv's own listing after a relaunch is then not complete.
+                    if state.relaunch == server { state.failed.insert(server) }
                 } else {
                     state.seenCursors.insert(key)
                     fanouts[fanout] = state
@@ -1229,7 +1281,9 @@ public struct MCPGatewayCore {
             state.failed.insert(server)
         }
         if let upstream = upstreams[server] {
-            let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
+            let listed = state.listed.removeValue(forKey: server) ?? []
+            noteLaunchListed(listed, server: server)
+            let settled = settleListing(listed, upstream: upstream)
             state.tools += settled.tools
             outputs += settled.outputs
         }
