@@ -186,10 +186,10 @@ struct HostCommandTests {
     }
 
     /// A config `GuardConfig` rejects (here a repeated key) is unreadable,
-    /// not "no entries": leaving it for `block` must still treat the host as
-    /// possibly `off`, so the hook is re-wired instead of the store saying
-    /// block over an unwired host.
-    @Test func block_overAnUnreadableConfigWithTheHostOff_rewires() async throws {
+    /// not "no entries", and no writer rewrites it: `block` stores nothing
+    /// and re-wires nothing (the host stays as `off` left it, never looser),
+    /// and tells the owner to fix the file.
+    @Test func block_overAnUnreadableConfigWithTheHostOff_refusesAndStaysUnwired() async throws {
         try await withTempHomeAsync { home, layout, environment in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
             #expect(SetupRun.setup(environment).exitCode == 0)
@@ -204,20 +204,22 @@ struct HostCommandTests {
             let list = HostModeRun.list(environment, json: true)
             #expect(list.stdout.contains(#"{"host":"grok","mode":"block","wiring":"absent-file"}"#))
 
+            let unreadable = try Data(contentsOf: config)
             let probe = AuthProbe(allow: false)
             let block = await HostModeRun.setMode(
                 .block, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
-            #expect(block.exitCode == 0)
-            #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
+            #expect(block.exitCode == EX_DATAERR)
+            #expect(block.stdout.isEmpty)
+            #expect(block.stderr.contains("fix config.json by hand"))
             #expect(probe.calls == 0)
-            #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-            #expect(store(home).read() == .entries([.grok: .block]))
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+            #expect(try Data(contentsOf: config) == unreadable)
         }
     }
 
-    /// Reading an unreadable config as possibly `off` re-wires a host that
-    /// is already wired: the same write `rv setup` repeats, so the hook is
-    /// unchanged. The trusted-daemon check still applies first.
+    /// Reading an unreadable config as possibly `off` runs the
+    /// trusted-daemon check first; with a trusted daemon the write is then
+    /// refused, and the wired hook and the file are left as they were.
     @Test func block_overAnUnreadableConfigWithTheHostWired_keepsTheHookAndChecksTheDaemon() async throws {
         try await withTempHomeAsync { home, layout, base in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
@@ -244,9 +246,10 @@ struct HostCommandTests {
 
             let block = await HostModeRun.setMode(
                 .block, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: false).authenticate)
-            #expect(block.exitCode == 0)
+            #expect(block.exitCode == EX_DATAERR)
+            #expect(block.stderr.contains("fix config.json by hand"))
             #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == hook)
-            #expect(store(home).read() == .entries([.grok: .block]))
+            #expect(try Data(contentsOf: config) == unreadable)
         }
     }
 
