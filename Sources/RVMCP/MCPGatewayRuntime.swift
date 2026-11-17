@@ -405,6 +405,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// How long serve's own stop leaves each server to exit before SIGTERM:
     /// `MCPPlaceholderShutdown.grace`, unless a test widens it.
     private let shutdownGrace: TimeInterval
+    /// `MCPRemoteUpstream.maximumRequestsInFlight`, unless a test lowers it.
+    private let remoteRequestLimit: Int
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private let clientProgress = MCPWriteProgress()
@@ -464,6 +466,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
         restartWait: TimeInterval? = nil,
         shutdownGrace: TimeInterval? = nil,
+        remoteRequestLimit: Int? = nil,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -485,6 +488,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.stopGrace = stopGrace
         self.restartWait = restartWait ?? stopGrace + Self.restartReapGrace
         self.shutdownGrace = shutdownGrace ?? MCPPlaceholderShutdown.grace
+        self.remoteRequestLimit = remoteRequestLimit ?? MCPRemoteUpstream.maximumRequestsInFlight
         self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
@@ -740,7 +744,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 // A 401 retry's body counts as its first try's did.
                 queue.async { self.chargeRemote(server, generation, cost) }
                 return { [self] in queue.async { self.chargeRemote(server, generation, -cost) } }
-            })
+            },
+            requestLimit: remoteRequestLimit)
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
         remoteInFlight[server] = (generation, 0)
@@ -756,6 +761,13 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         log("MCP server \(MCPDisplayedText.field(server)) sent more than \(Self.mebibytes(writeBufferBytes)) MiB "
             + "that waits behind the client's output; stopping it")
         stopUpstream(server)
+    }
+
+    /// A request this remote launch did not post: the core ends what
+    /// waited on it.
+    private func unsent(_ server: String, _ generation: Int, id: JSONValue) {
+        guard stopping == false, live[server] == generation else { return }
+        perform(core.handle(.upstreamUnsent(server: server, id: id)))
     }
 
     /// Adds `bytes` (or takes them off) to what this remote launch counts
@@ -984,12 +996,17 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             if flight.bytes > 0, flight.bytes + cost > writeBufferBytes {
                 admission = .overflow
             } else {
-                admission = sender.submit(cost: 0) {
-                    remote.send(message) { [self] in
+                admission = sender.submit(cost: 0) { [self] in
+                    let sent = remote.send(message) { [self] in
                         queue.async {
                             guard let now = self.remoteInFlight[server], now.generation == flight.generation else { return }
                             self.remoteInFlight[server] = (now.generation, now.bytes - cost)
                         }
+                    }
+                    // Not posted (the remote has its most requests in
+                    // flight): a request waiting on it ends now.
+                    if sent == false, MCPHTTPExchange.isRequest(message), let id = message["id"] {
+                        queue.async { self.unsent(server, flight.generation, id: id) }
                     }
                 }
                 if admission == .queued { remoteInFlight[server] = (flight.generation, flight.bytes + cost) }

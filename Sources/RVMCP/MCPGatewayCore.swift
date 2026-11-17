@@ -14,6 +14,9 @@ public enum MCPGatewayInput: Sendable, Equatable {
     /// server's lease revoked): the runtime now plans and starts `launch`,
     /// and its `startTimeoutSeconds` counts from here.
     case upstreamReaped(server: String, launch: Int)
+    /// The runtime did not send this request to `server` (a remote with its
+    /// most requests in flight): what waited on it ends now.
+    case upstreamUnsent(server: String, id: JSONValue)
     /// Time passed: deadlines are checked, as they are on every input. The
     /// runtime sends one about every second.
     case tick
@@ -505,6 +508,7 @@ public struct MCPGatewayCore {
         case .upstreamExited(let server): outputs += upstreamExited(server)
         case .upstreamRelaunched(let server, let launch): outputs += upstreamRelaunched(server, launch: launch)
         case .upstreamReaped(let server, let launch): upstreamReaped(server, launch: launch)
+        case .upstreamUnsent(let server, let id): outputs += upstreamUnsent(server, id: id)
         case .tick, .gatewayStopping: break
         }
         return outputs
@@ -1206,6 +1210,34 @@ public struct MCPGatewayCore {
                 message: "MCP server \(MCPDisplayedText.field(server)) already has \(limit) calls in flight, the most rv "
                     + "sends a remote server at once; the call was not run. Try it again once one of them has finished.")),
         ]
+    }
+
+    /// A request rv did not send to `server`. A call ends not run, with
+    /// its error to the client; a listing page fails as an unanswered page
+    /// does. Anything else (an `initialize`, a `ping`) is left to its own
+    /// deadline, which fails closed.
+    mutating func upstreamUnsent(_ server: String, id: JSONValue) -> [MCPGatewayOutput] {
+        guard let key = id.intValue, let entry = pending[key] else { return [] }
+        switch entry {
+        case .call(let call) where call.server == server:
+            pending[key] = nil
+            progressTokens[key] = nil
+            let reason = "not sent: MCP server \(MCPDisplayedText.field(server)) has its most requests in flight"
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask, argumentKeys: call.keys,
+                    isError: true, reason: reason, outcome: .notRun)),
+                .toClient(Self.error(
+                    id: call.client, code: -32603,
+                    message: "MCP server \(MCPDisplayedText.field(server)) has too many requests in flight; tool "
+                        + "\(MCPDisplayedText.field(call.tool)) was not run. Try it again once some have finished.")),
+            ]
+        case .list(let fanout, let owner, _) where owner == server:
+            pending[key] = nil
+            return listPage(fanout: fanout, server: server, message: .null, failure: "has too many requests in flight to list tools")
+        default:
+            return []
+        }
     }
 
     /// The outcome of a call that never went upstream: declined with its

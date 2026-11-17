@@ -173,6 +173,14 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private var cancelledIDs: [JSONValue] = []
     static let cancelledMemory = 256
 
+    /// The most requests (POSTs of any kind) one remote has in flight. On
+    /// Linux each is a session and a connection of its own, so this bounds
+    /// rv's descriptors whatever the server does. 160: the 64 calls the
+    /// gateway lets a remote have (`MCPGatewayCore.maximumRemoteCallsInFlight`),
+    /// a cancel for each, and 32 for listings, pings and notifications.
+    package static let maximumRequestsInFlight = 160
+    private let requestLimit: Int
+
     package init(
         launch: MCPRemoteLaunch,
         authorizer: MCPRemoteAuthorizer? = nil,
@@ -182,8 +190,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         deliveryLimit: Int = MCPGatewayRuntime.writeBufferBytes,
         overflowed: @escaping @Sendable () -> Void = {},
         recharge: @escaping @Sendable (Int) -> (@Sendable () -> Void)? = { _ in nil },
-        whileReceiving: @escaping @Sendable (JSONValue) -> Void = { _ in }
+        whileReceiving: @escaping @Sendable (JSONValue) -> Void = { _ in },
+        requestLimit: Int = MCPRemoteUpstream.maximumRequestsInFlight
     ) {
+        self.requestLimit = requestLimit
         self.launch = launch
         self.authorizer = authorizer
         self.deliver = deliver
@@ -266,21 +276,46 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         task?.resume()
     }
 
+    /// Requests posted (or waiting for a legacy SSE server's endpoint) and
+    /// not yet over.
+    package var requestsInFlight: Int {
+        locked { postsInFlight }
+    }
+
+    private var postsInFlight: Int {
+        held.count + exchanges.values.filter { if case .post = $0.kind { true } else { false } }.count
+    }
+
     /// Sends `message`; `completed` is told once its body has all gone out,
     /// or its POST is over (answered, failed, or closed) before that, so
     /// what waits in the HTTP layer for the server to take it can be bounded.
-    package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) {
-        let target: URL? = locked {
+    /// False when `requestLimit` requests are already in flight: then
+    /// nothing is posted (`completed` is told at once, and a line logged),
+    /// though a cancel still closes the request it names. Only the remote's
+    /// one sender calls this, so the count cannot change under it but by
+    /// requests ending.
+    @discardableResult
+    package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) -> Bool {
+        let target: Result<URL?, Never>? = locked {
+            guard postsInFlight < requestLimit else { return nil }
             if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
-            guard launch.transport == .sse else { return launch.url }
+            guard launch.transport == .sse else { return .success(launch.url) }
             guard let endpoint else {
                 held.append((message, completed))
-                return nil
+                return .success(nil)
             }
-            return endpoint
+            return .success(endpoint)
         }
-        if let target { post(message, to: target, retried: false, completed: completed) }
+        guard case .success(let url) = target else {
+            let method = message["method"]?.stringValue ?? "a reply"
+            log("MCP server \(name) has \(requestLimit) requests in flight; not sending \(MCPDisplayedText.field(method))")
+            completed?()
+            closeCancelled(message)
+            return false
+        }
+        if let url { post(message, to: url, retried: false, completed: completed) }
         closeCancelled(message)
+        return true
     }
 
     /// A request rv cancelled gets no more of its reply, so its POST, if it
@@ -481,6 +516,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         }
         if let endpointEvent { useEndpoint(endpointEvent, stream: dataTask) }
         for item in incoming { hand(item.message, cost: item.cost) }
+        // Answered: what a server sends on a request's stream after its
+        // answer is not waited for, so a stream held open holds nothing.
+        if case .post = exchange.kind, exchange.isEventStream, exchange.answered { dataTask.cancel() }
     }
 
     package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
