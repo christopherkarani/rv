@@ -93,12 +93,20 @@ struct CustodianSocketClientTests {
             connections.withLock { $0 += 1 }
             var answered = 0
             while let request = MCPCustodianFrame.read(MCPCustodianSocketRequest.self, from: fd) {
-                guard let response = service.withLock({ $0.handle(id, request, now: .now) }),
-                    MCPCustodianFrame.write(response, to: fd)
-                else { return }
+                // The hello counts as one. The last answer comes from a
+                // daemon that has already forgotten the connection: once
+                // the client has read it the connection is gone, as it is
+                // for a daemon that hung up, however long this thread then
+                // takes to close the descriptor.
+                let last = answersPerConnection.withLock { $0 }.map { answered + 1 > $0 } ?? false
+                let response = service.withLock { service -> MCPCustodianSocketResponse? in
+                    let response = service.handle(id, request, now: .now)
+                    if last { service.close(id) }
+                    return response
+                }
+                guard let response, MCPCustodianFrame.write(response, to: fd) else { return }
                 answered += 1
-                // The hello counts as one.
-                if let limit = answersPerConnection.withLock({ $0 }), answered > limit {
+                if last {
                     whileHangingUp.withLock { $0 }?()
                     return
                 }
