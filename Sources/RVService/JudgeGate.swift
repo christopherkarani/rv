@@ -37,19 +37,6 @@ public enum JudgeRuntime {
         provenance.isUntrusted ? (0.6, 0.30) : (0.8, 0.45)
     }
 
-    /// Machine-wide guard mode, ignoring per-host entries and the
-    /// organization pin (doctor, `rv host list`).
-    public static func guardMode(home: HomeDirectory?) -> GuardMode {
-        guardMode(environment: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home))
-    }
-
-    /// Machine-wide `guard.mode` from `config.json` alone. `RV_GUARD_MODE`
-    /// is ignored: a caller deciding whether a change sheds oversight must
-    /// not let a same-user environment make enforce look like observe.
-    public static func configuredGuardMode(home: HomeDirectory?) -> GuardMode {
-        guardMode(environment: [:], config: loadConfigDict(home: home))
-    }
-
     /// The mode one evaluation from `host` runs under: per-host resolution,
     /// then the organization pin (`ManagedGate.guardMode`). The file door
     /// reads it once per evaluation; the shell doors read it through
@@ -58,7 +45,7 @@ public enum JudgeRuntime {
         home: HomeDirectory?,
         host: LedgerHost,
         environment: [String: String],
-        config: [String: Any]?
+        config: GuardConfig
     ) -> GuardMode {
         let hookHost: HookHost?
         switch host {
@@ -66,84 +53,7 @@ public enum JudgeRuntime {
         case .hook(let hook): hookHost = hook
         }
         return ManagedGate.guardMode(
-            guardMode(environment: environment, config: config, host: hookHost), home: home)
-    }
-
-    /// The mode the config file alone selects for `host`, ignoring
-    /// `RV_GUARD_MODE` and the organization pin. The hook's daemon-down
-    /// fallback reads it: hook environment can come from project-scoped
-    /// host config an agent writes.
-    public static func configuredGuardMode(config: [String: Any]?, host: HookHost) -> GuardMode {
-        guardMode(environment: [:], config: config, host: host)
-    }
-
-    /// `RV_GUARD_MODE=enforce` > `guard.hosts.<host>` > `guard.mode` >
-    /// enforce. An unknown value at any level falls through to the next. A
-    /// host entry of `block` is enforce; `observe` and `off` are observe (an
-    /// `off` host should be unwired, so a stale hook that still fires must
-    /// never block).
-    ///
-    /// The environment can only tighten: `RV_GUARD_MODE=observe` is
-    /// ignored. rvd inherits its environment from launchd/systemd, which a
-    /// same-user agent can edit (`launchctl setenv`); loosening belongs to
-    /// the owner's config (`rv host mode`, `guard.mode`), never to the
-    /// launch environment. Tests inject `environment` and `config` directly.
-    static func guardMode(
-        environment: [String: String],
-        config: [String: Any]?,
-        host: HookHost? = nil
-    ) -> GuardMode {
-        if let raw = environment["RV_GUARD_MODE"],
-           GuardMode(rawValue: raw.lowercased()) == .enforce {
-            return .enforce
-        }
-        if let host, let hostMode = HostModeStore.modes(inConfig: config)[host] {
-            return hostMode == .block ? .enforce : .observe
-        }
-        if let raw = configGuardMode(config),
-           let mode = GuardMode(rawValue: raw.lowercased()) {
-            return mode
-        }
-        return .enforce
-    }
-
-    /// Reads `guard.mode` from a parsed config object, nested
-    /// (`{"guard": {"mode": "observe"}}`) or flat dotted form.
-    static func configGuardMode(_ config: [String: Any]?) -> String? {
-        guard let config else { return nil }
-        if let nested = config["guard"] as? [String: Any],
-           let mode = nested["mode"] as? String, !mode.isEmpty {
-            return mode
-        }
-        if let flat = config["guard.mode"] as? String, !flat.isEmpty {
-            return flat
-        }
-        return nil
-    }
-
-    static func loadConfigDict(home: HomeDirectory?) -> [String: Any]? {
-        guard let home else { return nil }
-        let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("config.json")
-        guard let data = try? Data(contentsOf: file),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return root
-    }
-
-    /// Reads `judge.engine` from a parsed config object. Accepts the nested
-    /// form (`{"judge": {"engine": "ft"}}`) and the flat dotted form
-    /// (`{"judge.engine": "ft"}`). Returns nil when unset or not a string;
-    /// unknown values are ignored by the resolver below.
-    static func configEngine(_ config: [String: Any]?) -> String? {
-        guard let config else { return nil }
-        if let nested = config["judge"] as? [String: Any],
-           let engine = nested["engine"] as? String, !engine.isEmpty {
-            return engine
-        }
-        if let flat = config["judge.engine"] as? String, !flat.isEmpty {
-            return flat
-        }
-        return nil
+            GuardModeResolution.resolve(config, host: hookHost, environment: environment), home: home)
     }
 
     /// Testable engine resolution. `config` is injected (only
@@ -160,12 +70,8 @@ public enum JudgeRuntime {
     /// launchd/systemd, which a same-user agent can edit, and picking a
     /// missing or foreign bundle disables or replaces the judge. Engine and
     /// bundle belong to the owner's config and install, like `guard.mode`.
-    static func explicitEngine(config: [String: Any]?) -> JudgeEngine? {
-        configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
-    }
-
     static func resolveEngine(
-        config: [String: Any]?,
+        config: GuardConfig,
         bundleExists: (JudgeEngine) -> Bool
     ) -> (engine: JudgeEngine, bundlePresent: Bool) {
         let resolved = resolveEngine(config: config) { bundleExists($0) ? () : nil }
@@ -174,10 +80,10 @@ public enum JudgeRuntime {
 
     /// The one precedence ladder. `bundle` probes each engine at most once.
     static func resolveEngine<Bundle>(
-        config: [String: Any]?,
+        config: GuardConfig,
         bundle: (JudgeEngine) -> Bundle?
     ) -> (engine: JudgeEngine, bundle: Bundle?) {
-        if let explicit = explicitEngine(config: config) {
+        if let explicit = config.judgeEngine {
             return (explicit, bundle(explicit))
         }
         if let ft = bundle(.ft) { return (.ft, ft) }
@@ -188,7 +94,7 @@ public enum JudgeRuntime {
     /// bundle directories are probed.
     static func selection(
         home: HomeDirectory?,
-        config: [String: Any]?
+        config: GuardConfig
     ) -> JudgeSelection {
         let resolved = resolveEngine(config: config) { engine -> URL? in
             switch engine {
@@ -202,8 +108,8 @@ public enum JudgeRuntime {
     /// The engine that will actually run, with its validated bundle dir.
     /// Nil when the selected engine's bundle is missing — the caller goes
     /// packs-only (never fail-closed; see `apply`).
-    static func resolvedJudge(home: HomeDirectory?) -> (engine: JudgeEngine, bundle: URL)? {
-        let selected = selection(home: home, config: loadConfigDict(home: home))
+    static func resolvedJudge(home: HomeDirectory?, config: GuardConfig) -> (engine: JudgeEngine, bundle: URL)? {
+        let selected = selection(home: home, config: config)
         guard let bundle = selected.bundle else { return nil }
         return (selected.engine, bundle)
     }
@@ -218,7 +124,8 @@ public enum JudgeRuntime {
     }
 
     public static func bundleHealth(home: HomeDirectory?) -> BundleHealth {
-        if let resolved = resolvedJudge(home: home) {
+        let config = GuardConfig.read(home: home)
+        if let resolved = resolvedJudge(home: home, config: config) {
             let problems = bundleProblems(engine: resolved.engine, dir: resolved.bundle)
             return problems.isEmpty
                 ? .ok(engine: resolved.engine, bundle: resolved.bundle)
@@ -228,8 +135,7 @@ public enum JudgeRuntime {
         // broken install, not an absence. Check the explicit engine,
         // else FT (production default) before stock — the resolver
         // falls back to stock precisely because FT did not validate.
-        let explicitChoice = explicitEngine(config: loadConfigDict(home: home))
-        for engine in explicitChoice.map { [$0] } ?? [JudgeEngine.ft, .laya] {
+        for engine in config.judgeEngine.map { [$0] } ?? [JudgeEngine.ft, .laya] {
             if let expected = expectedBundleDir(engine: engine, home: home),
                FileManager.default.fileExists(atPath: expected.path) {
                 return .invalid(
@@ -240,8 +146,7 @@ public enum JudgeRuntime {
         }
         // Nothing installed: point at the production (FT) bundle unless
         // another engine was explicitly selected.
-        let explicit = explicitEngine(config: loadConfigDict(home: home))
-        let installEngine = explicit ?? .ft
+        let installEngine = config.judgeEngine ?? .ft
         return .missing(
             engine: installEngine,
             expected: expectedBundleDir(engine: installEngine, home: home)
@@ -629,7 +534,7 @@ public enum JudgeRuntime {
     /// config and bundle paths, then hands the load to a utility queue.
     public static func prewarm(home: HomeDirectory?) {
         #if canImport(CoreML)
-        guard let resolved = resolvedJudge(home: home) else { return }
+        guard let resolved = resolvedJudge(home: home, config: GuardConfig.read(home: home)) else { return }
         slot.prewarm(engine: resolved.engine, bundleDir: resolved.bundle)
         #endif
     }

@@ -54,6 +54,7 @@ Out of scope:
   - Add a convenience `GuardConfig.machineMode` (`resolve(self, host: nil, environment: [:])`).
 - **REQ-A05**: Add one shell reader in RVPolicy: `GuardConfig.read(configDirectory: URL) -> GuardConfig` (missing or unparseable file → `.empty`), plus `GuardConfig.read(home: HomeDirectory?)` using `RVPolicyPaths.configDirectory`. Decode with `JSONDecoder` into `JSONValue`, as `MachineConfigJSON.load` does.
 - **SEC-A01**: For every input, the new path must resolve the same `GuardMode` as the old `JSONSerialization` + `[String: Any]` path. Where the two parsers legitimately differ (for example, `JSONValue` decodes integers beyond 2^53 as digit strings), the new result must be `enforce`. A new `observe` that the old path did not produce is a blocking defect.
+  - *Amended (review of T1)*: `GuardConfig(jsonData:)` is the one bytes-to-config entry. It fails closed: text that does not parse, is not an object, repeats a key in any object (compared after unescaping), nests deeper than `JSONDuplicateKeys.maxNestingDepth` (64), or is not UTF-8 reads as `.empty` (enforce, no engine, no host entries). Parsers disagree on duplicates (Darwin keeps the first, swift-corelibs `JSONSerialization` the last), so the old path's answer there is platform-dependent; the new one is not. Callers that must tell a rejected file from one with no entries (`HostModeStore.read() -> StoredHostModes`) use `GuardConfig(validatingJSON:)` and get `.unreadable`.
 - **SEC-A02**: The hook daemon-down fallback (`HookObserveFallback.applies`) keeps every check it makes today:
   - `O_NOFOLLOW` open
   - regular file
@@ -151,7 +152,7 @@ enum WorkspacePublishPlanner {
   - invalid JSON
 - **AC-A02**: Given the same corpus, `GuardConfig.judgeEngine` equals the old `JudgeRuntime.explicitEngine(config:)`, or is `nil` where the parsers differ.
 - **AC-A03**: Given the same corpus, `GuardConfig.hosts` equals the old `HostModeStore.modes(inConfig:)`, or omits an entry where the parsers differ.
-- **AC-A04**: After T2, `grep -rn '\[String: Any\]' Sources/RVService/JudgeGate.swift Sources/RVPolicy/HostModeStore.swift Sources/RVCLI/Service/HookDaemonFallback.swift` matches only `bundleProblems`.
+- **AC-A04**: After T2, `grep -rn '\[String: Any\]' Sources/RVService/JudgeGate.swift Sources/RVPolicy/HostModeStore.swift Sources/RVCLI/Service/HookDaemonFallback.swift` matches only `bundleProblems` and `appendLog` (the `judge-log.jsonl` writer, which reads no guard config). *Amended after T2 review.*
 - **AC-A05**: These suites pass unchanged in assertions: `GuardModeCharacterizationTests`, `HostGuardModeTests`, `EvaluationInputsTests`, `GatedEffectCharacterizationTests`, `HookDaemonFallbackTests`, `HostModeStoreTests`, `SetupObserveTests`, `HostCommandTests`. Edits are allowed only where a test called a deleted helper.
 - **AC-B01**: The planner has value tests covering:
   - each `WorkspacePublishRejection.Reason` it can emit (`unsupportedFileType`, `unreadable`, `caseCollision`, `kindChanged`, `symlinkEscapesWorkspace`, `inodeChanged`, `unexpectedNameInRemovedDirectory`)

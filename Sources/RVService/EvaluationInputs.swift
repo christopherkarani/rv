@@ -61,7 +61,7 @@ struct EvaluationInputs: Sendable {
         environment: [String: String],
         host: LedgerHost = .tty
     ) -> EvaluationInputs {
-        let config = JudgeRuntime.loadConfigDict(home: home)
+        let config = GuardConfig.read(home: home)
         return EvaluationInputs(
             // The organization's gate pins enforce mode while it applies.
             guardMode: JudgeRuntime.effectiveGuardMode(

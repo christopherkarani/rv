@@ -90,7 +90,7 @@ public struct GatedEvaluate: Sendable {
             guardMode: JudgeRuntime.effectiveGuardMode(
                 home: home, host: host,
                 environment: ProcessInfo.processInfo.environment,
-                config: JudgeRuntime.loadConfigDict(home: home)
+                config: GuardConfig.read(home: home)
             )
         )
     }

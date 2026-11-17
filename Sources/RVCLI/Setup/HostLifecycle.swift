@@ -103,7 +103,7 @@ enum HostLifecycle {
     }
 
     private static func observing(_ env: SetupEnvironment) -> Bool {
-        JudgeRuntime.configuredGuardMode(home: env.home) == .observe
+        GuardConfig.read(home: env.home).machineMode == .observe
     }
 
     /// Installs and starts the service, then waits (bounded) for rvd to

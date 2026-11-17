@@ -201,9 +201,8 @@ enum HookObserveFallback {
               info.st_uid == getuid(),
               (info.st_mode & mode_t(S_IWGRP | S_IWOTH)) == 0,
               info.st_size >= 0, info.st_size <= configMaxBytes,
-              let data = try? handle.readToEnd(), data.count == Int(info.st_size),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let data = try? handle.readToEnd(), data.count == Int(info.st_size)
         else { return false }
-        return JudgeRuntime.configuredGuardMode(config: root, host: host) == .observe
+        return GuardModeResolution.resolve(GuardConfig(jsonData: data), host: host, environment: [:]) == .observe
     }
 }

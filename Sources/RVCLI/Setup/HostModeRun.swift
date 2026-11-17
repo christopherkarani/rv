@@ -53,8 +53,15 @@ enum HostModeRun {
     static func list(_ env: SetupEnvironment, json: Bool) -> SetupOutcome {
         do {
             let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
-            let modes = store(env).load()
-            let guardMode = JudgeRuntime.guardMode(home: env.home)
+            // An unreadable config shows every host under the global mode,
+            // as a host with no entry would.
+            let modes: [HookHost: HostMode]
+            switch store(env).read() {
+            case .entries(let entries): modes = entries
+            case .unreadable: modes = [:]
+            }
+            let guardMode = GuardModeResolution.resolve(
+                GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
             let rows = HookHost.allCases
                 .sorted { $0.rawValue < $1.rawValue }
                 .map { host in
@@ -115,7 +122,14 @@ enum HostModeRun {
                     exitCode: EX_NOPERM)
             }
             let store = store(env)
-            let current = store.mode(for: host)
+            let stored = store.read()
+            // Two questions, each with its own conservative reading of an
+            // unreadable config: for "is this a loosening?" the host is
+            // `block` (any move away needs the owner); for "is the host
+            // leaving `off`?" it is `off`, so the trusted-daemon check and
+            // the re-wire run (re-wiring a wired host rewrites the same hook).
+            let current = stored.mode(for: host, ifUnreadable: .block)
+            let wiredFrom = stored.mode(for: host, ifUnreadable: .off)
             // Only loosening asks the owner; tightening needs no check.
             var authorization: String?
             if mode.isLooser(than: current) {
@@ -134,7 +148,7 @@ enum HostModeRun {
             // owner); leaving `off`, the tighter mode is stored before
             // re-wiring (a failed re-wire leaves the host unwired under that
             // mode, which `rv setup` repairs).
-            if current == .off, mode != .off {
+            if wiredFrom == .off, mode != .off {
                 // Leaving `off` re-wires the host: refuse, as `rv setup`
                 // does, before storing anything when the fail-closed hook
                 // would reject the installed rvd and deny every tool call.
@@ -143,7 +157,7 @@ enum HostModeRun {
             do {
                 try await ConfigChangeAudit.$authorization.withValue(authorization) {
                     try store.save(mode, for: host) {
-                        if mode == .off { try applyWiring(from: current, to: mode, host: host, env: env) }
+                        if mode == .off { try applyWiring(from: wiredFrom, to: mode, host: host, env: env) }
                     }
                 }
             } catch let error as SetupError {
@@ -158,7 +172,7 @@ enum HostModeRun {
                     exitCode: EX_CANTCREAT)
             }
             if mode != .off {
-                try applyWiring(from: current, to: mode, host: host, env: env)
+                try applyWiring(from: wiredFrom, to: mode, host: host, env: env)
             }
             let wiring = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
                 .state(for: host).rawValue

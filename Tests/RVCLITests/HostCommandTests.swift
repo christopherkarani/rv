@@ -109,7 +109,7 @@ struct HostCommandTests {
             #expect(block.exitCode == 0)
             #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
             #expect(probe.calls == 0)
-            #expect(store(home).load() == [.grok: .block])
+            #expect(store(home).read() == .entries([.grok: .block]))
             let after = HostModeRun.list(environment, json: true)
             #expect(after.stdout.contains(#"{"host":"grok","mode":"block","wiring":"wired"}"#))
             #expect(after.stdout.contains(#"{"host":"claude","mode":"observe","wiring":"missing"}"#))
@@ -130,7 +130,7 @@ struct HostCommandTests {
                 #expect(outcome.stderr.contains("device-owner authentication required"))
                 #expect(probe.calls == 1)
             }
-            #expect(store(home).load().isEmpty)
+            #expect(store(home).read() == .entries([:]))
             #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == hook)
         }
     }
@@ -145,7 +145,7 @@ struct HostCommandTests {
             #expect(outcome.exitCode == 0)
             #expect(outcome.stdout == #"{"host":"grok","mode":"observe","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
             #expect(probe.calls == 1)
-            #expect(store(home).load() == [.grok: .observe])
+            #expect(store(home).read() == .entries([.grok: .observe]))
             // Same mode again is not a loosening: no prompt.
             let again = AuthProbe(allow: false)
             let repeated = await HostModeRun.setMode(
@@ -168,7 +168,7 @@ struct HostCommandTests {
             #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
             #expect(try Data(contentsOf: URL(fileURLWithPath: layout.piExtension)) == piBytes)
             #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
-            #expect(store(home).load() == [.grok: .off])
+            #expect(store(home).read() == .entries([.grok: .off]))
 
             // `rv setup` leaves an off host unwired.
             #expect(SetupRun.setup(environment).exitCode == 0)
@@ -181,7 +181,90 @@ struct HostCommandTests {
             #expect(block.stdout == "grok  block  wired\n")
             #expect(probe.calls == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-            #expect(store(home).load() == [.grok: .block])
+            #expect(store(home).read() == .entries([.grok: .block]))
+        }
+    }
+
+    /// A config `GuardConfig` rejects (here a repeated key) is unreadable,
+    /// not "no entries": leaving it for `block` must still treat the host as
+    /// possibly `off`, so the hook is re-wired instead of the store saying
+    /// block over an unwired host.
+    @Test func block_overAnUnreadableConfigWithTheHostOff_rewires() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(environment).exitCode == 0)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: environment, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 0)
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+            let config = home.appendingPathComponent(".config/rv/config.json")
+            try Data(#"{"guard":{"hosts":{"grok":"off"}},"guard.mode":"enforce","guard.mode":"enforce"}"#.utf8)
+                .write(to: config)
+            #expect(store(home).read() == .unreadable)
+            let list = HostModeRun.list(environment, json: true)
+            #expect(list.stdout.contains(#"{"host":"grok","mode":"block","wiring":"absent-file"}"#))
+
+            let probe = AuthProbe(allow: false)
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
+            #expect(block.exitCode == 0)
+            #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
+            #expect(probe.calls == 0)
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+            #expect(store(home).read() == .entries([.grok: .block]))
+        }
+    }
+
+    /// Reading an unreadable config as possibly `off` re-wires a host that
+    /// is already wired: the same write `rv setup` repeats, so the hook is
+    /// unchanged. The trusted-daemon check still applies first.
+    @Test func block_overAnUnreadableConfigWithTheHostWired_keepsTheHookAndChecksTheDaemon() async throws {
+        try await withTempHomeAsync { home, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            let hook = try Data(contentsOf: URL(fileURLWithPath: layout.grokHook))
+            let config = home.appendingPathComponent(".config/rv/config.json")
+            let unreadable = Data(#"{"guard.mode":"enforce","guard.mode":"enforce"}"#.utf8)
+            try unreadable.write(to: config)
+            if FileManager.default.isExecutableFile(atPath: base.rvdPath) == false {
+                try Data("#!/bin/sh\n".utf8).write(to: URL(fileURLWithPath: base.rvdPath))
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: base.rvdPath)
+            }
+
+            var untrusted = base
+            untrusted.daemonTrust = { _ in
+                DoctorServiceTrust(source: "manifest", satisfied: false, reason: "installed rvd is ad-hoc signed")
+            }
+            let refused = await HostModeRun.setMode(
+                .block, for: .grok, env: untrusted, json: true, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(refused.exitCode != 0)
+            #expect(refused.stderr.contains("hooks would reject the installed rvd"))
+            #expect(try Data(contentsOf: config) == unreadable)
+            #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == hook)
+
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(block.exitCode == 0)
+            #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == hook)
+            #expect(store(home).read() == .entries([.grok: .block]))
+        }
+    }
+
+    /// Loosening from an unreadable config needs the owner: the host reads
+    /// as `block` for that question.
+    @Test func loosening_overAnUnreadableConfig_needsTheOwner() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(environment).exitCode == 0)
+            let config = home.appendingPathComponent(".config/rv/config.json")
+            let unreadable = Data(#"{"guard":{"hosts":{"grok":"observe","grok":"observe"}}}"#.utf8)
+            try unreadable.write(to: config)
+            let probe = AuthProbe(allow: false)
+            let observe = await HostModeRun.setMode(
+                .observe, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
+            #expect(observe.exitCode == 77)
+            #expect(probe.calls == 1)
+            #expect(try Data(contentsOf: config) == unreadable)
         }
     }
 
@@ -201,7 +284,7 @@ struct HostCommandTests {
             #expect(off.stdout.isEmpty)
             #expect(off.stderr.hasPrefix("rv host mode failed: unable to remove grok hook"))
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-            #expect(store(home).load().isEmpty)
+            #expect(store(home).read() == .entries([:]))
             let retry = AuthProbe(allow: false)
             let again = await HostModeRun.setMode(
                 .off, for: .grok, env: environment, json: true, authenticate: retry.authenticate)
@@ -225,7 +308,7 @@ struct HostCommandTests {
             #expect(off.exitCode == 74)
             #expect(off.stderr.hasPrefix("rv host mode: the audit log could not record the guard.hosts.grok change"))
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-            #expect(store(home).load().isEmpty)
+            #expect(store(home).read() == .entries([:]))
         }
     }
 
@@ -253,7 +336,7 @@ struct HostCommandTests {
             #expect(block.exitCode == 73)
             #expect(block.stderr.hasPrefix("rv host mode failed: unable to write grok hook"))
             #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
-            #expect(store(home).load() == [.grok: .block])
+            #expect(store(home).read() == .entries([.grok: .block]))
             #expect(SetupRun.setup(base).exitCode == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
         }
@@ -283,7 +366,7 @@ struct HostCommandTests {
                 #expect(outcome.stdout.isEmpty)
                 #expect(outcome.stderr.contains("hooks would reject the installed rvd"))
                 #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
-                #expect(store(home).load() == [.grok: .off])
+                #expect(store(home).read() == .entries([.grok: .off]))
             }
         }
     }
@@ -302,13 +385,13 @@ struct HostCommandTests {
             #expect(off.stdout.isEmpty)
             #expect(off.stderr == "rv host mode failed: organization policy requires rv on grok\n")
             #expect(probe.calls == 0)
-            #expect(store(home).load().isEmpty)
+            #expect(store(home).read() == .entries([:]))
             #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == hook)
             // Observe is still stored: rvd pins enforce under the gate.
             let observe = await HostModeRun.setMode(
                 .observe, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
             #expect(observe.exitCode == 0)
-            #expect(store(home).load() == [.grok: .observe])
+            #expect(store(home).read() == .entries([.grok: .observe]))
             let list = HostModeRun.list(environment, json: true)
             #expect(list.stdout.contains(#""managed_enforce":true"#))
         }
