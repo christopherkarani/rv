@@ -879,6 +879,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             log("not starting MCP server \(shown) again: \(refusal.message)")
             started = false
         }
+        // Planned but not spawned: its cage's proxy ends now (a placeholder
+        // server's lease ended with the failed start).
+        if started == false {
+            switch connection {
+            case .process(let launch), .placeholderBound(let launch, _): Self.abandonProxy(of: launch)
+            case .remote, .refused: break
+            }
+        }
         perform(core.handle(started ? .upstreamRelaunched(server: server, launch: launch) : .upstreamExited(server: server)))
     }
 
