@@ -59,6 +59,25 @@ struct GuardConfigJSONDataTests {
         #expect(!Self.distinct("{" + members + #","k0": 0}"#))
     }
 
+    /// Root object plus arrays: `depth` containers in all.
+    private static func nested(depth: Int) -> String {
+        let arrays = depth - 1
+        return #"{"guard.mode": "observe", "x": "# + String(repeating: "[", count: arrays)
+            + String(repeating: "]", count: arrays) + "}"
+    }
+
+    @Test("nesting up to the limit is read; one deeper reads as empty")
+    func nestingLimit() {
+        let limit = JSONDuplicateKeys.maxNestingDepth
+        #expect(limit == 64)
+        #expect(GuardConfig(jsonData: Data(Self.nested(depth: limit).utf8)) == GuardConfig(mode: .observe))
+        #expect(!Self.distinct(Self.nested(depth: limit + 1)))
+        #expect(GuardConfig(jsonData: Data(Self.nested(depth: limit + 1).utf8)) == .empty)
+        let objects = String(repeating: #"{"a":"#, count: limit) + "1" + String(repeating: "}", count: limit)
+        #expect(Self.distinct(objects))
+        #expect(!Self.distinct(#"{"b":"# + objects + "}"))
+    }
+
     @Test("UTF-16 and UTF-32 text fails closed")
     func wideEncodings() throws {
         let json = #"{"guard.mode": "observe"}"#

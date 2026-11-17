@@ -123,6 +123,10 @@ struct GuardConfigEquivalenceTests {
         Document("arrays nested 512 deep", #"{"guard.mode": "observe", "x": "#
             + String(repeating: "[", count: 512) + String(repeating: "]", count: 512) + "}"),
         Document("sibling -1e309", #"{"guard.mode": "observe", "x": -1e309}"#),
+        Document("arrays nested 65 deep", #"{"guard.mode": "observe", "x": "#
+            + String(repeating: "[", count: 64) + String(repeating: "]", count: 64) + "}"),
+        Document("arrays nested 64 deep", #"{"guard.mode": "observe", "x": "#
+            + String(repeating: "[", count: 63) + String(repeating: "]", count: 63) + "}"),
         Document("UTF-32LE with BOM", bytes: [0xFF, 0xFE, 0x00, 0x00]
             + Array(#"{"guard.mode": "observe"}"#.data(using: .utf32LittleEndian)!)),
         Document("UTF-16LE", bytes: Array(#"{"guard.mode": "observe"}"#.data(using: .utf16LittleEndian)!)),
@@ -245,7 +249,8 @@ struct GuardConfigEquivalenceTests {
     ///   duplicate.
     /// - Validity: Darwin legacy accepts arrays nested 512 deep and
     ///   `-1e309`; Linux legacy accepts UTF-32LE with a BOM; both accept
-    ///   UTF-16, which the duplicate-key scan cannot vouch for.
+    ///   UTF-16, which the duplicate-key scan cannot vouch for, and nesting
+    ///   past `JSONDuplicateKeys.maxNestingDepth` (65 containers).
     static let knownDivergences: [String] = [
         "duplicate guard, observe last",
         "duplicate guard, observe first",
@@ -263,6 +268,7 @@ struct GuardConfigEquivalenceTests {
         "engine big int, flat ft",
         "arrays nested 512 deep",
         "sibling -1e309",
+        "arrays nested 65 deep",
         "UTF-32LE with BOM",
         "UTF-16LE",
     ]

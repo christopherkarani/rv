@@ -7,12 +7,19 @@ import Foundation
 /// `JSONSerialization` keeps the last. A guard setting must not depend on
 /// which parser reads it, so a reader that cares rejects such a document.
 public enum JSONDuplicateKeys {
+    /// Deepest object/array nesting the scan accepts. Deeper text fails
+    /// closed: `JSONValue` decodes deep nesting slowly (500 levels take
+    /// seconds, against the hook's 8 s budget), and no rv config nests
+    /// anywhere near this.
+    public static let maxNestingDepth = 64
+
     /// True only when `data` is UTF-8 JSON text (an optional leading BOM
     /// allowed) in which every object's keys are distinct. Keys compare
     /// after unescaping, so `"guard"` and `"gu\u0061rd"` collide.
     ///
-    /// Fails closed: false for a duplicate key, unbalanced brackets, an
-    /// unterminated string or key that does not decode, and any byte
+    /// Fails closed: false for a duplicate key, nesting deeper than
+    /// `maxNestingDepth`, unbalanced brackets, an unterminated string or
+    /// key that does not decode, and any byte
     /// outside a string that UTF-8 JSON cannot hold there (which rejects
     /// UTF-16 and UTF-32 text). It does not otherwise validate the JSON;
     /// callers parse it as well.
@@ -49,8 +56,10 @@ public enum JSONDuplicateKeys {
             let byte = bytes[index]
             switch byte {
             case UInt8(ascii: "{"):
+                guard stack.count < JSONDuplicateKeys.maxNestingDepth else { return false }
                 stack.append(.object(keys: [], expectingKey: true))
             case UInt8(ascii: "["):
+                guard stack.count < JSONDuplicateKeys.maxNestingDepth else { return false }
                 stack.append(.array)
             case UInt8(ascii: "}"):
                 guard case .object = stack.popLast() else { return false }
