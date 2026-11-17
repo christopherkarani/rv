@@ -475,6 +475,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             // Gone meanwhile (stopped): not put back.
             guard let current = exchanges[id] else { return }
             exchange.closed = exchange.closed || current.closed
+            // `stop()` takes the session out to invalidate it itself.
+            exchange.ownSession = current.ownSession
             exchanges[id] = exchange
         }
         if let endpointEvent { useEndpoint(endpointEvent, stream: dataTask) }
