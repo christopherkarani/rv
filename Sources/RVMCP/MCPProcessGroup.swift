@@ -164,11 +164,13 @@ final class MCPProcessGroup: MCPSupervisedGroup {
             envp.release()
         }
         var pid: pid_t = 0
-        let status = argv.withPointers { argvPointer in
+        let spawned: Int32?? = argv.withPointers { argvPointer in
             envp.withPointers { envPointer in
                 posix_spawn(&pid, launch.executable, &actions, &attributes, argvPointer, envPointer)
             }
         }
+        // No vector to hand over: nothing is spawned.
+        guard case .some(.some(let status)) = spawned else { return .failure(MCPStartFailure("spawn arguments")) }
         guard status == 0, pid > 1 else { return .failure(MCPStartFailure(String(cString: strerror(status)))) }
         return .success(pid)
     }
@@ -206,7 +208,11 @@ struct MCPPipe {
         #if canImport(Darwin)
         guard pipe(&fds) == 0 else { return nil }
         #else
-        guard fds.withUnsafeMutableBufferPointer({ systemPipe2($0.baseAddress!, Int32(O_CLOEXEC)) }) == 0 else { return nil }
+        let made = fds.withUnsafeMutableBufferPointer { buffer -> Int32 in
+            guard let base = buffer.baseAddress else { return -1 }
+            return systemPipe2(base, Int32(O_CLOEXEC))
+        }
+        guard made == 0 else { return nil }
         #endif
         guard let read = lifted(fds[0]) else {
             close(fds[1])
@@ -263,9 +269,14 @@ private struct CStringVector {
         storage = values.map { strdup($0) } + [nil]
     }
 
-    func withPointers<T>(_ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T) -> T {
+    /// `body`'s result, or nil (and `body` not run) when there is no
+    /// vector to point at.
+    func withPointers<T>(_ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T) -> T? {
         var values = storage
-        return values.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
+        return values.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return nil }
+            return body(base)
+        }
     }
 
     func release() {
