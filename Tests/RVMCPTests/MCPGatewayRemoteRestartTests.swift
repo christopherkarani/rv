@@ -154,13 +154,13 @@ struct MCPGatewayRemoteRestartTests {
     /// and with nothing in flight.
     static func boundRemote(
         _ fixture: RemoteFixture, lifetime: TimeInterval = 30, afterHead: TimeInterval = 1, requestLimit: Int = 4,
-        authorizer: MCPRemoteAuthorizer? = nil, exits: Mutex<Int>? = nil, logged: Mutex<[String]>? = nil
+        authorizer: MCPRemoteAuthorizer? = nil, exits: PlanCount? = nil, logged: LoggedLines? = nil
     ) async throws -> MCPRemoteUpstream {
         let delivered = RecordedMessages()
         let remote = MCPRemoteUpstream(
             launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")), authorizer: authorizer,
             deliver: { message in delivered.items.withLock { $0.append(message) } },
-            exited: { exits?.withLock { $0 += 1 } }, log: { line in logged?.withLock { $0.append(line) } },
+            exited: { exits?.value.withLock { $0 += 1 } }, log: { line in logged?.items.withLock { $0.append(line) } },
             requestLimit: requestLimit, notificationLifetime: lifetime, notificationAfterHead: afterHead)
         remote.start()
         remote.send(try Self.initialize(1))
@@ -185,7 +185,7 @@ struct MCPGatewayRemoteRestartTests {
     @Test(.timeLimit(.minutes(5)))
     func aNotificationStreamedAfterItsHeadIsCutAfterItsBound() async throws {
         let fixture = try RemoteFixture(["--stream-notifications"])
-        let logged = Mutex<[String]>([])
+        let logged = LoggedLines()
         let remote = try await Self.boundRemote(fixture, logged: logged)
         for id in 100..<106 {
             #expect(remote.send(try Self.cancel(id)), "cancel \(id) was refused: \(remote.requestsInFlight) in flight")
@@ -196,7 +196,8 @@ struct MCPGatewayRemoteRestartTests {
         #expect(await eventually(30) {
             fixture.requests().components(separatedBy: "CLOSED notification notifications/cancelled").count == 7
         }, "\(fixture.requests())")
-        #expect(logged.withLock { $0 }.filter { $0.contains("past its bound") }.count == 6, "\(logged.withLock { $0 })")
+        let bounded = logged.items.withLock { lines in lines.filter { line in line.contains("past its bound") }.count }
+        #expect(bounded == 6, "\(logged.items.withLock { $0 })")
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
@@ -232,12 +233,13 @@ struct MCPGatewayRemoteRestartTests {
     @Test(.timeLimit(.minutes(5)))
     func aNormalNotificationIsNeverCut() async throws {
         let fixture = try RemoteFixture()
-        let logged = Mutex<[String]>([])
+        let logged = LoggedLines()
         let remote = try await Self.boundRemote(fixture, logged: logged)
         #expect(remote.send(try Self.cancel(100)))
         #expect(await eventually(5) { remote.requestsInFlight == 0 })
         try await Task.sleep(nanoseconds: 2_000_000_000)
-        #expect(logged.withLock { $0 }.contains { $0.contains("past its bound") } == false, "\(logged.withLock { $0 })")
+        let bounded = logged.items.withLock { lines in lines.contains { line in line.contains("past its bound") } }
+        #expect(bounded == false, "\(logged.items.withLock { $0 })")
         #expect(fixture.requests().contains("ACCEPTED notifications/cancelled"))
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
@@ -274,13 +276,13 @@ struct MCPGatewayRemoteRestartTests {
     @Test(.timeLimit(.minutes(5)), arguments: [false, true])
     func aNotificationAnswered404EndsTheSessionOnce(endless: Bool) async throws {
         let fixture = try RemoteFixture(endless ? ["--endless-refusals"] : [])
-        let exits = Mutex(0)
+        let exits = PlanCount()
         let remote = try await Self.boundRemote(fixture, exits: exits)
         #expect(await Self.post(fixture.url("/expire-sessions")) == 200)
         #expect(remote.send(try Self.cancel(100)))
-        #expect(await eventually(15) { exits.withLock { $0 } == 1 })
+        #expect(await eventually(15) { exits.value.withLock { $0 } == 1 })
         try await Task.sleep(nanoseconds: 2_000_000_000)
-        #expect(exits.withLock { $0 } == 1)
+        #expect(exits.value.withLock { $0 } == 1)
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
@@ -863,4 +865,9 @@ struct MCPGatewayRemoteRestartTests {
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
+}
+
+/// Log lines a test collects.
+final class LoggedLines: Sendable {
+    let items = Mutex<[String]>([])
 }
