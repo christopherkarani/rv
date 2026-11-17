@@ -319,6 +319,14 @@ struct HostCommandTests {
         #expect(output.stderr.hasPrefix("rv setup failed: the audit log could not record the guard.mode change"))
     }
 
+    @Test func setupObserve_whenConfigCannotBeRewritten_exitsDataErrAndNamesTheFix() {
+        let output = setupFailureOutput(.guardConfigUnreadable, command: .setup)
+        #expect(output.exitCode == EX_DATAERR)
+        #expect(output.stderr.hasPrefix("rv setup failed: config.json cannot be rewritten safely"))
+        #expect(output.stderr.contains("no hooks were wired"))
+        #expect(output.stderr.contains("fix config.json by hand"))
+    }
+
     /// Leaving `off` stores the tighter mode before re-wiring: a re-wire
     /// that fails leaves the host unwired under `block` (which `rv setup`
     /// repairs), never wired under `off`.
@@ -429,6 +437,28 @@ struct HostCommandTests {
             gated.managedEnforce = { _ in true }
             #expect(SetupRun.setup(gated).exitCode == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        }
+    }
+
+    /// Duplicate `guard` keys read as enforce at rvd. `block` tightens, so it
+    /// asks no owner, and it must not rewrite the file to the first
+    /// (observe) copy either: it refuses and names the fix.
+    @Test func block_onADuplicateKeyConfig_refusesAndLeavesTheFile() async throws {
+        try await withTempHomeAsync { home, _, environment in
+            let text = Data(#"{"guard":{"mode":"observe"},"guard":{"mode":"enforce"}}"#.utf8)
+            let file = store(home).configFile
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: file)
+            let probe = AuthProbe(allow: false)
+            let outcome = await HostModeRun.setMode(
+                .block, for: .claude, env: environment, json: true, authenticate: probe.authenticate)
+            #expect(outcome.exitCode == EX_DATAERR)
+            #expect(outcome.stdout.isEmpty)
+            #expect(outcome.stderr.hasPrefix("rv host mode failed:"))
+            #expect(outcome.stderr.contains("fix config.json by hand"))
+            #expect(probe.calls == 0)
+            #expect(try Data(contentsOf: file) == text)
         }
     }
 

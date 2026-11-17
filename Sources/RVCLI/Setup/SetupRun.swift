@@ -179,6 +179,8 @@ enum SetupRun {
             }
         } catch let unrecorded as ConfigChangeUnrecorded {
             throw .guardModeUnrecorded(unrecorded)
+        } catch HostModeStoreError.unreadableConfig {
+            throw .guardConfigUnreadable
         } catch {
             throw .guardModeWriteFailed
         }

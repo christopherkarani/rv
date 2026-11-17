@@ -86,7 +86,7 @@ public struct HostModeStore: Sendable {
                 guardObject["hosts"] = .object(hosts)
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }
@@ -106,7 +106,7 @@ public struct HostModeStore: Sendable {
                 guardObject["mode"] = .string("observe")
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }
