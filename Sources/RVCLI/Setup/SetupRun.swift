@@ -135,12 +135,19 @@ enum SetupRun {
 
     /// Confirms observe mode and names hosts whose stored `block` entry
     /// still outranks it.
+    private static let observeNoticeLine =
+        "rv setup: observe mode on: rv logs what it would block instead of blocking (rv blocks lists them)"
+
     private static func observeNotice(_ request: SetupGuardRequest, env: SetupEnvironment) -> String {
         guard case .observe = request else { return "" }
-        let pinned = hostModeStore(env).load()
+        // An unreadable config pins no host: rvd reads it as enforce.
+        guard case .entries(let stored) = hostModeStore(env).read() else {
+            return Self.observeNoticeLine + "\n"
+        }
+        let pinned = stored
             .filter { $0.value == .block }
             .keys.map(\.rawValue).sorted()
-        var line = "rv setup: observe mode on: rv logs what it would block instead of blocking (rv blocks lists them)"
+        var line = Self.observeNoticeLine
         for host in pinned {
             line += "; \(host) stays block (rv host mode \(host) observe to change)"
         }
@@ -231,9 +238,14 @@ enum SetupRun {
         let installations = try inspectInstallations(layout: layout, env: env)
         // An organization gate keeps every detected host wired: `off` would
         // drop the hook and with it the org policy.
-        let offHosts: Set<HookHost> = env.managedEnforce(env.home) ? [] : Set(HostModeStore(
+        // An unreadable config stores no `off`: every detected host is wired.
+        let stored = HostModeStore(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
-        ).load().filter { $0.value == .off }.keys)
+        ).read()
+        var offHosts: Set<HookHost> = []
+        if !env.managedEnforce(env.home), case .entries(let entries) = stored {
+            offHosts = Set(entries.filter { $0.value == .off }.keys)
+        }
         let plan = SetupWorkPlanBuilder.make(
             installations: installations,
             layout: layout,

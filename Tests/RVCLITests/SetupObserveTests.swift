@@ -175,8 +175,8 @@ struct SetupObserveTests {
             #expect(outcome.exitCode == 0)
             #expect(outcome.stderr.contains("claude stays block (rv host mode claude observe to change)"))
             #expect(outcome.stderr.contains("cursor stays") == false)
-            #expect(try HostModeStore(configDirectory: configURL(home).deletingLastPathComponent()).load()
-                == [.claude: .block, .cursor: .observe])
+            #expect(try HostModeStore(configDirectory: configURL(home).deletingLastPathComponent()).read()
+                == .entries([.claude: .block, .cursor: .observe]))
         }
     }
 

@@ -63,16 +63,21 @@ public struct GuardConfig: Sendable, Equatable {
 
     /// Decodes `config.json` bytes: the one bytes-to-config entry, shared
     /// by `GuardConfig.read` and the hook's daemon-down fallback. Text that
-    /// does not parse, is not an object, or repeats a key in any object
-    /// (`JSONDuplicateKeys`) is `.empty`: parsers disagree on which
-    /// duplicate wins, so a duplicate never selects observe.
+    /// `init(validatingJSON:)` rejects is `.empty`: parsers disagree on
+    /// which duplicate wins, so a duplicate never selects observe.
     public init(jsonData: Data) {
+        self = GuardConfig(validatingJSON: jsonData) ?? .empty
+    }
+
+    /// Decodes `config.json` bytes, or nil when the text does not parse, is
+    /// not an object, or fails `JSONDuplicateKeys` (a repeated key in any
+    /// object, too deep, not UTF-8). For callers that must tell a rejected
+    /// file from one with no guard keys.
+    public init?(validatingJSON jsonData: Data) {
         guard JSONDuplicateKeys.allObjectKeysDistinct(jsonData),
-              let root = try? JSONDecoder().decode(JSONValue.self, from: jsonData)
-        else {
-            self = .empty
-            return
-        }
+              let root = try? JSONDecoder().decode(JSONValue.self, from: jsonData),
+              case .object = root
+        else { return nil }
         self.init(root)
     }
 

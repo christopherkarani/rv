@@ -2,6 +2,25 @@ import Foundation
 import RVDomain
 import RVHistory
 
+/// What `config.json` stores under `guard.hosts` (`HostModeStore.read`).
+public enum StoredHostModes: Sendable, Equatable {
+    /// The file is missing, or `GuardConfig` accepts it.
+    case entries([HookHost: HostMode])
+    /// The file exists but could not be read, or `GuardConfig` rejects it.
+    case unreadable
+
+    /// The stored mode for `host`: its entry, else `block` (a host with no
+    /// entry follows `guard.mode`; reading it as `block` means pinning
+    /// `observe` over a global observe still needs the owner), else
+    /// `ifUnreadable` when the file is unreadable.
+    public func mode(for host: HookHost, ifUnreadable: HostMode) -> HostMode {
+        switch self {
+        case .entries(let entries): entries[host] ?? .block
+        case .unreadable: ifUnreadable
+        }
+    }
+}
+
 public enum HostModeStoreError: Error, Sendable, Equatable {
     /// `config.json` exists but is not a JSON object, or its `guard` /
     /// `guard.hosts` value is not one: writing would drop or replace keys
@@ -23,16 +42,23 @@ public struct HostModeStore: Sendable {
         configDirectory.appendingPathComponent("config.json", isDirectory: false)
     }
 
-    /// Stored entries only; a host missing here follows `guard.mode`.
-    public func load() -> [HookHost: HostMode] {
-        GuardConfig.read(configDirectory: configDirectory).hosts
-    }
-
-    /// The stored entry, or `block` when there is none. Callers that ask
-    /// "is this a loosening?" use it: treating a missing entry as `block`
-    /// means pinning `observe` over a global observe still needs the owner.
-    public func mode(for host: HookHost) -> HostMode {
-        load()[host] ?? .block
+    /// The stored `guard.hosts` entries. A missing file has none. A file
+    /// that exists but cannot be read, or that `GuardConfig` rejects (not
+    /// JSON, not an object, a repeated key, too deep, not UTF-8), is
+    /// `.unreadable`, never "no entries": rvd reads such a file as
+    /// enforce, and each caller picks the conservative reading for its own
+    /// question.
+    public func read() -> StoredHostModes {
+        let data: Data
+        do {
+            data = try Data(contentsOf: configFile)
+        } catch CocoaError.fileReadNoSuchFile {
+            return .entries([:])
+        } catch {
+            return .unreadable
+        }
+        guard let config = GuardConfig(validatingJSON: data) else { return .unreadable }
+        return .entries(config.hosts)
     }
 
     /// Writes one host's entry, `block` included: an explicit `block` must
