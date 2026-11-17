@@ -389,7 +389,9 @@ struct MCPShutdownSignalTests {
     /// thread's mask passes to what it starts; python execs the probe with
     /// them blocked, so every thread of it starts so) still hears them: it
     /// unblocks what it handles. A SIGTERM ends it as killed by it, after
-    /// its server got rv's own SIGTERM.
+    /// its server got rv's own SIGTERM. Linux is where this guards: macOS
+    /// hears a signal through a kqueue source even while it is blocked, so
+    /// there it passes with the unblock removed too (checked).
     @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
     func aServeStartedWithItsSignalsBlockedStillHearsThem() async throws {
         let server = try NotingServer()

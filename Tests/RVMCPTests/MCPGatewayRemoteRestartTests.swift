@@ -167,7 +167,7 @@ struct MCPGatewayRemoteRestartTests {
         #expect(await eventually { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight)")
         for id in 100..<110 {
             #expect(remote.send(try Self.cancel(id)), "cancel \(id) was refused: \(remote.requestsInFlight) in flight")
-            #expect(await eventually(30) { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight) after cancel \(id)")
+            #expect(await eventually(10) { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight) after cancel \(id)")
         }
         #expect(await eventually(30) {
             fixture.requests().components(separatedBy: "CLOSED notification notifications/cancelled").count == 11
