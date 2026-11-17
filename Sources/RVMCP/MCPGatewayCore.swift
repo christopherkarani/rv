@@ -1212,9 +1212,10 @@ public struct MCPGatewayCore {
         ]
     }
 
-    /// A request rv did not send to `server`. A call ends not run, with
-    /// its error to the client; a listing page fails as an unanswered page
-    /// does. Anything else (an `initialize`, a `ping`) is left to its own
+    /// A request rv did not send to `server`. A call ends not run (an
+    /// approved one declined, its approval spent), with its error to the
+    /// client; a listing page fails as an unanswered page does; a ping is
+    /// dropped with no verdict. An `initialize` is left to its own
     /// deadline, which fails closed.
     mutating func upstreamUnsent(_ server: String, id: JSONValue) -> [MCPGatewayOutput] {
         guard let key = id.intValue, let entry = pending[key] else { return [] }
@@ -1223,15 +1224,23 @@ public struct MCPGatewayCore {
             pending[key] = nil
             progressTokens[key] = nil
             let reason = "not sent: MCP server \(MCPDisplayedText.field(server)) has its most requests in flight"
+            // An approved call keeps its approval id on its last row; the
+            // approval is spent.
+            let spent = call.approval == nil ? "" : " Its approval was used up, so it must be approved again."
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask, argumentKeys: call.keys,
-                    isError: true, reason: reason, outcome: .notRun)),
+                    isError: true, reason: reason, outcome: Self.notForwarded(call.approval?.id))),
                 .toClient(Self.error(
                     id: call.client, code: -32603,
                     message: "MCP server \(MCPDisplayedText.field(server)) has too many requests in flight; tool "
-                        + "\(MCPDisplayedText.field(call.tool)) was not run. Try it again once some have finished.")),
+                        + "\(MCPDisplayedText.field(call.tool)) was not run. Try it again once some have finished." + spent)),
             ]
+        case .ping(let owner, _) where owner == server:
+            // Not sent, so not unanswered: no verdict that the server hung.
+            pending[key] = nil
+            return [.log("MCP server \(MCPDisplayedText.field(server)) has too many requests in flight to be pinged; "
+                + "it is not judged hung")]
         case .list(let fanout, let owner, _) where owner == server:
             pending[key] = nil
             return listPage(fanout: fanout, server: server, message: .null, failure: "has too many requests in flight to list tools")
