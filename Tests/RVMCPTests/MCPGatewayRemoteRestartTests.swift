@@ -29,10 +29,11 @@ struct MCPGatewayRemoteRestartTests {
         _ fixture: RemoteFixture, forwards: ForwardRecords = ForwardRecords(),
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
-        remoteRequestLimit: Int? = nil
+        remoteRequestLimit: Int? = nil, callTimeout: Int = MCPServerDefinition.defaultCallTimeoutSeconds
     ) -> GatewayRun {
-        let remote = MCPServerDefinition(
+        var remote = MCPServerDefinition(
             name: "remote", remote: MCPRemoteServer(url: fixture.url("/mcp")), tools: MCPToolPolicy(allow: ["*"]))
+        remote.callTimeoutSeconds = callTimeout
         let core = MCPGatewayCore(
             configuration: MCPConfiguration(servers: [remote]), upstreams: [MCPGatewayCore.Upstream(definition: remote)],
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
@@ -149,36 +150,188 @@ struct MCPGatewayRemoteRestartTests {
         _ = await offThePool { fixture.stop() }
     }
 
-    /// A notification's POST holds no place once the server's response
-    /// head is in, whatever follows it: a server that streams on every
-    /// cancel cannot walk the count up to the limit.
-    @Test(.timeLimit(.minutes(5)))
-    func aNotificationsPostIsClosedOnceItsResponseHeadIsIn() async throws {
-        let fixture = try RemoteFixture(["--stream-notifications"])
+    /// A remote for the notification-bound tests: started, initialized,
+    /// and with nothing in flight.
+    static func boundRemote(
+        _ fixture: RemoteFixture, lifetime: TimeInterval = 30, afterHead: TimeInterval = 1, requestLimit: Int = 4,
+        authorizer: MCPRemoteAuthorizer? = nil, exits: Mutex<Int>? = nil, logged: Mutex<[String]>? = nil
+    ) async throws -> MCPRemoteUpstream {
         let delivered = RecordedMessages()
         let remote = MCPRemoteUpstream(
-            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
-            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in },
-            requestLimit: 4)
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")), authorizer: authorizer,
+            deliver: { message in delivered.items.withLock { $0.append(message) } },
+            exited: { exits?.withLock { $0 += 1 } }, log: { line in logged?.withLock { $0.append(line) } },
+            requestLimit: requestLimit, notificationLifetime: lifetime, notificationAfterHead: afterHead)
         remote.start()
         remote.send(try Self.initialize(1))
         #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
         remote.send(try Self.message(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#))
+        #expect(await eventually { fixture.requests().contains("ACCEPTED notifications/initialized") }, "\(fixture.requests())")
         #expect(await eventually { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight)")
-        for id in 100..<110 {
+        return remote
+    }
+
+    /// Seconds until `remote` has nothing in flight (nil past `limit`).
+    static func secondsUntilIdle(_ remote: MCPRemoteUpstream, limit: TimeInterval = 15) async -> TimeInterval? {
+        let started = Date()
+        guard await eventually(limit, { remote.requestsInFlight == 0 }) else { return nil }
+        return Date().timeIntervalSince(started)
+    }
+
+    /// A notification whose server goes on after a 202 head is let go
+    /// once its bound after the head runs out (1 s here, 5 s by default),
+    /// not at the head; each frees its place, so cancels to such a server
+    /// never walk the count up to the limit.
+    @Test(.timeLimit(.minutes(5)))
+    func aNotificationStreamedAfterItsHeadIsCutAfterItsBound() async throws {
+        let fixture = try RemoteFixture(["--stream-notifications"])
+        let logged = Mutex<[String]>([])
+        let remote = try await Self.boundRemote(fixture, logged: logged)
+        for id in 100..<106 {
             #expect(remote.send(try Self.cancel(id)), "cancel \(id) was refused: \(remote.requestsInFlight) in flight")
-            #expect(await eventually(10) { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight) after cancel \(id)")
+            let waited = await Self.secondsUntilIdle(remote)
+            #expect(waited != nil, "cancel \(id) is still in flight")
+            #expect((waited ?? 0) >= 0.8, "cut before its bound: \(String(describing: waited))")
         }
         #expect(await eventually(30) {
-            fixture.requests().components(separatedBy: "CLOSED notification notifications/cancelled").count == 11
+            fixture.requests().components(separatedBy: "CLOSED notification notifications/cancelled").count == 7
         }, "\(fixture.requests())")
+        #expect(logged.withLock { $0 }.filter { $0.contains("past its bound") }.count == 6, "\(logged.withLock { $0 })")
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
 
+    /// A reply rv posts (to a request of the server's) has the same bound.
+    @Test(.timeLimit(.minutes(5)))
+    func aReplyStreamedAfterItsHeadIsCutAfterItsBound() async throws {
+        let fixture = try RemoteFixture(["--stream-notifications"])
+        let remote = try await Self.boundRemote(fixture)
+        #expect(remote.send(try Self.message(#"{"jsonrpc":"2.0","id":7,"result":{}}"#)))
+        let waited = await Self.secondsUntilIdle(remote)
+        #expect(waited != nil && (waited ?? 0) >= 0.8, "\(String(describing: waited))")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A notification whose response head never finishes is let go when
+    /// its lifetime from sending runs out (2 s here, 30 s by default),
+    /// though bytes keep coming.
+    @Test(.timeLimit(.minutes(5)))
+    func aNotificationWhoseHeadDripsIsCutByItsLifetime() async throws {
+        let fixture = try RemoteFixture(["--drip-notification-heads"])
+        let remote = try await Self.boundRemote(fixture, lifetime: 2)
+        #expect(remote.send(try Self.cancel(100)))
+        let waited = await Self.secondsUntilIdle(remote)
+        #expect(waited != nil && (waited ?? 0) >= 1.5, "\(String(describing: waited))")
+        #expect(await eventually(30) { fixture.requests().contains("CLOSED notification notifications/cancelled") })
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A normal 202 is never cut: it ends by itself, and nothing is closed.
+    @Test(.timeLimit(.minutes(5)))
+    func aNormalNotificationIsNeverCut() async throws {
+        let fixture = try RemoteFixture()
+        let logged = Mutex<[String]>([])
+        let remote = try await Self.boundRemote(fixture, logged: logged)
+        #expect(remote.send(try Self.cancel(100)))
+        #expect(await eventually(5) { remote.requestsInFlight == 0 })
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        #expect(logged.withLock { $0 }.contains { $0.contains("past its bound") } == false, "\(logged.withLock { $0 })")
+        #expect(fixture.requests().contains("ACCEPTED notifications/cancelled"))
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A notification answered 401 is refreshed and sent again once,
+    /// whether the 401 ends by itself or its body never ends and the bound
+    /// cuts it.
+    @Test(.timeLimit(.minutes(5)), arguments: [false, true])
+    func aNotificationAnswered401IsSentAgainOnce(endless: Bool) async throws {
+        let fixture = try RemoteFixture(["--token", "good-token"] + (endless ? ["--endless-refusals"] : []))
+        let token = Mutex("good-token")
+        let authorizer = MCPRemoteAuthorizer(
+            token: { token.withLock { $0 } },
+            refresh: { _ in
+                token.withLock { $0 = "good-token" }
+                return true
+            })
+        let remote = try await Self.boundRemote(fixture, authorizer: authorizer)
+        token.withLock { $0 = "stale-token" }
+        #expect(remote.send(try Self.cancel(100)))
+        #expect(await eventually(15) { fixture.requests().contains("ACCEPTED notifications/cancelled") }, "\(fixture.requests())")
+        #expect(await eventually(15) { remote.requestsInFlight == 0 })
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let lines = fixture.requests().components(separatedBy: "\n")
+        #expect(lines.filter { $0.contains("ACCEPTED notifications/cancelled") }.count == 1, "\(fixture.requests())")
+        #expect(lines.filter { $0.contains("-> 401") }.count == 1, "\(fixture.requests())")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A notification answered 404 ends the session, once, whether the 404
+    /// ends by itself or the bound cuts its endless body.
+    @Test(.timeLimit(.minutes(5)), arguments: [false, true])
+    func aNotificationAnswered404EndsTheSessionOnce(endless: Bool) async throws {
+        let fixture = try RemoteFixture(endless ? ["--endless-refusals"] : [])
+        let exits = Mutex(0)
+        let remote = try await Self.boundRemote(fixture, exits: exits)
+        #expect(await Self.post(fixture.url("/expire-sessions")) == 200)
+        #expect(remote.send(try Self.cancel(100)))
+        #expect(await eventually(15) { exits.withLock { $0 } == 1 })
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        #expect(exits.withLock { $0 } == 1)
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// rv's own ping is not held back by the request limit: a remote that
+    /// is full can still be judged (there is one ping at a time).
+    @Test(.timeLimit(.minutes(5)))
+    func aPingGoesOutAtTheRequestLimit() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let remote = try await Self.boundRemote(fixture, requestLimit: 2)
+        #expect(remote.send(try Self.message(Self.call(2))))
+        #expect(remote.send(try Self.message(Self.call(3))))
+        #expect(await eventually { Self.requests(fixture, "tools/call") == 2 }, "\(fixture.requests())")
+        #expect(remote.send(try Self.message(Self.call(4))) == false)
+        #expect(remote.send(try Self.message(#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#)))
+        #expect(await eventually { Self.requests(fixture, "ping") == 1 }, "\(fixture.requests())")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A remote at its request limit whose call times out is pinged: one
+    /// that answers is left running, one that does not is stopped and
+    /// started again.
+    @Test(.timeLimit(.minutes(5)), arguments: [false, true])
+    func aFullRemoteIsStillJudgedByItsPing(deaf: Bool) async throws {
+        let fixture = try RemoteFixture(["--hang-calls"] + (deaf ? ["--deaf-pings"] : []))
+        let run = Self.run(fixture, remoteRequestLimit: 2, callTimeout: 2)
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        #expect(await eventually { fixture.requests().contains("ACCEPTED notifications/initialized") }, "\(fixture.requests())")
+        run.client.send(Self.call(2))
+        run.client.send(Self.call(3))
+        #expect(await eventually { Self.requests(fixture, "ping") >= 1 }, "\(fixture.requests())")
+        let logs = run.logs
+        if deaf {
+            #expect(await eventually(60) { logs.text.contains("did not answer a ping") }, "\(logs.text)")
+            #expect(await eventually(60) { Self.initializes(fixture) == 2 }, "\(fixture.requests())")
+        } else {
+            try await Task.sleep(nanoseconds: 14_000_000_000)
+            #expect(logs.text.contains("did not answer a ping") == false, "\(logs.text)")
+            #expect(Self.initializes(fixture) == 1)
+        }
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
     /// A read put back after `stop()` keeps the session `stop()` took out,
-    /// so it is not invalidated a second time (on Linux, where each POST
-    /// has a session of its own, the count of live ones never goes below 0).
+    /// so it is not invalidated a second time. This guards only on Linux,
+    /// where each POST has a session of its own and the count of live ones
+    /// must never go below 0; on macOS there are no such sessions, and the
+    /// count stays 0 either way.
     @Test(.timeLimit(.minutes(5)))
     func aStopDuringAReadInvalidatesItsSessionOnce() async throws {
         let fixture = try RemoteFixture(["--hang-calls", "--hang-notes"])

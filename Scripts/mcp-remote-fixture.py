@@ -21,9 +21,15 @@ forgets every streamable HTTP session, so the next request on one gets 404.
 With --log-connections every POST is logged as it arrives, before its body is
 read ("ENTER POST <path> port=<client port>"), so a request sent again
 without its body still shows.
-With --stream-notifications a notification after initialized is answered
-200 with an event stream that never ends ("CLOSED notification <method>" is
-logged once the client closes it).
+With --stream-notifications a notification after initialized, or a reply,
+is answered 202 with a body that never ends, a comment every half second
+("CLOSED notification <method>" is logged once the client closes it).
+With --drip-notification-heads such a POST's response head is written a
+byte every half second and never finished ("CLOSED notification <method>"
+once the client closes it).
+With --endless-refusals a 401 or 404 has a body that never ends
+("CLOSED refusal <status>" once the client closes it).
+With --deaf-pings a ping is never answered ("DEAF ping" is logged).
 With --hold-replies a call's event-stream reply is sent whole and then
 held open ("CLOSED reply <id>" is logged once the client closes it).
 With --hang-notes a held call's event stream first carries one comment
@@ -107,6 +113,9 @@ class Handler(BaseHTTPRequestHandler):
     hang_notes = False
     hold_replies = False
     stream_notifications = False
+    drip_notification_heads = False
+    endless_refusals = False
+    deaf_pings = False
     reset_calls = False
     log_connections = False
     deaf_over = None
@@ -118,6 +127,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send(self, status, body=b"", content_type="application/json", extra=None):
+        if status in (401, 404) and self.endless_refusals and self.command == "POST":
+            return self.endless(status, extra)
         self.send_response(status)
         if body or status != 202:
             self.send_header("Content-Type", content_type)
@@ -289,19 +300,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404, b'{"error":"unknown session"}')
         if version != negotiated:
             return self.send(400, b'{"error":"bad MCP-Protocol-Version"}')
-        if "id" not in msg:
+        if "id" not in msg or "method" not in msg:
             log("ACCEPTED %s session=%s" % (method, sid))
             if self.stream_notifications and method != "notifications/initialized":
-                self.send_response(200)
+                self.send_response(202)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                self.wfile.write(b": keepalive\n\n")
-                self.wfile.flush()
-                self.wait_for_close()
+                self.drip(b": keepalive\n\n")
+                log("CLOSED notification %s" % method)
+                self.close_connection = True
+                return
+            if self.drip_notification_heads and method != "notifications/initialized":
+                for byte in b"HTTP/1.1 202 Accepted\r\n":
+                    self.drip_once(bytes([byte]))
+                self.drip(b"X")
                 log("CLOSED notification %s" % method)
                 self.close_connection = True
                 return
             return self.send(202)
+        if method == "ping" and self.deaf_pings:
+            log("DEAF ping")
+            return self.hang(msg.get("id"))
         if method == "tools/call" and self.hang_calls:
             return self.hang(msg.get("id"))
         if method == "tools/call" and self.reset_calls:
@@ -330,6 +349,40 @@ class Handler(BaseHTTPRequestHandler):
         self.wait_for_close()
         log("CLOSED reply %s" % mid)
         self.close_connection = True
+
+    def endless(self, status, extra=None):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        self.drip(b" ")
+        log("CLOSED refusal %d" % status)
+        self.close_connection = True
+
+    def drip(self, byte):
+        """Writes `byte` every half second until the client closes."""
+        while True:
+            try:
+                self.wfile.write(byte)
+                self.wfile.flush()
+            except OSError:
+                return
+            readable, _, _ = select.select([self.connection], [], [], 0.5)
+            if readable:
+                try:
+                    if not self.connection.recv(1, socket.MSG_PEEK):
+                        return
+                except OSError:
+                    return
+
+    def drip_once(self, byte):
+        try:
+            self.wfile.write(byte)
+            self.wfile.flush()
+        except OSError:
+            pass
+        select.select([], [], [], 0.5)
 
     def wait_for_close(self):
         while True:
@@ -421,6 +474,9 @@ def main():
     parser.add_argument("--hang-notes", action="store_true")
     parser.add_argument("--hold-replies", action="store_true")
     parser.add_argument("--stream-notifications", action="store_true")
+    parser.add_argument("--drip-notification-heads", action="store_true")
+    parser.add_argument("--endless-refusals", action="store_true")
+    parser.add_argument("--deaf-pings", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
     parser.add_argument("--log-connections", action="store_true")
     parser.add_argument("--deaf-over", type=int)
@@ -431,6 +487,9 @@ def main():
     Handler.hang_notes = options.hang_notes
     Handler.hold_replies = options.hold_replies
     Handler.stream_notifications = options.stream_notifications
+    Handler.drip_notification_heads = options.drip_notification_heads
+    Handler.endless_refusals = options.endless_refusals
+    Handler.deaf_pings = options.deaf_pings
     Handler.reset_calls = options.reset_calls
     Handler.log_connections = options.log_connections
     Handler.deaf_over = options.deaf_over
