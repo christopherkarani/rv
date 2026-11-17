@@ -25,7 +25,8 @@ private func eventuallyOffThePool(_ seconds: TimeInterval = 60, _ condition: @es
 }
 
 /// A plain stdio server that notes every SIGTERM, SIGINT and SIGHUP it or
-/// its child gets in `<argv[1]>.signals` (and exits on SIGTERM). At start
+/// its child gets in `<argv[1]>.signals` (and exits on SIGTERM, unless
+/// `<argv[1]>.ignore-term` exists). At start
 /// it writes its SIGHUP disposition to `.start`, then forks a child in its
 /// group and writes both pids to `.pids`. Its one tool, `wait`, is never
 /// answered; a call to it is noted in `.called`. It outlives its input, so
@@ -38,9 +39,10 @@ let signalNotingServer = #"""
             f.write(text + "\n")
     hup = signal.getsignal(signal.SIGHUP)
     note(".start", "HUP=" + ("ignore" if hup == signal.SIG_IGN else "default" if hup == signal.SIG_DFL else "handler"))
+    stubborn = os.path.exists(record + ".ignore-term")
     def heard(number, frame):
         note(".signals", signal.Signals(number).name[3:])
-        if number == signal.SIGTERM:
+        if number == signal.SIGTERM and not stubborn:
             os._exit(0)
     for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(number, heard)
@@ -72,10 +74,11 @@ let signalNotingServer = #"""
 private struct NotingServer {
     let directory: URL
 
-    init() throws {
+    init(ignoringTerm: Bool = false) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-signal-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data(signalNotingServer.utf8).write(to: script)
+        if ignoringTerm { try Data().write(to: URL(fileURLWithPath: record + ".ignore-term")) }
     }
 
     var script: URL { directory.appendingPathComponent("server.py") }
@@ -239,7 +242,60 @@ struct MCPShutdownSignalTests {
             audit: { _ in }, log: { _ in })
     }
 
-    #if os(macOS)
+    /// Without the relay that makes signals heard on Linux, nothing is
+    /// installed and serve is told so (`installed`): it refuses to run
+    /// rather than run with no handler.
+    @Test func withoutItsRelayNothingIsInstalled() {
+        var before = sigaction()
+        _ = sigaction(SIGURG, nil, &before)
+        let signals = MCPShutdownSignals([SIGURG], catching: true, relay: { _ in false })
+        defer { signals.cancel() }
+        #expect(signals.installed == false)
+        var after = sigaction()
+        _ = sigaction(SIGURG, nil, &after)
+        #expect(Self.handlerBits(after) == Self.handlerBits(before))
+        let relayed = MCPShutdownSignals([SIGURG], catching: false)
+        defer { relayed.cancel() }
+        #expect(relayed.installed)
+    }
+
+    /// Planning is not waited on once a signal is heard: a plan that never
+    /// returns (a hung secret provider) still ends at the first signal, and
+    /// one heard before planning ends it before it starts.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalEndsPlanningThatNeverReturns() {
+        let signals = MCPShutdownSignals([SIGURG], catching: false)
+        defer { signals.cancel() }
+        let started = DispatchSemaphore(value: 0)
+        let hung = DispatchSemaphore(value: 0)
+        defer { hung.signal() }
+        Thread.detachNewThread {
+            _ = started.wait(timeout: .now() + 30)
+            usleep(100_000)
+            kill(getpid(), SIGURG)
+        }
+        let planned: Int? = signals.plan {
+            started.signal()
+            // Never returns while the test waits on it.
+            _ = hung.wait(timeout: .now() + 120)
+            return 0
+        }
+        #expect(planned == nil)
+        #expect(signals.first == SIGURG)
+        #expect(signals.plan { 1 } == nil, "a plan after a signal was used")
+        let quiet = MCPShutdownSignals([SIGURG], catching: false)
+        defer { quiet.cancel() }
+        #expect(quiet.plan { 7 } == 7)
+    }
+
+    private static func handlerBits(_ action: sigaction) -> Int {
+        #if canImport(Darwin)
+        unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
+        #else
+        unsafeBitCast(action.__sigaction_handler.sa_handler, to: Int.self)
+        #endif
+    }
+
     /// In a child, so this process's dispositions never change. Installed:
     /// a real handler, not `SIG_IGN`, so a plain server spawned meanwhile
     /// starts with the defaults; the signal still reaches serve, which does
@@ -248,7 +304,7 @@ struct MCPShutdownSignalTests {
     /// runs this test too rather than skipping it.
     @Test(.timeLimit(.minutes(1)))
     func caughtSignalsLeaveAPlainChildTheDefaultsAndAreRestored() throws {
-        let lines = try probeLines(try mcpProbe().path, ["signals", "INT", "TERM", "HUP"])
+        let lines = try probeLines(try mcpSignalProbe().path, ["signals", "INT", "TERM", "HUP"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=default")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=handler")
         #expect(lines["child"] == "INT=default TERM=default HUP=default")
@@ -261,7 +317,7 @@ struct MCPShutdownSignalTests {
     /// probe sets INT and TERM to the default whatever the runner had.
     @Test(.timeLimit(.minutes(1)))
     func aSignalInheritedIgnoredStaysIgnored() throws {
-        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals", "INT", "TERM"])
+        let lines = try probeLines("/usr/bin/nohup", [try mcpSignalProbe().path, "signals", "INT", "TERM"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=ignore")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=ignore")
         // Serve adds nothing: the child keeps HUP ignored, unless Foundation's
@@ -286,7 +342,7 @@ struct MCPShutdownSignalTests {
         #expect(await serve.listed())
         serve.client.send(NotingServer.call)
         #expect(await eventuallyOffThePool { server.called }, "the call never reached the server: \(serve.drain())")
-        #expect(Darwin.kill(serve.process.processIdentifier, number) == 0)
+        #expect(kill(serve.process.processIdentifier, number) == 0)
         #expect(await eventuallyOffThePool { serve.process.isRunning == false }, "serve did not end")
         let process = serve.process
         #expect(process.isRunning == false && process.terminationReason == .exit, "serve was killed by the signal")
@@ -328,10 +384,50 @@ struct MCPShutdownSignalTests {
         #expect(serve.lines("chld") == ["default"])
         #expect(await serve.ends(within: 60) == 0)
     }
-    #endif
+
+    /// A second signal ends serve at once: a server that outlives SIGTERM
+    /// is killed without the grace (it never gets rv's SIGTERM), and serve
+    /// exits as killed by the first signal.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
+    func aSecondRealSignalKillsWhatIsLeftAtOnce() async throws {
+        let server = try NotingServer(ignoringTerm: true)
+        defer { server.remove() }
+        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP"])
+        defer { serve.kill() }
+        #expect(await serve.initialize())
+        #expect(await eventuallyOffThePool { server.pids.count == 2 })
+        #expect(kill(serve.process.processIdentifier, SIGINT) == 0)
+        // Well inside the 2 s serve gives a server before its SIGTERM.
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(kill(serve.process.processIdentifier, SIGTERM) == 0)
+        let process = serve.process
+        #expect(await eventuallyOffThePool { process.isRunning == false }, "serve did not end")
+        #expect(process.isRunning == false && process.terminationReason == .exit)
+        #expect(process.isRunning == false && process.terminationStatus == 128 + SIGINT)
+        for pid in server.pids {
+            #expect(await eventuallyOffThePool { MCPGatewayRestartRuntimeTests.gone(pid) }, "\(pid) is still running")
+        }
+        #expect(server.lines(".signals").contains("TERM") == false, "\(server.lines(".signals"))")
+    }
+
+    /// A signal while serve plans ends it at once, as killed by that
+    /// signal, however long planning would take: no server is started.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available), arguments: [SIGTERM, SIGINT, SIGHUP])
+    func aRealSignalWhilePlanningEndsServeAtOnce(_ number: Int32) async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let serve = try ProbeServe(server, prefix: [], flags: ["INT", "TERM", "HUP", "plan-hangs"])
+        defer { serve.kill() }
+        #expect(await eventuallyOffThePool { serve.lines("planning").isEmpty == false }, "planning never started")
+        #expect(kill(serve.process.processIdentifier, number) == 0)
+        let process = serve.process
+        #expect(await eventuallyOffThePool(10) { process.isRunning == false }, "serve did not end")
+        #expect(process.isRunning == false && process.terminationReason == .exit)
+        #expect(process.isRunning == false && process.terminationStatus == 128 + number)
+        #expect(server.pids.isEmpty, "a server was started")
+    }
 }
 
-#if os(macOS)
 /// Runs `executable` to its end and returns its output lines by their first
 /// word. Hard bound: killed, and the test fails, after 20 seconds; the wait
 /// polls instead of blocking in `waitid`.
@@ -366,7 +462,7 @@ private final class ProbeServe: @unchecked Sendable {
     let directory: URL
 
     init(_ server: NotingServer, prefix: [String], flags: [String]) throws {
-        let probe = try mcpProbe().path
+        let probe = try mcpSignalProbe().path
         let process = Process()
         let arguments = [probe, "serve", server.directory.path, server.script.path] + flags
         process.executableURL = URL(fileURLWithPath: prefix.first ?? probe)
@@ -416,7 +512,10 @@ private final class ProbeServe: @unchecked Sendable {
     }
 
     func kill() {
+        #if canImport(Darwin)
         if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+        #else
+        if process.isRunning { Glibc.kill(process.processIdentifier, SIGKILL) }
+        #endif
     }
 }
-#endif
