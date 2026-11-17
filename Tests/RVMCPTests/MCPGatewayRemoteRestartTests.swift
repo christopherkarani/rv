@@ -45,6 +45,29 @@ struct MCPGatewayRemoteRestartTests {
             writeBufferBytes: writeBufferBytes, clientStallSeconds: clientStallSeconds)
     }
 
+    /// An event-stream reply is closed once its answer is in: a server that
+    /// answers and then holds the stream open holds no connection of rv's.
+    @Test(.timeLimit(.minutes(5)))
+    func anEventStreamReplyIsClosedOnceItIsAnswered() async throws {
+        let fixture = try RemoteFixture(["--hold-replies"])
+        let delivered = RecordedMessages()
+        let exits = Mutex(0)
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } },
+            exited: { exits.withLock { $0 += 1 } }, log: { _ in })
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        remote.send(try JSONValue.parse(Data(Self.call(2).utf8)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } })
+        #expect(await eventually(30) { fixture.requests().contains("CLOSED reply 2") }, "\(fixture.requests())")
+        #expect(exits.withLock { $0 } == 0)
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
     static func call(_ id: Int, text: String = "x") -> String {
         #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"echo","arguments":{"text":"\#(text)"}}}"#
     }

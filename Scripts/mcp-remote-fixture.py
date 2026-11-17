@@ -21,6 +21,8 @@ forgets every streamable HTTP session, so the next request on one gets 404.
 With --log-connections every POST is logged as it arrives, before its body is
 read ("ENTER POST <path> port=<client port>"), so a request sent again
 without its body still shows.
+With --hold-replies a call's event-stream reply is sent whole and then
+held open ("CLOSED reply <id>" is logged once the client closes it).
 With --hang-notes a held call's event stream first carries one comment
 line, so the client reads part of a reply that never answers.
 With --deaf-over N a POST /mcp whose body is over N bytes is never read
@@ -100,6 +102,7 @@ class Handler(BaseHTTPRequestHandler):
     oauth = False
     hang_calls = False
     hang_notes = False
+    hold_replies = False
     reset_calls = False
     log_connections = False
     deaf_over = None
@@ -299,8 +302,32 @@ class Handler(BaseHTTPRequestHandler):
             note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": data}}
             body = ("event: message\ndata: %s\n\n: keepalive\n\nevent: message\ndata: %s\n\n" % (
                 json.dumps(note), json.dumps(reply))).encode()
+            if self.hold_replies:
+                return self.hold(msg.get("id"), body)
             return self.send(200, body, content_type="text/event-stream")
         self.send(200, json.dumps(reply).encode())
+
+    def hold(self, mid, body):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.wait_for_close()
+        log("CLOSED reply %s" % mid)
+        self.close_connection = True
+
+    def wait_for_close(self):
+        while True:
+            readable, _, _ = select.select([self.connection], [], [], 0.2)
+            if not readable:
+                continue
+            try:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    return
+            except OSError:
+                return
+            select.select([], [], [], 0.2)
 
     def hang(self, mid):
         self.send_response(200)
@@ -378,6 +405,7 @@ def main():
     parser.add_argument("--oauth", action="store_true")
     parser.add_argument("--hang-calls", action="store_true")
     parser.add_argument("--hang-notes", action="store_true")
+    parser.add_argument("--hold-replies", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
     parser.add_argument("--log-connections", action="store_true")
     parser.add_argument("--deaf-over", type=int)
@@ -386,6 +414,7 @@ def main():
     Handler.oauth = options.oauth
     Handler.hang_calls = options.hang_calls
     Handler.hang_notes = options.hang_notes
+    Handler.hold_replies = options.hold_replies
     Handler.reset_calls = options.reset_calls
     Handler.log_connections = options.log_connections
     Handler.deaf_over = options.deaf_over
