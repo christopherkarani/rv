@@ -99,6 +99,17 @@ public enum MCPSandbox {
         earlier.forEach { $0.stop() }
     }
 
+    /// Stops and forgets `server`'s proxy: the launch planned with it will
+    /// not run (its plan failed, or serve stopped before it started).
+    static func stopProxies(server: String) {
+        let stopped = proxies.withLock { running -> [EgressProxy] in
+            let named = running.filter { $0.server == server }.map(\.proxy)
+            running.removeAll { $0.server == server }
+            return named
+        }
+        stopped.forEach { $0.stop() }
+    }
+
     /// The proxy credential a caged launch carries in its proxy URL, so the
     /// gateway can scrub it from anything the server echoes back.
     public static func proxyCredential(in environment: [String: String]) -> String? {

@@ -77,14 +77,21 @@ public enum MCPLaunchPlanner {
         placeholders: MCPPlaceholderLeasing = .unavailable,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
-        // A plan that fails starts nothing: the leases it took end with it.
+        // A plan that fails starts nothing: the leases it took end with it,
+        // and so do the proxies its cages started.
         var leases: [SecretPlaceholderLease] = []
+        var caged: [String] = []
         let planned = planServers(
             names, configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: baseEnvironment,
-            requireSandbox: requireSandbox, oauthTokens: oauthTokens, sandbox: sandbox, placeholders: placeholders,
-            leases: &leases, now: now)
+            requireSandbox: requireSandbox, oauthTokens: oauthTokens,
+            sandbox: { definition, launch, reach in
+                caged.append(definition.name)
+                return sandbox(definition, launch, reach)
+            },
+            placeholders: placeholders, leases: &leases, now: now)
         if case .failure = planned {
             for lease in leases { lease.revoke() }
+            for server in caged { MCPSandbox.stopProxies(server: server) }
         }
         return planned
     }
@@ -249,6 +256,7 @@ public enum MCPLaunchPlanner {
         case .success(let caged):
             guard caged.executable == MCPSandbox.sandboxExec else {
                 lease.revoke()
+                if MCPSandbox.proxyCredential(in: caged.environment) != nil { MCPSandbox.stopProxies(server: name) }
                 return refuse(.uncaged)
             }
             var scrubbed = named(resolved)
@@ -391,6 +399,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let clientStallSeconds: TimeInterval
     /// `MCPGatewayRuntime.stopGrace`, unless a test widens it.
     private let stopGrace: TimeInterval
+    /// How long a restart waits for the last process to be reaped:
+    /// `stopGrace + restartReapGrace`, unless a test shortens it.
+    private let restartWait: TimeInterval
     /// The client's output, written off the gateway queue.
     private let clientWriter: MCPOutbox
     private let clientProgress = MCPWriteProgress()
@@ -408,8 +419,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// its exit reach the core, and its exit only once.
     private var live: [String: Int] = [:]
     /// Every stdio server's process group not yet reaped (and, for a
-    /// placeholder server, its lease not yet revoked), by launch.
-    private var groups: [Int: (server: String, group: any MCPSupervisedGroup, bound: Bool)] = [:]
+    /// placeholder server, its lease not yet revoked), by launch, with the
+    /// end a restart waits for.
+    private var groups: [Int: (server: String, group: any MCPSupervisedGroup, bound: Bool, ended: MCPLaunchEnd)] = [:]
     /// Each stdio upstream's input, written off the gateway queue.
     private var upstreamWriters: [String: (outbox: MCPOutbox, input: FileHandle)] = [:]
     private var remotes: [String: MCPRemoteUpstream] = [:]
@@ -420,8 +432,15 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// gone out (and whose POST is not over): what waits in the HTTP layer
     /// for the server to take it counts against `writeBufferBytes`.
     private var remoteInFlight: [String: (generation: Int, bytes: Int)] = [:]
+    /// Servers whose restart waits for their last process or is being
+    /// planned: a restart of one of them, or of a server that is live, is
+    /// refused, so a server has at most one launch.
+    private var restarting: Set<String> = []
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
+    /// `stopping`, for restarts off the gateway queue: once it is set, none
+    /// plans a launch.
+    private let stoppingRestarts = Atomic<Bool>(false)
     /// Feeds the core `.tick` on the gateway queue, so deadlines pass with
     /// no other input.
     private var ticker: DispatchSourceTimer?
@@ -440,6 +459,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         relaunch: Relaunch? = nil,
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
         stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
+        restartWait: TimeInterval? = nil,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
@@ -459,6 +479,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.writeBufferBytes = writeBufferBytes
         self.clientStallSeconds = clientStallSeconds
         self.stopGrace = stopGrace
+        self.restartWait = restartWait ?? stopGrace + Self.restartReapGrace
         self.clientWriter = MCPOutbox(limit: .max)
         self.placeholdersBound = placeholdersBound
     }
@@ -515,6 +536,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         finished.wait()
         let ending: Ending = queue.sync {
             stopping = true
+            stoppingRestarts.store(true, ordering: .sequentiallyConsistent)
             ticker?.cancel()
             ticker = nil
             perform(core.handle(.gatewayStopping))
@@ -594,9 +616,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         let gate = MCPExitGate { [self] in
             queue.async { self.exited(server, generation) }
         }
+        let ended = MCPLaunchEnd()
         let started = body(
             [STDIN_FILENO: stdin.read, STDOUT_FILENO: stdout.write, STDERR_FILENO: stderr.write],
             { [self] _ in
+                ended.end()
                 queue.async { self.groups[generation] = nil }
                 gate.reaped()
             })
@@ -614,7 +638,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             return false
         case .success(let running): group = running
         }
-        groups[generation] = (server, group, bound)
+        groups[generation] = (server, group, bound, ended)
         live[server] = generation
         upstreamWriters[server] = (MCPOutbox(limit: writeBufferBytes), FileHandle(fileDescriptor: stdin.write, closeOnDealloc: true))
         let stderrReader = stderr.read
@@ -734,24 +758,62 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// placeholder server's lease revoked), then it is planned again
     /// (`relaunch`, or its serve-start connection); back on the queue it is
     /// started and the core told, or the core hears it went away again.
+    /// One asked for while the server is live, or while a restart of it is
+    /// under way, is refused and logged: it starts nothing. Once serve is
+    /// stopping nothing is planned, and a plan that returns after that is
+    /// abandoned (`abandon`).
     private func restart(_ server: String, launch: Int) {
-        let earlier = groups.values.filter { $0.server == server }.map { $0.group }
+        if let busy = restartRefusal(server) {
+            log("not starting MCP server \(MCPDisplayedText.field(server)) again: \(busy)")
+            return
+        }
+        restarting.insert(server)
+        let earlier = groups.values.filter { $0.server == server }.map { $0.ended }
         let original = connections.first { $0.server == server }
         let relaunch = relaunch
+        let deadline = SuspendingClock.now.advanced(by: .seconds(restartWait))
         Thread.detachNewThread { [self] in
-            let deadline = Date().addingTimeInterval(self.stopGrace + Self.restartReapGrace)
             let planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
-            if earlier.allSatisfy({ $0.waitUntilFinished(until: deadline) }) == false {
-                planned = .failure(MCPStartFailure("its last process did not exit"))
-            } else if let relaunch {
-                planned = relaunch(server)
-                    .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }
-                    .mapError { MCPStartFailure($0.message) }
-            } else {
-                planned = Self.reused(original)
+            switch MCPLaunchEnd.wait(
+                for: earlier, until: deadline, abandoned: { self.stoppingRestarts.load(ordering: .sequentiallyConsistent) })
+            {
+            case .timedOut: planned = .failure(MCPStartFailure("its last process did not exit"))
+            case .abandoned: planned = .failure(MCPStartFailure("serve is stopping"))
+            case .ended:
+                if let relaunch {
+                    planned = relaunch(server)
+                        .map { pair -> (MCPGatewayCore.Upstream?, MCPUpstreamConnection) in (pair.0, pair.1) }
+                        .mapError { MCPStartFailure($0.message) }
+                } else {
+                    planned = Self.reused(original)
+                }
             }
             queue.async { self.relaunched(server, launch: launch, planned) }
         }
+    }
+
+    /// Why `server` is not started again now: it is live, or a restart of it
+    /// is already under way. Nil when it may be.
+    private func restartRefusal(_ server: String) -> String? {
+        if live[server] != nil { return "it is running" }
+        if restarting.contains(server) { return "it is already being started" }
+        return nil
+    }
+
+    /// A launch planned while serve stopped: it never starts, so what its
+    /// plan started ends now (a placeholder server's lease, a cage's proxy).
+    private static func abandon(_ connection: MCPUpstreamConnection) {
+        switch connection {
+        case .process(let launch): abandonProxy(of: launch)
+        case .placeholderBound(let launch, let binding):
+            binding.lease.revoke()
+            abandonProxy(of: launch)
+        case .remote, .refused: break
+        }
+    }
+
+    private static func abandonProxy(of launch: MCPUpstreamLaunch) {
+        if MCPSandbox.proxyCredential(in: launch.environment) != nil { MCPSandbox.stopProxies(server: launch.server) }
     }
 
     /// How long a restart waits, past `stopGrace`, for the last process to be reaped.
@@ -772,10 +834,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         _ server: String, launch: Int, _ planned: Result<(MCPGatewayCore.Upstream?, MCPUpstreamConnection), MCPStartFailure>
     ) {
         let shown = MCPDisplayedText.field(server)
+        restarting.remove(server)
         // Serving ends, or the core stopped waiting for this launch (it ran
-        // out of time): nothing is started, and the core is not told.
+        // out of time): nothing is started, what its plan started ends, and
+        // the core is not told.
         guard stopping == false, core.awaitsRelaunch(server: server, launch: launch) else {
-            if case .success((_, .placeholderBound(_, let binding))) = planned { binding.lease.revoke() }
+            if case .success((_, let next)) = planned { Self.abandon(next) }
             return
         }
         let connection: MCPUpstreamConnection
@@ -802,6 +866,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             started = false
         }
         perform(core.handle(started ? .upstreamRelaunched(server: server, launch: launch) : .upstreamExited(server: server)))
+    }
+
+    /// Runs `outputs` on the gateway queue as if the core had produced them:
+    /// for tests that drive the runtime past what the core asks of it.
+    func performOnQueue(_ outputs: [MCPGatewayOutput]) {
+        queue.sync { perform(outputs) }
     }
 
     /// `charging`: the reader whose line produced `outputs`, held back until

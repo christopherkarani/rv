@@ -315,7 +315,7 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistReachesOnlyTheProxysPort() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "probe") }
         let other = try listener()
         defer { close(other.fd) }
         let script = """
@@ -339,7 +339,7 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistHasNoWayRoundTheProxysPort() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "probe") }
         let other = try listener()
         defer { close(other.fd) }
         try home.write("project/routes.py", routes)
@@ -383,7 +383,7 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func theProxysPortOnAnotherAddressIsRefused() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "probe") }
         try home.write("project/beyond.py", """
             import errno, os, socket, sys
             port = int(os.environ["HTTPS_PROXY"].rsplit(":", 1)[1])
@@ -442,7 +442,7 @@ struct MCPLinuxSandboxTests {
         .timeLimit(.minutes(2)))
     func whereTheHostForbidsTheConnectorAServerWithAnAllowlistIsNotStarted() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "probe") }
         let policy = MCPSandboxPolicy(network: false, hosts: ["allowed.example"])
         let outcome = try caged(home, "echo ran > ran", policy: policy)
         #expect(outcome.status == 125 && outcome.errors.contains("kernel.yama.ptrace_scope"), "\(outcome)")
@@ -458,7 +458,7 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistStillExitsAndIsSignalledAsItself() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "probe") }
         let policy = MCPSandboxPolicy(network: false, hosts: ["allowed.example"])
         #expect(try caged(home, "exit 7", policy: policy).status == 7)
         let killed = try run(try cage(home, "kill -SEGV $$", policy: policy).get())
@@ -725,7 +725,7 @@ struct MCPLinuxSandboxTests {
     @Test(.enabled(if: realServers), .timeLimit(.minutes(5)))
     func aNodeServerStartedWithNpxRunsInTheCage() throws {
         let home = try Home()
-        defer { MCPSandbox.stopProxies() }
+        defer { MCPSandbox.stopProxies(server: "files") }
         let policy = MCPSandboxPolicy(network: false, hosts: ["registry.npmjs.org"])
         let definition = MCPServerDefinition(name: "files", command: "npx", sandbox: policy)
         let launch = MCPUpstreamLaunch(

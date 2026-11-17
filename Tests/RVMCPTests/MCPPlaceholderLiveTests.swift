@@ -322,6 +322,71 @@ struct MCPPlaceholderLiveTests {
         #expect(served)
     }
 
+    /// A bound server that went away is planned again only once its last
+    /// lease is revoked, and its new launch runs bound under a lease of its own.
+    @Test(.enabled(if: hostBindsPlaceholders && MCPSandbox.enforced && python3Available), .timeLimit(.minutes(3)))
+    func aRelaunchedBoundServerIsLeasedOnlyOnceItsLastLeaseEnded() async throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-placeholder-restart-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent("Library/Caches"), withIntermediateDirectories: true)
+        try Data(restartingServer.utf8).write(to: root.appendingPathComponent("server.py"))
+        let name = "placeholder-restart"
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(name)", isDirectory: true)
+        let fixture = try PlaceholderSecretsFixture()
+        defer { fixture.tearDown() }
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
+        defer { broker.stop() }
+        // The launches file is in the server's scratch, one of its write roots.
+        let definition = MCPServerDefinition(
+            name: name, command: "python3",
+            args: ["-u", root.appendingPathComponent("server.py").path, scratch.appendingPathComponent("launches").path],
+            tools: MCPToolPolicy(allow: ["*"]), sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
+        let configuration = MCPConfiguration(servers: [definition])
+        let secrets = try PlaceholderSecretsFixture.definitions()
+        let base = ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "TMPDIR": temporary]
+        let configDirectory = fixture.directory
+        let plan: @Sendable () -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> = {
+            MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: CountingResolver().resolver,
+                baseEnvironment: base, requireSandbox: true,
+                sandbox: Self.cage(home: home, configDirectory: configDirectory), placeholders: .broker(broker)
+            ).flatMap { planned in planned.first.map { .success($0) } ?? .failure(.unknownServer(name)) }
+        }
+        let first = try plan().get()
+        guard case .placeholderBound = first.1 else {
+            Issue.record("not bound: \(first.1)")
+            return
+        }
+        let core = MCPGatewayCore(
+            configuration: configuration, upstreams: [first.0],
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true })
+        // How many leases were live each time it was planned again.
+        let liveAtRelaunch = Mutex<[Int]>([])
+        let run = GatewayRun(
+            core: core, connections: [first.1],
+            relaunch: { _ in
+                liveAtRelaunch.withLock { $0.append(broker.broker.liveCount) }
+                return plan()
+            })
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        #expect(broker.broker.liveCount == 1)
+        run.client.send(MCPGatewayRestartRuntimeTests.call(2, "crash"))
+        _ = await MCPGatewayRestartRuntimeTests.reply(run, 2)
+        let answer = await MCPGatewayRestartRuntimeTests.echoes(run, from: 3)
+        #expect(answer?["result"] != nil, "\(run.logs.text)")
+        #expect(liveAtRelaunch.withLock { $0 } == [0])
+        #expect(broker.broker.liveCount == 1)
+        #expect(MCPGatewayRestartRuntimeTests.starts(in: scratch) == 2)
+        #expect(await run.finish())
+        #expect(await offThePool { eventually { broker.broker.liveCount == 0 } })
+    }
+
     /// The cage `MCPSandbox.apply` builds, for a fake home: apply() takes only
     /// the passwd home (`unreviewedHome`), and a test must not write there.
     /// Same scratch, network reach, profile and launch rewrite.
