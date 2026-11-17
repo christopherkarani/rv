@@ -112,16 +112,20 @@ struct MCPGatewayRestartRuntimeTests {
             environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"])
     }
 
-    static func definition(callTimeout: Int = 300, server name: String = "flaky") -> MCPServerDefinition {
+    static func definition(
+        callTimeout: Int = 300, startTimeout: Int = MCPServerDefinition.defaultStartTimeoutSeconds, server name: String = "flaky"
+    ) -> MCPServerDefinition {
         var server = MCPServerDefinition(name: name, command: "python3", tools: MCPToolPolicy(allow: ["*"]))
         server.callTimeoutSeconds = callTimeout
+        server.startTimeoutSeconds = startTimeout
         return server
     }
 
     static func core(
-        callTimeout: Int = 300, forwards: ForwardRecords = ForwardRecords(), server name: String = "flaky"
+        callTimeout: Int = 300, startTimeout: Int = MCPServerDefinition.defaultStartTimeoutSeconds,
+        forwards: ForwardRecords = ForwardRecords(), server name: String = "flaky"
     ) -> MCPGatewayCore {
-        let server = definition(callTimeout: callTimeout, server: name)
+        let server = definition(callTimeout: callTimeout, startTimeout: startTimeout, server: name)
         return MCPGatewayCore(
             configuration: MCPConfiguration(servers: [server]), upstreams: [MCPGatewayCore.Upstream(definition: server)],
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
@@ -547,6 +551,64 @@ struct MCPGatewayRestartRuntimeTests {
             "\(logs.text)")
         #expect(planned.value.withLock { $0 } == 0)
         #expect(Self.starts(in: directory) == 1)
+        #expect(await run.finish())
+    }
+
+    /// rv's own wait for the stopped launch to be reaped is not the new
+    /// launch's start time: a server whose SIGKILL comes 6 s after its stop
+    /// still has its whole 3 s `startTimeoutSeconds` once it is reaped, and
+    /// comes back on the first try.
+    @Test(.timeLimit(.minutes(5)))
+    func aRelaunchKeepsItsWholeStartTimeoutPastTheWaitForItsLastProcess() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let planned = PlanCount()
+        let run = GatewayRun(
+            core: Self.core(startTimeout: 3), connections: [.process(Self.launch(["deaf", "ignore-term"], in: directory))],
+            writeBufferBytes: 256 << 10, relaunch: Self.counting(planned, in: directory), stopGrace: 6)
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        let stopped = await Self.overflow(run)
+        #expect(stopped?["error"]?["message"]?.stringValue?.contains("may have run") == true, "\(String(describing: stopped))")
+        let logs = run.logs
+        let answer = await Self.echoes(run, from: 4)
+        #expect(answer?["result"] != nil, "\(logs.text)")
+        #expect(logs.text.contains("did not start again") == false, "\(logs.text)")
+        #expect(planned.value.withLock { $0 } == 1, "\(logs.text)")
+        #expect(Self.starts(in: directory) == 2)
+        #expect(await run.finish())
+    }
+
+    /// A plan that never returns is not waited on for good: its launch runs
+    /// out of its start timeout, every later restart is refused while the
+    /// plan still runs and counts as one more time the server went away,
+    /// and past the restart cap the server fails for the session.
+    @Test(.timeLimit(.minutes(5)))
+    func aPlanThatNeverReturnsEndsWithTheServerFailed() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let planned = PlanCount()
+        let release = DispatchSemaphore(value: 0)
+        let run = GatewayRun(
+            core: Self.core(startTimeout: 1), connections: [.process(Self.launch([], in: directory))],
+            relaunch: { _ in
+                planned.value.withLock { $0 += 1 }
+                _ = release.wait(timeout: .now() + 240)
+                return .failure(.unknownServer("flaky"))
+            })
+        defer { run.stopNow() }
+        defer { release.signal() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2, "crash"))
+        _ = await Self.reply(run, 2)
+        let logs = run.logs
+        #expect(await eventually(120) { logs.text.contains("so rv stopped restarting it") }, "\(logs.text)")
+        #expect(logs.text.contains("not starting MCP server flaky again: it is already being started"), "\(logs.text)")
+        #expect(planned.value.withLock { $0 } == 1)
+        run.client.send(Self.call(3, "echo"))
+        let refused = await Self.reply(run, 3)
+        #expect(refused?["error"]?["message"]?.stringValue?.contains("rv stopped restarting it") == true, "\(String(describing: refused))")
+        release.signal()
         #expect(await run.finish())
     }
 
