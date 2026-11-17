@@ -121,7 +121,7 @@ public enum JSONDuplicateKeys {
             return text
         }
 
-        private static let byteOrderMark = Unicode.Scalar(0xFEFF)!
+        private static let byteOrderMark: Unicode.Scalar = "\u{FEFF}"
 
         /// Bytes of numbers and of `true`, `false`, `null`.
         private static let scalarBytes = Set("0123456789+-.eEtrufalsn".utf8)
