@@ -28,7 +28,8 @@ struct MCPGatewayRemoteRestartTests {
     static func run(
         _ fixture: RemoteFixture, forwards: ForwardRecords = ForwardRecords(),
         writeBufferBytes: Int = MCPGatewayRuntime.writeBufferBytes,
-        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds
+        clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
+        remoteRequestLimit: Int? = nil
     ) -> GatewayRun {
         let remote = MCPServerDefinition(
             name: "remote", remote: MCPRemoteServer(url: fixture.url("/mcp")), tools: MCPToolPolicy(allow: ["*"]))
@@ -42,7 +43,82 @@ struct MCPGatewayRemoteRestartTests {
             })
         return GatewayRun(
             core: core, connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))],
-            writeBufferBytes: writeBufferBytes, clientStallSeconds: clientStallSeconds)
+            writeBufferBytes: writeBufferBytes, clientStallSeconds: clientStallSeconds,
+            remoteRequestLimit: remoteRequestLimit)
+    }
+
+    static func message(_ text: String) throws -> JSONValue {
+        try JSONValue.parse(Data(text.utf8))
+    }
+
+    static func cancel(_ id: Int) throws -> JSONValue {
+        try Self.message(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":\#(id)}}"#)
+    }
+
+    /// How many requests of `method` the fixture has logged.
+    static func requests(_ fixture: RemoteFixture, _ method: String) -> Int {
+        fixture.requests().components(separatedBy: "\n").filter { $0.contains("REQ POST /mcp \(method)") }.count
+    }
+
+    /// A remote has at most its limit of requests in flight, whatever they
+    /// are. Past it nothing is sent: a request is refused (`send` says so),
+    /// and a cancel is not posted but still closes the request it names,
+    /// which frees its place.
+    @Test(.timeLimit(.minutes(5)))
+    func aRemoteHasAtMostItsLimitOfRequestsInFlight() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let delivered = RecordedMessages()
+        let logged = Mutex<[String]>([])
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {},
+            log: { line in logged.withLock { $0.append(line) } }, requestLimit: 2)
+        remote.start()
+        #expect(remote.send(try Self.initialize(1)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        #expect(remote.send(try Self.message(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)))
+        #expect(await eventually { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight)")
+        #expect(remote.send(try Self.message(Self.call(2))))
+        #expect(remote.send(try Self.message(Self.call(3))))
+        #expect(await eventually { Self.requests(fixture, "tools/call") == 2 }, "\(fixture.requests())")
+        #expect(remote.requestsInFlight == 2)
+        // At the limit: one more is not sent.
+        #expect(remote.send(try Self.message(Self.call(4))) == false)
+        #expect(remote.send(try Self.cancel(2)) == false)
+        #expect(await eventually { fixture.requests().contains("CLOSED call 2") }, "\(fixture.requests())")
+        #expect(await eventually { remote.requestsInFlight == 1 }, "\(remote.requestsInFlight)")
+        #expect(Self.requests(fixture, "notifications/cancelled") == 0)
+        #expect(logged.withLock { $0 }.contains { $0.contains("2 requests in flight") }, "\(logged.withLock { $0 })")
+        // A freed place takes the next.
+        #expect(remote.send(try Self.message(Self.call(5))))
+        #expect(await eventually { Self.requests(fixture, "tools/call") == 3 }, "\(fixture.requests())")
+        #expect(fixture.requests().contains("tools/call") && Self.requests(fixture, "tools/call") == 3)
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A call that finds its remote full is not sent: the client is told it
+    /// was not run, its audit record says so, and calls in flight go on.
+    @Test(.timeLimit(.minutes(5)))
+    func aCallPastTheRemotesRequestLimitIsNotRun() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let run = Self.run(fixture, remoteRequestLimit: 2)
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2))
+        run.client.send(Self.call(3))
+        #expect(await eventually { Self.requests(fixture, "tools/call") == 2 }, "\(fixture.requests())")
+        run.client.send(Self.call(4))
+        let refused = await MCPGatewayRestartRuntimeTests.reply(run, 4, timeout: 30)
+        let message = refused?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("was not run"), "\(String(describing: refused))")
+        let audits = run.audits
+        #expect(await eventually { audits.items.withLock { $0.contains { $0.outcome == .notRun } } })
+        #expect(audits.items.withLock { $0.filter { $0.outcome == .notRun }.count } == 1)
+        #expect(Self.requests(fixture, "tools/call") == 2)
+        #expect(run.logs.text.contains("could not reach") == false, "\(run.logs.text)")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
     }
 
     /// An event-stream reply is closed once its answer is in: a server that
@@ -59,8 +135,8 @@ struct MCPGatewayRemoteRestartTests {
         remote.start()
         remote.send(try Self.initialize(1))
         #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
-        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
-        remote.send(try JSONValue.parse(Data(Self.call(2).utf8)))
+        remote.send(try Self.message(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#))
+        remote.send(try Self.message(Self.call(2)))
         #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } })
         #expect(await eventually(30) { fixture.requests().contains("CLOSED reply 2") }, "\(fixture.requests())")
         #expect(exits.withLock { $0 } == 0)

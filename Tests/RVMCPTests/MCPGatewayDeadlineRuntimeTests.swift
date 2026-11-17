@@ -66,7 +66,8 @@ final class GatewayRun: Sendable {
         relaunch: MCPGatewayRuntime.Relaunch? = nil,
         clientStallSeconds: TimeInterval = MCPGatewayRuntime.clientStallSeconds,
         stopGrace: TimeInterval = MCPGatewayRuntime.stopGrace,
-        restartWait: TimeInterval? = nil
+        restartWait: TimeInterval? = nil,
+        remoteRequestLimit: Int? = nil
     ) {
         let client = LineClient()
         let audits = RecordedAudits()
@@ -81,6 +82,7 @@ final class GatewayRun: Sendable {
             clientStallSeconds: clientStallSeconds,
             stopGrace: stopGrace,
             restartWait: restartWait,
+            remoteRequestLimit: remoteRequestLimit,
             audit: { record in audits.items.withLock { $0.append(record) } },
             log: { line in
                 logs.lines.withLock { $0.append(line) }
