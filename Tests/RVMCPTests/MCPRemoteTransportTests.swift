@@ -189,6 +189,12 @@ final class RemoteFixture: @unchecked Sendable {
             """)
     }
 
+    /// A test that fails before `stop` still ends its server. Only a server
+    /// still running is signalled: once reaped its pid may be another's.
+    deinit {
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+
     /// What `fd` holds now, without waiting for its end: a child the fixture
     /// left could still hold the write end open.
     private static func available(_ fd: Int32) -> String {

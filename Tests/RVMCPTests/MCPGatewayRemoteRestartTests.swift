@@ -126,6 +126,7 @@ struct MCPGatewayRemoteRestartTests {
     func aRemoteThatEndsItsSessionIsConnectedAgain() async throws {
         let fixture = try RemoteFixture()
         let run = Self.run(fixture)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         // Nothing but the call may meet the ended session: rv's own
         // `notifications/initialized` POST runs beside it, and a 404 on that
@@ -156,6 +157,7 @@ struct MCPGatewayRemoteRestartTests {
     func aCallWhoseConnectionFailsMayHaveRunAndTheServerComesBack() async throws {
         let fixture = try RemoteFixture(["--reset-calls", "--log-connections"])
         let run = Self.run(fixture)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(Self.call(2))
         // Far inside the call's 300 s limit.
@@ -188,6 +190,7 @@ struct MCPGatewayRemoteRestartTests {
         let fixture = try RemoteFixture(["--deaf-over", "\(1 << 20)"])
         let forwards = ForwardRecords()
         let run = Self.run(fixture, forwards: forwards, writeBufferBytes: 256 << 10)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         // Far more than the connection's buffers hold, so it never all goes out.
         let pad = String(repeating: "p", count: 32 << 20)
@@ -216,6 +219,7 @@ struct MCPGatewayRemoteRestartTests {
     func requestsTheServerTookNoLongerCountAgainstItsBound() async throws {
         let fixture = try RemoteFixture(["--hang-calls"])
         let run = Self.run(fixture, writeBufferBytes: 256 << 10)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let pad = String(repeating: "p", count: 100 << 10)
         for (index, id) in [2, 3, 4].enumerated() {
@@ -241,6 +245,7 @@ struct MCPGatewayRemoteRestartTests {
     func aRemoteFasterThanTheClientIsStoppedPastItsBound() async throws {
         let fixture = try RemoteFixture()
         let run = Self.run(fixture, writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         // Not taken yet by the client: what it holds for the client fills
         // the remote's reader backlog.
@@ -265,6 +270,7 @@ struct MCPGatewayRemoteRestartTests {
     func aReplyTooLargeToPassOnEndsOnlyItsCall() async throws {
         let fixture = try RemoteFixture()
         let run = Self.run(fixture)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let size = MCPGatewayRuntime.maximumLineBytes + (1 << 20)
         // As an event stream, then as a JSON body.

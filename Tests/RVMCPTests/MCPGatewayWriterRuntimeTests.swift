@@ -117,6 +117,7 @@ struct MCPGatewayWriterRuntimeTests {
         let run = GatewayRun(
             core: Self.core([Self.server("deaf"), Self.server("big")]),
             connections: [Self.launch("deaf", mode: "deaf", in: directory), Self.launch("big", mode: "big", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(Self.call(2, "deaf__wait", padding: 4 << 20))
         run.client.send(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}"#)
@@ -137,6 +138,7 @@ struct MCPGatewayWriterRuntimeTests {
             core: Self.core([Self.server("deaf")]),
             connections: [Self.launch("deaf", mode: "deaf", in: directory)],
             writeBufferBytes: 256 << 10)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let logs = run.logs
         #expect(await eventually { Self.pid("deaf", in: directory) != nil })
@@ -169,6 +171,7 @@ struct MCPGatewayWriterRuntimeTests {
             core: Self.core([Self.server("big")]),
             connections: [Self.launch("big", mode: "big", in: directory)],
             clientStallSeconds: 1)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         // Never read: the answer fills the pipe, and nothing more is taken.
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":4194304}}}"#)
@@ -192,6 +195,7 @@ struct MCPGatewayWriterRuntimeTests {
             // The client reads nothing until both answers are handed on,
             // which can pass serve's 30 s stall on a loaded machine.
             writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let size = 1 << 20
         for id in [2, 3] {
@@ -224,6 +228,7 @@ struct MCPGatewayWriterRuntimeTests {
             // The client reads nothing until the flood is handled, which can
             // pass serve's 30 s stall on a loaded machine.
             writeBufferBytes: 256 << 10, clientStallSeconds: 3600)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#)
         // Its answer follows the flood on the same pipe, so once it is handed
@@ -258,6 +263,7 @@ struct MCPGatewayWriterRuntimeTests {
             core: Self.core([Self.server("big")]),
             connections: [Self.launch("big", mode: "big", in: directory)],
             clientStallSeconds: 6)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let size = 48 << 20
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":\#(size)}}}"#)
@@ -331,6 +337,7 @@ struct MCPGatewayWriterRuntimeTests {
         let run = GatewayRun(
             core: Self.core([Self.server("big")]),
             connections: [Self.launch("big", mode: "big", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":4194304}}}"#)
         let audits = run.audits
@@ -353,6 +360,7 @@ struct MCPGatewayWriterRuntimeTests {
             core: GatewayRun.core([silent], startTimeout: 1),
             connections: [Self.launch("silent", mode: "silent", in: directory)],
             log: { _ in gate.pass() })
+        defer { run.stopNow() }
         #expect(await run.initialize())
         #expect(await eventually { gate.entered.withLock { $0 } })
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#)

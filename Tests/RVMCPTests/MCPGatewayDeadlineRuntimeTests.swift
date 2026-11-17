@@ -171,6 +171,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([slow], startTimeout: 300),
             connections: [Self.launch("slow", mode: "answers", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
         let reply = await run.client.next(timeout: 120)
@@ -196,6 +197,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([slow], startTimeout: 300),
             connections: [Self.launch("slow", mode: "answers", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait","arguments":{}}}"#)
         #expect(await eventuallyAsync { Self.seen("slow", in: directory).contains("tools/call") })
@@ -223,6 +225,7 @@ struct MCPGatewayDeadlineRuntimeTests {
                 return true
             })
         let run = GatewayRun(core: core, connections: [Self.launch("slow", mode: "answers", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         // The same call is forwarded while serving.
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
@@ -244,6 +247,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([silent], startTimeout: 1),
             connections: [Self.launch("silent", mode: "silent", in: directory)])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
         let listed = await run.client.next(timeout: 120)
@@ -288,6 +292,7 @@ struct MCPGatewayDeadlineRuntimeTests {
                 arguments: ["python3", "-u", directory.appendingPathComponent("stubborn.py").path, marker.path],
                 environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"]))],
             stopGrace: 10)
+        defer { run.stopNow() }
         #expect(await run.initialize())
         let logs = run.logs
         #expect(await eventuallyAsync { logs.text.contains("MCP server stubborn exited") }, "\(logs.text)")
@@ -307,6 +312,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([legacy], startTimeout: 300),
             connections: [.remote(MCPRemoteLaunch(server: "legacy", url: fixture.url("/sse"), transport: .sse))])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
         let reply = await run.client.next(timeout: 120)
@@ -331,6 +337,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([remote], startTimeout: 300),
             connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
         let reply = await run.client.next(timeout: 120)
@@ -359,6 +366,7 @@ struct MCPGatewayDeadlineRuntimeTests {
         let run = GatewayRun(
             core: GatewayRun.core([remote], startTimeout: 300),
             connections: [.remote(MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")))])
+        defer { run.stopNow() }
         #expect(await run.initialize())
         run.client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}"#)
         #expect(await eventuallyAsync { fixture.requests().contains("REQ POST /mcp tools/call") })
