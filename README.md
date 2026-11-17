@@ -290,8 +290,9 @@ rv is one binary, 25 commands. The rest of the surface:
   send a request again when a kept-alive connection drops before its
   answer. A remote server is never slowed down: once more than 128 MiB
   of what it sent waits for the gateway, rv stops it (and restarts it as
-  above). It has at most 64 calls, and 160 requests of any kind, in
-  flight; past that a request is not sent (a call ends not run). A signal
+  above). Each remote server has at most 64 calls, and 160 requests of
+  any kind, in flight; past that a request is not sent (a call ends not
+  run, and an approved call's approval is used up). A signal
   while serve plans its servers (a secret provider's
   unlock prompt, say) ends serve at once. A client that takes nothing rv
   writes for 30 s ends `rv mcp serve` with exit status 1 (on a blocking
