@@ -152,11 +152,14 @@ package final class MCPShutdownSignals {
     /// Runs `body` (planning) on a thread of its own and returns what it
     /// returned, or nil as soon as a signal is heard, before or while it
     /// runs: serve then ends at once, however long a secret provider or
-    /// prompt holds the plan. A plan still running then is left to finish
-    /// on its own, and nothing it returns is used.
+    /// prompt holds the plan. After a signal heard before this call,
+    /// `body` never starts. A plan still running when one comes is left to
+    /// finish on its own, and nothing it returns is used.
     package func plan<T>(_ body: @escaping () -> T) -> T? {
         let planning = MCPPlanning(body)
         forward { planning.wake.signal() }
+        // Heard already: nothing is planned at all.
+        guard first == nil else { return nil }
         Thread.detachNewThread { planning.run() }
         while true {
             planning.wake.wait()
