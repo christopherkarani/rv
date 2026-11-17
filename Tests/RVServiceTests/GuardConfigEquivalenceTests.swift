@@ -120,8 +120,8 @@ struct GuardConfigEquivalenceTests {
         Document("BOM nested observe", bytes: [0xEF, 0xBB, 0xBF] + Array(#"{"guard": {"mode": "observe"}}"#.utf8)),
         Document("BOM host observe", bytes: [0xEF, 0xBB, 0xBF] + Array(#"{"guard": {"hosts": {"claude": "observe"}}}"#.utf8)),
         // Escapes and odd strings.
-        Document("escaped mode", #"{"guard": {"mode": "observe"}}"#),
-        Document("escaped key", #"{"guard": {"mode": "observe"}}"#),
+        Document("escaped mode", #"{"guard": {"mode": "\u006Fbserve"}}"#),
+        Document("escaped key", #"{"gu\u0061rd": {"mode": "observe"}}"#),
         Document("lone surrogate sibling", #"{"guard.mode": "observe", "x": "\ud800"}"#),
         Document("mode with whitespace", #"{"guard": {"mode": " observe"}, "guard.mode": "observe"}"#),
         Document("mode with NUL", #"{"guard": {"mode": "observe\u0000"}}"#),
