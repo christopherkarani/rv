@@ -237,7 +237,7 @@ enum WorkspacePublishPlanner {
     }
 
     /// Volume names that share a directory and differ only by case.
-    static func caseVariantNames(_ present: [String]) -> Set<String> {
+    private static func caseVariantNames(_ present: [String]) -> Set<String> {
         var groups: [String: [String]] = [:]
         for relative in present {
             let folded = parentRelative(relative) + "/" + (relative as NSString).lastPathComponent.lowercased()

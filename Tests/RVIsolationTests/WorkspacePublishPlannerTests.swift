@@ -24,6 +24,9 @@ struct WorkspacePublishPlannerTests {
         let trees = fixture.trees()
         let result = fixture.plan(trees)
 
+        // The symlink loop's order is unspecified by design: it is the
+        // dictionary's iteration order, as at 245aa9b1. The test mirrors
+        // that order from the same dictionary rather than pinning one.
         let symlinks = fixture.volume.compactMap { $0.value.kind == .symlink ? $0.key : nil }
         var respelled = fixture.snapshot
         respelled["README.md"] = respelled.removeValue(forKey: "Readme.md")
