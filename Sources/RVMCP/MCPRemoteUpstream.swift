@@ -422,7 +422,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
 
     package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = ObjectIdentifier(dataTask)
-        guard var exchange = locked({ exchanges[id] }) else { return }
+        // A reply rv cut off for its size: what still comes of it is dropped
+        // (corelibs goes on delivering what it already read after a cancel).
+        guard var exchange = locked({ exchanges[id] }), exchange.oversized == false else { return }
         var incoming: [(message: JSONValue, cost: Int)] = []
         var endpointEvent: String?
         if exchange.isEventStream, (200..<300).contains(exchange.status) {
@@ -494,19 +496,21 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
                 log(text)
             }
         }
+        // The server answered, too large to pass on: this request ends with
+        // that error, and the session is left as it is. Whether the cancel
+        // rv made ends the task with an error or (on corelibs, which had
+        // already read the whole reply) without one.
+        if exchange.oversized, exchange.answered == false, exchange.closed == false {
+            fail("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes, "
+                + "which rv does not pass on")
+            return false
+        }
         if let error, exchange.answered == false {
             // Neither is the server's answer. rv closed this one after
             // cancelling it; the HTTP layer gives up only after the core's
             // own deadline has ended the request, and a failure delivered
             // for it would be recorded as the tool having run.
             if exchange.closed { return false }
-            // The server answered, too large to pass on: this request ends
-            // with that error, and the session is left as it is.
-            if exchange.oversized {
-                fail("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes, "
-                    + "which rv does not pass on")
-                return false
-            }
             if MCPHTTPExchange.isRequest(message), (error as? URLError)?.code == .timedOut {
                 log("MCP server \(name) sent nothing on a request for \(Int(launch.answerTimeout)) s; "
                     + "rv stopped waiting at the HTTP level")

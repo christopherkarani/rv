@@ -279,6 +279,12 @@ struct MCPGatewayRemoteRestartTests {
             let reply = await MCPGatewayRestartRuntimeTests.reply(run, id)
             #expect(String(describing: reply).contains("larger than"), "\(String(describing: reply)) \(run.logs.text)")
         }
+        // Each reply is cut off once (nothing more of it is read), and each
+        // call ends once.
+        let logged = run.logs.text
+        #expect(logged.components(separatedBy: "sent an event larger than").count == 2, "\(logged)")
+        #expect(logged.components(separatedBy: "bytes; dropped").count == 2, "\(logged)")
+        #expect(run.audits.items.withLock { $0.filter { $0.tool == "echo" }.count } == 2)
         let answer = await MCPGatewayRestartRuntimeTests.echoes(run, from: 4)
         #expect(answer?["result"] != nil, "\(run.logs.text)")
         #expect(Self.initializes(fixture) == 1, "\(fixture.requests())")
