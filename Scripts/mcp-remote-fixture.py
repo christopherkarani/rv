@@ -131,6 +131,9 @@ class Handler(BaseHTTPRequestHandler):
             return True
         meta = self.origin() + "/.well-known/oauth-protected-resource/mcp"
         challenge_header = 'Bearer resource_metadata="%s", scope="mcp:tools"' % meta
+        # The whole request is taken before the refusal, so the client has
+        # sent its body (as a real server that reads first would see it).
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.close_connection = True
         self.send(401, b'{"error":"unauthorized"}', extra={"WWW-Authenticate": challenge_header, "Connection": "close"})
         log("REQ %s %s -> 401" % (self.command, self.path))
