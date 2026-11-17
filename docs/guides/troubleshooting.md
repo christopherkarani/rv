@@ -113,7 +113,7 @@ and run `rv setup`.
 | `<server> uses secret <name>, which secrets.json does not define` | `rv secrets set <name> …` |
 | `<server> could not read secret <name>: …` | `rv secrets check <name>`; unlock the provider |
 | `mcp.json changed while it was being checked; not launching MCP servers` | Start the host again |
-| `rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; not serving` | Start serve from a normal process, not one that blocks signal handling |
+| `rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; not serving` | Linux only: rv could not set up how it hears signals (it needs one pipe, so usually rv is out of file descriptors). Close what holds them or raise the limit, then start the host again. Signals the parent left blocked are not the cause: serve unblocks the ones it handles |
 
 **The agent sees `MCP server <name> did not answer tool <tool> within 300 s; rv stopped waiting. The call may still have run, so check before calling it again.`**
 The tool took longer than its server's `callTimeoutSeconds`. If the tool
@@ -121,7 +121,8 @@ is meant to run that long, raise `callTimeoutSeconds` for that server
 (up to 86400) and re-trust. Check whether it ran before retrying: rv
 asked the server to cancel but cannot make it stop. After a timeout rv
 pings the server; a server that cannot answer while busy is then stopped
-and restarted.
+and restarted. A remote server at its request limit is not pinged, and
+is not judged hung for it.
 
 **`MCP server <name> is unavailable: it did not answer initialize within 60 s (its startTimeoutSeconds)`**
 The server took too long to start. An `npx` server's first download is
@@ -151,8 +152,10 @@ The server crashed during the call. rv never re-sends it.
 
 **`MCP server <name> already has 64 calls in flight, …`** or **`… has too many requests in flight; …`**
 A remote server is not answering fast enough and rv stopped sending
-more. Wait for calls to finish; if it does not recover, the remote is
-likely stuck.
+more (the limits are per remote server). Wait for calls to finish; if it
+does not recover, the remote is likely stuck. The second message, for an
+approved call, ends `Its approval was used up, so it must be approved
+again.`: that approval was spent on a call that was not sent.
 
 **`rv paused this call: … Ask the user to run `rv mcp approve <id>` …`**
 Your client cannot show rv's prompt. Run `rv mcp pending`, then

@@ -235,6 +235,9 @@ this description, and every call asks:
 [rv: this tool changed since the user trusted it; its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]
 ```
 
+A tool that was never pinned starts `[rv: this tool is not yet trusted by
+the user; …` instead, with the same ending.
+
 A tool whose name is longer than 64 bytes or uses anything outside
 `A-Z a-z 0-9 _ . -` is hidden and cannot be called; serve names one such
 tool per server on stderr.
@@ -358,7 +361,7 @@ These are the exact error texts rv returns to the client (JSON-RPC error
 | Prompt declined | `The user declined tickets tool create_ticket in rv's approval prompt. Do not retry unless the user asks.` | not run |
 | Audit log unwritable | `rv could not write the audit record for files tool read_file; the call was not run` | not run |
 | 64 calls in flight to one remote | `MCP server tickets already has 64 calls in flight, the most rv sends a remote server at once; the call was not run. Try it again once one of them has finished.` | not run |
-| 160 requests in flight to one remote | `MCP server tickets has too many requests in flight; tool search_tickets was not run. Try it again once some have finished.` | not run |
+| 160 requests in flight to one remote | `MCP server tickets has too many requests in flight; tool search_tickets was not run. Try it again once some have finished.` (an approved call adds ` Its approval was used up, so it must be approved again.`) | not run; an approved call's audit row is declined, keeping its approval id |
 
 ### Crashes and restarts
 
@@ -376,10 +379,15 @@ so it is stopped too and what it was running is cut off.
   are resolved again each time (which can mean a provider unlock prompt
   each time).
 - A server that never became ready is not restarted.
+- A restart must start and answer `initialize` within the server's
+  `startTimeoutSeconds`, counted once rv has reaped its last process (rv's
+  own wait for that, up to 7 s, does not use it up), and its listing must
+  be complete within 2 minutes; otherwise the try counts toward the five.
 - A restart uses the `mcp.json` serve verified when it started, not the
   file on disk now. The restarted server is listed again before any call
-  reaches it: a changed tool asks again, and an approval for the old
-  definition does not carry over.
+  reaches it: a changed tool asks again, an approval for the old
+  definition does not carry over, and only tools that server lists again
+  can be called.
 - The client gets `notifications/tools/list_changed` when the server goes
   and when it is back.
 
@@ -392,24 +400,35 @@ rv mcp: MCP server files is back
 
 ### Limits per remote server
 
-A remote server has at most **64 calls** and **160 requests of any kind**
-(calls, cancels, listings, pings, notifications) in flight. Past either,
-rv does not send the request: a call ends not run (the messages above), a
-listing page fails, and a notification is dropped with a line on stderr.
-Nothing already in flight is touched. A remote that has more than
-128 MiB of its output waiting for the gateway is stopped and restarted.
-A streamable HTTP answer over 64 MiB ends only the call it answers.
+Each remote server has its own limits: at most **64 calls** and **160
+requests of any kind** (calls, cancels, listings, pings, notifications)
+in flight. On Linux each request is a connection, so several saturated
+remotes add up. Past either limit, rv does not send the request: a call
+ends not run (the messages above; an approved call's approval is used
+up, so it must be approved again), a listing page fails, a ping is
+dropped without judging the server hung, and a notification is dropped
+with a line on stderr (a cancel still closes the call it names). Nothing
+already in flight is touched. A notification's POST is let go once the
+server's response head arrives, or after 30 s, and a call's event-stream
+reply is closed once its answer is in, so neither holds a place. A remote
+that has more than 128 MiB of its output waiting for the gateway is
+stopped and restarted. A streamable HTTP answer over 64 MiB ends only the
+call it answers.
 
 ## Stopping serve
 
 Serve ends when the client closes its input. It also catches SIGINT,
 SIGTERM and SIGHUP (a terminal's Ctrl-C, a closed terminal, a host's
-process-group kill) and stops its servers itself: SIGTERM to each
-server's process group, SIGKILL 2 s later if still running. A second
-signal kills what is left at once. Serve then exits with 128 plus the
+process-group kill) and stops its servers itself: each server's input is
+closed and it has 2 s to exit on its own, then SIGTERM goes to its
+process group, and SIGKILL 1 s later if it is still running. A second
+signal kills what is left at once. A signal while serve is still
+planning its servers (a secret provider's unlock prompt, say) ends serve
+at once, with no server started. Serve then exits with 128 plus the
 signal; it exits 1 if the client stopped reading for 30 s. Each call
 still in flight gets a last audit record ("gateway stopped; the call may
-still have run").
+still have run"). A server rv stops while serving (hung, or not reading
+its input) gets SIGTERM, then SIGKILL 2 s later.
 
 What a server started in a session of its own (`setsid`) or outside rv
 (the container of a `docker run` server) is not reached by those signals.

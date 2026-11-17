@@ -150,8 +150,10 @@ when rv or a person refused it. The `reason` says how it ended, for
 example `timed out: no answer within 300 s`, `upstream exited`,
 `upstream restarting: process exited`, `the server has not listed this
 tool since rv restarted it`, `64 calls to this server are already in
-flight`, `gateway stopped; the call may still have run`, or `cancelled
-by client`.
+flight`, `not sent: MCP server <name> has its most requests in flight`
+(after its `forward` record; an approved call's row keeps its approval
+id, since the approval was spent), `gateway stopped; the call may still
+have run`, or `cancelled by client`.
 
 Other MCP kinds:
 
