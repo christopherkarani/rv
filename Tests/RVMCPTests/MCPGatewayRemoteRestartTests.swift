@@ -274,10 +274,11 @@ struct MCPGatewayRemoteRestartTests {
         #expect(await run.initialize())
         let size = MCPGatewayRuntime.maximumLineBytes + (1 << 20)
         // As an event stream, then as a JSON body.
-        for (id, plain) in [(2, false), (3, true)] {
+        for (id, plain, limit) in [(2, false, "an event larger than"), (3, true, "a reply larger than")] {
             run.client.send(Self.call(id, arguments: #"{"size":\#(size),"plain":\#(plain)}"#))
             let reply = await MCPGatewayRestartRuntimeTests.reply(run, id)
-            #expect(String(describing: reply).contains("larger than"), "\(String(describing: reply)) \(run.logs.text)")
+            // It names the limit it passed.
+            #expect(String(describing: reply).contains(limit), "\(String(describing: reply)) \(run.logs.text)")
         }
         // Each reply is cut off once (nothing more of it is read), and each
         // call ends once.
@@ -440,6 +441,86 @@ struct MCPGatewayRemoteRestartTests {
         #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(3) } } })
         let sent = await eventually(5) { fixture.requests().contains("REQ POST /mcp tools/call") }
         #expect(sent == false, "\(fixture.requests())")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A client's cancel that lands while part of the call's reply is being
+    /// read closes only that POST: the close is not lost when what was read
+    /// is put back, so the server is not taken for gone.
+    @Test(.timeLimit(.minutes(5)))
+    func aCancelWhilePartOfTheReplyIsReadClosesOnlyThatCall() async throws {
+        let fixture = try RemoteFixture(["--hang-calls", "--hang-notes"])
+        let exits = Mutex(0)
+        let logged = Mutex<[String]>([])
+        let box = Mutex<MCPRemoteUpstream?>(nil)
+        let cancelled = Mutex(false)
+        let delivered = RecordedMessages()
+        let cancel = try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}"#.utf8))
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } },
+            exited: { exits.withLock { $0 += 1 } }, log: { line in logged.withLock { $0.append(line) } },
+            whileReceiving: { request in
+                guard request["id"] == .int(2), cancelled.withLock({ was in defer { was = true }; return was == false }) else {
+                    return
+                }
+                box.withLock { $0 }?.send(cancel)
+            })
+        box.withLock { $0 = remote }
+        defer { box.withLock { $0 = nil } }
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        remote.send(try JSONValue.parse(Data(Self.call(2).utf8)))
+        #expect(await eventually { cancelled.withLock { $0 } }, "\(fixture.requests())")
+        #expect(await eventually { fixture.requests().contains("CLOSED call 2") }, "\(fixture.requests())")
+        let gone = await eventually(5) { exits.withLock { $0 } > 0 }
+        #expect(gone == false, "\(logged.withLock { $0 })")
+        #expect(logged.withLock { $0 }.contains { $0.contains("could not reach") } == false, "\(logged.withLock { $0 })")
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#.utf8)))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(3) } } })
+        #expect(delivered.items.withLock { $0.contains { $0["id"] == .int(2) } } == false)
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A 401 retry's body counts against the bound as the first try's did:
+    /// once the first body went out, the retry is counted again, and let go
+    /// once its own body has gone out.
+    @Test(.timeLimit(.minutes(5)))
+    func aRetrysBodyCountsAgainstTheBoundAsTheFirstDid() async throws {
+        let fixture = try RemoteFixture(["--token", "good-token", "--hang-calls"])
+        let token = Mutex("good-token")
+        let authorizer = MCPRemoteAuthorizer(
+            token: { token.withLock { $0 } },
+            refresh: { _ in
+                token.withLock { $0 = "good-token" }
+                return true
+            })
+        let charged = Mutex<[Int]>([])
+        let released = Mutex(0)
+        let firstLetGo = Mutex(false)
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "auth", url: fixture.url("/mcp")), authorizer: authorizer,
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in },
+            recharge: { bytes in
+                charged.withLock { $0.append(bytes) }
+                return { released.withLock { $0 += 1 } }
+            })
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try JSONValue.parse(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+        token.withLock { $0 = "stale-token" }
+        let call = try JSONValue.parse(Data(Self.call(2).utf8))
+        remote.send(call) { firstLetGo.withLock { $0 = true } }
+        #expect(await eventually { fixture.requests().contains("REQ POST /mcp tools/call") }, "\(fixture.requests())")
+        #expect(await eventually { firstLetGo.withLock { $0 } })
+        #expect(await eventually { released.withLock { $0 } == 1 }, "\(charged.withLock { $0 })")
+        #expect(charged.withLock { $0 } == [call.compactText.utf8.count])
         await offThePool { remote.stop() }
         _ = await offThePool { fixture.stop() }
     }
