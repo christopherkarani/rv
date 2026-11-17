@@ -15,8 +15,6 @@ protocol MCPSupervisedGroup: AnyObject, Sendable {
     func signal(_ number: Int32)
     /// The leader has exited, reaped or not.
     var hasExited: Bool { get }
-    /// Polls until the leader is reaped (and anything it held let go); false at `deadline`.
-    func waitUntilFinished(until deadline: Date) -> Bool
 }
 
 extension SecretPlaceholderGroup: MCPSupervisedGroup {}
@@ -61,14 +59,6 @@ final class MCPProcessGroup: MCPSupervisedGroup {
 
     var hasExited: Bool {
         phase.withLock { $0 != .running }
-    }
-
-    func waitUntilFinished(until deadline: Date) -> Bool {
-        while phase.withLock({ $0 }) != .reaped {
-            guard Date() < deadline else { return false }
-            usleep(10_000)
-        }
-        return true
     }
 
     /// Starts `launch` with `descriptors` (child fd: rv fd) as its 0, 1 and

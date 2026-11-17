@@ -1045,17 +1045,24 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// exit on its own), then waits for its supervisor to kill the rest of
     /// the group, reap it and revoke its lease. Bounded: a placeholder group
     /// still there after that is left to the broker's stop, which ends
-    /// every lease.
+    /// every lease. Timed on the monotonic clock, so a wall-clock step
+    /// neither cuts the graces short nor stretches them.
     private func stopGroups() {
-        let started = Date()
+        let origin = SuspendingClock.now
+        // Seconds since `origin`, as the Date `MCPPlaceholderShutdown` steps on.
+        func elapsed() -> Date {
+            let (seconds, attoseconds) = origin.duration(to: SuspendingClock.now).components
+            return Date(timeIntervalSinceReferenceDate: TimeInterval(seconds) + TimeInterval(attoseconds) * 1e-18)
+        }
+        let started = elapsed()
         var shutdowns = groups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
         func waiting(_ now: Date) -> Bool {
             groups.contains { launch, entry in
                 entry.group.hasExited == false && now < (shutdowns[launch]?.giveUp ?? now)
             }
         }
-        while waiting(Date()) {
-            let now = Date()
+        while waiting(elapsed()) {
+            let now = elapsed()
             let hurry = hurried
             for (launch, entry) in groups {
                 let exited = entry.group.hasExited
@@ -1066,8 +1073,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             }
             usleep(20_000)
         }
-        let reaped = Date().addingTimeInterval(2)
-        for entry in groups.values where entry.group.waitUntilFinished(until: reaped) == false {
+        let reaped = SuspendingClock.now.advanced(by: .seconds(2))
+        for entry in groups.values where MCPLaunchEnd.wait(for: [entry.ended], until: reaped, abandoned: { false }) != .ended {
             let shown = MCPDisplayedText.field(entry.server)
             log(entry.bound
                 ? "MCP server \(shown) did not exit; its placeholders end when serve stops the secrets gateway"
