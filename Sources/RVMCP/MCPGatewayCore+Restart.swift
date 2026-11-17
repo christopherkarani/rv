@@ -86,11 +86,12 @@ extension MCPGatewayCore {
         return outputs
     }
 
-    /// Whether the core still waits for this launch of `server` to start.
-    /// The runtime starts nothing for a launch it no longer waits for.
+    /// Whether the core still waits for this launch of `server` to start:
+    /// not past its deadline, even before the tick that expires it. The
+    /// runtime starts nothing for a launch it no longer waits for.
     func awaitsRelaunch(server: String, launch: Int) -> Bool {
-        guard case .restarting(_, .launching(let awaited, _))? = phases[server] else { return false }
-        return awaited == launch
+        guard case .restarting(_, .launching(let awaited, let until))? = phases[server], awaited == launch else { return false }
+        return until.map { deadlineClock() < $0 } ?? true
     }
 
     /// rv's wait for the server's last process is over: the launch's start
@@ -108,26 +109,46 @@ extension MCPGatewayCore {
         guard case .restarting(let reason, .launching(let awaited, let until))? = phases[server], awaited == launch else {
             return []
         }
-        phases[server] = .restarting(reason, .relisting)
+        phases[server] = .restarting(reason, .relisting(until: nil))
         return [initialize(server, by: until)]
     }
 
+    /// How many list pages' time a relisting after a restart has in all.
+    static let relistPages = 4
+
     /// A launch the runtime has not reported started by its `until` counts
-    /// as one more time the server went away; a late start of it is ignored.
+    /// as one more time the server went away; a late start of it is ignored,
+    /// and whatever did start is stopped (its exit is not counted again).
+    /// A relisting not done by its own `until` failed, as any failed
+    /// relisting does.
     mutating func expireLaunches() -> [MCPGatewayOutput] {
         let now = deadlineClock()
         var outputs: [MCPGatewayOutput] = []
         for server in order {
-            guard case .restarting(_, .launching(_, let until?))? = phases[server], until <= now else { continue }
-            let reason = "it did not start again within \(Self.seconds(startTimeout(server))) s"
-            phases[server] = .restarting(reason, .stopping)
-            outputs += afterExit(server)
+            switch phases[server] {
+            case .restarting(_, .launching(_, let until?))? where until <= now:
+                let reason = "it did not start again within \(Self.seconds(startTimeout(server))) s"
+                phases[server] = .restarting(reason, .stopping)
+                outputs += afterExit(server) + [.stopUpstream(server: server)]
+            case .restarting(_, .relisting(let until?))? where until <= now:
+                let seconds = Self.seconds(deadlines.list * TimeInterval(Self.relistPages))
+                outputs.append(.log("MCP server \(MCPDisplayedText.field(server)) did not finish listing its tools "
+                    + "within \(seconds) s after a restart"))
+                outputs += relisted(server, failed: true)
+            default:
+                continue
+            }
         }
         return outputs
     }
 
-    /// rv's own listing of a relaunched server; nobody gets its answer.
+    /// rv's own listing of a relaunched server; nobody gets its answer. It
+    /// has `relistPages` pages' time in all.
     mutating func relist(_ server: String) -> [MCPGatewayOutput] {
+        if case .restarting(let reason, .relisting)? = phases[server] {
+            let until = deadlineClock().addingTimeInterval(deadlines.list * TimeInterval(Self.relistPages))
+            phases[server] = .restarting(reason, .relisting(until: until))
+        }
         let fanout = nextID
         nextID += 1
         fanouts[fanout] = ListFanout(client: .null, remaining: [server], tools: [], search: nil, relaunch: server)
@@ -140,7 +161,7 @@ extension MCPGatewayCore {
     mutating func noteLaunchListed(_ tools: [JSONValue], server: String) {
         guard var names = launchListed[server] else { return }
         for name in tools.compactMap({ scrub($0, for: server)["name"]?.stringValue })
-        where names.count < Self.maximumListedTools {
+        where names.count < Self.maximumListedTools && Self.servesToolName(name) {
             names.insert(name)
         }
         launchListed[server] = names

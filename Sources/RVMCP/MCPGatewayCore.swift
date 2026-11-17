@@ -82,8 +82,10 @@ public struct MCPCallRecord: Sendable, Equatable {
         case forwarding(grant: Grant?)
         /// Stopped for an approval nobody has answered yet.
         case awaiting(approvalID: String?)
-        /// The prompt ended without a yes: the user refused, the prompt failed
-        /// or timed out, or its upstream exited while it was shown.
+        /// The prompt ended and its call was not run: the user refused, the
+        /// prompt failed or timed out, its upstream exited while it was
+        /// shown, or the user said yes but rv could not run it (its server
+        /// was not ready, or no longer listed the tool, or the tool changed).
         case declined(approvalID: String)
         /// Nothing went upstream: rv refused before any grant, or answered itself (search).
         case notRun
@@ -176,8 +178,9 @@ public struct MCPGatewayCore {
         /// as gone again, and a late start of this launch is not taken.
         case launching(Int, until: Date?)
         /// The runtime started it: it is initialized (by the same `until`),
-        /// then listed again.
-        case relisting
+        /// then listed again, all of the listing within its own `until`
+        /// (`relistPages` list pages' time, set once the listing starts).
+        case relisting(until: Date?)
     }
 
     struct Approval {
@@ -719,6 +722,13 @@ public struct MCPGatewayCore {
             return unavailable(
                 client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
+        // As `callTool`: only a tool this launch listed, whatever order the
+        // inputs came in.
+        if let listed = launchListed[call.server], listed.contains(call.tool) == false {
+            let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
+            return notListedSinceRestart(
+                client: call.client, server: call.server, tool: call.tool, exposed: exposed, keys: call.keys, approvalID: key)
+        }
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
         }
@@ -927,7 +937,8 @@ public struct MCPGatewayCore {
             return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
         }
         if let listed = launchListed[server], listed.contains(tool) == false {
-            return notListedSinceRestart(client: client, server: server, tool: tool, exposed: exposed, keys: keys)
+            return notListedSinceRestart(
+                client: client, server: server, tool: tool, exposed: exposed, keys: keys, approvalID: nil)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -1137,13 +1148,15 @@ public struct MCPGatewayCore {
     /// A call to a tool the server's current launch has not listed since rv
     /// started it again: refused, never forwarded, until a listing of this
     /// launch names it.
+    /// A prompt the user accepted (`approvalID`) ends declined; any other
+    /// call `notRun`.
     func notListedSinceRestart(
-        client: JSONValue, server: String, tool: String, exposed: String, keys: [String]
+        client: JSONValue, server: String, tool: String, exposed: String, keys: [String], approvalID: String?
     ) -> [MCPGatewayOutput] {
         [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
-                reason: "the server has not listed this tool since rv restarted it", outcome: .notRun)),
+                reason: "the server has not listed this tool since rv restarted it", outcome: Self.notForwarded(approvalID))),
             .toClient(Self.error(
                 id: client, code: -32602,
                 message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
