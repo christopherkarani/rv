@@ -124,6 +124,12 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         var task: URLSessionDataTask?
         /// rv cancelled the request and closed this POST itself.
         var closed = false
+        /// A notification's (or reply's) POST that rv let go at its bound
+        /// (`notificationLifetime`, `notificationAfterHead`): not a failure;
+        /// what its status already said (a 401, a 404) is still acted on.
+        var bounded = false
+        /// Numbers this exchange, so a bound's timer finds only its own.
+        var serial = 0
         /// rv cut the reply off itself, past this limit (what it names: an
         /// event, or a reply body, larger than so many bytes).
         var oversized: String?
@@ -183,10 +189,16 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     /// retry or the legacy SSE endpoint's flush posts from the delegate
     /// queue meanwhile, so the count can pass it by those for a moment.
     package static let maximumRequestsInFlight = 160
-    /// How long a notification's POST is waited on for its response head:
-    /// a list page's time.
-    static let notificationTimeout = MCPGatewayDeadlines.standardList
+    /// How long a notification's (or reply's) POST may stay open after it
+    /// is sent, however the server answers: a list page's time.
+    package static let notificationLifetime = MCPGatewayDeadlines.standardList
+    /// How long it may stay open once its response head is in.
+    package static let notificationAfterHead: TimeInterval = 5
     private let requestLimit: Int
+    private let lifetime: TimeInterval
+    private let afterHead: TimeInterval
+    private let bounds = DispatchQueue(label: "rv.mcp.remote.bounds")
+    private var nextSerial = 0
 
     package init(
         launch: MCPRemoteLaunch,
@@ -198,9 +210,13 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         overflowed: @escaping @Sendable () -> Void = {},
         recharge: @escaping @Sendable (Int) -> (@Sendable () -> Void)? = { _ in nil },
         whileReceiving: @escaping @Sendable (JSONValue) -> Void = { _ in },
-        requestLimit: Int = MCPRemoteUpstream.maximumRequestsInFlight
+        requestLimit: Int = MCPRemoteUpstream.maximumRequestsInFlight,
+        notificationLifetime: TimeInterval = MCPRemoteUpstream.notificationLifetime,
+        notificationAfterHead: TimeInterval = MCPRemoteUpstream.notificationAfterHead
     ) {
         self.requestLimit = requestLimit
+        lifetime = notificationLifetime
+        afterHead = notificationAfterHead
         self.launch = launch
         self.authorizer = authorizer
         self.deliver = deliver
@@ -305,7 +321,10 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     @discardableResult
     package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) -> Bool {
         let target: Result<URL?, Never>? = locked {
-            guard postsInFlight < requestLimit else { return nil }
+            // rv's own ping goes out whatever else is in flight, so a full
+            // remote can still be judged; the core has one at a time.
+            let ping = MCPHTTPExchange.isRequest(message) && message["method"]?.stringValue == "ping"
+            guard ping || postsInFlight < requestLimit else { return nil }
             if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
             guard launch.transport == .sse else { return .success(launch.url) }
             guard let endpoint else {
@@ -398,28 +417,34 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private func post(_ message: JSONValue, to url: URL, retried: Bool, completed: (@Sendable () -> Void)?) {
         let (sent, token) = headers()
         let body = Data(message.compactText.utf8)
+        var serial = 0
         let task: URLSessionDataTask? = locked {
             guard stopped == false, let shared = self.session else { return nil }
             if retried, MCPHTTPExchange.isRequest(message), cancelledIDs.contains(message["id"] ?? .null) { return nil }
             var request = MCPHTTPExchange.request(
                 url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
                 protocolVersion: protocolVersion, body: body)
-            // A notification (or a reply) is owed no answer: its POST is let
-            // go once its response head is in, or after a list page's time.
-            request.timeoutInterval = MCPHTTPExchange.isRequest(message) ? launch.answerTimeout : Self.notificationTimeout
+            request.timeoutInterval = launch.answerTimeout
             // An upload task: corelibs reports a body's progress only for one.
             request.httpBody = nil
             let own = Self.sessionPerPost ? makeSession() : nil
             if own != nil { liveSessions += 1 }
             let task = (own ?? shared).uploadTask(with: request, from: body)
+            nextSerial += 1
+            serial = nextSerial
             exchanges[ObjectIdentifier(task)] = Exchange(
-                kind: .post(message, retried: retried), token: token, task: task, completed: completed,
+                kind: .post(message, retried: retried), token: token, task: task, serial: serial, completed: completed,
                 bodyBytes: body.count, ownSession: own)
             return task
         }
         guard let task else {
             completed?()
             return
+        }
+        // A notification (or a reply) is owed no answer: its POST is let go
+        // at most `lifetime` after it is sent, bytes arriving or not.
+        if MCPHTTPExchange.isRequest(message) == false {
+            bound(ObjectIdentifier(task), serial: serial, after: lifetime)
         }
         task.resume()
     }
@@ -467,8 +492,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             return
         }
         let contentType = MCPHTTPExchange.header(http, "Content-Type")?.lowercased() ?? ""
-        let notification: Bool = locked {
-            let id = ObjectIdentifier(dataTask)
+        let id = ObjectIdentifier(dataTask)
+        let notification: Int? = locked {
             exchanges[id]?.status = http.statusCode
             exchanges[id]?.isEventStream = contentType.hasPrefix("text/event-stream")
             if launch.transport == .http, (200..<300).contains(http.statusCode),
@@ -476,16 +501,35 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             {
                 sessionID = assigned
             }
-            // The head is all a notification's POST is owed (a 401 is
-            // refreshed and sent again, a 404 ends the session, as before).
-            guard case .post(let message, _)? = exchanges[id]?.kind, MCPHTTPExchange.isRequest(message) == false,
-                http.statusCode != 401, http.statusCode != 404
-            else { return false }
-            exchanges[id]?.closed = true
-            return true
+            guard let exchange = exchanges[id], case .post(let message, _) = exchange.kind,
+                MCPHTTPExchange.isRequest(message) == false
+            else { return nil }
+            return exchange.serial
         }
         completionHandler(.allow)
-        if notification { dataTask.cancel() }
+        // Its head is in: the rest of a notification's response may take
+        // `afterHead` at most, whatever its status. A normal one ends first.
+        if let serial = notification { bound(id, serial: serial, after: afterHead) }
+    }
+
+    /// Lets go of a notification's POST `seconds` from now, on a timer of
+    /// its own, if it is still open then.
+    private func bound(_ id: ObjectIdentifier, serial: Int, after seconds: TimeInterval) {
+        bounds.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.closeBounded(id, serial: serial) }
+    }
+
+    /// Its place is freed once, by its completion; nothing is stopped.
+    private func closeBounded(_ id: ObjectIdentifier, serial: Int) {
+        let closing: (task: URLSessionDataTask, method: String)? = locked {
+            guard let exchange = exchanges[id], exchange.serial == serial, exchange.bounded == false,
+                let task = exchange.task, case .post(let message, _) = exchange.kind
+            else { return nil }
+            exchanges[id]?.bounded = true
+            return (task, message["method"]?.stringValue ?? "a reply")
+        }
+        guard let closing else { return }
+        log("MCP server \(name) kept rv's \(MCPDisplayedText.field(closing.method)) open past its bound; closed it")
+        closing.task.cancel()
     }
 
     package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -529,6 +573,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             // Gone meanwhile (stopped): not put back.
             guard let current = exchanges[id] else { return }
             exchange.closed = exchange.closed || current.closed
+            exchange.bounded = exchange.bounded || current.bounded
             // `stop()` takes the session out to invalidate it itself.
             exchange.ownSession = current.ownSession
             exchanges[id] = exchange
@@ -590,7 +635,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
             fail("MCP server \(name) sent \(oversized), which rv does not pass on")
             return false
         }
-        if let error, exchange.answered == false {
+        // A notification let go at its bound did not fail: what its status
+        // said (a 401, a 404) is acted on below, once.
+        if let error, exchange.answered == false, exchange.bounded == false {
             // Neither is the server's answer. rv closed this one after
             // cancelling it; the HTTP layer gives up only after the core's
             // own deadline has ended the request, and a failure delivered
