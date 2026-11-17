@@ -246,6 +246,45 @@ struct MCPGatewayWriterRuntimeTests {
         #expect(await run.finish())
     }
 
+    /// A client that takes one long line slowly but steadily is not counted
+    /// as stalled: the line is written in parts, and each part it takes is
+    /// progress. The whole line takes it about twice its stall time; each
+    /// MiB, a twenty-fourth of it.
+    @Test(.timeLimit(.minutes(5)))
+    func aClientTakingALongLineSteadilyIsNotStalled() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let run = GatewayRun(
+            core: Self.core([Self.server("big")]),
+            connections: [Self.launch("big", mode: "big", in: directory)],
+            clientStallSeconds: 6)
+        #expect(await run.initialize())
+        let size = 48 << 20
+        run.client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"size":\#(size)}}}"#)
+        let fd = run.client.fromGateway.fileHandleForReading.fileDescriptor
+        let line: Int = await offThePool {
+            let bytesPerSecond = 4 << 20
+            var taken = 0
+            var chunk = [UInt8](repeating: 0, count: 64 << 10)
+            let deadline = Date().addingTimeInterval(120)
+            while Date() < deadline {
+                var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 200) > 0 else { continue }
+                let n = read(fd, &chunk, chunk.count)
+                if n < 0, errno == EINTR { continue }
+                guard n > 0 else { break }
+                taken += n
+                if chunk[0..<n].contains(0x0A) { break }
+                usleep(useconds_t(n * 1_000_000 / bytesPerSecond))
+            }
+            return taken
+        }
+        #expect(line > size)
+        #expect(run.ending == nil, "\(run.logs.text)")
+        #expect(run.logs.text.contains("not reading its output") == false, "\(run.logs.text)")
+        #expect(await run.finish())
+    }
+
     /// A non-blocking descriptor that is full is waited on, not given up
     /// on mid-line: every byte arrives, in order.
     @Test(.timeLimit(.minutes(5)))
@@ -259,17 +298,25 @@ struct MCPGatewayWriterRuntimeTests {
             MCPGatewayRuntime.writeAll(writer, bytes)
             close(writer)
         }
+        // A ceiling, so a write that never finishes fails this test instead
+        // of holding the suite. The reader stays open then: closing it would
+        // raise SIGPIPE in the writer.
         let received: [UInt8] = await offThePool {
             var all: [UInt8] = []
             var chunk = [UInt8](repeating: 0, count: 4096)
-            while true {
+            let deadline = Date().addingTimeInterval(60)
+            while Date() < deadline {
+                var poller = pollfd(fd: reader, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 200) > 0 else { continue }
                 usleep(200)
                 let n = read(reader, &chunk, chunk.count)
                 if n < 0, errno == EINTR { continue }
-                guard n > 0 else { break }
+                guard n > 0 else {
+                    close(reader)
+                    break
+                }
                 all += chunk[0..<n]
             }
-            close(reader)
             return all
         }
         #expect(received.count == bytes.count)

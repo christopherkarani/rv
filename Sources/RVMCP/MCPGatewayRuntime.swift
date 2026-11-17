@@ -416,8 +416,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     /// Each remote's sends and its stop, off the gateway queue: a send may
     /// refresh an OAuth token, and a stop waits for its DELETE.
     private var remoteSenders: [String: MCPOutbox] = [:]
-    /// Bytes each remote launch has been sent whose POST is not over: what
-    /// waits in the HTTP layer counts against `writeBufferBytes` until then.
+    /// Bytes each remote launch has been sent whose POST body has not all
+    /// gone out (and whose POST is not over): what waits in the HTTP layer
+    /// for the server to take it counts against `writeBufferBytes`.
     private var remoteInFlight: [String: (generation: Int, bytes: Int)] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
@@ -681,8 +682,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                     }
                 })
         }
-        // Its replies wait on its delegate queue (which stops reading it)
-        // while `readerBacklogBytes` of them are not yet handled.
+        // Its messages wait, off its delegate queue, while
+        // `readerBacklogBytes` of them (and of their output for the client)
+        // are not yet handled; its connection goes on reading meanwhile, so
+        // past `writeBufferBytes` more waiting there it is stopped.
         let backlog = MCPBacklog(limit: Self.readerBacklogBytes)
         let remote = MCPRemoteUpstream(
             launch: launch, authorizer: authorizer,
@@ -699,12 +702,31 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             exited: { [self] in
                 queue.async { self.exited(server, generation) }
             },
-            log: log)
+            log: log,
+            deliveryLimit: writeBufferBytes,
+            overflowed: { [self] in
+                queue.async { self.deliveryOverflowed(server, generation) }
+            })
         remotes[server] = remote
         remoteSenders[server] = MCPOutbox(limit: writeBufferBytes)
         remoteInFlight[server] = (generation, 0)
         live[server] = generation
         remote.start()
+    }
+
+    /// More than `writeBufferBytes` of what this remote launch sent waits
+    /// behind the client's output: it is stopped, which the core hears at
+    /// once, and its calls end as on any exit (they may have run).
+    private func deliveryOverflowed(_ server: String, _ generation: Int) {
+        guard stopping == false, live[server] == generation else { return }
+        log("MCP server \(MCPDisplayedText.field(server)) sent more than \(Self.mebibytes(writeBufferBytes)) MiB "
+            + "that waits behind the client's output; stopping it")
+        stopUpstream(server)
+    }
+
+    /// Test seam: what `server`'s remote launch counts against its bound now.
+    func remoteBytesInFlight(_ server: String) -> Int? {
+        queue.sync { remoteInFlight[server]?.bytes }
     }
 
     /// The core's restart of a server that went away. Off the gateway
@@ -848,7 +870,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             let fd = writer.input.fileDescriptor
             admission = writer.outbox.submit(cost: bytes.count) { Self.writeAll(fd, bytes) }
         } else if let sender = remoteSenders[server], let remote = remotes[server], let flight = remoteInFlight[server] {
-            // Counted from here until its POST is over, not just until sent.
+            // Counted from here until its body has gone out, not until answered.
             let cost = message.compactText.utf8.count
             if flight.bytes > 0, flight.bytes + cost > writeBufferBytes {
                 admission = .overflow
@@ -984,17 +1006,21 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     static func mebibytes(_ bytes: Int) -> Int { bytes >> 20 }
 
+    /// The most one `write` is given, so a reader that takes a long line
+    /// slowly but steadily is seen to make progress while it does.
+    static let writeChunkBytes = 1 << 20
+
     /// Blocks until every byte is written or the write fails (a reader that
     /// is gone, or any error other than an interrupt): only ever on a
     /// writer's own thread. A non-blocking descriptor that is full is waited
     /// on, so a line is never left half written. `wrote` is told after each
-    /// part of `bytes` is written.
+    /// part of `bytes` is written, at most `writeChunkBytes` at a time.
     static func writeAll(_ fd: Int32, _ bytes: [UInt8], wrote: (() -> Void)? = nil) {
         var written = 0
         while written < bytes.count {
             let n = bytes.withUnsafeBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
-                return write(fd, base + written, raw.count - written)
+                return write(fd, base + written, min(raw.count - written, writeChunkBytes))
             }
             if n < 0, errno == EINTR { continue }
             if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {

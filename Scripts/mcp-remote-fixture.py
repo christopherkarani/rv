@@ -21,6 +21,12 @@ forgets every streamable HTTP session, so the next request on one gets 404.
 With --log-connections every POST is logged as it arrives, before its body is
 read ("ENTER POST <path> port=<client port>"), so a request sent again
 without its body still shows.
+With --deaf-over N a POST /mcp whose body is over N bytes is never read
+("DEAF POST <length>" is logged) and its connection is held open.
+The echo tool's arguments: "text", or "size" (and "char", default "x") for a
+text of that many characters; "noise" makes the note sent before a streamable
+HTTP answer carry that many bytes; "plain" sends that answer as a JSON body
+instead of an event stream.
 """
 import argparse
 import base64
@@ -61,7 +67,7 @@ def answer(msg, headers):
     elif method == "tools/call":
         name, args = msg["params"]["name"], msg["params"].get("arguments", {})
         if name == "echo":
-            text = args.get("text", "")
+            text = args.get("char", "x") * args["size"] if "size" in args else args.get("text", "")
         elif name == "whoami":
             text = "authorization=%s team=%s" % (headers.get("Authorization", "none"), headers.get("X-Team", "none"))
         else:
@@ -93,6 +99,7 @@ class Handler(BaseHTTPRequestHandler):
     hang_calls = False
     reset_calls = False
     log_connections = False
+    deaf_over = None
 
     def origin(self):
         return "http://" + self.headers.get("Host")
@@ -215,6 +222,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.oauth and (path.path.startswith("/auth/")):
             return self.oauth_post(path.path)
         if path.path == "/mcp":
+            length = int(self.headers.get("Content-Length", "0"))
+            if self.deaf_over is not None and length > self.deaf_over:
+                log("DEAF POST %d" % length)
+                threading.Event().wait()
             return self.streamable()
         if path.path == "/expire-sessions":
             with STATE["lock"]:
@@ -276,8 +287,10 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         reply = answer(msg, self.headers)
-        if method == "tools/call":
-            note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "working"}}
+        arguments = msg.get("params", {}).get("arguments", {}) if method == "tools/call" else {}
+        if method == "tools/call" and not arguments.get("plain"):
+            data = "x" * arguments["noise"] if "noise" in arguments else "working"
+            note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": data}}
             body = ("event: message\ndata: %s\n\n: keepalive\n\nevent: message\ndata: %s\n\n" % (
                 json.dumps(note), json.dumps(reply))).encode()
             return self.send(200, body, content_type="text/event-stream")
@@ -358,12 +371,14 @@ def main():
     parser.add_argument("--hang-calls", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
     parser.add_argument("--log-connections", action="store_true")
+    parser.add_argument("--deaf-over", type=int)
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
     Handler.hang_calls = options.hang_calls
     Handler.reset_calls = options.reset_calls
     Handler.log_connections = options.log_connections
+    Handler.deaf_over = options.deaf_over
     server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)
