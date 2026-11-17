@@ -1701,15 +1701,15 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let error): try fail(error.message)
         case .success(let loaded): secrets = loaded
         }
-        // A signal ends serve through its normal shutdown once a server lists
-        // placeholders: from before planning, whose capability probe holds a
-        // stopped child, until the last group is reaped. A second signal
-        // kills what is left at once. Any other serve keeps the defaults.
-        // Planning itself is not interruptible: a signal during it, first
-        // or second, is held and acted on once planning returns.
-        let signals = MCPShutdownSignals.wanted(by: names.compactMap { configuration.server(named: $0) })
-            ? MCPShutdownSignals(MCPShutdownSignals.handled, catching: true) : nil
-        defer { signals?.cancel() }
+        // A signal ends serve through its normal shutdown: from before
+        // planning, whose capability probe holds a stopped child, until the
+        // last group is reaped. Every server runs in a process group of its
+        // own, which a terminal's or a host's signal no longer reaches, so
+        // every serve catches them. A second signal kills what is left at
+        // once. Planning itself is not interruptible: a signal during it,
+        // first or second, is held and acted on once planning returns.
+        let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
+        defer { signals.cancel() }
         // Its gateway serves only the servers that list `placeholders`, each
         // lease bound to that server's process group; it stops with serve.
         let placeholderBroker = SecretPlaceholderBroker(
@@ -1738,10 +1738,6 @@ struct MCPServe: AsyncParsableCommand {
         signal(SIGPIPE, SIG_IGN)
         let log: @Sendable (String) -> Void = { message in
             MCPGatewayRuntime.writeStderrLine("rv mcp: \(message)\n")
-        }
-        let bindsPlaceholders = planned.contains { entry in
-            guard case .placeholderBound = entry.1 else { return false }
-            return true
         }
         // Read and verified once, beside the mcp.json check above. An
         // unreadable or unverifiable store pins nothing: every tool asks.
@@ -1784,20 +1780,17 @@ struct MCPServe: AsyncParsableCommand {
             placeholdersBound: { server, definitions in
                 for line in MCPRun.placeholderBindingLog(server: server, definitions: definitions) { log(line) }
             })
-        // No server bound: from here a signal acts by default. Cancelled
-        // before `first` is read, so no signal falls between the two.
-        if bindsPlaceholders == false { signals?.cancel() }
         // Heard while planning: nothing was spawned, and the leases end with
         // the broker. Exits as a signal-killed serve would report it.
-        if let number = signals?.first {
+        if let number = signals.first {
             MCPSandbox.stopProxies()
             throw ExitCode(128 + number)
         }
-        signals?.forward { runtime.requestShutdown() }
+        signals.forward { runtime.requestShutdown() }
         let ending = runtime.run()
-        signals?.cancel()
+        signals.cancel()
         MCPSandbox.stopProxies()
-        if let code = Self.exitCode(ending, signal: signals?.first) { throw ExitCode(code) }
+        if let code = Self.exitCode(ending, signal: signals.first) { throw ExitCode(code) }
     }
 
     /// How serve exits once the runtime returns: as killed by a signal it

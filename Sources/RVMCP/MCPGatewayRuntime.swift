@@ -583,10 +583,11 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     ) -> Bool {
         let server = launch.server
         let shown = MCPDisplayedText.field(server)
-        guard let stdin = MCPPipe.make(), let stdout = MCPPipe.make(), let stderr = MCPPipe.make() else {
+        guard let pipes = MCPPipe.make(3) else {
             log("could not start MCP server \(shown): no pipes")
             return false
         }
+        let (stdin, stdout, stderr) = (pipes[0], pipes[1], pipes[2])
         let generation = nextGeneration
         nextGeneration += 1
         let gate = MCPExitGate { [self] in

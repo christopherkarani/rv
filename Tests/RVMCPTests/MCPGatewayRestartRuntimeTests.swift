@@ -141,8 +141,31 @@ struct MCPGatewayRestartRuntimeTests {
         for pid in children(in: directory) { kill(pid, SIGKILL) }
     }
 
+    /// No such process, or a zombie: exited and waiting only to be reaped,
+    /// which `kill(pid, 0)` still finds and a container's PID 1 may never
+    /// do for an orphan.
     static func gone(_ pid: pid_t) -> Bool {
-        kill(pid, 0) != 0 && errno == ESRCH
+        guard kill(pid, 0) == 0 else { return errno == ESRCH }
+        return isZombie(pid)
+    }
+
+    /// Read without a shell: `sysctl` `KERN_PROC_PID` on macOS
+    /// (`proc_pidinfo` answers nothing for a zombie), `/proc/<pid>/stat`'s
+    /// state (the first field after the command's closing parenthesis) on
+    /// Linux.
+    static func isZombie(_ pid: pid_t) -> Bool {
+        #if canImport(Darwin)
+        var info = kinfo_proc()
+        var length = MemoryLayout<kinfo_proc>.stride
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&name, 4, &info, &length, nil, 0) == 0, length > 0 else { return false }
+        return Int32(info.kp_proc.p_stat) == SZOMB
+        #else
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+            let close = stat.lastIndex(of: ")")
+        else { return false }
+        return stat[stat.index(after: close)...].split(separator: " ").first == "Z"
+        #endif
     }
 
     static func call(_ id: Int, _ tool: String, text: String = "") -> String {
@@ -305,5 +328,28 @@ struct MCPGatewayRestartRuntimeTests {
         #expect(answer?["result"]?["content"]?.arrayValue?.first?["text"] == .string("[redacted:TOKEN]"))
         #expect(planned.withLock { $0 } == 1)
         #expect(await run.finish())
+    }
+
+    /// `gone` counts a zombie as gone: it has exited and waits only to be
+    /// reaped, which a container's PID 1 may never do for an orphan.
+    @Test(.timeLimit(.minutes(1)))
+    func aZombieCountsAsGone() async throws {
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup("exit 0"), nil]
+        defer { for pointer in argv { free(pointer) } }
+        var environment: [UnsafeMutablePointer<CChar>?] = [nil]
+        var pid: pid_t = 0
+        let status = argv.withUnsafeBufferPointer { arguments in
+            environment.withUnsafeMutableBufferPointer { environment in
+                posix_spawn(&pid, "/bin/sh", nil, nil, UnsafeMutablePointer(mutating: arguments.baseAddress!), environment.baseAddress!)
+            }
+        }
+        try #require(status == 0)
+        let child = pid
+        // Never reaped until the end, so it stays a zombie meanwhile.
+        defer {
+            var exited: Int32 = 0
+            _ = waitpid(child, &exited, 0)
+        }
+        #expect(await eventually(30) { Self.gone(child) }, "an exited, unreaped child is not gone")
     }
 }

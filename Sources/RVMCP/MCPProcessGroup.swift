@@ -156,9 +156,12 @@ final class MCPProcessGroup: MCPSupervisedGroup {
             }
         }
         #if !canImport(Darwin)
-        // No close-on-exec default here: everything else rv has open is closed.
-        for fd in openDescriptors() where descriptors[fd] == nil && fd > STDERR_FILENO {
-            guard posix_spawn_file_actions_addclose(&actions, fd) == 0 else { return .failure(MCPStartFailure("spawn file actions")) }
+        // No close-on-exec default here: the child closes everything above
+        // its standard descriptors itself, after the dups, so a descriptor
+        // another thread opens meanwhile is closed too (glibc 2.34; a spawn
+        // whose close fails does not run).
+        guard posix_spawn_file_actions_addclosefrom_np(&actions, STDERR_FILENO + 1) == 0 else {
+            return .failure(MCPStartFailure("spawn file actions"))
         }
         #endif
         if let directory = launch.workingDirectory, addChangeDirectory(&actions, directory) != 0 {
@@ -192,16 +195,6 @@ final class MCPProcessGroup: MCPSupervisedGroup {
     private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ path: String) -> Int32 {
         posix_spawn_file_actions_addchdir_np(&actions, path)
     }
-
-    /// rv's open descriptors, from `/proc/self/fd`; the first 1024 numbers
-    /// when that cannot be read. A number closed by the time of the spawn is
-    /// harmless: glibc ignores a close that fails on an in-range descriptor.
-    private static func openDescriptors() -> [Int32] {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd") else {
-            return (3..<1024).map { Int32($0) }
-        }
-        return names.compactMap { Int32($0) }
-    }
     #endif
 }
 
@@ -234,6 +227,21 @@ struct MCPPipe {
             return nil
         }
         return MCPPipe(read: read, write: write)
+    }
+
+    /// `count` pipes from `make`, or nil when one of them cannot be made;
+    /// then the ones already made are closed, so a failed start (out of
+    /// descriptors) does not use up more of them.
+    static func make(_ count: Int, using make: () -> MCPPipe? = { MCPPipe.make() }) -> [MCPPipe]? {
+        var pipes: [MCPPipe] = []
+        for _ in 0..<count {
+            guard let pipe = make() else {
+                for made in pipes { made.closeBoth() }
+                return nil
+            }
+            pipes.append(pipe)
+        }
+        return pipes
     }
 
     /// `fd`, close-on-exec, at a number above 2 (moved there if rv was
