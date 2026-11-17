@@ -67,9 +67,10 @@ See [Secrets placeholders](secrets-placeholders.md#what-is-protected-and-what-is
   stays failed until the MCP client restarts `rv mcp serve`. The window
   slides, so a server that fails every two minutes or so is restarted
   indefinitely, its secrets resolved again each time.
-- **Each remote server gets at most 64 calls and 160 requests in
-  flight.** Past either, rv does not send the request; nothing in flight
-  is touched. An approved call that is not sent spends its approval. The
+- **Each remote server gets at most 64 calls and about 160 requests
+  in flight** (a retry or a legacy stream's first messages can pass the
+  160 briefly). Past either, rv does not send the request; nothing in
+  flight is touched. An approved call that is not sent spends its approval. The
   limits are per remote server, not per serve process: on Linux, where
   each request is a connection, several saturated remotes add up and can
   still run rv out of file descriptors.

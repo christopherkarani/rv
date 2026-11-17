@@ -121,8 +121,8 @@ is meant to run that long, raise `callTimeoutSeconds` for that server
 (up to 86400) and re-trust. Check whether it ran before retrying: rv
 asked the server to cancel but cannot make it stop. After a timeout rv
 pings the server; a server that cannot answer while busy is then stopped
-and restarted. A remote server at its request limit is not pinged, and
-is not judged hung for it.
+and restarted. rv's ping goes out even when a remote server is at its
+request limit, so a full remote is judged like any other.
 
 **`MCP server <name> is unavailable: it did not answer initialize within 60 s (its startTimeoutSeconds)`**
 The server took too long to start. An `npx` server's first download is

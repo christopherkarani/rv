@@ -361,7 +361,7 @@ These are the exact error texts rv returns to the client (JSON-RPC error
 | Prompt declined | `The user declined tickets tool create_ticket in rv's approval prompt. Do not retry unless the user asks.` | not run |
 | Audit log unwritable | `rv could not write the audit record for files tool read_file; the call was not run` | not run |
 | 64 calls in flight to one remote | `MCP server tickets already has 64 calls in flight, the most rv sends a remote server at once; the call was not run. Try it again once one of them has finished.` | not run |
-| 160 requests in flight to one remote | `MCP server tickets has too many requests in flight; tool search_tickets was not run. Try it again once some have finished.` (an approved call adds ` Its approval was used up, so it must be approved again.`) | not run; an approved call's audit row is declined, keeping its approval id |
+| about 160 requests in flight to one remote | `MCP server tickets has too many requests in flight; tool search_tickets was not run. Try it again once some have finished.` (an approved call adds ` Its approval was used up, so it must be approved again.`) | not run; an approved call's audit row is declined, keeping its approval id |
 
 ### Crashes and restarts
 
@@ -400,17 +400,21 @@ rv mcp: MCP server files is back
 
 ### Limits per remote server
 
-Each remote server has its own limits: at most **64 calls** and **160
-requests of any kind** (calls, cancels, listings, pings, notifications)
-in flight. On Linux each request is a connection, so several saturated
-remotes add up. Past either limit, rv does not send the request: a call
-ends not run (the messages above; an approved call's approval is used
-up, so it must be approved again), a listing page fails, a ping is
-dropped without judging the server hung, and a notification is dropped
-with a line on stderr (a cancel still closes the call it names). Nothing
-already in flight is touched. A notification's POST is let go once the
-server's response head arrives, or after 30 s, and a call's event-stream
-reply is closed once its answer is in, so neither holds a place. A remote
+Each remote server has its own limits: at most **64 calls** and about
+**160 requests of any kind** (calls, cancels, listings, pings,
+notifications) in flight; a 401 retry or a legacy SSE server's first
+messages can pass the 160 briefly. On Linux each request is a
+connection, so several saturated remotes add up. Past either limit, rv
+does not send the request: a call ends not run (the messages above; an
+approved call's approval is used up, so it must be approved again), a
+listing page fails, and a notification is dropped with a line on stderr
+(a cancel still closes the call it names). Nothing already in flight is
+touched. rv's own ping always goes out (one at a time), so a full remote
+that stopped answering is still found hung. A notification's (or
+reply's) POST is let go at most 30 s after it is sent and 5 s after its
+response starts, on rv's own timer (a normal response ends first and is
+never cut), and a call's event-stream reply is closed once its answer is
+in, so neither holds a place. A remote
 that has more than 128 MiB of its output waiting for the gateway is
 stopped and restarted. A streamable HTTP answer over 64 MiB ends only the
 call it answers.
