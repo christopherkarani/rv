@@ -25,10 +25,7 @@ public struct HostModeStore: Sendable {
 
     /// Stored entries only; a host missing here follows `guard.mode`.
     public func load() -> [HookHost: HostMode] {
-        guard let data = try? Data(contentsOf: configFile),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return Self.modes(inConfig: root)
+        GuardConfig.read(configDirectory: configDirectory).hosts
     }
 
     /// The stored entry, or `block` when there is none. Callers that ask
@@ -100,22 +97,5 @@ public struct HostModeStore: Sendable {
         guard let value else { return [:] }
         guard let object = value.asObject else { throw .unreadableConfig }
         return object
-    }
-
-    /// Reads `guard.hosts` from an already-parsed config object (rvd parses
-    /// `config.json` once per evaluation).
-    public static func modes(inConfig config: [String: Any]?) -> [HookHost: HostMode] {
-        guard let guardObject = config?["guard"] as? [String: Any],
-              let hosts = guardObject["hosts"] as? [String: Any]
-        else { return [:] }
-        var modes: [HookHost: HostMode] = [:]
-        for (key, value) in hosts {
-            guard let host = HookHost(rawValue: key),
-                  let raw = value as? String,
-                  let mode = HostMode(rawValue: raw.lowercased())
-            else { continue }
-            modes[host] = mode
-        }
-        return modes
     }
 }

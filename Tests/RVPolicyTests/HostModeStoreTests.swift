@@ -52,12 +52,14 @@ struct HostModeStoreTests {
     }
 
     @Test func unknownHostsAndValuesAreIgnored() {
-        let config: [String: Any] = [
-            "guard": ["hosts": ["claude": "OBSERVE", "nope": "off", "cursor": "loud", "codex": 3]],
-        ]
-        #expect(HostModeStore.modes(inConfig: config) == [.claude: .observe])
-        #expect(HostModeStore.modes(inConfig: nil).isEmpty)
-        #expect(HostModeStore.modes(inConfig: ["guard": "observe"]).isEmpty)
+        let config: JSONValue = .object([
+            "guard": .object(["hosts": .object([
+                "claude": .string("OBSERVE"), "nope": .string("off"), "cursor": .string("loud"), "codex": .number(3),
+            ])]),
+        ])
+        #expect(GuardConfig(config).hosts == [.claude: .observe])
+        #expect(GuardConfig(.null).hosts.isEmpty)
+        #expect(GuardConfig(.object(["guard": .string("observe")])).hosts.isEmpty)
     }
 
     @Test func save_refusesToClobberAnUnreadableConfig() throws {

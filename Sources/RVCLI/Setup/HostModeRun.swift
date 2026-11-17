@@ -54,7 +54,8 @@ enum HostModeRun {
         do {
             let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
             let modes = store(env).load()
-            let guardMode = JudgeRuntime.guardMode(home: env.home)
+            let guardMode = GuardModeResolution.resolve(
+                GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
             let rows = HookHost.allCases
                 .sorted { $0.rawValue < $1.rawValue }
                 .map { host in

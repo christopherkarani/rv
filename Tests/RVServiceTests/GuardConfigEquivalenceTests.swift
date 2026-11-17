@@ -2,16 +2,15 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
-@testable import RVService
 
 /// SEC-A01 / AC-A01..A03: the typed reader (`GuardConfig.read(home:)` +
-/// `GuardModeResolution`) against the legacy `JSONSerialization` +
-/// `[String: Any]` readers, over the same `config.json` bytes on disk.
+/// `GuardModeResolution`) over a corpus of `config.json` bytes on disk.
 ///
-/// Where the two parsers legitimately disagree the new path must be the
-/// stricter one: `enforce` for the mode, `nil` for the engine, a missing
-/// entry for a host. A new `observe` the legacy path did not produce is a
-/// blocking defect.
+/// T1 checked this corpus against the legacy `JSONSerialization` +
+/// `[String: Any]` readers: the same result everywhere except
+/// `knownDivergences`, which read as `.empty` (enforce). That result is
+/// frozen in `golden`. The legacy readers are gone; the golden table keeps
+/// guarding the typed path.
 @Suite("Guard config equivalence")
 struct GuardConfigEquivalenceTests {
     struct Document: Sendable, CustomTestStringConvertible {
@@ -279,47 +278,25 @@ struct GuardConfigEquivalenceTests {
         Golden("no file", modes: ["EEEEEEEEEEE", "EEEEEEEEEEE", "EEEEEEEEEEE", "EEEEEEEEEEE", "EEEEEEEEEEE"], engine: nil, hosts: ""),
     ]
 
-    /// Both readers' view of one document, read from the same file.
-    struct Views {
-        let legacy: [String: Any]?
-        let typed: GuardConfig
-
-        static func load(_ document: Document) throws -> Views {
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("rv-guard-equiv-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: url) }
-            let home = try #require(HomeDirectory(validating: url.path))
-            if let bytes = document.bytes {
-                let directory = RVPolicyPaths.configDirectory(home: home)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try Data(bytes).write(to: directory.appendingPathComponent("config.json"))
-            }
-            return Views(legacy: JudgeRuntime.loadConfigDict(home: home), typed: GuardConfig.read(home: home))
+    /// The typed reader's view of one document, read from disk.
+    static func load(_ document: Document) throws -> GuardConfig {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-guard-equiv-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let home = try #require(HomeDirectory(validating: url.path))
+        if let bytes = document.bytes {
+            let directory = RVPolicyPaths.configDirectory(home: home)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(bytes).write(to: directory.appendingPathComponent("config.json"))
         }
-
-        typealias ModeDivergence = (host: HookHost?, environment: [String: String], old: GuardMode, new: GuardMode)
-
-        func modeDivergences() -> [ModeDivergence] {
-            var out: [ModeDivergence] = []
-            for host in GuardConfigEquivalenceTests.hosts {
-                for environment in GuardConfigEquivalenceTests.environments {
-                    let old = JudgeRuntime.guardMode(environment: environment, config: legacy, host: host)
-                    let new = GuardModeResolution.resolve(typed, host: host, environment: environment)
-                    if old != new { out.append((host: host, environment: environment, old: old, new: new)) }
-                }
-            }
-            return out
-        }
-
-        var engineDiverges: Bool { typed.judgeEngine != JudgeRuntime.explicitEngine(config: legacy) }
-        var hostsDiverge: Bool { typed.hosts != HostModeStore.modes(inConfig: legacy) }
+        return GuardConfig.read(home: home)
     }
 
     @Test("golden table: the typed reader resolves each document as frozen", arguments: zip(corpus, golden))
     func goldenTable(_ document: Document, _ expected: Golden) throws {
         #expect(document.name == expected.name)
-        let config = try Views.load(document).typed
+        let config = try Self.load(document)
         let modes = Self.environments.map { environment in
             String(Self.hosts.map {
                 GuardModeResolution.resolve(config, host: $0, environment: environment) == .enforce ? "E" : "O"
@@ -338,55 +315,16 @@ struct GuardConfigEquivalenceTests {
         #expect(Set(Self.corpus.map(\.name)).count == Self.corpus.count)
     }
 
-    @Test("AC-A01: same guard mode as the legacy reader, or enforce", arguments: corpus)
-    func guardMode(_ document: Document) throws {
-        let views = try Views.load(document)
-        for divergence in views.modeDivergences() {
-            #expect(
-                divergence.new == .enforce,
-                "new path observes where legacy enforces: host \(String(describing: divergence.host)), env \(divergence.environment)")
-        }
-        #expect(views.typed.machineMode == JudgeRuntime.guardMode(environment: [:], config: views.legacy)
-            || views.typed.machineMode == .enforce)
-    }
-
-    @Test("AC-A02: same judge engine as the legacy reader, or nil", arguments: corpus)
-    func judgeEngine(_ document: Document) throws {
-        let views = try Views.load(document)
-        let old = JudgeRuntime.explicitEngine(config: views.legacy)
-        #expect(views.typed.judgeEngine == old || views.typed.judgeEngine == nil)
-    }
-
-    @Test("AC-A03: same host modes as the legacy reader, or an entry omitted", arguments: corpus)
-    func hostModes(_ document: Document) throws {
-        let views = try Views.load(document)
-        let old = HostModeStore.modes(inConfig: views.legacy)
-        for (host, mode) in views.typed.hosts {
-            #expect(old[host] == mode, "new path adds or changes \(host): \(mode), legacy \(String(describing: old[host]))")
-        }
-    }
-
-    /// Every other document resolves exactly as the legacy reader does, on
-    /// every platform.
-    @Test("outside the known divergences the readers agree exactly", arguments: corpus)
-    func agreesOutsideKnownDivergences(_ document: Document) throws {
-        guard !Self.knownDivergences.contains(document.name) else { return }
-        let views = try Views.load(document)
-        #expect(views.modeDivergences().isEmpty)
-        #expect(!views.engineDiverges)
-        #expect(!views.hostsDiverge)
-    }
-
-    /// Where the legacy reader's answer depends on the platform's parser,
-    /// the typed reader does not: it reads `.empty` (enforce, no engine, no
-    /// host entries) on every platform.
+    /// Where the legacy reader's answer depended on the platform's parser,
+    /// the typed reader's does not: it reads `.empty` (enforce, no engine,
+    /// no host entries) on every platform.
     @Test("known divergences read as empty", arguments: knownDivergences)
     func knownDivergenceIsEmpty(_ name: String) throws {
         let document = try #require(Self.corpus.first { $0.name == name })
-        #expect(try Views.load(document).typed == .empty)
+        #expect(try Self.load(document) == .empty)
     }
 
-    /// Documents the parsers may disagree on.
+    /// Documents the legacy and typed parsers disagreed on.
     /// - Integers beyond 2^53: `JSONValue` keeps the digit string, which as
     ///   the nested value is chosen, fails to parse and shadows the flat
     ///   key. The legacy reader sees an `NSNumber`, skips it and takes the
@@ -428,8 +366,8 @@ struct GuardConfigEquivalenceTests {
     func corpusExercisesObserve() throws {
         var observed = 0
         for document in Self.corpus {
-            let views = try Views.load(document)
-            for host in Self.hosts where GuardModeResolution.resolve(views.typed, host: host, environment: [:]) == .observe {
+            let config = try Self.load(document)
+            for host in Self.hosts where GuardModeResolution.resolve(config, host: host, environment: [:]) == .observe {
                 observed += 1
             }
         }

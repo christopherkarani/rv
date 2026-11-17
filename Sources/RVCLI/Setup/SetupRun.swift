@@ -52,7 +52,7 @@ enum SetupRun {
                 AdapterRuntime.setupRefusal(
                     hosts: report.unwiredForMissingInterpreter[interpreter] ?? [], interpreter: interpreter)
             }
-            let observing = JudgeRuntime.configuredGuardMode(home: env.home) == .observe
+            let observing = GuardConfig.read(home: env.home).machineMode == .observe
             let direct = report.serviceStartedDirectly
                 ? DirectRvd.notice(command: "setup", rvPath: env.rvPath, rvdPath: env.rvdPath, observing: observing)
                 : ""
@@ -154,7 +154,7 @@ enum SetupRun {
     /// `observePinnedByOrganization` under an organization gate.
     static func observeShedsOversight(_ env: SetupEnvironment) throws(SetupError) -> Bool {
         if env.managedEnforce(env.home) { throw .observePinnedByOrganization }
-        guard JudgeRuntime.configuredGuardMode(home: env.home) == .enforce else { return false }
+        guard GuardConfig.read(home: env.home).machineMode == .enforce else { return false }
         let installations = try inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
         return HookHost.allCases.contains { [.wired, .broken].contains(installations.state(for: $0)) }
     }
