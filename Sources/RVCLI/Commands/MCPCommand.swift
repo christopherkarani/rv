@@ -43,6 +43,20 @@ struct MCPEnvironment: Sendable {
     }
 }
 
+/// What serve launches: the mcp.json `MCPRun.upstreamLaunches` verified,
+/// and what it planned from it. Only that function makes one, so serve's
+/// relaunches (`MCPRun.relaunch(plan:)`) cannot be planned from any other
+/// read of mcp.json.
+struct MCPServePlan {
+    let configuration: MCPConfiguration
+    let launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
+
+    fileprivate init(configuration: MCPConfiguration, launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]) {
+        self.configuration = configuration
+        self.launches = launches
+    }
+}
+
 enum MCPRun {
     struct Row: Encodable, Equatable {
         var host: String
@@ -1152,9 +1166,9 @@ enum MCPRun {
 
     /// Plans upstream processes. An untrusted mcp.json is refused before any
     /// command, argument, sandbox, or secret is resolved into a launch.
-    /// The plan uses the bytes this call verified, and returns that
-    /// configuration for relaunches. A configuration captured earlier is
-    /// not launched when it differs.
+    /// The plan uses the bytes this call verified, and carries that
+    /// configuration for relaunches (`relaunch(plan:)`). A configuration
+    /// captured earlier is not launched when it differs.
     static func upstreamLaunches(
         names: [String], configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
         resolver: SecretResolver,
@@ -1162,9 +1176,7 @@ enum MCPRun {
             .success(launch)
         },
         placeholders: MCPPlaceholderLeasing = .unavailable
-    ) -> Result<
-        (configuration: MCPConfiguration, launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]), CommandFailure
-    > {
+    ) -> Result<MCPServePlan, CommandFailure> {
         let verified: MCPConfiguration
         switch boundConfiguration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -1204,21 +1216,23 @@ enum MCPRun {
                     configDirectory: environment.configDirectory)
             }
             return .failure(CommandFailure(error.message))
-        case .success(let planned): return .success((verified, planned))
+        case .success(let planned): return .success(MCPServePlan(configuration: verified, launches: planned))
         }
     }
 
     /// How serve starts a server again after it went away: planned alone,
-    /// as at serve start, from `configuration` (the one serve verified and
-    /// started with; mcp.json is not read again). Its secrets are resolved
-    /// again, a placeholder server gets a new lease, and a caged one a new
-    /// cage and proxy (the old proxy is stopped), as a first launch gets them.
+    /// as at serve start, from the configuration `plan` was made from (the
+    /// one serve verified and started with; mcp.json is not read again).
+    /// Its secrets are resolved again, a placeholder server gets a new
+    /// lease, and a caged one a new cage and proxy (the old proxy is
+    /// stopped), as a first launch gets them.
     static func relaunch(
-        configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
+        plan: MCPServePlan, environment: MCPEnvironment, secrets: SecretsConfiguration,
         resolver: SecretResolver, placeholders: MCPPlaceholderLeasing,
         sandbox: @escaping @Sendable () -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>
     ) -> MCPGatewayRuntime.Relaunch {
-        { server in
+        let configuration = plan.configuration
+        return { server in
             switch MCPLaunchPlanner.plan(
                 servers: [server], configuration: configuration, secrets: secrets, resolver: resolver,
                 baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load,
@@ -1718,10 +1732,10 @@ struct MCPServe: AsyncParsableCommand {
         let placeholderBroker = SecretPlaceholderBroker(
             configDirectory: environment.configDirectory, resolver: .live(home: home.rawValue))
         defer { placeholderBroker.stop() }
-        let planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
-        // What relaunches are planned from: the configuration verified for
-        // these launches, not the read above.
-        let verified: MCPConfiguration
+        // Relaunches are planned from this plan, which only
+        // `upstreamLaunches` makes: from the configuration it verified for
+        // these launches, never the read above.
+        let plan: MCPServePlan
         switch MCPRun.upstreamLaunches(
             names: names, configuration: configuration, environment: environment, secrets: secrets,
             resolver: .live(home: home.rawValue),
@@ -1731,10 +1745,9 @@ struct MCPServe: AsyncParsableCommand {
             placeholders: .broker(placeholderBroker))
         {
         case .failure(let failure): try fail(failure.message)
-        case .success(let result):
-            planned = result.launches
-            verified = result.configuration
+        case .success(let result): plan = result
         }
+        let planned = plan.launches
         let configDirectory = environment.configDirectory
         // As `MCPGatewayRuntime.run` does, before the pin-store and
         // host-check lines below. Lines through the gateway's stderr writer
@@ -1775,7 +1788,7 @@ struct MCPServe: AsyncParsableCommand {
             connections: planned.map { $0.1 },
             oauthStore: environment.oauthTokens,
             relaunch: MCPRun.relaunch(
-                configuration: verified, environment: environment, secrets: secrets,
+                plan: plan, environment: environment, secrets: secrets,
                 resolver: .live(home: home.rawValue), placeholders: .broker(placeholderBroker),
                 sandbox: {
                     MCPSandbox.apply(

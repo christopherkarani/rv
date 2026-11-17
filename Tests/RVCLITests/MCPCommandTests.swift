@@ -5524,9 +5524,6 @@ struct MCPCommandTests {
         ]))
         let environment = fixture.environment()
         let configuration = try MCPRun.configuration(environment).get()
-        let path = ".config/rv/mcp.json"
-        try fixture.write(path, fixture.text(path).replacingOccurrences(of: "fs-mcp", with: "evil-binary"))
-        chmod(fixture.home.appendingPathComponent(path).path, 0o600)
         let calls = Mutex(0)
         let resolver = SecretResolver { _ in
             calls.withLock { $0 += 1 }
@@ -5535,8 +5532,15 @@ struct MCPCommandTests {
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
         ])
+        let plan = try MCPRun.upstreamLaunches(
+            names: ["fs"], configuration: configuration, environment: environment, secrets: secrets, resolver: resolver
+        ).get()
+        calls.withLock { $0 = 0 }
+        let path = ".config/rv/mcp.json"
+        try fixture.write(path, fixture.text(path).replacingOccurrences(of: "fs-mcp", with: "evil-binary"))
+        chmod(fixture.home.appendingPathComponent(path).path, 0o600)
         let relaunch = MCPRun.relaunch(
-            configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            plan: plan, environment: environment, secrets: secrets, resolver: resolver,
             placeholders: .unavailable, sandbox: { { _, launch, _ in .success(launch) } })
         let (upstream, connection) = try relaunch("fs").get()
         guard case .process(let launch) = connection else {
@@ -5587,7 +5591,7 @@ struct MCPCommandTests {
             sandbox: sandbox()
         ).get()
         let relaunch = MCPRun.relaunch(
-            configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            plan: first, environment: environment, secrets: secrets, resolver: resolver,
             placeholders: .unavailable, sandbox: sandbox)
         let again = try relaunch("fs").get()
         guard case .process(let started)? = first.launches.first?.1, case .process(let relaunched) = again.1 else {
@@ -5624,7 +5628,7 @@ struct MCPCommandTests {
         ).get()
         #expect(plan.configuration.untrusted == false)
         let relaunch = MCPRun.relaunch(
-            configuration: plan.configuration, environment: environment, secrets: secrets, resolver: resolver,
+            plan: plan, environment: environment, secrets: secrets, resolver: resolver,
             placeholders: .unavailable, sandbox: { { _, launch, _ in .success(launch) } })
         guard case .success((_, .process(let launch))) = relaunch("fs") else {
             Issue.record("the verified configuration did not relaunch fs")
