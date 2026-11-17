@@ -258,19 +258,40 @@ rv is one binary, 25 commands. The rest of the surface:
   group and both go to the whole group, while its leader is not yet
   reaped, so what it started in a session of its own (`setsid`), or
   outside rv (the container of a `docker run` server), is not stopped by
-  them. A server that was ready and then goes away (it exits, ends its
+  them. A terminal's Ctrl-C or a host's process-group kill reaches
+  serve, not the servers: every `rv mcp serve` catches SIGINT, SIGTERM
+  and SIGHUP and stops its servers itself (a second signal kills them at
+  once). A server starts with every signal at its default, even one rv
+  inherited ignored; it cannot `setsid()` itself (its children can); and
+  a launcher that starts the real server and exits counts as the server
+  exiting. On Linux a server inherits only descriptors 0, 1 and 2.
+  A server that was ready and then goes away (it exits, ends its
   session, loses its connection, stops reading its input, or does not
-  answer rv's `ping` within 10 s after a call timed out) is started again
-  after 1, 2, 4 … up to 30 s, at most 5 times in 10 minutes, then stays
-  failed; one that was never ready is not restarted. It is started from
-  the mcp.json serve started with, listed again before any call reaches
-  it (a changed tool asks, and old approvals do not carry over), and the
-  client is told its tools changed. A call in flight is never sent again:
-  it fails saying it may have run, and a call made while the server is
-  coming back is refused at once. On Linux each POST to a remote server
-  goes on a connection of its own, since libcurl would send a request
-  again when a kept-alive connection drops before its answer. A client that takes nothing rv writes
-  for 30 s ends `rv mcp serve` with exit status 1.
+  answer rv's `ping` within 10 s after a call timed out, which a server
+  that handles one request at a time cannot do while busy with a slow
+  call, so whatever it was running is cut off) is started again after 1,
+  2, 4, 8, then 16 s, at most 5 times in any 10 minutes, then stays
+  failed. The 10 minutes slide: a server that goes away every two minutes
+  or so is restarted for as long as serve runs, its secrets resolved
+  again each time. One that was never ready is not restarted. A restart
+  must start and answer `initialize` within its `"startTimeoutSeconds"`
+  (counted once rv has reaped its last process), or it counts toward
+  that cap. It is started from the mcp.json serve verified at start and
+  listed again before any call reaches it: a changed tool asks, an
+  approval for the old definition does not carry over, and only tools
+  that server lists again can be called (others are refused and
+  audited). The client is told its tools changed. A call in flight is
+  never sent again: it fails saying it may have run, and a call made
+  while the server is coming back is refused at once; a prompt accepted
+  then, or one the client cancels, is audited as declined. An answer a
+  server wrote just before it exited that rv has not read 1 s later is
+  dropped, and its call counts as may have run. On Linux each POST to a
+  remote server goes on a connection of its own, since libcurl would
+  send a request again when a kept-alive connection drops before its
+  answer. A remote server is never slowed down: once more than 128 MiB
+  of what it sent waits for the gateway, rv stops it (and restarts it as
+  above). A client that takes nothing rv writes for 30 s ends
+  `rv mcp serve` with exit status 1.
   Each `rv mcp serve` process also warns once at start, on stderr and in
   the audit log, when host configs bypass the gateway, run a server
   mcp.json blocks, or hold unreviewed servers (a host set up by
