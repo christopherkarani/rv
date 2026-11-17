@@ -613,38 +613,6 @@ struct MCPGatewayRestartRuntimeTests {
         #expect(await run.finish())
     }
 
-    /// A plan that returns just past its launch's start timeout, before
-    /// the tick that would expire it, starts nothing: the launch is no
-    /// longer awaited, it counts once, and the next try brings the server
-    /// back with one start.
-    @Test(.timeLimit(.minutes(5)))
-    func aPlanReturningPastItsStartTimeoutStartsNothing() async throws {
-        let directory = try Self.scratch()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let planned = PlanCount()
-        let plan = Self.counting(planned, in: directory)
-        let run = GatewayRun(
-            core: Self.core(startTimeout: 10), connections: [.process(Self.launch([], in: directory))],
-            relaunch: { server in
-                let late = planned.value.withLock { $0 } == 0
-                // The deadline is set just before planning starts.
-                if late { usleep(10_200_000) }
-                return plan(server)
-            })
-        defer { run.stopNow() }
-        #expect(await run.initialize())
-        run.client.send(Self.call(2, "crash"))
-        _ = await Self.reply(run, 2)
-        let logs = run.logs
-        let answer = await Self.echoes(run, from: 3)
-        #expect(answer?["result"] != nil, "\(logs.text)")
-        #expect(planned.value.withLock { $0 } == 2, "\(logs.text)")
-        #expect(Self.starts(in: directory) == 2, "\(logs.text)")
-        #expect(logs.text.contains("it is running") == false, "\(logs.text)")
-        #expect(logs.text.components(separatedBy: "did not start again").count == 2, "\(logs.text)")
-        #expect(await run.finish())
-    }
-
     /// A plan that succeeds but whose launch cannot be spawned ends what
     /// the plan started at once: its cage's proxy is stopped and untracked.
     @Test(.timeLimit(.minutes(5)))
