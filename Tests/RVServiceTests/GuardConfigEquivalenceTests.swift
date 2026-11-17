@@ -119,6 +119,13 @@ struct GuardConfigEquivalenceTests {
         Document("sibling big int", #"{"guard": {"mode": "observe"}, "n": 9007199254740993}"#),
         Document("sibling beyond Double", #"{"guard": {"mode": "observe"}, "n": 1e400}"#),
         Document("sibling negative big int", #"{"guard.mode": "observe", "n": -9223372036854775809}"#),
+        // Parsers disagree on validity (Darwin or Linux legacy accepts).
+        Document("arrays nested 512 deep", #"{"guard.mode": "observe", "x": "#
+            + String(repeating: "[", count: 512) + String(repeating: "]", count: 512) + "}"),
+        Document("sibling -1e309", #"{"guard.mode": "observe", "x": -1e309}"#),
+        Document("UTF-32LE with BOM", bytes: [0xFF, 0xFE, 0x00, 0x00]
+            + Array(#"{"guard.mode": "observe"}"#.data(using: .utf32LittleEndian)!)),
+        Document("UTF-16LE", bytes: Array(#"{"guard.mode": "observe"}"#.data(using: .utf16LittleEndian)!)),
         // UTF-8 BOM.
         Document("BOM nested observe", bytes: [0xEF, 0xBB, 0xBF] + Array(#"{"guard": {"mode": "observe"}}"#.utf8)),
         Document("BOM host observe", bytes: [0xEF, 0xBB, 0xBF] + Array(#"{"guard": {"hosts": {"claude": "observe"}}}"#.utf8)),
@@ -236,6 +243,9 @@ struct GuardConfigEquivalenceTests {
     /// - Duplicate keys: Darwin keeps the first, swift-corelibs
     ///   `JSONSerialization` the last. `GuardConfig(jsonData:)` rejects any
     ///   duplicate.
+    /// - Validity: Darwin legacy accepts arrays nested 512 deep and
+    ///   `-1e309`; Linux legacy accepts UTF-32LE with a BOM; both accept
+    ///   UTF-16, which the duplicate-key scan cannot vouch for.
     static let knownDivergences: [String] = [
         "duplicate guard, observe last",
         "duplicate guard, observe first",
@@ -251,6 +261,10 @@ struct GuardConfigEquivalenceTests {
         "mode big int, flat observe",
         "mode huge uint, flat observe",
         "engine big int, flat ft",
+        "arrays nested 512 deep",
+        "sibling -1e309",
+        "UTF-32LE with BOM",
+        "UTF-16LE",
     ]
 
     @Test("the corpus resolves to observe somewhere, so the equivalence is not vacuous")
