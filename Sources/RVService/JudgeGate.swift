@@ -5,25 +5,6 @@ import RVHistory
 import RVLaya
 import RVPolicy
 
-/// Guard posture for the whole evaluate door — packs and judge alike.
-public enum GuardMode: String, Sendable {
-    /// Normal operation: packs deny, judge (when on) may raise an allow.
-    case enforce
-    /// Everything is evaluated and logged, nothing blocks. The would-be
-    /// verdict (packs, script check, judge) lands in judge-log.jsonl.
-    case observe
-}
-
-/// Which judge scores a pack-allowed command.
-///
-/// `ft` is the Ticket 5a single-pass fine-tune (bundle
-/// `models/laya-ft-v2-coreml`); `laya` is the stock three-question CoreML
-/// judge (bundle `models/laya-multilingual-coreml`).
-public enum JudgeEngine: String, Sendable {
-    case ft
-    case laya
-}
-
 /// Laya judge wiring for the gated evaluate door.
 ///
 /// One config knob (~/.config/rv/config.json): `guard.mode`: `enforce`

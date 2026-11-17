@@ -2,29 +2,6 @@ import Foundation
 import RVDomain
 import RVHistory
 
-/// How rv guards one hook host. `block` enforces, `observe` allows and logs
-/// what enforcement would have blocked, `off` leaves the host unwired. A
-/// host with no stored entry follows the global `guard.mode` (enforce by
-/// default); a stored entry, `block` included, outranks it.
-public enum HostMode: String, Sendable, Equatable, CaseIterable {
-    case block
-    case observe
-    case off
-
-    /// True when moving from `current` to `self` sheds oversight.
-    public func isLooser(than current: HostMode) -> Bool {
-        rank < current.rank
-    }
-
-    private var rank: Int {
-        switch self {
-        case .off: 0
-        case .observe: 1
-        case .block: 2
-        }
-    }
-}
-
 public enum HostModeStoreError: Error, Sendable, Equatable {
     /// `config.json` exists but is not a JSON object, or its `guard` /
     /// `guard.hosts` value is not one: writing would drop or replace keys
