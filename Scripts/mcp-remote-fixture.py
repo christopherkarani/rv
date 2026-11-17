@@ -21,6 +21,8 @@ forgets every streamable HTTP session, so the next request on one gets 404.
 With --log-connections every POST is logged as it arrives, before its body is
 read ("ENTER POST <path> port=<client port>"), so a request sent again
 without its body still shows.
+With --hang-notes a held call's event stream first carries one comment
+line, so the client reads part of a reply that never answers.
 With --deaf-over N a POST /mcp whose body is over N bytes is never read
 ("DEAF POST <length>" is logged) and its connection is held open.
 The echo tool's arguments: "text", or "size" (and "char", default "x") for a
@@ -97,6 +99,7 @@ class Handler(BaseHTTPRequestHandler):
     token = None
     oauth = False
     hang_calls = False
+    hang_notes = False
     reset_calls = False
     log_connections = False
     deaf_over = None
@@ -300,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
+        if self.hang_notes:
+            self.wfile.write(b": waiting\n\n")
         self.wfile.flush()
         while True:
             readable, _, _ = select.select([self.connection], [], [], 0.2)
@@ -369,6 +374,7 @@ def main():
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--oauth", action="store_true")
     parser.add_argument("--hang-calls", action="store_true")
+    parser.add_argument("--hang-notes", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
     parser.add_argument("--log-connections", action="store_true")
     parser.add_argument("--deaf-over", type=int)
@@ -376,6 +382,7 @@ def main():
     Handler.token = options.token
     Handler.oauth = options.oauth
     Handler.hang_calls = options.hang_calls
+    Handler.hang_notes = options.hang_notes
     Handler.reset_calls = options.reset_calls
     Handler.log_connections = options.log_connections
     Handler.deaf_over = options.deaf_over

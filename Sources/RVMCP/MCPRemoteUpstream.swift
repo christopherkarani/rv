@@ -148,6 +148,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
     private let exited: @Sendable () -> Void
     private let log: @Sendable (String) -> Void
     private let overflowed: @Sendable () -> Void
+    private let recharge: @Sendable (Int) -> (@Sendable () -> Void)?
+    private let whileReceiving: @Sendable (JSONValue) -> Void
     /// What waits for `deliver`, by the bytes it came in.
     private let deliveries: MCPOutbox
     private let lock = NSLock()
@@ -174,7 +176,9 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         exited: @escaping @Sendable () -> Void,
         log: @escaping @Sendable (String) -> Void,
         deliveryLimit: Int = MCPGatewayRuntime.writeBufferBytes,
-        overflowed: @escaping @Sendable () -> Void = {}
+        overflowed: @escaping @Sendable () -> Void = {},
+        recharge: @escaping @Sendable (Int) -> (@Sendable () -> Void)? = { _ in nil },
+        whileReceiving: @escaping @Sendable (JSONValue) -> Void = { _ in }
     ) {
         self.launch = launch
         self.authorizer = authorizer
@@ -182,6 +186,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         self.exited = exited
         self.log = log
         self.overflowed = overflowed
+        self.recharge = recharge
+        self.whileReceiving = whileReceiving
         self.deliveries = MCPOutbox(limit: deliveryLimit)
         super.init()
     }
@@ -425,6 +431,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         // A reply rv cut off for its size: what still comes of it is dropped
         // (corelibs goes on delivering what it already read after a cancel).
         guard var exchange = locked({ exchanges[id] }), exchange.oversized == false else { return }
+        // Test seam: what runs while this reply's part is read, as a racing cancel would.
+        if case .post(let message, _) = exchange.kind { whileReceiving(message) }
         var incoming: [(message: JSONValue, cost: Int)] = []
         var endpointEvent: String?
         if exchange.isEventStream, (200..<300).contains(exchange.status) {
