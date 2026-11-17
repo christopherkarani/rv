@@ -32,6 +32,13 @@ $ rv test 'git status'
 {"decision":"allow","schema":"rv.test.v1"}
 ```
 
+**User guides:** [install and first run](docs/guides/install.md) ·
+[secrets placeholders](docs/guides/secrets-placeholders.md) ·
+[MCP gateway](docs/guides/mcp-gateway.md) ·
+[audit log](docs/guides/audit-log.md) ·
+[troubleshooting](docs/guides/troubleshooting.md) ·
+[known limits](docs/guides/known-limits.md)
+
 ## Install (30 seconds)
 
 ```sh
