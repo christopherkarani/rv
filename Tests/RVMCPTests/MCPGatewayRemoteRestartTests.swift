@@ -105,9 +105,13 @@ struct MCPGatewayRemoteRestartTests {
         let run = Self.run(fixture, remoteRequestLimit: 2)
         defer { run.stopNow() }
         #expect(await run.initialize())
+        let runtime = run.runtime
+        // rv's own initialize and initialized are over before the calls.
+        #expect(await eventually { runtime.remoteRequestsInFlight("remote") == 0 })
         run.client.send(Self.call(2))
         run.client.send(Self.call(3))
         #expect(await eventually { Self.requests(fixture, "tools/call") == 2 }, "\(fixture.requests())")
+        #expect(runtime.remoteRequestsInFlight("remote") == 2)
         run.client.send(Self.call(4))
         let refused = await MCPGatewayRestartRuntimeTests.reply(run, 4, timeout: 30)
         let message = refused?["error"]?["message"]?.stringValue ?? ""

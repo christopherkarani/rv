@@ -777,6 +777,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         remoteInFlight[server] = (now.generation, now.bytes + bytes)
     }
 
+    /// Test seam: how many requests `server`'s remote launch has in flight.
+    func remoteRequestsInFlight(_ server: String) -> Int? {
+        let remote = queue.sync { remotes[server] }
+        return remote?.requestsInFlight
+    }
+
     /// Test seam: what `server`'s remote launch counts against its bound now.
     func remoteBytesInFlight(_ server: String) -> Int? {
         queue.sync { remoteInFlight[server]?.bytes }
