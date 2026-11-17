@@ -363,6 +363,30 @@ struct MCPShutdownSignalTests {
         #expect(server.lines(".signals").first == "TERM", "\(server.lines(".signals"))")
     }
 
+    /// Serve started with SIGINT, SIGTERM and SIGHUP blocked (a parent
+    /// thread's mask passes to what it starts; python execs the probe with
+    /// them blocked, so every thread of it starts so) still hears them: it
+    /// unblocks what it handles. A SIGTERM ends it as killed by it, after
+    /// its server got rv's own SIGTERM.
+    @Test(.timeLimit(.minutes(5)), .enabled(if: python3Available))
+    func aServeStartedWithItsSignalsBlockedStillHearsThem() async throws {
+        let server = try NotingServer()
+        defer { server.remove() }
+        let blocking = "import os, signal, sys; "
+            + "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}); "
+            + "os.execv(sys.argv[1], sys.argv[1:])"
+        let serve = try ProbeServe(server, prefix: ["/usr/bin/env", "python3", "-c", blocking], flags: ["INT", "TERM", "HUP"])
+        defer { serve.kill() }
+        #expect(await serve.initialize())
+        #expect(await eventuallyOffThePool { server.pids.count == 2 })
+        #expect(kill(serve.process.processIdentifier, SIGTERM) == 0)
+        let process = serve.process
+        #expect(await eventuallyOffThePool(30) { process.isRunning == false }, "serve did not hear SIGTERM")
+        #expect(process.isRunning == false && process.terminationReason == .exit)
+        #expect(process.isRunning == false && process.terminationStatus == 128 + SIGTERM)
+        #expect(server.lines(".signals").first == "TERM", "\(server.lines(".signals"))")
+    }
+
     /// A server starts with every signal at its default, even one serve
     /// inherited ignored (`nohup`'s SIGHUP): rv, not the server, decides
     /// when it stops, and it sends SIGTERM to the server's group.
