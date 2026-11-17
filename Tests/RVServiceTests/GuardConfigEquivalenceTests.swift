@@ -107,6 +107,9 @@ struct GuardConfigEquivalenceTests {
         Document("duplicate host key", #"{"guard": {"hosts": {"claude": "block", "claude": "observe"}}}"#),
         Document("duplicate host key, observe first", #"{"guard": {"hosts": {"claude": "observe", "claude": "block"}}}"#),
         Document("duplicate engine", #"{"judge": {"engine": "ft", "engine": "laya"}}"#),
+        Document("duplicate guard, object then string", #"{"guard": {"mode": "enforce"}, "guard": "x", "guard.mode": "observe"}"#),
+        Document("duplicate guard, string then object", #"{"guard": "x", "guard": {"mode": "observe"}}"#),
+        Document("duplicate in an unrelated object", #"{"guard.mode": "observe", "analytics": {"enabled": true, "enabled": false}}"#),
         // Integers beyond 2^53.
         Document("mode big int, flat observe", #"{"guard": {"mode": 9007199254740993}, "guard.mode": "observe"}"#),
         Document("mode huge uint, flat observe", #"{"guard": {"mode": 18446744073709551615}, "guard.mode": "observe"}"#),
@@ -175,7 +178,6 @@ struct GuardConfigEquivalenceTests {
 
         var engineDiverges: Bool { typed.judgeEngine != JudgeRuntime.explicitEngine(config: legacy) }
         var hostsDiverge: Bool { typed.hosts != HostModeStore.modes(inConfig: legacy) }
-        var diverges: Bool { !modeDivergences().isEmpty || engineDiverges || hostsDiverge }
     }
 
     @Test("AC-A01: same guard mode as the legacy reader, or enforce", arguments: corpus)
@@ -206,19 +208,46 @@ struct GuardConfigEquivalenceTests {
         }
     }
 
-    /// Pins where the parsers disagree, so a new divergence is reviewed
-    /// rather than absorbed by the `or enforce` arms above.
-    @Test("divergences are exactly the known parser differences")
-    func knownDivergences() throws {
-        let diverging = try Self.corpus.filter { try Views.load($0).diverges }.map(\.name)
-        #expect(diverging == Self.knownDivergences)
+    /// Every other document resolves exactly as the legacy reader does, on
+    /// every platform.
+    @Test("outside the known divergences the readers agree exactly", arguments: corpus)
+    func agreesOutsideKnownDivergences(_ document: Document) throws {
+        guard !Self.knownDivergences.contains(document.name) else { return }
+        let views = try Views.load(document)
+        #expect(views.modeDivergences().isEmpty)
+        #expect(!views.engineDiverges)
+        #expect(!views.hostsDiverge)
     }
 
-    /// `JSONValue` decodes an integer beyond 2^53 as its digit string. As
-    /// the nested value that string is non-empty, so it is chosen, fails to
-    /// parse and shadows the flat key: mode nil (enforce), engine nil. The
-    /// legacy reader sees an `NSNumber`, skips it and takes the flat key.
+    /// Where the legacy reader's answer depends on the platform's parser,
+    /// the typed reader does not: it reads `.empty` (enforce, no engine, no
+    /// host entries) on every platform.
+    @Test("known divergences read as empty", arguments: knownDivergences)
+    func knownDivergenceIsEmpty(_ name: String) throws {
+        let document = try #require(Self.corpus.first { $0.name == name })
+        #expect(try Views.load(document).typed == .empty)
+    }
+
+    /// Documents the parsers may disagree on.
+    /// - Integers beyond 2^53: `JSONValue` keeps the digit string, which as
+    ///   the nested value is chosen, fails to parse and shadows the flat
+    ///   key. The legacy reader sees an `NSNumber`, skips it and takes the
+    ///   flat key.
+    /// - Duplicate keys: Darwin keeps the first, swift-corelibs
+    ///   `JSONSerialization` the last. `GuardConfig(jsonData:)` rejects any
+    ///   duplicate.
     static let knownDivergences: [String] = [
+        "duplicate guard, observe last",
+        "duplicate guard, observe first",
+        "duplicate mode, observe last",
+        "duplicate mode, observe first",
+        "duplicate flat mode",
+        "duplicate host key",
+        "duplicate host key, observe first",
+        "duplicate engine",
+        "duplicate guard, object then string",
+        "duplicate guard, string then object",
+        "duplicate in an unrelated object",
         "mode big int, flat observe",
         "mode huge uint, flat observe",
         "engine big int, flat ft",

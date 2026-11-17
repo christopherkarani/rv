@@ -1,3 +1,5 @@
+import Foundation
+
 /// Guard posture for the whole evaluate door — packs and judge alike.
 public enum GuardMode: String, Sendable {
     /// Normal operation: packs deny, judge (when on) may raise an allow.
@@ -57,6 +59,21 @@ public struct GuardConfig: Sendable, Equatable {
         self.mode = mode
         self.hosts = hosts
         self.judgeEngine = judgeEngine
+    }
+
+    /// Decodes `config.json` bytes: the one bytes-to-config entry, shared
+    /// by `GuardConfig.read` and the hook's daemon-down fallback. Text that
+    /// does not parse, is not an object, or repeats a key in any object
+    /// (`JSONDuplicateKeys`) is `.empty`: parsers disagree on which
+    /// duplicate wins, so a duplicate never selects observe.
+    public init(jsonData: Data) {
+        guard JSONDuplicateKeys.allObjectKeysDistinct(jsonData),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: jsonData)
+        else {
+            self = .empty
+            return
+        }
+        self.init(root)
     }
 
     /// Decodes a parsed `config.json`. A non-object root is `.empty`.
