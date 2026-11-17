@@ -106,7 +106,9 @@ struct MCPGatewayRemoteRestartTests {
         defer { run.stopNow() }
         #expect(await run.initialize())
         let runtime = run.runtime
-        // rv's own initialize and initialized are over before the calls.
+        // rv's own initialize and initialized are over before the calls:
+        // the server took initialized, and nothing is in flight.
+        #expect(await eventually { fixture.requests().contains("ACCEPTED notifications/initialized") }, "\(fixture.requests())")
         #expect(await eventually { runtime.remoteRequestsInFlight("remote") == 0 })
         run.client.send(Self.call(2))
         run.client.send(Self.call(3))
@@ -122,6 +124,87 @@ struct MCPGatewayRemoteRestartTests {
         #expect(Self.requests(fixture, "tools/call") == 2)
         #expect(run.logs.text.contains("could not reach") == false, "\(run.logs.text)")
         #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A report of a request not sent that names an earlier launch of the
+    /// remote ends nothing of the launch running now; one naming it does.
+    @Test(.timeLimit(.minutes(5)))
+    func aReportOfARequestNotSentForAnEarlierLaunchEndsNothing() async throws {
+        let fixture = try RemoteFixture(["--hang-calls"])
+        let run = Self.run(fixture)
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2))
+        #expect(await eventually { Self.requests(fixture, "tools/call") == 1 }, "\(fixture.requests())")
+        let runtime = run.runtime
+        let generation = try #require(runtime.remoteGeneration("remote"))
+        for id in 1...200 { runtime.unsentOnQueue("remote", generation: generation - 1, id: .int(id)) }
+        #expect(await run.client.next(timeout: 2) == nil, "a stale report ended a call")
+        #expect(run.audits.items.withLock { $0.contains { $0.outcome == .notRun } } == false)
+        for id in 1...200 { runtime.unsentOnQueue("remote", generation: generation, id: .int(id)) }
+        let ended = await MCPGatewayRestartRuntimeTests.reply(run, 2, timeout: 30)
+        #expect(ended?["error"]?["message"]?.stringValue?.contains("was not run") == true, "\(String(describing: ended))")
+        #expect(await run.finish())
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A notification's POST holds no place once the server's response
+    /// head is in, whatever follows it: a server that streams on every
+    /// cancel cannot walk the count up to the limit.
+    @Test(.timeLimit(.minutes(5)))
+    func aNotificationsPostIsClosedOnceItsResponseHeadIsIn() async throws {
+        let fixture = try RemoteFixture(["--stream-notifications"])
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in },
+            requestLimit: 4)
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try Self.message(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#))
+        #expect(await eventually { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight)")
+        for id in 100..<110 {
+            #expect(remote.send(try Self.cancel(id)), "cancel \(id) was refused: \(remote.requestsInFlight) in flight")
+            #expect(await eventually(30) { remote.requestsInFlight == 0 }, "\(remote.requestsInFlight) after cancel \(id)")
+        }
+        #expect(await eventually(30) {
+            fixture.requests().components(separatedBy: "CLOSED notification notifications/cancelled").count == 11
+        }, "\(fixture.requests())")
+        await offThePool { remote.stop() }
+        _ = await offThePool { fixture.stop() }
+    }
+
+    /// A read put back after `stop()` keeps the session `stop()` took out,
+    /// so it is not invalidated a second time (on Linux, where each POST
+    /// has a session of its own, the count of live ones never goes below 0).
+    @Test(.timeLimit(.minutes(5)))
+    func aStopDuringAReadInvalidatesItsSessionOnce() async throws {
+        let fixture = try RemoteFixture(["--hang-calls", "--hang-notes"])
+        let box = Mutex<MCPRemoteUpstream?>(nil)
+        let stopped = Mutex(false)
+        let delivered = RecordedMessages()
+        let remote = MCPRemoteUpstream(
+            launch: MCPRemoteLaunch(server: "remote", url: fixture.url("/mcp")),
+            deliver: { message in delivered.items.withLock { $0.append(message) } }, exited: {}, log: { _ in },
+            whileReceiving: { request in
+                guard request["id"] == .int(2), stopped.withLock({ was in defer { was = true }; return was == false }) else {
+                    return
+                }
+                box.withLock { $0 }?.stop()
+            })
+        box.withLock { $0 = remote }
+        defer { box.withLock { $0 = nil } }
+        remote.start()
+        remote.send(try Self.initialize(1))
+        #expect(await eventually { delivered.items.withLock { $0.contains { $0["id"] == .int(1) } } })
+        remote.send(try Self.message(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#))
+        remote.send(try Self.message(Self.call(2)))
+        #expect(await eventually { stopped.withLock { $0 } })
+        #expect(await eventually { remote.postSessionsLive == 0 }, "\(remote.postSessionsLive)")
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        #expect(remote.postSessionsLive == 0, "a session was invalidated twice: \(remote.postSessionsLive)")
         _ = await offThePool { fixture.stop() }
     }
 

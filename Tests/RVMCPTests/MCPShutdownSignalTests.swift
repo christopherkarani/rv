@@ -242,9 +242,6 @@ struct MCPShutdownSignalTests {
             audit: { _ in }, log: { _ in })
     }
 
-    /// Without the relay that makes signals heard on Linux, nothing is
-    /// installed and serve is told so (`installed`): it refuses to run
-    /// rather than run with no handler.
     /// A signal blocked in the installing thread is unblocked while it is
     /// handled, and blocked again by `cancel` on that thread. One thread
     /// throughout: nothing here suspends.
@@ -267,6 +264,9 @@ struct MCPShutdownSignalTests {
         #expect(blocked(), "cancel did not block it again")
     }
 
+    /// Without the relay that makes signals heard on Linux, nothing is
+    /// installed and serve is told so (`installed`): it refuses to run
+    /// rather than run with no handler.
     @Test func withoutItsRelayNothingIsInstalled() {
         var before = sigaction()
         _ = sigaction(SIGURG, nil, &before)

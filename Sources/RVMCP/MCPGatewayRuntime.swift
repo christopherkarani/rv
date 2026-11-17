@@ -777,6 +777,17 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         remoteInFlight[server] = (now.generation, now.bytes + bytes)
     }
 
+    /// Test seam: the launch number of `server`'s remote launch.
+    func remoteGeneration(_ server: String) -> Int? {
+        queue.sync { remoteInFlight[server]?.generation }
+    }
+
+    /// Test seam: a report, on the gateway queue, that `server`'s launch
+    /// `generation` did not send request `id`.
+    func unsentOnQueue(_ server: String, generation: Int, id: JSONValue) {
+        queue.sync { unsent(server, generation, id: id) }
+    }
+
     /// Test seam: how many requests `server`'s remote launch has in flight.
     func remoteRequestsInFlight(_ server: String) -> Int? {
         let remote = queue.sync { remotes[server] }

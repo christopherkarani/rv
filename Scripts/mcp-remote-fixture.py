@@ -21,6 +21,9 @@ forgets every streamable HTTP session, so the next request on one gets 404.
 With --log-connections every POST is logged as it arrives, before its body is
 read ("ENTER POST <path> port=<client port>"), so a request sent again
 without its body still shows.
+With --stream-notifications a notification after initialized is answered
+200 with an event stream that never ends ("CLOSED notification <method>" is
+logged once the client closes it).
 With --hold-replies a call's event-stream reply is sent whole and then
 held open ("CLOSED reply <id>" is logged once the client closes it).
 With --hang-notes a held call's event stream first carries one comment
@@ -103,6 +106,7 @@ class Handler(BaseHTTPRequestHandler):
     hang_calls = False
     hang_notes = False
     hold_replies = False
+    stream_notifications = False
     reset_calls = False
     log_connections = False
     deaf_over = None
@@ -287,6 +291,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, b'{"error":"bad MCP-Protocol-Version"}')
         if "id" not in msg:
             log("ACCEPTED %s session=%s" % (method, sid))
+            if self.stream_notifications and method != "notifications/initialized":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+                self.wait_for_close()
+                log("CLOSED notification %s" % method)
+                self.close_connection = True
+                return
             return self.send(202)
         if method == "tools/call" and self.hang_calls:
             return self.hang(msg.get("id"))
@@ -406,6 +420,7 @@ def main():
     parser.add_argument("--hang-calls", action="store_true")
     parser.add_argument("--hang-notes", action="store_true")
     parser.add_argument("--hold-replies", action="store_true")
+    parser.add_argument("--stream-notifications", action="store_true")
     parser.add_argument("--reset-calls", action="store_true")
     parser.add_argument("--log-connections", action="store_true")
     parser.add_argument("--deaf-over", type=int)
@@ -415,6 +430,7 @@ def main():
     Handler.hang_calls = options.hang_calls
     Handler.hang_notes = options.hang_notes
     Handler.hold_replies = options.hold_replies
+    Handler.stream_notifications = options.stream_notifications
     Handler.reset_calls = options.reset_calls
     Handler.log_connections = options.log_connections
     Handler.deaf_over = options.deaf_over

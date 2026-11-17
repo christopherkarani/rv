@@ -613,6 +613,55 @@ struct MCPGatewayRestartRuntimeTests {
         #expect(await run.finish())
     }
 
+    /// The runtime asks the core whether it still waits for a launch, with
+    /// the core's clock moved by the test (no timing margin): a plan held
+    /// past its start timeout starts nothing when it returns, and a restart
+    /// that comes due while that plan still runs is refused and counted as
+    /// the server going away again (the next delay is 4 s).
+    @Test(.timeLimit(.minutes(5)))
+    func aPlanHeldPastItsDeadlineStartsNothingAndTheRestartDueMeanwhileCounts() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let clock = ManualClock()
+        let definition = Self.definition()
+        let core = MCPGatewayCore(
+            configuration: MCPConfiguration(servers: [definition]), upstreams: [MCPGatewayCore.Upstream(definition: definition)],
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true }, clock: { clock.now }, deadlineClock: { clock.now })
+        let planned = PlanCount()
+        let release = DispatchSemaphore(value: 0)
+        let plan = Self.counting(planned, in: directory)
+        let run = GatewayRun(
+            core: core, connections: [.process(Self.launch([], in: directory))],
+            relaunch: { server in
+                let result = plan(server)
+                _ = release.wait(timeout: .now() + 120)
+                return result
+            })
+        defer { run.stopNow() }
+        defer { release.signal() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2, "crash"))
+        _ = await Self.reply(run, 2)
+        let logs = run.logs
+        #expect(await eventually { logs.text.contains("restarting it in 1 s") }, "\(logs.text)")
+        clock.advance(1)
+        #expect(await eventually { planned.value.withLock { $0 } == 1 }, "\(logs.text)")
+        // The reap report, queued before planning began, is handled.
+        await offThePool { run.runtime.performOnQueue([]) }
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds))
+        #expect(await eventually { logs.text.contains("did not start again within 60 s") }, "\(logs.text)")
+        clock.advance(2)
+        #expect(await eventually { logs.text.contains("not starting MCP server flaky again: it is already being started") }, "\(logs.text)")
+        #expect(await eventually { logs.text.contains("restarting it in 4 s") }, "\(logs.text)")
+        release.signal()
+        // The held plan has returned; nothing came of it.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        #expect(Self.starts(in: directory) == 1, "\(logs.text)")
+        #expect(planned.value.withLock { $0 } == 1)
+        #expect(await run.finish())
+    }
+
     /// A plan that succeeds but whose launch cannot be spawned ends what
     /// the plan started at once: its cage's proxy is stopped and untracked.
     @Test(.timeLimit(.minutes(5)))
