@@ -555,17 +555,18 @@ struct MCPGatewayRestartRuntimeTests {
     }
 
     /// rv's own wait for the stopped launch to be reaped is not the new
-    /// launch's start time: a server whose SIGKILL comes 6 s after its stop
-    /// still has its whole 3 s `startTimeoutSeconds` once it is reaped, and
-    /// comes back on the first try.
+    /// launch's start time: a server whose SIGKILL comes 15 s after its
+    /// stop still has its whole 10 s `startTimeoutSeconds` once it is
+    /// reaped, and comes back on the first try. (10 s, so the first
+    /// launch's python has ample time to start on a starved runner.)
     @Test(.timeLimit(.minutes(5)))
     func aRelaunchKeepsItsWholeStartTimeoutPastTheWaitForItsLastProcess() async throws {
         let directory = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let planned = PlanCount()
         let run = GatewayRun(
-            core: Self.core(startTimeout: 3), connections: [.process(Self.launch(["deaf", "ignore-term"], in: directory))],
-            writeBufferBytes: 256 << 10, relaunch: Self.counting(planned, in: directory), stopGrace: 6)
+            core: Self.core(startTimeout: 10), connections: [.process(Self.launch(["deaf", "ignore-term"], in: directory))],
+            writeBufferBytes: 256 << 10, relaunch: Self.counting(planned, in: directory), stopGrace: 15)
         defer { run.stopNow() }
         #expect(await run.initialize())
         let stopped = await Self.overflow(run)
@@ -590,7 +591,7 @@ struct MCPGatewayRestartRuntimeTests {
         let planned = PlanCount()
         let release = DispatchSemaphore(value: 0)
         let run = GatewayRun(
-            core: Self.core(startTimeout: 1), connections: [.process(Self.launch([], in: directory))],
+            core: Self.core(startTimeout: 10), connections: [.process(Self.launch([], in: directory))],
             relaunch: { _ in
                 planned.value.withLock { $0 += 1 }
                 _ = release.wait(timeout: .now() + 240)
@@ -609,6 +610,75 @@ struct MCPGatewayRestartRuntimeTests {
         let refused = await Self.reply(run, 3)
         #expect(refused?["error"]?["message"]?.stringValue?.contains("rv stopped restarting it") == true, "\(String(describing: refused))")
         release.signal()
+        #expect(await run.finish())
+    }
+
+    /// A plan that returns just past its launch's start timeout, before
+    /// the tick that would expire it, starts nothing: the launch is no
+    /// longer awaited, it counts once, and the next try brings the server
+    /// back with one start.
+    @Test(.timeLimit(.minutes(5)))
+    func aPlanReturningPastItsStartTimeoutStartsNothing() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let planned = PlanCount()
+        let plan = Self.counting(planned, in: directory)
+        let run = GatewayRun(
+            core: Self.core(startTimeout: 10), connections: [.process(Self.launch([], in: directory))],
+            relaunch: { server in
+                let late = planned.value.withLock { $0 } == 0
+                // The deadline is set just before planning starts.
+                if late { usleep(10_200_000) }
+                return plan(server)
+            })
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2, "crash"))
+        _ = await Self.reply(run, 2)
+        let logs = run.logs
+        let answer = await Self.echoes(run, from: 3)
+        #expect(answer?["result"] != nil, "\(logs.text)")
+        #expect(planned.value.withLock { $0 } == 2, "\(logs.text)")
+        #expect(Self.starts(in: directory) == 2, "\(logs.text)")
+        #expect(logs.text.contains("it is running") == false, "\(logs.text)")
+        #expect(logs.text.components(separatedBy: "did not start again").count == 2, "\(logs.text)")
+        #expect(await run.finish())
+    }
+
+    /// A plan that succeeds but whose launch cannot be spawned ends what
+    /// the plan started at once: its cage's proxy is stopped and untracked.
+    @Test(.timeLimit(.minutes(5)))
+    func aPlannedLaunchThatCannotBeSpawnedStopsItsProxy() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = "flaky-unspawnable-\(UUID().uuidString.prefix(8))"
+        let started = Mutex<(proxy: EgressProxy, port: Int)?>(nil)
+        defer { started.withLock { $0?.proxy.stop() } }
+        let definition = Self.definition(server: server)
+        let run = GatewayRun(
+            core: Self.core(server: server), connections: [.process(Self.launch([], in: directory, server: server))],
+            relaunch: { name in
+                // Only the first plan starts a proxy; later ones fail.
+                guard started.withLock({ $0 }) == nil else { return .failure(.unknownServer(name)) }
+                let credential = MCPSandbox.proxyCredential()
+                let proxy = MCPSandboxProxyTests.proxy(credential: credential)
+                guard case .success(let port) = proxy.start() else { return .failure(.sandbox("no proxy")) }
+                MCPSandbox.track(proxy, server: name)
+                started.withLock { $0 = (proxy, port) }
+                var launch = Self.launch([], in: directory, server: name)
+                launch.executable = directory.appendingPathComponent("no-such-executable").path
+                launch.environment = MCPSandbox.proxyEnvironment(launch.environment, port: port, credential: credential)
+                return .success((MCPGatewayCore.Upstream(definition: definition), .process(launch)))
+            })
+        defer { run.stopNow() }
+        #expect(await run.initialize())
+        run.client.send(Self.call(2, "crash"))
+        _ = await Self.reply(run, 2)
+        let logs = run.logs
+        try #require(await eventually(30) { logs.text.contains("could not start MCP server \(server)") }, "\(logs.text)")
+        let port = try #require(started.withLock { $0?.port })
+        #expect(await eventually(5) { MCPSandboxProxyTests.accepts(port) == false }, "the unspawned launch's proxy still runs")
+        #expect(MCPSandbox.proxies.withLock { $0.contains { $0.server == server } } == false)
         #expect(await run.finish())
     }
 

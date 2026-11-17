@@ -657,4 +657,124 @@ struct MCPGatewayRestartTests {
         #expect(message.contains("rv is restarting it"), "\(message)")
         #expect(harness.core.handle(.upstreamExited(server: "github")).audits.isEmpty)
     }
+
+    /// Past its deadline a launch is no longer awaited, even before the
+    /// tick that expires it: a start reported then is not taken, whatever
+    /// did start is stopped, the try counts once, and the stopped
+    /// process's exit is not counted again.
+    @Test func aStartPastItsDeadlineBeforeTheTickIsNotTakenAndCountsOnce() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        Self.reaped(&harness)
+        let first = Self.launch(harness)
+        clock.advance(TimeInterval(MCPServerDefinition.defaultStartTimeoutSeconds))
+        #expect(harness.core.awaitsRelaunch(server: "github", launch: first) == false)
+        let late = harness.core.handle(.upstreamRelaunched(server: "github", launch: first))
+        #expect(late.stopped == ["github"], "\(late)")
+        #expect(late.sent("initialize").isEmpty)
+        #expect(harness.core.handle(.upstreamExited(server: "github")).isEmpty)
+        // Counted once: the next try waits 2 s, not 4.
+        clock.advance(1.5)
+        #expect(harness.core.handle(.tick).restarted.isEmpty)
+        clock.advance(0.5)
+        #expect(harness.core.handle(.tick).restarted == ["github"])
+        _ = Self.bringBack(&harness)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    /// Only names rv would serve are kept for the launch: a hostile
+    /// relaunched server cannot make serve hold names of any size.
+    @Test func aRelaunchKeepsOnlyToolNamesRvServes() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        let long = String(repeating: "n", count: 4096)
+        let unserved = [
+            #"{"name":"bad/name","inputSchema":{"type":"object"}}"#,
+            #"{"name":"\#(long)","inputSchema":{"type":"object"}}"#,
+        ]
+        _ = Self.crash(&harness, clock, delay: 1, [Self.listIssues] + unserved)
+        #expect(harness.core.launchListed["github"] == ["list_issues"])
+    }
+
+    /// The relisting after a restart has one total deadline, four list
+    /// pages long: a server that answers every page just in time cannot
+    /// hold its calls refused for half an hour; past it the restart failed.
+    @Test func aRelistingPastItsTotalDeadlineStopsTheServerAndCounts() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        Self.dueForRelaunch(&harness, clock)
+        var id = Self.relaunchToListing(&harness)
+        let page = MCPGatewayDeadlines.standardList
+        for number in 1...4 {
+            clock.advance(page - 1)
+            let next = harness.upstream(
+                "github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[\#(Self.listIssues)],"nextCursor":"p\#(number)"}}"#)
+            #expect(next.stopped.isEmpty)
+            id = next.sent("tools/list").first?["id"]?.intValue ?? -1
+        }
+        clock.advance(4 * page - 4 * (page - 1) - 0.5)
+        #expect(harness.core.handle(.tick).stopped.isEmpty)
+        clock.advance(0.5)
+        let expired = harness.core.handle(.tick)
+        #expect(expired.stopped == ["github"], "\(expired)")
+        #expect(expired.logs.contains { $0.contains("did not list its tools") }, "\(expired.logs)")
+        _ = Self.crash(&harness, clock, delay: 2)
+        #expect(harness.client(Self.listCall).sent("tools/call").count == 1)
+    }
+
+    /// What each launch listed is its own: a tool the second restart's
+    /// launch listed but the third's did not is refused again.
+    @Test func eachRestartStartsItsListingAfresh() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        _ = Self.crash(&harness, clock, delay: 1, [Self.listIssues, Self.closeIssue])
+        #expect(harness.client(Self.closeCall).sent("tools/call").count == 1)
+        _ = Self.crash(&harness, clock, delay: 2, [Self.listIssues])
+        let refused = harness.client(Self.closeCall)
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.audits.first?.outcome == .notRun)
+    }
+
+    /// At most `maximumListedTools` names are kept; a tool past them is
+    /// refused, never forwarded.
+    @Test func aRelaunchKeepsAtMostTheListedToolCap() {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.ready()
+        let count = MCPGatewayCore.maximumListedTools + 1
+        let tools = (0..<count).map { #"{"name":"t\#($0)","inputSchema":{"type":"object"}}"# }
+        _ = Self.crash(&harness, clock, delay: 1, tools)
+        #expect(harness.core.launchListed["github"]?.count == MCPGatewayCore.maximumListedTools)
+        let call = { (name: String) in #"{"jsonrpc":"2.0","id":"\#(name)","method":"tools/call","params":{"name":"\#(name)","arguments":{}}}"# }
+        #expect(harness.client(call("t\(count - 2)")).sent("tools/call").count == 1)
+        let refused = harness.client(call("t\(count - 1)"))
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.audits.first?.outcome == .notRun)
+    }
+
+    /// An accepted prompt is checked against what this launch listed, as a
+    /// direct call is, whatever order the inputs came in: a tool it has not
+    /// listed is refused, with the prompt's row closed.
+    @Test func anAcceptedPromptForAToolThisLaunchDidNotListIsRefused() throws {
+        let clock = ManualClock()
+        var harness = Self.harness(clock)
+        _ = harness.client(Self.elicits)
+        _ = harness.ready()
+        _ = Self.crash(&harness, clock, delay: 1, [Self.listIssues, Self.createIssue])
+        let key = try #require(harness.client(Self.createCall).toClient.first?["id"]?.stringValue)
+        harness.core.launchListed["github"] = ["list_issues"]
+        let accepted = harness.client(MCPGatewayElicitationTests.answer(key, #"{"action":"accept","content":{"approve":true}}"#))
+        #expect(accepted.toUpstream.isEmpty, "forwarded a tool this launch did not list")
+        #expect(accepted.audits.count == 1)
+        #expect(accepted.audits.first?.outcome == .declined(approvalID: key))
+        #expect(accepted.audits.first?.decision == .deny)
+        #expect(accepted.audits.first?.reason == "the server has not listed this tool since rv restarted it")
+        let message = accepted.toClient.first { $0["id"] == .string("p") }?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("did not list"), "\(message)")
+    }
 }
