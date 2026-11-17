@@ -723,11 +723,15 @@ public struct MCPGatewayCore {
                 client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
         // As `callTool`: only a tool this launch listed, whatever order the
-        // inputs came in.
+        // inputs came in, and not past the remote's calls in flight.
         if let listed = launchListed[call.server], listed.contains(call.tool) == false {
             let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
             return notListedSinceRestart(
                 client: call.client, server: call.server, tool: call.tool, exposed: exposed, keys: call.keys, approvalID: key)
+        }
+        if remoteCallsFull(call.server) {
+            return tooManyRemoteCalls(
+                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
@@ -939,6 +943,9 @@ public struct MCPGatewayCore {
         if let listed = launchListed[server], listed.contains(tool) == false {
             return notListedSinceRestart(
                 client: client, server: server, tool: tool, exposed: exposed, keys: keys, approvalID: nil)
+        }
+        if remoteCallsFull(server) {
+            return tooManyRemoteCalls(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -1161,6 +1168,43 @@ public struct MCPGatewayCore {
                 id: client, code: -32602,
                 message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
                     + "did not list it after rv restarted it; the call was not run.")),
+        ]
+    }
+
+    /// How many calls one remote server may have in flight. Each holds an
+    /// HTTP request open (on Linux a connection and a session of its own),
+    /// so a server that takes calls and never answers cannot make rv hold
+    /// more; local servers are not limited.
+    static let maximumRemoteCallsInFlight = 64
+
+    /// Whether `server` is remote and already has
+    /// `maximumRemoteCallsInFlight` calls forwarded and unanswered.
+    func remoteCallsFull(_ server: String) -> Bool {
+        guard upstreams[server]?.definition.remote != nil else { return false }
+        var count = 0
+        for entry in pending.values {
+            guard case .call(let call) = entry, call.server == server else { continue }
+            count += 1
+            if count >= Self.maximumRemoteCallsInFlight { return true }
+        }
+        return false
+    }
+
+    /// A call past its remote's calls in flight: not sent, and nothing in
+    /// flight is touched. A prompt the user accepted (`approvalID`) ends
+    /// declined; any other call `notRun`.
+    func tooManyRemoteCalls(
+        client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String], approvalID: String?
+    ) -> [MCPGatewayOutput] {
+        let limit = Self.maximumRemoteCallsInFlight
+        return [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
+                reason: "\(limit) calls to this server are already in flight", outcome: Self.notForwarded(approvalID))),
+            .toClient(Self.error(
+                id: client, code: -32603,
+                message: "MCP server \(MCPDisplayedText.field(server)) already has \(limit) calls in flight, the most rv "
+                    + "sends a remote server at once; the call was not run. Try it again once one of them has finished.")),
         ]
     }
 
