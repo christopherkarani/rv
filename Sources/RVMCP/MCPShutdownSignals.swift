@@ -36,6 +36,10 @@ package final class MCPShutdownSignals {
 
     private let heard = Heard()
     private var previous: [(number: Int32, action: sigaction)] = []
+    /// The thread that installed this, and the signals it unblocked there
+    /// that were blocked before: `cancel` on that thread blocks them again.
+    private let owner = pthread_self()
+    private var reblock: [Int32] = []
     /// Whether signals are heard at all. False only on Linux when the relay
     /// pipe could not be made: then nothing was installed, and serve must
     /// not run (a signal would end rv with every server still running).
@@ -101,13 +105,20 @@ package final class MCPShutdownSignals {
             sigemptyset(&handler.sa_mask)
             if sigaction(number, &handler, nil) == 0 { previous.append((number, before)) }
         }
-        Self.unblock(previous.map(\.number) + (catching ? [] : numbers))
+        let unblocking = previous.map(\.number) + (catching ? [] : numbers)
+        var blocked = sigset_t()
+        sigemptyset(&blocked)
+        if pthread_sigmask(SIG_BLOCK, nil, &blocked) == 0 {
+            reblock = unblocking.filter { sigismember(&blocked, $0) == 1 }
+        }
+        Self.unblock(unblocking)
     }
 
     /// A process started with these signals blocked (a parent's thread
     /// mask passes to its children) would never hear them: they are
     /// unblocked in this thread (and, on Linux, in the relay's thread, which
-    /// lives as long as the process), and left so.
+    /// lives as long as the process and stays so). `cancel` blocks again,
+    /// on the thread that installed them, what was blocked there before.
     static func unblock(_ numbers: [Int32]) {
         guard numbers.isEmpty == false else { return }
         var set = sigset_t()
@@ -131,16 +142,24 @@ package final class MCPShutdownSignals {
         for _ in 0..<pending { action() }
     }
 
-    /// Restores the dispositions, then stops hearing signals. Idempotent.
-    /// In that order a signal in between has its restored action (or is
-    /// still heard); the other order would leave the handler with nothing
-    /// hearing it, and the signal would vanish.
+    /// Restores the dispositions (and, called on the thread that installed
+    /// them, the signal mask), then stops hearing signals. Idempotent. In
+    /// that order a signal in between has its restored action (or is still
+    /// heard); the other order would leave the handler with nothing hearing
+    /// it, and the signal would vanish.
     package func cancel() {
         for entry in previous.reversed() {
             var action = entry.action
             _ = sigaction(entry.number, &action, nil)
         }
         previous = []
+        if reblock.isEmpty == false, pthread_equal(pthread_self(), owner) != 0 {
+            var set = sigset_t()
+            sigemptyset(&set)
+            for number in reblock { sigaddset(&set, number) }
+            _ = pthread_sigmask(SIG_BLOCK, &set, nil)
+        }
+        reblock = []
         #if canImport(Darwin)
         for source in sources { source.cancel() }
         sources = []
