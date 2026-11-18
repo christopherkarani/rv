@@ -87,15 +87,22 @@ private func writeExecutable(_ url: URL, contents: String) throws {
 /// before a download (`getconf GNU_LIBC_VERSION`, `ldconfig -p`, `ldd
 /// --version`), so a macOS test host reads as a supported glibc system.
 /// `glibc: nil` makes getconf fail (a non-glibc host); `libraries` is what
-/// the loader cache lists.
+/// the loader cache lists. `uid` is what `id -u` prints: the default 0
+/// (root) never meets install.sh's missing-`/run/user/<uid>` stop, so no
+/// test depends on the host's `/run/user`.
 private func writeLinuxShims(
     in shim: URL,
     arch: String = "x86_64",
     glibc: String? = "2.39",
     libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
-    lddBanner: String = "ldd (GNU libc) 2.39"
+    lddBanner: String = "ldd (GNU libc) 2.39",
+    uid: Int = 0
 ) throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
+    try writeExecutable(
+        shim.appendingPathComponent("id"),
+        contents: "#!/bin/sh\nif [ \"$1\" = -u ]; then echo \(uid); exit 0; fi\nexec /usr/bin/id \"$@\"\n"
+    )
     try writeExecutable(
         shim.appendingPathComponent("uname"),
         contents: """
@@ -2225,6 +2232,7 @@ private func runChecksumInstall(
     glibc: String? = "2.39",
     libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
     lddBanner: String = "ldd (GNU libc) 2.39",
+    uid: Int = 0,
     afterSums: (URL) throws -> Void = { _ in }
 ) throws -> ChecksumRun {
     let root = FileManager.default.temporaryDirectory
@@ -2255,7 +2263,7 @@ private func runChecksumInstall(
     if darwin {
         try writeDarwinShims(in: shim)
     } else {
-        try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner)
+        try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner, uid: uid)
     }
     try writeCurlShim(in: shim, assets: assets, latestTag: "v1.2.3", servedTag: servedTag)
 
@@ -2494,6 +2502,58 @@ func installSh_linuxAcceptsGlibcAtOrAboveTheReleaseFloor(_ version: String) thro
     let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
     #expect(result.status == 0, "\(result.stderr)")
     #expect(result.stderr.contains("glibc") == false, "\(result.stderr)")
+}
+
+// MARK: - Linux runtime directory (no login manager)
+
+/// A uid no host has a `/run/user/<uid>` for.
+private let uidWithoutRuntimeDirectory = 3_999_999_917
+
+/// No login manager made `/run/user/<uid>`, XDG_RUNTIME_DIR is unset and the
+/// installer is not root: rvd could never bind its socket, so `rv setup`
+/// would fail after a 10 s wait with the cause only in rvd.log. The
+/// installer says the cause and the root fix before downloading anything.
+@Test(.enabled(if: getuid() != 0, "root can create /run/user/<uid>"))
+func installSh_linuxStopsBeforeDownloadingWhenNoRuntimeDirectory() throws {
+    let uid = uidWithoutRuntimeDirectory
+    let run = try runChecksumInstall(uid: uid)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    let directory = "/run/user/\(uid)"
+    #expect(run.status == 1, "\(run.stderr)")
+    #expect(run.stderr.contains("XDG_RUNTIME_DIR is unset and \(directory) does not exist"), "\(run.stderr)")
+    #expect(
+        run.stderr.contains("fix: as root, mkdir -p -m 0700 \(directory) && chown \(uid) \(directory)"),
+        "\(run.stderr)")
+    #expect(run.curlLog.isEmpty, "nothing may download: \(run.curlLog)")
+    try expectOldInstallIntact(run)
+}
+
+/// XDG_RUNTIME_DIR names rvd's directory, so `/run/user/<uid>` is not needed.
+@Test func installSh_linuxSetXDGRuntimeDirSkipsTheRuntimeDirectoryStop() throws {
+    let xdg = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-xdg-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: xdg, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: xdg) }
+    let run = try runChecksumInstall(environment: ["XDG_RUNTIME_DIR": xdg.path], uid: uidWithoutRuntimeDirectory)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("XDG_RUNTIME_DIR is unset") == false, "\(run.stderr)")
+}
+
+/// `exec rv setup` replaces the shell, so the EXIT trap never ran and every
+/// download left its `rv-install.*` directory (~156 MB) in TMPDIR.
+@Test(arguments: ["", "observe"])
+func installSh_downloadRemovesItsTempDirectoryBeforeRunningSetup(mode: String) throws {
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-tmpdir-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": tmp.path, "RV_INSTALL_MODE": mode])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv-workspace-host").path))
+    let left = try FileManager.default.contentsOfDirectory(atPath: tmp.path).filter { $0.hasPrefix("rv-install.") }
+    #expect(left.isEmpty, "download directory left behind: \(left)")
 }
 
 @Test func releaseWorkflow_glibcFloorMatchesInstallScript() throws {
