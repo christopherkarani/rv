@@ -564,3 +564,57 @@ struct EgressReviewTests {
         #expect(raw.contains("tracker note") == false)
     }
 }
+
+struct EgressReviewCeilingTests {
+    @Test func approveBeyondCeilingIsRefusedBeforeThePromptWithWitness() async throws {
+        let config = try egressCLITempConfig()
+        try "schema_version = 1\negress.hosts = [\"github.com\"]\n"
+            .write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        let store = PendingApprovalStore(baseDirectory: config)
+        let created = try await egressCLIProposal(store: store, host: "pastebin.com", port: 443)
+        let now = Date()
+        do {
+            // No owner seam: reaching the prompt would refuse with an
+            // owner-gate error instead of the ceiling's.
+            _ = try await withCLIProcess {
+                try await EgressReviewRun.approve(
+                    id: created.id,
+                    tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                    robot: false,
+                    store: store,
+                    now: now,
+                    refreshedNow: { now }
+                )
+            }
+            Issue.record("expected a ceiling refusal")
+        } catch let error as PolicyCeilingError {
+            #expect(error.refusal.contains("CONNECT pastebin.com:443"))
+            #expect(WorkspaceReviewQueue.refusal(error).contains("CONNECT pastebin.com:443"))
+        }
+        let loaded = try await store.load(id: created.id, now: now)
+        guard case .awaitingHuman = loaded.state else {
+            Issue.record("the proposal must stay awaiting, got \(loaded.state)")
+            return
+        }
+    }
+
+    @Test func approveWithinCeilingStillResolves() async throws {
+        let config = try egressCLITempConfig()
+        try "schema_version = 1\negress.hosts = [\"*.example.com\"]\n"
+            .write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        let store = PendingApprovalStore(baseDirectory: config)
+        let created = try await egressCLIProposal(store: store)
+        let now = Date()
+        let view = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await EgressReviewRun.approve(
+                id: created.id,
+                tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                robot: false,
+                store: store,
+                now: now,
+                refreshedNow: { now }
+            )
+        }
+        #expect(view.state == "resolved-allowOnce")
+    }
+}

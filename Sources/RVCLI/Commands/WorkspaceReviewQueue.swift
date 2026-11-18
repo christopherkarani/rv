@@ -89,6 +89,7 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
         case EgressReviewError.reasonRequired: return "a reason is required (one line, 500 chars)"
         case EgressReviewError.reviewChanged: return "egress grants changed since you reviewed this; review it again"
         case EgressReviewError.reviewTokenMissing: return "nothing binds this approval to what you reviewed; review it again"
+        case let error as PolicyCeilingError: return error.refusal
         default: return "unexpected error"
         }
     }

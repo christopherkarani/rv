@@ -385,6 +385,10 @@ enum EgressReviewRun {
         guard let rule = EgressProposal.rule(for: before) else {
             throw EgressReviewError.notNetworkProposal
         }
+        // Before the prompt: the owner is never asked to approve what the
+        // ceiling forbids. An unreadable ceiling refuses too.
+        try PolicyCeilingStore(configDirectory: store.baseDirectory).load()?
+            .requireEgress(host: rule.host, port: rule.port)
         try await reserveLAPrompt(store: store, now: now)
         let authorization = try await CLIOwnerAuth.requireAuthenticated(
             reason: approveReason(host: rule.host, port: rule.port)
@@ -694,6 +698,8 @@ struct EgressApprove: AsyncParsableCommand {
             try ctx.fail("rv egress approve: \(EgressReviewRun.reviewChangedText(id: id))\n", exitCode: 2)
         } catch EgressReviewError.reviewTokenMissing {
             try ctx.fail("rv egress approve: \(EgressReviewRun.reviewTokenMissingText(id: id))\n", exitCode: 2)
+        } catch let error as PolicyCeilingError {
+            try ctx.fail("rv egress approve: refused: \(error.refusal)\n", exitCode: 2)
         } catch {
             try ctx.failOwnerGate(error, command: "egress approve", subject: .proposal)
         }
