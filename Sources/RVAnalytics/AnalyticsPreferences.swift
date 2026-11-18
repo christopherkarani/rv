@@ -1,7 +1,8 @@
 import Foundation
 import RVDomain
 
-/// User preference for analytics. Missing key means enabled (opt-out).
+/// User preference for analytics. Opt-in: on only when config.json says
+/// `analytics.enabled` is true; anything else means off.
 public struct AnalyticsPreferences: Sendable, Equatable {
     public var isEnabled: Bool
 
@@ -9,27 +10,30 @@ public struct AnalyticsPreferences: Sendable, Equatable {
         self.isEnabled = isEnabled
     }
 
-    /// Missing config means analytics is on (opt-out, not opt-in).
-    public static let enabledByDefault = AnalyticsPreferences(isEnabled: true)
+    /// No opt-in means analytics is off (opt-in, not opt-out).
+    public static let disabledByDefault = AnalyticsPreferences(isEnabled: false)
 
-    /// Reads `analytics.enabled` nested (`{"analytics": {"enabled": false}}`)
+    /// Reads `analytics.enabled` nested (`{"analytics": {"enabled": true}}`)
     /// or in the flat dotted form the README documents
-    /// (`{"analytics.enabled": false}`), matching how `guard.mode` is read.
-    /// When both forms are present and disagree, the opt-out wins.
+    /// (`{"analytics.enabled": true}`), matching how `guard.mode` is read.
+    /// A missing, unreadable or undecodable config, a missing or non-boolean
+    /// key, or a key repeated anywhere in the document reads as off. When both
+    /// forms are present and disagree, off wins.
     public static func load(from paths: AnalyticsPaths, fileManager: FileManager = .default) -> AnalyticsPreferences {
         guard let data = fileManager.contents(atPath: paths.configFile.path),
+              JSONDuplicateKeys.allObjectKeysDistinct(data),
               let root = try? JSONDecoder().decode(JSONValue.self, from: data)
         else {
-            return .enabledByDefault
+            return .disabledByDefault
         }
         let nested = root["analytics"]?.asObject?["enabled"]?.bool
         let flat = root["analytics.enabled"]?.bool
         if nested == false || flat == false {
-            return AnalyticsPreferences(isEnabled: false)
+            return .disabledByDefault
         }
         if nested == true || flat == true {
             return AnalyticsPreferences(isEnabled: true)
         }
-        return .enabledByDefault
+        return .disabledByDefault
     }
 }

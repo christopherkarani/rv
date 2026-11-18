@@ -200,7 +200,8 @@ public actor AnalyticsCoordinator {
 public enum AnalyticsBootstrap {
     /// Creates a coordinator for setup / rvd using the live filesystem and identity store.
     ///
-    /// Returns `nil` when `HOME` is missing or analytics is opted out.
+    /// Returns `nil` when `HOME` is missing or analytics is not opted in; then no
+    /// identity is minted, no analytics file is written and nothing is sent.
     public static func makeLive(
         productVersion: String,
         sink: (any AnalyticsSink)? = nil,
