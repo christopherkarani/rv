@@ -288,4 +288,57 @@ struct RuntimeResourcePolicyStoreTests {
         )
         #expect(entry.agents == nil)
     }
+
+    @Test func processLimitsRoundTripThroughTheStore() throws {
+        let limits = RuntimeProcessLimits(
+            openFiles: 4_096, fileSizeBytes: 1 << 30, cpuSeconds: 600, timeoutSeconds: 3_600
+        )
+        let document = RuntimeResourcePolicy(limits: limits)
+        let decoded = try RuntimeResourcePolicyStore.decode(JSONEncoder().encode(document)).get()
+        #expect(decoded.limits == limits)
+        let legacy = try RuntimeResourcePolicyStore.decode(
+            Data(#"{"version":1,"profiles":[]}"#.utf8)
+        ).get()
+        #expect(legacy.limits == nil)
+        let partial = try RuntimeResourcePolicyStore.decode(
+            Data(#"{"version":1,"profiles":[],"limits":{"timeoutSeconds":60}}"#.utf8)
+        ).get()
+        #expect(partial.limits == RuntimeProcessLimits(timeoutSeconds: 60))
+    }
+
+    @Test func unknownProcessLimitKeysFailClosed() {
+        // A misspelled cap must not fall back to the default silently.
+        for body in [
+            #"{"version":1,"profiles":[],"limits":{"openfiles":64}}"#,
+            #"{"version":1,"profiles":[],"limits":{"processes":64}}"#,
+            #"{"version":1,"profiles":[],"limits":{"timeoutSeconds":60,"core":1}}"#,
+            #"{"version":1,"profiles":[],"limits":{"openFiles":"64"}}"#,
+            #"{"version":1,"profiles":[],"limits":{"openFiles":-1}}"#,
+            #"{"version":1,"profiles":[],"limits":[]}"#,
+        ] {
+            #expect(RuntimeResourcePolicyStore.decode(Data(body.utf8)) == .failure(.invalidDocument), "\(body)")
+        }
+    }
+
+    @Test func outOfRangeProcessLimitsFailClosed() throws {
+        let bad: [RuntimeProcessLimits] = [
+            .init(openFiles: 63),
+            .init(openFiles: 1_048_577),
+            .init(fileSizeBytes: 1_048_575),
+            .init(fileSizeBytes: (1 << 50) + 1),
+            .init(cpuSeconds: 0),
+            .init(cpuSeconds: 31_536_001),
+            .init(timeoutSeconds: 0),
+            .init(timeoutSeconds: 604_801),
+        ]
+        for limits in bad {
+            let data = try JSONEncoder().encode(RuntimeResourcePolicy(limits: limits))
+            #expect(RuntimeResourcePolicyStore.decode(data) == .failure(.invalidDocument), "\(limits)")
+        }
+        let edges = RuntimeProcessLimits(
+            openFiles: 64, fileSizeBytes: 1_048_576, cpuSeconds: 1, timeoutSeconds: 604_800
+        )
+        let data = try JSONEncoder().encode(RuntimeResourcePolicy(limits: edges))
+        #expect(try RuntimeResourcePolicyStore.decode(data).get().limits == edges)
+    }
 }

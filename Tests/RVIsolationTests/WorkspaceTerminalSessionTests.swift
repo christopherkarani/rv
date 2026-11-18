@@ -53,6 +53,12 @@ struct WorkspaceTerminalSessionTests {
         StepCase(name: "input owner", read: event(.inputOwner(false)), expected: .idle),
         StepCase(name: "window notice", read: event(.window(rows: 30, columns: 100)), expected: .idle),
         StepCase(name: "exit status", read: event(.exited(7)), expected: .exited(7)),
+        StepCase(name: "killed exit", read: event(.exited(9)), expected: .exited(9, timedOutAfter: nil)),
+        StepCase(
+            name: "timed-out exit",
+            read: event(.exited(9, timedOutAfter: 30)),
+            expected: .exited(9, timedOutAfter: 30)
+        ),
         StepCase(name: "overflow", read: event(.overflow), expected: .failed(.fellBehind)),
         StepCase(name: "workspace closed", read: .failure(.workspaceClosed), expected: .failed(.client(.workspaceClosed))),
         StepCase(name: "disconnect", read: .failure(.disconnected), expected: .failed(.client(.disconnected))),

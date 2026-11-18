@@ -15,6 +15,7 @@ struct LaunchRuntimePayload: Sendable, Equatable {
     var hook: HookHost?
     var resourceProfile: RuntimeResourceProfile?
     var microVM: MicroVMLaunchOptions? = nil
+    var timeoutSeconds: UInt64? = nil
 
     /// Ordered exactly like the legacy handler: executable, profile, hook,
     /// command, IO. The profile lookup precedes hook/command/IO selection,
@@ -60,7 +61,8 @@ struct LaunchRuntimePayload: Sendable, Equatable {
                 io: io,
                 hook: hook,
                 resourceProfile: resourceProfile,
-                microVM: fields.microvm
+                microVM: fields.microvm,
+                timeoutSeconds: fields.timeoutSeconds
             ))
         }
     }
@@ -81,8 +83,9 @@ struct EnsureTerminalRuntimePayload: Sendable, Equatable {
         _ fields: WorkspaceControlRequestPayload.Launch
     ) -> Result<EnsureTerminalRuntimePayload, WorkspaceControlCode> {
         // The reuse shortcut is backend-agnostic; a micro-VM launch must not
-        // silently attach to (or start) a Seatbelt runtime.
-        guard fields.microvm == nil,
+        // silently attach to (or start) a Seatbelt runtime. A reused
+        // runtime keeps its own deadline, so a new one is refused too.
+        guard fields.microvm == nil, fields.timeoutSeconds == nil,
             let executable = fields.executable, executable.hasPrefix("/"),
             let command = IsolatedCommand(
                 executable: executable,

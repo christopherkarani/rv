@@ -332,7 +332,7 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession {
             .bytes(runtime: event.runtime, data: bytes)
         case .overflow:
             .overflow(runtime: event.runtime)
-        case .exited(let status):
+        case .exited(let status, _):
             .exited(runtime: event.runtime, status: status)
         case .inputOwner(let owned):
             .inputOwner(runtime: event.runtime, owned: owned)
