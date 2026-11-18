@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 import RVDomain
@@ -234,6 +239,135 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         #expect(try Uninstall.parse([]).purge == false)
     }
 
+    /// `ln -sfn ~/src ~/.local/state` must not make purge delete `~/src/rv`.
+    @Test func purgeDoesNotFollowASymlinkedParentOfItsDataDirectories() throws {
+        try withTempHome { home, _, launchctl in
+            let owned = [
+                home.appendingPathComponent(platformLogDirectory).path,
+                home.appendingPathComponent(platformMCPCacheDirectory).path,
+            ]
+            var decoys: [String] = []
+            for (index, path) in owned.enumerated() {
+                let parent = (path as NSString).deletingLastPathComponent
+                let decoy = home.appendingPathComponent("decoy-\(index)").path
+                let kept = decoy + "/" + (path as NSString).lastPathComponent + "/keep.txt"
+                try touch(kept)
+                try FileManager.default.createDirectory(
+                    atPath: (parent as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                try FileManager.default.createSymbolicLink(atPath: parent, withDestinationPath: decoy)
+                decoys.append(kept)
+            }
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore().writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            for decoy in decoys {
+                #expect(exists(decoy), "purge deleted \(decoy) through a symlinked parent")
+            }
+            for path in owned {
+                #expect(outcome.stderr.contains(path), "\(path) not reported: \(outcome.stderr)")
+            }
+        }
+    }
+
+    @Test func purgeDoesNotEnterASymlinkedConfigDirectory() throws {
+        try withTempHome { home, layout, launchctl in
+            let target = home.appendingPathComponent("elsewhere/rv").path
+            try writeUserData(configDirectory: target)
+            try touch(target + "/config.json", "{}")
+            try FileManager.default.createDirectory(
+                atPath: (layout.configDirectory as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: layout.configDirectory, withDestinationPath: target)
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.isEmpty, "values deleted while their definitions stay behind a link")
+            for name in ["secrets.json", "mcp.json", "audit.jsonl", "config.json"] {
+                #expect(exists(target + "/" + name), "purge deleted \(name) through the symlinked config dir")
+            }
+            #expect(outcome.stderr.contains(layout.configDirectory), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(target), "\(outcome.stderr)")
+        }
+    }
+
+    @Test func purgeWithAnUnreadableSecretsFileDeletesNoValueAndKeepsIt() throws {
+        try withTempHome { home, layout, launchctl in
+            try touch(layout.configDirectory + "/secrets.json", "not json")
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.isEmpty)
+            #expect(exists(layout.configDirectory + "/secrets.json"))
+            #expect(outcome.stderr.contains("secrets.json"), "\(outcome.stderr)")
+        }
+    }
+
+    /// Only `keychain rv.secrets/<its own name>` is a value rv stored.
+    @Test func purgeLeavesAnRvSecretsItemNamedByAnotherAccount() throws {
+        try withTempHome { home, layout, launchctl in
+            let secrets = SecretsConfiguration(secrets: [
+                SecretDefinition(
+                    name: "ALIAS", source: .keychain(service: SecretKeychain.service, account: "OTHER"),
+                    delivery: .environment),
+            ])
+            try secrets.write(configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)).get()
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.isEmpty)
+        }
+    }
+
+    @Test func robotOutputDoesNotClaimCompleteWhenPurgeLeavesAValue() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore(failing: ["GH_TOKEN"]).writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true, appearance: .robot)
+
+            #expect(outcome.exitCode != 0)
+            #expect(outcome.stdout.contains("Uninstall complete") == false, "\(outcome.stdout)")
+            #expect(outcome.stdout.contains("incomplete"), "\(outcome.stdout)")
+        }
+    }
+
+    /// An owned path that survives fails the command, and the values purge
+    /// could not delete are still named.
+    @Test func purgeNamesUndeletedValuesWhenAnOwnedPathSurvives() throws {
+        // Root ignores the mode that keeps the file below.
+        guard getuid() != 0 else { return }
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            let stuck = layout.modelsDirectory + "/stuck"
+            try touch(stuck + "/weights.bin")
+            chmod(stuck, 0o500)
+            defer { chmod(stuck, 0o700) }
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore(failing: ["GH_TOKEN"]).writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0)
+            #expect(outcome.stderr.contains("GH_TOKEN"), "\(outcome.stderr)")
+        }
+    }
+
     @Test func uninstallWithNothingKeptPrintsNoKeptNote() throws {
         try withTempHome { home, layout, launchctl in
             try touch(layout.localRv)
@@ -275,7 +409,11 @@ private final class RecordingSecretStore: Sendable {
 /// secrets.json with two values rv stored (`rv.secrets`) and one item rv
 /// did not store, plus an mcp.json and an audit log.
 private func writeUserData(_ layout: OwnedPaths) throws {
-    let config = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+    try writeUserData(configDirectory: layout.configDirectory)
+}
+
+private func writeUserData(configDirectory: String) throws {
+    let config = URL(fileURLWithPath: configDirectory, isDirectory: true)
     let secrets = SecretsConfiguration(secrets: [
         SecretDefinition(
             name: "GH_TOKEN", source: .keychain(service: SecretKeychain.service, account: "GH_TOKEN"),
@@ -288,8 +426,8 @@ private func writeUserData(_ layout: OwnedPaths) throws {
             delivery: .environment),
     ])
     try secrets.write(configDirectory: config).get()
-    try touch(layout.configDirectory + "/mcp.json", "{}")
-    let audit = layout.configDirectory + "/audit.jsonl"
+    try touch(configDirectory + "/mcp.json", "{}")
+    let audit = configDirectory + "/audit.jsonl"
     if exists(audit) == false {
         try touch(audit, "")
     }
