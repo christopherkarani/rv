@@ -597,8 +597,9 @@ struct MCPHostSpellingTests {
     /// subcommand of a program rv does not list as a wrapper (git -C, a
     /// redefined git, tar -I, docker compose exec, kubectl exec) is an
     /// existing gap not modelled here; these allowed before any option
-    /// tail was read.
-    @Test("a dynamic program behind a non-wrapper's options is a known gap", arguments: [
+    /// tail was read. So did the last two: a listed wrapper running a
+    /// dynamic program given a dynamic group word, and an unlisted wrapper.
+    @Test("a dynamic program rv does not read as a host command is a known gap", arguments: [
         "git -C \"$REPO\" $C mcp add evil -- x",
         "alias git=strace; git -C \"$C\" mcp add evil -- x",
         "tar -C \"$D\" -I \"$P\" -xf x.tgz mcp add evil",
