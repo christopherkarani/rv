@@ -173,8 +173,9 @@ struct SpawnPrimitivesTests {
     #if os(macOS)
     /// A zero session-death budget still reaps once: a killed leader
     /// is a zombie until `waitpid`, and kill-based probes read a
-    /// zombie as alive. Pipe EOF proves the child exited (and is
-    /// therefore a zombie) before the call, with no sleep.
+    /// zombie as alive. Pipe EOF alone does not prove a zombie: XNU
+    /// closes the child's fds before it reaches `SZOMB`, so the test
+    /// waits (without reaping) until `waitid(WNOWAIT)` reports the exit.
     /// `waitUntilSessionIsDead` lives in the macOS session supervisor.
     @Test func zeroBudgetSessionWaitStillReapsAZombie() throws {
         let (readEnd, writeEnd) = try openPipe()
@@ -189,6 +190,13 @@ struct SpawnPrimitivesTests {
         let count = withUnsafeMutableBytes(of: &byte) { read(readEnd, $0.baseAddress, 1) }
         _ = close(readEnd)
         try #require(count == 0)
+        // Bounded wait for the zombie state. `WNOWAIT` leaves the child
+        // waitable, so the reap below is still the call under test.
+        let deadline = Date().addingTimeInterval(30)
+        while sessionLeaderHasExited(pid) == false, Date() < deadline {
+            usleep(1_000)
+        }
+        try #require(sessionLeaderHasExited(pid))
         // The child has exited but nothing has waited for it: zombie.
         #expect(kill(pid, 0) == 0)
         #expect(waitUntilSessionIsDead(pgid: pid, also: [pid], budget: 0))
