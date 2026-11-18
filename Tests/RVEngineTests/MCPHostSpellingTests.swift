@@ -487,6 +487,22 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// A program rv does not list as a runner, given options before the
+    /// host, may still run it: the host's words after those options are
+    /// read as their own command line, so a dynamic group word or a
+    /// dynamic head there asks as it does with no options.
+    @Test("a host after an unlisted wrapper's options asks with a dynamic word", arguments: [
+        "strace -f claude \"$(printf mcp)\" add evil -- npx -y evil-mcp",
+        "C=claude; strace -f $C mcp add evil -- npx evil",
+        "xvfb-run -a claude $(printf mcp) add evil -- x",
+        "firejail --quiet claude $SUB add evil -- x",
+        "strace -o out.txt claude $SUB add evil -- x",
+        "strace -o out.txt $C mcp add evil -- x",
+    ])
+    func unlistedWrapperWithOptionsAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
     /// Bounds, not pins: these allow because no group word follows the
     /// dynamic word (`*.json` cannot be one) or the parser drops it (a
     /// `timeout` duration), as they did before any runner operand was read.

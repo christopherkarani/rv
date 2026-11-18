@@ -132,6 +132,26 @@ private func sedExecutes(_ script: String) -> Bool {
     return false
 }
 
+/// AppleScript or JXA that may run a command: `do shell script` (any
+/// whitespace between its keywords, which AppleScript accepts, or a `\t`
+/// or `\n` escape `printf` or `echo -e` decodes), JXA's `doShellScript`,
+/// a raw Apple event (`«event sysoexec»` is `do shell script`), Terminal's
+/// `do script`, `run script` of built text, and the Cocoa bridge's
+/// `NSTask`/`NSAppleScript`. Matched case-folded with all whitespace and
+/// those escapes dropped, so a word split across them matches as well.
+private func appleScriptRunsCommand(_ text: String) -> Bool {
+    var folded = text.lowercased()
+    for escape in ["\\t", "\\n", "\\r", "\\v", "\\f"] {
+        folded = folded.replacingOccurrences(of: escape, with: "")
+    }
+    folded.removeAll(where: \.isWhitespace)
+    return appleScriptRunMarkers.contains(where: folded.contains)
+}
+
+private let appleScriptRunMarkers = [
+    "doshellscript", "doscript", "runscript", "«event", "<<event", "sysoexec", "nstask", "nsapplescript",
+]
+
 private func substituteFlagRun(_ chars: [Character], endingAt index: Int) -> Bool {
     var cursor = index - 1
     while cursor >= 0, "gpiImM0123456789".contains(chars[cursor]) {
@@ -150,8 +170,7 @@ func scriptIsRisky(_ source: String, kind: ProgramKind, secrets: SecretPathCatal
     case .awk:
         if awkPipesCommand(text) { return true }
     case .appleScript:
-        let folded = text.lowercased()
-        if folded.contains("do shell script") || folded.contains("doshellscript") { return true }
+        if appleScriptRunsCommand(text) { return true }
     case .plain:
         break
     }
