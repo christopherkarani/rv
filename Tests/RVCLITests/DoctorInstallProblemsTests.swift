@@ -228,6 +228,14 @@ private func makeRuntimeDirectory(_ fixture: InstallHome, mode: Int) throws -> S
     return path
 }
 
+/// The fix for an `XDG_RUNTIME_DIR` that is not this user's uid-derived
+/// directory: never chown or chmod it (it may be a shared directory such as
+/// `/tmp`, or another user's runtime directory under `sudo -E`).
+private func elsewhereFix(_ userID: uid_t) -> String {
+    "set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents, "
+        + "or unset it (rvd then uses /run/user/\(userID))"
+}
+
 /// rvd refuses a runtime directory that group or others can write, or
 /// that another uid owns (`UnixSocketPath.prepareRuntime`).
 @Test func doctorInstall_linuxUnsafeRuntimeDirectory_failsNamingIt() throws {
@@ -238,7 +246,8 @@ private func makeRuntimeDirectory(_ fixture: InstallHome, mode: Int) throws -> S
         let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
         #expect(problem.severity == .fail)
         #expect(problem.summary == "\(runtime) is group/world-writable (mode 770); rvd refuses to start")
-        #expect(problem.fix == "chmod go-w '\(runtime)'")
+        #expect(problem.fix == elsewhereFix(getuid()))
+        #expect(problem.fix.contains("chmod") == false)
         #expect(doctorPretty(fixture).exitCode == 1)
     }
     try withInstallHome(userID: getuid() + 1) { fixture in
@@ -247,7 +256,8 @@ private func makeRuntimeDirectory(_ fixture: InstallHome, mode: Int) throws -> S
         fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: runtime)
         let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
         #expect(problem.summary.contains("\(runtime) is owned by uid \(getuid()), not uid \(getuid() + 1)"))
-        #expect(problem.fix == "sudo chown \(getuid() + 1) '\(runtime)'")
+        #expect(problem.fix == elsewhereFix(getuid() + 1))
+        #expect(problem.fix.contains("chown") == false)
     }
 }
 
