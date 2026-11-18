@@ -19,7 +19,7 @@ Usage: Scripts/release.sh
   clang -Os the C hook → stage as rv (stripped)
   one swift build -c release (all products) → stage rv-cli, rvd,
     rv-workspace-host (+ rv-pty-claim on Darwin,
-    rv-isolation-exec on Linux) (strip -x)
+    rv-isolation-exec and rv-mcp-custodian on Linux) (strip -x)
   Darwin also stages rv-microvm + rv-guest-relay and rv-macvm +
     rv-macvm-agent (Scripts/build-microvm.sh; needs zig)
   Darwin also assembles RVApprovals.app (rv-mcp-custodian + Info.plist)
@@ -165,6 +165,15 @@ if [[ "$OS" == "Linux" ]]; then
   cp "$BIN_DIR/rv-isolation-exec" "$STAGE/rv-isolation-exec"
   chmod 755 "$STAGE/rv-isolation-exec"
   strip "$STAGE/rv-isolation-exec"
+  # The approvals custodian: `sudo rv mcp custodian install` copies it
+  # from beside rv (docs/security/mcp-linux-custodian.md).
+  if [[ ! -x "$BIN_DIR/rv-mcp-custodian" ]]; then
+    printf "release: expected executable rv-mcp-custodian in %s\n" "$BIN_DIR" >&2
+    exit 1
+  fi
+  cp "$BIN_DIR/rv-mcp-custodian" "$STAGE/rv-mcp-custodian"
+  chmod 755 "$STAGE/rv-mcp-custodian"
+  strip "$STAGE/rv-mcp-custodian"
 fi
 
 if [[ ! -x "$BIN_DIR/rvd" ]]; then
@@ -363,7 +372,8 @@ if [[ "$OS" == "Linux" ]]; then
   # build runner resolves it, and every non-system path ships. Dereference:
   # DT_NEEDED names the unversioned file, which is often a symlink.
   staged_libs=0
-  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-isolation-exec"; do
+  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-isolation-exec" \
+    "$STAGE/rv-mcp-custodian"; do
     while IFS= read -r line; do
       case "$line" in
         *" => "*) ;;

@@ -211,6 +211,11 @@ rv is one binary, 25 commands. The rest of the surface:
   (macOS) see placeholders, never values. Real bytes are injected at the
   boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical, or
   Bitwarden, then scrubbed from everything that comes back.
+  `rv run --secret NAME -- command` does the same for one command with no
+  workspace, on macOS and Linux: the command starts suspended, its
+  placeholders are bound to its process tree, and the loopback gateway
+  swaps the real value in only for requests from that tree. It is not a
+  sandbox.
   Hook-guarded agents get secret-path blocking instead; stdio MCP servers
   receive the real value. `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
@@ -228,6 +233,46 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
+  Tool definitions are pinned only by `rv mcp trust`, which shows every
+  field it pins: a tool that is new or changed since you trusted it
+  always asks and reaches the agent as its name, rv's marker saying it
+  is not trusted, an empty object schema and four boolean hints, nothing
+  else.
+  Tools named other than 1-64 of `A-Z a-z 0-9 _ . -` are hidden. Start
+  your MCP host once so `rv mcp serve` queues the tools, run
+  `rv mcp trust`, then restart the host (a running serve keeps the pins
+  it started with). Tool result text is forwarded byte for byte;
+  rendering it safely is the MCP host's job. Keys that differ only by
+  Unicode normalization (NFC/NFD) count as duplicates, so such a message
+  is dropped.
+  *Platform support:* gateway trust and approvals need a key custodian
+  the agent cannot read. On macOS that is RVApprovals.app. On Linux it is
+  a system service you install once with `sudo rv mcp custodian install`,
+  run from a copy of rv that only root can write (systemd and PAM; see
+  [the custodian's threat model](docs/security/mcp-linux-custodian.md)):
+  signing then asks for your login password at your terminal. Without a
+  custodian rv's signing key is a file any process running as you can
+  read: mcp.json is never trusted, `rv mcp serve` launches no servers,
+  and `rv mcp trust` and `rv mcp approve` refuse. The MCP server sandbox
+  is Seatbelt on macOS and, on Linux 6.7 or later, Landlock with a
+  seccomp socket filter
+  ([what it closes and what it leaves](docs/security/mcp-linux-sandbox.md)).
+  Where a host has a sandbox every local server needs a `sandbox` entry
+  and runs in it. Where it has none (an older Linux kernel), servers that
+  ask for one, or that an organization policy with `requireSandbox`
+  covers, are refused rather than run uncaged; a server with no `sandbox`
+  entry runs uncaged with a warning.
+  While the gateway is in use, the hook guard also keeps an agent from
+  adding servers around it: writes to a host's own MCP config
+  (`~/.claude.json`, `.mcp.json`, Cursor, Codex, Gemini, Claude Code
+  plugins, ...) and host CLIs that add servers (`claude mcp add`, `npx
+  @anthropic-ai/claude-code mcp add`, `mcp install`, `@smithery/cli`) ask
+  or deny as `core.mcp:mcp-host-config`. *Known limits:* a nested agent
+  started with servers rv does not govern (`claude --mcp-config …`,
+  `claude --plugin-dir …`, `codex -c mcp_servers…`), and a program that
+  writes a config without its name on the command line (a script, a
+  shell fed an expansion, or a git hook — which `git commit -m` still
+  runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
@@ -257,6 +302,19 @@ rv is one binary, 25 commands. The rest of the surface:
   rather than downgrade. This is a hardening layer, not a finished
   isolation boundary — see the
   [acceptance audit](docs/security/runtime-acceptance.md).
+
+## Platform support
+
+| | macOS 15+ (Apple Silicon) | Linux (x86_64, aarch64; glibc 2.35+) |
+| --- | --- | --- |
+| Hook guard, packs, `rv test`, audit log | yes | yes |
+| Secrets gateway binds a placeholder to the process tree it was leased to | yes (libproc) | yes (`/proc`); refuses where `/proc` hides processes |
+| `rv run` (placeholders for one command) | yes | yes; needs `rv-isolation-exec` beside rv (the installer puts it there) and Linux 5.9+ |
+| MCP gateway: per-tool policy, tool pinning, audit | yes | yes, with the custodian installed |
+| MCP approvals signed by a key the agent cannot use | RVApprovals.app (Touch ID or password) | `sudo rv mcp custodian install` (login password through PAM; systemd) |
+| MCP server sandbox | Seatbelt | Landlock, a seccomp socket filter and, for `sandbox.hosts`, a connector; Linux 6.7+ (x86-64 tested), see [limits](docs/security/mcp-linux-sandbox.md) |
+| Contained workspaces, micro-VMs | yes | no |
+| On-device judge | yes | no (packs only) |
 
 ## Everyday commands
 

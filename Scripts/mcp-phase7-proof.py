@@ -156,13 +156,26 @@ def text_of(reply):
     return "".join(c.get("text", "") for c in reply.get("result", {}).get("content", []))
 
 
-def server(**extra):
-    # Local servers need an explicit sandbox where the cage is enforced.
-    # The cage is macOS-only, so fixtures carry a sandbox there and run
-    # bare elsewhere (serve refuses sandbox-less servers only on macOS)
-    # until the Linux cage lands.
-    base = {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]}
+def host_cages():
     if sys.platform == "darwin":
+        return True
+    helper = os.path.join(os.path.dirname(RV), "rv-isolation-exec")
+    try:
+        report = subprocess.run([helper, "--landlock-abi"], capture_output=True, text=True, timeout=30).stdout.split()
+    except OSError:
+        return False
+    return len(report) == 1 and report[0].isdigit() and int(report[0]) >= 4
+
+
+HOST_CAGES = host_cages()
+
+
+def server(**extra):
+    # Local servers need an explicit sandbox where the cage is enforced
+    # (macOS, and Linux with Landlock ABI 4 and seccomp filters) and are
+    # refused with one elsewhere.
+    base = {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]}
+    if HOST_CAGES:
         base["sandbox"] = {"network": False}
     return {**base, **extra}
 

@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 import RVIPC
 import RVPacks
@@ -56,7 +57,8 @@ public enum DoctorSnapshotBuilder {
     /// present-but-invalid bundle as a warning, or where the production
     /// bundle should be installed.
     private static func judgeCheck(home: HomeDirectory?) -> DoctorCheck {
-        let mode = JudgeRuntime.guardMode(home: home)
+        let mode = GuardModeResolution.resolve(
+            GuardConfig.read(home: home), host: nil, environment: ProcessInfo.processInfo.environment)
         switch JudgeRuntime.bundleHealth(home: home) {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
