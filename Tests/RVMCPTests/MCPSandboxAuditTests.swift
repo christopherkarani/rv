@@ -68,10 +68,10 @@ struct MCPSandboxAuditTests {
 
     @Test func hostsProxyAuditsOnlyWhenEnforcementIsAudit() {
         let audited = MCPSandbox.hostsProxy(
-            server: "gh", hosts: ["api.github.com"], enforcement: .audit, credential: "c",
+            server: "gh", hosts: ["api.github.com"], allowedIPs: [:], enforcement: .audit, credential: "c",
             denied: { _, _ in }, audited: { _, _ in true })
         let enforced = MCPSandbox.hostsProxy(
-            server: "gh", hosts: ["api.github.com"], enforcement: .enforce, credential: "c",
+            server: "gh", hosts: ["api.github.com"], allowedIPs: [:], enforcement: .enforce, credential: "c",
             denied: { _, _ in }, audited: { _, _ in true })
         #expect(audited.auditsAllowlist)
         #expect(enforced.auditsAllowlist == false)

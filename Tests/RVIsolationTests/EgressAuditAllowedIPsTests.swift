@@ -60,7 +60,7 @@ import Testing
         // Unlisted host answering inside the listed host's range: audited
         // past admission, then refused at dial (public unicast only).
         Row(host: "other.corp.lan", answer: ["10.0.5.20"], audited: true, dialed: [], denial: .addressFiltered),
-        // Listed host answering metadata: a forbidden range still refuses.
+        // Listed host answering metadata, outside its range: still refused.
         Row(host: listed, answer: ["169.254.169.254"], audited: false, dialed: [], denial: .addressFiltered),
         // Listed host with a partly covered answer: refused whole.
         Row(host: listed, answer: ["10.0.5.20", "10.0.6.20"], audited: false, dialed: [], denial: .addressFiltered),

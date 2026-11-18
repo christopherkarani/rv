@@ -202,7 +202,7 @@ public enum MCPSandbox {
     /// The `sandbox.hosts` allowlist proxy for one server. In audit mode a
     /// host outside the list passes only after `audited` durably recorded it.
     static func hostsProxy(
-        server: String, hosts: [String], allowedIPs: [String: EgressAllowedIPs] = [:],
+        server: String, hosts: [String], allowedIPs: [String: EgressAllowedIPs],
         enforcement: MCPSandboxEnforcement, credential: String,
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void,
         audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool
