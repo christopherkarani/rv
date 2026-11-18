@@ -19,10 +19,14 @@ public struct WorkspaceTransferLimits: Sendable, Equatable {
     public var maxIgnoreRules: Int
     /// Pattern bytes of those rules.
     public var maxIgnoreBytes: Int
+    /// Rule-against-name match attempts in one plan (each held rule tried
+    /// on each name read), so hostile rules and names cannot burn CPU.
+    public var maxIgnoreEvaluations: Int
 
     public init(
         maxEntries: Int, maxBytes: UInt64, maxDepth: Int,
-        maxNames: Int = 200_000, maxIgnoreRules: Int = 10_000, maxIgnoreBytes: Int = 1 << 20
+        maxNames: Int = 200_000, maxIgnoreRules: Int = 10_000, maxIgnoreBytes: Int = 1 << 20,
+        maxIgnoreEvaluations: Int = 20_000_000
     ) {
         self.maxEntries = maxEntries
         self.maxBytes = maxBytes
@@ -30,6 +34,7 @@ public struct WorkspaceTransferLimits: Sendable, Equatable {
         self.maxNames = maxNames
         self.maxIgnoreRules = maxIgnoreRules
         self.maxIgnoreBytes = maxIgnoreBytes
+        self.maxIgnoreEvaluations = maxIgnoreEvaluations
     }
 
     public static let standard = WorkspaceTransferLimits(maxEntries: 20_000, maxBytes: 2 << 30, maxDepth: 64)
@@ -90,6 +95,8 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
     /// More `.gitignore` rules (or bytes of them) than the caps, or one
     /// `.gitignore` over 256 KiB.
     case tooManyIgnoreRules(Int)
+    /// More rule-against-name match attempts than `maxIgnoreEvaluations`.
+    case tooMuchIgnoreMatching(Int)
     case nothingSelected
     /// The tree changed between planning and copying.
     case changed(String)
@@ -116,6 +123,7 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
         case .tooDeep(let limit): "nested more than \(limit) directories deep"
         case .tooManyNames(let limit): "more than \(limit) directory entries, ignored ones included"
         case .tooManyIgnoreRules(let limit): "more than \(limit) .gitignore rules, or an oversized .gitignore"
+        case .tooMuchIgnoreMatching(let limit): "more than \(limit) .gitignore match attempts; use --no-gitignore or a smaller tree"
         case .nothingSelected: "nothing to copy (everything is ignored)"
         case .changed(let path): "\(path) changed during the transfer; nothing more was copied"
         case .io(let path, let code): "\(path): \(String(cString: strerror(code)))"
@@ -477,6 +485,7 @@ private struct TreePlanner {
     /// truncated on exit).
     private var rules = GitignoreRules()
     private var namesRead = 0
+    private var ignoreEvaluations = 0
 
     private static let maxGitignoreBytes = 256 * 1024
 
@@ -563,6 +572,10 @@ private struct TreePlanner {
             }
             let (found, code) = lstatAt(fd, name)
             guard let info = found else { return code == ENOENT ? .changed(display(childPath)) : .io(display(childPath), code) }
+            if gitignore {
+                ignoreEvaluations += rules.count
+                if ignoreEvaluations > limits.maxIgnoreEvaluations { return .tooMuchIgnoreMatching(limits.maxIgnoreEvaluations) }
+            }
             if gitignore, rules.isIgnored(childPath, isDirectory: NodeKind(info) == .directory) {
                 plan.ignored += 1
                 continue

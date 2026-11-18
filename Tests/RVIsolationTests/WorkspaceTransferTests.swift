@@ -450,6 +450,20 @@ struct WorkspaceDownloadTests {
         #expect(refusal(fixture.download("big", to: fixture.host + "/r3")) == .tooManyIgnoreRules(WorkspaceTransferLimits.standard.maxIgnoreRules))
     }
 
+    @Test func ruleMatchingWorkIsBounded() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        // 3 rules tried on 4 names = 12 match attempts.
+        try fixture.write(fixture.workspace + "/out/.gitignore", "a\nb\nc\n")
+        for name in ["x", "y", "z"] { try fixture.write(fixture.workspace + "/out/" + name, name) }
+        var limits = WorkspaceTransferLimits.standard
+        limits.maxIgnoreEvaluations = 11
+        #expect(refusal(fixture.download("out", to: fixture.host + "/r1", limits: limits)) == .tooMuchIgnoreMatching(11))
+        limits.maxIgnoreEvaluations = 12
+        #expect(refusal(fixture.download("out", to: fixture.host + "/r2", limits: limits)) == nil)
+        #expect(refusal(fixture.download("out", to: fixture.host + "/r3", gitignore: false, limits: limits)) == nil)
+    }
+
     @Test func aDirectorysRulesDoNotLeakToItsSiblings() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }
