@@ -1,0 +1,60 @@
+name: claude-review
+
+# Claude reviews every non-draft PR and leaves inline comments plus a summary.
+# Needs the CLAUDE_CODE_OAUTH_TOKEN repo secret (or swap in ANTHROPIC_API_KEY)
+# and the Claude GitHub App installed on this repo.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  id-token: write
+
+# A new push supersedes the review of the previous one.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Fork PRs get no secrets, so skip them along with drafts.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. Read CONTEXT.md and CONTRIBUTING.md first
+            for project conventions.
+
+            Focus on, in order:
+            - Correctness bugs, edge cases, and concurrency/data-race issues
+            - Security: policy enforcement, fail-closed behaviour, input handling
+            - Missing or weak tests for the changed behaviour
+            - Swift 6 strict-concurrency and API design issues
+
+            Only flag issues you are confident about. Skip style nits the
+            linters already catch.
+
+            Use `gh pr diff` and `gh pr view` to read the change. Post each
+            finding as an inline comment on the relevant line with
+            mcp__github_inline_comment__create_inline_comment, then post one
+            short summary with `gh pr comment`. If nothing is worth flagging,
+            say so in the summary.
+          claude_args: >-
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
