@@ -398,7 +398,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
@@ -466,7 +466,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
@@ -534,7 +534,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
@@ -616,7 +616,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
@@ -761,7 +761,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
@@ -871,6 +871,29 @@ jobs:
           Scripts/swift-6.4 test --skip-build --filter
           'WorkspaceHostTests|RuntimeTerminalTests|RuntimeResourceAdversarialTests|LocalTerminalRestoreTests|WorkspaceTUIIntegrationTests|OpenCodeCommandTests'
 
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Remove development peer trust
         if: always()
         run: |
@@ -925,7 +948,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: crash-reports-${{ github.job }}
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crash-reports/
           if-no-files-found: ignore
           retention-days: 14
