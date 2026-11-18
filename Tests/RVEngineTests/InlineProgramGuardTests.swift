@@ -35,6 +35,10 @@ struct InlineProgramGuardTests {
         #"ls && /usr/bin/perl -e 'unlink "/etc/hosts"'"#,
         #"bash -c "perl -e 'system(\"id\")'""#,
         #"cat f | awk '{ system($0) }'"#,
+        // Ruby's `-E` takes the inline check exactly as before the stdin
+        // read stopped treating it as inline code.
+        #"ruby -E 'system("id")'"#,
+        #"ruby -E UTF-8 -e 'system("id")'"#,
     ]
 
     static let benign: [String] = [
@@ -54,6 +58,8 @@ struct InlineProgramGuardTests {
         "perl script.pl system",
         "echo 'system(\"rm -rf ~\")'",
         "git commit -m 'use exec in perl -e'",
+        // Perl's `-E` stays inline code, judged as before (a benign one).
+        "perl -E 'say 1'",
     ]
 
     @Test("spawn, eval, delete and secret-read payloads need the judge", arguments: risky)

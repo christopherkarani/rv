@@ -538,9 +538,10 @@ private let hostRunners: Set<String> = argvFeeders.union([
 /// --quiet CMD`, `systemd-run --user CMD`), and that neither `hostRunners`
 /// nor the parser's launcher stripping (`nice`, `nohup`, `timeout`, ...)
 /// already covers. Only `carriesHostMCPText` uses it: after such a
-/// wrapper's options a dynamic word may be the program it runs. Each entry
-/// makes the gate stricter; any other program's dynamic option value is
-/// no program it runs.
+/// wrapper's options a host name or a dynamic word may be the program it
+/// runs. Each entry makes the gate stricter; under any other program a
+/// host name or dynamic word after options is an option value or an
+/// operand, not read.
 let optionTailWrappers: Set<String> = [
     "strace", "ltrace", "dtruss", "valgrind", "xvfb-run", "firejail", "bwrap", "unshare", "nsenter",
     "sandbox-exec", "systemd-run", "faketime", "proxychains", "proxychains4", "torsocks", "numactl",
