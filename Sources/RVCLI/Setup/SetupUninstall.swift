@@ -16,7 +16,9 @@ extension SetupRun {
         clock: any SetupCeremonyClock,
         animate: Bool,
         write: ((String) -> Void)?
-    ) throws(SetupError) -> (text: String, emitted: Bool, leftovers: UninstallLeftovers) {
+    ) throws(SetupError) -> (
+        text: String, emitted: Bool, leftovers: UninstallLeftovers, ownedPathStillExists: Bool
+    ) {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
@@ -44,24 +46,35 @@ extension SetupRun {
             auditForwardAgentExisted: auditForwardAgentExisted
         )
 
+        // --purge decides on every directory it would enter before touching
+        // anything (`purgeRefusal`). A config dir it refuses is not entered,
+        // and the values its secrets.json names are not deleted. A plain
+        // uninstall removes its listed config files as it always has.
+        let home = layout.home.rawValue
+        let configRefusal = purgeRefusal(layout.configDirectory, home: home, files: files)
+        let entersConfig = purge == false || configRefusal == nil
+        let dataDirectories = ownedDataDirectories(layout: layout, env: env).map {
+            (path: $0, refusal: purgeRefusal($0, home: home, files: files))
+        }
+
         // The definitions are how the stored values are found, so under
         // --purge the values go before secrets.json does. A value that
         // cannot be deleted is reported and fails the command once the rest
         // is done; it never stops hooks, service and binaries going.
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        let deletesSecrets = purge && configRefusal == nil
         var storedSecrets: [String] = []
         var secretsUnreadable: String?
         switch SecretsConfiguration.load(configDirectory: configDir) {
         case .success(let configuration):
             let names = rvStoredSecretNames(configuration)
-            storedSecrets = purge ? purgeStoredSecrets(names, keychain: env.secretKeychain) : names
+            storedSecrets = deletesSecrets ? purgeStoredSecrets(names, keychain: env.secretKeychain) : names
         case .failure(let error):
             secretsUnreadable = error.message
         }
-        let dataDirectories = ownedDataDirectories(layout: layout, env: env)
         let purgedData = purge
-            && (keptConfigEntries(layout: layout, files: files).isEmpty == false
-                || dataDirectories.contains { ownedPathPresent($0, files: files) })
+            && ((configRefusal == nil && keptConfigEntries(layout: layout, files: files).isEmpty == false)
+                || dataDirectories.contains { $0.refusal == nil && ownedPathPresent($0.path, files: files) })
 
         let bin = layout.localBinDirectory
         let binPaths = InstallManifest.ownedBinPaths(
@@ -74,16 +87,18 @@ extension SetupRun {
         )
         removedPaths.append(contentsOf: binPaths)
         removedPaths.append(layout.approvalsApp)
-        if removeModels || purge {
+        if (removeModels || purge) && entersConfig {
             removedPaths.append(layout.modelsDirectory)
         }
 
-        let analytics = AnalyticsPaths(configDirectory: configDir)
-        let configArtifacts =
-            analytics.uninstallArtifacts
-            + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
-            + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
-            + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
+        var configArtifacts: [URL] = []
+        if entersConfig {
+            configArtifacts =
+                AnalyticsPaths(configDirectory: configDir).uninstallArtifacts
+                + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+                + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
+                + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
+        }
         let configExisted = configArtifacts.contains { files.fileExists($0.path) }
         for artifact in configArtifacts {
             removedPaths.append(artifact.path)
@@ -93,35 +108,54 @@ extension SetupRun {
             files.removeFile(atPath: path)
         }
         if purge {
-            // secrets.json stays while it names a value still stored.
-            let keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
-                ? [] : [SecretsConfiguration.fileName]
-            purgeConfigDirectory(layout.configDirectory, keeping: keep, files: files)
-            for path in dataDirectories {
-                removeOwnedPath(path, files: files)
+            if configRefusal == nil {
+                // secrets.json stays while it names a value still stored.
+                let keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
+                    ? [] : [SecretsConfiguration.fileName]
+                purgeConfigDirectory(layout.configDirectory, keeping: keep, files: files)
+            }
+            for directory in dataDirectories where directory.refusal == nil {
+                removeOwnedPath(directory.path, files: files)
             }
         }
-        files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
-
-        if removedPaths.contains(where: { files.fileExists($0) }) {
-            throw SetupError.ownedPathStillExists
+        if entersConfig {
+            files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
         }
 
+        var refusedPaths: [UninstallLeftovers.RefusedPath] = []
+        if purge, let configRefusal {
+            refusedPaths.append(.init(path: layout.configDirectory, reason: configRefusal))
+        }
+        for directory in dataDirectories {
+            if let refusal = directory.refusal {
+                refusedPaths.append(.init(path: directory.path, reason: refusal))
+            }
+        }
         let leftovers = UninstallLeftovers(
             configDirectory: layout.configDirectory,
-            configEntries: keptConfigEntries(layout: layout, files: files),
-            otherPaths: dataDirectories.filter { ownedPathPresent($0, files: files) },
+            configEntries: entersConfig ? keptConfigEntries(layout: layout, files: files) : [],
+            otherPaths: dataDirectories
+                .filter { $0.refusal == nil && ownedPathPresent($0.path, files: files) }
+                .map { $0.path },
             storedSecrets: storedSecrets,
+            secretDeletesAttempted: deletesSecrets,
             secretsUnreadable: secretsUnreadable,
+            refusedPaths: refusedPaths,
             custodianSystemPaths: env.custodianSystemPaths.filter { ownedPathPresent($0, files: files) },
             purged: purge
         )
+        // The failure still carries the note: it names values not deleted.
+        if removedPaths.contains(where: { files.fileExists($0) }) {
+            return ("", false, leftovers, true)
+        }
+
         let report = UninstallReport(
             removedHosts: removedHosts,
             occupiedHosts: occupiedHosts,
             removedLaunchAgent: launchAgentExisted,
             removedBinaries: binariesExisted,
-            removedConfigArtifacts: configExisted || purgedData
+            removedConfigArtifacts: configExisted || purgedData,
+            incomplete: leftovers.purgeFailed
         )
         let formatted = SetupFormat.uninstallStdout(
             report: report,
@@ -130,7 +164,7 @@ extension SetupRun {
             animate: animate,
             write: write
         )
-        return (formatted.text, formatted.emitted, leftovers)
+        return (formatted.text, formatted.emitted, leftovers, false)
     }
 
     /// Boots out every rv job this HOME's real supervisor runs. Only the

@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 import RVIsolation
@@ -16,15 +21,28 @@ struct UninstallLeftovers: Equatable, Sendable {
     /// rv's log, cache and runtime directories still present.
     var otherPaths: [String] = []
     /// Secrets whose value rv stored under `SecretKeychain.service` and
-    /// that are still there: all of them after a plain uninstall, those a
-    /// delete failed for under `--purge`.
+    /// that are still there: all of them after a plain uninstall, or under
+    /// `--purge` when it refused the config dir; those a delete failed for
+    /// otherwise.
     var storedSecrets: [String] = []
+    /// `--purge` tried the deletes, so `storedSecrets` are the failures.
+    /// False when it did not try (secrets.json is behind a config dir it
+    /// refused).
+    var secretDeletesAttempted = false
     /// Why secrets.json, which names the stored values, could not be read.
     var secretsUnreadable: String? = nil
+    /// rv paths uninstall would not enter, each with why
+    /// (`SetupRun.purgeRefusal`). Left out of the `rm -rf` line.
+    var refusedPaths: [RefusedPath] = []
     /// System files `sudo rv mcp custodian install` wrote. Never removed
     /// here: `sudo rv mcp custodian uninstall` owns them.
     var custodianSystemPaths: [String] = []
     var purged = false
+
+    struct RefusedPath: Equatable, Sendable {
+        var path: String
+        var reason: String
+    }
 
     /// `--purge` left some of rv's data or a stored value behind.
     var purgeFailed: Bool {
@@ -43,10 +61,12 @@ struct UninstallLeftovers: Equatable, Sendable {
                     + configEntries.map { DisplayedText.field($0) }.joined(separator: ", "))
         }
         lines += otherPaths.map { DisplayedText.field($0) }
+        lines += refusedPaths.map { "\(DisplayedText.field($0.path)): not entered, \(DisplayedText.field($0.reason))" }
         if storedSecrets.isEmpty == false {
             let count = storedSecrets.count == 1 ? "1 secret value" : "\(storedSecrets.count) secret values"
+            let lead = purged ? (secretDeletesAttempted ? "could not delete " : "did not delete ") + count : count
             lines.append(
-                (purged ? "could not delete \(count)" : count) + " rv stored in \(Self.store): "
+                lead + " rv stored in \(Self.store): "
                     + storedSecrets.map { DisplayedText.field($0) }.joined(separator: ", "))
         }
         if let secretsUnreadable {
@@ -105,7 +125,10 @@ struct UninstallLeftovers: Equatable, Sendable {
         }
         return storedSecrets.map { "security delete-generic-password -s \(SecretKeychain.service) -a \($0)" }
         #else
-        return ["secret-tool clear service \(SecretKeychain.service)"]
+        return [
+            "secret-tool clear service \(SecretKeychain.service)"
+                + "  # deletes every item in \(SecretKeychain.service), also any no definition names",
+        ]
         #endif
     }
 
@@ -158,28 +181,57 @@ extension SetupRun {
 
     /// Removes an rv-owned path. A symlink is unlinked, never followed; a
     /// directory goes with its contents (`removeItem` unlinks symlinks
-    /// inside it and does not descend through them).
+    /// inside it and does not descend through them). Callers first clear
+    /// the directory it sits in with `purgeRefusal`.
     static func removeOwnedPath(_ path: String, files: FileOps) {
         guard ownedPathPresent(path, files: files) else { return }
         try? files.fileManager.removeItem(atPath: path)
     }
 
-    /// `--purge`: empties the config dir except `keep`. A symlinked config
-    /// dir is unlinked, never entered (and kept whole when `keep` is not
-    /// empty).
+    /// `--purge`: empties the config dir except `keep`. The caller has
+    /// cleared the directory itself with `purgeRefusal`.
     static func purgeConfigDirectory(_ directory: String, keeping keep: Set<String>, files: FileOps) {
-        if files.isSymbolicLink(directory) {
-            if keep.isEmpty {
-                removeOwnedPath(directory, files: files)
-            }
-            return
-        }
-        guard files.isDirectory(directory),
-              let entries = try? files.fileManager.contentsOfDirectory(atPath: directory)
-        else { return }
+        guard let entries = try? files.fileManager.contentsOfDirectory(atPath: directory) else { return }
         for entry in entries where keep.contains(entry) == false {
             removeOwnedPath(directory + "/" + entry, files: files)
         }
+    }
+
+    /// Why purge must not enter or remove the directory `path`, or nil when
+    /// it may (a missing path is nil: nothing to remove). `path` must be a
+    /// real directory this user owns (lstat: a symlink is refused, not
+    /// unlinked), and its parent must resolve to exactly where it should
+    /// be: under the real home for a path in HOME, to itself otherwise. So
+    /// `ln -s ~/src ~/.local/state` cannot steer purge into `~/src/rv`.
+    static func purgeRefusal(_ path: String, home: String, files: FileOps) -> String? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else {
+            return errno == ENOENT ? nil : "it could not be inspected"
+        }
+        if (info.st_mode & S_IFMT) == S_IFLNK {
+            let target = (try? files.fileManager.destinationOfSymbolicLink(atPath: path)) ?? "an unreadable target"
+            return "it is a symlink to \(target)"
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else { return "it is not a directory" }
+        guard info.st_uid == getuid() else { return "it is owned by another user" }
+        let parent = (path as NSString).deletingLastPathComponent
+        let expected: String?
+        if path.hasPrefix(home + "/") {
+            expected = resolvedPath(home).map { $0 + String(parent.dropFirst(home.count)) }
+        } else {
+            expected = parent
+        }
+        guard let expected, resolvedPath(parent) == expected else {
+            return "a folder above it is a symlink or resolves elsewhere"
+        }
+        return nil
+    }
+
+    /// `realpath(3)`; nil when it does not resolve.
+    private static func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// Names left in the config dir, the judge weights excepted.

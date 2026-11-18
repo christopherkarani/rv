@@ -330,23 +330,30 @@ pin, review and approval files, the audit log and `audit.key`, the judge
 weights, rvd's log (`~/.local/state/rv`, or `~/Library/Logs/rv` on macOS)
 and the MCP server caches. It prints each kept path, the number of stored
 secret values and where they are, and the commands that remove them by
-hand, because no `rv` is left to do it: `rm -rf` of the kept directories,
-then `secret-tool clear service rv.secrets` on Linux, or one `security
-delete-generic-password -s rv.secrets -a NAME` per value on macOS.
+hand, because no `rv` is left to do it: first the stored values, with
+`secret-tool clear service rv.secrets` on Linux (it deletes every item in
+`rv.secrets`, including any that no definition names) or one `security
+delete-generic-password -s rv.secrets -a NAME` per value on macOS, then
+`rm -rf` of the kept directories.
 
 ```bash
 rv uninstall --remove-models   # also delete the judge weights in ~/.config/rv/models
 rv uninstall --purge           # also delete all of rv's data and the values it stored
 ```
 
-`--purge` deletes the secret values rv stored (only those whose
-definition reads `rv.secrets`; never a value kept by 1Password, Vault or
-another provider, nor another Keychain item), then all of `~/.config/rv`
+`--purge` deletes the secret values rv stored (only a definition whose
+source is the `rv.secrets` item named after the secret itself, the one
+`rv secrets set` writes; never a value kept by 1Password, Vault or another
+provider, nor any other Keychain item), then all of `~/.config/rv`
 including the audit log, its key and the judge weights, rvd's log
 directory, the MCP caches, and on Linux `/run/user/<uid>/rv`. A value it
 cannot delete (no session bus, a locked keyring) is named on stderr,
 `secrets.json` stays so it can be found, and the command exits non-zero
-after removing everything else.
+after removing everything else. It enters none of those directories
+through a symlink: one that is a symlink, or whose parent resolves
+somewhere other than its place under your home, is left as it is and
+named, and the command exits non-zero. When `~/.config/rv` itself is such
+a path, the values its `secrets.json` names are not deleted either.
 
 On Linux, if you installed the custodian:
 

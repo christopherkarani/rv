@@ -65,6 +65,9 @@ struct UninstallReport: Equatable, Sendable {
     var removedLaunchAgent: Bool
     var removedBinaries: Bool
     var removedConfigArtifacts: Bool
+    /// `--purge` left some of rv's data behind (named on stderr); the
+    /// command exits non-zero, so the robot line must not say complete.
+    var incomplete = false
 
     /// Terminal outcome; single owner of the removed-vs-clean decision.
     var closer: UninstallCloser {
@@ -167,6 +170,9 @@ enum SetupFormat {
     }
 
     private static func uninstallRobot(_ report: UninstallReport) -> String {
+        if report.incomplete {
+            return "Uninstall incomplete; see stderr.\n"
+        }
         switch report.closer {
         case .removed:
             uninstallRobotCompleteLine + "\n"

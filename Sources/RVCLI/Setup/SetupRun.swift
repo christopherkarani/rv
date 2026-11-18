@@ -344,6 +344,11 @@ enum SetupRun {
                 animate: animate,
                 write: write
             )
+            if formatted.ownedPathStillExists {
+                var failure = failureOutcome(.ownedPathStillExists, command: .uninstall)
+                failure.stderr += formatted.leftovers.note
+                return failure
+            }
             let note = keptModelsNote(
                 layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager))
             return SetupOutcome(
