@@ -499,6 +499,13 @@ struct SecretsCommandTests {
             keychain: SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in true }))
     }
 
+    /// `set`'s refusal for flags that would change an existing secret.
+    static func alreadyDefined(_ name: String) -> CommandFailure {
+        CommandFailure(
+            "\(name) is already defined; `rv secrets set \(name)` with no flags other than --expires, --refresh or "
+                + "--resource-profile replaces its value; edit secrets.json to change anything else")
+    }
+
     /// A first set whose value cannot be stored has already written its
     /// definition. The same command run again stores the value under that
     /// definition, changes nothing in secrets.json and defines nothing twice.
@@ -568,9 +575,7 @@ struct SecretsCommandTests {
             name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: acme(), agents: ["codex"],
             description: "acme calls", environment: refusingStore(fixture))
         let defined = try Data(contentsOf: fixture.secretsFile)
-        let refusal = CommandFailure(
-            "ACME_KEY is already defined; `rv secrets set ACME_KEY` with no delivery flags replaces its value; "
-                + "edit secrets.json to change its delivery")
+        let refusal = Self.alreadyDefined("ACME_KEY")
         let reruns: [(definition: SecretsRun.Definition, agents: [String], description: String?)] = [
             (acme("https://other.example"), ["codex"], "acme calls"),
             (acme(baseURLEnv: "OTHER_URL"), ["codex"], "acme calls"),
@@ -606,6 +611,158 @@ struct SecretsCommandTests {
             == "could not store ACME_KEY \(SecretKeychainWriter.storeFailureSuffix); its definition was saved to "
                 + "secrets.json, but no value is stored: once \(SecretKeychain.storeName) is available, run this "
                 + "command again or `rv secrets set ACME_KEY` to store it")
+    }
+
+    /// Allow rules, surfaces, the placeholder prefix and the order of agents
+    /// are all part of the definition: a re-run that differs in any is refused.
+    @Test func setRerunDifferingInScopePrefixOrAgentOrderIsRefused() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let readOnly = try SecretsRun.allowances(["read-only"]).get()
+        let posts = try SecretsRun.allowances(["POST /v1/**"]).get()
+        func acme(
+            prefix: String = "acme-", surfaces: Set<GatewaySurface> = [.header], allow: [GatewayAllowance]
+        ) -> SecretsRun.Definition {
+            .gateway(
+                upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: prefix,
+                surfaces: surfaces, allow: allow)
+        }
+        _ = SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: acme(allow: readOnly),
+            agents: ["codex", "claude"], description: nil, environment: refusingStore(fixture))
+        let defined = try Data(contentsOf: fixture.secretsFile)
+        let reruns: [(definition: SecretsRun.Definition, agents: [String])] = [
+            (acme(allow: posts), ["codex", "claude"]),
+            (acme(allow: []), ["codex", "claude"]),
+            (acme(surfaces: [.header, .query], allow: readOnly), ["codex", "claude"]),
+            (acme(prefix: "", allow: readOnly), ["codex", "claude"]),
+            (acme(prefix: "other-", allow: readOnly), ["codex", "claude"]),
+            (acme(allow: readOnly), ["claude", "codex"]),
+        ]
+        for rerun in reruns {
+            #expect(SecretsRun.set(
+                name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: rerun.definition,
+                agents: rerun.agents, description: nil, environment: fixture.environment())
+                == .failure(Self.alreadyDefined("ACME_KEY")))
+        }
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
+        // The command as first run is still accepted.
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: acme(allow: readOnly),
+            agents: ["codex", "claude"], description: nil, environment: fixture.environment()).get()
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-12345678".utf8))
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
+    }
+
+    /// The upstream is compared as secrets.json stores it: host case and a
+    /// trailing slash are normalised away, an explicit port is not.
+    @Test func setRerunComparesTheUpstreamAsSecretsJsonStoresIt() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        func setAcme(_ upstream: String, _ environment: SecretsEnvironment) -> Result<String, CommandFailure> {
+            SecretsRun.set(
+                name: "ACME_KEY", value: Data("acme-12345678".utf8),
+                definition: .gateway(upstream: upstream, baseURLEnv: "ACME_URL", placeholderPrefix: ""),
+                agents: [], description: nil, environment: environment)
+        }
+        _ = setAcme("https://api.acme.example/v1", refusingStore(fixture))
+        let defined = try Data(contentsOf: fixture.secretsFile)
+        #expect(setAcme("https://api.acme.example:443/v1", fixture.environment())
+            == .failure(Self.alreadyDefined("ACME_KEY")))
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        _ = try setAcme("https://API.Acme.example/v1/", fixture.environment()).get()
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-12345678".utf8))
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
+    }
+
+    /// A rule added to secrets.json by hand is part of the definition: the
+    /// command that first defined the secret no longer matches it.
+    @Test func setRerunOfADefinitionWithAHandAddedApproveRuleIsRefused() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let definition = SecretsRun.Definition.gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "")
+        _ = SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: definition, agents: [],
+            description: nil, environment: refusingStore(fixture))
+        var configuration = try SecretsRun.configuration(fixture.environment()).get()
+        let index = try #require(configuration.secrets.firstIndex(where: { $0.name == "ACME_KEY" }))
+        guard case .gateway(var binding) = configuration.secrets[index].delivery else {
+            Issue.record("expected gateway delivery")
+            return
+        }
+        binding.approve = try SecretsRun.allowances(["POST /v1/**"]).get()
+        configuration.secrets[index].delivery = .gateway(binding)
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let edited = try Data(contentsOf: fixture.secretsFile)
+
+        #expect(SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: definition, agents: [],
+            description: nil, environment: fixture.environment())
+            == .failure(Self.alreadyDefined("ACME_KEY")))
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        #expect(try Data(contentsOf: fixture.secretsFile) == edited)
+        // The bare form still stores the value.
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: nil, agents: [], description: nil,
+            environment: fixture.environment()).get()
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-12345678".utf8))
+    }
+
+    /// A matching re-run with a new expiry writes secrets.json once and
+    /// records exactly what the bare form records for the same change.
+    @Test func setRerunWithANewExpiryRecordsWhatTheBareFormRecords() throws {
+        let now = try #require(SecretExpiry.parse("2026-11-01T12:00:00Z"))
+        let december = try #require(SecretExpiry.parse("2026-12-31"))
+        let january = try #require(SecretExpiry.parse("2027-01-31"))
+        let definition = SecretsRun.Definition.gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "")
+        func outcome(rerunWith rerun: SecretsRun.Definition?) throws -> (file: Data, events: [AuditEvent]) {
+            let fixture = try SecretsCLIFixture()
+            defer { fixture.tearDown() }
+            _ = SecretsRun.set(
+                name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: definition, agents: [],
+                description: nil, environment: refusingStore(fixture), expires: .some(december), now: now)
+            _ = try SecretsRun.set(
+                name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: rerun, agents: [],
+                description: nil, environment: fixture.environment(), expires: .some(january), now: now).get()
+            #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-12345678".utf8))
+            #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_KEY")?.expires
+                == january)
+            let events = AuditLedger(configDirectory: fixture.directory).events(AuditFilter(kinds: ["config.changed"]))
+            return (try Data(contentsOf: fixture.secretsFile), events)
+        }
+        let rerun = try outcome(rerunWith: definition)
+        let bare = try outcome(rerunWith: nil)
+        #expect(rerun.file == bare.file)
+        #expect(rerun.events.count == 2)
+        #expect(rerun.events.map(\.subject) == bare.events.map(\.subject))
+        #expect(rerun.events.map(\.detail) == bare.events.map(\.detail))
+    }
+
+    /// An accepted re-run still meets organization policy before the value is stored.
+    @Test func setRerunStopsAtOrganizationPolicyBeforeStoringTheValue() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        _ = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: refusingStore(fixture))
+        let defined = try Data(contentsOf: fixture.secretsFile)
+        var environment = fixture.environment()
+        environment.managed = .active(ManagedPolicyBundle(
+            policy: try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#.utf8)).get(),
+            sha256: "abc", isSigned: true, directory: "/managed"))
+        guard case .failure(let failure) = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment)
+        else {
+            Issue.record("a re-run that organization policy forbids stored its value")
+            return
+        }
+        #expect(failure.message.hasPrefix("organization policy: "))
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
     }
 
     /// Removing a definition only removes access, so it goes through (and

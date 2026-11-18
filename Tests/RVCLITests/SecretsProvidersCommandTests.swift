@@ -97,10 +97,29 @@ struct SecretsProvidersCommandTests {
         #expect(SecretsRun.set(
             name: "GITHUB_TOKEN", value: Data("ghp-9999".utf8), definition: narrowed.definition, agents: [],
             description: nil, environment: environment).map { _ in "" }
-            == .failure(CommandFailure(
-                "GITHUB_TOKEN is already defined; `rv secrets set GITHUB_TOKEN` with no delivery flags replaces its "
-                    + "value; edit secrets.json to change its delivery")))
+            == .failure(SecretsCommandTests.alreadyDefined("GITHUB_TOKEN")))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/GITHUB_TOKEN"] } == Data("ghp-5678".utf8))
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
+    }
+
+    @Test func providerRerunNamingAnotherProviderIsRefused() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let github = try SecretsRun.definitionForProvider(
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil, allow: []).get()
+        _ = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-1234".utf8), definition: github.definition, agents: [],
+            description: nil, environment: environment).get()
+        let defined = try Data(contentsOf: fixture.secretsFile)
+        let vercel = try SecretsRun.definitionForProvider(
+            "vercel", name: "GITHUB_TOKEN", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "", surfaces: nil,
+            allow: []).get()
+        #expect(SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("vcl-5678".utf8), definition: vercel.definition, agents: [],
+            description: nil, environment: environment)
+            == .failure(SecretsCommandTests.alreadyDefined("GITHUB_TOKEN")))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GITHUB_TOKEN"] } == Data("ghp-1234".utf8))
         #expect(try Data(contentsOf: fixture.secretsFile) == defined)
     }
 
