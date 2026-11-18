@@ -423,7 +423,11 @@ enum DoctorInstallChecks {
     /// path too long for `sockaddr_un`, a base that is not a directory (a
     /// symlink included: rvd judges the link itself), one owned by another
     /// uid or writable by group or others, and a missing uid-derived base,
-    /// which only root can create. rvd creates any other missing base.
+    /// which only root can create. A missing base elsewhere is not reported:
+    /// rvd tries to create it with its parents, and doctor does not predict
+    /// whether that works. The rows judge the `XDG_RUNTIME_DIR` this shell
+    /// sees (the directory it and its agents dial); an rvd started by the
+    /// systemd user manager uses `/run/user/<uid>` instead.
     static func runtimeDirectory(_ environment: SocketBaseEnvironment?, userID: uid_t) -> DoctorProblem? {
         guard let environment else { return nil }
         let ownerRuntime = "\(environment.userRuntimeRoot)/\(userID)"
@@ -435,7 +439,8 @@ enum DoctorInstallChecks {
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
-                summary: "XDG_RUNTIME_DIR is set but empty; rvd refuses to start",
+                summary: "XDG_RUNTIME_DIR is set but empty; rvd refuses it, "
+                    + "and this shell and its agents cannot dial rvd",
                 fix: "unset it (rvd then uses \(ownerRuntime)) or set it to a directory only you can access"
             )
         } catch {
@@ -443,39 +448,55 @@ enum DoctorInstallChecks {
                 id: "runtime-dir",
                 severity: .fail,
                 summary: "rvd's socket path under \(environment.xdgRuntimeDir ?? ownerRuntime) is too long "
-                    + "for a Unix socket; rvd refuses to start",
-                fix: "\(setRuntimeDirectory), with a shorter path"
+                    + "for a Unix socket; rvd refuses it, and this shell and its agents cannot dial rvd",
+                fix: "\(setRuntimeDirectory), with a shorter path, or unset it (rvd then uses \(ownerRuntime))"
             )
         }
         let base = socket.deletingLastPathComponent().deletingLastPathComponent().path
-        let ownerBase = base == ownerRuntime
-        let rootFix = "as root, mkdir -p -m 0700 \(base) && chown \(userID) \(base); or \(setRuntimeDirectory)"
         var info = stat()
         guard lstat(base, &info) == 0 else {
-            guard ownerBase, userID != 0 else { return nil }
+            guard base == ownerRuntime, userID != 0 else { return nil }
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
                 summary: "\(base) is missing and only root can create it; rvd refuses to start",
-                fix: rootFix
+                fix: "as root, mkdir -p -m 0700 \(base) && chown \(userID) \(base); or \(setRuntimeDirectory)"
             )
         }
+        return existingRuntimeDirectory(
+            base, info: info, userID: userID,
+            // Only this user's own uid-derived directory is repaired in
+            // place; anything else (`/tmp`, another user's runtime
+            // directory under `sudo -E`) is left alone.
+            elsewhere: base == ownerRuntime
+                ? nil : "\(setRuntimeDirectory), or unset it (rvd then uses \(ownerRuntime))"
+        )
+    }
+
+    /// The rule rvd applies to a base that exists. `elsewhere` is the fix
+    /// for a base that is not this user's uid-derived directory, nil for
+    /// that directory itself.
+    private static func existingRuntimeDirectory(
+        _ base: String, info: stat, userID: uid_t, elsewhere: String?
+    ) -> DoctorProblem? {
+        let refuses = elsewhere == nil
+            ? "rvd refuses this directory"
+            : "rvd refuses this directory (XDG_RUNTIME_DIR here: the directory this shell and its agents dial)"
         if (info.st_mode & S_IFMT) != S_IFDIR {
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
-                summary: "\(base) is not a directory; rvd refuses to start",
-                fix: ownerBase
-                    ? "as root, mv '\(base)' '\(base).bak' && mkdir -m 0700 \(base) && chown \(userID) \(base)"
-                    : setRuntimeDirectory
+                summary: "\(base) is not a directory; \(refuses)",
+                fix: elsewhere
+                    ?? "as root, mv '\(base)' '\(base).bak' && mkdir -m 0700 \(base) && chown \(userID) \(base)"
             )
         }
         if info.st_uid != userID {
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
-                summary: "\(base) is owned by uid \(info.st_uid), not uid \(userID); rvd refuses to start",
-                fix: "sudo chown \(userID) '\(base)'"
+                summary: "\(base) is owned by uid \(info.st_uid), not uid \(userID); \(refuses)",
+                fix: elsewhere ?? "sudo chown \(userID) '\(base)'"
             )
         }
         let mode = Int(info.st_mode) & 0o777
@@ -483,8 +504,8 @@ enum DoctorInstallChecks {
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
-                summary: "\(base) is group/world-writable (mode \(String(mode, radix: 8))); rvd refuses to start",
-                fix: "chmod go-w '\(base)'"
+                summary: "\(base) is group/world-writable (mode \(String(mode, radix: 8))); \(refuses)",
+                fix: elsewhere ?? "chmod go-w '\(base)'"
             )
         }
         return nil

@@ -231,6 +231,8 @@ private func makeRuntimeDirectory(_ fixture: InstallHome, mode: Int) throws -> S
 /// The fix for an `XDG_RUNTIME_DIR` that is not this user's uid-derived
 /// directory: never chown or chmod it (it may be a shared directory such as
 /// `/tmp`, or another user's runtime directory under `sudo -E`).
+private let dialed = "rvd refuses this directory (XDG_RUNTIME_DIR here: the directory this shell and its agents dial)"
+
 private func elsewhereFix(_ userID: uid_t) -> String {
     "set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents, "
         + "or unset it (rvd then uses /run/user/\(userID))"
@@ -245,7 +247,7 @@ private func elsewhereFix(_ userID: uid_t) -> String {
         fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: runtime)
         let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
         #expect(problem.severity == .fail)
-        #expect(problem.summary == "\(runtime) is group/world-writable (mode 770); rvd refuses to start")
+        #expect(problem.summary == "\(runtime) is group/world-writable (mode 770); \(dialed)")
         #expect(problem.fix == elsewhereFix(getuid()))
         #expect(problem.fix.contains("chmod") == false)
         #expect(doctorPretty(fixture).exitCode == 1)
@@ -282,7 +284,8 @@ private func elsewhereFix(_ userID: uid_t) -> String {
         try stageHealthyInstall(fixture)
         fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: "")
         let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
-        #expect(problem.summary == "XDG_RUNTIME_DIR is set but empty; rvd refuses to start")
+        #expect(problem.summary
+            == "XDG_RUNTIME_DIR is set but empty; rvd refuses it, and this shell and its agents cannot dial rvd")
         #expect(problem.fix.hasPrefix("unset it (rvd then uses /run/user/\(getuid()))"))
     }
 }
@@ -300,6 +303,82 @@ private func elsewhereFix(_ userID: uid_t) -> String {
         #expect(problems(fixture).isEmpty)
         fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: fixture.root.path + "/absent")
         #expect(problems(fixture).isEmpty)
+        let readable = try makeRuntimeDirectory(fixture, mode: 0o755)
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: readable)
+        #expect(problems(fixture).isEmpty)
+    }
+}
+
+/// Root may create a missing `/run/user/<uid>` (and `/run/user`), so rvd
+/// starts as root and doctor stays silent.
+@Test func doctorInstall_linuxMissingUserRuntimeDirectoryAsRoot_addsNoProblem() throws {
+    try withInstallHome(userID: 0) { fixture in
+        try stageHealthyInstall(fixture)
+        let root = fixture.root.path + "/run-user"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: nil, userRuntimeRoot: root)
+        #expect(problems(fixture).isEmpty)
+    }
+}
+
+/// The user's own uid-derived directory is repaired in place. Tests cannot
+/// chown, so "owned by root" is another uid owning it.
+@Test func doctorInstall_linuxUnsafeUserRuntimeDirectory_isRepairedInPlace() throws {
+    try withInstallHome(userID: getuid() + 1) { fixture in
+        try stageHealthyInstall(fixture)
+        let root = fixture.root.path + "/run-user"
+        let base = root + "/\(getuid() + 1)"
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: nil, userRuntimeRoot: root)
+        let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
+        #expect(problem.summary
+            == "\(base) is owned by uid \(getuid()), not uid \(getuid() + 1); rvd refuses this directory")
+        #expect(problem.fix == "sudo chown \(getuid() + 1) '\(base)'")
+    }
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let root = fixture.root.path + "/run-user"
+        let base = root + "/\(getuid())"
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: base)
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: nil, userRuntimeRoot: root)
+        let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
+        #expect(problem.summary == "\(base) is group/world-writable (mode 770); rvd refuses this directory")
+        #expect(problem.fix == "chmod go-w '\(base)'")
+    }
+}
+
+/// rvd refuses a base that is a file, or a symlink even to a good
+/// directory (it judges the link itself).
+@Test func doctorInstall_linuxRuntimeDirectoryFileOrSymlink_isNotADirectory() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let file = fixture.root.path + "/runtime-file"
+        try Data("x".utf8).write(to: URL(fileURLWithPath: file))
+        let target = try makeRuntimeDirectory(fixture, mode: 0o700)
+        let link = fixture.root.path + "/runtime-link"
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+        for base in [file, link] {
+            fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: base)
+            let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
+            #expect(problem.summary == "\(base) is not a directory; \(dialed)")
+            #expect(problem.fix == elsewhereFix(getuid()))
+        }
+    }
+}
+
+/// A socket path past the `sockaddr_un` budget: rvd cannot bind it and
+/// clients cannot dial it.
+@Test func doctorInstall_linuxRuntimeDirectoryTooLong_saysRvdRefuses() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let long = "/" + String(repeating: "a", count: 120)
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: long)
+        let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
+        #expect(problem.summary == "rvd's socket path under \(long) is too long for a Unix socket; "
+            + "rvd refuses it, and this shell and its agents cannot dial rvd")
+        #expect(problem.fix == "set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents, "
+            + "with a shorter path, or unset it (rvd then uses /run/user/\(getuid()))")
     }
 }
 #endif
