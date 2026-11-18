@@ -89,14 +89,18 @@ struct ManagedCommandTests {
     @Test func restrictionsAlwaysNameTheSandboxRequirement() throws {
         let legacy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
         let plain = try ManagedPolicy.decode(Data(#"{"version":1}"#.utf8)).get()
-        #if os(macOS)
+        // Where the cage runs, the hard flip requires sandboxes, flag or not.
         let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
-        #else
-        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
-        #endif
-        // The policy flag is legacy: the hard flip requires sandboxes either way.
-        #expect(ManagedRun.restrictions(legacy) == [sandbox])
-        #expect(ManagedRun.restrictions(plain) == [sandbox])
+        #expect(ManagedRun.restrictions(legacy, sandboxEnforced: true) == [sandbox])
+        #expect(ManagedRun.restrictions(plain, sandboxEnforced: true) == [sandbox])
+        // No cage: the flag refuses every local server.
+        #expect(ManagedRun.restrictions(legacy, sandboxEnforced: false) == [
+            "mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)"
+        ])
+        #expect(ManagedRun.restrictions(plain, sandboxEnforced: false) == [
+            "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
+        ])
+        #expect(ManagedRun.restrictions(plain) == ManagedRun.restrictions(plain, sandboxEnforced: MCPSandbox.enforced))
     }
 
     @Test func allowedSecretSourcesKeepTheirFileOrderInRestrictions() throws {
@@ -142,11 +146,9 @@ struct ManagedCommandTests {
             environment.approvals.request(server: "github", tool: "merge_pr", argumentsHash: "h", argumentKeys: []))
         #expect(failure(await MCPRun.approve(id: merge.id, always: true, environment: environment))?
             .contains("has argument rules") == true)
-        #if os(macOS)
-        let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
-        #else
-        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
-        #endif
+        let sandbox = MCPSandbox.enforced
+            ? "mcp: every local server must be sandboxed (remote servers are exempt)"
+            : "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
         #expect(ManagedRun.restrictions(try #require(environment.managed.policy))
             == [sandbox, #"mcp deny: github/merge_* when /branch == "main""#])
 
@@ -193,6 +195,22 @@ struct ManagedCommandTests {
         #expect(build().compliant)
     }
 
+    @Test func reportCountsProjectEntriesWhenRunInsideAProject() throws {
+        let scratch = Scratch()
+        let project = scratch.root.appendingPathComponent("work/repo")
+        try scratch.write("work/repo/.mcp.json", #"{"mcpServers": {"team": {"command": "team-mcp"}}}"#)
+        func build(_ project: URL?) -> ReportRun.Report {
+            ReportRun.build(ReportRun.Inputs(
+                configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], managed: .none,
+                managedDirectory: "/managed", now: Date(), hostName: "h", userName: "dev", userID: 501,
+                fileExists: { _ in false }, project: project))
+        }
+        #expect(build(nil).mcp.counts.isEmpty)
+        let inside = build(project)
+        #expect(inside.mcp.counts == ["unreviewed": 1])
+        #expect(inside.mcp.failing.count == 1)
+    }
+
     @Test func reportSummarizesPostureWithoutSecretValues() throws {
         let scratch = Scratch()
         try scratch.write("home/.cursor/mcp.json", #"{"mcpServers": {"loose": {"command": "x", "env": {"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"}}}}"#)
@@ -210,6 +228,14 @@ struct ManagedCommandTests {
 
         let plain = ReportRun.build(inputs(.none))
         #expect(plain.schema == "rv.report.v1")
+        #if os(Linux)
+        // On Linux the MCP sandbox is the kernel's to give, not a file's.
+        var caged = inputs(.none)
+        caged.linuxCage = { true }
+        var bare = inputs(.none)
+        bare.linuxCage = { false }
+        #expect(ReportRun.build(caged).sandbox.mcpSandbox && ReportRun.build(bare).sandbox.mcpSandbox == false)
+        #endif
         #expect(plain.mcp.counts == ["unreviewed": 1])
         #expect(plain.mcp.plaintextCredentials == 1)
         #expect(plain.secrets.items == [.init(name: "GH", source: "hostEnvironment", delivery: "environment")])

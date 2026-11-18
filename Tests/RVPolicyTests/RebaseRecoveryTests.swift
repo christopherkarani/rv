@@ -26,6 +26,18 @@ struct RebaseRecoveryTests {
         #expect(RebaseRecovery.isEligible(result: result) == false)
     }
 
+    @Test func mcpHostConfigDenyIsNeverEligible() {
+        let deny = Deny(ruleID: MCPHostConfigPaths.ruleID, reason: MCPHostConfigPaths.reason)
+        for analysis: SemanticAnalysis in [
+            .git(.discardWorktree(pathspecs: [".mcp.json"], source: nil)),
+            .git(.restore(pathspecs: [".mcp.json"], destination: .worktree, source: nil)),
+        ] {
+            let result = EvaluationResult(
+                outcome: .deny(deny, matched: nil), matchingView: "git checkout -- .mcp.json", analysis: analysis)
+            #expect(RebaseRecovery.isEligible(result: result) == false)
+        }
+    }
+
     @Test func resetHardIsNeverEligible() {
         let result = deny(
             pack: .coreGit,

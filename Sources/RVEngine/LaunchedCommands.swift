@@ -51,6 +51,9 @@ struct LaunchedCommand {
     let guardArgv: [String]
     /// The structural redirect words alone (operators and targets).
     var redirects: [String] = []
+    /// Leading `NAME=value` words, before and among launchers (`X=1 env Y=2
+    /// less f`), which `argv` drops.
+    var assignments: [String] = []
     var headIsDynamic = false
     var speculative = false
     var truncated = false
@@ -80,6 +83,14 @@ struct LaunchedCommand {
         )
         command.redirects = args.filter(isRedirectWord).map(unmarkedWord)
         return command
+    }
+
+    /// This command run in an environment that also carries `outer`.
+    func inheriting(_ outer: [String]) -> LaunchedCommand {
+        guard outer.isEmpty == false else { return self }
+        var copy = self
+        copy.assignments = outer + assignments
+        return copy
     }
 
     var asSpeculative: LaunchedCommand {
@@ -254,6 +265,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
     var launcher: String?
     var optionsEnded = false
     var splits = 0
+    var assignments: [String] = []
     while index < words.count {
         let word = words[index]
         if isRedirectWord(word) {
@@ -261,6 +273,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
             continue
         }
         if isAssignmentWord(word) {
+            assignments.append(word)
             index += 1
             continue
         }
@@ -322,7 +335,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
         if payloads.count > maxShellOperands { out.append(.truncatedMarker) }
         for payload in payloads.prefix(maxShellOperands) {
             for variant in payloadVariants(payload) {
-                out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1))
+                out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1).map { $0.inheriting(assignments) })
             }
         }
         return out
@@ -332,10 +345,12 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
         let raw = operands.joined(separator: " ")
         let decoded = operands.map { $0.ansiCDecodedIfMarked }.joined(separator: " ")
         for variant in Set([raw, decoded]) {
-            out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1))
+            out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1).map { $0.inheriting(assignments) })
         }
     }
-    out.append(.make(head: head, program: program, args: args, headIsDynamic: isDynamicHead(head)))
+    var command = LaunchedCommand.make(head: head, program: program, args: args, headIsDynamic: isDynamicHead(head))
+    command.assignments = assignments
+    out.append(command)
     return out
 }
 
@@ -372,7 +387,7 @@ func isDynamicHead(_ word: String) -> Bool {
 
 /// Replaces each `$(...)`, `${...}` and backtick span with a lone `$`, so a
 /// `/` inside a substitution cannot masquerade as a path separator.
-private func collapsingSubstitutions(_ word: String) -> String {
+func collapsingSubstitutions(_ word: String) -> String {
     let chars = Array(word)
     var out = ""
     var i = 0

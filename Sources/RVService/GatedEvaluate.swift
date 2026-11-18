@@ -90,7 +90,7 @@ public struct GatedEvaluate: Sendable {
             guardMode: JudgeRuntime.effectiveGuardMode(
                 home: home, host: host,
                 environment: ProcessInfo.processInfo.environment,
-                config: JudgeRuntime.loadConfigDict(home: home)
+                config: GuardConfig.read(home: home)
             )
         )
     }
@@ -140,6 +140,12 @@ public struct GatedEvaluate: Sendable {
         if case .allow = result.decision, action.kind != .read,
            WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
             result = WiringPathGuard.deny(path: action.path.rawValue)
+        }
+        // Edit/Write to a host MCP config while rv's MCP gateway is in use.
+        if case .allow = result.decision, action.kind != .read,
+           let guarded = MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home, now: now)),
+           MCPHostConfigDoor.protects(action.path.rawValue, guard: guarded, home: home, cwd: cwd) {
+            result = MCPHostConfigDoor.deny(path: action.path.rawValue)
         }
         switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
@@ -842,10 +848,14 @@ public struct GatedEvaluate: Sendable {
                     GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
                 },
                 filesystemProbe: { unwrapped in
-                    FilesystemLiveProbe.context(
-                        unwrapped: unwrapped,
-                        command: request.command,
-                        cwd: cwd,
+                    attachingMCPHostConfigGuard(
+                        store.mcpHostConfigGuard,
+                        to: FilesystemLiveProbe.context(
+                            unwrapped: unwrapped,
+                            command: request.command,
+                            cwd: cwd,
+                            homeDirectory: home
+                        ),
                         homeDirectory: home
                     )
                 },

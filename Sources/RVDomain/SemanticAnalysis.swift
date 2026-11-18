@@ -173,19 +173,23 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
     public var homeDirectory: HomePath?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
+    /// Set while rv's MCP gateway is in use: host MCP config writes deny.
+    public var mcpHostConfigGuard: MCPHostConfigGuard?
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil,
         homeDirectory: HomePath? = nil,
         catalog: SecretPathCatalog = .dayOne,
-        facts: [FilesystemPathFact] = []
+        facts: [FilesystemPathFact] = [],
+        mcpHostConfigGuard: MCPHostConfigGuard? = nil
     ) {
         self.workingDirectory = workingDirectory
         self.repositoryRoot = repositoryRoot
         self.homeDirectory = homeDirectory
         self.catalog = catalog
         self.facts = facts
+        self.mcpHostConfigGuard = mcpHostConfigGuard
     }
 
     public static let empty = FilesystemAnalysisContext()
@@ -199,6 +203,7 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         case repositoryRoot
         case homeDirectory
         case facts
+        case mcpHostConfigGuard
     }
 
     public init(from decoder: Decoder) throws {
@@ -214,6 +219,7 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         homeDirectory = try container.decodeIfPresent(HomePath.self, forKey: .homeDirectory)
         catalog = .dayOne
         facts = try container.decodeIfPresent([FilesystemPathFact].self, forKey: .facts) ?? []
+        mcpHostConfigGuard = try container.decodeIfPresent(MCPHostConfigGuard.self, forKey: .mcpHostConfigGuard)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -222,5 +228,18 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         try container.encodeIfPresent(repositoryRoot, forKey: .repositoryRoot)
         try container.encodeIfPresent(homeDirectory, forKey: .homeDirectory)
         try container.encode(facts, forKey: .facts)
+        try container.encodeIfPresent(mcpHostConfigGuard, forKey: .mcpHostConfigGuard)
+    }
+}
+
+/// The host MCP config guard is on (`MCPHostConfigPaths`). The service
+/// attaches it when rv's MCP gateway is configured.
+public struct MCPHostConfigGuard: Sendable, Equatable, Codable {
+    /// Resolved locations of guarded files that are symlinks (a dotfiles
+    /// checkout): writing the link target is writing the config.
+    public var resolvedAliases: [String]
+
+    public init(resolvedAliases: [String] = []) {
+        self.resolvedAliases = resolvedAliases
     }
 }

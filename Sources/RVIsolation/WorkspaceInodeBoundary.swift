@@ -470,7 +470,12 @@ final class WorkspaceInodeBoundary: Sendable {
         }
         // Every entry is validated before anything is written, so one
         // rejected name leaves the saved tree untouched.
-        switch planPublish(walked.entries, special: walked.special) {
+        switch WorkspacePublishPlanner.plan(
+            volumeEntries: walked.entries,
+            special: walked.special,
+            snapshot: snapshot,
+            facts: livePublishFacts()
+        ).plan {
         case .stopped:
             return .failure(.workspaceInodeBoundaryFailed)
         case .rejected(let rejections):
@@ -668,36 +673,6 @@ final class WorkspaceInodeBoundary: Sendable {
 
     // MARK: Transactional publish
 
-    /// One planned mutation of the saved tree. Steps run in this order:
-    /// case-only renames of captured names (shallowest first), new
-    /// directories, staged new files, in-place updates, installs of staged
-    /// files and new symlinks, retirement of removed names, then directory
-    /// modes deepest first. A directory therefore stays writable while its
-    /// children change.
-    private enum PublishStep {
-        /// Respell captured `from` as `to`, its case-only variant in the
-        /// same directory. `relative` is the new spelling.
-        case renameCase(from: String, to: String)
-        case makeDirectory(String)
-        case stageFile(String, mode_t)
-        case updateFile(String, mode_t)
-        case replaceSymlink(String, target: String)
-        case installFile(String)
-        case createSymlink(String, target: String)
-        case retire(String)
-        case setDirectoryMode(String, mode_t)
-
-        var relative: String {
-            switch self {
-            case .renameCase(_, let relative), .makeDirectory(let relative), .stageFile(let relative, _),
-                .updateFile(let relative, _), .replaceSymlink(let relative, _),
-                .installFile(let relative), .createSymlink(let relative, _),
-                .retire(let relative), .setDirectoryMode(let relative, _):
-                return relative
-            }
-        }
-    }
-
     /// How to put one applied step back. Each undo re-verifies the inode it
     /// touches before it mutates anything.
     private enum PublishUndo {
@@ -721,12 +696,6 @@ final class WorkspaceInodeBoundary: Sendable {
                 return relative
             }
         }
-    }
-
-    private enum PublishPlan {
-        case planned([PublishStep])
-        case rejected([WorkspacePublishRejection])
-        case stopped
     }
 
     private struct PublishJournal {
@@ -754,140 +723,21 @@ final class WorkspaceInodeBoundary: Sendable {
         return (parent as NSString).appendingPathComponent(".rv-rollback-\(token)")
     }
 
-    /// Decide every name without writing. Inode checks, kind checks, the
-    /// symlink policy, case handling, and the removed-subtree check all run
-    /// here. `special` names volume entries publish cannot copy.
-    private func planPublish(_ volumeEntries: [String: TreeEntry], special: [String]) -> PublishPlan {
-        var rejections: [WorkspacePublishRejection] = []
-        func reject(_ relative: String, _ reason: WorkspacePublishRejection.Reason) {
-            rejections.append(WorkspacePublishRejection(relative: relative, reason: reason))
-        }
-        for relative in special {
-            reject(relative, .unsupportedFileType)
-        }
-        var links: [String: String] = [:]
-        for (relative, entry) in volumeEntries where entry.kind == .symlink {
-            if cancelClockAllowsTreeCopy() == false { return .stopped }
-            guard let target = readVolumeLink(relative) else {
-                reject(relative, .unreadable)
-                continue
-            }
-            links[relative] = target
-        }
-        let linkTable = WorkspaceLinkTable(links)
-        let present = volumeEntries.keys.sorted { (pathDepth($0), $0) < (pathDepth($1), $1) }
-        guard let caseInsensitive = savedTreeIsCaseInsensitive() else { return .stopped }
-        // Two volume names one case-insensitive directory cannot hold.
-        let collided = caseInsensitive ? caseVariantNames(present) : []
-        for relative in present where collided.contains(relative) {
-            reject(relative, .caseCollision)
-        }
-        guard let renames = planCaseRenames(volumeEntries, present: present, skipping: collided, reject: reject) else {
-            return .stopped
-        }
-        let stamps = publishStamps
-        var makes: [PublishStep] = []
-        var stages: [PublishStep] = []
-        var updates: [PublishStep] = []
-        var installs: [PublishStep] = []
-        var modes: [PublishStep] = []
-        // Saved inodes an on-volume name resolves to. None of them may be
-        // retired, whatever the snapshot says about another spelling.
-        var claimed = Set<WorkspaceInodeKey>()
-        for relative in present where collided.contains(relative) == false {
-            if cancelClockAllowsTreeCopy() == false { return .stopped }
-            guard let entry = volumeEntries[relative] else { continue }
-            let saved = savedStamp(relative)
-            if let saved { claimed.insert(WorkspaceInodeKey(saved)) }
-            switch workspacePublishDecision(snapshot: stamps[relative], saved: saved, onVolume: true) {
-            case .update:
-                guard let saved, saved.kind == entry.kind else {
-                    reject(relative, .kindChanged)
-                    continue
-                }
-                switch entry.kind {
-                case .directory:
-                    modes.append(.setDirectoryMode(relative, entry.mode))
-                case .regular:
-                    updates.append(.updateFile(relative, entry.mode))
-                case .symlink:
-                    guard let target = links[relative] else { continue }
-                    guard let current = readSavedLink(relative) else {
-                        reject(relative, .unreadable)
-                        continue
-                    }
-                    // An untouched link is not rewritten, so a link the
-                    // project already had is never judged by the policy.
-                    if current == target { continue }
-                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: linkTable) else {
-                        reject(relative, .symlinkEscapesWorkspace)
-                        continue
-                    }
-                    updates.append(.replaceSymlink(relative, target: target))
-                }
-            case .create:
-                switch entry.kind {
-                case .directory:
-                    makes.append(.makeDirectory(relative))
-                    modes.append(.setDirectoryMode(relative, entry.mode))
-                case .regular:
-                    guard stageNameIsFree(relative, volumeEntries) else {
-                        reject(relative, .unreadable)
-                        continue
-                    }
-                    stages.append(.stageFile(relative, entry.mode))
-                    installs.append(.installFile(relative))
-                case .symlink:
-                    guard let target = links[relative] else { continue }
-                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: linkTable) else {
-                        reject(relative, .symlinkEscapesWorkspace)
-                        continue
-                    }
-                    installs.append(.createSymlink(relative, target: target))
-                }
-            case .remove, .leave, .reject:
-                reject(relative, .inodeChanged)
-            }
-        }
-        var removed = Set<String>()
-        for relative in stamps.keys.sorted() where volumeEntries[relative] == nil {
-            if cancelClockAllowsTreeCopy() == false { return .stopped }
-            let saved = savedStamp(relative)
-            switch workspacePublishDecision(snapshot: stamps[relative], saved: saved, onVolume: false) {
-            case .remove:
-                if let saved, claimed.contains(WorkspaceInodeKey(saved)) {
-                    // Another spelling on the volume reaches this inode.
-                    reject(relative, .inodeChanged)
-                } else {
-                    removed.insert(relative)
-                }
-            case .leave:
-                break
-            case .update, .create, .reject:
-                reject(relative, .inodeChanged)
-            }
-        }
-        var retires: [PublishStep] = []
-        for relative in removed.sorted() where removed.contains(parentRelative(relative)) == false {
-            if stamps[relative]?.kind == .directory {
-                switch removedSubtreeIsOwned(relative, removed: removed) {
-                case nil:
-                    if cancelClockAllowsTreeCopy() == false { return .stopped }
-                    reject(relative, .unreadable)
-                    continue
-                case false:
-                    reject(relative, .unexpectedNameInRemovedDirectory)
-                    continue
-                case true:
-                    break
-                }
-            }
-            retires.append(.retire(relative))
-        }
-        guard rejections.isEmpty else {
-            return .rejected(rejections.sorted { $0.relative < $1.relative })
-        }
-        return .planned(renames + makes + stages + updates + installs + retires + modes.reversed())
+    /// The publish planner's view of this boundary's two trees. The saved
+    /// walk behind `savedStamp`, `readSavedLink` and `removedSubtreeIsOwned`
+    /// checks each directory it passes against `mutable.publishStamps`, so
+    /// `publishStampsChanged` stores the respelled snapshot at the points
+    /// planning respells it, as the planner did when it lived here.
+    private func livePublishFacts() -> PublishFacts {
+        PublishFacts(
+            volumeLink: { self.readVolumeLink($0) },
+            savedStamp: { relative, _ in self.savedStamp(relative) },
+            savedLink: { self.readSavedLink($0) },
+            savedFoldsCase: { self.savedTreeIsCaseInsensitive() },
+            removedSubtreeOwned: { self.removedSubtreeIsOwned($0, removed: $1) },
+            shouldStop: { cancelClockAllowsTreeCopy() == false },
+            publishStampsChanged: { stamps in self.mutable.withLock { $0.publishStamps = stamps } }
+        )
     }
 
     /// The snapshot as the current publish spells it.
@@ -908,74 +758,6 @@ final class WorkspaceInodeBoundary: Sendable {
         }
         guard let sensitive else { return nil }
         return sensitive == false
-    }
-
-    /// Volume names that share a directory and differ only by case.
-    private func caseVariantNames(_ present: [String]) -> Set<String> {
-        var groups: [String: [String]] = [:]
-        for relative in present {
-            let folded = parentRelative(relative) + "/" + (relative as NSString).lastPathComponent.lowercased()
-            groups[folded, default: []].append(relative)
-        }
-        return Set(groups.values.filter { $0.count > 1 }.joined())
-    }
-
-    /// Find case-only renames of captured names and respell the snapshot to
-    /// match, so the rest of the plan sees one name per inode.
-    ///
-    /// On a case-insensitive saved tree a volume name with no snapshot stamp
-    /// can resolve to a captured inode under another spelling (`README.md`
-    /// reaching `readme.md`). Planning that as an update plus a removal
-    /// would write the inode and then retire it. When the resolved inode is
-    /// the captured one, has one owner, sits in the same directory, and the
-    /// names differ only by case, the saved name is renamed first and every
-    /// later step uses the new spelling. Anything else that aliases a
-    /// captured inode is refused. Nil is a clock stop.
-    private func planCaseRenames(
-        _ volumeEntries: [String: TreeEntry],
-        present: [String],
-        skipping collided: Set<String>,
-        reject: (String, WorkspacePublishRejection.Reason) -> Void
-    ) -> [PublishStep]? {
-        var stamps = snapshot
-        mutable.withLock { $0.publishStamps = stamps }
-        var owners = workspaceUniqueInodeOwners(stamps)
-        var renames: [PublishStep] = []
-        for relative in present where collided.contains(relative) == false {
-            if cancelClockAllowsTreeCopy() == false { return nil }
-            guard stamps[relative] == nil,
-                let saved = savedStamp(relative),
-                let origin = owners[WorkspaceInodeKey(saved)]
-            else { continue }
-            guard parentRelative(origin) == parentRelative(relative),
-                (origin as NSString).lastPathComponent.lowercased()
-                    == (relative as NSString).lastPathComponent.lowercased(),
-                let captured = stamps[origin],
-                workspaceInodeAcceptableForPublish(captured: captured, live: saved)
-            else {
-                reject(relative, .inodeChanged)
-                continue
-            }
-            guard volumeEntries[origin] == nil else {
-                reject(relative, .caseCollision)
-                continue
-            }
-            renames.append(.renameCase(from: origin, to: relative))
-            workspaceRespellStamps(from: origin, to: relative, stamps: &stamps, owners: &owners)
-            mutable.withLock { $0.publishStamps = stamps }
-        }
-        return renames
-    }
-
-    private func parentRelative(_ relative: String) -> String {
-        (relative as NSString).deletingLastPathComponent
-    }
-
-    private func stageNameIsFree(_ relative: String, _ volumeEntries: [String: TreeEntry]) -> Bool {
-        let parent = parentRelative(relative)
-        let stage = workspacePublishStageName(for: (relative as NSString).lastPathComponent)
-        let staged = parent.isEmpty ? stage : parent + "/" + stage
-        return publishStamps[staged] == nil && volumeEntries[staged] == nil
     }
 
     /// Whether every saved name under a removed directory is itself a

@@ -222,7 +222,7 @@ public enum MCPToolMode: String, Sendable, Equatable {
 }
 
 public struct MCPConfiguration: Sendable, Equatable {
-    public static let fileName = "mcp.json"
+    public static let fileName = MCPHostConfigPaths.gatewayConfigFileName
     public static let maximumBytes = 1024 * 1024
     public static let maximumServers = 128
 
