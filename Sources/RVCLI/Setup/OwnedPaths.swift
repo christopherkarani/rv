@@ -38,6 +38,12 @@ struct OwnedPaths: Equatable, Sendable {
     var museDirectory: String { home.rawValue + "/.config/muse" }
     var museSettings: String { home.rawValue + "/.config/muse/settings.json" }
     var museHooks: String { home.rawValue + "/.config/muse/rv-hooks.json" }
+    /// User skill directories that load a `rv/SKILL.md` (`AgentSkill`).
+    /// Codex reads the shared `~/.agents/skills`; OpenCode also reads the
+    /// Claude and `.agents` folders, so the same rv-owned text may load twice.
+    var claudeAgentSkill: String { home.rawValue + "/.claude/skills/rv/SKILL.md" }
+    var codexAgentSkill: String { home.rawValue + "/.agents/skills/rv/SKILL.md" }
+    var openCodeAgentSkill: String { home.rawValue + "/.config/opencode/skills/rv/SKILL.md" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
     /// Written by `rv audit forward --install` (`AuditForwardInstall.label`).
@@ -65,6 +71,17 @@ struct OwnedPaths: Equatable, Sendable {
     /// Judge weights install.sh downloads (hundreds of MB). `rv uninstall`
     /// keeps them unless asked (`--remove-models`).
     var modelsDirectory: String { home.rawValue + "/.config/rv/models" }
+
+    /// The rv agent skill a host loads, or nil for a host with no
+    /// documented user skill directory.
+    func agentSkill(for host: HookHost) -> String? {
+        switch host {
+        case .claude: claudeAgentSkill
+        case .codex: codexAgentSkill
+        case .opencode: openCodeAgentSkill
+        case .grok, .pi, .openclaw, .hermes, .cursor, .antigravity, .muse: nil
+        }
+    }
 
     var hostAdapters: [OwnedHostAdapterPath] {
         HookHost.setupSlotOrder.map(hostAdapter)

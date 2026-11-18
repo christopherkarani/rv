@@ -302,6 +302,7 @@ let cliTargets: [Target] = [
         resources: [
             .embedInCode("Resources/launchd"),
             .embedInCode("Resources/systemd"),
+            .embedInCode("Resources/skills"),
         ]
     ),
     .executableTarget(
