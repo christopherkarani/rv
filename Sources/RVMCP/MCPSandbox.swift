@@ -159,8 +159,8 @@ public enum MCPSandbox {
                 let server = definition.name
                 let credential = proxyCredential()
                 let proxy = hostsProxy(
-                    server: server, hosts: policy.hosts, enforcement: enforcement(definition), credential: credential,
-                    denied: denied, audited: audited)
+                    server: server, hosts: policy.hosts, allowedIPs: policy.allowedIPs,
+                    enforcement: enforcement(definition), credential: credential, denied: denied, audited: audited)
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
@@ -201,13 +201,16 @@ public enum MCPSandbox {
 
     /// The `sandbox.hosts` allowlist proxy for one server. In audit mode a
     /// host outside the list passes only after `audited` durably recorded it.
+    /// `allowedIPs` (`sandbox.allowed_ips`) applies to listed hosts only; an
+    /// audit pass dials public unicast.
     static func hostsProxy(
-        server: String, hosts: [String], enforcement: MCPSandboxEnforcement, credential: String,
+        server: String, hosts: [String], allowedIPs: [String: EgressAllowedIPs], enforcement: MCPSandboxEnforcement,
+        credential: String,
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void,
         audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool
     ) -> EgressProxy {
         EgressProxy(
-            policy: EgressHostPolicy(allowedHosts: Set(hosts), relaysLoopback: false),
+            policy: EgressHostPolicy(allowedHosts: Set(hosts), allowedIPs: allowedIPs, relaysLoopback: false),
             record: { denied(server, $0) }, clientCredential: credential,
             audit: enforcement == .audit ? EgressAuditMode(record: { audited(server, $0) }) : nil)
     }

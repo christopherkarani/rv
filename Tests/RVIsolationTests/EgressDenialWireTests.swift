@@ -587,3 +587,38 @@ private struct DenyWireReview {
     #expect(retry.json?["reason"] as? String == "denied-policy")
     #expect(retry.json?["proposal_id"] == nil)
 }
+
+// Oracle: an owner-set `allowed_ips` endpoint whose answer falls outside
+// its ranges (or on a forbidden address) is refused before any connect,
+// with the same address-filtered body as any other filtered answer.
+// Port 8443 keeps the tunnel dial-first (no SNI binding), so the refusal
+// reaches the wire; on 443 the SNI path records it after the 200.
+@Test func allowedIPsRefusalGetsTheAddressFilteredBody() throws {
+    let host = "staging.corp.lan"
+    let allowed = try EgressAllowedIPs(parsing: ["10.0.5.0/24"])
+    let credential = EgressProxyCredential()
+    let grant = EgressGrant(
+        principal: EgressPrincipal(rawValue: "mcp:staging"),
+        policy: EgressHostPolicy(
+            allowedHosts: [host], allowedPort: 8443, allowedIPs: [host: allowed], relaysLoopback: false))
+    let request = "CONNECT \(host):8443 HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n"
+    for answer in ["10.0.6.20", "169.254.169.254"] {
+        let candidate = try #require(denyWireCandidate(answer, port: 8443))
+        let records = DenyWireCalls()
+        let connects = Mutex(0)
+        let proxy = EgressProxy(
+            policy: .publicHTTPS, grants: [credential: grant], record: { records.note($0) },
+            resolve: { _, _ in [candidate] },
+            connect: { _ in
+                connects.withLock { $0 += 1 }
+                return nil
+            })
+        let port = try proxy.start().get()
+        defer { proxy.stop() }
+        let bytes = denyWireExchange(port: port, request: request)
+        #expect(bytes == EgressDenialResponse(reason: .addressFiltered, host: host, port: 8443).bytes, "\(answer)")
+        denyWireAwait(records, count: 1)
+        #expect(records.all.map(\.reason) == [.addressFiltered], "\(answer)")
+        #expect(connects.withLock { $0 } == 0, "\(answer)")
+    }
+}

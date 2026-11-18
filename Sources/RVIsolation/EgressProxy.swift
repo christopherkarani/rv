@@ -232,6 +232,9 @@ public final class EgressProxy: @unchecked Sendable {
     /// connects. Production is `boundedResolver(budget: resolverBudget)`;
     /// tests inject answers.
     let resolve: @Sendable (String, Int) -> [EgressDialCandidate]
+    /// Connects one vetted candidate, or nil. Production is
+    /// `connectCandidate`; tests observe which address was dialed.
+    let connector: @Sendable (EgressDialCandidate) -> Int32?
     /// This instance's outstanding-lookup budget. Per proxy (one per
     /// runtime) so one runtime's hung lookups cannot starve another's;
     /// only `EgressResolverBudget.processCeiling` is shared.
@@ -308,7 +311,8 @@ public final class EgressProxy: @unchecked Sendable {
         resolverBudget: EgressResolverBudget = EgressResolverBudget(
             limit: EgressResolverBudget.perProxyLimit, parent: .processCeiling
         ),
-        resolve: (@Sendable (String, Int) -> [EgressDialCandidate])? = nil
+        resolve: (@Sendable (String, Int) -> [EgressDialCandidate])? = nil,
+        connect: (@Sendable (EgressDialCandidate) -> Int32?)? = nil
     ) {
         self.policy = policy
         self.binaryPolicy = binaryPolicy
@@ -322,6 +326,7 @@ public final class EgressProxy: @unchecked Sendable {
         self.maximumProposalWaiters = maximumProposalWaiters
         self.resolverBudget = resolverBudget
         self.resolve = resolve ?? EgressProxy.boundedResolver(budget: resolverBudget)
+        self.connector = connect ?? EgressProxy.connectCandidate
         admitAttributionPin()
     }
 
@@ -600,16 +605,26 @@ public final class EgressProxy: @unchecked Sendable {
             denyProxyAuthRequired(client: client, host: target.host, port: target.port)
         case .deny(let reason, let binaryPath):
             deny(client: client, host: target.host, port: target.port, reason: reason, binaryPath: binaryPath)
-        case .tunnel(let external, let requireSNI):
-            tunnel(client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI)
-        case .forward(let external):
-            forward(client: client, header: header, target: target, leftover: leftover, external: external)
-        case .audited(.tunnel(let external, let requireSNI)):
+        case .tunnel(let external, let requireSNI, let allowedIPs):
             tunnel(
                 client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI,
-                audited: true)
-        case .audited(.forward(let external)):
-            forward(client: client, header: header, target: target, leftover: leftover, external: external, audited: true)
+                allowedIPs: allowedIPs
+            )
+        case .forward(let external, let allowedIPs):
+            forward(
+                client: client, header: header, target: target, leftover: leftover, external: external,
+                allowedIPs: allowedIPs
+            )
+        // An audit pass is for an unlisted host, which has no owner-set
+        // `allowed_ips`: it dials public unicast only, whatever it carries.
+        case .audited(.tunnel(let external, let requireSNI, _)):
+            tunnel(
+                client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI,
+                allowedIPs: nil, audited: true)
+        case .audited(.forward(let external, _)):
+            forward(
+                client: client, header: header, target: target, leftover: leftover, external: external,
+                allowedIPs: nil, audited: true)
         case .audited:
             // The ladder never nests or audits a deny; anything else refuses.
             deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
@@ -629,7 +644,8 @@ public final class EgressProxy: @unchecked Sendable {
     /// `audited`: an audit pass, recorded once SNI checked out (a bare
     /// CONNECT never mints one) and before dialing.
     private func tunnel(
-        client: Int32, target: EgressTarget, leftover: [UInt8], external: Bool, requireSNI: Bool, audited: Bool = false
+        client: Int32, target: EgressTarget, leftover: [UInt8], external: Bool, requireSNI: Bool,
+        allowedIPs: EgressAllowedIPs?, audited: Bool = false
     ) {
         // A `requireSNI` tunnel (credentialed allowlist, external, TLS port)
         // is bound to the origin it dials: the ClientHello's SNI must be
@@ -669,6 +685,7 @@ public final class EgressProxy: @unchecked Sendable {
                 host: target.host,
                 port: target.port,
                 external: external,
+                allowedIPs: allowedIPs,
                 client: client,
                 established: established
             )
@@ -690,7 +707,8 @@ public final class EgressProxy: @unchecked Sendable {
 
     /// Executes an admitted absolute-URI request.
     private func forward(
-        client: Int32, header: String, target: EgressTarget, leftover: [UInt8], external: Bool, audited: Bool = false
+        client: Int32, header: String, target: EgressTarget, leftover: [UInt8], external: Bool,
+        allowedIPs: EgressAllowedIPs?, audited: Bool = false
     ) {
         if audited, recordAuditPass(target) == false {
             deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
@@ -701,6 +719,7 @@ public final class EgressProxy: @unchecked Sendable {
                 host: target.host,
                 port: target.port,
                 external: external,
+                allowedIPs: allowedIPs,
                 client: client
             )
         else {
@@ -981,9 +1000,13 @@ public final class EgressProxy: @unchecked Sendable {
     /// is already established (the SNI-checked path already sent 200),
     /// failure just closes and records instead of writing a 403 into a
     /// tunnel the client believes is open.
-    private func dialUpstream(host: String, port: Int, external: Bool, client: Int32, established: Bool = false) -> Int32? {
+    private func dialUpstream(
+        host: String, port: Int, external: Bool, allowedIPs: EgressAllowedIPs?, client: Int32, established: Bool = false
+    ) -> Int32? {
         let reason: EgressDenialReason
-        switch EgressProxy.dial(host: host, port: port, external: external, resolve: resolve) {
+        switch EgressProxy.dial(
+            host: host, port: port, external: external, allowedIPs: allowedIPs, resolve: resolve, connect: connector
+        ) {
         case .connected(let fd):
             return fd
         case .dnsFailed:
@@ -1183,23 +1206,26 @@ public final class EgressProxy: @unchecked Sendable {
     /// link-local, or metadata addresses and have the proxy relay there.
     /// The dialed sockaddr is the filtered one, so there is no
     /// check-to-use race.
+    ///
+    /// `allowedIPs` (an owner-set endpoint's private ranges, carried only by
+    /// a policy admission) widens the external check exactly as far as
+    /// `externalAnswerAdmitted` says and changes nothing else: the same
+    /// single resolution is checked and the same sockaddrs are connected,
+    /// so an answer that rebinds between check and connect is never used.
     static func dial(
         host: String,
         port: Int,
         external: Bool,
-        resolve: (String, Int) -> [EgressDialCandidate]
+        allowedIPs: EgressAllowedIPs? = nil,
+        resolve: (String, Int) -> [EgressDialCandidate],
+        connect: (EgressDialCandidate) -> Int32? = connectCandidate,
+        localAddresses: () -> Set<EgressIPAddress>? = localInterfaceAddresses
     ) -> DialOutcome {
         let candidates = resolve(host, port)
         guard candidates.isEmpty == false else { return .dnsFailed }
         if external {
-            for candidate in candidates {
-                var storage = candidate.address
-                let publicUnicast = withUnsafePointer(to: &storage) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, isPublicUnicast)
-                }
-                if publicUnicast == false {
-                    return .addressFiltered
-                }
+            guard externalAnswerAdmitted(candidates, allowedIPs: allowedIPs, localAddresses: localAddresses) else {
+                return .addressFiltered
             }
         } else {
             // Loopback dials verify the candidates, not just the name:
@@ -1217,23 +1243,130 @@ public final class EgressProxy: @unchecked Sendable {
             }
         }
         for candidate in candidates {
-            let fd = socket(candidate.family, candidate.socktype | egressSocketCloexec, candidate.proto)
-            if fd >= 0 {
-                var storage = candidate.address
-                let connected = withUnsafePointer(to: &storage) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                        connectWithTimeout(
-                            fd, address: address, length: candidate.length, seconds: 10
-                        )
-                    }
-                }
-                if connected {
-                    return .connected(fd)
-                }
-                close(fd)
+            if let fd = connect(candidate) {
+                return .connected(fd)
             }
         }
         return .connectFailed
+    }
+
+    /// External answer-set verdict, consensus over every address. Without
+    /// `allowedIPs` every address must be public unicast. With them an
+    /// all-public answer passes as before; any other answer passes only
+    /// when every address, public ones included, is covered by the list
+    /// and outside the forbidden ranges (`EgressAllowedIPs.covers`), so a
+    /// mixed answer with one uncovered address is refused whole.
+    ///
+    /// A listed range can include this machine's own interface address
+    /// (192.168.1.0/24 with the Mac at 192.168.1.10), which would hand the
+    /// cage every host service on that port. So a non-public answer is
+    /// also refused when any address equals a local interface address,
+    /// and when the interfaces cannot be listed (`localAddresses` nil).
+    /// The interface set is a snapshot taken per dial. Other routes back
+    /// to the host (a Docker or Lima host-gateway address, a NAT that
+    /// hairpins to it) are not detected; the owner's list is the control
+    /// there.
+    static func externalAnswerAdmitted(
+        _ candidates: [EgressDialCandidate],
+        allowedIPs: EgressAllowedIPs?,
+        localAddresses: () -> Set<EgressIPAddress>? = localInterfaceAddresses
+    ) -> Bool {
+        let allPublic = candidates.allSatisfy { candidate in
+            var storage = candidate.address
+            return withUnsafePointer(to: &storage) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, isPublicUnicast)
+            }
+        }
+        if allPublic { return true }
+        guard let allowedIPs, let local = localAddresses() else { return false }
+        return candidates.allSatisfy { candidate in
+            guard let address = coverageAddress(of: candidate) else { return false }
+            return allowedIPs.covers(address) && local.contains(address) == false
+        }
+    }
+
+    /// Every address on this machine's interfaces (`getifaddrs`), folded
+    /// like a coverage address; IPv6 scope ids are ignored so a scoped
+    /// local address still matches its bytes. Nil when the interfaces
+    /// cannot be listed.
+    static func localInterfaceAddresses() -> Set<EgressIPAddress>? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return nil }
+        defer { freeifaddrs(head) }
+        return interfaceAddresses(from: head)
+    }
+
+    /// The IPv4 and IPv6 addresses in one `getifaddrs` list. Nil when it
+    /// holds none: a listing without even loopback is not trusted to
+    /// prove an answer is not this machine.
+    static func interfaceAddresses(from head: UnsafeMutablePointer<ifaddrs>?) -> Set<EgressIPAddress>? {
+        var addresses = Set<EgressIPAddress>()
+        var cursor = head
+        while let entry = cursor {
+            cursor = entry.pointee.ifa_next
+            guard let raw = entry.pointee.ifa_addr else { continue }
+            let address: EgressIPAddress?
+            switch Int32(raw.pointee.sa_family) {
+            case AF_INET:
+                address = raw.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                    withUnsafeBytes(of: socket.pointee.sin_addr) { EgressIPAddress(ipv4: Array($0)) }
+                }
+            case AF_INET6:
+                address = raw.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                    withUnsafeBytes(of: socket.pointee.sin6_addr) { EgressIPAddress(ipv6: Array($0)) }
+                }
+            default:
+                address = nil
+            }
+            if let address { addresses.insert(address) }
+        }
+        return addresses.isEmpty ? nil : addresses
+    }
+
+    /// The address one candidate dials, for `allowed_ips` coverage. Nil
+    /// (refused) for an unknown family, a length short of the family's
+    /// sockaddr, or an IPv6 address with a scope id: a scoped dial picks
+    /// an interface the owner's list does not name. IPv4-mapped IPv6
+    /// folds to IPv4 (`EgressIPAddress`).
+    static func coverageAddress(of candidate: EgressDialCandidate) -> EgressIPAddress? {
+        var storage = candidate.address
+        switch Int32(storage.ss_family) {
+        case AF_INET:
+            guard candidate.length >= socklen_t(MemoryLayout<sockaddr_in>.size) else { return nil }
+            return withUnsafePointer(to: &storage) { pointer in
+                pointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                    withUnsafeBytes(of: socket.pointee.sin_addr) { EgressIPAddress(ipv4: Array($0)) }
+                }
+            }
+        case AF_INET6:
+            guard candidate.length >= socklen_t(MemoryLayout<sockaddr_in6>.size) else { return nil }
+            return withUnsafePointer(to: &storage) { pointer in
+                pointer.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                    guard socket.pointee.sin6_scope_id == 0 else { return nil }
+                    return withUnsafeBytes(of: socket.pointee.sin6_addr) { EgressIPAddress(ipv6: Array($0)) }
+                }
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// Production connect for one vetted candidate: a fresh socket and a
+    /// bounded connect to exactly that sockaddr.
+    static func connectCandidate(_ candidate: EgressDialCandidate) -> Int32? {
+        let fd = socket(candidate.family, candidate.socktype | egressSocketCloexec, candidate.proto)
+        guard fd >= 0 else { return nil }
+        var storage = candidate.address
+        let connected = withUnsafePointer(to: &storage) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+                connectWithTimeout(fd, address: address, length: candidate.length, seconds: 10)
+            }
+        }
+        guard connected else {
+            close(fd)
+            return nil
+        }
+        return fd
     }
 
     /// True when `address` is loopback: 127.0.0.0/8, ::1, or an

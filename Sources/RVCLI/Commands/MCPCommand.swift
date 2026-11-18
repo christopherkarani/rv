@@ -296,7 +296,7 @@ enum MCPRun {
         } else {
             if let problem = report.integrityProblem {
                 lines.append("untrusted  " + reviewField(problem))
-                lines.append("  Fix: review with `rv mcp list`, then `rv mcp trust`")
+                lines.append("  Fix: run `rv mcp trust`; it shows every server, host and range before you sign")
             }
             for row in report.failing {
                 let status = MCPEntryStatus(rawValue: row.status)
@@ -958,6 +958,12 @@ enum MCPRun {
                 if sandbox.hosts.isEmpty == false {
                     rules.append("network only to " + sandbox.hosts.map(visible).joined(separator: ", "))
                     for host in sandbox.hosts { lines.append("    host \(visible(host))") }
+                    lines += allowedIPLines(sandbox)
+                    if sandbox.allowedIPs.isEmpty == false {
+                        rules.append(
+                            "private networks for " + sandbox.allowedIPs.keys.sorted().map(visible).joined(separator: ", ")
+                                + " (loosens public-only)")
+                    }
                     if sandbox.enforcement == .audit {
                         rules.append("audit: other hosts are allowed and logged")
                         lines.append("    sandbox enforcement audit")
@@ -1582,10 +1588,19 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] {
             lines.append("    host \(visible(host))")
         }
+        if let sandbox = server.sandbox { lines += allowedIPLines(sandbox) }
         for name in server.placeholders {
             lines.append("    placeholder \(visible(name))")
         }
         return lines
+    }
+
+    /// One line per owner-set private network, so a trust review shows
+    /// every range the file opens beyond public unicast.
+    static func allowedIPLines(_ sandbox: MCPSandboxPolicy) -> [String] {
+        sandbox.allowedIPs.keys.sorted().flatMap { host in
+            (sandbox.allowedIPs[host]?.entries ?? []).map { "    allowed_ips \(visible(host)) \($0)" }
+        }
     }
 
     private static func reviewLists(
@@ -1624,6 +1639,9 @@ enum MCPRun {
         }
         if server.sandbox?.enforcement == .audit, lines.contains("    sandbox enforcement audit") == false {
             return false
+        }
+        if let sandbox = server.sandbox {
+            for line in allowedIPLines(sandbox) where lines.contains(line) == false { return false }
         }
         for name in server.placeholders where lines.contains("    placeholder \(visible(name))") == false {
             return false

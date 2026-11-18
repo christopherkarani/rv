@@ -183,8 +183,8 @@ extension MCPSandbox {
         if policy.hosts.isEmpty == false {
             let credential = proxyCredential()
             let proxy = hostsProxy(
-                server: server, hosts: policy.hosts, enforcement: enforcement, credential: credential,
-                denied: denied, audited: audited)
+                server: server, hosts: policy.hosts, allowedIPs: policy.allowedIPs, enforcement: enforcement,
+                credential: credential, denied: denied, audited: audited)
             guard case .success(let port) = proxy.start(), let tcp = UInt16(exactly: port), tcp != 0 else {
                 return .failure(.sandbox("could not start the egress proxy for \(server)"))
             }
