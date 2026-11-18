@@ -63,10 +63,29 @@ struct WorkspaceTransferCommandTests {
         })
         defer { try? FileManager.default.removeItem(atPath: root) }
         #expect(symlink(root + "/real", root + "/link") == 0)
-        let resolved = WorkspaceTransferRun.resolvedParent(of: root + "/link/out")
+        let resolved = try WorkspaceTransferRun.resolvedParent(of: root + "/link/out")
         #expect(resolved.parent == root + "/real")
         #expect(resolved.display == root + "/real/out")
-        #expect(WorkspaceTransferRun.resolvedParent(of: root + "/missing/out").parent == nil)
+        #expect(throws: ValidationError.self) { try WorkspaceTransferRun.resolvedParent(of: root + "/missing/out") }
+    }
+
+    @Test func anUnresolvableParentIsRefusedBeforeTheOwnerPrompt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-transfer-cli-\(UUID().uuidString)").path
+        #if os(macOS)
+        // No owner authentication is given: reaching the prompt would exit
+        // EX_NOPERM, so a ValidationError means the refusal came first.
+        await #expect(throws: ValidationError.self) {
+            try await withCLIProcess(home: try isolatedHome()) {
+                try await WorkspaceTransferRun.upload(root + "/ws", source: root + "/missing/f", destination: nil, gitignore: true)
+            }
+        }
+        await #expect(throws: ValidationError.self) {
+            try await withCLIProcess(home: try isolatedHome()) {
+                try await WorkspaceTransferRun.download(root + "/ws", source: "f", destination: root + "/missing/out", gitignore: true)
+            }
+        }
+        #endif
+        #expect(FileManager.default.fileExists(atPath: root) == false)
     }
 
     @Test func summaryLine() {

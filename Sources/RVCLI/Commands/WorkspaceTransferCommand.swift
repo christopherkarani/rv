@@ -69,7 +69,7 @@ enum WorkspaceTransferRun {
         let project = try WorkspaceCommandRun.requireProject(raw)
         let hostSource = absolute(source)
         let target = destination ?? URL(fileURLWithPath: hostSource).lastPathComponent
-        let resolved = resolvedParent(of: hostSource)
+        let resolved = try resolvedParent(of: hostSource)
         try await OwnerConfirmation.require(
             "upload \(WorkspaceTransfer.escaped(resolved.display)) into the workspace at \(project) as \(WorkspaceTransfer.escaped(target))"
                 + (gitignore ? "" : ", ignoring .gitignore")
@@ -95,7 +95,7 @@ enum WorkspaceTransferRun {
         #else
         let project = try WorkspaceCommandRun.requireProject(raw)
         let hostDestination = absolute(destination)
-        let resolved = resolvedParent(of: hostDestination)
+        let resolved = try resolvedParent(of: hostDestination)
         try await OwnerConfirmation.require(
             "download \(WorkspaceTransfer.escaped(source)) from the workspace at \(project) to \(WorkspaceTransfer.escaped(resolved.display))"
                 + (gitignore ? "" : ", ignoring .gitignore")
@@ -122,11 +122,15 @@ enum WorkspaceTransferRun {
 
     /// The path the owner approves: its parent with every symlink resolved
     /// (as the transfer will open it), plus the final name. The transfer is
-    /// refused if the parent later resolves anywhere else. An unresolvable
-    /// parent is shown as typed; the transfer then refuses it.
-    static func resolvedParent(of path: String) -> (parent: String?, display: String) {
+    /// refused if the parent later resolves anywhere else. A parent that
+    /// does not resolve is refused here, before the prompt: the owner never
+    /// approves a path blind.
+    static func resolvedParent(of path: String) throws -> (parent: String, display: String) {
         let url = URL(fileURLWithPath: path)
-        guard let real = realpath(url.deletingLastPathComponent().path, nil) else { return (nil, path) }
+        let parentPath = url.deletingLastPathComponent().path
+        guard let real = realpath(parentPath, nil) else {
+            throw ValidationError("\(WorkspaceTransfer.escaped(parentPath)) does not exist or cannot be resolved; nothing was copied")
+        }
         let parent = String(cString: real)
         free(real)
         return (parent, (parent == "/" ? "" : parent) + "/" + url.lastPathComponent)
