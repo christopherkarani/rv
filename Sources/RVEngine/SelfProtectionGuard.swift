@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 /// rv must not let the agent it guards weaken it.
@@ -122,6 +123,12 @@ private enum HostModeWord {
     static let block = "block"
 }
 
+/// Bare `rv allow-once <code>` redeems through the default subcommand. The
+/// CLI trims and lowercases before `AllowOnceUnlockCode.isValid`, so the
+/// guard does the same. Digit-only words of any length stay flagged as
+/// before: loosening them buys nothing.
 private func isUnlockCode(_ word: String) -> Bool {
-    word.isEmpty == false && word.allSatisfy(\.isNumber)
+    let normalized = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if AllowOnceUnlockCode.isValid(normalized) { return true }
+    return word.isEmpty == false && word.allSatisfy(\.isNumber)
 }
