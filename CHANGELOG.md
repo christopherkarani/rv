@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
-- Analytics is now off unless you turn it on with `"analytics.enabled": true` (nested or flat) in `~/.config/rv/config.json`. Before, it was on by default and sent anonymous usage events to PostHog (`us.i.posthog.com`) with no consent step; installs that never wrote the key now send nothing after upgrade. A missing, unreadable or ambiguous config, or the two forms disagreeing, means off, and while off rv mints no install id and writes no analytics files.
+- Analytics is now off unless you turn it on with `"analytics.enabled": true` (nested or flat) in `~/.config/rv/config.json`. Before, it was on by default and sent anonymous usage events to PostHog (`us.i.posthog.com`) with no consent step; installs that never wrote the key now send nothing after upgrade. Only an unambiguous boolean `true` turns it on: a missing, unreadable or ambiguous config, a non-boolean value in either form, or the two forms disagreeing means off. While off, rv mints no install id, keeps no usage counts, and removes counts left from before. `rvd` reads the setting when it starts, so a change takes effect at the next `rv service restart`; the install event, if none was sent before, goes out at the next `rv setup`.
 
 ### Fixed
 

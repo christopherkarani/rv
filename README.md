@@ -548,8 +548,13 @@ party) an install event and one event a day with a random install id, the
 rv version, the OS version and build, the day's allow, deny and
 indeterminate counts, the enabled pack ids, and which host agents are
 wired; PostHog also sees the address the request comes from. rv never
-sends commands, paths or secrets. The id and counters live
-in `~/.config/rv/analytics-*`; `rv uninstall` deletes them.
+sends commands, paths or secrets. While analytics is off rv keeps no usage
+counts. `rvd` reads the setting once, when it starts: after turning
+analytics on, daily events start once `rvd` restarts (`rv service
+restart`), and the install event, if none was sent before, goes out at the
+next `rv setup`; after turning it off, daily events continue until `rvd`
+restarts. The id and counters live in `~/.config/rv/analytics-*`;
+`rv uninstall` deletes them.
 
 ## For developers
 
