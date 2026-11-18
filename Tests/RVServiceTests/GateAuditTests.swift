@@ -315,7 +315,7 @@ struct GateAuditTests {
         #expect(events.first?.detail["verdict"] == "indeterminate")
         #expect(events.first?.detail["tool"] == "Write")
 
-        let (broken, brokenURL) = try home()
+        let (broken, brokenURL) = try self.home()
         defer { try? FileManager.default.removeItem(at: brokenURL) }
         let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: broken))
         try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
