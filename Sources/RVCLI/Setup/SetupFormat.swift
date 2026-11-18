@@ -173,7 +173,7 @@ enum SetupFormat {
         if report.incomplete {
             return "Uninstall incomplete; see stderr.\n"
         }
-        switch report.closer {
+        return switch report.closer {
         case .removed:
             uninstallRobotCompleteLine + "\n"
         case .alreadyClean:
