@@ -362,6 +362,28 @@ struct WorkspaceDownloadTests {
         #expect(summary.ignored == 2)
     }
 
+    @Test(arguments: [false, true])
+    func neverRemovesADestinationSomeoneElseCreatedAfterPlanning(directory: Bool) throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        if directory {
+            try fixture.write(fixture.workspace + "/out/a", "agent")
+        } else {
+            try fixture.write(fixture.workspace + "/out", "agent")
+        }
+        let target = fixture.host + "/results"
+        let result = fixture.download("out", to: target, afterPlan: {
+            if directory {
+                try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: false)
+                try? Data("mine".utf8).write(to: URL(fileURLWithPath: target + "/keep"))
+            } else {
+                try? Data("mine".utf8).write(to: URL(fileURLWithPath: target))
+            }
+        })
+        guard case .destinationExists? = refusal(result) else { Issue.record("expected destinationExists, got \(String(describing: refusal(result)))"); return }
+        #expect(fixture.read(directory ? target + "/keep" : target) == "mine")
+    }
+
     @Test func refusesSpecialFiles() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }

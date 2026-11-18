@@ -20,6 +20,9 @@ private struct TreeCopier {
     let mode: DestinationMode
     let limits: WorkspaceTransferLimits
     var copied: UInt64 = 0
+    /// This copy created the top (a download's new destination). Only then
+    /// may a failed download remove it.
+    private(set) var createdTop = false
 
     func display(_ path: [String]) -> String {
         let top = prepared.destinationName.map { [$0] } ?? []
@@ -67,7 +70,12 @@ private struct TreeCopier {
         return nil
     }
 
-    private func makeDirectory(_ parent: Int32, _ name: String?, path: [String]) -> Result<Int32, WorkspaceTransferRefusal> {
+    /// A name that appeared after planning: someone else's; never removed.
+    private func existed(_ path: [String]) -> WorkspaceTransferRefusal {
+        path.isEmpty ? .destinationExists(display(path)) : .changed(display(path))
+    }
+
+    private mutating func makeDirectory(_ parent: Int32, _ name: String?, path: [String]) -> Result<Int32, WorkspaceTransferRefusal> {
         guard let name else {
             let fd = dup(parent)
             return fd >= 0 ? .success(fd) : .failure(.io(display(path), errno))
@@ -75,7 +83,7 @@ private struct TreeCopier {
         if name.withCString({ mkdirat(parent, $0, 0o755) }) != 0 {
             let code = errno
             guard code == EEXIST, mode == .replace else {
-                return .failure(code == EEXIST ? .changed(display(path)) : .io(display(path), code))
+                return .failure(code == EEXIST ? existed(path) : .io(display(path), code))
             }
             let (found, _) = lstatAt(parent, name)
             switch found.map(NodeKind.init) {
@@ -83,6 +91,8 @@ private struct TreeCopier {
             case .symlink?: return .failure(.symlink(display(path)))
             default: return .failure(.destinationConflict(display(path)))
             }
+        } else if path.isEmpty, mode == .createOnly {
+            createdTop = true
         }
         let fd = openDirectoryAt(parent, name)
         guard fd >= 0 else { return .failure(errno == ELOOP ? .symlink(display(path)) : .io(display(path), errno)) }
@@ -118,8 +128,9 @@ private struct TreeCopier {
             openat(destinationParent, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, permissions)
         }
         guard destination >= 0 else {
-            return errno == EEXIST ? .changed(display(entry.path)) : .io(display(entry.path), errno)
+            return errno == EEXIST ? existed(entry.path) : .io(display(entry.path), errno)
         }
+        if entry.path.isEmpty, mode == .createOnly { createdTop = true }
         defer { close(destination) }
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
@@ -150,8 +161,8 @@ extension WorkspaceTransfer {
     static func copyDownload(_ prepared: PreparedTransfer, limits: WorkspaceTransferLimits) -> Result<WorkspaceTransferSummary, WorkspaceTransferRefusal> {
         var copier = TreeCopier(prepared: prepared, mode: .createOnly, limits: limits)
         if let refusal = copier.run() {
-            // Only names this copy created live under the new top.
-            if let name = prepared.destinationName { removeTree(prepared.destinationParent, name) }
+            // Only a top this copy created, and so everything under it, is ours.
+            if copier.createdTop, let name = prepared.destinationName { removeTree(prepared.destinationParent, name) }
             return .failure(refusal)
         }
         return .success(summary(prepared.plan, copied: copier.copied))

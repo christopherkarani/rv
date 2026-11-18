@@ -808,23 +808,23 @@ extension WorkspaceTransfer {
             close(parent.fd)
             return .failure(.protectedEntries(offenders))
         }
-        request.afterPlan?()
-        if let refusal = stillAt(realParent, parent.info) {
-            close(sourceParent)
-            close(parent.fd)
-            return .failure(refusal)
-        }
         let (existing, code) = lstatAt(parent.fd, destination.name)
         guard existing == nil, code == ENOENT else {
             close(sourceParent)
             close(parent.fd)
             return .failure(existing != nil ? .destinationExists(destinationDisplay) : .io(destinationDisplay, code))
         }
+        request.afterPlan?()
+        if let refusal = stillAt(realParent, parent.info) {
+            close(sourceParent)
+            close(parent.fd)
+            return .failure(refusal)
+        }
         return .success(PreparedTransfer(
             sourceParent: sourceParent, sourceName: sourceName,
             destinationParent: parent.fd, destinationName: destination.name,
             destinationDevice: UInt64(truncatingIfNeeded: parent.info.st_dev),
-            destinationLabel: [destinationDisplay], plan: planner.plan
+            destinationLabel: [realParent == "/" ? "" : escaped(realParent)], plan: planner.plan
         ))
     }
 
