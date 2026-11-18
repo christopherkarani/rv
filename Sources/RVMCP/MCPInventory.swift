@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 
 public enum MCPHost: String, CaseIterable, Sendable, Equatable {
     case claudeCode = "claude-code"
@@ -21,11 +22,17 @@ public enum MCPHost: String, CaseIterable, Sendable, Equatable {
 public enum MCPEntryScope: Sendable, Equatable {
     case user
     case project(String)
+    /// The organization's system-wide config (Claude Code managed files).
+    case managed
+    /// A Claude Code plugin, by plugin id (`name@marketplace`).
+    case plugin(String)
 
     public var label: String {
         switch self {
         case .user: "user"
         case .project(let path): "project \(path)"
+        case .managed: "managed"
+        case .plugin(let id): "plugin \(id)"
         }
     }
 }
@@ -145,6 +152,10 @@ public struct MCPHostFile: Sendable, Equatable {
         /// JSON object of servers at `keyPath`; `opencode` uses its own entry shape.
         case json(keyPath: [String], lenient: Bool, opencode: Bool)
         case codexTOML
+        /// A plugin servers file: `mcpServers`, or the root object itself.
+        case pluginServers(disabled: Bool)
+        /// A plugin manifest: inline `mcpServers` (an object, or objects in an array).
+        case pluginManifest(disabled: Bool)
     }
 
     public var host: MCPHost
@@ -159,56 +170,53 @@ public struct MCPHostFile: Sendable, Equatable {
         self.format = format
     }
 
+    /// Host files `rv mcp setup` may route through rv, from the shared
+    /// `MCPHostConfigLocation` table the hook guard also reads. Managed and
+    /// plugin sources are read-only: `MCPInventory.discover` adds them.
     public static func all(home: URL, project: URL?, environment: [String: String]) -> [MCPHostFile] {
-        func at(_ base: URL, _ relative: String) -> URL { base.appendingPathComponent(relative, isDirectory: false) }
-        let standard = Format.json(keyPath: ["mcpServers"], lenient: false, opencode: false)
-        let codexHome = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? at(home, ".codex")
-        #if os(macOS)
-        let claudeDesktop = at(home, "Library/Application Support/Claude/claude_desktop_config.json")
-        let vscodeUser = at(home, "Library/Application Support/Code/User/mcp.json")
-        #else
-        let claudeDesktop = at(home, ".config/Claude/claude_desktop_config.json")
-        let vscodeUser = at(home, ".config/Code/User/mcp.json")
-        #endif
-        var files = [
-            MCPHostFile(host: .claudeCode, scope: .user, path: at(home, ".claude.json"), format: standard),
-            MCPHostFile(host: .claudeDesktop, scope: .user, path: claudeDesktop, format: standard),
-            MCPHostFile(host: .cursor, scope: .user, path: at(home, ".cursor/mcp.json"), format: standard),
-            MCPHostFile(host: .codex, scope: .user, path: at(codexHome, "config.toml"), format: .codexTOML),
-            MCPHostFile(
-                host: .opencode, scope: .user, path: at(home, ".config/opencode/opencode.json"),
-                format: .json(keyPath: ["mcp"], lenient: true, opencode: true)),
-            MCPHostFile(
-                host: .opencode, scope: .user, path: at(home, ".config/opencode/opencode.jsonc"),
-                format: .json(keyPath: ["mcp"], lenient: true, opencode: true)),
-            MCPHostFile(host: .gemini, scope: .user, path: at(home, ".gemini/settings.json"), format: standard),
-            MCPHostFile(
-                host: .antigravity, scope: .user, path: at(home, ".gemini/antigravity/mcp_config.json"), format: standard),
-            MCPHostFile(
-                host: .vscode, scope: .user, path: vscodeUser,
-                format: .json(keyPath: ["servers"], lenient: true, opencode: false)),
-            MCPHostFile(host: .windsurf, scope: .user, path: at(home, ".codeium/windsurf/mcp_config.json"), format: standard),
-            MCPHostFile(host: .muse, scope: .user, path: at(home, ".config/muse/settings.json"), format: standard),
-        ]
-        guard let project else { return files }
-        let projectPath = project.standardizedFileURL.path
-        let scope = MCPEntryScope.project(projectPath)
-        files += [
-            MCPHostFile(
-                host: .claudeCode, scope: scope, path: at(home, ".claude.json"),
-                format: .json(keyPath: ["projects", projectPath, "mcpServers"], lenient: false, opencode: false)),
-            MCPHostFile(host: .claudeCode, scope: scope, path: at(project, ".mcp.json"), format: standard),
-            MCPHostFile(host: .cursor, scope: scope, path: at(project, ".cursor/mcp.json"), format: standard),
-            MCPHostFile(
-                host: .vscode, scope: scope, path: at(project, ".vscode/mcp.json"),
-                format: .json(keyPath: ["servers"], lenient: true, opencode: false)),
-            MCPHostFile(
-                host: .opencode, scope: scope, path: at(project, "opencode.json"),
-                format: .json(keyPath: ["mcp"], lenient: true, opencode: true)),
-            MCPHostFile(host: .gemini, scope: scope, path: at(project, ".gemini/settings.json"), format: standard),
-        ]
+        let homePath = home.path
+        let codexHome = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true).path }
+        let projectPath = project?.standardizedFileURL.path
+        var files: [MCPHostFile] = []
+        for location in MCPHostConfigLocation.allCases {
+            guard let format = setupFormat(location), let host = MCPHost(rawValue: location.host),
+                  let path = location.path(home: homePath, codexHome: codexHome, project: projectPath)
+            else { continue }
+            var scope = MCPEntryScope.user
+            if case .project = location.anchor, let projectPath {
+                scope = .project(projectPath)
+                if location == .claudeCodeProject,
+                   let claudeJSON = MCPHostConfigLocation.claudeCodeUser.path(
+                       home: homePath, codexHome: codexHome, project: nil)
+                {
+                    files.append(MCPHostFile(
+                        host: .claudeCode, scope: scope, path: URL(fileURLWithPath: claudeJSON, isDirectory: false),
+                        format: .json(keyPath: ["projects", projectPath, "mcpServers"], lenient: false, opencode: false)))
+                }
+            }
+            files.append(MCPHostFile(
+                host: host, scope: scope, path: URL(fileURLWithPath: path, isDirectory: false), format: format))
+        }
         return files
+    }
+
+    /// Nil for read-only locations, which `rv mcp setup` never rewrites.
+    static func setupFormat(_ location: MCPHostConfigLocation) -> Format? {
+        let standard = Format.json(keyPath: ["mcpServers"], lenient: false, opencode: false)
+        switch location {
+        case .claudeCodeUser, .claudeDesktopUser, .cursorUser, .geminiUser, .antigravityUser, .windsurfUser,
+             .museUser, .claudeCodeProject, .cursorProject, .geminiProject:
+            return standard
+        case .codexUser:
+            return .codexTOML
+        case .opencodeUser, .opencodeUserJSONC, .opencodeProject:
+            return .json(keyPath: ["mcp"], lenient: true, opencode: true)
+        case .vscodeUser, .vscodeProject:
+            return .json(keyPath: ["servers"], lenient: true, opencode: false)
+        case .claudeCodeManagedMCP, .claudeCodeManagedSettings, .claudeCodeManagedSettingsDropIns,
+             .claudeCodePlugins:
+            return nil
+        }
     }
 }
 
@@ -231,14 +239,22 @@ public struct MCPInventory: Sendable, Equatable {
     /// Host config files that exist (read or not).
     public var filesSeen: [String]
 
+    /// Setup targets (`MCPHostFile.all`) first, then the read-only managed
+    /// and plugin sources. `managedDirectory` is Claude Code's system
+    /// directory; tests pass a temporary one.
     public static func discover(
         home: URL,
         project: URL?,
         environment: [String: String],
-        read: (URL) -> HostFile = MCPInventory.readFile
+        managedDirectory: String = MCPHostConfigPaths.claudeCodeManagedDirectory,
+        read: (URL) -> HostFile = MCPInventory.readFile,
+        list: (URL) -> [String] = MCPInventory.listDirectory
     ) -> MCPInventory {
         var inventory = MCPInventory(entries: [], problems: [], filesSeen: [])
-        for file in MCPHostFile.all(home: home, project: project, environment: environment) {
+        let readOnly = MCPReadOnlySources.files(
+            home: home, project: project, environment: environment, managedDirectory: managedDirectory,
+            read: read, list: list, problems: &inventory.problems)
+        for file in MCPHostFile.all(home: home, project: project, environment: environment) + readOnly {
             switch read(file.path) {
             case .missing:
                 continue
@@ -287,6 +303,11 @@ public struct MCPInventory: Sendable, Equatable {
         }
         guard count == bytes.count else { return .unreadable("could not be read") }
         return .data(Data(bytes))
+    }
+
+    /// Entry names of a directory; empty when it is missing or unreadable.
+    public static func listDirectory(_ url: URL) -> [String] {
+        (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
     }
 
     static func readFailure(_ code: Int32) -> String {
@@ -345,6 +366,32 @@ public struct MCPInventory: Sendable, Equatable {
                 return opencode
                     ? opencodeEntry(name: name, object: object, file: file)
                     : standardEntry(name: name, object: object, file: file)
+            })
+        case .pluginServers(let disabled), .pluginManifest(let disabled):
+            let root: JSONValue
+            do {
+                root = try JSONValue.parse(data, maximumDepth: 128)
+            } catch {
+                return problem("could not parse JSON")
+            }
+            let maps: [JSONObject]
+            if case .pluginManifest = file.format {
+                switch root["mcpServers"] {
+                case .object(let object): maps = [object]
+                case .array(let items): maps = items.compactMap(\.objectValue)
+                default: maps = []
+                }
+            } else {
+                maps = [root["mcpServers"]?.objectValue ?? root.objectValue].compactMap { $0 }
+            }
+            return .success(maps.flatMap { servers in
+                servers.entries.compactMap { name, value -> MCPHostEntry? in
+                    guard let object = value.objectValue,
+                          var entry = standardEntry(name: name, object: object, file: file)
+                    else { return nil }
+                    if disabled { entry.isDisabled = true }
+                    return entry
+                }
             })
         }
     }

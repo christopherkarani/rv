@@ -46,6 +46,9 @@ public struct MCPCallRecord: Sendable, Equatable {
         case ran(durationMilliseconds: Int, grant: Grant?)
         /// Allowed (or granted), then the upstream or rv failed before an answer.
         case interrupted(grant: Grant?)
+        /// Allowed (or granted) and about to go upstream. Written before the
+        /// call is forwarded; a call whose record cannot be written is refused.
+        case forwarding(grant: Grant?)
         /// Stopped for an approval nobody has answered yet.
         case awaiting(approvalID: String?)
         /// The prompt ended without a yes: the user refused, the prompt failed
@@ -78,7 +81,7 @@ public struct MCPCallRecord: Sendable, Equatable {
 
     public var approvalID: String? {
         switch outcome {
-        case .ran(_, let grant), .interrupted(let grant): grant?.approvalID
+        case .ran(_, let grant), .interrupted(let grant), .forwarding(let grant): grant?.approvalID
         case .awaiting(let id): id
         case .declined(let id): id
         case .notRun: nil
@@ -87,7 +90,7 @@ public struct MCPCallRecord: Sendable, Equatable {
 
     public var approvedVia: MCPApprovalChannel? {
         switch outcome {
-        case .ran(_, let grant), .interrupted(let grant): grant?.channel
+        case .ran(_, let grant), .interrupted(let grant), .forwarding(let grant): grant?.channel
         case .awaiting, .declined, .notRun: nil
         }
     }
@@ -159,6 +162,9 @@ public struct MCPGatewayCore {
         var seenCursors: Set<String> = []
         /// Pages fetched per server; capped so a cycling upstream cannot page forever.
         var pages: [String: Int] = [:]
+        /// Each server's listed tools, held until its listing ends so they
+        /// are checked against its pins as one listing.
+        var listed: [String: [JSONValue]] = [:]
     }
 
     /// Pagination bounds for one `tools/list` fanout.
@@ -183,6 +189,9 @@ public struct MCPGatewayCore {
         var params: JSONObject
         var arguments: JSONValue
         var keys: [String]
+        /// The definition the prompt was shown for. Accept runs only while
+        /// the tool is still listed with it.
+        var binding: MCPToolBinding
         /// The elicitation text the person was shown. Accept runs only when
         /// this text contains the full arguments.
         var shown: String
@@ -198,14 +207,59 @@ public struct MCPGatewayCore {
     static let maximumElicitationArguments = 4096
     /// An unanswered prompt older than this fails closed on the next message.
     static let heldLifetime: TimeInterval = 300
+    /// `mcp.tool.changed` events per server per session; past this one
+    /// event says the rest are suppressed. Those tools still ask and are
+    /// still queued for `rv mcp trust`, within the queue's budget.
+    static let maximumChangeEvents = 64
+    /// Longest progress `message` passed to the client, in UTF-8 bytes.
+    static let maximumProgressMessageBytes = 512
+
+    /// Upstream tool names rv lists and routes. Any other name (prose,
+    /// controls, separators, over 64 bytes) is neither listed nor called.
+    static func servesToolName(_ name: String) -> Bool {
+        let bytes = Array(name.utf8)
+        guard (1...64).contains(bytes.count) else { return false }
+        return bytes.allSatisfy { byte in
+            switch byte {
+            case UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "a")...UInt8(ascii: "z"),
+                UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "_"), UInt8(ascii: "."), UInt8(ascii: "-"):
+                true
+            default:
+                false
+            }
+        }
+    }
 
     let configuration: MCPConfiguration
     var upstreams: [String: Upstream]
     let order: [String]
     let approvals: MCPApprovalGate
+    let pinning: MCPToolPinning
+    /// Writes the `mcp.call` record for a call about to go upstream; false
+    /// when it could not be written, and the call is then refused.
+    let recordForward: @Sendable (MCPCallRecord) -> Bool
     let clock: () -> Date
     let version: String
 
+    /// server → tool → definition hash the user trusted; nil when the pin
+    /// store could not be read or verified. The gateway never adds pins.
+    let pins: [String: [String: String]]?
+    /// server → tool → hash of the definition this session last listed.
+    var observed: [String: [String: String]] = [:]
+    /// `server\0tool` listed this session with a definition that differs
+    /// from its pin or from another listing. Sticky: such a tool is never
+    /// pinned again this session, whatever it lists next.
+    var tainted: Set<String> = []
+    /// `server\0tool\0hash` already audited as not pinned.
+    var reportedChanges: Set<String> = []
+    /// Servers already reported on stderr as having untrusted tools.
+    var untrustedNoticed: Set<String> = []
+    /// Servers already reported on stderr as listing names rv does not serve.
+    var unservedNoticed: Set<String> = []
+    /// server → `mcp.tool.changed` events written this session.
+    var changeEvents: [String: Int] = [:]
+    /// pending call id → the `progressToken` the client sent with it.
+    var progressTokens: [Int: JSONValue] = [:]
     var phases: [String: UpstreamPhase] = [:]
     var pending: [Int: Pending] = [:]
     var fanouts: [Int: ListFanout] = [:]
@@ -218,6 +272,8 @@ public struct MCPGatewayCore {
         configuration: MCPConfiguration,
         upstreams: [Upstream],
         approvals: MCPApprovalGate,
+        pinning: MCPToolPinning,
+        recordForward: @escaping @Sendable (MCPCallRecord) -> Bool,
         version: String = "1",
         clock: @escaping () -> Date = { Date() }
     ) {
@@ -225,6 +281,9 @@ public struct MCPGatewayCore {
         self.upstreams = Dictionary(upstreams.map { ($0.definition.name, $0) }, uniquingKeysWith: { first, _ in first })
         self.order = upstreams.map(\.definition.name)
         self.approvals = approvals
+        self.pinning = pinning
+        self.pins = pinning.pins
+        self.recordForward = recordForward
         self.clock = clock
         self.version = version
     }
@@ -373,7 +432,8 @@ public struct MCPGatewayCore {
                 ]
             }
             return outOfBand(
-                client: call.client, server: call.server, tool: call.tool, arguments: call.arguments, keys: call.keys)
+                client: call.client, server: call.server, tool: call.tool, arguments: call.arguments, keys: call.keys,
+                binding: call.binding)
         }
         let accepted = Self.elicitationAccepts(message["result"])
         guard accepted else {
@@ -396,11 +456,43 @@ public struct MCPGatewayCore {
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
         }
-        let approval = Approval(id: key, channel: .elicitation)
-        let upstreamID = allocate(.call(
-            client: call.client, server: call.server, tool: call.tool, keys: call.keys, approval: approval, started: clock()))
-        return [.toUpstream(server: call.server, message: Self.request(
-            id: .int(upstreamID), method: "tools/call", params: .object(call.params)))]
+        guard toolBinding(server: call.server, tool: call.tool) == call.binding else {
+            let reason = "the tool definition changed while the approval prompt was shown"
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys, isError: true,
+                    reason: reason, outcome: .declined(approvalID: key))),
+                .toClient(Self.toolError(
+                    id: call.client,
+                    "rv refused \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)): \(reason). The call was not run.")),
+            ]
+        }
+        return forward(
+            client: call.client, server: call.server, tool: call.tool, keys: call.keys,
+            approval: Approval(id: key, channel: .elicitation), params: call.params)
+    }
+
+    /// Records the call, then forwards it. A call whose record cannot be
+    /// written is refused: nothing reaches an upstream unaudited.
+    mutating func forward(
+        client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, params: JSONObject
+    ) -> [MCPGatewayOutput] {
+        let record = MCPCallRecord(
+            server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys, isError: false,
+            outcome: .forwarding(grant: approval?.grant))
+        guard recordForward(record) else {
+            let shownServer = MCPDisplayedText.field(server)
+            let shownTool = MCPDisplayedText.field(tool)
+            return [
+                .log("could not write the audit record for \(shownServer) tool \(shownTool); the call was not forwarded"),
+                .toClient(Self.error(
+                    id: client, code: -32603,
+                    message: "rv could not write the audit record for \(shownServer) tool \(shownTool); the call was not run")),
+            ]
+        }
+        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
+        if let token = params["_meta"]?["progressToken"] { progressTokens[id] = token }
+        return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(params)))]
     }
 
 
@@ -415,6 +507,7 @@ public struct MCPGatewayCore {
         for (id, entry) in pending {
             guard case .call(let client, let server, _, _, _, _) = entry, client == target else { continue }
             pending[id] = .cancelled
+            progressTokens[id] = nil
             var forwarded = JSONObject()
             forwarded["requestId"] = .int(id)
             if let reason = params?["reason"] { forwarded["reason"] = reason }
@@ -491,13 +584,27 @@ public struct MCPGatewayCore {
             arguments = rawArguments
         }
         let keys = arguments.objectValue?.keys.sorted() ?? []
-        let decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
+        var decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
+        // A tool not listed this session only exactly as the user trusted
+        // it (changed, new, or unverifiable) is never called under `allow`.
+        let binding = toolBinding(server: server, tool: tool)
+        if decision == .allow, binding.pinStatus != .pinned { decision = .ask }
         if decision == .deny {
             let reason = "rv policy denies \(server) tool \(tool)"
             let shown = "rv policy denies \(MCPDisplayedText.field(server)) tool \(MCPDisplayedText.field(tool))"
             return [
                 .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true, reason: reason, outcome: .notRun)),
                 .toClient(Self.toolError(id: client, "\(shown). Do not retry; ask the user if you need it.")),
+            ]
+        }
+        // rv never lists such a name, so no call to it is meant for a tool
+        // rv serves; refusing it also keeps routing on the raw name.
+        guard Self.servesToolName(tool) else {
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                    reason: "rv does not serve tools with this name", outcome: .notRun)),
+                .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
         guard phases[server] == .ready else {
@@ -517,7 +624,7 @@ public struct MCPGatewayCore {
         var outputs: [MCPGatewayOutput] = []
         if decision == .ask {
             let hash = arguments.canonicalHash
-            switch approvals.consumeGrant(server, tool, hash, keys) {
+            switch approvals.consumeGrant(server, tool, hash, keys, binding) {
             case .granted(let id):
                 approval = Approval(id: id, channel: .local)
             case .forged(let id):
@@ -533,23 +640,26 @@ public struct MCPGatewayCore {
                 break
             }
             if approval == nil {
-                return outputs + askUser(client: client, server: server, tool: tool, params: forwarded, arguments: arguments, keys: keys)
+                return outputs + askUser(
+                    client: client, server: server, tool: tool, params: forwarded, arguments: arguments, keys: keys,
+                    binding: binding)
             }
         }
-        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
-        return outputs + [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(forwarded)))]
+        return outputs + forward(client: client, server: server, tool: tool, keys: keys, approval: approval, params: forwarded)
     }
 
     /// Elicitation when the client can show it; otherwise a pending request
     /// the user approves out of band with `rv mcp approve`.
     mutating func askUser(
-        client: JSONValue, server: String, tool: String, params: JSONObject, arguments: JSONValue, keys: [String]
+        client: JSONValue, server: String, tool: String, params: JSONObject, arguments: JSONValue, keys: [String],
+        binding: MCPToolBinding
     ) -> [MCPGatewayOutput] {
         if clientElicits, held.count < Self.maximumHeld {
             guard arguments.canonicalText.count <= Self.maximumElicitationArguments else {
                 return argumentsNotShown(client: client, server: server, tool: tool, keys: keys)
             }
-            let message = Self.elicitationMessage(server: server, tool: tool, arguments: arguments)
+            let message = Self.elicitationMessage(
+                server: server, tool: tool, arguments: arguments, note: Self.pinNote(binding.pinStatus))
             guard Self.elicitationCovers(arguments, shown: message) else {
                 return argumentsNotShown(client: client, server: server, tool: tool, keys: keys)
             }
@@ -557,7 +667,7 @@ public struct MCPGatewayCore {
             nextID += 1
             held[key] = HeldCall(
                 client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys,
-                shown: message, heldAt: clock())
+                binding: binding, shown: message, heldAt: clock())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: false,
@@ -578,13 +688,14 @@ public struct MCPGatewayCore {
                 ]))),
             ]
         }
-        return outOfBand(client: client, server: server, tool: tool, arguments: arguments, keys: keys)
+        return outOfBand(client: client, server: server, tool: tool, arguments: arguments, keys: keys, binding: binding)
     }
 
     func outOfBand(
-        client: JSONValue, server: String, tool: String, arguments: JSONValue, keys: [String]
+        client: JSONValue, server: String, tool: String, arguments: JSONValue, keys: [String], binding: MCPToolBinding
     ) -> [MCPGatewayOutput] {
-        guard let ticket = approvals.request(server, tool, arguments.canonicalHash, keys) else {
+        let note = Self.pinNote(binding.pinStatus)
+        guard let ticket = approvals.request(server, tool, arguments.canonicalHash, keys, binding) else {
             let reason = "rv could not record an approval request"
             return [
                 .audit(MCPCallRecord(server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: true, reason: reason, outcome: .notRun)),
@@ -595,6 +706,7 @@ public struct MCPGatewayCore {
         let shownTool = MCPDisplayedText.field(tool)
         let shownID = MCPDisplayedText.field(ticket.id)
         let text = "rv paused this call: \(shownServer) tool \(shownTool) needs the user's approval. "
+            + (note.map { $0 + " " } ?? "")
             + "Ask the user to run `rv mcp approve \(shownID)` in their own terminal "
             + "(or `rv mcp approve \(shownID) --always`), then call the tool again with the same arguments."
         var outputs: [MCPGatewayOutput] = [
@@ -611,11 +723,53 @@ public struct MCPGatewayCore {
         return outputs
     }
 
-    static func elicitationMessage(server: String, tool: String, arguments: JSONValue) -> String {
+    static func elicitationMessage(server: String, tool: String, arguments: JSONValue, note: String? = nil) -> String {
         let shownServer = MCPDisplayedText.field(server)
         let shownTool = MCPDisplayedText.field(tool)
         let shownArguments = MCPDisplayedText.field(arguments.canonicalText)
-        return "rv: allow MCP server \(shownServer) to run tool \(shownTool)?\nArguments: \(shownArguments)"
+        let warning = note.map { "\n" + $0 } ?? ""
+        return "rv: allow MCP server \(shownServer) to run tool \(shownTool)?\(warning)\nArguments: \(shownArguments)"
+    }
+
+    /// Why a tool the policy allows still asks, or nil when it is pinned.
+    /// rv's own text: it never contains the `\nArguments: ` marker.
+    static func pinNote(_ status: MCPToolPinStatus) -> String? {
+        switch status {
+        case .pinned: nil
+        case .changed:
+            "Its definition changed since the user trusted it; `rv mcp trust` reviews and pins it."
+        case .new: "The user has not trusted its definition yet; `rv mcp trust` reviews and pins it."
+        case .unverified: "rv could not check it against the tool definitions the user trusted."
+        }
+    }
+
+    /// The whole listed description of a tool that is not pinned. Such a
+    /// tool is listed with only its name, this marker, an empty object
+    /// schema and the four boolean hints (`exposedTool`).
+    static func pinMarker(_ status: MCPToolPinStatus) -> String? {
+        let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]"
+        return switch status {
+        case .pinned: nil
+        case .changed: "[rv: this tool changed since the user trusted it; " + hidden
+        case .new: "[rv: this tool is not yet trusted by the user; " + hidden
+        case .unverified: "[rv: rv could not check this tool against the tools the user trusted; " + hidden
+        }
+    }
+
+    /// The tool against the pins. Pinned only when every listing this
+    /// session matched its pin. A tool not listed this session cannot be
+    /// checked, so it is unverified.
+    func pinStatus(server: String, tool: String) -> MCPToolPinStatus {
+        guard pinning.enforced else { return .pinned }
+        guard let pins, let seen = observed[server]?[tool] else { return .unverified }
+        guard let pinned = pins[server]?[tool] else { return .new }
+        guard tainted.contains(server + "\0" + tool) == false, pinned == seen else { return .changed }
+        return .pinned
+    }
+
+    /// What an approval for this tool is bound to right now.
+    func toolBinding(server: String, tool: String) -> MCPToolBinding {
+        MCPToolBinding(definitionHash: observed[server]?[tool] ?? "", pinStatus: pinStatus(server: server, tool: tool))
     }
 
     /// True only when `shown` carries the arguments that would run, in full.
@@ -687,7 +841,7 @@ public struct MCPGatewayCore {
             case "notifications/tools/list_changed":
                 return [.toClient(Self.notification(method, nil))]
             case "notifications/progress":
-                return [.toClient(displayedProgress(scrub(message, for: server)))]
+                return progress(from: server, message["params"]).map { [.toClient($0)] } ?? []
             default:
                 return []
             }
@@ -700,6 +854,7 @@ public struct MCPGatewayCore {
             return [.log("MCP server \(server) answered request \(id) owned by \(owner); ignoring")]
         }
         pending.removeValue(forKey: id)
+        progressTokens[id] = nil
         switch entry {
         case .initialize:
             if message["result"]?.objectValue != nil {
@@ -709,21 +864,34 @@ public struct MCPGatewayCore {
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
             let reason = MCPDisplayedText.field(scrubText(raw, for: server))
-            phases[server] = .failed(reason)
+            // The upstream's text goes to stderr only: a server's error is
+            // not a channel to the client or the model.
+            phases[server] = .failed("it failed to initialize")
             return [.log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)")] + releaseWaiting()
         case .list(let fanout, _):
             return listPage(fanout: fanout, server: server, message: message)
         case .call(let client, _, let tool, let keys, let approval, let started):
-            let isError = message["error"] != nil || message["result"]?["isError"]?.boolValue == true
-            var reply = clientVisibleReply(message, server: server).objectValue ?? JSONObject()
-            reply["id"] = client
+            // The reply is rebuilt from the upstream's result or error;
+            // no other field of its message reaches the client.
+            let visible = clientVisibleReply(message, server: server)
+            let reply: JSONValue
+            if let result = visible["result"] {
+                reply = Self.result(id: client, result)
+            } else if let error = visible["error"] {
+                reply = .object(["jsonrpc": .string("2.0"), "id": client, "error": error])
+            } else {
+                reply = Self.error(
+                    id: client, code: -32603,
+                    message: "MCP server \(MCPDisplayedText.field(server)) answered with neither a result nor an error")
+            }
+            let isError = message["result"] == nil || message["result"]?["isError"]?.boolValue == true
             let duration = Int((clock().timeIntervalSince(started) * 1000).rounded())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
                     isError: isError,
                     outcome: .ran(durationMilliseconds: max(0, duration), grant: approval?.grant))),
-                .toClient(.object(reply)),
+                .toClient(reply),
             ]
         case .cancelled:
             return []
@@ -733,11 +901,12 @@ public struct MCPGatewayCore {
     mutating func listPage(fanout: Int, server: String, message: JSONValue) -> [MCPGatewayOutput] {
         guard var state = fanouts[fanout] else { return [] }
         var outputs: [MCPGatewayOutput] = []
-        if let upstream = upstreams[server], let tools = message["result"]?["tools"]?.arrayValue {
-            state.tools += tools.compactMap { exposedTool($0, upstream: upstream) }
+        if upstreams[server] != nil, let tools = message["result"]?["tools"]?.arrayValue {
+            state.listed[server, default: []] += tools
             state.pages[server, default: 0] += 1
-            if state.tools.count > Self.maximumListedTools {
-                state.tools = Array(state.tools.prefix(Self.maximumListedTools))
+            let room = max(0, Self.maximumListedTools - state.tools.count)
+            if state.listed[server, default: []].count > room {
+                state.listed[server] = Array(state.listed[server, default: []].prefix(room))
                 outputs.append(.log("MCP tool listing exceeded \(Self.maximumListedTools) tools; truncating"))
             } else if let cursor = message["result"]?["nextCursor"]?.stringValue, cursor.isEmpty == false {
                 let key = server + "\0" + cursor
@@ -754,6 +923,11 @@ public struct MCPGatewayCore {
         } else {
             outputs.append(.log("MCP server \(server) did not list tools"))
         }
+        if let upstream = upstreams[server] {
+            let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
+            state.tools += settled.tools
+            outputs += settled.outputs
+        }
         state.remaining.remove(server)
         guard state.remaining.isEmpty else {
             fanouts[fanout] = state
@@ -769,6 +943,94 @@ public struct MCPGatewayCore {
             ]
         }
         return outputs + [.toClient(Self.result(id: state.client, .object(["tools": .array(state.tools)])))]
+    }
+
+    /// One server's listing against its pins. The gateway never pins: a
+    /// tool with no pin, or listed this session with a definition other
+    /// than its pin or than an earlier listing, stays unpinned for the rest
+    /// of the session. Each such tool is audited once per definition (at
+    /// most `maximumChangeEvents` per server) and kept in the review queue
+    /// for `rv mcp trust`. A tool whose name `servesToolName` rejects is
+    /// neither listed, observed nor queued; stderr says so once per server.
+    mutating func settleListing(
+        _ listed: [JSONValue], upstream: Upstream
+    ) -> (tools: [JSONValue], outputs: [MCPGatewayOutput]) {
+        let server = upstream.definition.name
+        let shownServer = MCPDisplayedText.field(server)
+        var outputs: [MCPGatewayOutput] = []
+        let unserved = listed.compactMap { scrub($0, for: server)["name"]?.stringValue }.filter { Self.servesToolName($0) == false }
+        if let first = unserved.first, unservedNoticed.insert(server).inserted {
+            let shown = MCPDisplayedText.field(MCPCallRecord.bounded(first, 64))
+            outputs.append(.log(
+                "MCP server \(shownServer) lists \(unserved.count) tool(s) whose names rv does not serve "
+                    + "(only A-Z a-z 0-9 _ . -, at most 64 bytes), such as \"\(shown)\"; they are hidden"))
+        }
+        if pinning.enforced {
+            var seen: [String: String] = [:]
+            var definitions: [String: JSONValue] = [:]
+            for tool in listed {
+                guard let definition = MCPToolPinStore.definition(of: scrub(tool, for: server)),
+                    let name = definition["name"]?.stringValue, Self.servesToolName(name)
+                else { continue }
+                let hash = MCPToolPinStore.hash(definition)
+                if let earlier = seen[name] ?? observed[server]?[name], earlier != hash {
+                    tainted.insert(server + "\0" + name)
+                }
+                if let pinned = pins?[server]?[name], pinned != hash { tainted.insert(server + "\0" + name) }
+                seen[name] = hash
+                definitions[name] = definition
+            }
+            observed[server, default: [:]].merge(seen) { _, new in new }
+            var unpinned: [String: JSONValue] = [:]
+            var untrusted = 0
+            for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
+                let status = pinStatus(server: server, tool: name)
+                guard status != .pinned else { continue }
+                untrusted += 1
+                let hash = seen[name] ?? ""
+                guard reportedChanges.insert(server + "\0" + name + "\0" + hash).inserted else { continue }
+                // The pinned definition itself, listed again after another
+                // one, asks for this session but has nothing to review.
+                if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                let written = changeEvents[server, default: 0]
+                guard written <= Self.maximumChangeEvents else { continue }
+                changeEvents[server] = written + 1
+                if written == Self.maximumChangeEvents {
+                    outputs.append(.event(AuditEvent(
+                        time: clock(), kind: .mcpToolChanged, decision: .pending, subject: server,
+                        reason: "further MCP tool definition changes on this server are suppressed this session; "
+                            + "they still need approval until `rv mcp trust`",
+                        source: "mcp-gateway", detail: ["server": server, "suppressed": "true"])))
+                    continue
+                }
+                outputs.append(.event(AuditEvent(
+                    time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
+                    reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
+                    source: "mcp-gateway",
+                    detail: ["server": server, "tool": name, "status": status.rawValue, "sha256": hash])))
+            }
+            if untrusted > 0, untrustedNoticed.insert(server).inserted {
+                outputs.append(.log(untrusted == 1
+                    ? "1 tool on \(shownServer) is not yet trusted; run `rv mcp trust`"
+                    : "\(untrusted) tools on \(shownServer) are not yet trusted; run `rv mcp trust`"))
+            }
+            if unpinned.isEmpty == false {
+                switch pinning.recordChanged(server, unpinned) {
+                case .recorded:
+                    break
+                case .dropped(let names):
+                    // Not kept, so not reported: a later listing offers them again.
+                    for name in names { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
+                    outputs.append(.log(
+                        "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                case .failed:
+                    for name in unpinned.keys { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
+                    outputs.append(.log(
+                        "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                }
+            }
+        }
+        return (listed.compactMap { exposedTool($0, upstream: upstream) }, outputs)
     }
 
     /// Tools whose name or description holds every term; name matches first.
@@ -827,13 +1089,21 @@ public struct MCPGatewayCore {
         ]),
     ]
 
-    /// Denied tools are hidden; `ask` tools say so in their description, and
-    /// so do tools whose arguments can change the decision.
-    /// Routing uses the raw name. Every other string the client can read,
-    /// including title and schemas, is escaped once.
+    /// Denied tools are hidden, and so is every tool whose name
+    /// `servesToolName` rejects. `ask` tools say so in their description,
+    /// and so do tools whose arguments can change the decision. A tool that
+    /// is not pinned (changed, new, or unverifiable) always asks and is
+    /// listed with no upstream string but its name: its description is rv's
+    /// marker, its input schema `{"type":"object"}`, it has no output
+    /// schema, and its annotations are only `withheldHints` with boolean
+    /// values. For a pinned tool the prose fields (`description`, `title`,
+    /// `annotations.title`, and every `description`/`title` string in its
+    /// schemas) keep line breaks and backslashes and lose only hiding
+    /// scalars (`MCPDisplayedText.description`). Everything else is
+    /// forwarded as the upstream sent it, after secret scrubbing.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
         let scrubbed = scrub(tool, for: upstream.definition.name)
-        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue else {
+        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue, Self.servesToolName(name) else {
             return nil
         }
         let rawDescription = object["description"]?.stringValue
@@ -851,45 +1121,112 @@ public struct MCPGatewayCore {
             guard route(exposedName)?.server == upstream.definition.name else { return nil }
             listedName = exposedName
         }
-        guard var walked = displayedContent(.object(object)).objectValue else { return nil }
+        var walked = object
+        if let marker = Self.pinMarker(pinStatus(server: upstream.definition.name, tool: name)) {
+            // No upstream string but the (conforming) name: an empty object
+            // schema, so the arguments an approved call forwards are the
+            // client's own, and only the four boolean hints.
+            var withheld = JSONObject()
+            withheld["name"] = .string(listedName)
+            withheld["description"] = .string(marker)
+            withheld["inputSchema"] = .object(["type": .string("object")])
+            if let annotations = object["annotations"]?.objectValue {
+                var flags = JSONObject()
+                for key in Self.withheldHints {
+                    if let value = annotations[key], value.boolValue != nil { flags[key] = value }
+                }
+                if flags.isEmpty == false { withheld["annotations"] = .object(flags) }
+            }
+            return .object(withheld)
+        }
+        let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
+        if rawDescription != nil { walked["description"] = .string(shownDescription) }
+        if let title = object["title"]?.stringValue { walked["title"] = .string(MCPDisplayedText.description(title)) }
+        if var annotations = object["annotations"]?.objectValue, let title = annotations["title"]?.stringValue {
+            annotations["title"] = .string(MCPDisplayedText.description(title))
+            walked["annotations"] = .object(annotations)
+        }
+        for key in ["inputSchema", "outputSchema"] {
+            if let schema = object[key] { walked[key] = Self.schemaProse(schema) }
+        }
         if configuration.decision(server: upstream.definition, tool: name) == .ask {
-            walked["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(rawDescription ?? ""))
+            walked["description"] = .string("[rv: needs the user's approval] " + shownDescription)
         } else if configuration.hasArgumentRules(server: upstream.definition, tool: name) {
             walked["description"] = .string(
-                "[rv: some arguments need the user's approval or are refused] " + MCPDisplayedText.field(rawDescription ?? ""))
+                "[rv: some arguments need the user's approval or are refused] " + shownDescription)
         }
         walked["name"] = .string(MCPDisplayedText.field(listedName))
         return .object(walked)
     }
 
-    /// Every string in a progress notification, including the token.
-    func displayedProgress(_ message: JSONValue) -> JSONValue {
-        displayedContent(message)
-    }
+    /// The only annotations a tool that is not pinned keeps, and only with
+    /// boolean values: the keys are rv's, not the upstream's.
+    static let withheldHints = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]
 
-    /// Every string in a scrubbed tool result, including a successful call,
-    /// nested resource text, and error data.
-    func clientVisibleReply(_ message: JSONValue, server: String) -> JSONValue {
-        displayedContent(scrub(message, for: server))
-    }
+    /// Keywords whose values are data, kept byte-exact.
+    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]
+    /// Keywords whose members are named subschemas; a member may be
+    /// called `description` or `title`.
+    static let schemaMapKeywords: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
 
-    /// Escape every string the client would display. Object keys are escaped
-    /// too. Each raw string is escaped once.
-    func displayedContent(_ content: JSONValue) -> JSONValue {
-        switch content {
-        case .string(let text):
-            return .string(MCPDisplayedText.field(text))
+    /// A pinned tool's JSON Schema with every `description`/`title` string
+    /// shown with hiding scalars neutralised. `pattern` and the value
+    /// keywords are left byte-exact.
+    static func schemaProse(_ schema: JSONValue) -> JSONValue {
+        switch schema {
         case .array(let items):
-            return .array(items.map(displayedContent))
+            return .array(items.map { schemaProse($0) })
         case .object(let object):
             var copy = JSONObject()
             for (key, value) in object.entries {
-                copy[MCPDisplayedText.field(key)] = displayedContent(value)
+                if schemaValueKeywords.contains(key) {
+                    copy[key] = value
+                } else if key == "description" || key == "title", let text = value.stringValue {
+                    copy[key] = .string(MCPDisplayedText.description(text))
+                } else if schemaMapKeywords.contains(key), let members = value.objectValue {
+                    var mapped = JSONObject()
+                    for (member, subschema) in members.entries { mapped[member] = schemaProse(subschema) }
+                    copy[key] = .object(mapped)
+                } else {
+                    copy[key] = schemaProse(value)
+                }
             }
             return .object(copy)
         default:
-            return content
+            return schema
         }
+    }
+
+    /// A progress notification for a call this upstream is running, rebuilt
+    /// from the fields the protocol defines: the client's own token, the
+    /// numbers, and a bounded, scrubbed, display-escaped `message`. Nil
+    /// (dropped) when no pending call from `server` carries the token.
+    func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
+        func runs(_ id: Int) -> Bool {
+            guard case .call(_, let owner, _, _, _, _)? = pending[id] else { return false }
+            return owner == server
+        }
+        guard let token = params?["progressToken"],
+            progressTokens.contains(where: { $0.value == token && runs($0.key) }),
+            let done = params?["progress"], case .number = done
+        else { return nil }
+        var rebuilt = JSONObject()
+        rebuilt["progressToken"] = token
+        rebuilt["progress"] = done
+        if let total = params?["total"], case .number = total { rebuilt["total"] = total }
+        if let text = params?["message"]?.stringValue {
+            rebuilt["message"] = .string(MCPCallRecord.bounded(
+                MCPDisplayedText.field(scrubText(text, for: server)), Self.maximumProgressMessageBytes))
+        }
+        return Self.notification("notifications/progress", .object(rebuilt))
+    }
+
+    /// A tool result or upstream error, scrubbed of secrets and otherwise
+    /// exactly as the upstream sent it: file contents, code, and regexes
+    /// keep their newlines and backslashes. JSON escapes every control,
+    /// separator, and format scalar on the wire (`JSONValue.escapedContent`).
+    func clientVisibleReply(_ message: JSONValue, server: String) -> JSONValue {
+        scrub(message, for: server)
     }
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {
@@ -907,6 +1244,7 @@ public struct MCPGatewayCore {
                 outputs += listPage(fanout: fanout, server: server, message: .null)
             case .call(let client, let owner, let tool, let keys, let approval, _) where owner == server:
                 pending[id] = nil
+                progressTokens[id] = nil
                 outputs.append(.audit(MCPCallRecord(
                     server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
                     isError: true, reason: "upstream exited", outcome: .interrupted(grant: approval?.grant))))
@@ -1029,6 +1367,12 @@ public struct MCPGatewayCore {
 }
 
 extension MCPCallRecord {
+    /// Bounds on what one `mcp.call` event carries from the client.
+    public static let maximumAuditedKeys = 64
+    public static let maximumAuditedKeyBytes = 256
+    public static let maximumAuditedSubjectBytes = 512
+    public static let maximumAuditedReasonBytes = 1024
+
     /// The unified `mcp.call` audit event. An `ask` call that was granted is
     /// `allowed`, even if it then failed; one still waiting on an approval is
     /// `pending`; one refused, by the user or by rv, is `denied`.
@@ -1039,23 +1383,44 @@ extension MCPCallRecord {
         case .deny: audited = .denied
         case .ask:
             switch outcome {
-            case .ran, .interrupted: audited = .allowed
+            case .ran, .interrupted, .forwarding: audited = .allowed
             case .awaiting: audited = .pending
             case .declined, .notRun: audited = .denied
             }
         }
+        // The client chooses the tool name and the argument names, so both
+        // are bounded: one call is one audit line of bounded size.
+        let keys = argumentKeys.prefix(Self.maximumAuditedKeys).map { Self.bounded($0, Self.maximumAuditedKeyBytes) }
         var detail = [
-            "server": server,
-            "tool": tool,
+            "server": Self.bounded(server, Self.maximumAuditedSubjectBytes),
+            "tool": Self.bounded(tool, Self.maximumAuditedSubjectBytes),
             "policy": decision.rawValue,
-            "argumentKeys": argumentKeys.joined(separator: ","),
+            "argumentKeys": keys.joined(separator: ","),
             "isError": isError ? "true" : "false",
         ]
-        if let approvalID { detail["approval"] = approvalID }
+        if keys != Array(argumentKeys) { detail["argumentKeysTruncated"] = "true" }
+        if let approvalID { detail["approval"] = Self.bounded(approvalID, Self.maximumAuditedKeyBytes) }
         if let approvedVia { detail["approvedVia"] = approvedVia.rawValue }
         if let durationMilliseconds { detail["durationMs"] = String(durationMilliseconds) }
+        if case .forwarding = outcome { detail["stage"] = "forward" }
         return AuditEvent(
-            time: time, kind: .mcpCall, decision: audited, subject: "\(server)/\(tool)", reason: reason,
+            time: time, kind: .mcpCall, decision: audited,
+            subject: Self.bounded("\(server)/\(tool)", Self.maximumAuditedSubjectBytes),
+            reason: reason.map { Self.bounded($0, Self.maximumAuditedReasonBytes) },
             source: "mcp-gateway", detail: detail)
+    }
+
+    /// The longest prefix of whole scalars that fits in `bytes` UTF-8 bytes.
+    static func bounded(_ text: String, _ bytes: Int) -> String {
+        guard text.utf8.count > bytes else { return text }
+        var kept = String.UnicodeScalarView()
+        var used = 0
+        for scalar in text.unicodeScalars {
+            let size = String(scalar).utf8.count
+            guard used + size <= bytes else { break }
+            kept.append(scalar)
+            used += size
+        }
+        return String(kept)
     }
 }

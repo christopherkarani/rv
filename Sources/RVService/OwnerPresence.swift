@@ -64,11 +64,18 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         let onWaitThread = onWaitThread
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                Thread.detachNewThread {
+                // The thread names itself only once `start` has returned.
+                // Foundation on Linux drops a name a thread gives itself
+                // before that, and one given to a thread not yet started.
+                let started = DispatchSemaphore(value: 0)
+                let thread = Thread {
+                    started.wait()
                     Thread.current.name = Self.waitThreadName
                     onWaitThread?()
                     continuation.resume(returning: Self.runHelper(helper, user: user, payload: payload, run: run))
                 }
+                thread.start()
+                started.signal()
             }
         } onCancel: {
             run.cancel()

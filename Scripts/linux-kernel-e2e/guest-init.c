@@ -8,8 +8,8 @@
  * on its own libraries rather than on the boundary under test.
  *
  * The same binary is the inner probe: `probe OP ARGS...` does one
- * filesystem operation and exits 0 on success or with errno (capped below
- * the trampoline's reserved 125/126). The inner runs from a copy inside the
+ * operation (a file, a socket, a signal, an ioctl) and exits 0 on success
+ * or with errno (capped below the trampoline's reserved 125/126). The inner runs from a copy inside the
  * workspace: Landlock needs READ_FILE to exec, and rv grants that only
  * beneath the workspace (no system read-only layer yet), so a binary
  * outside it cannot be exec'd at all. `exec-outside-workspace-denied` pins
@@ -20,17 +20,25 @@
  * cannot silently test a different regime than it claims.
  */
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/ioctl.h>
 #include <sys/reboot.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <termios.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
@@ -47,6 +55,19 @@
 #define ROOT "/e2e"
 #define WORKSPACE ROOT "/workspace"
 #define OUTSIDE ROOT "/outside"
+#define SCRATCH ROOT "/scratch"
+#define UNIX_SOCKET OUTSIDE "/socket"
+#define DATAGRAM_SOCKET OUTSIDE "/datagram"
+#define TEMP ROOT "/temp"
+#define TEMP_SOCKET TEMP "/socket"
+#define SCRATCH_SOCKET SCRATCH "/socket"
+#define NESTED TEMP "/own"
+#define NESTED_SOCKET NESTED "/socket"
+#define ABSTRACT_SOCKET "rv-kernel-e2e"
+/* What run() returns for a child a signal killed, plus the signal. */
+#define KILLED_BY 256
+/* A second address of this guest, on the loopback device but not in 127/8. */
+#define BEYOND_ADDRESS "10.99.0.1"
 #define ESTABLISH_FAILED 125
 #define EXEC_FAILED 126
 #define INHERITED_FD 7
@@ -99,6 +120,132 @@ static int probe(int argc, char **argv) {
     if (strcmp(op, "nnp") == 0) {
         errno = EPERM;
         return probe_exit(prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1);
+    }
+    if (strcmp(op, "tcp") == 0 || strcmp(op, "udp") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        if (strcmp(op, "tcp") == 0) {
+            fd = socket(AF_INET, SOCK_STREAM, 0);
+            return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+        }
+        fd = socket(AF_INET, SOCK_DGRAM, 0);
+        return probe_exit(fd >= 0
+            && sendto(fd, "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    if (strcmp(op, "unix") == 0 || strcmp(op, "abstract") == 0) {
+        struct sockaddr_un address;
+        socklen_t length;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        if (strcmp(op, "unix") == 0) {
+            strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+            length = sizeof(address);
+        } else {
+            strncpy(address.sun_path + 1, argv[3], sizeof(address.sun_path) - 2);
+            length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(argv[3]));
+        }
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, length) == 0);
+    }
+    /* A socket the caged process makes itself, then connects to. */
+    if (strcmp(op, "own-unix") == 0) {
+        struct sockaddr_un address;
+        int client;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 1) != 0) {
+            return errno;
+        }
+        client = socket(AF_UNIX, SOCK_STREAM, 0);
+        return probe_exit(client >= 0 && connect(client, (struct sockaddr *)&address, sizeof(address)) == 0);
+    }
+    if (strcmp(op, "signal") == 0) {
+        return probe_exit(kill(atoi(argv[3]), 0) == 0);
+    }
+    /* TCP by routes that pass neither connect() nor bind() on a TCP socket. */
+    if (strcmp(op, "mptcp") == 0 || strcmp(op, "tfo") == 0 || strcmp(op, "mptcp-tfo") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        fd = socket(AF_INET, SOCK_STREAM, strcmp(op, "tfo") == 0 ? 0 : IPPROTO_MPTCP);
+        if (fd < 0) {
+            return errno;
+        }
+        if (strcmp(op, "mptcp") == 0) {
+            return probe_exit(connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+        }
+        return probe_exit(sendto(fd, "x", 1, MSG_FASTOPEN, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    if (strcmp(op, "listen") == 0) {
+        struct sockaddr_in address;
+        socklen_t length = sizeof(address);
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && listen(fd, 1) == 0
+            && getsockname(fd, (struct sockaddr *)&address, &length) == 0 && address.sin_port != 0);
+    }
+    /* The port of a listener this host has on an address that is not loopback. */
+    if (strcmp(op, "tcp-beyond") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = inet_addr(BEYOND_ADDRESS);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    }
+    if (strcmp(op, "exit") == 0) {
+        return atoi(argv[3]);
+    }
+#if defined(__x86_64__)
+    /* getpid through the two other system call tables an x86-64 program
+     * can enter: the 32-bit one (int 0x80, number 20) and x32's. A filter
+     * that tested only this architecture's numbers would not see them. */
+    if (strcmp(op, "int80") == 0) {
+        long result;
+        __asm__ volatile("int $0x80" : "=a"(result) : "a"(20L) : "r8", "r9", "r10", "r11", "cc", "memory");
+        return probe_exit(result == (long)getpid());
+    }
+    if (strcmp(op, "x32") == 0) {
+        return probe_exit(syscall(0x40000000L | 39) == (long)getpid());
+    }
+#endif
+    if (strcmp(op, "socketpair") == 0) {
+        int pair[2];
+        return probe_exit(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    }
+    /* A datagram pair is made without socket() and can address anyone. */
+    if (strcmp(op, "datagram-pair") == 0) {
+        struct sockaddr_un address;
+        int pair[2];
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) != 0) {
+            return errno;
+        }
+        return probe_exit(sendto(pair[0], "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    /* A socket made through io_uring would be one no system-call filter sees. */
+    if (strcmp(op, "uring") == 0) {
+        char parameters[128];
+        memset(parameters, 0, sizeof(parameters));
+        return probe_exit(syscall(SYS_io_uring_setup, 4, parameters) >= 0);
+    }
+    if (strcmp(op, "ioctl") == 0) {
+        struct termios modes;
+        fd = open(argv[3], O_RDWR);
+        if (fd < 0) {
+            return errno;
+        }
+        /* Not a terminal: reaching the driver at all is the access. */
+        return probe_exit(ioctl(fd, TCGETS, &modes) == 0 || errno == ENOTTY);
     }
     return 124;
 }
@@ -190,10 +337,14 @@ static int run(char *const argv[]) {
         execv(argv[0], argv);
         _exit(127);
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+    if (waitpid(pid, &status, 0) != pid) {
         return -1;
     }
-    return WEXITSTATUS(status);
+    /* Killed by a signal: past every exit status. */
+    if (WIFSIGNALED(status)) {
+        return KILLED_BY + WTERMSIG(status);
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 /* rv-isolation-exec --workspace WS -- INNER probe OP A [B] */
@@ -318,6 +469,281 @@ static void enforcement_cases(void) {
 /* Setup failed before /dev/console was usable: point stdout at the console
  * anyway (creating the node if devtmpfs never mounted) so the FAIL line
  * still reaches the serial log. */
+/* ---- MCP server confinement (rv-isolation-exec --confine) -------------- */
+
+/* rv-isolation-exec --confine FLOOR --read WORKSPACE --write SCRATCH
+ *     --write NESTED --temp TEMP --temp /dev [--tcp PORT]
+ *     -- INNER INNER probe OP A */
+static int confined(const char *floor, const char *port, const char *op, const char *a) {
+    char *argv[24];
+    int count = 0;
+    argv[count++] = HELPER;
+    argv[count++] = "--confine";
+    argv[count++] = (char *)floor;
+    argv[count++] = "--read";
+    argv[count++] = WORKSPACE;
+    argv[count++] = "--write";
+    argv[count++] = SCRATCH;
+    /* A write root inside a shared one, as the scratch directory is
+     * inside the user's cache. Missing below ABI 4, where nothing is
+     * applied and the request is refused before it is looked at. */
+    if (access(NESTED, F_OK) == 0) {
+        argv[count++] = "--write";
+        argv[count++] = NESTED;
+    }
+    argv[count++] = "--temp";
+    argv[count++] = TEMP;
+    argv[count++] = "--temp";
+    argv[count++] = "/dev";
+    if (port != NULL) {
+        argv[count++] = "--tcp";
+        argv[count++] = (char *)port;
+    }
+    argv[count++] = "--";
+    argv[count++] = INNER;
+    argv[count++] = INNER; /* the inner's own argv[0] */
+    argv[count++] = "probe";
+    argv[count++] = (char *)op;
+    argv[count++] = (char *)a;
+    argv[count] = NULL;
+    return run(argv);
+}
+
+/* The probe with no cage at all: what the kernel does when nothing stops it. */
+static int uncaged(const char *op, const char *a) {
+    char *argv[] = { INNER, "probe", (char *)op, (char *)a, NULL };
+    return run(argv);
+}
+
+/* A TCP listener on `host` (and `port`, or any when 0); returns its port, or 0. */
+static int tcp_listener_at(const char *host, int port) {
+    struct sockaddr_in address;
+    socklen_t length = sizeof(address);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(host);
+    address.sin_port = htons((unsigned short)port);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 8) != 0
+        || getsockname(fd, (struct sockaddr *)&address, &length) != 0) {
+        return 0;
+    }
+    return ntohs(address.sin_port);
+}
+
+static int tcp_listener(void) {
+    return tcp_listener_at("127.0.0.1", 0);
+}
+
+/* A pathname Unix socket this process holds: a listener, or a datagram one. */
+static int unix_socket(const char *path, int type) {
+    struct sockaddr_un address;
+    int fd = socket(AF_UNIX, type, 0);
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    strcpy(address.sun_path, path);
+    return fd >= 0 && bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0
+        && (type == SOCK_DGRAM || listen(fd, 8) == 0);
+}
+
+static int unix_listener(const char *path) {
+    return unix_socket(path, SOCK_STREAM);
+}
+
+/* Loopback up, two TCP listeners, four pathname Unix listeners (outside
+ * every root, in the --temp root, in the --write root, in the --write
+ * root nested in the --temp root), a datagram socket outside every root
+ * and one abstract listener, all held by this process, outside any cage. */
+static int confine_setup(char *port_a, char *port_b, size_t size) {
+    struct ifreq interface;
+    struct sockaddr_un address;
+    int control = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd;
+    int a;
+    int b;
+
+    memset(&interface, 0, sizeof(interface));
+    strcpy(interface.ifr_name, "lo");
+    interface.ifr_flags = IFF_UP;
+    if (control < 0 || ioctl(control, SIOCSIFFLAGS, &interface) != 0) {
+        return 0;
+    }
+    /* The second address, as an alias of the loopback device. */
+    memset(&interface, 0, sizeof(interface));
+    strcpy(interface.ifr_name, "lo:1");
+    ((struct sockaddr_in *)&interface.ifr_addr)->sin_family = AF_INET;
+    ((struct sockaddr_in *)&interface.ifr_addr)->sin_addr.s_addr = inet_addr(BEYOND_ADDRESS);
+    if (ioctl(control, SIOCSIFADDR, &interface) != 0) {
+        return 0;
+    }
+    a = tcp_listener();
+    b = tcp_listener();
+    /* The first listener's port again, on the address that is not loopback. */
+    if (a == 0 || tcp_listener_at(BEYOND_ADDRESS, a) != a) {
+        return 0;
+    }
+    if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0 || mkdir(TEMP, 0755) != 0) {
+        return 0;
+    }
+    if (mkdir(NESTED, 0755) != 0) {
+        return 0;
+    }
+    if (!unix_listener(TEMP_SOCKET) || !unix_listener(SCRATCH_SOCKET) || !unix_listener(NESTED_SOCKET)) {
+        return 0;
+    }
+    snprintf(port_a, size, "%d", a);
+    snprintf(port_b, size, "%d", b);
+
+    if (!unix_listener(UNIX_SOCKET) || !unix_socket(DATAGRAM_SOCKET, SOCK_DGRAM)) {
+        return 0;
+    }
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    strcpy(address.sun_path + 1, ABSTRACT_SOCKET);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    return fd >= 0
+        && bind(fd, (struct sockaddr *)&address,
+            (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(ABSTRACT_SOCKET))) == 0
+        && listen(fd, 8) == 0;
+}
+
+/* Below ABI 4 nothing is confined and nothing runs. */
+static void confine_refusal_cases(void) {
+    const char *marker = WORKSPACE "/confine-refusal-ran";
+    int status = confined("4", NULL, "write", marker);
+    check(status == ESTABLISH_FAILED, "confine-refuses-125", "exit %d", status);
+    check(!exists(marker), "confine-refusal-never-execs", "inner wrote %s", marker);
+}
+
+/* ABI 4 and up: files and the network always; Unix sockets not at all
+ * below ABI 9 and confined from it; signals and device ioctl open below
+ * the ABI that closes them. */
+static void confine_cases(long abi) {
+    char port_a[16];
+    char port_b[16];
+    int status;
+
+    if (!confine_setup(port_a, port_b, sizeof(port_a))) {
+        check(0, "confine-setup", "errno %d", errno);
+        return;
+    }
+    status = confined("4", NULL, "read", WORKSPACE "/note.txt");
+    check(status == 0, "confine-read-allowed", "exit %d", status);
+    status = confined("4", NULL, "read", OUTSIDE "/seed.txt");
+    check(status == EACCES, "confine-read-outside-denied", "exit %d", status);
+    status = confined("4", NULL, "write", SCRATCH "/made.txt");
+    check(status == 0 && exists(SCRATCH "/made.txt"), "confine-write-root-allowed", "exit %d", status);
+    status = confined("4", NULL, "write", WORKSPACE "/confine-made.txt");
+    check(status == EACCES && !exists(WORKSPACE "/confine-made.txt"), "confine-write-elsewhere-denied",
+        "exit %d", status);
+    status = confined("4", NULL, "nnp", "-");
+    check(status == 0, "confine-no-new-privs-set", "exit %d", status);
+
+    status = confined("4", NULL, "tcp", port_a);
+    check(status == EACCES, "confine-tcp-denied", "exit %d", status);
+    status = confined("4", port_a, "tcp", port_a);
+    check(status == 0, "confine-tcp-listed-port-allowed", "exit %d", status);
+    status = confined("4", port_a, "tcp", port_b);
+    check(status == EACCES, "confine-tcp-other-port-denied", "exit %d", status);
+    /* The listed port is the proxy's on loopback, not that port anywhere:
+     * the same port answers on another address of this guest, outside
+     * the cage only. */
+    status = uncaged("tcp-beyond", port_a);
+    check(status == 0, "confine-listed-port-elsewhere-works-outside-the-cage", "exit %d", status);
+    status = confined("4", port_a, "tcp-beyond", port_a);
+    check(status == EACCES, "confine-listed-port-elsewhere-denied", "exit %d", status);
+    status = confined("4", NULL, "tcp-beyond", port_a);
+    check(status == EACCES, "confine-tcp-elsewhere-denied", "exit %d", status);
+    /* The inner is then a child of the helper, and its exit is the helper's. */
+    status = confined("4", port_a, "exit", "7");
+    check(status == 7, "confine-exit-status-passes-through-the-connector", "exit %d", status);
+#if defined(__x86_64__)
+    /* A system call by another table's numbers. Where the kernel has the
+     * 32-bit table, a caged program that uses it is killed (and the
+     * connector dies of the same signal); x32 answers "no such call". */
+    {
+        int outside = uncaged("int80", "-");
+        int inside = confined("4", NULL, "int80", "-");
+        int beside = confined("4", port_a, "int80", "-");
+        printf("rv-kernel-e2e: INFO foreign-calls abi=%ld int80 outside=%d caged=%d caged-with-port=%d x32 outside=%d\n",
+            abi, outside, inside, beside, uncaged("x32", "-"));
+        check(outside == 0 ? inside == KILLED_BY + SIGSYS : inside != 0, "confine-32-bit-call-killed", "exit %d", inside);
+        check(outside == 0 ? beside == KILLED_BY + SIGSYS : beside != 0, "confine-32-bit-call-killed-with-a-port",
+            "exit %d", beside);
+        status = confined("4", NULL, "x32", "-");
+        check(status == ENOSYS, "confine-x32-call-unsupported", "exit %d", status);
+        status = confined("4", port_a, "x32", "-");
+        check(status == ENOSYS, "confine-x32-call-unsupported-with-a-port", "exit %d", status);
+    }
+#endif
+
+    status = confined("999", NULL, "write", SCRATCH "/floor-ran");
+    check(status == ESTABLISH_FAILED && !exists(SCRATCH "/floor-ran"), "confine-floor-above-abi-refuses",
+        "exit %d", status);
+    status = confined("3", NULL, "write", SCRATCH "/low-floor-ran");
+    check(status == ESTABLISH_FAILED && !exists(SCRATCH "/low-floor-ran"), "confine-floor-below-4-refuses",
+        "exit %d", status);
+
+    /* Another program's socket is never reached. Below ABI 9 the socket
+     * filter lets the inner make no Unix socket at all (EACCES from
+     * socket()); from ABI 9 Landlock confines the ones it makes: a
+     * pathname socket outside its own directories is EACCES at connect,
+     * an abstract one outside the cage EPERM. */
+    status = confined("4", NULL, "unix", UNIX_SOCKET);
+    check(status == EACCES, "confine-pathname-unix-denied", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "abstract", ABSTRACT_SOCKET);
+    check(status == (abi >= 9 ? EPERM : EACCES), "confine-abstract-unix-denied", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "write", TEMP "/made.txt");
+    check(status == 0 && exists(TEMP "/made.txt"), "confine-temp-root-writable", "exit %d", status);
+    status = confined("4", NULL, "unix", TEMP_SOCKET);
+    check(status == EACCES, "confine-unix-in-temp-denied", "abi %ld exit %d", abi, status);
+    /* Its own directories: reachable where Landlock can confine them. */
+    status = confined("4", NULL, "unix", SCRATCH_SOCKET);
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-unix-in-write-root-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "unix", NESTED_SOCKET);
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-unix-in-write-root-inside-temp-by-abi", "abi %ld exit %d", abi,
+        status);
+    status = confined("4", NULL, "own-unix", TEMP "/made-here.sock");
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-own-unix-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "socketpair", "-");
+    check(status == 0, "confine-socketpair-allowed", "abi %ld exit %d", abi, status);
+    /* Refused at socketpair() below ABI 9, by Landlock at sendto() from it. */
+    status = uncaged("datagram-pair", DATAGRAM_SOCKET);
+    check(status == 0, "confine-datagram-pair-works-outside-the-cage", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "datagram-pair", DATAGRAM_SOCKET);
+    check(status == EACCES, "confine-datagram-pair-denied", "abi %ld exit %d", abi, status);
+
+    /* What only Landlock mediates follows the ABI. */
+    status = confined("4", NULL, "signal", "1");
+    check(status == (abi >= 6 ? EPERM : 0), "confine-signal-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "ioctl", "/dev/null");
+    check(status == (abi >= 5 ? EACCES : 0), "confine-device-ioctl-by-abi", "abi %ld exit %d", abi, status);
+
+    /* The ways onto the network that Landlock's TCP rules do not cover.
+     * Each works here outside the cage; the socket filter refuses each
+     * inside it, with no port and with one. */
+    {
+        static const char *const routes[] = { "mptcp", "tfo", "mptcp-tfo", "listen", "udp", "uring" };
+        char name[64];
+        size_t index;
+        for (index = 0; index < sizeof(routes) / sizeof(routes[0]); index++) {
+            const char *route = routes[index];
+            int refusal = strcmp(route, "uring") == 0 ? ENOSYS : EACCES;
+            int outside = uncaged(route, port_b);
+            int inside = confined("4", NULL, route, port_b);
+            int beside = confined("4", port_a, route, port_b);
+            printf("rv-kernel-e2e: INFO route %s abi=%ld outside=%d caged=%d caged-with-port=%d\n", route, abi, outside,
+                inside, beside);
+            snprintf(name, sizeof(name), "confine-%s-works-outside-the-cage", route);
+            check(outside == 0, name, "abi %ld exit %d", abi, outside);
+            snprintf(name, sizeof(name), "confine-%s-refused", route);
+            check(inside == refusal, name, "abi %ld exit %d", abi, inside);
+            snprintf(name, sizeof(name), "confine-%s-refused-with-a-port", route);
+            check(beside == refusal, name, "abi %ld exit %d", abi, beside);
+        }
+    }
+}
+
 static void console_fallback(void) {
     int fd = open("/dev/console", O_WRONLY);
     if (fd < 0 && mknod("/dev/console", S_IFCHR | 0600, makedev(5, 1)) == 0) {
@@ -440,6 +866,11 @@ int main(int argc, char **argv) {
         enforcement_cases();
     } else {
         refusal_cases();
+    }
+    if (live >= 4) {
+        confine_cases(live);
+    } else {
+        confine_refusal_cases();
     }
     finish(live, uts.release);
     return 1;

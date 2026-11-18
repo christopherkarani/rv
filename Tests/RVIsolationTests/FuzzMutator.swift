@@ -1,9 +1,10 @@
 import Foundation
 
 // Deterministic, seeded byte mutator for the in-suite fuzz properties.
-// Kept identical in Tests/RVCorpusTests and Tests/RVIsolationTests (test
-// targets cannot share sources). The libFuzzer harnesses under Fuzz/ do
-// not use it: libFuzzer mutates for them. See docs/fuzzing.md.
+// Kept identical in Tests/RVCorpusTests, Tests/RVIsolationTests and
+// Tests/RVMCPTests (test targets cannot share sources). The libFuzzer
+// harnesses under Fuzz/ do not use it: libFuzzer mutates for them. See
+// docs/fuzzing.md.
 
 /// SplitMix64: tiny, seedable, the same sequence on every platform.
 struct FuzzRandom: RandomNumberGenerator {
