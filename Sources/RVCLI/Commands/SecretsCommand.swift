@@ -381,7 +381,8 @@ enum SecretsRun {
             guard rerun || (definition == nil && agents.isEmpty && description == nil) else {
                 return .failure(CommandFailure(
                     "\(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
-                        + "with no delivery flags replaces its value; edit secrets.json to change its delivery"))
+                        + "with no flags other than --expires, --refresh or --resource-profile replaces its value; "
+                        + "edit secrets.json to change anything else"))
             }
         } else {
             guard let definition else {
@@ -1075,7 +1076,8 @@ struct SecretsSet: AsyncParsableCommand {
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
                 "rv secrets set: \(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
-                    + "with no delivery flags replaces its value; edit secrets.json to change its surfaces or allow rules\n")
+                    + "with no flags other than --expires, --refresh or --resource-profile replaces its value; "
+                    + "edit secrets.json to change its surfaces or allow rules\n")
         }
         let inferredNote = resolved.note
         if let profile {
@@ -1099,7 +1101,8 @@ struct SecretsSet: AsyncParsableCommand {
         {
         case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(var text):
-            if let inferredNote { text = inferredNote + text }
+            // Only a new secret's definition is written; a re-run applies no defaults.
+            if isNew, let inferredNote { text = inferredNote + text }
             if let profile {
                 switch InitRun.attachSecret(
                     name, profileID: profile, configDirectory: environment.configDirectory)
