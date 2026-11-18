@@ -91,6 +91,29 @@ struct MCPToolTrustTests {
         #expect(try store.load().get() == ["github": ["push": MCPToolPinStore.hash(rich)]])
     }
 
+    /// L2 residual: `enum`, `const`, `default` and `examples` values are
+    /// forwarded byte-exact, so the review shows a hiding scalar in one
+    /// escaped at the moment of trust, and pins exactly those bytes.
+    @Test func theReviewShowsSchemaValuesEscaped() async throws {
+        let (fixture, store) = try Self.signedFixture()
+        let tool = try RVMCP.JSONValue.parse(
+            #"{"name":"push","inputSchema":{"type":"object","properties":{"sep":{"enum":[",","\t","a\u202eb"]},"mode":{"const":"x\u001b[2Jy"},"tag":{"default":"d\u2028e","examples":["f\udb40\udc41g"]}}}}"#)
+        #expect(store.recordChanged(server: "github", definitions: ["push": tool]) == .recorded)
+        let shown = Mutex("")
+        _ = try await MCPRun.trust(
+            environment: fixture.environment(presence: Self.confirming), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        let review = shown.withLock { $0 }
+        let hiding: Set<UInt32> = [0x09, 0x1B, 0x202E, 0x2028, 0xE0041]
+        #expect(review.unicodeScalars.contains { hiding.contains($0.value) } == false)
+        #expect(MCPRun.reviewConceals(review) == false)
+        let schema = try #require(review.split(separator: "\n").first { $0.hasPrefix("    inputSchema: ") })
+        for escape in ["\\t", "\\u202e", "\\u001b", "\\u2028", "\\udb40\\udc41"] {
+            #expect(schema.contains(escape), "\(escape) missing from \(schema)")
+        }
+        #expect(try store.load().get() == ["github": ["push": MCPToolPinStore.hash(tool)]])
+    }
+
     /// Trust race: the pins the review was built on changed before trust
     /// took the lock, so nothing is pinned and the user is told to rerun.
     @Test func pinsThatChangeDuringReviewPinNothing() async throws {
@@ -129,7 +152,8 @@ struct MCPToolTrustTests {
         let (fixture, store) = try Self.signedFixture()
         let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(result == "mcp.json already matches rv's signature; nothing to trust\n"
-            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n")
+            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again "
+            + "(a tool named with more than 64 bytes or anything but A-Z a-z 0-9 _ . - is hidden and never queued)\n")
         #expect(try store.load().get() == [:])
     }
 
@@ -179,8 +203,54 @@ struct MCPToolTrustTests {
     /// N5: trusting drops queued tools of servers no longer in mcp.json.
     @Test func trustPrunesQueuedToolsOfRemovedServers() async throws {
         let (fixture, store) = try Self.pinnedFixture()
-        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
+        #expect(try store.contents().get().changed.keys.sorted() == ["github", "removed"])
         _ = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
+        #expect(try store.contents().get().changed.isEmpty)
+    }
+
+    /// Q1: a queue holding only tools of removed servers is pruned too,
+    /// though there is nothing to trust; nothing is pinned.
+    @Test func aStaleOnlyQueueIsPrunedWhenThereIsNothingToTrust() async throws {
+        let (fixture, store) = try Self.signedFixture()
+        // Queued under its own name: an entry whose key is not its name is dropped on read.
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+        let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
+        #expect(result.hasPrefix("mcp.json already matches rv's signature; nothing to trust\n"), "\(result)")
+        #expect(try store.contents().get().changed.isEmpty)
+        #expect(try store.load().get() == [:])
+    }
+
+    /// An mcp.json changed since it was signed, under review.
+    private static func unsignedFixtureWithStaleQueue() throws -> (Fixture, MCPToolPinStore) {
+        let (fixture, store) = try Self.signedFixture()
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+        let config = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        var bytes = try Data(contentsOf: config)
+        bytes.append(UInt8(ascii: "\n"))
+        try bytes.write(to: config)
+        chmod(config.path, 0o600)
+        #expect(fixture.environment().integrity != .trusted)
+        return (fixture, store)
+    }
+
+    /// M2: an mcp.json the owner has not confirmed decides nothing about
+    /// the queue: declined, every queued tool stays.
+    @Test func anUnconfirmedMcpJSONPrunesNothing() async throws {
+        let (fixture, store) = try Self.unsignedFixtureWithStaleQueue()
+        let refused = await MCPRun.trust(environment: fixture.environment(presence: MCPCommandTests.absent), show: { _ in })
+        #expect(refused.failureMessage == "not trusted: this process has no terminal")
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+    }
+
+    /// M2: once the owner confirms and mcp.json is signed, its server list
+    /// prunes the queue.
+    @Test func aConfirmedMcpJSONPrunesAfterSigning() async throws {
+        let (fixture, store) = try Self.unsignedFixtureWithStaleQueue()
+        let result = try await MCPRun.trust(environment: fixture.environment(presence: MCPCommandTests.present), show: { _ in }).get()
+        #expect(result.hasPrefix("trusted mcp.json; rv signs it again on every change it makes\n"), "\(result)")
         #expect(try store.contents().get().changed.isEmpty)
     }
 }

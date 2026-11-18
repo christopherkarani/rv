@@ -40,20 +40,31 @@ struct LibprocProcessTable: ProcessTable {
     }
 
     /// Nil when this process's descriptors could not be read; an exited
-    /// process holds nothing.
+    /// process holds nothing, and so does one with no descriptors. libproc
+    /// returns 0 both for a failed call (the syscall's -1, errno set) and for
+    /// an empty listing (errno untouched, still the 0 set here), so only
+    /// errno tells them apart. A child spawned with `CLOEXEC_DEFAULT` and no
+    /// file actions has no descriptors; reading that as unreadable turned
+    /// every outside spend of its placeholder into `runtimeUnverified`.
     func holdsSocket(_ pid: pid_t, _ peer: GatewayPeer) -> Bool? {
         errno = 0
         let needed = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard needed > 0 else { return errno == ESRCH ? false : nil }
+        guard needed > 0 else { return Self.holdsNothing(errno) }
         let stride = MemoryLayout<proc_fdinfo>.stride
         var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(needed) / stride + 16)
         errno = 0
         let filled = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
-        guard filled > 0 else { return errno == ESRCH ? false : nil }
+        guard filled > 0 else { return Self.holdsNothing(errno) }
         for fd in fds.prefix(Int(filled) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
             if isPeerSocket(pid, fd.proc_fd, peer) { return true }
         }
         return false
+    }
+
+    /// After a descriptor listing returned 0: false for no such process or an
+    /// empty table, nil for any other error.
+    private static func holdsNothing(_ error: Int32) -> Bool? {
+        error == ESRCH || error == 0 ? false : nil
     }
 
     func executable(_ pid: pid_t) -> ProcessExecutable? {

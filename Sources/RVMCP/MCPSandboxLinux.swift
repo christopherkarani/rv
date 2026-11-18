@@ -188,7 +188,7 @@ extension MCPSandbox {
             guard case .success(let port) = proxy.start(), let tcp = UInt16(exactly: port), tcp != 0 else {
                 return .failure(.sandbox("could not start the egress proxy for \(server)"))
             }
-            proxies.withLock { $0.append(proxy) }
+            track(proxy, server: server)
             proxyPort = tcp
             environment = proxyEnvironment(environment, port: port, credential: credential)
         }

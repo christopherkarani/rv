@@ -8,6 +8,13 @@ import RVDomain
 import RVIsolation
 import Synchronization
 
+/// What a caged server may dial on loopback besides its `sandbox.hosts` proxy.
+public enum MCPCageReach: Sendable, Equatable {
+    case standard
+    /// The secrets gateway its placeholders are spent through.
+    case secretsGateway(port: Int)
+}
+
 /// Seatbelt cage for upstream MCP servers that set `sandbox` in mcp.json.
 /// Allow-default (so npx/uvx/node work) with writes confined to a scratch
 /// directory, temp and package caches, and reads of credential stores and
@@ -67,15 +74,40 @@ public enum MCPSandbox {
         "~/Library/Application Support/Claude", "~/.netrc", "~/.npmrc", "~/.pypirc",
     ]
 
-    /// Allowlist proxies for `sandbox.hosts`; they live as long as `rv mcp serve`.
-    static let proxies = Mutex<[EgressProxy]>([])
+    /// Allowlist proxies for `sandbox.hosts`, by server; they live as long
+    /// as `rv mcp serve`, or until the server is planned again.
+    static let proxies = Mutex<[(server: String, proxy: EgressProxy)]>([])
 
     /// Stops every proxy this process started; called when serve exits.
     public static func stopProxies() {
         proxies.withLock { running in
-            running.forEach { $0.stop() }
+            running.forEach { $0.proxy.stop() }
             running = []
         }
+    }
+
+    /// `proxy` is the one `server`'s launch uses now: one planned earlier
+    /// for it (a launch that went away and is being started again) is
+    /// stopped.
+    static func track(_ proxy: EgressProxy, server: String) {
+        let earlier = proxies.withLock { running -> [EgressProxy] in
+            let replaced = running.filter { $0.server == server }.map(\.proxy)
+            running.removeAll { $0.server == server }
+            running.append((server, proxy))
+            return replaced
+        }
+        earlier.forEach { $0.stop() }
+    }
+
+    /// Stops and forgets `server`'s proxy: the launch planned with it will
+    /// not run (its plan failed, or serve stopped before it started).
+    static func stopProxies(server: String) {
+        let stopped = proxies.withLock { running -> [EgressProxy] in
+            let named = running.filter { $0.server == server }.map(\.proxy)
+            running.removeAll { $0.server == server }
+            return named
+        }
+        stopped.forEach { $0.stop() }
     }
 
     /// The proxy credential a caged launch carries in its proxy URL, so the
@@ -99,12 +131,12 @@ public enum MCPSandbox {
     /// each audit pass durably and return false when it could not.
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
-        notice: @escaping @Sendable (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
+        notice: @escaping @Sendable (String) -> Void = { MCPGatewayRuntime.writeStderrLine($0 + "\n") },
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in },
         enforcement: @escaping @Sendable (MCPServerDefinition) -> MCPSandboxEnforcement = { _ in .enforce },
         audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool = { _, _ in false }
-    ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
-        { definition, launch in
+    ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
+        { definition, launch, reach in
             guard let policy = definition.sandbox else { return .success(launch) }
             guard enforced else { return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name))) }
             #if os(macOS)
@@ -122,8 +154,7 @@ public enum MCPSandbox {
             if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
-            var environment = launch.environment
-            var proxyPort: Int?
+            var proxied: (port: Int, credential: String)?
             if policy.hosts.isEmpty == false {
                 let server = definition.name
                 let credential = proxyCredential()
@@ -133,16 +164,16 @@ public enum MCPSandbox {
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
-                proxies.withLock { $0.append(proxy) }
-                proxyPort = port
-                environment = proxyEnvironment(environment, port: port, credential: credential)
+                track(proxy, server: server)
+                proxied = (port, credential)
             }
+            let network = cageNetwork(launch.environment, proxy: proxied, reach: reach)
             guard createPinned(scratch.path, pinned: pinned) else {
                 return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             switch profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
-                temporaryDirectory: temporary, proxyPort: proxyPort)
+                temporaryDirectory: temporary, loopbackPorts: network.loopbackPorts)
             {
             case .failure(let error): return .failure(error)
             case .success(let text):
@@ -152,7 +183,7 @@ public enum MCPSandbox {
                     return .failure(profileFailure(server: definition.name, reason: reason))
                 }
                 var caged = launch
-                caged.environment = environment
+                caged.environment = network.environment
                 caged.executable = sandboxExec
                 caged.arguments = ["-p", text, launch.executable] + launch.arguments
                 caged.workingDirectory = scratch.path
@@ -203,9 +234,35 @@ public enum MCPSandbox {
         return environment
     }
 
+    /// A caged server's environment and the loopback ports it may dial: its
+    /// `sandbox.hosts` proxy, if it has one, and for placeholders the secrets
+    /// gateway. The egress proxy does not relay loopback, so with both a
+    /// base-URL request to the gateway must skip the proxy: `NO_PROXY` names
+    /// the gateway's address, and nothing else.
+    static func cageNetwork(
+        _ base: [String: String], proxy: (port: Int, credential: String)?, reach: MCPCageReach
+    ) -> (environment: [String: String], loopbackPorts: [Int]) {
+        var environment = base
+        var ports: [Int] = []
+        if let proxy {
+            environment = proxyEnvironment(environment, port: proxy.port, credential: proxy.credential)
+            ports.append(proxy.port)
+        }
+        switch reach {
+        case .standard: break
+        case .secretsGateway(let port):
+            if proxy != nil {
+                environment["NO_PROXY"] = "127.0.0.1"
+                environment["no_proxy"] = "127.0.0.1"
+            }
+            ports.append(port)
+        }
+        return (environment, ports)
+    }
+
     public static func profile(
         policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String,
-        proxyPort: Int? = nil
+        loopbackPorts: [Int] = []
     ) -> Result<String, MCPLaunchError> {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
@@ -218,34 +275,81 @@ public enum MCPSandbox {
             return .failure(.sandbox(widened))
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
-        let writeAllow = paths(writable, denyTargets: false)
-        let linkDenies = symlinkDenies(unreadable)
+        let writeAllow = paths(writable, denyTargets: false, writable: writable)
+        guard let ancestors = credentialAncestors(unreadable, insideWriteRoots: writable) else {
+            return .failure(.sandbox(
+                "more than \(maximumCredentialAncestors) credential ancestors lie inside the write roots"))
+        }
+        let credentialDeny = "(deny file-read* file-write* file-link file-clone "
+            + paths(unreadable, denyTargets: true, writable: writable) + symlinkDenies(unreadable) + ")"
+        // `file-write*` does not cover `file-link` or `file-clone`, which
+        // `(allow default)` would otherwise allow everywhere. A hard link
+        // needs both of its ends allowed (checked live on macOS 27), so links
+        // are allowed only among the write roots: package managers link
+        // inside their caches.
+        //
+        // A file clone needs read on its source, so a credential file is
+        // covered by the credential deny. A directory clone is checked only
+        // at its top directory, and the kernel copies every file under it,
+        // denied ones too: cloning `~/.config` would copy `~/.config/gh`. So
+        // a directory outside the write roots is never cloned. File-by-file
+        // copies and clones (`cp -c`, uv, Rust's `std::fs::copy`, Node's
+        // `fs.cpSync`) are unaffected; only a raw `clonefile(2)` of such a
+        // directory is refused. A credential ancestor inside a write root
+        // (a home under the temp directory, a target under a cache) is named
+        // one by one, refused a clone and a rename, so the credential is
+        // neither copied nor moved out from under its deny. One that is
+        // missing is refused a create too: a symlink, a link or directory
+        // renamed onto it, or a hard link there would hold the credential
+        // once its owner writes it. A plain `mkdir` there is refused with
+        // them, since Seatbelt checks it as the same create as a directory
+        // renamed in (probed); making one that exists still fails EEXIST.
+        //
+        // A hard link an uncaged process planted under a write root is not
+        // seen by any path rule.
         var lines = [
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
+            "(deny file-link)",
             "(allow file-write* " + writeAllow + ")",
-            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")",
+            "(allow file-link " + writeAllow + ")",
+            "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeAllow + "))))",
         ]
-        // A credential symlink can be retargeted at a path the profile did not
-        // name. File reads no longer fall through to (allow default). Reviewed
-        // write paths are allowed again, then the credential deny is repeated
-        // so a target under /private/tmp or a cache is not re-opened.
-        if linkDenies.isEmpty == false {
-            let credentialDeny = "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")"
-            lines.append("(deny file-read*)")
-            lines.append("(allow file-read* file-write* " + writeAllow + ")")
-            lines.append(credentialDeny)
+        if ancestors.isEmpty == false {
+            lines.append("(deny file-clone file-write-unlink file-write-create file-link " + ancestorFilters(ancestors) + ")")
         }
+        lines.append(credentialDeny)
+        // `KERN_PROCARGS2` hands a same-uid caller the exec-time arguments and
+        // environment of any process that is not a platform binary: rv puts
+        // a server's `secrets` there, and serve's own holds the host's
+        // tokens. The kernel consults both a sysctl check (the name carries
+        // the pid, so only a prefix matches) and a pidinfo check; refusing
+        // both for every process outside this sandbox instance refuses the
+        // read, while the server's own and its children's still work
+        // (measured on macOS 27; `(target others)` alone did not refuse it).
+        lines.append("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))")
+        lines.append("(deny process-info-pidinfo (require-not (target same-sandbox)))")
+        // `proc_pidfdinfo` and `proc_pid_rusage` of another process hand back
+        // its open-file paths and socket endpoints (no values). Refuse them
+        // for every process outside this sandbox too; `proc_listpids` stays,
+        // so pid and short command-name enumeration still works.
+        lines.append("(deny process-info-pidfdinfo process-info-rusage (require-not (target same-sandbox)))")
+        // LaunchServices starts what it opens outside the caller's sandbox,
+        // and an Apple event can ask a running app to run a command outside
+        // it (docs/security/runtime-boundary.md): either would undo every
+        // rule above. The macOS guest profile denies the same two.
+        lines.append("(deny lsopen)")
+        lines.append("(deny appleevent-send)")
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
-        if policy.network == false || proxyPort != nil {
+        if policy.network == false || loopbackPorts.isEmpty == false {
             lines.append("(deny network*)")
             // Seatbelt network addresses accept only `*` or `localhost` as
             // the host; `127.0.0.1:<port>` fails to compile and the server
             // never starts.
-            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"localhost:\(proxyPort)\"))") }
+            for port in loopbackPorts { lines.append("(allow network-outbound (remote tcp \"localhost:\(port)\"))") }
         }
         // No mach-lookup rule for the resolver: verified live on macOS that
         // (deny network*) alone makes getaddrinfo fail inside this profile
@@ -369,7 +473,16 @@ public enum MCPSandbox {
     /// Allow filters add a resolved spelling only when it is the same
     /// directory. Deny filters also add a different real path, so a symlink
     /// at `~/.ssh` or the config directory does not leave the target readable.
-    static func paths(_ raw: [String], denyTargets: Bool) -> String {
+    /// A deny also names the openings of a missing name (every directory a
+    /// link created there could send the credential to), but only when the
+    /// cage could create one: some entry on the credential's path lies
+    /// inside `writable`. Everywhere else `(deny file-write*)` and
+    /// `(deny file-link)` already refuse that create, a link, a rename or a
+    /// clone onto it alike, and the openings would deny `/Users` and the
+    /// home for a `~/.config` linked into a dotfiles directory. A path whose
+    /// entries cannot be listed keeps them.
+    static func paths(_ raw: [String], denyTargets: Bool, writable: [String]) -> String {
+        let insideWriteRoot = insideAny(writable)
         // Scalar identity, not String equality. Swift treats NFC and NFD as
         // the same string, and a catalog name in the other form would be dropped.
         var seen = Set<[UInt32]>()
@@ -383,7 +496,8 @@ public enum MCPSandbox {
             if denyTargets {
                 var expanded: [String] = []
                 var roots = spellings + seatbeltSpellings(resolved)
-                for opening in missingSymlinkOpenings(path) {
+                let creatable = entriesOnPath(path).map { $0.contains(where: insideWriteRoot) } ?? true
+                for opening in creatable ? missingSymlinkOpenings(path) : [] {
                     roots.append(opening)
                     roots.append(contentsOf: seatbeltSpellings(opening))
                 }
@@ -971,6 +1085,9 @@ public enum MCPSandbox {
     ) -> UnsafeMutableRawPointer?
     private typealias FreeProfile = @convention(c) (UnsafeMutableRawPointer) -> Void
 
+    /// Two C function pointers, set once when libsandbox is loaded and never
+    /// changed; `@convention(c)` types are not Sendable only because the
+    /// compiler cannot see that. Each call gets its own buffers.
     private struct ProfileCompiler: @unchecked Sendable {
         let compile: CompileProfile
         let free: FreeProfile
@@ -987,10 +1104,60 @@ public enum MCPSandbox {
             compile: unsafeBitCast(compile, to: CompileProfile.self), free: unsafeBitCast(free, to: FreeProfile.self))
     }()
 
+    /// The largest profile rv compiles. libsandbox's limit is on filter
+    /// count, not bytes: measured on macOS 27 it refuses about 2700 deny
+    /// rules (~5400 filters) as "profile too large", cleanly, on both the
+    /// compile thread and under `sandbox-exec -p`, and the stack it recurses
+    /// on grows with that count. Dense short filters reach the limit at fewer
+    /// bytes than long ones, so the byte cap is set for the densest shape: at
+    /// 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
+    /// 4x inside the 8 MB stack `sandbox-exec -p` recompiles on in the child,
+    /// ~8x inside `profileCompileStackBytes` — and compiles in about 0.7 s. A
+    /// letter-heavy home fills about 274 KB (few, long filters, a far smaller
+    /// peak); an everyday profile is about 24 KB.
+    static let maximumProfileBytes = 288 * 1024
+
+    /// The compile's own stack. A 128 KB profile of distinct filters
+    /// overflowed a 512 KiB thread (SIGBUS in `expand_logical_conditions`),
+    /// the stack `rv mcp serve` and Swift Testing run synchronous code on.
+    static let profileCompileStackBytes = 16 << 20
+
+    /// How long a compile may take before the profile is refused. Round 12
+    /// measured a profile shape that compiled for over 20 minutes.
+    static let profileCompileSeconds = 60
+
+    /// Each compile's answer, by its key, until the caller takes it. A
+    /// compile that outlived its caller (and so refused its server) leaves
+    /// its one entry behind.
+    private static let compileOutcomes = Mutex<[UUID: String?]>([:])
+
     /// The compiler's first error line for `profile`, or nil when it
-    /// compiles. Nothing is applied or launched.
+    /// compiles. Nothing is applied or launched. It runs on a thread of its
+    /// own with `profileCompileStackBytes`, never on the caller's stack, and
+    /// a profile over `maximumProfileBytes` or a compile that does not
+    /// return in `profileCompileSeconds` is an error.
     static func profileCompileError(_ profile: String) -> String? {
+        let size = profile.utf8.count
+        if size > maximumProfileBytes {
+            return "the profile is \(size) bytes, more than the \(maximumProfileBytes) rv compiles"
+        }
         guard let compiler = profileCompiler else { return nil }
+        let key = UUID()
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            let error = compile(profile, with: compiler)
+            compileOutcomes.withLock { _ = $0.updateValue(error, forKey: key) }
+            done.signal()
+        }
+        thread.stackSize = profileCompileStackBytes
+        thread.start()
+        guard done.wait(timeout: .now() + .seconds(profileCompileSeconds)) == .success,
+            let error = compileOutcomes.withLock({ $0.removeValue(forKey: key) })
+        else { return "the profile did not compile within \(profileCompileSeconds) seconds" }
+        return error
+    }
+
+    private static func compile(_ profile: String, with compiler: ProfileCompiler) -> String? {
         var error: UnsafeMutablePointer<CChar>?
         if let compiled = profile.withCString({ compiler.compile($0, nil, &error) }) {
             compiler.free(compiled)
@@ -1005,9 +1172,11 @@ public enum MCPSandbox {
     #endif
 
     /// Each symlink in a credential chain is denied by a regex built from the
-    /// path Seatbelt checks, and by its parent. A static regex cannot see a
-    /// retarget, so the parent is not left to `(allow default)`. Reviewed
-    /// write paths are allowed again after that deny.
+    /// path Seatbelt checks; `paths(_:denyTargets:writable:)` denies the target the
+    /// chain resolves to at launch. Nothing else is denied: not the link's
+    /// parent (for `~/.ssh` that is the whole home, the scratch with it) and
+    /// not every read. A link an uncaged process retargets after launch
+    /// leaves its new target readable until the server restarts.
     static func symlinkDenies(_ raw: [String]) -> String {
         var seen = Set<String>()
         var filters: [String] = []
@@ -1022,15 +1191,188 @@ public enum MCPSandbox {
                         filters.append(filter)
                     }
                 }
-                let parent = URL(fileURLWithPath: link).deletingLastPathComponent().path
-                guard parent != "/" else { continue }
-                for spelling in seatbeltSpellings(parent) {
-                    let filter = "(subpath \(seatbeltString(escape(spelling), raw: false)))"
-                    if seen.insert(filter).inserted { filters.append(filter) }
-                }
             }
         }
         return filters.isEmpty ? "" : " " + filters.joined(separator: " ")
+    }
+
+    /// Whether a path is one of `writable`, or inside one, under any spelling
+    /// Seatbelt checks (each root as given and resolved, `/tmp` and
+    /// `/private/tmp`, the Data-volume firmlink). APFS is case-insensitive
+    /// by default, so both sides are case-folded; folding can only add a
+    /// path, so a miss can only drop an opening or an ancestor the cage
+    /// could otherwise reach, never add a write reach.
+    static func insideAny(_ writable: [String]) -> (String) -> Bool {
+        let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
+            .map { caseFolded(directorySpelling($0)) })
+        return { path in
+            let folded = caseFolded(path)
+            return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+        }
+    }
+
+    /// Full Unicode case folding, as the macOS guest's path comparison folds
+    /// (runtime-boundary.md's `/uſr`): `ß` folds to `ss` and `ſ` to `s`,
+    /// which `lowercased()` leaves apart, so a write root named with one is
+    /// still matched against the path spelled with the other.
+    static func caseFolded(_ path: String) -> String {
+        path.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// Every directory entry `open` passes through for `path`: each
+    /// component as spelled, then each component of every link target it
+    /// follows, and past a missing name the names after it, spelled on (a
+    /// `..` there drops one). These are the entries the cage would have to
+    /// create, rename or remove to change where `path` resolves. Nil past 32
+    /// links.
+    static func entriesOnPath(_ path: String) -> [String]? {
+        var entries: [String] = []
+        var current = "/"
+        var parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var followsLeft = 32
+        while parts.isEmpty == false {
+            let part = parts.removeFirst()
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(current)
+                continue
+            }
+            let next = current == "/" ? "/" + part : current + "/" + part
+            entries.append(next)
+            if let link = readLink(next) {
+                guard followsLeft > 0 else { return nil }
+                followsLeft -= 1
+                let target = link.hasPrefix("/") ? link : (current == "/" ? "/" + link : current + "/" + link)
+                parts = target.split(separator: "/", omittingEmptySubsequences: true).map(String.init) + parts
+                current = "/"
+                continue
+            }
+            current = next
+        }
+        return entries
+    }
+
+    /// Credential ancestors `profile` names one by one; more refuse the profile.
+    static let maximumCredentialAncestors = 128
+
+    /// Paths `credentialAncestors` walks up from; more refuse the profile.
+    static let maximumCredentialAncestorWalks = 1024
+
+    /// Every directory above a credential that lies inside a write root, up
+    /// to the outermost one: renaming, unlinking or cloning any of them would
+    /// move or copy the credential to a path its deny does not name. The
+    /// walk starts at the credential's path, the target it resolves to, each
+    /// link in its chain and that link's target, and the target of every
+    /// symlinked directory it passes. Each directory is named twice: where it
+    /// resolves, and as the link itself (its parent resolved, its own name
+    /// not followed), which is the path an unlink or rename of a symlinked
+    /// directory is checked against. Without repeats. Nil, never a shorter
+    /// list, past `maximumCredentialAncestors` or
+    /// `maximumCredentialAncestorWalks`.
+    static func credentialAncestors(_ unreadable: [String], insideWriteRoots writable: [String]) -> [String]? {
+        let insideWriteRoot = insideAny(writable)
+        var seen = Set<String>()
+        var ancestors: [String] = []
+        func add(_ ancestor: String) -> Bool {
+            guard seen.insert(ancestor).inserted else { return true }
+            ancestors.append(ancestor)
+            return ancestors.count <= maximumCredentialAncestors
+        }
+        // A start to walk up from, and whether the start directory itself is
+        // named. A credential path is not (its leaf is covered by the
+        // credential deny); a directory a link points at is (swapping it
+        // moves the credential), so it is walked from itself.
+        var pending: [(start: String, includeStart: Bool)] = []
+        for path in unreadable {
+            pending += [(path, false), (deniedRealPath(path), false)]
+            for link in symlinkChain(path) {
+                pending.append((link, false))
+                if let target = absoluteLinkTarget(link) { pending.append((target, true)) }
+            }
+        }
+        // `directory` and each one above it inside a write root. It has no
+        // `.` or `..`, so each step drops one component and the walk ends at
+        // `/`. (`URL` would append `..` to a `..`.) False past a cap. A
+        // symlinked directory it passes is queued, to be walked from itself:
+        // its target (a further link's parent) is otherwise never named.
+        func walkUp(from directory: String) -> Bool {
+            var parent = directory
+            while parent != "/", insideWriteRoot(parent) {
+                let above = parentDirectory(parent)
+                let resolvedAbove = realPath(above)
+                let name = parent.split(separator: "/").last.map(String.init) ?? ""
+                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
+                guard add(realPath(parent)), add(itself) else { return false }
+                var info = stat()
+                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
+                    pending.append((target, true))
+                }
+                parent = above
+            }
+            return true
+        }
+        var walked = Set<String>()
+        var next = 0
+        while next < pending.count {
+            let (start, includeStart) = pending[next]
+            next += 1
+            guard walked.insert("\(includeStart):\(start)").inserted else { continue }
+            if walked.count > maximumCredentialAncestorWalks { return nil }
+            let spelled = withoutDotComponents(start)
+            // A directory-link target is named itself (walk from it); a
+            // credential path is named from its parent up.
+            guard walkUp(from: includeStart ? spelled.path : parentDirectory(spelled.path)) else { return nil }
+            // A directory a `..` stepped out of decides where the rest
+            // lands: replaced, it moves the credential. Named like the rest.
+            for directory in spelled.steppedOutOf {
+                guard walkUp(from: directory) else { return nil }
+            }
+        }
+        return ancestors
+    }
+
+    /// `path` with its `.` and `..` taken as `open` takes them: a `..` goes
+    /// to the parent of where the path so far resolves, not to the lexical
+    /// parent, which a symlink would make a different directory. Also each
+    /// directory a `..` stepped out of, as spelled so far (none of them
+    /// holds a `.` or `..`).
+    static func withoutDotComponents(_ path: String) -> (path: String, steppedOutOf: [String]) {
+        var current = "/"
+        var steppedOutOf: [String] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                if current != "/" { steppedOutOf.append(current) }
+                current = parentDirectory(realPath(current))
+                continue
+            }
+            current = current == "/" ? "/" + part : current + "/" + part
+        }
+        return (current, steppedOutOf)
+    }
+
+    /// Each ancestor exactly, as a literal in every spelling Seatbelt may
+    /// check, so files can still be made and removed inside it. Seatbelt
+    /// matches the canonical path, so a literal also holds against case
+    /// variants, `./`, `//`, a trailing slash and a spelling through a
+    /// symlinked parent (probed on macOS 27). It does not hold when the
+    /// ancestor IS the link: an unlink or rename of a symlinked directory is
+    /// checked at the link's own path, not where it resolves, which is why
+    /// `credentialAncestors` names that path too. No case-folded regex:
+    /// thirty of them on temp-directory paths kept libsandbox compiling for
+    /// over 20 minutes.
+    static func ancestorFilters(_ ancestors: [String]) -> String {
+        var seen = Set<[UInt32]>()
+        var filters: [String] = []
+        for ancestor in ancestors {
+            for spelling in seatbeltSpellings(ancestor) {
+                for form in unicodeForms(spelling) {
+                    let filter = "(literal \(seatbeltString(escape(form), raw: false)))"
+                    if seen.insert(filter.unicodeScalars.map(\.value)).inserted { filters.append(filter) }
+                }
+            }
+        }
+        return filters.joined(separator: " ")
     }
 
     /// The path and every symlink it points through, without the final real
@@ -1446,15 +1788,10 @@ public enum MCPSandbox {
             last.stillChecked()
         else { return false }
         let existingPath = existingCount == 0 ? "/" : "/" + parts.prefix(existingCount).joined(separator: "/")
-        let watched = watchedWritableRoots(path)
-        let watchedBefore = watched.map(treeStamp)
+        let watchedBefore = watchedRootIdentities(path)
         afterAncestorMatch?()
         guard pathStillNames(existingPath, held: last) else { return false }
-        // A rename into an existing child does not change the watched
-        // directory's own link count or timestamps. The child's stamp does.
-        if zip(watched, watchedBefore).contains(where: { treeStamp($0.0) != $0.1 }) {
-            return false
-        }
+        guard watchedRootIdentities(path) == watchedBefore else { return false }
         guard createMissing(pinned.missing, parent: current) else { return false }
         guard pathStillNames(existingPath, held: last) else {
             removeCreated(pinned.missing, parent: current)
@@ -1470,244 +1807,40 @@ public enum MCPSandbox {
         return true
     }
 
-    /// `Library/Caches`, `~/.npm`, and `~/.cache`. The profile allows all
-    /// three. Moving a project into a directory that already exists does not
-    /// change that directory's inode: `rename` into a non-empty directory
-    /// keeps it. The link count and timestamps do change.
+    /// `Library/Caches`, `~/.npm`, and `~/.cache`. The profile allows writes
+    /// under all three, by path, for the server's whole life. Creation and
+    /// `profile` check only that each path still names the entry it named
+    /// when the scratch was created, so a root swapped for another directory
+    /// or a symlink is refused. Nothing under a root is read: a directory
+    /// moved under one is writable to the cage whenever the move happens,
+    /// so a check during the milliseconds of creation stops nothing the same
+    /// move a second later would not do. A symlink under a root reaches
+    /// nothing outside it, because Seatbelt authorizes the resolved path.
     private static func watchedWritableRoots(_ scratch: String) -> [String] {
         guard let marker = scratch.range(of: "/Library/Caches/") else { return [] }
         let home = String(scratch[..<marker.lowerBound])
         return [home + "/Library/Caches", home + "/.npm", home + "/.cache"]
     }
 
-    private struct InodeStamp: Equatable {
-        var present: Bool
-        var device: UInt64
-        var inode: UInt64
-        var links: UInt64
-        var modified: Int64
-        var modifiedNsec: Int64
-        var changed: Int64
-        var changedNsec: Int64
-        /// Set when `path` is a symlink. The target directory can be unlistable
-        /// on both reads; a move into it still changes this link count.
-        var targetPresent: Bool = false
-        var targetDevice: UInt64 = 0
-        var targetInode: UInt64 = 0
-        var targetLinks: UInt64 = 0
-        var targetModified: Int64 = 0
-        var targetModifiedNsec: Int64 = 0
-        var targetChanged: Int64 = 0
-        var targetChangedNsec: Int64 = 0
+    /// What one watched root's path names, read with `lstat`: a symlink is
+    /// its own entry, never followed. Kind, device and inode only, since
+    /// writes under a root change its link count and timestamps all the
+    /// time. A read that fails other than with `ENOENT` carries a fresh
+    /// token, so it equals no other read and the caller refuses.
+    private enum RootIdentity: Equatable {
+        case absent
+        case entry(kind: UInt32, device: UInt64, inode: UInt64)
+        case unreadable(UUID)
     }
 
-    private static func inodeStamp(_ path: String) -> InodeStamp {
-        var info = stat()
-        guard lstat(path, &info) == 0 else {
-            return InodeStamp(
-                present: false, device: 0, inode: 0, links: 0,
-                modified: 0, modifiedNsec: 0, changed: 0, changedNsec: 0)
-        }
-        let clock = directoryClock(info)
-        return InodeStamp(
-            present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino), links: UInt64(info.st_nlink),
-            modified: clock.modified, modifiedNsec: clock.modifiedNsec,
-            changed: clock.changed, changedNsec: clock.changedNsec)
-    }
-
-    /// The watched directory and every directory under it, including the
-    /// directory a symlink already names. Moving a project into a grandchild
-    /// changes that directory's link count and timestamps. A direct child's
-    /// own stamp does not. The symlink's inode stays in the stamp, so
-    /// replacing a directory with a link still changes it. The target
-    /// directory's own inode is on that same stamp: its link count is the
-    /// change a move into it leaves behind. A child that already exists under
-    /// an unlistable target is on the stamp too. Listing that target adds the
-    /// owner's read bit and restores the mode; chmod changes ctime, so that
-    /// ctime is not part of the stamp. The child's link count is.
-    private struct TreeStamp: Equatable {
-        var root: InodeStamp
-        var children: [String: InodeStamp]
-    }
-
-    private struct DirectoryWalk {
-        var stamps: [String: InodeStamp]
-        var clearedChangeTime: Bool
-    }
-
-    private static func treeStamp(_ path: String) -> TreeStamp {
-        var visited: Set<String> = []
-        if let identity = directoryIdentity(path) {
-            visited.insert(identity)
-        }
-        var root = inodeStamp(path)
-        let walked = directoryStamps(under: path, relative: "", visited: &visited)
-        if walked.clearedChangeTime {
-            root.changed = 0
-            root.changedNsec = 0
-        }
-        return TreeStamp(root: root, children: walked.stamps)
-    }
-
-    private static func directoryStamps(
-        under path: String, relative: String, visited: inout Set<String>
-    ) -> DirectoryWalk {
-        var stamps: [String: InodeStamp] = [:]
-        let listed = listDirectory(path)
-        guard let names = listed.names else {
-            return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
-        }
-        for name in names where name != "." && name != ".." {
-            let child = path == "/" ? "/" + name : path + "/" + name
+    /// One `lstat` per root: three for any scratch under `Library/Caches`.
+    private static func watchedRootIdentities(_ scratch: String) -> [RootIdentity] {
+        watchedWritableRoots(scratch).map { root in
             var info = stat()
-            guard lstat(child, &info) == 0 else { continue }
-            let kind = info.st_mode & S_IFMT
-            guard kind == S_IFDIR || kind == S_IFLNK else { continue }
-            let rel = relative.isEmpty ? name : relative + "/" + name
-            var entered: String?
-            if kind == S_IFDIR {
-                stamps[rel] = inodeStamp(child)
-                entered = child
-            } else if let target = symlinkDirectory(child) {
-                stamps[rel] = stampNotingTarget(child, target: target)
-                entered = target
-            } else {
-                stamps[rel] = inodeStamp(child)
-            }
-            guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
-                continue
-            }
-            let nested = directoryStamps(under: entered, relative: rel, visited: &visited)
-            if nested.clearedChangeTime, var stamp = stamps[rel] {
-                if kind == S_IFDIR {
-                    stamp.changed = 0
-                    stamp.changedNsec = 0
-                } else {
-                    stamp.targetChanged = 0
-                    stamp.targetChangedNsec = 0
-                }
-                stamps[rel] = stamp
-            }
-            for (deeper, stamp) in nested.stamps {
-                stamps[deeper] = stamp
-            }
+            guard lstat(root, &info) == 0 else { return errno == ENOENT ? .absent : .unreadable(UUID()) }
+            return .entry(
+                kind: UInt32(info.st_mode & S_IFMT), device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
         }
-        return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
-    }
-
-    /// Names in `path`. Mode `0111` cannot be listed. The owner read bit is
-    /// added for this call and the mode is put back; chmod updates ctime
-    /// and leaves mtime and the link count alone, so the caller drops
-    /// ctime. On Darwin the directory is held by fd throughout (`O_SEARCH`
-    /// needs only execute permission, so a 0111 directory can still be
-    /// opened): swapping `path` for a symlink between the stat and the
-    /// chmod cannot redirect the mode change (or the listing) at a foreign
-    /// directory such as `~/.ssh`.
-    private static func listDirectory(_ path: String) -> (names: [String]?, clearedChangeTime: Bool) {
-        if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
-            return (names, false)
-        }
-        #if canImport(Darwin)
-        let fd = open(path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { return (nil, false) }
-        defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
-            return (nil, false)
-        }
-        let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, chmodHeld(fd, mode | S_IRUSR) else {
-            return (nil, false)
-        }
-        defer { _ = chmodHeld(fd, mode) }
-        let listing = openat(fd, ".", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard listing >= 0, let stream = fdopendir(listing) else {
-            if listing >= 0 { close(listing) }
-            return (nil, true)
-        }
-        defer { closedir(stream) }
-        var names: [String] = []
-        while let entry = readdir(stream) {
-            var entry = entry.pointee
-            let name = withUnsafeBytes(of: &entry.d_name) { raw -> String in
-                guard let base = raw.baseAddress else { return "" }
-                return String(cString: base.assumingMemoryBound(to: CChar.self))
-            }
-            if name.isEmpty == false { names.append(name) }
-        }
-        return (names, true)
-        #else
-        // Linux has no O_SEARCH and Swift's Glibc module does not export
-        // O_PATH; seatbelt itself is Darwin-only, so keep the original
-        // path-based form here rather than inventing an untested fd dance.
-        var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
-            return (nil, false)
-        }
-        let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, chmod(path, mode | S_IRUSR) == 0 else {
-            return (nil, false)
-        }
-        defer { _ = chmod(path, mode) }
-        return (try? FileManager.default.contentsOfDirectory(atPath: path), true)
-        #endif
-    }
-
-    #if canImport(Darwin)
-    /// chmod the directory behind a search fd.
-    private static func chmodHeld(_ fd: Int32, _ mode: mode_t) -> Bool {
-        fchmod(fd, mode) == 0
-    }
-    #endif
-
-    /// The symlink's own inode, plus the directory it names. Listing that
-    /// directory can fail (mode `0111`) while its link count still changes.
-    private static func stampNotingTarget(_ path: String, target: String) -> InodeStamp {
-        var stamp = inodeStamp(path)
-        let noted = inodeStamp(target)
-        stamp.targetPresent = noted.present
-        stamp.targetDevice = noted.device
-        stamp.targetInode = noted.inode
-        stamp.targetLinks = noted.links
-        stamp.targetModified = noted.modified
-        stamp.targetModifiedNsec = noted.modifiedNsec
-        stamp.targetChanged = noted.changed
-        stamp.targetChangedNsec = noted.changedNsec
-        return stamp
-    }
-
-    /// The real directory a symlink names, relative target included.
-    /// A link that does not name a directory is only its own inode.
-    private static func symlinkDirectory(_ path: String) -> String? {
-        guard let raw = readLink(path) else { return nil }
-        let absolute: String
-        if raw.hasPrefix("/") {
-            absolute = raw
-        } else {
-            let parent = parentDirectory(path)
-            absolute = parent == "/" ? "/" + raw : parent + "/" + raw
-        }
-        guard let resolved = resolveExisting(absolute) else { return nil }
-        guard directoryIdentity(resolved) != nil else { return nil }
-        return resolved
-    }
-
-    private static func directoryIdentity(_ path: String) -> String? {
-        var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
-        return "\(UInt64(info.st_dev)):\(UInt64(info.st_ino))"
-    }
-
-    private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
-        #if canImport(Darwin)
-        return (
-            Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
-            Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec))
-        #else
-        return (
-            Int64(info.st_mtim.tv_sec), Int64(info.st_mtim.tv_nsec),
-            Int64(info.st_ctim.tv_sec), Int64(info.st_ctim.tv_nsec))
-        #endif
     }
 
     private struct AncestorPin: Equatable {
@@ -1724,10 +1857,9 @@ public enum MCPSandbox {
         /// Parent, then each directory above it. Moving `rv-mcp` together
         /// with the leaf keeps those two inodes and changes `Caches`.
         var ancestors: [AncestorPin]
-        /// `~/Library/Caches`, `~/.npm`, and `~/.cache` at the moment the leaf
-        /// was recorded. A later move into a grandchild does not change the
-        /// ancestor inodes. `profile` re-reads these stamps.
-        var watched: [String: TreeStamp]
+        /// What `~/Library/Caches`, `~/.npm`, and `~/.cache` named when the
+        /// leaf was recorded. `profile` reads them again.
+        var watched: [RootIdentity]
     }
 
     private static let leafRecords = Mutex<[String: LeafIdentity]>([:])
@@ -1737,7 +1869,7 @@ public enum MCPSandbox {
         guard lstat(path, &info) == 0 else {
             return LeafIdentity(
                 present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0,
-                ancestors: [], watched: [:])
+                ancestors: [], watched: [])
         }
         var parentInfo = stat()
         let parent = parentDirectory(path)
@@ -1747,15 +1879,7 @@ public enum MCPSandbox {
             parentDevice: parentOK ? UInt64(parentInfo.st_dev) : 0,
             parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0,
             ancestors: ancestorPins(parent),
-            watched: watchedStamps(path))
-    }
-
-    private static func watchedStamps(_ path: String) -> [String: TreeStamp] {
-        var stamps: [String: TreeStamp] = [:]
-        for root in watchedWritableRoots(path) {
-            stamps[root] = treeStamp(root)
-        }
-        return stamps
+            watched: watchedRootIdentities(path))
     }
 
     private static func ancestorPins(_ path: String) -> [AncestorPin] {

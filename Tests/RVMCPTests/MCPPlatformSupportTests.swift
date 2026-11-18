@@ -101,8 +101,8 @@ struct MCPPlatformSupportTests {
         let apply = MCPSandbox.apply(configDirectory: directory, home: directory, enforced: false)
         let launch = MCPUpstreamLaunch(server: "x", executable: "/usr/bin/env", arguments: ["x"], environment: [:])
         let caged = MCPServerDefinition(name: "closed", command: "c", sandbox: MCPSandboxPolicy(network: false))
-        #expect(apply(caged, launch) == .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: "closed"))))
-        #expect(apply(MCPServerDefinition(name: "bare", command: "b"), launch) == .success(launch))
+        #expect(apply(caged, launch, .standard) == .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: "closed"))))
+        #expect(apply(MCPServerDefinition(name: "bare", command: "b"), launch, .standard) == .success(launch))
     }
 
     @Test func sandboxWordingNamesThePlatform() {

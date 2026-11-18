@@ -136,6 +136,18 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// it nil; wiring tests use it to capture proxies that never register
     /// (retired children). Boxed: the spawn path reads it off the test thread.
     private let egressConstructionHookBox = Mutex<(@Sendable (EgressProxy) -> Void)?>(nil)
+    /// Caps every runtime and admission one-shot of this workspace starts
+    /// with. The host sets them from `runtime-resources.json` before it
+    /// serves a launch; until then the defaults apply.
+    private let processLimitsBox = Mutex(CageProcessLimits.standard)
+
+    func configureProcessLimits(_ policy: RuntimeProcessLimits?) {
+        processLimitsBox.withLock { $0 = CageProcessLimits(policy: policy) }
+    }
+
+    var processLimits: CageProcessLimits {
+        processLimitsBox.withLock { $0 }
+    }
     /// Phase 4 review queue: denial intake plus live approval loading.
     /// Nil when the review config directory is unavailable (fail closed:
     /// denials still log, static policy still stands, no live updates).
@@ -1154,11 +1166,12 @@ final class WorkspaceSessionSupervisor: Sendable {
         plan: ContainedPlan, io: IsolatedIO, resourceProfile: RuntimeResourceProfile? = nil,
         microVM: MicroVMLaunchOptions? = nil,
         admission: RuntimeAdmissionConfiguration, sessionStore: RuntimeSessionStore,
-        runningLimit: Int? = nil
+        runningLimit: Int? = nil, timeoutSeconds: UInt64? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         launch(host: host, stagingAgent: nil, command: command, plan: plan,
                io: io, resourceProfile: resourceProfile, microVM: microVM, admission: admission,
-               sessionStore: sessionStore, runningLimit: runningLimit, agentDefinition: nil)
+               sessionStore: sessionStore, runningLimit: runningLimit, agentDefinition: nil,
+               timeoutSeconds: timeoutSeconds)
     }
 
     /// Start one contained runtime inside this workspace.
@@ -1203,7 +1216,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         runningLimit: Int? = nil,
         keychainReader: KeychainReader = .live,
         spawnFault: RuntimeSpawnFault? = nil,
-        agentDefinition: AgentDefinition? = nil
+        agentDefinition: AgentDefinition? = nil,
+        timeoutSeconds: UInt64? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
         let prepared: Result<IsolatedLaunchRequest, IsolationApplyError>
@@ -1242,7 +1256,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             admission: admission,
             runningLimit: runningLimit,
             keychainReader: keychainReader,
-            agentDefinition: agentDefinition
+            agentDefinition: agentDefinition,
+            timeoutSeconds: timeoutSeconds
         )
     }
 
@@ -1271,7 +1286,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         acceptedID: PreparedLaunchID? = nil,
         cwdVerification: CwdCommitVerification? = nil,
         executableVerification: ExecutableCommitVerification? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        timeoutSeconds: UInt64? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         guard request.containedWorkspacePath == expectedWorkspacePath else {
             return .failure(.apply(.workspacePathUnresolvable))
@@ -1291,15 +1307,17 @@ final class WorkspaceSessionSupervisor: Sendable {
             acceptedID: acceptedID,
             cwdVerification: cwdVerification,
             executableVerification: executableVerification,
-            now: now
+            now: now,
+            timeoutSeconds: timeoutSeconds
         )
         switch spawned {
         case .failure(let error):
             return .failure(error)
         case .success(let child):
             let session = child.live.session
+            let live = child.live
             child.start {
-                self.noteRuntimeEnded(session)
+                self.noteRuntimeEnded(session, endReason: live.endReason)
             } deathObserved: {
                 self.noteDeathObserved(session)
             } settled: {
@@ -1353,7 +1371,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             // Unregistered by design: stop the runtime's own proxy here,
             // since noteRuntimeEnded only reaches registered children.
             child.egressProxy.stop()
-            noteRuntimeEnded(child.live.session)
+            noteRuntimeEnded(child.live.session, endReason: child.live.endReason)
             child.live.markWatchFinished()
             return mounted
         }
@@ -1534,7 +1552,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         acceptedID: PreparedLaunchID? = nil,
         cwdVerification: CwdCommitVerification? = nil,
         executableVerification: ExecutableCommitVerification? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        timeoutSeconds: UInt64? = nil
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         let profile = request.seatbeltProfile
         let backend: RuntimeIsolationBackend = request.microVMProfile == nil ? .seatbelt : .microvm
@@ -1601,6 +1620,16 @@ final class WorkspaceSessionSupervisor: Sendable {
         // must not run under the supervisor lock. On every failure below the
         // proxy is stopped (fail closed, no leak); on success it attaches to
         // the child and dies with it (CON-2-4).
+        // A micro-VM is sized by its own options: the policy deadline is a
+        // Seatbelt cap, and an explicit one is refused at spawn there.
+        let limits: CageProcessLimits
+        if request.microVMProfile == nil {
+            limits = processLimits.withRequestedTimeout(timeoutSeconds)
+        } else {
+            var vm = CageProcessLimits.standard
+            vm.timeoutSeconds = timeoutSeconds
+            limits = vm
+        }
         let sessionID = RuntimeSessionID()
         let runtimeEgress = makeRuntimeEgress(session: sessionID)
         if let hook = egressConstructionHookBox.withLock({ $0 }) {
@@ -1700,7 +1729,8 @@ final class WorkspaceSessionSupervisor: Sendable {
                 stagingAgent: stagingAgent,
                 keychain: keychain,
                 preparedEnvironment: preparedEnvironment,
-                cwdVerification: cwdVerification
+                cwdVerification: cwdVerification,
+                limits: limits
             ) {
             case .failure(let error):
                 return .failure(.apply(error))
@@ -2044,7 +2074,8 @@ final class WorkspaceSessionSupervisor: Sendable {
 
     private func noteRuntimeEnded(
         _ session: RuntimeSession,
-        reason: AgentRevokeReason = .runtimeEnded
+        reason: AgentRevokeReason = .runtimeEnded,
+        endReason: String? = nil
     ) {
         // The watch owns this call when a runtime ends: its proxy stops with
         // it (CON-2-4). Unregistered paths (single runtimes, spawn failures,
@@ -2061,7 +2092,8 @@ final class WorkspaceSessionSupervisor: Sendable {
                 volumeDevice: boundary.volumeDeviceIdentifier,
                 disk: boundary.diskIdentifier,
                 runtime: session.id.rawValue,
-                recordedAt: Date()
+                recordedAt: Date(),
+                endReason: endReason
             )
         )
         if case .failure(let error) = recorded {

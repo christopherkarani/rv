@@ -106,7 +106,11 @@ struct ControlAuthorizationTests {
         let stored = try row()
         let operation = try #require(ApprovalOperation(row: stored, decision: .allowOnce))
         let actor = ApprovalActor(owner: .current(), connectionID: UUID())
-        let broker = ControlAuthorizationBroker(authenticator: Authenticator(accepted: true))
+        // A frozen clock: on a loaded runner the consumers can start past
+        // the 30s lifetime, and expiry would hide the one-winner property.
+        let time = TestClock()
+        let broker = ControlAuthorizationBroker(authenticator: Authenticator(accepted: true),
+            clock: { time.wallNow() }, monotonicNow: { time.monotonicNow() })
         let permit = try await broker.authenticate(actor: actor, operation: operation,
             reload: { stored }, validateLive: { _ in true })
         let winners = await withTaskGroup(of: Bool.self) { group in

@@ -172,10 +172,23 @@ public struct MCPServerDefinition: Sendable, Equatable {
     public var environment: [String: String]
     /// Upstream environment variable → rv secret name (Phase 2 `secrets.json`).
     public var secrets: [String: String]
+    /// Secret names the server gets as per-launch placeholders instead of
+    /// real values; the variables come from each secret's definition.
+    public var placeholders: [String]
     public var tools: MCPToolPolicy
     public var sandbox: MCPSandboxPolicy?
     /// Set instead of `command`; the decoder refuses process keys beside it.
     public var remote: MCPRemoteServer?
+    /// How long one `tools/call` may go unanswered; its progress restarts it.
+    public var callTimeoutSeconds: Int = MCPServerDefinition.defaultCallTimeoutSeconds
+
+    /// How long the server may take to answer `initialize`.
+    public var startTimeoutSeconds: Int = MCPServerDefinition.defaultStartTimeoutSeconds
+
+    public static let defaultCallTimeoutSeconds = 300
+    public static let callTimeoutRange = 1...86400
+    public static let defaultStartTimeoutSeconds = 60
+    public static let startTimeoutRange = 1...600
 
     public init(name: String, description: String? = nil, remote: MCPRemoteServer, tools: MCPToolPolicy = MCPToolPolicy()) {
         self.init(name: name, description: description, command: "", tools: tools)
@@ -190,7 +203,8 @@ public struct MCPServerDefinition: Sendable, Equatable {
         environment: [String: String] = [:],
         secrets: [String: String] = [:],
         tools: MCPToolPolicy = MCPToolPolicy(),
-        sandbox: MCPSandboxPolicy? = nil
+        sandbox: MCPSandboxPolicy? = nil,
+        placeholders: [String] = []
     ) {
         self.name = name
         self.description = description
@@ -198,6 +212,7 @@ public struct MCPServerDefinition: Sendable, Equatable {
         self.args = args
         self.environment = environment
         self.secrets = secrets
+        self.placeholders = placeholders
         self.tools = tools
         self.sandbox = sandbox
     }
@@ -376,6 +391,7 @@ public struct MCPConfiguration: Sendable, Equatable {
         if server.args.isEmpty == false { object["args"] = .array(server.args.map(JSONValue.string)) }
         if server.environment.isEmpty == false { object["env"] = stringMap(server.environment) }
         if server.secrets.isEmpty == false { object["secrets"] = stringMap(server.secrets) }
+        if server.placeholders.isEmpty == false { object["placeholders"] = .array(server.placeholders.map(JSONValue.string)) }
         var tools = JSONObject()
         if let decision = server.tools.defaultDecision { tools["default"] = .string(decision.rawValue) }
         for (key, globs, decision) in [
@@ -393,6 +409,12 @@ public struct MCPConfiguration: Sendable, Equatable {
             if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
             if sandbox.enforcement == .audit { value["enforcement"] = .string(sandbox.enforcement.rawValue) }
             object["sandbox"] = .object(value)
+        }
+        if server.callTimeoutSeconds != MCPServerDefinition.defaultCallTimeoutSeconds {
+            object["callTimeoutSeconds"] = .int(server.callTimeoutSeconds)
+        }
+        if server.startTimeoutSeconds != MCPServerDefinition.defaultStartTimeoutSeconds {
+            object["startTimeoutSeconds"] = .int(server.startTimeoutSeconds)
         }
         return .object(object)
     }
@@ -457,13 +479,26 @@ enum MCPConfigurationDecoding {
         let context = "server \(name)"
         if object["url"] != nil {
             guard object["command"] == nil else { throw MCPConfigurationError.invalid("\(context) has both command and url") }
-            try allowOnly(object, ["name", "description", "url", "headers", "transport", "tools"], context)
+            guard object["placeholders"] == nil else {
+                throw MCPConfigurationError.invalid("\(context) is remote; placeholders are only for local (command) servers")
+            }
+            try allowOnly(
+                object, ["name", "description", "url", "headers", "transport", "tools", "callTimeoutSeconds", "startTimeoutSeconds"],
+                context)
             var definition = MCPServerDefinition(name: name, remote: try remote(object, context))
             definition.description = try description(object, context)
             if let raw = object["tools"] { definition.tools = try tools(raw, context) }
+            definition.callTimeoutSeconds = try callTimeout(object, context)
+            definition.startTimeoutSeconds = try startTimeout(object, context)
             return definition
         }
-        try allowOnly(object, ["name", "description", "command", "args", "env", "secrets", "tools", "sandbox"], context)
+        try allowOnly(
+            object,
+            [
+                "name", "description", "command", "args", "env", "secrets", "placeholders", "tools", "sandbox",
+                "callTimeoutSeconds", "startTimeoutSeconds",
+            ],
+            context)
         guard let command = object["command"]?.stringValue, command.isEmpty == false, command.contains("\0") == false else {
             throw MCPConfigurationError.invalid("\(context) needs a command")
         }
@@ -488,9 +523,59 @@ enum MCPConfigurationDecoding {
                 throw MCPConfigurationError.invalid("\(context) sets \(variable) in both env and secrets")
             }
         }
+        definition.placeholders = try placeholders(object["placeholders"], context)
+        let realValues = Set(definition.secrets.values)
+            .union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
+        for name in definition.placeholders where realValues.contains(name) {
+            throw MCPConfigurationError.invalid(
+                "\(context) gets secret \(name) as its real value (secrets or args) and as a placeholder; list it in one")
+        }
         if let raw = object["tools"] { definition.tools = try tools(raw, context) }
         if let raw = object["sandbox"] { definition.sandbox = try sandbox(raw, context) }
+        definition.callTimeoutSeconds = try callTimeout(object, context)
+        definition.startTimeoutSeconds = try startTimeout(object, context)
         return definition
+    }
+
+    private static func callTimeout(_ object: JSONObject, _ context: String) throws -> Int {
+        try seconds(
+            object, "callTimeoutSeconds", MCPServerDefinition.callTimeoutRange,
+            default: MCPServerDefinition.defaultCallTimeoutSeconds, context)
+    }
+
+    private static func startTimeout(_ object: JSONObject, _ context: String) throws -> Int {
+        try seconds(
+            object, "startTimeoutSeconds", MCPServerDefinition.startTimeoutRange,
+            default: MCPServerDefinition.defaultStartTimeoutSeconds, context)
+    }
+
+    /// Whole seconds in `range`; absent is the default.
+    private static func seconds(
+        _ object: JSONObject, _ key: String, _ range: ClosedRange<Int>, default fallback: Int, _ context: String
+    ) throws -> Int {
+        guard let raw = object[key] else { return fallback }
+        guard let seconds = raw.intValue, range.contains(seconds) else {
+            throw MCPConfigurationError.invalid(
+                "\(context) \(key) must be a whole number of seconds from \(range.lowerBound) to \(range.upperBound)")
+        }
+        return seconds
+    }
+
+    /// Distinct secret names, at most as many as secrets.json can hold.
+    private static func placeholders(_ value: JSONValue?, _ context: String) throws -> [String] {
+        guard let value else { return [] }
+        guard let names = value.stringArray, names.allSatisfy(SecretsConfiguration.isVariableName) else {
+            throw MCPConfigurationError.invalid("\(context) placeholders must be an array of secret names")
+        }
+        guard names.count <= SecretsConfiguration.maximumSecrets else {
+            throw MCPConfigurationError.invalid(
+                "\(context) placeholders has more than \(SecretsConfiguration.maximumSecrets) secrets")
+        }
+        var seen = Set<String>()
+        for name in names where seen.insert(name).inserted == false {
+            throw MCPConfigurationError.invalid("\(context) placeholders lists \(name) twice")
+        }
+        return names
     }
 
     private static func description(_ object: JSONObject, _ context: String) throws -> String? {

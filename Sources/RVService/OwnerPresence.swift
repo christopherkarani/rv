@@ -104,9 +104,10 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         }
         run.attach(process)
         defer { run.detach() }
-        // rvd does not ignore SIGPIPE, so the write runs on a thread with
-        // SIGPIPE blocked: a helper that exits without reading becomes EPIPE
-        // here instead of killing rvd.
+        // This must not depend on the host's SIGPIPE disposition (rvd ignores
+        // SIGPIPE on Linux; on macOS it only keeps its own stdio from raising
+        // it), so the write runs on a thread with SIGPIPE blocked: a helper
+        // that exits without reading becomes EPIPE here instead of a kill.
         let writer = input.fileHandleForWriting
         #if canImport(Darwin)
         // Darwin can still raise a thread-blocked SIGPIPE on the process;
@@ -365,21 +366,37 @@ actor OwnerPresence {
         return .denied(ConfirmOwnerActionReply(outcome: outcome))
     }
 
-    /// Appends one `owner.action` event to the hash-chained audit log.
+    /// Appends one `owner.action` event to the hash-chained audit log, on a
+    /// global queue: the append can wait for the file lock, and the caller
+    /// is the `ServiceRuntime` actor that hook evaluation also enters.
+    /// False when the event was not written, or when there is no home to
+    /// keep `audit.jsonl` under: an approval must then not be acted on.
+    /// Each drop is logged (`AuditDropLog`).
     nonisolated static func audit(
-        summary: String, approved: Bool, outcome: String, context: AuthenticatedRequestContext, home: HomeDirectory?
-    ) {
-        guard let home else { return }
+        summary: String, approved: Bool, outcome: String, context: AuthenticatedRequestContext, home: HomeDirectory?,
+        dropLog: AuditDropLog = .shared
+    ) async -> Bool {
+        let consequence = approved ? "the owner's approval was refused" : "the refusal stands unrecorded"
+        guard let home else {
+            dropLog.report(.ownerAction, file: nil, consequence: consequence)
+            return false
+        }
         var detail = ["outcome": outcome]
         if let role = context.componentRole { detail["caller"] = String(describing: role) }
-        AuditLog.append(
-            AuditEvent(
-                time: Date(), kind: AuditEventKind(rawValue: "owner.action"),
-                decision: approved ? .allowed : .denied,
-                subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
-                source: AuditLedger.Source.audit.rawValue, detail: detail
-            ),
-            configDirectory: RVPolicyPaths.configDirectory(home: home)
-        )
+        let event = AuditEvent(
+            time: Date(), kind: AuditEventKind(rawValue: "owner.action"),
+            decision: approved ? .allowed : .denied,
+            subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
+            source: AuditLedger.Source.audit.rawValue, detail: detail)
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        let recorded: Bool = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: AuditLog.append(event, configDirectory: directory))
+            }
+        }
+        if recorded == false {
+            dropLog.report(.ownerAction, file: AuditLog.fileURL(configDirectory: directory), consequence: consequence)
+        }
+        return recorded
     }
 }
