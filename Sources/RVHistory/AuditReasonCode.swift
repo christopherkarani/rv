@@ -56,6 +56,16 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
 
     /// The tool's policy is `deny`.
     case mcpDeniedPolicy = "rv.mcp.denied-policy"
+    /// An argument rule reads a number rv could not parse exactly.
+    case mcpInexactNumber = "rv.mcp.inexact-number"
+    /// A tool name rv never lists, so never serves.
+    case mcpUnservedToolName = "rv.mcp.unserved-tool-name"
+    /// The tool's schema property names hide text from a client.
+    case mcpHidingSchema = "rv.mcp.hiding-schema"
+    /// An untracked tool of a server that listed one with a hiding schema.
+    case mcpHidingUntracked = "rv.mcp.hiding-untracked"
+    /// The server has not listed the tool since rv restarted it.
+    case mcpNotListedSinceRestart = "rv.mcp.not-listed-since-restart"
     /// An `ask` call the user declined, or that rv did not run after asking.
     case mcpNotApproved = "rv.mcp.not-approved"
     case mcpCallDeniedOther = "rv.mcp.call-denied-other"
@@ -132,7 +142,7 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
         switch event.kind {
         case .commandDenied: return command(event)
         case .egressDenied: return event.reason.flatMap(egress(reason:)) ?? .egressDeniedOther
-        case .mcpCall: return mcpCall(policy: event.detail["policy"])
+        case .mcpCall: return mcpCall(policy: event.detail["policy"], reason: event.reason)
         case .mcpApproval: return mcpApproval(event)
         case .secretUse, .secretMisuse: return event.detail["refusal"].flatMap(secret(refusal:)) ?? .secretRefusedOther
         case .admission: return event.detail["authorization"] == "rejected" ? .admissionRejected : .admissionDenied
@@ -159,12 +169,13 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
         }
     }
 
-    private static func mcpCall(policy: String?) -> AuditReasonCode {
-        switch policy {
-        case "deny": .mcpDeniedPolicy
-        case "ask": .mcpNotApproved
-        default: .mcpCallDeniedOther
+    /// The gateway records its own refusals under policy `deny` whatever
+    /// the tool's policy is, so the reason, not the policy, says which.
+    private static func mcpCall(policy: String?, reason: String?) -> AuditReasonCode {
+        if let denial = reason.flatMap(MCPGatewayDenial.init(recorded:)), denial != .policy || policy == "deny" {
+            return denial.code
         }
+        return policy == "ask" ? .mcpNotApproved : .mcpCallDeniedOther
     }
 
     private static func mcpApproval(_ event: AuditEvent) -> AuditReasonCode {
@@ -230,12 +241,66 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
     ]
 }
 
-/// The `mcp.approval` reasons and source `AuditReasonCode` tells apart.
-/// Writers use these constants, so a reworded reason cannot silently move
-/// its events to `rv.mcp.approval-denied-other`.
+/// The MCP reasons and source `AuditReasonCode` tells apart. Writers use
+/// these constants, so a reworded reason cannot silently move its events
+/// to an `*-other` code.
 public enum MCPAuditVocabulary {
     public static let approveSource = "rv mcp approve"
     public static let forgedGrant = "forged grant rejected"
     public static let secretRefusedAtLaunch = "secret refused at launch"
     public static let secretRefusedAtRelaunch = "secret refused at relaunch"
+
+    /// `mcp.call` refusals by the gateway itself (`MCPGatewayDenial`).
+    /// A policy denial's reason is this prefix, the server, " tool ", the tool.
+    public static let policyDeniedPrefix = "rv policy denies "
+    public static let inexactNumber = "rv will not forward a number it cannot read exactly"
+    public static let unservedToolName = "rv does not serve tools with this name"
+    public static let hidingSchema = "rv does not serve tools whose schema property names hide text"
+    public static let hidingUntracked = "the server listed more tools than rv tracks, one of them with schema property "
+        + "names that hide text, so rv does not serve its tools it does not track"
+    public static let notListedSinceRestart = "the server has not listed this tool since rv restarted it"
+}
+
+/// Why the MCP gateway refused a call on its own. The record says policy
+/// `deny` whatever the tool's policy is. The gateway records its own
+/// refusals only through this type, so each has a reason code: a new case
+/// does not compile until `code` names one.
+public enum MCPGatewayDenial: CaseIterable, Sendable {
+    case policy, inexactNumber, unservedToolName, hidingSchema, hidingUntracked, notListedSinceRestart
+
+    /// The recorded reason. Only `policy` names the server and the tool.
+    public func reason(server: String, tool: String) -> String {
+        switch self {
+        case .policy: MCPAuditVocabulary.policyDeniedPrefix + "\(server) tool \(tool)"
+        case .inexactNumber: MCPAuditVocabulary.inexactNumber
+        case .unservedToolName: MCPAuditVocabulary.unservedToolName
+        case .hidingSchema: MCPAuditVocabulary.hidingSchema
+        case .hidingUntracked: MCPAuditVocabulary.hidingUntracked
+        case .notListedSinceRestart: MCPAuditVocabulary.notListedSinceRestart
+        }
+    }
+
+    public var code: AuditReasonCode {
+        switch self {
+        case .policy: .mcpDeniedPolicy
+        case .inexactNumber: .mcpInexactNumber
+        case .unservedToolName: .mcpUnservedToolName
+        case .hidingSchema: .mcpHidingSchema
+        case .hidingUntracked: .mcpHidingUntracked
+        case .notListedSinceRestart: .mcpNotListedSinceRestart
+        }
+    }
+
+    /// The denial a recorded reason stands for, or nil when it is none of
+    /// them. Fixed reasons match exactly, and none starts with the policy
+    /// prefix, so a server or tool name cannot pose as one.
+    public init?(recorded reason: String) {
+        if reason.hasPrefix(MCPAuditVocabulary.policyDeniedPrefix) {
+            self = .policy
+            return
+        }
+        guard let match = Self.allCases.first(where: { $0 != .policy && $0.reason(server: "", tool: "") == reason })
+        else { return nil }
+        self = match
+    }
 }

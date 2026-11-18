@@ -754,12 +754,12 @@ public struct MCPGatewayCore {
         // Refused as `callTool` would now: the prompt may predate a listing
         // that left an untracked tool's binding unchanged. The record closes
         // the prompt's `ask` row, as a changed binding's does.
-        if let reason = hiddenRefusal(server: call.server, tool: call.tool) {
+        if let denial = hiddenRefusal(server: call.server, tool: call.tool) {
             let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
             return [
                 .audit(MCPCallRecord(
                     server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys, isError: true,
-                    reason: reason, outcome: .declined(approvalID: key))),
+                    reason: denial.reason(server: call.server, tool: call.tool), outcome: .declined(approvalID: key))),
                 .toClient(Self.error(id: call.client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
@@ -897,9 +897,9 @@ public struct MCPGatewayCore {
         let arguments: JSONValue
         if configuration.hasArgumentRules(server: upstream.definition, tool: tool) {
             guard let exact = rawArguments.withExactNumbers() else {
-                let reason = "rv will not forward a number it cannot read exactly"
+                let reason = MCPAuditVocabulary.inexactNumber
                 return [
-                    .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: [], isError: true, reason: reason, outcome: .notRun)),
+                    Self.refused(.inexactNumber, server: server, tool: tool, keys: [], outcome: .notRun),
                     .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
                 ]
             }
@@ -914,10 +914,10 @@ public struct MCPGatewayCore {
         let binding = toolBinding(server: server, tool: tool)
         if decision == .allow, binding.pinStatus != .pinned { decision = .ask }
         if decision == .deny {
-            let reason = "rv policy denies \(server) tool \(tool)"
-            let shown = "rv policy denies \(MCPDisplayedText.field(server)) tool \(MCPDisplayedText.field(tool))"
+            let shown = MCPGatewayDenial.policy.reason(
+                server: MCPDisplayedText.field(server), tool: MCPDisplayedText.field(tool))
             return [
-                .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true, reason: reason, outcome: .notRun)),
+                Self.refused(.policy, server: server, tool: tool, keys: keys, outcome: .notRun),
                 .toClient(Self.toolError(id: client, "\(shown). Do not retry; ask the user if you need it.")),
             ]
         }
@@ -925,19 +925,15 @@ public struct MCPGatewayCore {
         // rv serves; refusing it also keeps routing on the raw name.
         guard Self.servesToolName(tool) else {
             return [
-                .audit(MCPCallRecord(
-                    server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
-                    reason: "rv does not serve tools with this name", outcome: .notRun)),
+                Self.refused(.unservedToolName, server: server, tool: tool, keys: keys, outcome: .notRun),
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
         // Not listed either: its schema names a property a client may show
         // raw, or it may and rv could not track it.
-        if let reason = hiddenRefusal(server: server, tool: tool) {
+        if let denial = hiddenRefusal(server: server, tool: tool) {
             return [
-                .audit(MCPCallRecord(
-                    server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
-                    reason: reason, outcome: .notRun)),
+                Self.refused(denial, server: server, tool: tool, keys: keys, outcome: .notRun),
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
@@ -1156,6 +1152,16 @@ public struct MCPGatewayCore {
         ]
     }
 
+    /// The audit record of a call the gateway refused on its own. Every such
+    /// record is made here, so its reason is one `AuditReasonCode` knows.
+    static func refused(
+        _ denial: MCPGatewayDenial, server: String, tool: String, keys: [String], outcome: MCPCallRecord.Outcome
+    ) -> MCPGatewayOutput {
+        .audit(MCPCallRecord(
+            server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+            reason: denial.reason(server: server, tool: tool), outcome: outcome))
+    }
+
     /// A call to a tool the server's current launch has not listed since rv
     /// started it again: refused, never forwarded, until a listing of this
     /// launch names it.
@@ -1165,9 +1171,7 @@ public struct MCPGatewayCore {
         client: JSONValue, server: String, tool: String, exposed: String, keys: [String], approvalID: String?
     ) -> [MCPGatewayOutput] {
         [
-            .audit(MCPCallRecord(
-                server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
-                reason: "the server has not listed this tool since rv restarted it", outcome: Self.notForwarded(approvalID))),
+            Self.refused(.notListedSinceRestart, server: server, tool: tool, keys: keys, outcome: Self.notForwarded(approvalID)),
             .toClient(Self.error(
                 id: client, code: -32602,
                 message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
@@ -1596,12 +1600,12 @@ public struct MCPGatewayCore {
 
     /// Why a call to `tool` on `server` is refused as hidden, or nil: it
     /// was listed with a schema `schemaNamesHideText` rejects
-    /// (`hidingSchemaReason`), or its server listed such a tool past
+    /// (`hidingSchema`), or its server listed such a tool past
     /// `maximumTrackedTools` and rv does not track this one
-    /// (`untrackedHidingReason`).
-    func hiddenRefusal(server: String, tool: String) -> String? {
-        if hidingSchemas[server]?.contains(tool) == true { return Self.hidingSchemaReason }
-        if hidingUntracked.contains(server), observed[server]?[tool] == nil { return Self.untrackedHidingReason }
+    /// (`hidingUntracked`).
+    func hiddenRefusal(server: String, tool: String) -> MCPGatewayDenial? {
+        if hidingSchemas[server]?.contains(tool) == true { return .hidingSchema }
+        if hidingUntracked.contains(server), observed[server]?[tool] == nil { return .hidingUntracked }
         return nil
     }
 
@@ -1743,10 +1747,9 @@ public struct MCPGatewayCore {
     /// Schema keywords whose string value is display text.
     static let schemaProseKeywords: Set<String> = ["description", "title", "$comment", "markdownDescription"]
     /// Why a call to a tool `schemaNamesHideText` rejects is refused.
-    static let hidingSchemaReason = "rv does not serve tools whose schema property names hide text"
+    static let hidingSchemaReason = MCPAuditVocabulary.hidingSchema
     /// Why a call to an untracked tool of a server in `hidingUntracked` is refused.
-    static let untrackedHidingReason = "the server listed more tools than rv tracks, one of them with schema property "
-        + "names that hide text, so rv does not serve its tools it does not track"
+    static let untrackedHidingReason = MCPAuditVocabulary.hidingUntracked
     /// The words the stderr notice for such a server uses.
     static let untrackedHidingNotice = "rv now hides and refuses"
 

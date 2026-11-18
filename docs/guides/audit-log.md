@@ -214,6 +214,11 @@ writer) gets its area's `*-other` code rather than none.
 | `rv.egress.observed-denied-policy` | `egress.observed` | Audit mode let it past the allowlist |
 | `rv.egress.observed-other` | `egress.observed` | Any other would-be reason |
 | `rv.mcp.denied-policy` | `mcp.call` | The tool's policy is `deny` |
+| `rv.mcp.inexact-number` | `mcp.call` | An argument rule reads a number rv could not parse exactly |
+| `rv.mcp.unserved-tool-name` | `mcp.call` | A tool name rv never lists, so never serves |
+| `rv.mcp.hiding-schema` | `mcp.call` | The tool's schema property names hide text from a client |
+| `rv.mcp.hiding-untracked` | `mcp.call` | An untracked tool of a server that listed one with a hiding schema |
+| `rv.mcp.not-listed-since-restart` | `mcp.call` | The server has not listed the tool since rv restarted it |
 | `rv.mcp.not-approved` | `mcp.call` | An `ask` call that was declined or not run |
 | `rv.mcp.call-denied-other` | `mcp.call` | Any other denied call |
 | `rv.mcp.approval-forged` | `mcp.approval` | A grant not signed by rv was rejected |

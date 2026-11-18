@@ -64,8 +64,12 @@ enum AuditOCSFSamples {
               detail: ["refusal": "foreignPlaceholder", "method": "GET", "path": "/v1", "severity": "high"]),
         event(.mcpCall, .allowed, "fs/read", source: "mcp-gateway",
               detail: ["server": "fs", "tool": "read", "policy": "allow", "argumentKeys": "path", "isError": "false"]),
-        event(.mcpCall, .denied, "fs/write", reason: "denied by policy", source: "mcp-gateway",
-              detail: ["server": "fs", "tool": "write", "policy": "deny", "argumentKeys": "", "isError": "true"]),
+    ] + MCPGatewayDenial.allCases.map {
+        event(.mcpCall, .denied, "fs/write", reason: $0.reason(server: "fs", tool: "write"), source: "mcp-gateway",
+              detail: ["server": "fs", "tool": "write", "policy": "deny", "argumentKeys": "", "isError": "true"])
+    } + [
+        event(.mcpCall, .denied, "fs/write", reason: "declined by the user", source: "mcp-gateway",
+              detail: ["server": "fs", "tool": "write", "policy": "ask", "argumentKeys": "path", "isError": "true"]),
         event(.mcpCall, .pending, "fs/write", source: "mcp-gateway",
               detail: ["server": "fs", "tool": "write", "policy": "ask", "argumentKeys": "path", "isError": "false"]),
         event(.mcpApproval, .denied, "fs/write", reason: MCPAuditVocabulary.forgedGrant, source: "mcp-gateway",

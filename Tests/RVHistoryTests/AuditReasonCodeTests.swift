@@ -27,6 +27,11 @@ struct AuditReasonCodeTests {
         (.egressObservedDeniedPolicy, "rv.egress.observed-denied-policy"),
         (.egressObservedOther, "rv.egress.observed-other"),
         (.mcpDeniedPolicy, "rv.mcp.denied-policy"),
+        (.mcpInexactNumber, "rv.mcp.inexact-number"),
+        (.mcpUnservedToolName, "rv.mcp.unserved-tool-name"),
+        (.mcpHidingSchema, "rv.mcp.hiding-schema"),
+        (.mcpHidingUntracked, "rv.mcp.hiding-untracked"),
+        (.mcpNotListedSinceRestart, "rv.mcp.not-listed-since-restart"),
         (.mcpNotApproved, "rv.mcp.not-approved"),
         (.mcpCallDeniedOther, "rv.mcp.call-denied-other"),
         (.mcpApprovalForged, "rv.mcp.approval-forged"),
@@ -111,6 +116,43 @@ struct AuditReasonCodeTests {
 
     typealias E = AuditOCSFSamples
 
+    static func mcpDeny(_ reason: String) -> AuditEvent {
+        E.event(.mcpCall, .denied, "fs/write", reason: reason, source: "mcp-gateway", detail: ["policy": "deny"])
+    }
+
+    /// The gateway's own refusal reasons, in `MCPGatewayDenial.allCases`
+    /// order, spelled out: they are in the hash chain, so a reworded
+    /// constant must fail here.
+    static let gatewayReasons: [(String, String)] = [
+        ("rv policy denies fs tool write", "rv.mcp.denied-policy"),
+        ("rv will not forward a number it cannot read exactly", "rv.mcp.inexact-number"),
+        ("rv does not serve tools with this name", "rv.mcp.unserved-tool-name"),
+        ("rv does not serve tools whose schema property names hide text", "rv.mcp.hiding-schema"),
+        ("the server listed more tools than rv tracks, one of them with schema property "
+            + "names that hide text, so rv does not serve its tools it does not track", "rv.mcp.hiding-untracked"),
+        ("the server has not listed this tool since rv restarted it", "rv.mcp.not-listed-since-restart"),
+    ]
+
+    @Test func gatewayDenialReasonsAreUnchanged() {
+        let recorded = MCPGatewayDenial.allCases.map { $0.reason(server: "fs", tool: "write") }
+        #expect(recorded == Self.gatewayReasons.map(\.0))
+        #expect(MCPGatewayDenial.allCases.map(\.code.rawValue) == Self.gatewayReasons.map(\.1))
+    }
+
+    @Test(arguments: Self.gatewayReasons)
+    func derivesTheGatewayCode(reason: String, code: String) {
+        let event = Self.mcpDeny(reason)
+        #expect(AuditReasonCode(event)?.rawValue == code)
+        #expect(statusCode(event) == code)
+    }
+
+    /// A server or tool name cannot make a policy denial read as another.
+    @Test func policyReasonWithAFixedReasonAsToolIsStillPolicy() {
+        let tool = MCPAuditVocabulary.hidingSchema
+        let event = Self.mcpDeny(MCPGatewayDenial.policy.reason(server: "fs", tool: tool))
+        #expect(AuditReasonCode(event) == .mcpDeniedPolicy)
+    }
+
     static let derivations: [(AuditEvent, String)] = [
         (E.event(.commandDenied, .denied, "core.git:reset-hard", detail: ["category": "core.git"]), "rv.command.denied-rule"),
         (E.event(.commandDenied, .denied, "core.secrets:read", detail: ["category": "ssh"]), "rv.command.denied-secret-path"),
@@ -126,7 +168,15 @@ struct AuditReasonCodeTests {
         (E.event(.egressDenied, .denied, "a.example:443"), "rv.egress.denied-other"),
         (E.event(.egressObserved, .info, "a.example:443", reason: "denied-policy"), "rv.egress.observed-denied-policy"),
         (E.event(.egressObserved, .info, "a.example:443", reason: "dial-failed"), "rv.egress.observed-other"),
-        (E.event(.mcpCall, .denied, "fs/write", detail: ["policy": "deny"]), "rv.mcp.denied-policy"),
+        (mcpDeny("a reason rv does not know"), "rv.mcp.call-denied-other"),
+        (E.event(.mcpCall, .denied, "fs/write", detail: ["policy": "deny"]), "rv.mcp.call-denied-other"),
+        // A refusal recorded under `ask` (a prompt replayed after the tool
+        // was hidden) keeps its own code; a declined prompt is not-approved,
+        // even when its reason looks like a policy denial.
+        (E.event(.mcpCall, .denied, "fs/write", reason: "rv does not serve tools whose schema property names hide text",
+                 detail: ["policy": "ask"]), "rv.mcp.hiding-schema"),
+        (E.event(.mcpCall, .denied, "fs/write", reason: "rv policy denies fs tool write", detail: ["policy": "ask"]),
+         "rv.mcp.not-approved"),
         (E.event(.mcpCall, .denied, "fs/write", detail: ["policy": "ask"]), "rv.mcp.not-approved"),
         (E.event(.mcpCall, .denied, "fs/write"), "rv.mcp.call-denied-other"),
         (E.event(.mcpApproval, .denied, "fs/write", reason: MCPAuditVocabulary.forgedGrant), "rv.mcp.approval-forged"),
