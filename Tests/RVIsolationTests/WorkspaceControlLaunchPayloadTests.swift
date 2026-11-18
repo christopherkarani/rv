@@ -117,6 +117,10 @@ struct LaunchParityWireTests {
         for raw in [
             "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":0}",
             "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":604801}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":-1}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":1.5}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":\"30\"}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":18446744073709551615}",
             "{\"v\":1,\"ok\":true,\"op\":\"terminalOutput\",\"runtime\":\"\(id)\",\"timedOutAfter\":30}",
             "{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\",\"timedOutAfter\":30}",
         ] {

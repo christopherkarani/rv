@@ -1234,6 +1234,19 @@ struct RuntimeTerminalTests {
         terminal.detach(client: lateID)
     }
 
+    @Test func aLateSubscriberSeesTheDeadlineThatEndedTheRuntime() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        terminal.finish(status: 9, timedOutAfter: 30)
+        let late = NoticeBox()
+        let lateID = UUID()
+        #expect(terminal.subscribe(client: lateID, emit: late.append).isSuccess)
+        terminal.activate(client: lateID)
+        #expect(waitUntil(seconds: 2) { late.exitStatus == 9 })
+        #expect(late.notices.contains(.exited(9, timedOutAfter: 30)))
+        terminal.detach(client: lateID)
+    }
+
     @Test func concurrentFinishDeliversOneExitNotice() throws {
         let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
         terminal.startReader()

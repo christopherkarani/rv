@@ -349,6 +349,22 @@ struct CageProcessLimitsSeatbeltTests {
         #expect(exit.timedOutAfter == 1)
     }
 
+    /// A leader that exited on its own just before the deadline check keeps
+    /// its status: the check reaps it instead of calling it a timeout. The
+    /// child here has already exited (proved without reaping), which is the
+    /// race the check closes, with no sleep timing involved.
+    @Test func aLeaderThatAlreadyExitedAtTheDeadlineIsNotATimeout() throws {
+        let exited = try limitsSpawn(["/bin/sh", "-c", "exit 3"])
+        var info = siginfo_t()
+        #expect(waitid(P_PID, id_t(exited), &info, WEXITED | WNOWAIT) == 0)
+        #expect(seatbeltDeadlineCheck(root: exited) == .exited(3))
+        let running = try limitsSpawn(["/bin/sleep", "300"])
+        #expect(seatbeltDeadlineCheck(root: running) == .running)
+        kill(running, SIGKILL)
+        var status: Int32 = 0
+        _ = waitpid(running, &status, 0)
+    }
+
     /// An older client refuses a frame with an unknown key, so the reason
     /// goes only to a subscriber that named `runtimeExitReasonV1`.
     @Test func theExitReasonGoesOnlyToSubscribersThatAskForIt() {
@@ -455,6 +471,19 @@ private struct LimitsWorkspace {
         _ = supervisor.close()
         tree.tearDown()
     }
+}
+
+/// Spawns `argv` as this process's own child, so the test (not Foundation)
+/// decides when it is reaped.
+private func limitsSpawn(_ argv: [String]) throws -> pid_t {
+    var pid: pid_t = 0
+    let pointers = argv.map { strdup($0) } + [nil]
+    defer { pointers.forEach { free($0) } }
+    let spawned = pointers.withUnsafeBufferPointer { buffer in
+        posix_spawn(&pid, argv[0], nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress), environ)
+    }
+    try #require(spawned == 0 && pid > 1)
+    return pid
 }
 
 private final class LimitsNotices: Sendable {

@@ -1409,14 +1409,22 @@ private func waitForSeatbeltSession(
     var matcher = HandshakePrefixMatcher(expected: expected, preface: preface)
     var recorded: Set<pid_t> = [root]
     var deadlineReached = false
+    var reapedAtDeadline = false
     while true {
         // The deadline reuses the cancel path below: the same group kill,
         // reap and teardown budget. Marked before the request, so whoever
-        // reads the cancel also sees why.
+        // reads the cancel also sees why. A leader that already exited
+        // ended on its own: its status stands and it is not a timeout.
         if let deadline, deadlineReached == false, stop.isRequested == false, ContinuousClock.now >= deadline {
             deadlineReached = true
-            onTimedOut()
-            stop.request()
+            switch seatbeltDeadlineCheck(root: root) {
+            case .exited(let status):
+                outcome.status = status
+                reapedAtDeadline = true
+            case .running:
+                onTimedOut()
+                stop.request()
+            }
         }
         if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
@@ -1434,11 +1442,12 @@ private func waitForSeatbeltSession(
         drain()
         recorded.formUnion(visibleSessionPIDs(root: root))
         var status: Int32 = 0
-        let waited = waitpid(root, &status, WNOHANG)
+        let waited = reapedAtDeadline ? -1 : waitpid(root, &status, WNOHANG)
         if waited == root {
             outcome.status = exitStatus(status)
         }
-        let rootGone = waited == root || (waited < 0 && errno == ECHILD && outcome.status != nil)
+        let rootGone = waited == root || reapedAtDeadline
+            || (waited < 0 && errno == ECHILD && outcome.status != nil)
         if outcome.cancelled || rootGone {
             admission.finish()
             // Definitive leader death is session death: this branch kills
@@ -1474,6 +1483,23 @@ private func waitForSeatbeltSession(
         }
         usleep(10_000)
     }
+}
+
+/// What the watch finds when a runtime's deadline arrives.
+enum SeatbeltDeadlineCheck: Equatable {
+    /// The leader had already exited, with this status; it was reaped here.
+    case exited(Int32)
+    /// The leader is still running: the deadline stops it.
+    case running
+}
+
+/// Reaps the leader if it exited before the deadline check, so a runtime
+/// that ended on its own at the deadline's edge keeps its status instead
+/// of being reported as stopped by the deadline.
+func seatbeltDeadlineCheck(root: pid_t) -> SeatbeltDeadlineCheck {
+    var status: Int32 = 0
+    guard waitpid(root, &status, WNOHANG) == root else { return .running }
+    return .exited(exitStatus(status))
 }
 
 /// Grants stdio and the handshake write end. Admission fds are added by the
