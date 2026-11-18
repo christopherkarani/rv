@@ -384,6 +384,46 @@ struct WorkspaceDownloadTests {
         #expect(fixture.read(directory ? target + "/keep" : target) == "mine")
     }
 
+    @Test func ignoredEntriesCountTowardTheNameCap() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/out/.gitignore", "*.log\n")
+        try fixture.write(fixture.workspace + "/out/keep.txt", "k")
+        for index in 0..<5 { try fixture.write(fixture.workspace + "/out/\(index).log", "l") }
+        var limits = WorkspaceTransferLimits.standard
+        limits.maxNames = 4
+        #expect(refusal(fixture.download("out", to: fixture.host + "/results", limits: limits)) == .tooManyNames(4))
+        limits.maxNames = 7
+        #expect(refusal(fixture.download("out", to: fixture.host + "/results", limits: limits)) == nil)
+    }
+
+    @Test func gitignoreRulesAreCappedAndOversizedFilesRefuse() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/out/.gitignore", "a\nb\nc\n")
+        try fixture.write(fixture.workspace + "/out/keep.txt", "k")
+        var limits = WorkspaceTransferLimits.standard
+        limits.maxIgnoreRules = 2
+        #expect(refusal(fixture.download("out", to: fixture.host + "/r1", limits: limits)) == .tooManyIgnoreRules(2))
+        limits = .standard
+        limits.maxIgnoreBytes = 2
+        #expect(refusal(fixture.download("out", to: fixture.host + "/r2", limits: limits)) == .tooManyIgnoreRules(limits.maxIgnoreRules))
+        try fixture.write(fixture.workspace + "/big/.gitignore", String(repeating: "x\n", count: 200 * 1024))
+        try fixture.write(fixture.workspace + "/big/keep.txt", "k")
+        #expect(refusal(fixture.download("big", to: fixture.host + "/r3")) == .tooManyIgnoreRules(WorkspaceTransferLimits.standard.maxIgnoreRules))
+    }
+
+    @Test func aDirectorysRulesDoNotLeakToItsSiblings() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/out/a/.gitignore", "x\n")
+        try fixture.write(fixture.workspace + "/out/a/x", "ignored")
+        try fixture.write(fixture.workspace + "/out/b/x", "kept")
+        _ = try fixture.download("out", to: fixture.host + "/results").get()
+        #expect(fixture.exists(fixture.host + "/results/a/x") == false)
+        #expect(fixture.read(fixture.host + "/results/b/x") == "kept")
+    }
+
     @Test func refusesSpecialFiles() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }

@@ -11,6 +11,9 @@
 /// less or more than git would, never reach a path outside the transfer.
 struct GitignoreRules: Sendable, Equatable {
     private var rules: [Rule] = []
+    /// Pattern bytes held by `rules`, for the caller's memory cap.
+    private(set) var heldBytes = 0
+    var count: Int { rules.count }
 
     /// Path segments longer than this, or patterns with more segments, are
     /// not matched (treated as "no match"): matching stays bounded.
@@ -23,16 +26,30 @@ struct GitignoreRules: Sendable, Equatable {
         let directoryOnly: Bool
         /// No slash in the pattern: match the last path component at any depth.
         let nameOnly: Bool
+        let byteCount: Int
     }
 
     /// The rules of one `.gitignore` in directory `base` (relative to the
     /// transfer root), after the rules already held.
     func adding(_ text: String, base: [String]) -> GitignoreRules {
         var copy = self
-        for line in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
-            if let rule = Self.parse(String(line), base: base) { copy.rules.append(rule) }
-        }
+        copy.append(text, base: base)
         return copy
+    }
+
+    /// In place, so a tree walk can push a directory's rules and `truncate`
+    /// them on the way out instead of copying the stack per level.
+    mutating func append(_ text: String, base: [String]) {
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
+            if let rule = Self.parse(String(line), base: base) {
+                rules.append(rule)
+                heldBytes += rule.byteCount
+            }
+        }
+    }
+
+    mutating func truncate(to count: Int) {
+        while rules.count > count { heldBytes -= rules.removeLast().byteCount }
     }
 
     /// Whether `path` (components relative to the transfer root) is ignored.
@@ -70,7 +87,10 @@ struct GitignoreRules: Sendable, Equatable {
         let parts = line.split(separator: "/", omittingEmptySubsequences: true).map { Array($0) }
         guard parts.isEmpty == false, parts.count <= maxSegments else { return nil }
         anchored = anchored || parts.count > 1
-        return Rule(base: base, segments: parts, negated: negated, directoryOnly: directoryOnly, nameOnly: anchored == false)
+        return Rule(
+            base: base, segments: parts, negated: negated, directoryOnly: directoryOnly,
+            nameOnly: anchored == false, byteCount: line.utf8.count
+        )
     }
 
     private static func trimmingUnescapedTrailingSpaces(_ line: String) -> String {

@@ -180,7 +180,9 @@ extension WorkspaceTransfer {
         if NodeKind(info) == .directory {
             let fd = openDirectoryAt(parent, name)
             if fd >= 0 {
-                for child in directoryNames(fd) ?? [] {
+                var children: [[UInt8]] = []
+                if case .names(let listed) = directoryNames(fd) { children = listed }
+                for child in children {
                     if let childName = String(validating: child, as: UTF8.self) { removeTree(fd, childName) }
                 }
                 close(fd)

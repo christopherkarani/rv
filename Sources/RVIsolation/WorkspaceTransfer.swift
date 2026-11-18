@@ -13,11 +13,23 @@ public struct WorkspaceTransferLimits: Sendable, Equatable {
     public var maxBytes: UInt64
     /// Components below the transferred top.
     public var maxDepth: Int
+    /// Directory entries read, ignored ones included.
+    public var maxNames: Int
+    /// `.gitignore` rules held at once (the rules of one directory chain).
+    public var maxIgnoreRules: Int
+    /// Pattern bytes of those rules.
+    public var maxIgnoreBytes: Int
 
-    public init(maxEntries: Int, maxBytes: UInt64, maxDepth: Int) {
+    public init(
+        maxEntries: Int, maxBytes: UInt64, maxDepth: Int,
+        maxNames: Int = 200_000, maxIgnoreRules: Int = 10_000, maxIgnoreBytes: Int = 1 << 20
+    ) {
         self.maxEntries = maxEntries
         self.maxBytes = maxBytes
         self.maxDepth = maxDepth
+        self.maxNames = maxNames
+        self.maxIgnoreRules = maxIgnoreRules
+        self.maxIgnoreBytes = maxIgnoreBytes
     }
 
     public static let standard = WorkspaceTransferLimits(maxEntries: 20_000, maxBytes: 2 << 30, maxDepth: 64)
@@ -70,6 +82,11 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
     case tooManyEntries(Int)
     case tooLarge(UInt64)
     case tooDeep(Int)
+    /// More directory entries than `maxNames`, ignored ones included.
+    case tooManyNames(Int)
+    /// More `.gitignore` rules (or bytes of them) than the caps, or one
+    /// `.gitignore` over 256 KiB.
+    case tooManyIgnoreRules(Int)
     case nothingSelected
     /// The tree changed between planning and copying.
     case changed(String)
@@ -93,6 +110,8 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
         case .tooManyEntries(let limit): "more than \(limit) files and directories"
         case .tooLarge(let limit): "more than \(limit) bytes"
         case .tooDeep(let limit): "nested more than \(limit) directories deep"
+        case .tooManyNames(let limit): "more than \(limit) directory entries, ignored ones included"
+        case .tooManyIgnoreRules(let limit): "more than \(limit) .gitignore rules, or an oversized .gitignore"
         case .nothingSelected: "nothing to copy (everything is ignored)"
         case .changed(let path): "\(path) changed during the transfer; nothing more was copied"
         case .io(let path, let code): "\(path): \(String(cString: strerror(code)))"
@@ -323,20 +342,31 @@ func openDirectoryAt(_ parent: Int32, _ name: String) -> Int32 {
 }
 
 /// Entry names of an open directory as raw bytes, `.`/`..` dropped.
-func directoryNames(_ fd: Int32) -> [[UInt8]]? {
+enum DirectoryListing {
+    case names([[UInt8]])
+    /// More than the limit: reading stopped there.
+    case tooMany
+    case failed(Int32)
+}
+
+/// Entry names of an open directory as raw bytes, `.`/`..` dropped, at
+/// most `limit` of them.
+func directoryNames(_ fd: Int32, limit: Int = .max) -> DirectoryListing {
     let copy = dup(fd)
-    guard copy >= 0 else { return nil }
+    guard copy >= 0 else { return .failed(errno) }
     guard let stream = fdopendir(copy) else {
+        let code = errno
         close(copy)
-        return nil
+        return .failed(code)
     }
     defer { closedir(stream) }
     var names: [[UInt8]] = []
     while true {
         errno = 0
-        guard let entry = readdir(stream) else { return errno == 0 ? names : nil }
+        guard let entry = readdir(stream) else { return errno == 0 ? .names(names) : .failed(errno) }
         let bytes = withUnsafeBytes(of: &entry.pointee.d_name) { raw in Array(raw.prefix(while: { $0 != 0 })) }
         if bytes == [0x2E] || bytes == [0x2E, 0x2E] { continue }
+        guard names.count < limit else { return .tooMany }
         names.append(bytes)
     }
 }
@@ -433,6 +463,10 @@ private struct TreePlanner {
     /// Directories no upload may read (rv's config dir, the workspace).
     var forbidden: Set<NodeIdentity> = []
     var plan = TransferPlan()
+    /// Rules of the directories on the current path only (pushed on entry,
+    /// truncated on exit).
+    private var rules = GitignoreRules()
+    private var namesRead = 0
 
     private static let maxGitignoreBytes = 256 * 1024
 
@@ -452,7 +486,7 @@ private struct TreePlanner {
         guard fd >= 0 else { return .io(display([]), errno) }
         defer { close(fd) }
         guard let opened = fstatOf(fd), NodeIdentity(opened) == NodeIdentity(info) else { return .changed(display([])) }
-        if let refusal = planDirectory(fd, path: [], rules: GitignoreRules()) { return refusal }
+        if let refusal = planDirectory(fd, path: []) { return refusal }
         return checkSelection()
     }
 
@@ -483,8 +517,14 @@ private struct TreePlanner {
         return nil
     }
 
-    private mutating func planDirectory(_ fd: Int32, path: [String], rules inherited: GitignoreRules) -> WorkspaceTransferRefusal? {
-        guard let raw = directoryNames(fd) else { return .io(display(path), errno) }
+    private mutating func planDirectory(_ fd: Int32, path: [String]) -> WorkspaceTransferRefusal? {
+        let raw: [[UInt8]]
+        switch directoryNames(fd, limit: limits.maxNames - namesRead) {
+        case .tooMany: return .tooManyNames(limits.maxNames)
+        case .failed(let code): return .io(display(path), code)
+        case .names(let listed): raw = listed
+        }
+        namesRead += raw.count
         var names: [String] = []
         for bytes in raw {
             guard WorkspaceTransfer.isSafeName(bytes), let name = String(validating: bytes, as: UTF8.self) else {
@@ -493,9 +533,15 @@ private struct TreePlanner {
             names.append(name)
         }
         names.sort()
-        var rules = inherited
-        if gitignore, names.contains(".gitignore"), let text = readGitignore(fd) {
-            rules = rules.adding(text, base: path)
+        let held = rules.count
+        defer { rules.truncate(to: held) }
+        if gitignore, names.contains(".gitignore") {
+            let read = readGitignore(fd)
+            if read.oversized { return .tooManyIgnoreRules(limits.maxIgnoreRules) }
+            if let text = read.text { rules.append(text, base: path) }
+            if rules.count > limits.maxIgnoreRules || rules.heldBytes > limits.maxIgnoreBytes {
+                return .tooManyIgnoreRules(limits.maxIgnoreRules)
+            }
         }
         for name in names {
             let childPath = path + [name]
@@ -519,17 +565,20 @@ private struct TreePlanner {
             guard let opened = fstatOf(child), NodeIdentity(opened) == NodeIdentity(info) else {
                 return .changed(display(childPath))
             }
-            if let refusal = planDirectory(child, path: childPath, rules: rules) { return refusal }
+            if let refusal = planDirectory(child, path: childPath) { return refusal }
         }
         return nil
     }
 
-    /// A regular `.gitignore` of bounded size; anything else contributes no rules.
-    private func readGitignore(_ directory: Int32) -> String? {
+    /// A regular `.gitignore` of bounded size; a non-regular one contributes
+    /// no rules (the walk refuses it as an entry anyway), an oversized one
+    /// refuses the transfer.
+    private func readGitignore(_ directory: Int32) -> (text: String?, oversized: Bool) {
         let fd = ".gitignore".withCString { openat(directory, $0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) }
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else { return (nil, false) }
         defer { close(fd) }
-        guard let info = fstatOf(fd), NodeKind(info) == .file, info.st_size <= Self.maxGitignoreBytes else { return nil }
+        guard let info = fstatOf(fd), NodeKind(info) == .file else { return (nil, false) }
+        guard info.st_size <= Self.maxGitignoreBytes else { return (nil, true) }
         var bytes: [UInt8] = []
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         while bytes.count <= Self.maxGitignoreBytes {
@@ -538,7 +587,8 @@ private struct TreePlanner {
             guard count > 0 else { break }
             bytes += buffer.prefix(count)
         }
-        return String(decoding: bytes.prefix(Self.maxGitignoreBytes), as: UTF8.self)
+        guard bytes.count <= Self.maxGitignoreBytes else { return (nil, true) }
+        return (String(decoding: bytes, as: UTF8.self), false)
     }
 }
 
