@@ -30,7 +30,8 @@ private func launchWeakens(_ launched: LaunchedCommand, xargsDepth: Int) -> Bool
 /// replace-string occurrence (`-I %`): unmodelled, so it counts as a
 /// flag-gated write (`draft`/`rollback --save`) and as a dynamic verb. A
 /// re-fed command whose head is or contains it runs a program stdin
-/// chose (`xargs sudo`, `xargs -I{} sh -c '{}'`): refused.
+/// chose (`xargs sudo`, `xargs -I{} sh -c '{}'`): refused, as is a shell or
+/// `eval` script that holds it (`scriptTakesStdin`).
 private let xargsStdinWord = "$xargs-stdin"
 
 private let xargsProgramNames: Set<String> = ["xargs", "gxargs"]
@@ -68,9 +69,21 @@ private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand, depth: I
     let substituted = substitutingReplaceStrings(parsed.replaceStrings, in: program)
     if substituted != program { variants.append(substituted + stdin) }
     return variants.contains { argv in
-        launchedCommandHeads(argv: argv, depth: depth + 1).contains { fed in
+        scriptTakesStdin(argv) || launchedCommandHeads(argv: argv, depth: depth + 1).contains { fed in
             fed.head.contains(xargsStdinWord) || launchWeakens(fed, xargsDepth: depth + 1)
         }
+    }
+}
+
+/// A shell or `eval` with the stdin stand-in in any later word: xargs pastes
+/// stdin into the script text (`xargs -I% sh -c 'echo %'` with stdin
+/// `x; rv uninstall`), so stdin may run any command. Any later word counts,
+/// not only a `-c` payload, and the shell may follow a wrapper: fail closed.
+private func scriptTakesStdin(_ argv: [String]) -> Bool {
+    argv.indices.contains { index in
+        let name = commandName(argv[index])
+        return (shellNames.contains(name) || name == "eval")
+            && argv[(index + 1)...].contains { $0.contains(xargsStdinWord) }
     }
 }
 
