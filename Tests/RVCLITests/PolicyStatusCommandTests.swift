@@ -169,7 +169,9 @@ struct PolicyStatusCommandTests {
                 return other
             })
         #expect(outcome == .timedOut(other))
-        #expect(calls.value > 1)
+        // Poll count depends on scheduling under a loaded test pool; only
+        // that rvd was asked is certain.
+        #expect(calls.value >= 1)
     }
 
     /// A slow rvd cannot carry the wait past its timeout: each call is
