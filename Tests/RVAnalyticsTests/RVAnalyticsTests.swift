@@ -112,6 +112,37 @@ struct AnalyticsPreferencesTests {
         try Data(#"{"analytics":{"enabled":"yes"}}"#.utf8).write(to: paths.configFile)
         #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
+
+    @Test func nonBooleanInEitherFormDisablesAnalytics() throws {
+        // On only for an unambiguous boolean true: a present key that is not a
+        // boolean, or an `analytics` that is not an object, means off even when
+        // the other form says true.
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        let documents = [
+            #"{"analytics":{"enabled":true},"analytics.enabled":"false"}"#,
+            #"{"analytics":{"enabled":"false"},"analytics.enabled":true}"#,
+            #"{"analytics":{"enabled":null},"analytics.enabled":true}"#,
+            #"{"analytics":{"enabled":true},"analytics.enabled":null}"#,
+            #"{"analytics":"off","analytics.enabled":true}"#,
+            #"{"analytics":null,"analytics.enabled":true}"#,
+            #"{"analytics":[true],"analytics.enabled":true}"#,
+            #"{"analytics":{"enabled":true},"analytics.enabled":"off"}"#,
+            #"{"analytics":{"enabled":true},"analytics.enabled":{}}"#,
+        ]
+        for json in documents {
+            try Data(json.utf8).write(to: paths.configFile)
+            #expect(AnalyticsPreferences.load(from: paths).isEnabled == false, "\(json)")
+        }
+    }
+
+    @Test func emptyAnalyticsObjectWithFlatTrueEnables() throws {
+        // `analytics` is an object without `enabled`: only the flat key is present.
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics":{},"analytics.enabled":true}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+    }
 }
 
 @Suite("AnalyticsIdentity")
@@ -302,6 +333,98 @@ struct AnalyticsBootstrapTests {
         #expect(FileManager.default.fileExists(atPath: fakeHome
             .appendingPathComponent(".config/rv/analytics-id").path))
     }
+
+    @Test func noOptInDiscardsLeftoverUsageCounts() throws {
+        let fakeHome = try temporaryConfigRoot()
+        let paths = try writeLeftoverAnalyticsFiles(home: fakeHome)
+        let result = AnalyticsBootstrap.makeLive(
+            productVersion: "1.0.0",
+            sink: RecordingAnalyticsSink(),
+            environment: ["HOME": fakeHome.path]
+        )
+        #expect(result == nil)
+        #expect(FileManager.default.fileExists(atPath: paths.countersFile.path) == false)
+        #expect(FileManager.default.fileExists(atPath: paths.hostsFile.path) == false)
+        // The id and the install marker stay as they were; nothing else appears.
+        #expect(try String(contentsOf: paths.identityFile, encoding: .utf8) == "old-id")
+        #expect(FileManager.default.fileExists(atPath: paths.installSentFile.path))
+        let names = try FileManager.default.contentsOfDirectory(atPath: paths.configDirectory.path).sorted()
+        #expect(names == ["analytics-id", "analytics-install-sent"])
+    }
+
+    @Test func noOptInUnlinksSymlinkedCountersWithoutTouchingTarget() throws {
+        let fakeHome = try temporaryConfigRoot()
+        let configDir = fakeHome
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("rv", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let paths = AnalyticsPaths(configDirectory: configDir)
+        let target = fakeHome.appendingPathComponent("not-analytics.json", isDirectory: false)
+        try Data(#"{"keep":true}"#.utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: paths.countersFile, withDestinationURL: target)
+        #expect(
+            AnalyticsBootstrap.makeLive(
+                productVersion: "1.0.0",
+                sink: RecordingAnalyticsSink(),
+                environment: ["HOME": fakeHome.path]
+            ) == nil
+        )
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: paths.countersFile.path)) == nil)
+        #expect(try Data(contentsOf: target) == Data(#"{"keep":true}"#.utf8))
+    }
+
+    @Test func laterOptInSendsNoCountsGatheredBeforeIt() async throws {
+        let fakeHome = try temporaryConfigRoot()
+        try writeLeftoverAnalyticsFiles(home: fakeHome)
+        // Off first (no config), as on an upgraded install that never opted in.
+        _ = AnalyticsBootstrap.makeLive(
+            productVersion: "1.0.0",
+            sink: RecordingAnalyticsSink(),
+            environment: ["HOME": fakeHome.path]
+        )
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
+        let sink = RecordingAnalyticsSink()
+        let live = try #require(
+            AnalyticsBootstrap.makeLive(
+                productVersion: "1.0.0",
+                sink: sink,
+                environment: ["HOME": fakeHome.path]
+            )
+        )
+        await live.flushDailyIfNeeded(now: day(2026, 8, 22))
+        let events = await sink.events
+        #expect(events.map(\.event) == [AnalyticsPayload.dailyActiveEvent])
+        let daily = try #require(events.first)
+        #expect(daily.properties["allow_count"] == .int(0))
+        #expect(daily.properties["deny_count"] == .int(0))
+        #expect(daily.properties["indeterminate_count"] == .int(0))
+        #expect(daily.properties["enabled_packs"] == .strings([]))
+        #expect(daily.properties.keys.contains { $0.hasPrefix("host_") } == false)
+    }
+}
+
+/// Analytics files as an install that ran under the old on-by-default left them:
+/// counts and hosts gathered without an opt-in, an id, and the install marker.
+@discardableResult
+private func writeLeftoverAnalyticsFiles(home: URL) throws -> AnalyticsPaths {
+    let configDir = home
+        .appendingPathComponent(".config", isDirectory: true)
+        .appendingPathComponent("rv", isDirectory: true)
+    try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+    let paths = AnalyticsPaths(configDirectory: configDir)
+    let counters = AnalyticsCounterState(
+        allowCount: 7,
+        denyCount: 3,
+        indeterminateCount: 2,
+        lastFlushDay: "",
+        enabledPackIDs: ["core.git"],
+        hosts: ["pi": "wired"]
+    )
+    try JSONEncoder().encode(counters).write(to: paths.countersFile)
+    try Data(#"{"pi":"wired"}"#.utf8).write(to: paths.hostsFile)
+    try Data("old-id".utf8).write(to: paths.identityFile)
+    try Data("1".utf8).write(to: paths.installSentFile)
+    return paths
 }
 
 @Suite("PostHogSink")
