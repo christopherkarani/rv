@@ -111,6 +111,14 @@ public struct EgressHostPolicy: Sendable, Equatable {
         }
     }
 
+    /// What audit mode may let through: the allowlist without its host
+    /// membership test. The port and DNS-name shape still hold, so no IP
+    /// literal, single label, or `localhost`; `.publicHTTPS` audits nothing.
+    public func auditAdmits(host: String, port: Int) -> Bool {
+        guard mode == .allowlist, port == allowedPort else { return false }
+        return canonicalEgressDNSName(host) != nil
+    }
+
     /// The owner-set private networks for `host`, or nil when the host
     /// may reach public unicast only.
     public func allowedIPs(forHost host: String) -> EgressAllowedIPs? {

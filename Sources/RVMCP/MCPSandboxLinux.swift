@@ -106,7 +106,9 @@ extension MCPSandbox {
         definition: MCPServerDefinition, launch: MCPUpstreamLaunch, policy: MCPSandboxPolicy, configDirectory: URL,
         home: URL, accountHome: String? = passwdHome(), support: MCPLinuxCageSupport = MCPSandbox.linuxSupport,
         helper: String? = MCPSandbox.linuxHelper, notice: (String) -> Void,
-        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void
+        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void,
+        enforcement: MCPSandboxEnforcement = .enforce,
+        audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool = { _, _ in false }
     ) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         let server = definition.name
         let abi: LandlockABI
@@ -180,10 +182,9 @@ extension MCPSandbox {
         var proxyPort: UInt16?
         if policy.hosts.isEmpty == false {
             let credential = proxyCredential()
-            let proxy = EgressProxy(
-                policy: EgressHostPolicy(
-                    allowedHosts: Set(policy.hosts), allowedIPs: policy.allowedIPs, relaysLoopback: false),
-                record: { denied(server, $0) }, clientCredential: credential)
+            let proxy = hostsProxy(
+                server: server, hosts: policy.hosts, allowedIPs: policy.allowedIPs, enforcement: enforcement,
+                credential: credential, denied: denied, audited: audited)
             guard case .success(let port) = proxy.start(), let tcp = UInt16(exactly: port), tcp != 0 else {
                 return .failure(.sandbox("could not start the egress proxy for \(server)"))
             }

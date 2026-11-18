@@ -126,6 +126,9 @@ public enum AuditOCSF {
         if kind == .egressDenied {
             return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse")
         }
+        if kind == .egressObserved {
+            return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 6, activityName: "Traffic")
+        }
         if kind == .commandDenied || kind == .commandObserved {
             return Class(uid: 1007, name: "Process Activity", category: 1, categoryName: "System Activity", activity: 1, activityName: "Launch")
         }

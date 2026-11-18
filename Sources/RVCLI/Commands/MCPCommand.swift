@@ -85,6 +85,11 @@ enum MCPRun {
         var integrityProblem: String?
         var rows: [Row]
         var problems: [Problem]
+        /// Servers whose `sandbox.hosts` serve in audit mode.
+        var sandboxAudit: [String] = []
+        /// Servers that ask for audit mode but enforce (organization policy
+        /// or an untrusted mcp.json).
+        var sandboxAuditIgnored: [String] = []
 
         var failing: [Row] {
             rows.filter { MCPEntryStatus(rawValue: $0.status)?.isAcceptable == false }
@@ -207,6 +212,7 @@ enum MCPRun {
         let integrity = environment.integrity
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
         problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
+        let auditing = configuration.servers.filter { $0.sandbox?.enforcement == .audit }
         return Report(
             servers: configuration.servers.count,
             direct: configuration.direct.count,
@@ -214,7 +220,36 @@ enum MCPRun {
             integrity: integrity.label,
             integrityProblem: integrity.problem,
             rows: rows,
-            problems: problems)
+            problems: problems,
+            sandboxAudit: auditing.filter {
+                configuration.sandboxEnforcement(for: $0, integrity: integrity) == .audit
+            }.map(\.name),
+            sandboxAuditIgnored: auditing.filter {
+                configuration.sandboxEnforcement(for: $0, integrity: integrity) == .enforce
+            }.map(\.name))
+    }
+
+    /// The sandbox enforcement `rv mcp serve` applies: judged against the
+    /// integrity of the same bytes it launches from.
+    static func serveEnforcement(
+        _ bound: MCPBoundConfiguration
+    ) -> @Sendable (MCPServerDefinition) -> MCPSandboxEnforcement {
+        let configuration = bound.configuration
+        let integrity = bound.integrity
+        return { configuration.sandboxEnforcement(for: $0, integrity: integrity) }
+    }
+
+    /// Audit mode is the owner's choice, so it warns instead of failing check.
+    static func sandboxAuditLines(_ report: Report) -> [String] {
+        let active = report.sandboxAudit.map {
+            "warning: \(reviewField($0)) sandbox.hosts is in audit mode: other hosts are allowed and logged"
+                + " (`rv audit tail --kind egress.observed`)"
+        }
+        let ignored = report.sandboxAuditIgnored.map {
+            "note: \(reviewField($0)) asks for sandbox audit mode, but organization policy or an untrusted mcp.json"
+                + " keeps it off; sandbox.hosts is enforced"
+        }
+        return active + ignored
     }
 
     static func listText(_ report: Report, home: URL) -> String {
@@ -250,6 +285,7 @@ enum MCPRun {
         lines.append(summary(report))
         lines += problemLines(report, home: home)
         if let problem = report.integrityProblem { lines.append("warning: " + reviewField(problem)) }
+        lines += sandboxAuditLines(report)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -278,6 +314,7 @@ enum MCPRun {
                 "warning: \(leaks.count) host entr\(leaks.count == 1 ? "y holds" : "ies hold") plaintext credentials ("
                     + leaks.map { reviewField($0.name) }.joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
         }
+        lines += sandboxAuditLines(report)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -707,7 +744,24 @@ enum MCPRun {
         environment.approvalSigning.beginFreshAuth()
         var done: [String] = []
         if configTrusted == false {
-            guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
+            let sign = { MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) }
+            let signed: Bool
+            if let event = sandboxAuditChange(configuration, sha256: digest, method: method) {
+                // Audit mode loosens sandbox.hosts: record it before signing, or refuse.
+                do {
+                    signed = try ConfigChangeAudit.commit(event, configDirectory: environment.configDirectory) {
+                        guard sign() else { throw MCPTrustSigningFailed() }
+                        return true
+                    }
+                } catch let unrecorded as ConfigChangeUnrecorded {
+                    return .failure(CommandFailure("\(unrecorded)", exitCode: ConfigChangeRefusal.exitCode))
+                } catch {
+                    signed = false
+                }
+            } else {
+                signed = sign()
+            }
+            guard signed else {
                 return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
             }
             guard environment.integrity == .trusted else {
@@ -828,6 +882,20 @@ enum MCPRun {
         return .success(review)
     }
 
+    /// The `config.changed` event for trusting a file that puts servers in
+    /// sandbox audit mode, or nil when every `sandbox.hosts` enforces.
+    static func sandboxAuditChange(_ configuration: MCPConfiguration, sha256: String, method: String) -> AuditEvent? {
+        let servers = configuration.servers.filter { $0.sandbox?.enforcement == .audit }.map(\.name)
+        guard servers.isEmpty == false else { return nil }
+        return ConfigChangeAudit.event(
+            .configChanged, subject: "mcp.sandbox.enforcement",
+            detail: [
+                "setting": "mcp.sandbox.enforcement", "new": MCPSandboxEnforcement.audit.rawValue,
+                "servers": ConfigChangeAudit.list(servers), "sha256": sha256, "authorized_by": "owner (\(method))",
+            ],
+            direction: .loosening)
+    }
+
     /// `secrets` is secrets.json as it reads now: it only says which
     /// variables a placeholder sets and where its real value goes.
     static func trustReview(
@@ -895,6 +963,10 @@ enum MCPRun {
                         rules.append(
                             "private networks for " + sandbox.allowedIPs.keys.sorted().map(visible).joined(separator: ", ")
                                 + " (loosens public-only)")
+                    }
+                    if sandbox.enforcement == .audit {
+                        rules.append("audit: other hosts are allowed and logged")
+                        lines.append("    sandbox enforcement audit")
                     }
                 } else if sandbox.network == false {
                     rules.append("no network")
@@ -1565,6 +1637,9 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] where lines.contains("    host \(visible(host))") == false {
             return false
         }
+        if server.sandbox?.enforcement == .audit, lines.contains("    sandbox enforcement audit") == false {
+            return false
+        }
         if let sandbox = server.sandbox {
             for line in allowedIPLines(sandbox) where lines.contains(line) == false { return false }
         }
@@ -1723,11 +1798,12 @@ struct MCPServe: AsyncParsableCommand {
             MCPGatewayRuntime.writeStderrLine(line)
             throw ExitCode(1)
         }
-        let configuration: MCPConfiguration
-        switch MCPRun.configuration(environment) {
+        let bound: MCPRun.MCPBoundConfiguration
+        switch MCPRun.boundConfiguration(environment) {
         case .failure(let failure): try fail(failure.message)
-        case .success(let loaded): configuration = loaded
+        case .success(let loaded): bound = loaded
         }
+        let configuration = bound.configuration
         var seen = Set<String>()
         let names = (servers.isEmpty ? configuration.servers.map(\.name) : servers).filter { seen.insert($0).inserted }
         guard names.isEmpty == false else { try fail("mcp.json defines no servers; see `rv mcp import`") }
@@ -1758,6 +1834,10 @@ struct MCPServe: AsyncParsableCommand {
         // Relaunches are planned from this plan, which only
         // `upstreamLaunches` makes: from the configuration it verified for
         // these launches, never the read above.
+        // One enforcement answer and one audit-pass budget for the life of
+        // serve: a relaunch must neither drop audit mode nor reset the budget.
+        let sandboxEnforcement = MCPRun.serveEnforcement(bound)
+        let auditPasses = DenialAudit.observed(configDirectory: environment.configDirectory)
         let plan: MCPServePlan
         let outcome = signals.plan {
             MCPRun.upstreamLaunches(
@@ -1765,7 +1845,8 @@ struct MCPServe: AsyncParsableCommand {
                 resolver: .live(home: home.rawValue),
                 sandbox: MCPSandbox.apply(
                     configDirectory: environment.configDirectory, home: environment.home,
-                    denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)),
+                    denied: DenialAudit.forwarder(configDirectory: environment.configDirectory),
+                    enforcement: sandboxEnforcement, audited: auditPasses),
                 placeholders: .broker(placeholderBroker))
         }
         guard let outcome, signals.first == nil else {
@@ -1822,7 +1903,8 @@ struct MCPServe: AsyncParsableCommand {
                 sandbox: {
                     MCPSandbox.apply(
                         configDirectory: environment.configDirectory, home: environment.home,
-                        denied: DenialAudit.forwarder(configDirectory: environment.configDirectory))
+                        denied: DenialAudit.forwarder(configDirectory: environment.configDirectory),
+                        enforcement: sandboxEnforcement, audited: auditPasses)
                 }),
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
@@ -1907,7 +1989,7 @@ struct MCPTrust: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp trust", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         switch await MCPRun.trust(environment: environment, show: { ctx.writeStdout($0) }) {
-        case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -2068,4 +2150,54 @@ enum DenialAudit {
                 configDirectory: configDirectory)
         }
     }
+
+    /// Audit passes each server may make per minute. Past it the proxy
+    /// denies `denied-policy` (audited like any denial, through
+    /// `forwarder`), so audit passes are budgeted.
+    static let observedPerMinute = 60
+
+    /// Audit-mode passes (`sandbox.enforcement: audit`). Each one let a
+    /// request out, so each is its own fsync'd `egress.observed` event,
+    /// written after the SNI check and before the dial. It means "admitted
+    /// past the host list"; a following `egress.denied` for the same host
+    /// (dial filter, DNS) means the request still failed. Returns false (the
+    /// proxy denies) when the append fails or the server's per-minute budget
+    /// is spent. Only the caged server holding the proxy credential reaches
+    /// this path.
+    static func observed(
+        configDirectory: URL, perMinute budget: Int = observedPerMinute
+    ) -> @Sendable (String, EgressProxyDenial) -> Bool {
+        let windows = Mutex<[String: (start: Date, count: Int)]>([:])
+        return { server, wouldBe in
+            let admitted = windows.withLock { table -> Bool in
+                let now = wouldBe.recordedAt
+                if let window = table[server], now.timeIntervalSince(window.start) < 60 {
+                    guard window.count < budget else { return false }
+                    table[server] = (window.start, window.count + 1)
+                    return true
+                }
+                // Server names come from mcp.json, but keep the table bounded.
+                if table[server] == nil, table.count >= 512 {
+                    table = table.filter { now.timeIntervalSince($0.value.start) < 60 }
+                    if table.count >= 512 { return false }
+                }
+                table[server] = (now, 1)
+                return budget > 0
+            }
+            guard admitted else { return false }
+            return AuditLog.append(
+                AuditEvent(
+                    time: wouldBe.recordedAt, kind: .egressObserved, decision: .info,
+                    subject: "\(wouldBe.host):\(wouldBe.port)", reason: wouldBe.reason.rawValue, source: "rv mcp serve",
+                    detail: [
+                        "server": server, "rule": "sandbox.hosts", "enforcement": "audit", "would_be": "deny",
+                        "because": "\(wouldBe.host) is not in \(server) sandbox.hosts",
+                    ]),
+                configDirectory: configDirectory)
+        }
+    }
 }
+
+/// `rv mcp trust` signing failed inside `ConfigChangeAudit.commit`, so the
+/// audit log gets its `failed` copy.
+private struct MCPTrustSigningFailed: Error {}
