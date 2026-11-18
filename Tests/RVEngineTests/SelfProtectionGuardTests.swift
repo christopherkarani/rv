@@ -38,6 +38,20 @@ struct SelfProtectionGuardTests {
         "rv-cli packs disable core.git",
         "~/.local/bin/rv-cli uninstall",
         "rv-cli allow-once redeem 123456",
+        // Bare `rv allow-once <code>` redeems through the default subcommand.
+        // Real codes are six lowercase hex; the CLI trims and lowercases first.
+        "rv allow-once 123456",
+        "rv allow-once a1b2c3",
+        "rv allow-once abcdef",
+        "rv allow-once A1B2C3",
+        "rv allow-once aBcDeF",
+        "rv allow-once ' a1b2c3 '",
+        "rv allow-once --json a1b2c3",
+        "rv-cli allow-once a1b2c3",
+        "bash -c 'rv allow-once a1b2c3'",
+        // Digit-only words stay flagged at any length, as before.
+        "rv allow-once 12345",
+        "rv allow-once 1234567",
         // `rv host mode <host> <mode>`: anything but `block` sheds oversight.
         "rv host mode claude off",
         "rv host mode claude observe",
@@ -67,6 +81,11 @@ struct SelfProtectionGuardTests {
         "rv policy ceiling show",
         "rv allowlist list",
         "rv allow-once list",
+        "rv allow-once clear",
+        // Not code-shaped: the CLI refuses these before any lookup.
+        "rv allow-once abcde",
+        "rv allow-once a1b2c3d",
+        "rv allow-once a1b2g3",
         "rv explain 'rm -rf /'",
         "rv blocks",
         "echo rv uninstall",
@@ -100,5 +119,16 @@ struct SelfProtectionGuardTests {
     @Test("read-only and strengthening rv commands are not", arguments: harmless)
     func harmlessPass(command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// The guard's code test must accept exactly what redemption accepts.
+    @Test(
+        "unlock-code shape matches AllowOnceUnlockCode.isValid",
+        arguments: ["a1b2c3", "000000", "abcdef", "fedcba", "abcde", "a1b2c3d", "a1b2g3", "zzzzzz", "a1b2c"]
+    )
+    func unlockShapePinned(code: String) {
+        let flagged = SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "rv allow-once \(code)"))
+        let digitsOnly = code.allSatisfy(\.isNumber)
+        #expect(flagged == (AllowOnceUnlockCode.isValid(code) || digitsOnly), "\(code)")
     }
 }
