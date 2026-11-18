@@ -489,19 +489,142 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
-    /// A program rv does not list as a runner, given options before the
-    /// host, may still run it: the host's words after those options are
-    /// read as their own command line, so a dynamic group word or a
-    /// dynamic head there asks as it does with no options.
-    @Test("a host after an unlisted wrapper's options asks with a dynamic word", arguments: [
+    /// A listed wrapper (`optionTailWrappers`), given options before the
+    /// host, still runs it: the host's words after those options are read
+    /// as their own command line, so a dynamic group word or a dynamic head
+    /// there asks as it does with no options.
+    @Test("a host after a listed wrapper's options asks with a dynamic word", arguments: [
         "strace -f claude \"$(printf mcp)\" add evil -- npx -y evil-mcp",
         "C=claude; strace -f $C mcp add evil -- npx evil",
         "xvfb-run -a claude $(printf mcp) add evil -- x",
         "firejail --quiet claude $SUB add evil -- x",
         "strace -o out.txt claude $SUB add evil -- x",
         "strace -o out.txt $C mcp add evil -- x",
+        "/usr/bin/strace -f $C mcp add evil -- x",
+        "xvfb-run -a $C mcp add evil -- x",
+        "firejail --quiet $C mcp add evil -- x",
+        "valgrind -q claude $SUB add evil -- x",
+        "systemd-run --wait codex $SUB add evil -- x",
+        "bwrap --dev /dev claude $SUB add evil -- x",
     ])
-    func unlistedWrapperWithOptionsAsks(_ command: String) {
+    func listedWrapperWithOptionsAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Host names before the real one do not use up the re-reads: every
+    /// host or dynamic word after the options is read from.
+    @Test("a host after decoy hosts in a wrapper's options asks", arguments: [
+        "strace -o cursor -o cursor -o cursor -o cursor -f claude $SUB add evil -- x",
+        "strace -o cursor -o cursor -o cursor -o cursor -o cursor -o cursor -f claude $SUB add evil -- x",
+    ])
+    func decoyHostsBeforeWrappedHostAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// A dynamic option value of a program rv does not list as a wrapper
+    /// is no program it runs, so a group word after it is no host's, as
+    /// before any option tail was read.
+    @Test("a dynamic option value outside a listed wrapper, with a group word, allows", arguments: [
+        "docker compose -f \"$COMPOSE_FILE\" config",
+        "git -C \"$REPO\" config --get remote.origin.url",
+        "kubectl --context \"$C\" config view",
+        "tar -C \"$D\" -xf x.tgz config",
+        "curl -H \"$A\" -H \"$B\" -H \"$C\" -H \"$D\" -H \"$E\" https://example.com/config",
+        "docker run -e A=\"$A\" -e B=\"$B\" -e C=\"$C\" -e D=\"$D\" -e E=\"$E\" image config",
+        "git -c a=\"$A\" -c b=\"$B\" -c c=\"$C\" -c d=\"$D\" -c e=\"$E\" config --list",
+        "git --git-dir \"$GIT_DIR\" config --list",
+        "git -c user.name=\"$NAME\" config --get remote.origin.url",
+        "docker --context \"$CTX\" plugin ls",
+        "docker compose -p \"$PROJECT\" config",
+        "kubectl --kubeconfig \"$KUBECONFIG\" config view",
+        "kubectl -n \"$NS\" plugin list",
+        "helm --kube-context \"$C\" plugin list",
+        "cargo --manifest-path \"$M\" run --bin mcp",
+        "gcloud --project \"$P\" config list",
+        "make -C \"$D\" config",
+        "pip --python \"$PY\" config list",
+        "ssh -i \"$KEY\" host cat config",
+        "sed -e \"$EXPR\" config",
+        "python3 -W \"$W\" manage.py config",
+        "systemctl -H \"$HOST\" status mcp",
+    ])
+    func dynamicOptionValueOutsideWrapperAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A host name that is an option's value or an operand of a program rv
+    /// does not list as a wrapper is no program it runs, so a dynamic word
+    /// after it allows, as before any option tail was read.
+    @Test("a host name as a non-wrapper's option value or operand allows", arguments: [
+        "gh issue list --label claude --search \"$Q\"",
+        "git checkout -b codex \"$BASE\"",
+        "ln -sf codex \"$DIR\"",
+        "rsync -av claude \"$DEST\"",
+        "docker run --rm --name codex -v \"$PWD\":/w img",
+        "screen -S cursor -dm \"$CMD\"",
+        "kubectl -n claude get pods -l \"$SEL\"",
+        "git worktree add -b codex \"$DIR\"",
+    ])
+    func hostNameOutsideWrapperAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A listed wrapper running a dynamic program with dynamic words allows,
+    /// as the same program run unwrapped does (`$C $G add` on the main line).
+    @Test("a listed wrapper running a dynamic program with dynamic words allows", arguments: [
+        "strace -o \"$LOG\" \"$BIN\"",
+        "valgrind --log-file=\"$LOG\" \"$BIN\" \"$ARG\"",
+        "systemd-run --unit \"$U\" \"$CMD\"",
+        "numactl -N \"$NODE\" \"$BIN\" --config c.yml",
+    ])
+    func wrappedDynamicProgramWithDynamicWordsAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// The nearest ways those programs run something still ask: a git
+    /// alias, a program given to another option as text, and a host named
+    /// in a container or pod command.
+    @Test("a command those programs run still asks", arguments: [
+        "git -c alias.x='!claude mcp add evil' x",
+        "git -C \"$REPO\" -c alias.x='!claude mcp add evil' x",
+        "tar -C \"$D\" --to-command='claude mcp add evil' -xf x.tgz",
+        "docker compose -f \"$F\" run svc claude mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- claude mcp add evil -- x",
+    ])
+    func pathOptionProgramsStillAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Known limits, not pins: a dynamic program run through an option or
+    /// subcommand of a program rv does not list as a wrapper (git -C, a
+    /// redefined git, tar -I, docker compose exec, kubectl exec) is an
+    /// existing gap not modelled here; these allowed before any option
+    /// tail was read. So did the last two: a listed wrapper running a
+    /// dynamic program given a dynamic group word, and an unlisted wrapper.
+    @Test("a dynamic program rv does not read as a host command is a known gap", arguments: [
+        "git -C \"$REPO\" $C mcp add evil -- x",
+        "alias git=strace; git -C \"$C\" mcp add evil -- x",
+        "tar -C \"$D\" -I \"$P\" -xf x.tgz mcp add evil",
+        "docker compose -f \"$F\" exec -T svc $X mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- $X mcp add evil -- x",
+        // Same as the unwrapped form: `$C $G add` does not ask on the main line.
+        "strace -f $C $G add evil -- x",
+        // An unlisted wrapper is not read, as before the change.
+        "gdb --args claude $SUB add evil -- x",
+        // A launcher prefix the resolver strips leaves that same command.
+        "stdbuf -o0 gdb --args claude $SUB add evil -- x",
+    ])
+    func dynamicProgramBehindNonWrapperIsKnownGap(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// Known cost: under a listed wrapper a dynamic option value is read
+    /// as the program, so a later group word asks (`xargs -P "$J" echo
+    /// config` does on the main line too).
+    @Test("a listed wrapper's dynamic option value with a group word asks", arguments: [
+        "strace -o \"$LOG\" ls config",
+    ])
+    func wrapperDynamicOptionValueAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
     }
 
