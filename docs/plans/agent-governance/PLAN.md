@@ -648,7 +648,12 @@ move them into rv secrets with `rv mcp import`.
       (`~/Library/Caches/rv-mcp/<name>`, also the working directory), temp dirs, package caches
       and listed `writable` paths; reads denied for credential dirs, browser profiles, Keychains,
       other hosts' MCP configs and the rv config dir; `network: false` → `(deny network*)`.
-      Linux fails closed (refuses to launch a server that asks for a sandbox).
+      Without a cage (`MCPSandbox.enforced` false, Linux today) serve refuses a server
+      that asks for a sandbox, and every local server when organization policy sets
+      `requireSandbox`; any other server would run uncaged, and `rv mcp check` says so.
+      Without a key custodian the agent cannot read (Linux today: a same-user-readable
+      key file) mcp.json is never trusted (`MCPIntegrityStatus.unsupportedPlatform`),
+      so serve launches nothing.
       Honest limit: allow-default profile (not deny-default) so npx/uvx work;
       no per-host egress allowlist yet.
 - [x] Tests: L2 `MCPSandboxLiveTests` (macOS): a caged shell cannot read a `~/.ssh` stand-in or
@@ -694,7 +699,8 @@ swift-crypto on Linux) and both RVIsolation (secrets) and RVMCP sit above it.
   > ask glob > allow glob > org `defaultDecision` (default allow). Org-blocked
   servers are `blocked` in the inventory and refused by `serve`. With
   `allowDirect: false` the user's `direct` list is ignored. `requireSandbox`
-  refuses to serve servers without `sandbox`. `rv mcp approve --always`
+  refuses to serve servers without `sandbox` (on macOS every local server needs
+  one anyway; where the cage is not enforced it refuses every local server). `rv mcp approve --always`
   refuses when the org decision is not allow. Secrets: sources outside
   `allowedSources` refuse to resolve; `allowEnvironmentDelivery: false`
   refuses environment delivery to agents (MCP upstreams always get env).
