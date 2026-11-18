@@ -146,6 +146,59 @@ struct SelfProtectionGuardTests {
         "echo 'x; rv uninstall' | gxargs -I% sh -c 'echo %'",
         "ls | xargs -I% sh -c 'echo %'",
         "echo a | xargs -I% sh -c 'grep -l % src'",
+        // `env -S` splits one word into a shell command line.
+        "echo 'x; rv uninstall' | xargs -I% env -S 'sh -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'sh -c \"echo %\"'",
+        "echo 'x; rv uninstall' | xargs -I% env -S\"sh -c 'echo %'\"",
+        "echo 'x; rv uninstall' | xargs -I% env -S'/bin/bash -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -vS 'sh -c' 'echo %'",
+        "echo 'x; rv policy ceiling set c.toml' | xargs -I% env -S 'sh -c' 'echo %'",
+        "echo 'x; rv policy ceiling set c.toml' | xargs -I% env -S 'sh -c \"echo %\"'",
+        "echo 'x; rv policy ceiling set c.toml' | xargs -I% env -S\"sh -c 'echo %'\"",
+        // Any `env -S`-shaped option before the stand-in: its quoting and
+        // escapes are not modelled (`s""h`, `sh\_-c`, `FOO=%`).
+        "echo 'x; rv uninstall' | xargs -I% env -S 's\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'bas\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'zs\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'das\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S \"s''h -c 'echo %'\"",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'sh\\_-c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'bash\\_-c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S 'zsh\\_-c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -S '/bin/sh\\_-c' 'echo %'",
+        "echo '1 rv uninstall' | xargs -I% env -S 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -S 'A=%'",
+        "echo '1 rv uninstall' | xargs -I% env -S 'FOO=1\\_%'",
+        "echo 'x; rv policy ceiling set c.toml' | xargs -I% env -S 's\"\"h -c' 'echo %'",
+        "echo 'x; rv policy ceiling set c.toml' | xargs -I% env -S 'sh\\_-c' 'echo %'",
+        "echo 'x; rv policy rollback 1 --save' | xargs -I% env -S 's\"\"h -c' 'echo %'",
+        "echo 'x; rv policy rollback 1 --save' | xargs -I% env -S 'sh\\_-c' 'echo %'",
+        "echo '1 rv allow-once a1b2c3' | xargs -I% env -S 'FOO=%'",
+        "echo '1 rv policy ceiling set c.toml' | xargs -I% env -S 'FOO=%'",
+        "echo 'x; rv uninstall' | xargs -I% env -vS 's\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env -iS 's\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env --split-string 's\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env --split-string='s\"\"h -c' 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env --sp 's\"\"h -c' 'echo %'",
+        "echo 'rv uninstall' | xargs env -S",
+        "echo 'x; rv uninstall' | xargs -I% echo -vSsh %",
+        // A dynamically spelled split option (`-$'\x53'`, `-$X`, `-?`,
+        // `--s*`) may be `-S`; a replace string may spell it from stdin.
+        // Accepted false refusals: `-t%`, `-o%`, `-j$(nproc)`, `-j$N`, `-e*`.
+        "echo '1 rv uninstall' | xargs -I% env -$'\\x53' 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -$X 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -`printf '\\x53'` 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -$(printf '\\x53') 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -? 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -[A-Z] 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env --s* 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env --split$X-string 'FOO=%'",
+        "echo 'S echo PWNED' | xargs -I% env -% x",
+        "echo 'S rv uninstall' | xargs -I% env -% x",
+        "echo '1 rv policy ceiling set c.toml' | xargs -I% env -$'\\x53' 'FOO=%'",
+        "echo '1 rv policy rollback 1 --save' | xargs -I% env -? 'FOO=%'",
+        "ls | xargs -I% make -j$(nproc) %",
+        "ls | xargs -I% tar -t% x",
         // Accepted false refusal of the fail-closed rule.
         "ls | xargs -I% sh -c 'cp % /tmp'",
         "rv policy ceiling set ceiling.toml",
@@ -231,6 +284,12 @@ struct SelfProtectionGuardTests {
         "$CC -o out main.c",
         "$CC -Wall main.c",
         "$PYTHON -m x",
+        "ls | xargs -I% echo \"file: %\"",
+        "ls | xargs -I% env FOO=1 grep -l foo %",
+        "ls | xargs -I% git merge --squash %",
+        "ls | xargs -I% git checkout --no-flush %",
+        "ls | xargs -I% cargo build --finish %",
+        "ls | xargs git fetch --push",
         "\"$(which python3)\" -c 'print(1)'",
         "rv policy check --ceiling",
         "rv policy ceiling",
@@ -277,17 +336,6 @@ struct SelfProtectionGuardTests {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
     }
 
-    /// The guard's code test must accept exactly what redemption accepts.
-    @Test(
-        "unlock-code shape matches AllowOnceUnlockCode.isValid",
-        arguments: ["a1b2c3", "000000", "abcdef", "fedcba", "abcde", "a1b2c3d", "a1b2g3", "zzzzzz", "a1b2c"]
-    )
-    func unlockShapePinned(code: String) {
-        let flagged = SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "rv allow-once \(code)"))
-        let digitsOnly = code.allSatisfy(\.isNumber)
-        #expect(flagged == (AllowOnceUnlockCode.isValid(code) || digitsOnly), "\(code)")
-    }
-
     @Test("an uncertain xargs line is judged in bounded time")
     func uncertainXargsIsBounded() {
         let distinct = "echo x | xargs -E -z " + (0..<1_500).map { "w\($0)" }.joined(separator: " ")
@@ -300,5 +348,16 @@ struct SelfProtectionGuardTests {
         }
         #expect(verdicts == [true, false])
         #expect(elapsed < .seconds(5), "took \(elapsed)")
+    }
+
+    /// The guard's code test must accept exactly what redemption accepts.
+    @Test(
+        "unlock-code shape matches AllowOnceUnlockCode.isValid",
+        arguments: ["a1b2c3", "000000", "abcdef", "fedcba", "abcde", "a1b2c3d", "a1b2g3", "zzzzzz", "a1b2c"]
+    )
+    func unlockShapePinned(code: String) {
+        let flagged = SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "rv allow-once \(code)"))
+        let digitsOnly = code.allSatisfy(\.isNumber)
+        #expect(flagged == (AllowOnceUnlockCode.isValid(code) || digitsOnly), "\(code)")
     }
 }

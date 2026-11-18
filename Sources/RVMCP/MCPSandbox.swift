@@ -154,7 +154,8 @@ public enum MCPSandbox {
                 let server = definition.name
                 let credential = proxyCredential()
                 let proxy = EgressProxy(
-                    policy: EgressHostPolicy(allowedHosts: Set(policy.hosts), relaysLoopback: false),
+                    policy: EgressHostPolicy(
+                        allowedHosts: Set(policy.hosts), allowedIPs: policy.allowedIPs, relaysLoopback: false),
                     record: { denied(server, $0) }, clientCredential: credential)
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))

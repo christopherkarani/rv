@@ -70,22 +70,58 @@ private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand, depth: I
     let substituted = substitutingReplaceStrings(parsed.replaceStrings, in: program)
     if substituted != program { variants.append(substituted + stdin) }
     return variants.contains { argv in
-        scriptTakesStdin(argv) || launchedCommandHeads(argv: argv, depth: depth + 1).contains { fed in
-            fed.head.contains(xargsStdinWord) || launchWeakens(fed, xargsDepth: depth + 1)
-        }
+        scriptTakesStdin(argv) || splitStringTakesStdin(argv)
+            || launchedCommandHeads(argv: argv, depth: depth + 1).contains { fed in
+                fed.head.contains(xargsStdinWord) || launchWeakens(fed, xargsDepth: depth + 1)
+            }
     }
 }
 
-/// A shell or `eval` with the stdin stand-in in any later word: xargs pastes
-/// stdin into the script text (`xargs -I% sh -c 'echo %'` with stdin
-/// `x; rv uninstall`), so stdin may run any command. Any later word counts,
-/// not only a `-c` payload, and the shell may follow a wrapper: fail closed.
+/// A shell or `eval` with the stdin stand-in after it: xargs pastes stdin
+/// into the script text (`xargs -I% sh -c 'echo %'` with stdin
+/// `x; rv uninstall`), so stdin may run any command. Words are split at
+/// whitespace and shell operators, once with quotes as separators and once
+/// with quotes and backslashes removed, since one word may carry a command
+/// line. Any later token counts, not only a `-c` payload, and the shell may
+/// follow a wrapper: fail closed.
 private func scriptTakesStdin(_ argv: [String]) -> Bool {
-    argv.indices.contains { index in
-        let name = commandName(argv[index])
-        return (shellNames.contains(name) || name == "eval")
-            && argv[(index + 1)...].contains { $0.contains(xargsStdinWord) }
-    }
+    let split = argv.flatMap { scriptTokens($0, separators: "'\";&|()<>`") }
+    let joined = argv.flatMap { scriptTokens($0.filter { "'\"\\".contains($0) == false }, separators: ";&|()<>`") }
+    return shellBeforeStdin(split) || shellBeforeStdin(joined)
+}
+
+private func scriptTokens(_ word: String, separators: String) -> [String] {
+    word.split(whereSeparator: { $0.isWhitespace || separators.contains($0) }).map(String.init)
+}
+
+private let scriptRunnerNames: Set<String> = shellNames.union(["eval"])
+
+private func shellBeforeStdin(_ tokens: [String]) -> Bool {
+    guard let lastStdin = tokens.lastIndex(where: { $0.contains(xargsStdinWord) }) else { return false }
+    return tokens[..<lastStdin].contains { scriptRunnerNames.contains(commandName($0)) }
+}
+
+/// `env -S` splits a string into a command line with its own quoting and
+/// escapes (`s""h -c`, `sh\_-c`, `FOO=%`), which is not modelled. A
+/// split-shaped option at or before the stdin stand-in is refused, whatever
+/// program it follows (a copied or renamed `env` has another name): fail
+/// closed.
+private func splitStringTakesStdin(_ argv: [String]) -> Bool {
+    guard let lastStdin = argv.lastIndex(where: { $0.contains(xargsStdinWord) }) else { return false }
+    return argv[...lastStdin].contains(where: isSplitStringOption)
+}
+
+/// `-S`, a single-dash cluster holding `S` (`-vS`, `-Ssh`, `-iS`), or
+/// `--split-string` and any abbreviation of it, with or without `=value`.
+private func isSplitStringOption(_ word: String) -> Bool {
+    let word = unescapeBackslashPairs(word)
+    guard word.hasPrefix("-") else { return false }
+    let name = word.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)[0]
+    // A variable, substitution, glob, or the stand-in may spell `-S`
+    // (`-$'\x53'`, `-?`, `--s*`, `-%` fed from stdin): fail closed.
+    if isUnmodelledWord(String(name)) { return true }
+    guard word.hasPrefix("--") else { return word.dropFirst().contains("S") }
+    return name.count > 2 && "--split-string".hasPrefix(name)
 }
 
 /// Programs that may run a command their stdin or operands name.

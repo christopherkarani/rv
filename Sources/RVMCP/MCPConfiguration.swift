@@ -75,11 +75,19 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     /// Exact DNS names reached through a per-server allowlist proxy; the
     /// cage itself can dial only that proxy.
     public var hosts: [String]
+    /// `sandbox.allowed_ips`: owner-set private networks per listed host.
+    /// A host here may also reach non-public addresses, and only when its
+    /// whole answer falls inside its list; other hosts stay public-only.
+    public var allowedIPs: [String: EgressAllowedIPs]
 
-    public init(network: Bool = true, writable: [String] = [], hosts: [String] = []) {
+    public init(
+        network: Bool = true, writable: [String] = [], hosts: [String] = [],
+        allowedIPs: [String: EgressAllowedIPs] = [:]
+    ) {
         self.network = network
         self.writable = writable
         self.hosts = hosts
+        self.allowedIPs = allowedIPs
     }
 }
 
@@ -381,6 +389,13 @@ public struct MCPConfiguration: Sendable, Equatable {
             value["network"] = .bool(sandbox.network)
             if sandbox.writable.isEmpty == false { value["writable"] = .array(sandbox.writable.map(JSONValue.string)) }
             if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
+            if sandbox.allowedIPs.isEmpty == false {
+                var ranges = JSONObject()
+                for host in sandbox.allowedIPs.keys.sorted() {
+                    ranges[host] = sandbox.allowedIPs[host].map { .array($0.entries.map(JSONValue.string)) }
+                }
+                value["allowed_ips"] = .object(ranges)
+            }
             object["sandbox"] = .object(value)
         }
         if server.callTimeoutSeconds != MCPServerDefinition.defaultCallTimeoutSeconds {
@@ -647,7 +662,7 @@ enum MCPConfigurationDecoding {
 
     private static func sandbox(_ value: JSONValue, _ context: String) throws -> MCPSandboxPolicy {
         let object = try objectValue(value, "\(context) sandbox")
-        try allowOnly(object, ["network", "writable", "hosts"], "\(context) sandbox")
+        try allowOnly(object, ["network", "writable", "hosts", "allowed_ips"], "\(context) sandbox")
         var policy = MCPSandboxPolicy()
         if let raw = object["network"] {
             guard let flag = raw.boolValue else { throw MCPConfigurationError.invalid("\(context) sandbox.network must be true or false") }
@@ -681,7 +696,43 @@ enum MCPConfigurationDecoding {
             var seen = Set<String>()
             policy.hosts = hosts.map { $0.lowercased() }.filter { seen.insert($0).inserted }
         }
+        if let raw = object["allowed_ips"] {
+            policy.allowedIPs = try allowedIPs(raw, hosts: policy.hosts, context)
+        }
         return policy
+    }
+
+    /// `sandbox.allowed_ips`: `{"<host>": ["<cidr>", ...]}`. Every key must
+    /// be one of `sandbox.hosts` and every entry must parse; any problem
+    /// refuses the whole file, so a bad range never drops silently.
+    private static func allowedIPs(
+        _ value: JSONValue, hosts: [String], _ context: String
+    ) throws -> [String: EgressAllowedIPs] {
+        guard let object = value.objectValue else {
+            throw MCPConfigurationError.invalid(
+                "\(context) sandbox.allowed_ips must map a host from sandbox.hosts to a list of IP networks")
+        }
+        var ranges: [String: EgressAllowedIPs] = [:]
+        for key in object.keys.sorted() {
+            let host = key.lowercased()
+            guard hosts.contains(host) else {
+                throw MCPConfigurationError.invalid(
+                    "\(context) sandbox.allowed_ips: \(key) is not in sandbox.hosts; list the host there too")
+            }
+            guard ranges[host] == nil else {
+                throw MCPConfigurationError.invalid("\(context) sandbox.allowed_ips names \(host) twice")
+            }
+            guard let entries = object[key]?.stringArray else {
+                throw MCPConfigurationError.invalid(
+                    "\(context) sandbox.allowed_ips.\(key) must be an array of IP addresses or CIDR networks")
+            }
+            do throws(EgressAllowedIPError) {
+                ranges[host] = try EgressAllowedIPs(parsing: entries)
+            } catch {
+                throw MCPConfigurationError.invalid("\(context) sandbox.allowed_ips.\(key): \(error.message)")
+            }
+        }
+        return ranges
     }
 
     /// Two or more LDH labels, the last not numeric: no IPs, no `localhost`.
