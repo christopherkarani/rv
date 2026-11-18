@@ -257,6 +257,8 @@ struct AuditLedgerTests {
         let read = AuditLedger(configDirectory: dir).events(AuditFilter(kinds: ["secret"]))
         #expect(read.count == count)
         #expect(Set(read.map(\.subject)) == Set((0..<count).map { "KEY_\($0)" }))
+        // Each line names the one before it: no two appends read the same tail.
+        #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get().isIntact)
     }
 
     @Test func oversizedLedgerKeepsOnlyCompleteNewestLines() throws {

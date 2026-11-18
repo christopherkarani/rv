@@ -8,10 +8,31 @@ struct HostModeStoreTests {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
-        #expect(store.load().isEmpty)
+        #expect(store.read() == .entries([:]))
         for host in HookHost.allCases {
-            #expect(store.mode(for: host) == .block)
+            #expect(store.read().mode(for: host, ifUnreadable: .off) == .block)
         }
+    }
+
+    /// A file `GuardConfig` rejects is unreadable, not "no entries": each
+    /// caller picks the conservative mode for its own question.
+    @Test(arguments: [
+        #"{"guard":{"hosts":{"claude":"off"}},"guard":{"mode":"enforce"}}"#,
+        #"{"guard":{"hosts":{"claude":"off","claude":"block"}}}"#,
+        #"{"guard":{"hosts":{"claude":"off"}},"analytics":{"enabled":true,"enabled":false}}"#,
+        #"{"guard":{"hosts":{"claude":"off"}"#,
+        #"["guard"]"#,
+    ])
+    func rejectedConfig_isUnreadable(_ json: String) throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: store.configFile)
+        let stored = store.read()
+        #expect(stored == .unreadable)
+        #expect(stored.mode(for: .claude, ifUnreadable: .off) == .off)
+        #expect(stored.mode(for: .claude, ifUnreadable: .block) == .block)
     }
 
     @Test func save_roundTripsAndKeepsOtherKeys() throws {
@@ -22,7 +43,7 @@ struct HostModeStoreTests {
         try Data(#"{"guard":{"mode":"enforce"},"safety":{"level":"strict"}}"#.utf8).write(to: store.configFile)
         try store.save(.observe, for: .claude)
         try store.save(.off, for: .cursor)
-        #expect(store.load() == [.claude: .observe, .cursor: .off])
+        #expect(store.read() == .entries([.claude: .observe, .cursor: .off]))
         let root = try #require(
             try JSONSerialization.jsonObject(with: Data(contentsOf: store.configFile)) as? [String: Any])
         let guardObject = try #require(root["guard"] as? [String: Any])
@@ -43,7 +64,7 @@ struct HostModeStoreTests {
         try Data(#"{"guard":{"mode":"observe"}}"#.utf8).write(to: store.configFile)
         try store.save(.observe, for: .codex)
         try store.save(.block, for: .codex)
-        #expect(store.load() == [.codex: .block])
+        #expect(store.read() == .entries([.codex: .block]))
         let root = try #require(
             try JSONSerialization.jsonObject(with: Data(contentsOf: store.configFile)) as? [String: Any])
         let guardObject = try #require(root["guard"] as? [String: Any])
@@ -52,12 +73,14 @@ struct HostModeStoreTests {
     }
 
     @Test func unknownHostsAndValuesAreIgnored() {
-        let config: [String: Any] = [
-            "guard": ["hosts": ["claude": "OBSERVE", "nope": "off", "cursor": "loud", "codex": 3]],
-        ]
-        #expect(HostModeStore.modes(inConfig: config) == [.claude: .observe])
-        #expect(HostModeStore.modes(inConfig: nil).isEmpty)
-        #expect(HostModeStore.modes(inConfig: ["guard": "observe"]).isEmpty)
+        let config: JSONValue = .object([
+            "guard": .object(["hosts": .object([
+                "claude": .string("OBSERVE"), "nope": .string("off"), "cursor": .string("loud"), "codex": .number(3),
+            ])]),
+        ])
+        #expect(GuardConfig(config).hosts == [.claude: .observe])
+        #expect(GuardConfig(.null).hosts.isEmpty)
+        #expect(GuardConfig(.object(["guard": .string("observe")])).hosts.isEmpty)
     }
 
     @Test func save_refusesToClobberAnUnreadableConfig() throws {

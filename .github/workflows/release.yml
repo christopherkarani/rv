@@ -282,7 +282,7 @@ jobs:
         run: |
           set -euo pipefail
           stage=.build/release-stage
-          for bin in rv rv-cli rvd rv-workspace-host rv-isolation-exec; do
+          for bin in rv rv-cli rvd rv-workspace-host rv-isolation-exec rv-mcp-custodian; do
             file "$stage/$bin"
             file "$stage/$bin" | grep -q 'ELF'
             case "${{ matrix.target }}" in
@@ -310,7 +310,7 @@ jobs:
           floor="$(sed -n 's/^linux_glibc_min="\([0-9.]*\)"$/\1/p' install.sh)"
           test -n "$floor"
           needed="$(for f in "$stage"/rv "$stage"/rv-cli "$stage"/rvd "$stage"/rv-workspace-host \
-              "$stage"/rv-isolation-exec "$stage"/*.so; do objdump -T "$f"; done \
+              "$stage"/rv-isolation-exec "$stage"/rv-mcp-custodian "$stage"/*.so; do objdump -T "$f"; done \
             | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
           cxx="$(for f in "$stage"/rv-cli "$stage"/rvd "$stage"/*.so; do objdump -T "$f"; done \
             | { grep -o 'GLIBCXX_[0-9][0-9.]*' || true; } | sed 's/^GLIBCXX_//' | sort -uV | tail -n 1)"

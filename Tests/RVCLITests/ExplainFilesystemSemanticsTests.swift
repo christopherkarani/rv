@@ -35,7 +35,7 @@ struct ExplainFilesystemSemanticsTests {
 
     @Test func explain_symlinkEscape_usesResolvedTarget() async throws {
         let repo = try makeExplainRepo()
-        let outside = repo.deletingLastPathComponent().appendingPathComponent("outside-target")
+        let outside = repo.deletingLastPathComponent().appendingPathComponent("outside-target-\(UUID().uuidString)")
         try "secret".write(to: outside, atomically: true, encoding: .utf8)
         try FileManager.default.createSymbolicLink(
             atPath: repo.appendingPathComponent("escape-link").path,

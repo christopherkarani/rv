@@ -49,6 +49,18 @@ let python3Available: Bool = {
     }
 }()
 
+/// Runs blocking `work` on a thread of its own and suspends the caller
+/// meanwhile. A test that waits on the gateway must not wait on one of the
+/// threads Swift's concurrency pool has, one per core: on a three-core CI
+/// Mac, three such tests held all of them for their whole receive
+/// timeouts, every other test in the process stood still, and the
+/// gateway's replies arrived only after the tests had given up.
+func offThePool<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+    await withCheckedContinuation { continuation in
+        Thread.detachNewThread { continuation.resume(returning: work()) }
+    }
+}
+
 final class LineClient: @unchecked Sendable {
     let toGateway = Pipe()
     let fromGateway = Pipe()
@@ -56,6 +68,11 @@ final class LineClient: @unchecked Sendable {
 
     func send(_ text: String) {
         toGateway.fileHandleForWriting.write(Data((text + "\n").utf8))
+    }
+
+    /// `receive`, waited for off the concurrency pool.
+    func next(timeout: TimeInterval = 15) async -> JSONValue? {
+        await offThePool { self.receive(timeout: timeout) }
     }
 
     /// Next line from the gateway, or nil after `timeout`.
@@ -115,7 +132,8 @@ struct MCPGatewayRuntimeTests {
         let audits = RecordedAudits()
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
-            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }))
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true })
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
@@ -276,7 +294,7 @@ struct MCPGatewayRuntimeTests {
         }
         #expect(plan("bare", requireSandbox: true)?.message.contains("needs a sandbox") == true)
         #expect(plan("open", requireSandbox: true)?.message.contains("stays off the network") == true)
-        // No cage off macOS yet: bare servers serve, and serve (not the
+        // A host without a cage: bare servers serve, and serve (not the
         // planner) still refuses sandboxed ones there.
         #expect(plan("bare", requireSandbox: false) == nil)
         #expect(plan("open", requireSandbox: false) == nil)

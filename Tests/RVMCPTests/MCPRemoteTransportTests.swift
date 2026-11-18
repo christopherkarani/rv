@@ -134,7 +134,11 @@ final class RemoteFixture: @unchecked Sendable {
         try process.run()
         var line = Data()
         let fd = output.fileHandleForReading.fileDescriptor
-        let deadline = Date().addingTimeInterval(15)
+        // A minute, not seconds: the first `python3` on a cold macOS runner
+        // goes through the developer-tools shim, and a suite's fixtures
+        // start together.
+        let started = Date()
+        let deadline = started.addingTimeInterval(60)
         while Date() < deadline, line.last != 0x0A {
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 200) > 0 else { continue }
@@ -144,6 +148,14 @@ final class RemoteFixture: @unchecked Sendable {
         }
         let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         port = text.hasPrefix("PORT ") ? Int(text.dropFirst(5)) ?? 0 : 0
+        let waited = Int(Date().timeIntervalSince(started))
+        // Without a port every request would go to port 0 and each test
+        // would fail on its own expectations, saying nothing of why.
+        if port == 0 {
+            Issue.record("the remote fixture reported no port in \(waited) s (it said \"\(text)\")")
+        } else if waited >= 5 {
+            print("mcp-remote-fixture took \(waited) s to report its port")
+        }
     }
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)\(path)")! }
@@ -166,8 +178,8 @@ final class RecordedLogs: Sendable {
 struct MCPRemoteRuntimeTests {
     private func run(
         _ servers: [MCPServerDefinition], resolver: SecretResolver = SecretResolver { _ in .success(SecretValue("tok-123")!) },
-        _ body: (LineClient) throws -> Void
-    ) throws -> RecordedLogs {
+        _ body: (LineClient) async throws -> Void
+    ) async throws -> RecordedLogs {
         let configuration = MCPConfiguration(servers: servers)
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "API_TOKEN", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
@@ -180,7 +192,8 @@ struct MCPRemoteRuntimeTests {
         let logs = RecordedLogs()
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
-            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }))
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true })
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
@@ -192,39 +205,41 @@ struct MCPRemoteRuntimeTests {
             done.signal()
         }
         client.send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
-        #expect(client.receive()?["result"]?["serverInfo"]?["name"] == .string("rv"))
+        #expect(await client.next()?["result"]?["serverInfo"]?["name"] == .string("rv"))
         client.send(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-        try body(client)
+        try await body(client)
         try client.toGateway.fileHandleForWriting.close()
-        #expect(done.wait(timeout: .now() + 10) == .success)
+        #expect(await offThePool { done.wait(timeout: .now() + 10) } == .success)
+        // What the gateway said of its upstreams, where a test then fails.
+        if logs.text.isEmpty == false { print("gateway log for \(servers.map(\.name)): \(logs.text)") }
         return logs
     }
 
-    private func tools(_ client: LineClient) -> [String]? {
+    private func tools(_ client: LineClient) async -> [String]? {
         client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
-        return client.receive()?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue }
+        return await client.next()?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue }
     }
 
-    private func call(_ client: LineClient, id: Int, _ tool: String, _ arguments: String = "{}") -> JSONValue? {
+    private func call(_ client: LineClient, id: Int, _ tool: String, _ arguments: String = "{}") async -> JSONValue? {
         client.send(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#)
-        return client.receive()
+        return await client.next()
     }
 
     private func text(_ reply: JSONValue?) -> String? {
         reply?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue
     }
 
-    @Test func streamableHTTPCarriesSessionVersionAndHeadersAndScrubsTheirSecrets() throws {
+    @Test func streamableHTTPCarriesSessionVersionAndHeadersAndScrubsTheirSecrets() async throws {
         let fixture = try RemoteFixture(["--token", "tok-123"])
         let remote = MCPRemoteServer(
             url: fixture.url("/mcp"), headers: ["Authorization": "Bearer ${secret:API_TOKEN}", "X-Team": "core"])
-        _ = try run([MCPServerDefinition(name: "remote", remote: remote, tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]))]) { client in
-            #expect(tools(client) == ["echo", "whoami"])
-            #expect(text(call(client, id: 3, "echo", #"{"text":"over http"}"#)) == "over http")
-            #expect(text(call(client, id: 4, "whoami")) == "authorization=Bearer [redacted:API_TOKEN] team=core")
-            #expect(call(client, id: 5, "delete_all")?["result"]?["isError"] == .bool(true))
+        _ = try await run([MCPServerDefinition(name: "remote", remote: remote, tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]))]) { client in
+            #expect(await tools(client) == ["echo", "whoami"])
+            #expect(text(await call(client, id: 3, "echo", #"{"text":"over http"}"#)) == "over http")
+            #expect(text(await call(client, id: 4, "whoami")) == "authorization=Bearer [redacted:API_TOKEN] team=core")
+            #expect(await call(client, id: 5, "delete_all")?["result"]?["isError"] == .bool(true))
         }
-        let requests = fixture.stop()
+        let requests = await offThePool { fixture.stop() }
         #expect(requests.contains("REQ POST /mcp initialize session=None version=None"), "\(requests)")
         #expect(requests.contains("REQ POST /mcp tools/list session=sess-"), "\(requests)")
         #expect(requests.contains("tools/call session=sess-") && requests.contains("version=2025-06-18"), "\(requests)")
@@ -232,22 +247,22 @@ struct MCPRemoteRuntimeTests {
         #expect(requests.contains("delete_all") == false)
     }
 
-    @Test func legacySSEPostsToTheAnnouncedEndpointAndReadsTheStream() throws {
+    @Test func legacySSEPostsToTheAnnouncedEndpointAndReadsTheStream() async throws {
         let fixture = try RemoteFixture(["--token", "tok-123"])
         let remote = MCPRemoteServer(
             url: fixture.url("/sse"), headers: ["Authorization": "Bearer ${secret:API_TOKEN}"], transport: .sse)
-        _ = try run([MCPServerDefinition(name: "legacy", remote: remote, tools: MCPToolPolicy(allow: ["*"]))]) { client in
-            #expect(tools(client) == ["echo", "whoami", "delete_all"])
-            #expect(text(call(client, id: 3, "echo", #"{"text":"over sse"}"#)) == "over sse")
+        _ = try await run([MCPServerDefinition(name: "legacy", remote: remote, tools: MCPToolPolicy(allow: ["*"]))]) { client in
+            #expect(await tools(client) == ["echo", "whoami", "delete_all"])
+            #expect(text(await call(client, id: 3, "echo", #"{"text":"over sse"}"#)) == "over sse")
         }
-        let requests = fixture.stop()
+        let requests = await offThePool { fixture.stop() }
         #expect(requests.contains("REQ GET /sse session="), "\(requests)")
         #expect(requests.contains("REQ POST /sse tools/call session="), "\(requests)")
     }
 
-    @Test func refusedCredentialsAndForeignEndpointsFailTheServerNotTheGateway() throws {
+    @Test func refusedCredentialsAndForeignEndpointsFailTheServerNotTheGateway() async throws {
         let fixture = try RemoteFixture(["--token", "tok-123"])
-        let logs = try run(
+        let logs = try await run(
             [
                 MCPServerDefinition(name: "locked", remote: MCPRemoteServer(
                     url: fixture.url("/mcp"), headers: ["Authorization": "Bearer ${secret:API_TOKEN}"])),
@@ -256,9 +271,9 @@ struct MCPRemoteRuntimeTests {
             ],
             resolver: SecretResolver { _ in .success(SecretValue("wrong-token")!) }
         ) { client in
-            #expect(tools(client) == [])
+            #expect(await tools(client) == [])
         }
-        let requests = fixture.stop()
+        let requests = await offThePool { fixture.stop() }
         #expect(logs.text.contains("locked failed to initialize: MCP server locked refused the credentials (HTTP 401)"), "\(logs.text)")
         #expect(logs.text.contains("MCP server foreign named a message endpoint on another origin; refused"), "\(logs.text)")
         #expect(logs.text.contains("wrong-token") == false)

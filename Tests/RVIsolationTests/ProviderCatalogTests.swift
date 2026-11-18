@@ -148,14 +148,28 @@ struct ProviderCatalogTests {
 
     // MARK: - KnownSecretDefaults parity
 
+    /// The catalog supplies where a well-known name goes; what it may be
+    /// spent on is the least-privilege rule set, not the profile's.
     @Test func knownSecretDefaultsKeepTheirCuratedValues() {
+        let model = KnownSecretDefaults.modelAPI
         let expected: [String: KnownSecretDefaults.Gateway] = [
-            "OPENAI_API_KEY": .init(upstream: "https://api.openai.com/v1", baseURLEnv: "OPENAI_BASE_URL", placeholderPrefix: "sk-"),
-            "ANTHROPIC_API_KEY": .init(upstream: "https://api.anthropic.com", baseURLEnv: "ANTHROPIC_BASE_URL", placeholderPrefix: "sk-ant-"),
-            "STRIPE_SECRET_KEY": .init(upstream: "https://api.stripe.com", baseURLEnv: "STRIPE_API_BASE", placeholderPrefix: "sk-"),
-            "GITHUB_TOKEN": .init(upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: ""),
-            "GH_TOKEN": .init(upstream: "https://api.github.com", baseURLEnv: "GH_API_URL", placeholderPrefix: ""),
-            "VERCEL_TOKEN": .init(upstream: "https://api.vercel.com", baseURLEnv: "VERCEL_BASE_URL", placeholderPrefix: ""),
+            "OPENAI_API_KEY": .init(
+                upstream: "https://api.openai.com/v1", baseURLEnv: "OPENAI_BASE_URL", placeholderPrefix: "sk-", allow: model),
+            "ANTHROPIC_API_KEY": .init(
+                upstream: "https://api.anthropic.com", baseURLEnv: "ANTHROPIC_BASE_URL", placeholderPrefix: "sk-ant-",
+                allow: model),
+            "STRIPE_SECRET_KEY": .init(
+                upstream: "https://api.stripe.com", baseURLEnv: "STRIPE_API_BASE", placeholderPrefix: "sk-",
+                allow: [.preset(.readOnly)]),
+            "GITHUB_TOKEN": .init(
+                upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "",
+                allow: [.preset(.githubRead)]),
+            "GH_TOKEN": .init(
+                upstream: "https://api.github.com", baseURLEnv: "GH_API_URL", placeholderPrefix: "",
+                allow: [.preset(.githubRead)]),
+            "VERCEL_TOKEN": .init(
+                upstream: "https://api.vercel.com", baseURLEnv: "VERCEL_BASE_URL", placeholderPrefix: "",
+                allow: [.preset(.readOnly)]),
         ]
         for (name, gateway) in expected {
             #expect(KnownSecretDefaults.gateway(for: name) == gateway, "\(name)")
