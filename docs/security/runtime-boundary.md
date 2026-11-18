@@ -425,6 +425,18 @@ the seatbelt profile is untouched.
   and so is an unreadable pending store (never read as empty). The
   token is not a credential: owner authentication still decides who
   approves. Denials are not bound (denying stale state is safe).
+- Related approvals, not supersession (`EgressReview.related`). OpenShell
+  auto-rejects older pending proposals an approval makes redundant. rv
+  does not retire any row: a proposal is exactly (workspace, host, port)
+  with no binary dimension, and the ledger already folds a second
+  same-workspace proposal for one host:port into the first, so an
+  approval covers no other awaiting row. A same-host row on another port
+  asks for a grant the approval does not give, so it stays pending and
+  the review surfaces name the approval beside it. Only approvals of the
+  same workspace identity count; denials and other workspaces relate
+  nothing. The annotation is drawn from the grant set the review token
+  hashes, in the same snapshot, so a review shown without it cannot
+  approve after the related grant lands.
 - Supplement admissions always dial the filtered external path, and
   supplement rules are DNS-only by construction (IP literals and
   single-label names are unrepresentable), so a live rule cannot open

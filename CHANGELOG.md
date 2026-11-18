@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Changed
+
+- `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host beside a pending one on another port (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed: that approval does not grant its port, so it still needs its own decision. No row is retired or approved by another's approval.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed
