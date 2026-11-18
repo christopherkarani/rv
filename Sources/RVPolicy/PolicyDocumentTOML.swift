@@ -337,7 +337,7 @@ public enum PolicyDocumentTOML {
         }
     }
 
-    private static func parseTOMLStringArray(_ raw: String) throws -> [String] {
+    static func parseTOMLStringArray(_ raw: String) throws -> [String] {
         let text = raw.trimmingCharacters(in: .whitespaces)
         guard text.hasPrefix("["), text.hasSuffix("]") else {
             throw PolicyDocumentError.invalidFile

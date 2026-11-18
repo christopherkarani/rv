@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 /// rv must not let the agent it guards weaken it.
@@ -5,7 +6,7 @@ import RVDomain
 /// `weakensPolicy` is true when any launched command is an `rv` invocation
 /// that lowers protection: uninstalling, disabling packs, lowering safety,
 /// adding allowlist entries, redeeming or minting allow-once permits,
-/// applying or saving policy, approving egress/MCP calls, trusting an
+/// applying or saving policy or its ceiling, approving egress/MCP calls, trusting an
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
@@ -90,6 +91,8 @@ private func isWeakeningSub(
         return sub == "redeem" || sub == "mint" || isUnlockCode(sub)
     case "policy":
         // `draft --save` writes the layer; a variable or glob may carry it.
+        // `ceiling` replaces the owner's bound; only `show` (the default) reads.
+        if sub == "ceiling" { return third.map { $0 != "show" } ?? false }
         return sub == "apply" || (sub == "draft" && (flags.contains("--save") || tail.contains(where: isUnmodelledWord)))
     case "egress", "mcp":
         return sub == "approve" || (verb == "mcp" && sub == "trust")
@@ -122,6 +125,12 @@ private enum HostModeWord {
     static let block = "block"
 }
 
+/// Bare `rv allow-once <code>` redeems through the default subcommand. The
+/// CLI trims and lowercases before `AllowOnceUnlockCode.isValid`, so the
+/// guard does the same. Digit-only words of any length stay flagged as
+/// before: loosening them buys nothing.
 private func isUnlockCode(_ word: String) -> Bool {
-    word.isEmpty == false && word.allSatisfy(\.isNumber)
+    let normalized = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if AllowOnceUnlockCode.isValid(normalized) { return true }
+    return word.isEmpty == false && word.allSatisfy(\.isNumber)
 }
