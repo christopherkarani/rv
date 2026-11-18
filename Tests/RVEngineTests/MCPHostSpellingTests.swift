@@ -308,11 +308,13 @@ struct MCPHostSpellingTests {
 
     /// A program not known to leave its operands alone may run them: these
     /// ask as their literal forms (`ls mcp install`) always have. So does a
-    /// command that leaves them alone when a wrapper or a path runs it, or
+    /// command that leaves them alone when a wrapper rv does not model
+    /// (`caffeinate -Q`, `firejail`, `chpst -e`) or a path runs it, or
     /// git with an option before its subcommand; and its literal words and
     /// carried text are read as before.
     @Test("a spelled operand of a program that may run still asks", arguments: [
-        "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "stdbuf -o0 ls mcp $DIR", "/bin/ls mcp $DIR",
+        "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "caffeinate -Q ls mcp $DIR", "firejail ls mcp $DIR",
+        "chpst -e env ls mcp $DIR", "/bin/ls mcp $DIR",
         "git -C . add mcp *", "ls mcp install", "ls 'chronic mcp install x'",
         "git add mcp install", "ls 'npx install-m[x]cp srv'", "grep 'npx install-m[x]cp srv' docs/",
     ])
@@ -326,7 +328,7 @@ struct MCPHostSpellingTests {
     @Test("a spelled operand of a command that leaves its operands alone allows", arguments: [
         "ls mcp *", "git add mcp *", "ls mcp $DIR", "cp -r packages/mcp \"$DEST\"", "rm -rf build/mcp $TMP",
         "mv mcp $BACKUP", "touch {a..z}{0..9}", "mkdir -p {a..h}/{1..9}", "git status mcp *",
-        "git diff mcp $REF", "cat mcp/{a,b}.md", "sudo rm -rf build/mcp $TMP",
+        "git diff mcp $REF", "cat mcp/{a,b}.md", "sudo rm -rf build/mcp $TMP", "stdbuf -o0 ls mcp $DIR",
     ])
     func operandsLeftAloneAllow(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
