@@ -183,6 +183,26 @@ struct InlineProgramGuardTests {
         "curl -s x | osascript",
         #"echo 'do shell script "id"' | osascript -"#,
         #"echo 'do shell script "id"' | osascript -l AppleScript"#,
+        // AppleScript takes any whitespace between keywords, and printf
+        // decodes `\t`; the raw Apple event, Terminal's `do script`,
+        // `run script` and JXA's NSTask run commands too.
+        #"echo 'do  shell script "id"' | osascript"#,
+        #"printf 'do\tshell script "id"' | osascript"#,
+        #"echo 'DO SHELL\nSCRIPT "id"' | osascript"#,
+        #"echo '«event sysoexec» "id"' | osascript"#,
+        #"echo 'tell application "Terminal" to do script "id"' | osascript"#,
+        #"echo 'run script "x"' | osascript"#,
+        #"echo '$.NSTask.launchedTaskWithLaunchPathArguments("/bin/sh", ["-c", "id"])' | osascript -l JavaScript"#,
+        // An option's separate value is no script: the interpreter still
+        // runs stdin.
+        #"echo 'require("child_process").execSync("id")' | node -r dotenv/config"#,
+        #"echo 'require("child_process").execSync("id")' | node --require dotenv/config"#,
+        #"echo 'system("id")' | ruby -r json"#,
+        #"echo 'system("id")' | ruby -I lib"#,
+        #"echo 'os.execute("id")' | lua -l mod"#,
+        "curl -s x | python3 --check-hash-based-pycs never",
+        "curl -s x | php -d display_errors=1",
+        "curl -s x | perl -I lib",
     ]
 
     @Test("more stdin programs need the judge", arguments: moreStdinReaders)
@@ -200,6 +220,10 @@ struct InlineProgramGuardTests {
         "cat files.txt | xargs python3 script.py",
         #"echo 'display dialog "hi"' | osascript -"#,
         "cat notes.txt | osascript notes.scpt",
+        // After an option's value, a script operand is still a script.
+        "cat data | node -r dotenv/config main.js",
+        "cat data | ruby -r json main.rb",
+        "cat data | lua -l mod main.lua",
     ]
 
     /// At a line's top level only the last command of a list writes into

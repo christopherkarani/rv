@@ -159,9 +159,10 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
         } else if sawStdin || arg.contains(">") {
             continue
         } else if arg.hasPrefix("-") {
-            // Python's `-W ignore`, `-X dev`: the value is no script, and
-            // never a redirect (`python3 -W <<< …`).
-            if kind == .plain, isPythonExecutable(program), arg == "-W" || arg == "-X", index < argv.count,
+            // An option's separate value (`python3 -W ignore`, `node -r
+            // dotenv/config`, `ruby -r json`) is no script, and never a
+            // redirect (`python3 -W <<< …`).
+            if separateValueOptions(program).contains(arg), index < argv.count,
                argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false
             {
                 index += 1
@@ -268,6 +269,23 @@ private func osascriptStdinRead(_ argv: [String]) -> StdinRead? {
         }
     }
     return StdinRead(kind: .appleScript)
+}
+
+/// The options of `program` that take their value as the next word, which
+/// is then no script operand.
+private func separateValueOptions(_ program: String) -> Set<String> {
+    if isPythonExecutable(program) { return ["-W", "-X", "--check-hash-based-pycs"] }
+    if isNodeExecutable(program) {
+        return [
+            "-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
+            "--input-type", "--title", "--env-file", "--env-file-if-exists", "--inspect-port", "--disable-warning",
+        ]
+    }
+    if isRubyExecutable(program) { return ["-r", "-I", "-C", "-E", "--encoding"] }
+    if isLuaExecutable(program) { return ["-l"] }
+    if isPHPExecutable(program) { return ["-d", "-c", "-z"] }
+    if isPerlExecutable(program) { return ["-I"] }
+    return []
 }
 
 private func stdinProgramKind(_ program: String) -> ProgramKind? {

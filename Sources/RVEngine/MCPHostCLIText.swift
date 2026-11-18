@@ -330,6 +330,21 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
             if name == "printf" { tails.append(Array(operands.dropFirst())) }
             printed.append(contentsOf: operands)
         }
+        // After options of a program rv does not list as a runner, a host
+        // name or a dynamic word may be the program it runs (`strace -f
+        // claude $SUB add`, `strace -o log $C mcp add`): read from there.
+        // Only the command as written, not a re-split of it, which starts
+        // at such a word already; and from the first few such words, each
+        // one an option or its value after the last option.
+        if reads.resplit == false, literalOnly == false, isPrinter == false,
+           let firstOption = args.firstIndex(where: { $0.hasPrefix("-") })
+        {
+            let starts = args.indices.filter { start in
+                start > firstOption && mayHeadHostCommand(args[start])
+                    && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
+            }
+            for start in starts.prefix(maxOptionTails) { tails.append(Array(args[start...])) }
+        }
         for tail in tails where tail.isEmpty == false {
             if joinedReadsRun(tail, &reads, dataOnly: dataOnly, literalOnly: literalOnly) { return true }
         }
@@ -433,6 +448,9 @@ private func decodedWord(_ word: String) -> String {
 }
 
 private let printers: Set<String> = ["echo", "printf", "print"]
+
+/// How many re-reads from after a wrapper's options one command gets.
+private let maxOptionTails = 4
 
 /// Every shell word of `raw`, as written and decoded, read as program text
 /// (`textNamesHostMCPMutation`): inline interpreter code, quoted strings

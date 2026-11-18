@@ -555,6 +555,13 @@ private let hostGroups: [String: Set<String>] = [
     "cursor-agent": ["mcp"],
 ]
 
+/// Whether `word` may be the program of a host command a wrapper runs: a
+/// host CLI's name, or a dynamic word rv cannot read.
+func mayHeadHostCommand(_ word: String) -> Bool {
+    let folded = foldedWord(word)
+    return hostGroups[commandName(folded)] != nil || wordIsDynamic(folded)
+}
+
 /// Group words a dynamic program (`$C`) may be given.
 private let dynamicGroupWords: Set<String> = hostGroups.values.reduce(into: ["--add-mcp"]) { $0.formUnion($1) }
 
