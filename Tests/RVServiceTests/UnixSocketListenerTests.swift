@@ -250,6 +250,45 @@ struct UnixSocketListenerTests {
         #expect(err.contains("HOME is required"))
     }
 
+    /// stdout is a pipe nobody reads: the version write must fail with
+    /// EPIPE (SIGPIPE ignored) and rvd must say so with its exit status,
+    /// not die of the signal and not exit 0 having printed nothing.
+    @Test func rvdVersionToAClosedPipeExitsOne() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("ver")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let process = Process()
+        process.executableURL = rvd
+        process.arguments = ["--version"]
+        process.environment = ["HOME": home.path]
+        let stdout = Pipe()
+        try stdout.fileHandleForReading.close()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationReason == .exit, "rvd must not die of SIGPIPE")
+        #expect(process.terminationStatus == 1)
+    }
+
+    /// The stderr twin: no HOME, so rvd writes its refusal to a stderr pipe
+    /// nobody reads. It must still exit 1 by code, not die of SIGPIPE.
+    @Test func rvdRefusalToAClosedStderrPipeExitsOne() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let process = Process()
+        process.executableURL = rvd
+        process.arguments = []
+        process.environment = [:]
+        let stderr = Pipe()
+        try stderr.fileHandleForReading.close()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationReason == .exit, "rvd must not die of SIGPIPE")
+        #expect(process.terminationStatus == 1)
+    }
+
     /// On macOS XPC is the production transport: a socket base the daemon
     /// refuses (group-writable `~/.config`) must not take XPC down with it.
     @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
@@ -331,6 +370,59 @@ struct UnixSocketListenerTests {
         if process.isRunning == false {
             #expect(process.terminationStatus == 0)
         }
+    }
+
+    /// A same-user client that sends a request and closes before rvd sets
+    /// up its connection is closed, and the listener keeps serving. Darwin
+    /// refuses every option on a socket whose peer is gone, so the refused
+    /// `SO_RCVTIMEO` closes it. This test cannot go red on the reply's send
+    /// flags: an accepted socket inherits `SO_NOSIGPIPE` from the listening
+    /// socket, which `openStream` sets, so even with that close removed and
+    /// flags 0 the reply's EPIPE raised no signal (measured on Darwin 27).
+    /// `repliesPassMSGNOSIGNAL` covers the flags.
+    @Test func aClientGoneBeforeItsReplyIsClosedAndTheListenerKeepsServing() throws {
+        let home = try makeIsolatedHome("pipe")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let gate = FirstAcceptGate()
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL,
+            limits: .standard,
+            afterAccept: { gate.hold() }
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        var header = Data(count: 4)
+        let hello = try IPCJSON.encode(Hello())
+        header.withUnsafeMutableBytes { $0.storeBytes(of: UInt32(hello.count).bigEndian, as: UInt32.self) }
+        let frame = header + hello
+        var addr = try DarwinFrameIO.sockaddr(path: socketURL.path)
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        try #require(fd >= 0)
+        let connected = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        try #require(connected == 0)
+        let sent = frame.withUnsafeBytes { Darwin.send(fd, $0.baseAddress, frame.count, 0) }
+        Darwin.close(fd)
+        try #require(sent == frame.count)
+        gate.release()
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let data = try #require(sendWithin(seconds: 10, client, body: hello).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    /// Replies never rely on the socket's `SO_NOSIGPIPE` alone: a flags-0
+    /// send on a gone peer whose socket lacks it ends the whole process.
+    @Test func repliesPassMSGNOSIGNAL() {
+        #expect(DarwinFrameIO.sendFlags & Int32(MSG_NOSIGNAL) != 0)
     }
 
     @Test func concurrentConnectionsAreBothServed() throws {
@@ -544,6 +636,23 @@ struct UnixSocketListenerTests {
             return
         }
     }
+}
+
+/// Holds the listener's first accepted connection until the test has closed
+/// its client; later accepts pass straight through.
+private final class FirstAcceptGate: Sendable {
+    private let armed = Mutex(true)
+    private let gone = DispatchSemaphore(value: 0)
+
+    func hold() {
+        let first = armed.withLock { armed in
+            defer { armed = false }
+            return armed
+        }
+        if first { _ = gone.wait(timeout: .now() + 10) }
+    }
+
+    func release() { gone.signal() }
 }
 
 /// Test-only shared box for one reply from a worker thread.

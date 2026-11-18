@@ -204,19 +204,23 @@ public struct RuntimeResourcePolicy: Codable, Sendable, Equatable {
     /// the auto-opened shell; the host still requires every launch to
     /// name its profile explicitly and never consults this field.
     public var defaultProfile: String?
+    /// Machine-wide caps for every caged runtime. Nil takes the defaults.
+    public var limits: RuntimeProcessLimits?
 
     public init(
         version: Int = 1,
         profiles: [RuntimeResourceProfile] = [],
-        defaultProfile: String? = nil
+        defaultProfile: String? = nil,
+        limits: RuntimeProcessLimits? = nil
     ) {
         self.version = version
         self.profiles = profiles
         self.defaultProfile = defaultProfile
+        self.limits = limits
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, profiles, defaultProfile
+        case version, profiles, defaultProfile, limits
     }
 
     /// Backward compatible: documents written before `defaultProfile` existed
@@ -226,6 +230,7 @@ public struct RuntimeResourcePolicy: Codable, Sendable, Equatable {
         version = try container.decode(Int.self, forKey: .version)
         profiles = try container.decode([RuntimeResourceProfile].self, forKey: .profiles)
         defaultProfile = try container.decodeIfPresent(String.self, forKey: .defaultProfile)
+        limits = try container.decodeIfPresent(RuntimeProcessLimits.self, forKey: .limits)
     }
 
     public static let empty = RuntimeResourcePolicy()

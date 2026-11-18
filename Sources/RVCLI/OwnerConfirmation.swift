@@ -103,6 +103,14 @@ enum OwnerConfirmation {
     static let expectedPresence = ConfirmOwnerActionReply.Presence.password
     #endif
 
+    /// The owner approved, but rvd could not record the approval in its
+    /// audit log, so it gave none. `result` says what did not happen.
+    static func auditUnwritableMessage(_ result: String) -> String {
+        "rvd could not write your approval to its audit log (~/.config/rv/audit.jsonl), so \(result). "
+            + "Check that ~/.config/rv and audit.jsonl are yours and writable and that the disk is not full, "
+            + "then run `rv audit verify` and try again"
+    }
+
     /// Returns only when rvd approved and said it checked the owner the way
     /// this platform's rvd does. An older rvd approves a pinned CLI with no
     /// check and omits `presence`: refused, fail closed.
@@ -139,6 +147,8 @@ enum OwnerConfirmation {
                 #else
                 throw Refused("rv: rvd could not check your login password (unix_chkpwd missing or not answering, or this account has no local password, such as an SSSD, LDAP or systemd-homed account)")
                 #endif
+            case .auditUnwritable:
+                throw Refused("rv: " + auditUnwritableMessage("\(summary) was not done"))
             }
         case .failure(let error):
             switch error {

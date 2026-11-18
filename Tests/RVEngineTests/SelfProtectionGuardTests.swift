@@ -16,8 +16,142 @@ struct SelfProtectionGuardTests {
         "rv allow-once mint",
         "rv policy apply policy.toml",
         "rv policy draft --save 'allow rm'",
+        "rv policy rollback 1 --save",
+        "rv policy rollback --save r1",
+        "rv policy rollback --repo 2 --save --json",
+        "rv policy rollback 1 $S",
+        "rv policy rollback $R --save",
+        "rv-cli policy rollback 1 --save",
+        "bash -c 'rv policy rollback 1 --save'",
+        // `xargs` appends stdin words the guard cannot see.
+        "echo --save | xargs rv policy rollback 3",
+        "echo --save | xargs rv policy draft --english x",
+        "echo --save | xargs -n1 rv-cli policy rollback 3",
+        "echo x | xargs rv uninstall",
+        "echo x | xargs rv policy apply x",
+        "echo normal | xargs rv safety",
+        "echo normal | xargs ~/.local/bin/rv safety",
+        "echo uninstall | xargs rv",
+        "echo 3 | xargs -I{} rv policy rollback {} --save",
+        "find . -name x | xargs -0 /usr/local/bin/rv packs disable",
+        "bash -c 'echo x | xargs rv uninstall'",
+        "echo x | xargs -n 1 rv uninstall",
+        "echo x | xargs -J % rv uninstall",
+        "echo x | xargs --max-args 1 rv uninstall",
+        "echo x | xargs -Q rv uninstall",
+        "echo x | xargs -- rv uninstall",
+        "echo x | xargs $RV uninstall",
+        // The xargs program is re-fed through the launcher resolver: shells,
+        // launcher prefixes, and nested xargs.
+        "echo x | xargs sh -c 'rv uninstall'",
+        "echo 3 | xargs -I{} bash -c 'rv policy rollback {} --save'",
+        "echo x | xargs -I% sh -c 'rv %'",
+        "echo x | xargs sudo rv uninstall",
+        "echo x | xargs env rv uninstall",
+        "echo x | xargs env FOO=1 rv uninstall",
+        "echo x | xargs command rv uninstall",
+        "echo x | xargs nohup rv uninstall",
+        "echo x | xargs time rv uninstall",
+        "echo x | xargs nice rv uninstall",
+        "echo x | xargs timeout 5 rv uninstall",
+        "echo x | xargs doas rv uninstall",
+        "echo x | xargs xargs rv uninstall",
+        // Replace strings anywhere: each occurrence is the stdin stand-in.
+        "echo uninstall | xargs -I% rv %",
+        "echo apply | xargs -I% rv policy %",
+        "echo setup | xargs -I@ rv @ --observe",
+        "echo rv | xargs -I% % uninstall",
+        "echo uninstall | xargs -J % rv %",
+        "echo uninstall | xargs -i rv {}",
+        "echo uninstall | xargs --replace=@ rv @",
+        "echo uninstall | xargs -0I% rv %",
+        // GNU xargs installed as gxargs (Homebrew findutils).
+        "echo x | gxargs rv uninstall",
+        "echo x | gxargs -0r rv uninstall",
+        // Clusters parse; an unknown letter stays ambiguous.
+        "echo x | xargs -0r rv uninstall",
+        "echo x | xargs -0Q rv uninstall",
+        // Stdin supplies the program or the whole command line.
+        "echo 'rv uninstall' | xargs -I{} sh -c '{}'",
+        "echo 'rv uninstall' | xargs -I% eval %",
+        "echo 'rv uninstall' | xargs eval",
+        "echo 'rv uninstall' | xargs sudo",
+        "echo 'rv uninstall' | xargs env",
+        "echo 'rv uninstall' | xargs nohup",
+        "echo 'rv uninstall' | xargs command",
+        "echo 'rv uninstall' | xargs time",
+        "echo 'rv uninstall' | xargs nice",
+        "echo 'rv uninstall' | xargs timeout 5",
+        "echo 'rv uninstall' | xargs -n 2 sh -c",
+        // Options that do not parse exactly fail closed.
+        "echo uninstall | xargs --repl=% rv %",
+        "echo x | xargs --delim - rv uninstall",
+        "echo x | xargs --max-a=1 rv uninstall",
+        "echo x | xargs --frobnicate rv uninstall",
+        "echo x | xargs - rv uninstall",
+        "echo x | xargs -n -1 rv uninstall",
+        "echo rv | xargs --repl=X X uninstall",
+        "echo rv | xargs -Q @ @ uninstall",
+        "echo rv | xargs --frobnicate sudo",
+        "echo x | xargs " + String(repeating: "-Q a ", count: 40) + "rv uninstall",
+        // A replace string inside a word.
+        "echo icy | xargs -I@ rv pol@ apply x",
+        "echo -cy | xargs -I@ rv pol@",
+        // Nested past the depth bound.
+        "echo x | xargs xargs xargs xargs xargs rv uninstall",
+        // A dynamic head may be xargs.
+        "X=xargs; echo uninstall | $X -I% rv %",
+        "X=xargs; echo uninstall | $X rv",
+        "echo uninstall | \"$(which xargs)\" -0 rv",
+        // An uncertain parse (`-E -z`): a replace string may hide in any
+        // suffix of a short cluster (`-rIX` names `X`).
+        "echo rv | xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | xargs -E -z -rIX X uninstall",
+        "echo rv | xargs -E -z -rIX X policy apply x",
+        "echo rv | xargs -E -z -rIX X egress approve 1",
+        "echo rv | xargs -E -z -rIX X secrets set K",
+        "echo rv | sudo xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | env xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | gxargs -E -z -rIX X policy rollback 3 --save",
+        "bash -c 'echo rv | xargs -E -z -rIX X policy rollback 3 --save'",
+        "echo rv | xargs -E -z -rIvv vv uninstall",
+        "echo rv | xargs -E -z -0iX X uninstall",
+        "echo rv | xargs -E -z -rIXX XX uninstall",
+        "echo rv | xargs -E -z -tiX X uninstall",
+        "echo 'rv uninstall' | xargs -E -z -rIX X",
+        "echo x | xargs --no-run rv uninstall",
+        // A glob head may be xargs, parsed or not.
+        "echo --save | /usr/bin/xarg? -E -z rv policy rollback 3",
+        "echo --save | x[a]rgs -E -z rv policy rollback 3",
+        "echo --save | /usr/bin/x*rgs -E -z rv policy rollback 3",
+        // A replace string or appended stdin pasted into shell or eval script
+        // text: stdin chooses the script (`x; rv uninstall`).
+        "echo 'x; rv uninstall' | xargs -I% sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I{} sh -c 'echo {}'",
+        "echo 'x; rv uninstall' | xargs -I% bash -c \"ls %\"",
+        "echo 'x; rv uninstall' | xargs -I% sh -c \"cat %; true\"",
+        "echo 'x; rv uninstall' | xargs -I% sudo sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% env FOO=1 bash -c \"ls %\"",
+        "echo 'x; rv uninstall' | sudo xargs -I% sh -c 'echo %'",
+        "echo 'x; rv uninstall' | env xargs -I{} sh -c 'echo {}'",
+        "echo 'x; rv uninstall' | xargs -0 -I% sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -d '\\n' -I% sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs --replace=% sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -i dash -c 'echo {}'",
+        "echo 'x; rv uninstall' | xargs -I% zsh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% ksh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% bash -ec 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% /bin/sh -c 'echo %'",
+        "echo 'x; rv uninstall' | xargs -I% eval echo %",
+        "echo 'x; rv uninstall' | gxargs -I% sh -c 'echo %'",
+        "ls | xargs -I% sh -c 'echo %'",
+        "echo a | xargs -I% sh -c 'grep -l % src'",
+        // Accepted false refusal of the fail-closed rule.
+        "ls | xargs -I% sh -c 'cp % /tmp'",
         "rv policy ceiling set ceiling.toml",
         "rv policy ceiling $SUB ceiling.toml",
+        "echo set | xargs rv policy ceiling",
+        "echo x | xargs rv policy ceiling set",
         "rv egress approve 1",
         "rv mcp approve 1",
         "rv mcp trust",
@@ -38,6 +172,20 @@ struct SelfProtectionGuardTests {
         "rv-cli packs disable core.git",
         "~/.local/bin/rv-cli uninstall",
         "rv-cli allow-once redeem 123456",
+        // Bare `rv allow-once <code>` redeems through the default subcommand.
+        // Real codes are six lowercase hex; the CLI trims and lowercases first.
+        "rv allow-once 123456",
+        "rv allow-once a1b2c3",
+        "rv allow-once abcdef",
+        "rv allow-once A1B2C3",
+        "rv allow-once aBcDeF",
+        "rv allow-once ' a1b2c3 '",
+        "rv allow-once --json a1b2c3",
+        "rv-cli allow-once a1b2c3",
+        "bash -c 'rv allow-once a1b2c3'",
+        // Digit-only words stay flagged at any length, as before.
+        "rv allow-once 12345",
+        "rv allow-once 1234567",
         // `rv host mode <host> <mode>`: anything but `block` sheds oversight.
         "rv host mode claude off",
         "rv host mode claude observe",
@@ -62,11 +210,38 @@ struct SelfProtectionGuardTests {
         "rv safety",
         "rv safety strict",
         "rv policy show",
+        "rv policy show --revision 2",
+        "rv policy rollback 1",
+        "rv policy rollback r2 --repo --json",
+        "echo x | xargs rv policy show",
+        "echo x | xargs rv test",
+        "find . -name '*.swift' | xargs grep -n rv",
+        "find . -print0 | xargs -0 grep -n rv",
+        "ls | xargs -I{} mv {} {}.bak",
+        "ls | xargs -n 1 echo rv uninstall",
+        "echo a b | xargs echo",
+        "git ls-files | xargs -0r grep -l rv",
+        "git ls-files -z | gxargs -0r grep -l rv",
+        "ls | xargs sudo grep -l rv",
+        "find . -name '*.txt' | xargs -I{} cp {} /tmp/",
+        "find . -print0 | xargs -0 -n1 -P4 swift-format -i",
+        "git ls-files | xargs -r wc -l",
+        "$PYTHON -m pytest",
+        "echo x | xargs --frobnicate grep -l foo",
+        "$CC -o out main.c",
+        "$CC -Wall main.c",
+        "$PYTHON -m x",
+        "\"$(which python3)\" -c 'print(1)'",
         "rv policy check --ceiling",
         "rv policy ceiling",
         "rv policy ceiling show",
         "rv allowlist list",
         "rv allow-once list",
+        "rv allow-once clear",
+        // Not code-shaped: the CLI refuses these before any lookup.
+        "rv allow-once abcde",
+        "rv allow-once a1b2c3d",
+        "rv allow-once a1b2g3",
         "rv explain 'rm -rf /'",
         "rv blocks",
         "echo rv uninstall",
@@ -100,5 +275,30 @@ struct SelfProtectionGuardTests {
     @Test("read-only and strengthening rv commands are not", arguments: harmless)
     func harmlessPass(command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// The guard's code test must accept exactly what redemption accepts.
+    @Test(
+        "unlock-code shape matches AllowOnceUnlockCode.isValid",
+        arguments: ["a1b2c3", "000000", "abcdef", "fedcba", "abcde", "a1b2c3d", "a1b2g3", "zzzzzz", "a1b2c"]
+    )
+    func unlockShapePinned(code: String) {
+        let flagged = SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "rv allow-once \(code)"))
+        let digitsOnly = code.allSatisfy(\.isNumber)
+        #expect(flagged == (AllowOnceUnlockCode.isValid(code) || digitsOnly), "\(code)")
+    }
+
+    @Test("an uncertain xargs line is judged in bounded time")
+    func uncertainXargsIsBounded() {
+        let distinct = "echo x | xargs -E -z " + (0..<1_500).map { "w\($0)" }.joined(separator: " ")
+        // Under the caps, every word is scanned and none matches.
+        let scanned = "echo x | xargs -E -z " + (0..<125).map { "--o\($0)x k\($0)k" }.joined(separator: " ")
+        let clock = ContinuousClock()
+        var verdicts: [Bool] = []
+        let elapsed = clock.measure {
+            verdicts = [distinct, scanned].map { SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: $0)) }
+        }
+        #expect(verdicts == [true, false])
+        #expect(elapsed < .seconds(5), "took \(elapsed)")
     }
 }

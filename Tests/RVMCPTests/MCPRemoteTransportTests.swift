@@ -116,56 +116,126 @@ struct MCPRemoteTransportTests {
     }
 }
 
+/// The fixture never said which port it listens on. Thrown from `init`, so
+/// the test stops there and records what the fixture did instead.
+struct RemoteFixtureUnstarted: Error, CustomStringConvertible {
+    var description: String
+}
+
 /// `Scripts/mcp-remote-fixture.py` on a loopback port.
 final class RemoteFixture: @unchecked Sendable {
     static let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().appendingPathComponent("Scripts/mcp-remote-fixture.py")
+    /// A minute, not seconds: the first `python3` on a cold macOS runner
+    /// goes through the developer-tools shim, and a suite's fixtures start
+    /// together.
+    static let startTimeout: TimeInterval = 60
 
     let process = Process()
     let errors = Pipe()
-    private(set) var port = 0
+    let port: Int
 
+    /// Throws `RemoteFixtureUnstarted` when no `PORT n` line arrives within
+    /// `startTimeout`: the fixture is killed and its exit state, its stderr
+    /// and what it printed instead are in the error.
     init(_ arguments: [String] = []) throws {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", "-u", Self.script.path] + arguments
         process.standardOutput = output
         process.standardError = errors
+        let started = Date()
         try process.run()
         var line = Data()
+        var readError: Int32 = 0
         let fd = output.fileHandleForReading.fileDescriptor
-        // A minute, not seconds: the first `python3` on a cold macOS runner
-        // goes through the developer-tools shim, and a suite's fixtures
-        // start together.
-        let started = Date()
-        let deadline = started.addingTimeInterval(60)
+        let deadline = started.addingTimeInterval(Self.startTimeout)
         while Date() < deadline, line.last != 0x0A {
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 200) > 0 else { continue }
             var byte: UInt8 = 0
-            guard read(fd, &byte, 1) == 1 else { break }
+            let n = read(fd, &byte, 1)
+            if n < 0, errno == EINTR { continue }
+            guard n == 1 else {
+                readError = n < 0 ? errno : 0
+                break
+            }
             line.append(byte)
         }
         let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        port = text.hasPrefix("PORT ") ? Int(text.dropFirst(5)) ?? 0 : 0
-        let waited = Int(Date().timeIntervalSince(started))
         // Without a port every request would go to port 0 and each test
-        // would fail on its own expectations, saying nothing of why.
-        if port == 0 {
-            Issue.record("the remote fixture reported no port in \(waited) s (it said \"\(text)\")")
-        } else if waited >= 5 {
-            print("mcp-remote-fixture took \(waited) s to report its port")
+        // would fail on its own expectations, saying nothing of why: the
+        // error below stops it instead.
+        if text.hasPrefix("PORT "), let port = Int(text.dropFirst(5)), port > 0 {
+            self.port = port
+            let waited = Int(Date().timeIntervalSince(started))
+            if waited >= 5 { print("mcp-remote-fixture took \(waited) s to report its port") }
+            return
         }
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(started))
+        // Only a fixture still running is signalled: once it has been
+        // reaped its pid may belong to another process.
+        let running = process.isRunning
+        if running { kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
+        let state = running
+            ? "still running (killed now)"
+            : "exited (\(process.terminationReason == .exit ? "status" : "signal") \(process.terminationStatus))"
+        let stderr = Self.available(errors.fileHandleForReading.fileDescriptor)
+        throw RemoteFixtureUnstarted(description: """
+            remote fixture printed no PORT line in \(elapsed) s: \(state); \
+            stdout \(String(reflecting: text))\(readError == 0 ? "" : ", read errno \(readError)"); \
+            stderr \(String(reflecting: stderr))
+            """)
+    }
+
+    /// A test that fails before `stop` still ends its server. Only a server
+    /// still running is signalled: once reaped its pid may be another's.
+    deinit {
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+
+    /// What `fd` holds now, without waiting for its end: a child the fixture
+    /// left could still hold the write end open.
+    private static func available(_ fd: Int32) -> String {
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while data.count < 64 * 1024 {
+            let n = read(fd, &chunk, chunk.count)
+            guard n > 0 else { break }
+            data.append(contentsOf: chunk[0..<n])
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)\(path)")! }
 
-    /// Stops the server and returns its request log. SIGKILL: a child of the
-    /// test runner can inherit a mask that blocks SIGTERM.
+    private let logged = Mutex(Data())
+
+    /// The request log so far, the server left running.
+    func requests() -> String {
+        let fd = errors.fileHandleForReading.fileDescriptor
+        return logged.withLock { data in
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            while true {
+                var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 0) > 0, poller.revents & Int16(POLLIN) != 0 else { break }
+                let n = read(fd, &chunk, chunk.count)
+                guard n > 0 else { break }
+                data.append(contentsOf: chunk[0..<n])
+            }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    /// Stops the server and returns its whole request log. SIGKILL: a child
+    /// of the test runner can inherit a mask that blocks SIGTERM.
     func stop() -> String {
-        kill(process.processIdentifier, SIGKILL)
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         process.waitUntilExit()
-        return String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let rest = errors.fileHandleForReading.readDataToEndOfFile()
+        return logged.withLock { String(decoding: $0 + rest, as: UTF8.self) }
     }
 }
 

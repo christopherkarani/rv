@@ -88,7 +88,8 @@ enum OwnerGateRefusal: Sendable, Equatable {
         case let error as EgressReviewError:
             switch error {
             case .storeUnavailable: self = .storeUnavailable
-            case .unknownProposal, .notAwaiting, .notNetworkProposal, .reasonRequired:
+            case .unknownProposal, .notAwaiting, .notNetworkProposal, .reasonRequired,
+                .reviewChanged, .reviewTokenMissing:
                 return nil
             }
         case let error as ConfigChangeUnrecorded:

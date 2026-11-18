@@ -560,7 +560,7 @@ struct RuntimeTerminalTests {
         #expect(client.writeTerminal(runtime.runtime, bytes: Data([0x03])).isSuccess)
         let events = readEvents(client, seconds: 10)
         let status = events.compactMap { event -> Int32? in
-            if case .exited(let status) = event.body { return status }
+            if case .exited(let status, _) = event.body { return status }
             return nil
         }.first
         #expect(status == SIGINT)
@@ -786,7 +786,7 @@ struct RuntimeTerminalTests {
         let sequences = terminalSequences(events)
         #expect(sequences.count > 1)
         #expect(zip(sequences, sequences.dropFirst()).allSatisfy { $0 < $1 })
-        #expect(events.contains { if case .exited(0) = $0.body { true } else { false } })
+        #expect(events.contains { if case .exited(0, _) = $0.body { true } else { false } })
         let watcher = try WorkspaceClient.connect(opened.server.endpoint).get()
         let facts = try watcher.listRuntimes().get()
         #expect(facts.contains { $0.runtime == runtime.runtime && $0.running == false })
@@ -1234,6 +1234,19 @@ struct RuntimeTerminalTests {
         terminal.detach(client: lateID)
     }
 
+    @Test func aLateSubscriberSeesTheDeadlineThatEndedTheRuntime() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        terminal.finish(status: 9, timedOutAfter: 30)
+        let late = NoticeBox()
+        let lateID = UUID()
+        #expect(terminal.subscribe(client: lateID, emit: late.append).isSuccess)
+        terminal.activate(client: lateID)
+        #expect(waitUntil(seconds: 2) { late.exitStatus == 9 })
+        #expect(late.notices.contains(.exited(9, timedOutAfter: 30)))
+        terminal.detach(client: lateID)
+    }
+
     @Test func concurrentFinishDeliversOneExitNotice() throws {
         let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
         terminal.startReader()
@@ -1404,7 +1417,7 @@ struct RuntimeTerminalTests {
 
 private func exitNotices(_ box: NoticeBox) -> [Int32] {
     box.notices.compactMap { notice in
-        if case .exited(let status) = notice { return status }
+        if case .exited(let status, _) = notice { return status }
         return nil
     }
 }
@@ -1674,7 +1687,7 @@ private final class NoticeBox: Sendable {
     var exitStatus: Int32? {
         let copy = box.withLock { $0 }
         for notice in copy {
-            if case .exited(let status) = notice { return status }
+            if case .exited(let status, _) = notice { return status }
         }
         return nil
     }

@@ -4,6 +4,7 @@ import RVDomain
 import RVHistory
 import RVPolicy
 @testable import RVService
+import Synchronization
 
 /// Value-level checks on the decision half of each door: which effects it
 /// asks for, in what order, with what content. Most cases pass no home, so
@@ -411,13 +412,99 @@ struct GatedEffectTests {
         let command = ShellCommand(rawValue: "git reset --hard")
         let first = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         #expect(first.result.decision == .allow)
-        // The redeemed allow asks for no denial row, only an override audit.
+        let second = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
+        let denied = try #require(Self.denialRow(second.result))
+        #expect(second.effects == [denied])
+        guard case .denialRow(let denial) = denied else {
+            Issue.record("expected a denial row")
+            return
+        }
+        // The redeemed allow asks for no denial row, only an override audit
+        // carrying the deny's rows for when it cannot be written.
         #expect(first.effects == [.overrideAudit(GatedEffect.OverrideRow(
             at: Self.now, host: .hook(.claude),
             ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-            override: "allowOnce", workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true)
+            override: "allowOnce", workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true),
+            denial: denial
         ))])
-        let second = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
-        #expect(second.effects == [try #require(Self.denialRow(second.result))])
+    }
+
+    private final class Flag: Sendable {
+        let raised = Mutex(false)
+        var isRaised: Bool { raised.withLock { $0 } }
+        func raise() { raised.withLock { $0 = true } }
+    }
+
+    /// L4: an override decided as the hook deadline passes carries no
+    /// fallback deny rows, as no deny row is written past the deadline.
+    /// The allowlist load (after the gate's own deadline check) moves the
+    /// fake clock past the deadline.
+    @Test("an override that lands past the hook deadline carries no deny rows")
+    func lateOverrideCarriesNoDenyRows() async throws {
+        let command = ShellCommand(rawValue: "git reset --hard")
+        let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(selector: .rule(rule), reason: "test", addedAt: Self.now.addingTimeInterval(-60)),
+        ])
+        let late = Flag()
+        let base = ContinuousClock.now
+        let deadline = HookDeadline(
+            expiresAt: base.advanced(by: .seconds(60)),
+            now: { late.isRaised ? base.advanced(by: .seconds(120)) : base })
+        let decided = await HookDeadline.$current.withValue(deadline) {
+            await GatedEvaluate().decide(
+                .apply, Self.request(command), cwd: wd("/tmp/ws"), home: nil, grants: EphemeralAllowOnceTable(),
+                now: Self.now, allowlist: { late.raise(); return allowlist }, host: .hook(.claude), tool: .bash,
+                inputs: Self.inputs(.enforce))
+        }
+        #expect(decided.result.decision == .allow)
+        let overrides = decided.effects.compactMap { effect -> GatedEffect.OverrideRow? in
+            if case .overrideAudit(let row) = effect { return row }
+            return nil
+        }
+        #expect(overrides.count == 1)
+        #expect(overrides.first?.ruleID == rule)
+        #expect(overrides.first.map { $0.denial == nil } == true)
+        #expect(deadline.hasTripped)
+    }
+
+    private final class Calls: Sendable {
+        let count = Mutex(0)
+        func next() -> Int { count.withLock { $0 += 1; return $0 } }
+    }
+
+    /// An allow-once grant spent in time keeps its reply when the deadline
+    /// passes after: `HookDoor` sends it, not the timeout deny, so the deny
+    /// it becomes if the override row fails keeps its deny rows. The fake
+    /// clock is in time for the gate's check and the grant claim (the first
+    /// two reads) and late from the third, the check after the gate.
+    @Test("an allow-once spent in time keeps its deny rows when the deadline passes after")
+    func spentGrantKeepsDenyRowsPastTheDeadline() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let cwd = wd("/tmp/ws")
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: cwd, codeHash: "late-grant", now: Self.now
+            ) == .planted
+        )
+        let command = ShellCommand(rawValue: "git reset --hard")
+        let calls = Calls()
+        let base = ContinuousClock.now
+        let deadline = HookDeadline(
+            expiresAt: base.advanced(by: .seconds(60)),
+            now: { calls.next() <= 2 ? base : base.advanced(by: .seconds(120)) })
+        let decided = await HookDeadline.$current.withValue(deadline) {
+            await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
+        }
+        #expect(decided.result.decision == .allow, "the grant must be spent in time")
+        #expect(deadline.hasTripped)
+        #expect(deadline.requiresTimeoutReply == false)
+        let overrides = decided.effects.compactMap { effect -> GatedEffect.OverrideRow? in
+            if case .overrideAudit(let row) = effect { return row }
+            return nil
+        }
+        #expect(overrides.count == 1)
+        #expect(overrides.first?.override == "allowOnce")
+        #expect(overrides.first?.denial?.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
     }
 }

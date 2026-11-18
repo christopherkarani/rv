@@ -146,6 +146,52 @@ struct MCPConfigurationTests {
         #expect(try MCPConfiguration.decode(Data(text.utf8)).get() == configuration)
     }
 
+    @Test func callTimeoutSecondsDecodesValidatesAndRoundTrips() throws {
+        func server(_ body: String) -> String { #"{"version":1,"servers":[{"name":"s",\#(body)}]}"# }
+        let local = try decode(server(#""command":"x","callTimeoutSeconds":1"#)).get()
+        #expect(local.server(named: "s")?.callTimeoutSeconds == 1)
+        let remote = try decode(server(#""url":"https://a.example/mcp","callTimeoutSeconds":86400"#)).get()
+        #expect(remote.server(named: "s")?.callTimeoutSeconds == 86400)
+        let unset = try decode(server(#""command":"x""#)).get()
+        #expect(unset.server(named: "s")?.callTimeoutSeconds == 300)
+        #expect(unset.encoded().compactText.contains("callTimeoutSeconds") == false)
+        for configuration in [local, remote] {
+            #expect(try MCPConfiguration.decode(Data(configuration.encoded().compactText.utf8)).get() == configuration)
+        }
+        for bad in ["0", "86401", "-5", "1.5", "\"300\"", "true", "null", "3e2"] {
+            for body in [#""command":"x","callTimeoutSeconds":\#(bad)"#, #""url":"https://a.example/mcp","callTimeoutSeconds":\#(bad)"#] {
+                guard case .failure(let error) = decode(server(body)) else {
+                    Issue.record("accepted callTimeoutSeconds \(bad)")
+                    continue
+                }
+                #expect(error.message.contains("server s callTimeoutSeconds must be a whole number of seconds from 1 to 86400"), "\(error.message)")
+            }
+        }
+    }
+
+    @Test func startTimeoutSecondsDecodesValidatesAndRoundTrips() throws {
+        func server(_ body: String) -> String { #"{"version":1,"servers":[{"name":"s",\#(body)}]}"# }
+        let local = try decode(server(#""command":"x","startTimeoutSeconds":1"#)).get()
+        #expect(local.server(named: "s")?.startTimeoutSeconds == 1)
+        let remote = try decode(server(#""url":"https://a.example/mcp","startTimeoutSeconds":600"#)).get()
+        #expect(remote.server(named: "s")?.startTimeoutSeconds == 600)
+        let unset = try decode(server(#""command":"x""#)).get()
+        #expect(unset.server(named: "s")?.startTimeoutSeconds == 60)
+        #expect(unset.encoded().compactText.contains("startTimeoutSeconds") == false)
+        for configuration in [local, remote] {
+            #expect(try MCPConfiguration.decode(Data(configuration.encoded().compactText.utf8)).get() == configuration)
+        }
+        for bad in ["0", "601", "-5", "1.5", "\"60\"", "true", "null", "6e1"] {
+            for body in [#""command":"x","startTimeoutSeconds":\#(bad)"#, #""url":"https://a.example/mcp","startTimeoutSeconds":\#(bad)"#] {
+                guard case .failure(let error) = decode(server(body)) else {
+                    Issue.record("accepted startTimeoutSeconds \(bad)")
+                    continue
+                }
+                #expect(error.message.contains("server s startTimeoutSeconds must be a whole number of seconds from 1 to 600"), "\(error.message)")
+            }
+        }
+    }
+
     @Test func remoteServersRefuseLocalKeysUnsafeURLsAndManagedHeaders() {
         func server(_ body: String) -> String { #"{"version":1,"servers":[{"name":"r",\#(body)}]}"# }
         let cases: [(String, String)] = [

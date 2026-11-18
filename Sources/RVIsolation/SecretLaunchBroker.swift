@@ -146,8 +146,11 @@ final class SecretLaunchBroker: @unchecked Sendable {
     /// the definitions loaded here, it refuses an environment-delivered
     /// secret (its real value would land in the environment) and one the
     /// agent filter would skip, instead of staging or dropping it.
+    ///
+    /// `runtime` names the launch in the staged records and, from the
+    /// start, in every gateway record for these placeholders.
     func lease(
-        names: [String], agent: String?, placeholdersOnly: Bool = false
+        names: [String], agent: String?, placeholdersOnly: Bool = false, runtime: String? = nil
     ) -> Result<SecretLease, SecretLeaseError> {
         guard names.isEmpty == false else { return .success(.empty) }
         let configuration: SecretsConfiguration
@@ -218,7 +221,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 let placeholder = SecretPlaceholder.mint(prefix: binding.placeholderPrefix)
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: binding.placeholderPrefix, value: value,
-                    upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
+                    upstream: binding.upstream, fingerprint: fingerprint, runtime: runtime,
                     surfaces: binding.surfaces, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: secret.version), approvals: binding.approvalRules,
                     binaries: pins))
@@ -233,7 +236,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 let placeholder = SecretPlaceholder.mint(prefix: "")
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, value: value, upstream: binding.upstream, fingerprint: fingerprint,
-                    runtime: nil, rules: binding.rules, expires: expires,
+                    runtime: runtime, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: secret.version), signing: binding,
                     approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
@@ -244,7 +247,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             staged.append(AuditEvent(
                 time: Date(), kind: .secretUse, decision: .info, subject: name,
-                reason: "staged for launch", workspace: workspace, agent: agent, source: "secret-broker",
+                reason: "staged for launch", workspace: workspace, runtime: runtime, agent: agent,
+                source: "secret-broker",
                 detail: Self.compact([
                     "event": "staged",
                     "delivery": definition.delivery.kind,

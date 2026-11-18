@@ -66,6 +66,9 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
     var blockReason: String?
     /// Persistent host that bound the control endpoint. Absent on older lines.
     var host: UUID?
+    /// Why a runtime ended, when rv ended it on purpose (`timeout`).
+    /// Absent for an ordinary exit and on older lines.
+    var endReason: String?
 
     init(
         kind: Kind,
@@ -81,7 +84,8 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
         processStartSeconds: Int64? = nil,
         processStartMicroseconds: Int64? = nil,
         blockReason: String? = nil,
-        host: UUID? = nil
+        host: UUID? = nil,
+        endReason: String? = nil
     ) {
         self.kind = kind
         self.workspace = workspace
@@ -97,6 +101,7 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
         self.processStartMicroseconds = processStartMicroseconds
         self.blockReason = blockReason
         self.host = host
+        self.endReason = endReason
     }
 }
 
@@ -177,6 +182,7 @@ enum WorkspaceLifecycleLog {
         var processStartMicroseconds: Int64?
         var blockReason: String?
         var host: UUID?
+        var endReason: String?
     }
 
     /// `$HOME/.config/rv/workspace-sessions.jsonl`. Ignores `XDG_CONFIG_HOME`.
@@ -203,7 +209,8 @@ enum WorkspaceLifecycleLog {
             processStartSeconds: record.processStartSeconds,
             processStartMicroseconds: record.processStartMicroseconds,
             blockReason: record.blockReason,
-            host: record.host
+            host: record.host,
+            endReason: record.endReason
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -472,7 +479,8 @@ enum WorkspaceLifecycleLog {
             processStartSeconds: record.processStartSeconds,
             processStartMicroseconds: record.processStartMicroseconds,
             blockReason: record.blockReason,
-            host: record.host
+            host: record.host,
+            endReason: record.endReason
         )
     }
 }

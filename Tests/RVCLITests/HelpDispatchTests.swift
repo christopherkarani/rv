@@ -52,6 +52,8 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["help", "workspace", "abandon"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--hook", "opencode", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--resource-profile=x", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--timeout", "10m", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--timeout=10m", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "agent", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["help", "workspace", "agent"]) == .workspace)
