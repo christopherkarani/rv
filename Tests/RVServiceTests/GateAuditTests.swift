@@ -26,14 +26,16 @@ struct GateAuditTests {
     private func decide(
         _ intent: EvaluationIntent,
         home: HomeDirectory,
-        allowlist: AllowlistSnapshot = .empty
+        allowlist: AllowlistSnapshot = .empty,
+        command: ShellCommand = Self.resetHard,
+        guardMode: GuardMode = .enforce
     ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
         await GatedEvaluate().decide(
-            intent, EvaluationRequest(command: Self.resetHard, enabledPacks: dayOnePackIDs),
+            intent, EvaluationRequest(command: command, enabledPacks: dayOnePackIDs),
             cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
             allowlist: { allowlist }, host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
-                guardMode: .enforce,
+                guardMode: guardMode,
                 judge: JudgeSelection(engine: .ft, bundle: nil),
                 store: .gather(home: nil, cwd: nil)
             )
@@ -177,6 +179,190 @@ struct GateAuditTests {
         #expect(recorded == false)
         #expect(ticks.value == 10, "the deny row must not get a fresh lock wait")
         #expect(DenialLedger(configDirectory: config).records(asOf: Self.now).map(\.ruleID) == [rule])
+    }
+
+    // MARK: - Indeterminate refusals (F6)
+
+    /// rv administration from the agent: the engine floors it to
+    /// `indeterminate(.selfProtection)` on every host and mode.
+    private static let selfProtected = ShellCommand(rawValue: "rv host mode claude off")
+    /// Over the engine's 64 KiB command cap: `indeterminate(.commandTooLarge)`.
+    private static let oversized = ShellCommand(rawValue: String(repeating: "a", count: 65_537))
+
+    private func chained(_ home: HomeDirectory) throws -> [AuditEvent] {
+        var events: [AuditEvent] = []
+        for line in try auditLines(home) {
+            events.append(try #require(AuditLedger.event(fromLine: Substring(line), source: .audit)))
+        }
+        return events
+    }
+
+    /// The hook door refuses an indeterminate verdict; it is chained as a
+    /// `command.denied` marked as an unfinished evaluation, with the reason
+    /// class and no command text. The reply is the refusal it always was.
+    @Test func anIndeterminateRefusalIsChainedAsAMarkedDeny() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let result = await GatedEvaluate().apply(
+            command: Self.selfProtected, cwd: wd("/tmp/ws"), home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .indeterminate(.selfProtection))
+        #expect(HookAuthorization.project(result: result, cwd: wd("/tmp/ws")) == .denyPinned)
+        let lines = try auditLines(home)
+        #expect(lines.count == 1)
+        let line = try #require(lines.first)
+        #expect(line.contains("host mode") == false, "audit must not carry command text")
+        #expect(line.contains("claude off") == false)
+        let event = try #require(AuditLedger.event(fromLine: Substring(line), source: .audit))
+        #expect(event.kind == .commandDenied)
+        #expect(event.decision == .denied)
+        #expect(event.subject == "rv.indeterminate:selfProtection")
+        #expect(event.reason == "selfProtection")
+        #expect(event.detail["verdict"] == "indeterminate")
+        #expect(event.detail["host"] == "claude")
+        #expect(event.detail["tool"] == "Bash")
+        #expect(event.detail["would_be"] == nil)
+        #expect(event.agent == "claude")
+        let report = AuditChain.verify(Data((lines.joined(separator: "\n") + "\n").utf8))
+        #expect(report.isIntact)
+        #expect(report.lines == 1)
+        // The denial ledger is rule-oriented (`rv blocks`, the review queue
+        // offers allow-once); an indeterminate is neither, so it stays out.
+        let blocks = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home)).records(asOf: Self.now)
+        #expect(blocks.isEmpty)
+    }
+
+    @Test func anIndeterminatePeekWritesNothingToTheChain() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let decided = await decide(.peek, home: home, command: Self.selfProtected)
+        #expect(decided.result.decision == .indeterminate(.selfProtection))
+        GatedEvaluate.perform(decided.effects, home: home)
+        #expect(try auditLines(home).isEmpty)
+    }
+
+    /// Observe never relaxes self-protection: the refusal stands and is
+    /// chained as a refusal, not as an observed would-be.
+    @Test func observeKeepsASelfProtectionRefusalAndChainsItAsADeny() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let decided = await decide(.apply, home: home, command: Self.selfProtected, guardMode: .observe)
+        #expect(decided.result.decision == .indeterminate(.selfProtection))
+        GatedEvaluate.perform(decided.effects, home: home)
+        let events = try chained(home)
+        #expect(events.map(\.kind) == [.commandDenied])
+        #expect(events.first?.subject == "rv.indeterminate:selfProtection")
+        #expect(events.first?.detail["verdict"] == "indeterminate")
+        #expect(events.first?.detail["would_be"] == nil)
+    }
+
+    /// Observe lets any other unfinished evaluation run (today's behaviour,
+    /// unchanged): it is chained as an observed would-be refusal.
+    @Test func observeLetsAnUnresolvedScriptGraphRunAndChainsItAsObserved() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pkg = try packageDir(script: "node ok.js")
+        defer { try? FileManager.default.removeItem(at: pkg) }
+        let cwd = WorkingDirectory(rawValue: pkg.path)
+        let request = EvaluationRequest(command: ShellCommand(rawValue: #"cd "$D" && npm test"#), enabledPacks: dayOnePackIDs)
+        func decideScript(_ mode: GuardMode) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+            await GatedEvaluate().decide(
+                .apply, request, cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { .empty }, host: .hook(.claude), tool: .bash,
+                inputs: EvaluationInputs(
+                    guardMode: mode,
+                    judge: JudgeSelection(engine: .ft, bundle: nil),
+                    store: .gather(home: home, cwd: cwd)
+                )
+            )
+        }
+        let enforced = await decideScript(.enforce)
+        #expect(enforced.result.decision == .indeterminate(.packageScriptUnresolved))
+        let observed = await decideScript(.observe)
+        #expect(observed.result.decision == .allow)
+        GatedEvaluate.perform(observed.effects, home: home)
+        let lines = try auditLines(home)
+        #expect(lines.count == 1)
+        #expect(lines.allSatisfy { $0.contains("npm test") == false }, "audit must not carry command text")
+        let events = try chained(home)
+        let event = try #require(events.first)
+        #expect(event.kind == .commandObserved)
+        #expect(event.decision == .info)
+        #expect(event.subject == "rv.indeterminate:packageScriptUnresolved")
+        #expect(event.reason == "packageScriptUnresolved")
+        #expect(event.detail["verdict"] == "indeterminate")
+        #expect(event.detail["would_be"] == "deny")
+        #expect(AuditChain.verify(Data((lines.joined(separator: "\n") + "\n").utf8)).isIntact)
+    }
+
+    /// The file door: observe floors a write of rv's install (a systemd user
+    /// unit that is not rv's own wiring file) to "run it in Terminal". That
+    /// refusal is chained; a log that cannot be written changes nothing.
+    @Test func theFileDoorChainsAnIndeterminateRefusal() throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let action = FileToolAction(
+            kind: .write, path: FileToolPath(rawValue: home.rawValue + "/.config/systemd/user/other.service"))
+        let decided = GatedEvaluate().decideFile(
+            action, home: home, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .observe)
+        #expect(decided.result.decision == .indeterminate(.selfProtection))
+        GatedEvaluate.perform(decided.effects, home: home)
+        let events = try chained(home)
+        #expect(events.map(\.kind) == [.commandDenied])
+        #expect(events.first?.subject == "rv.indeterminate:selfProtection")
+        #expect(events.first?.detail["verdict"] == "indeterminate")
+        #expect(events.first?.detail["tool"] == "Write")
+
+        let (broken, brokenURL) = try home()
+        defer { try? FileManager.default.removeItem(at: brokenURL) }
+        let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: broken))
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        let brokenAction = FileToolAction(
+            kind: .write, path: FileToolPath(rawValue: broken.rawValue + "/.config/systemd/user/other.service"))
+        let result = GatedEvaluate().runFile(
+            brokenAction, home: broken, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .observe)
+        #expect(result.decision == .indeterminate(.selfProtection))
+    }
+
+    /// Recording changes no verdict: for each indeterminate candidate on
+    /// the shell door, in each mode, apply returns what peek returns, and
+    /// an audit log that cannot be written leaves that verdict as it is.
+    @Test func recordingAnIndeterminateNeverChangesTheVerdict() async throws {
+        let cases: [(command: ShellCommand, mode: GuardMode, expected: Decision)] = [
+            (Self.selfProtected, .enforce, .indeterminate(.selfProtection)),
+            (Self.selfProtected, .observe, .indeterminate(.selfProtection)),
+            (Self.oversized, .enforce, .indeterminate(.commandTooLarge)),
+            // Observe lets an unfinished evaluation run (recorded as observed).
+            (Self.oversized, .observe, .allow),
+        ]
+        for (command, mode, expected) in cases {
+            let label = "\(command.rawValue.prefix(24)) \(mode)"
+            let (home, url) = try home()
+            defer { try? FileManager.default.removeItem(at: url) }
+            let peeked = await decide(.peek, home: home, command: command, guardMode: mode)
+            let applied = await decide(.apply, home: home, command: command, guardMode: mode)
+            #expect(peeked.result.decision == expected, "\(label)")
+            #expect(applied.result.decision == expected, "\(label)")
+            // A directory where audit.jsonl belongs: every append fails.
+            let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+            let gated = await GatedEvaluate().gated(
+                .apply, EvaluationRequest(command: command, enabledPacks: dayOnePackIDs),
+                cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { .empty }, host: .hook(.claude), tool: .bash,
+                inputs: EvaluationInputs(
+                    guardMode: mode,
+                    judge: JudgeSelection(engine: .ft, bundle: nil),
+                    store: .gather(home: nil, cwd: nil)
+                )
+            )
+            #expect(gated.decision == expected, "\(label)")
+            if case .indeterminate = expected {
+                #expect(HookAuthorization.project(result: gated, cwd: wd("/tmp/ws")) == .denyPinned, "\(label)")
+            }
+        }
     }
 
     @Test func ledgerCopiesOfChainedDeniesAreNotExportedTwice() throws {
