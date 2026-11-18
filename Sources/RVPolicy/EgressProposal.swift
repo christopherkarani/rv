@@ -30,10 +30,26 @@ public struct LiveNetworkRule: Sendable, Hashable, Equatable, Codable {
         case port
     }
 
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
     /// Decoding re-canonicalizes: a decoded rule carries the same
     /// invariant as a constructed one, so `{"host":"*","port":99999}`
-    /// throws instead of materializing an unrepresentable rule.
+    /// throws instead of materializing an unrepresentable rule. Any key
+    /// beyond host and port throws too: a live rule comes from a proposal
+    /// the agent's traffic minted, so it never carries `allowed_ips` or
+    /// another owner-only field, not even as an ignored extra.
     public init(from decoder: Decoder) throws {
+        let keys = try decoder.container(keyedBy: AnyKey.self).allKeys.map(\.stringValue)
+        if let extra = keys.first(where: { CodingKeys(rawValue: $0) == nil }) {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath, debugDescription: "live network rule has unknown key \(extra)"))
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawHost = try container.decode(String.self, forKey: .host)
         let rawPort = try container.decode(Int.self, forKey: .port)
