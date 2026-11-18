@@ -31,7 +31,7 @@ enum RvHookReplyKind rv_parse_hook_reply(
 );
 
 /* 1 when config.json bytes put `host` in observe mode, by rvd's
- * resolution (JudgeRuntime.guardMode) minus the environment:
+ * resolution (GuardModeResolution.resolve) minus the environment:
  * guard.hosts.<host> (block = enforce; observe / off = observe), then a
  * non-empty nested guard.mode, then a non-empty flat "guard.mode", then
  * enforce. Malformed JSON, a duplicated guard key, NULL arguments or

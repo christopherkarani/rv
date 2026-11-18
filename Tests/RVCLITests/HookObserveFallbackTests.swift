@@ -49,6 +49,18 @@ struct HookObserveFallbackTests {
         #expect(applies() == false, "malformed config is enforce")
     }
 
+    /// Parsers disagree on which duplicate key wins, so a config that
+    /// repeats one never steps aside, whichever copy says observe.
+    @Test func duplicateKeysAreEnforce() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try write(#"{"guard":{"mode":"observe","mode":"enforce"}}"#)
+        #expect(applies() == false)
+        try write(#"{"guard":{"mode":"enforce"},"guard":{"mode":"observe"}}"#)
+        #expect(applies() == false)
+        try write(#"{"guard":{"mode":"observe"}}"#)
+        #expect(applies(), "the same config without the duplicate observes")
+    }
+
     @Test func refusesUnsafeFilesAndOrganizationPolicy() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         try write(#"{"guard":{"mode":"observe"}}"#, mode: 0o644)

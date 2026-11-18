@@ -13,8 +13,8 @@ struct HostGuardModeTests {
     // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
     private static let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
 
-    private static func config(_ json: String) throws -> [String: Any] {
-        try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    private static func config(_ json: String) throws -> GuardConfig {
+        GuardConfig(try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)))
     }
 
     @Test("RV_GUARD_MODE=enforce > guard.hosts.<host> > guard.mode > enforce")
@@ -23,7 +23,7 @@ struct HostGuardModeTests {
             #"{"guard":{"mode":"observe","hosts":{"claude":"block","cursor":"observe","codex":"off","grok":"loud"}}}"#
         )
         func mode(_ env: [String: String], _ host: HookHost?) -> GuardMode {
-            JudgeRuntime.guardMode(environment: env, config: config, host: host)
+            GuardModeResolution.resolve(config, host: host, environment: env)
         }
         #expect(mode([:], .claude) == .enforce)
         #expect(mode([:], .cursor) == .observe)
@@ -37,8 +37,8 @@ struct HostGuardModeTests {
         #expect(mode(["RV_GUARD_MODE": "observe"], .claude) == .enforce)
         #expect(mode(["RV_GUARD_MODE": "observe"], .cursor) == .observe)
         let bare = try Self.config(#"{"guard":{"hosts":{"cursor":"observe"}}}"#)
-        #expect(JudgeRuntime.guardMode(environment: [:], config: bare, host: .claude) == .enforce)
-        #expect(JudgeRuntime.guardMode(environment: [:], config: bare, host: nil) == .enforce)
+        #expect(GuardModeResolution.resolve(bare, host: .claude, environment: [:]) == .enforce)
+        #expect(GuardModeResolution.resolve(bare, host: nil, environment: [:]) == .enforce)
     }
 
     @Test("gather reads the evaluating host's entry; tty has none")
