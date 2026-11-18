@@ -57,9 +57,15 @@ _rv() {
           _describe -t commands 'packs' pk
           ;;
         policy)
-          local -a po
-          po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
-          _describe -t commands 'policy' po
+          if [[ $words[2] == ceiling && CURRENT -eq 3 ]]; then
+            local -a pc
+            pc=('show:Print ceiling.toml' 'set:Replace ceiling.toml')
+            _describe -t commands 'policy ceiling' pc
+          else
+            local -a po
+            po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply' 'check:Check against the ceiling' 'ceiling:Show or set the ceiling')
+            _describe -t commands 'policy' po
+          fi
           ;;
         scan)
           local -a sc
