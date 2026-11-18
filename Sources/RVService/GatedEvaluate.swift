@@ -1129,7 +1129,9 @@ public struct GatedEvaluate: Sendable {
                 row.observed ? .commandObserved : .commandDenied, file: auditFile(home),
                 consequence: row.observed
                     ? "the observed allow under \(row.ruleID.rawValue) stands unrecorded"
-                    : "the deny by \(row.ruleID.rawValue) stands unrecorded")
+                    : row.indeterminate == nil
+                    ? "the deny by \(row.ruleID.rawValue) stands unrecorded"
+                    : "the indeterminate refusal \(row.ruleID.rawValue) stands unrecorded")
         }
     }
 
