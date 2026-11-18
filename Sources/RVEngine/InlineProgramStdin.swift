@@ -161,9 +161,13 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
         } else if arg.hasPrefix("-") {
             // An option's separate value (`python3 -W ignore`, `node -r
             // dotenv/config`, `ruby -r json`) is no script, and never a
-            // redirect (`python3 -W <<< …`).
+            // redirect (`python3 -W <<< …`). A value naming stdin (`node -r
+            // /dev/stdin app.js`, `ruby -r - main.rb`) is not skipped: the
+            // interpreter may load it as code, so it counts as the stdin
+            // operand on the next word (fail closed).
             if separateValueOptions(program).contains(arg), index < argv.count,
-               argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false
+               argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false,
+               stdinOperands.contains(argv[index]) == false
             {
                 index += 1
             }
