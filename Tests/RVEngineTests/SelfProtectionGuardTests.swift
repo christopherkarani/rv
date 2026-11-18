@@ -182,6 +182,23 @@ struct SelfProtectionGuardTests {
         "echo 'x; rv uninstall' | xargs -I% env --sp 's\"\"h -c' 'echo %'",
         "echo 'rv uninstall' | xargs env -S",
         "echo 'x; rv uninstall' | xargs -I% echo -vSsh %",
+        // A dynamically spelled split option (`-$'\x53'`, `-$X`, `-?`,
+        // `--s*`) may be `-S`; a replace string may spell it from stdin.
+        // Accepted false refusals: `-t%`, `-o%`, `-j$(nproc)`, `-j$N`, `-e*`.
+        "echo '1 rv uninstall' | xargs -I% env -$'\\x53' 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -$X 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -`printf '\\x53'` 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -$(printf '\\x53') 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -? 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env -[A-Z] 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env --s* 'FOO=%'",
+        "echo '1 rv uninstall' | xargs -I% env --split$X-string 'FOO=%'",
+        "echo 'S echo PWNED' | xargs -I% env -% x",
+        "echo 'S rv uninstall' | xargs -I% env -% x",
+        "echo '1 rv policy ceiling set c.toml' | xargs -I% env -$'\\x53' 'FOO=%'",
+        "echo '1 rv policy rollback 1 --save' | xargs -I% env -? 'FOO=%'",
+        "ls | xargs -I% make -j$(nproc) %",
+        "ls | xargs -I% tar -t% x",
         // Accepted false refusal of the fail-closed rule.
         "ls | xargs -I% sh -c 'cp % /tmp'",
         "rv policy ceiling set ceiling.toml",
