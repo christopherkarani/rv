@@ -148,6 +148,8 @@ struct SelfProtectionGuardTests {
         "echo a | xargs -I% sh -c 'grep -l % src'",
         // Accepted false refusal of the fail-closed rule.
         "ls | xargs -I% sh -c 'cp % /tmp'",
+        "rv policy ceiling set ceiling.toml",
+        "rv policy ceiling $SUB ceiling.toml",
         "rv egress approve 1",
         "rv mcp approve 1",
         "rv mcp trust",
@@ -214,6 +216,9 @@ struct SelfProtectionGuardTests {
         "$CC -Wall main.c",
         "$PYTHON -m x",
         "\"$(which python3)\" -c 'print(1)'",
+        "rv policy check --ceiling",
+        "rv policy ceiling",
+        "rv policy ceiling show",
         "rv allowlist list",
         "rv allow-once list",
         "rv explain 'rm -rf /'",

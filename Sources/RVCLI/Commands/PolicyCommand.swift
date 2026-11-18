@@ -10,7 +10,7 @@ struct Policy: AsyncParsableCommand {
         abstract: "Show, list, draft, share, or roll back compiled typed rules.",
         subcommands: [
             Show.self, List.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self,
-            PolicyRollbackCommand.self,
+            PolicyCheck.self, PolicyCeilingCommand.self, PolicyRollbackCommand.self,
         ],
         defaultSubcommand: Show.self
     )
@@ -71,6 +71,8 @@ struct Policy: AsyncParsableCommand {
                 effectiveRules = effective
                     ? try PolicyShowRun.loadEffective(home: home, workspace: workspace)
                     : nil
+            } catch let error as PolicyCeilingError {
+                try ctx.fail("rv policy show: refused: \(error.refusal)\n")
             } catch {
                 try ctx.fail("rv policy show: invalid policy file\n")
             }
@@ -295,6 +297,8 @@ struct Policy: AsyncParsableCommand {
                     }
                 } catch let unrecorded as ConfigChangeUnrecorded {
                     try ConfigChangeRefusal.fail(command: "policy apply", unrecorded)
+                } catch let error as PolicyCeilingError {
+                    try CommandContext.fail("rv policy apply: refused: \(error.refusal)\n")
                 } catch {
                     try CommandContext.fail("rv policy apply: write failed\n")
                 }
