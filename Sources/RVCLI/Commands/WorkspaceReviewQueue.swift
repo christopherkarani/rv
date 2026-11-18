@@ -80,6 +80,7 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
         case EgressReviewError.notNetworkProposal: return "not a network proposal"
         case EgressReviewError.notAwaiting(let state): return "proposal is \(state)"
         case EgressReviewError.reasonRequired: return "a reason is required (one line, 500 chars)"
+        case let error as PolicyCeilingError: return error.refusal
         default: return "unexpected error"
         }
     }

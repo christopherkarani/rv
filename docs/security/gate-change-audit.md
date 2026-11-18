@@ -6,8 +6,10 @@ rv records changes to the gate itself in the hash-chained `audit.jsonl`:
   reinitialize. It carries the revision, content hash, rule count and the
   prior revision. The repo workspace is shown with the home directory as `~`.
 - `config.changed`: the safety level, `guard.hosts.<host>`, `guard.mode`,
-  packs, the allowlist, `secrets.json` definitions, and `rv egress
-  approve|deny`. It carries the prior and new values.
+  packs, the allowlist, `secrets.json` definitions, `rv egress
+  approve|deny`, and the policy ceiling (`policy.ceiling`, from `rv policy
+  ceiling set`). It carries the prior and new values; for the ceiling these
+  are content hashes, plus its rule count and `egress_hosts` bound.
 - `policy.managed`: an accepted organization serial, or a bundle that stops
   verifying, is removed, or changes.
 
@@ -46,6 +48,7 @@ How each change is classified:
 | Allowlist | entries are only removed |
 | Secrets | definitions are only removed. An unreadable prior file counts as loosening. |
 | Egress review | the decision is `deny` |
+| Policy ceiling | the new ceiling keeps every deny and ask rule of the current one (same predicate, no weaker verdict) and does not widen `egress.hosts`. A first ceiling tightens; an unreadable current one loosens. |
 | Organization serial accepted | never |
 
 If the write fails after its event was appended, rv appends a copy with
