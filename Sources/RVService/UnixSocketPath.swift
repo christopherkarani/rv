@@ -167,6 +167,13 @@ public enum UnixSocketPath {
         try removeStaleSocket(at: socketURL)
     }
 
+    /// The one-line fix for a missing uid-derived runtime directory, shared
+    /// by rvd's refusal and by `rv setup`'s.
+    public static func userRuntimeDirectoryFix(directory: String, uid: UInt32) -> String {
+        "as root, mkdir -p -m 0700 \(directory) && chown \(uid) \(directory); "
+            + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents"
+    }
+
     /// Creates `/run/user/<uid>` (one level, 0700) when missing; root may
     /// also create a missing `/run/user` (0755). Then the base-directory
     /// rules apply as to any other base.
