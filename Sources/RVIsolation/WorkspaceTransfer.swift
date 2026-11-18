@@ -73,6 +73,9 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
     /// config or install dirs or inside the workspace.
     case protectedDestination(String)
     case destinationExists(String)
+    /// A transfer path through a `.git` directory (any case): git runs its
+    /// config and hooks wherever it lands.
+    case gitDirectory(String)
     /// A download would create files host tools run or trust (`.envrc`,
     /// `.claude/settings.json`, ...) at the top of the new directory. The
     /// cage protects those names only at the workspace root.
@@ -104,6 +107,7 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
         case .protectedSource(let path): "\(path) is, holds, or is inside rv's config dir or the workspace"
         case .protectedDestination(let path): "\(path) is a protected path"
         case .destinationExists(let path): "\(path) already exists; choose a new destination"
+        case .gitDirectory(let path): "\(path) is or is inside a .git directory; transfers never copy one"
         case .protectedEntries(let paths):
             "would create files host tools run or trust: \(paths.joined(separator: ", ")); copy them by hand after reading them"
         case .destinationConflict(let path): "\(path) exists with a different type"
@@ -265,6 +269,12 @@ public enum WorkspaceTransfer {
             }
         }
         return folded
+    }
+
+    /// `.git` in any case: the walk skips it below the top, and a transfer
+    /// path through one is refused.
+    static func isGitDirectoryName(_ name: String) -> Bool {
+        name.lowercased() == ".git"
     }
 
     static func isSafeName(_ bytes: [UInt8]) -> Bool {
@@ -547,7 +557,7 @@ private struct TreePlanner {
             let childPath = path + [name]
             // Always skipped, any case: a `.git` carries config git runs
             // (`core.fsmonitor`, hooks) wherever the tree lands.
-            if name.lowercased() == ".git" {
+            if WorkspaceTransfer.isGitDirectoryName(name) {
                 plan.ignored += 1
                 continue
             }
@@ -684,6 +694,10 @@ extension WorkspaceTransfer {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): destination = value
         }
+        if isGitDirectoryName(source.name) { return .failure(.gitDirectory(escaped(request.source))) }
+        if destination.contains(where: isGitDirectoryName) {
+            return .failure(.gitDirectory(escaped(destination.joined(separator: "/"))))
+        }
         guard let realParent = realpathString(source.parent) else {
             return .failure(errno == ENOENT ? .missing(escaped(request.source)) : .io(escaped(request.source), errno))
         }
@@ -778,6 +792,9 @@ extension WorkspaceTransfer {
         switch workspaceComponents(request.source) {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): source = value
+        }
+        if source.contains(where: isGitDirectoryName) {
+            return .failure(.gitDirectory(escaped(source.joined(separator: "/"))))
         }
         let destination: (parent: String, name: String)
         switch hostParentAndName(request.destination) {

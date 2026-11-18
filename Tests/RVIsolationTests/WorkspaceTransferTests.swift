@@ -194,14 +194,28 @@ struct WorkspaceUploadTests {
         defer { fixture.remove() }
         try fixture.write(fixture.host + "/hook", "#!/bin/sh")
         for destination in [
-            ".git/hooks/pre-commit", ".git/config", ".rv/policy.toml", ".config/rv/x", ".envrc",
-            ".MCP.json", ".claude/settings.json", ".Claude/Hooks/x.sh", ".git/info/attributes",
+            ".rv/policy.toml", ".config/rv/x", ".envrc",
+            ".MCP.json", ".claude/settings.json", ".Claude/Hooks/x.sh",
         ] {
             #expect(refusal(fixture.upload(fixture.host + "/hook", to: destination)) == .protectedDestination(destination))
+        }
+        for destination in [".git/hooks/pre-commit", ".git/config", ".git/info/attributes"] {
+            #expect(refusal(fixture.upload(fixture.host + "/hook", to: destination)) == .gitDirectory(destination))
         }
         try fixture.write(fixture.host + "/tree/.envrc", "export X=1")
         #expect(refusal(fixture.upload(fixture.host + "/tree", to: ".", gitignore: false)) == .protectedDestination(".envrc"))
         #expect(fixture.exists(fixture.workspace + "/.envrc") == false)
+    }
+
+    @Test func refusesAnUploadThroughAGitDirectory() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.host + "/hook", "#!/bin/sh")
+        try fixture.write(fixture.host + "/repo/.git/config", "[core]")
+        #expect(refusal(fixture.upload(fixture.host + "/hook", to: "sub/.git/hooks/pre-commit")) == .gitDirectory("sub/.git/hooks/pre-commit"))
+        #expect(refusal(fixture.upload(fixture.host + "/hook", to: "sub/.Git")) == .gitDirectory("sub/.Git"))
+        #expect(refusal(fixture.upload(fixture.host + "/repo/.git", to: "gitcopy")) == .gitDirectory(fixture.host + "/repo/.git"))
+        #expect(fixture.exists(fixture.workspace + "/sub") == false)
     }
 
     @Test func refusesADestinationThroughAWorkspaceSymlink() throws {
@@ -347,6 +361,16 @@ struct WorkspaceDownloadTests {
         defer { fixture.remove() }
         try fixture.write(fixture.workspace + "/cfg/settings.json", "{}")
         #expect(refusal(fixture.download("cfg", to: fixture.host + "/.claude")) == .protectedEntries([".claude/settings.json"]))
+    }
+
+    @Test(arguments: [".git", "sub/.git", "sub/.GIT/hooks", ".git/config"])
+    func refusesADownloadSourceThroughAGitDirectory(source: String) throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/.git/config", "[core]\n\tpager = /tmp/x\n")
+        try fixture.write(fixture.workspace + "/sub/.GIT/hooks/post-checkout", "#!/bin/sh")
+        #expect(refusal(fixture.download(source, to: fixture.host + "/x")) == .gitDirectory(source))
+        #expect(fixture.exists(fixture.host + "/x") == false)
     }
 
     @Test func gitDirectoriesAreAlwaysSkipped() throws {
