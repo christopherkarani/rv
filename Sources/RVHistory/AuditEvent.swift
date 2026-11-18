@@ -17,6 +17,11 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// recovery, contained delete).
     public static let commandOverride = AuditEventKind(rawValue: "command.override")
     public static let egressDenied = AuditEventKind(rawValue: "egress.denied")
+    /// An audit-mode would-be deny (`sandbox.enforcement: audit`): the egress
+    /// allowlist would have refused, and the proxy admitted the request past
+    /// it, after every other check and before dialing. A later `egress.denied`
+    /// for the same host means the request still failed (dial filter, DNS).
+    public static let egressObserved = AuditEventKind(rawValue: "egress.observed")
     public static let admission = AuditEventKind(rawValue: "admission")
     public static let runtimeSession = AuditEventKind(rawValue: "runtime.session")
     public static let runtimeStarted = AuditEventKind(rawValue: "runtime.started")

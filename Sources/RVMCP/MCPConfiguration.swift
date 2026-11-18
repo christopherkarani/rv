@@ -67,6 +67,14 @@ extension MCPToolDecision {
     }
 }
 
+/// What the `sandbox.hosts` proxy does with any other host: refuse it
+/// (`enforce`, the default) or let it through and log a would-be block
+/// (`audit`), for trialling a tighter list.
+public enum MCPSandboxEnforcement: String, Sendable, Equatable {
+    case enforce
+    case audit
+}
+
 public struct MCPSandboxPolicy: Sendable, Equatable {
     public static let maximumHosts = 32
 
@@ -79,15 +87,18 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     /// A host here may also reach non-public addresses, and only when its
     /// whole answer falls inside its list; other hosts stay public-only.
     public var allowedIPs: [String: EgressAllowedIPs]
+    /// As written; `MCPConfiguration.sandboxEnforcement(for:integrity:)` is what applies.
+    public var enforcement: MCPSandboxEnforcement
 
     public init(
         network: Bool = true, writable: [String] = [], hosts: [String] = [],
-        allowedIPs: [String: EgressAllowedIPs] = [:]
+        allowedIPs: [String: EgressAllowedIPs] = [:], enforcement: MCPSandboxEnforcement = .enforce
     ) {
         self.network = network
         self.writable = writable
         self.hosts = hosts
         self.allowedIPs = allowedIPs
+        self.enforcement = enforcement
     }
 }
 
@@ -293,6 +304,19 @@ public struct MCPConfiguration: Sendable, Equatable {
         server.tools.hasArgumentRules(for: tool) || managed?.mcpHasArgumentRules(server: server.name, tool: tool) == true
     }
 
+    /// The enforcement `rv mcp serve` gives a server's `sandbox.hosts`. Audit
+    /// loosens the owner's own list, so it needs positive proof: `integrity`
+    /// must be `.trusted` (the signature over these bytes verified) and no
+    /// organization policy may be installed. Anything else enforces.
+    public func sandboxEnforcement(
+        for server: MCPServerDefinition, integrity: MCPIntegrityStatus
+    ) -> MCPSandboxEnforcement {
+        guard let sandbox = server.sandbox, sandbox.hosts.isEmpty == false, sandbox.enforcement == .audit,
+            integrity == .trusted, untrusted == false, managed == nil
+        else { return .enforce }
+        return .audit
+    }
+
     public func isBlocked(_ server: String) -> Bool {
         blocked.contains(server) || managed?.isServerBlocked(server) == true
     }
@@ -389,6 +413,7 @@ public struct MCPConfiguration: Sendable, Equatable {
             value["network"] = .bool(sandbox.network)
             if sandbox.writable.isEmpty == false { value["writable"] = .array(sandbox.writable.map(JSONValue.string)) }
             if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
+            if sandbox.enforcement == .audit { value["enforcement"] = .string(sandbox.enforcement.rawValue) }
             if sandbox.allowedIPs.isEmpty == false {
                 var ranges = JSONObject()
                 for host in sandbox.allowedIPs.keys.sorted() {
@@ -662,7 +687,7 @@ enum MCPConfigurationDecoding {
 
     private static func sandbox(_ value: JSONValue, _ context: String) throws -> MCPSandboxPolicy {
         let object = try objectValue(value, "\(context) sandbox")
-        try allowOnly(object, ["network", "writable", "hosts", "allowed_ips"], "\(context) sandbox")
+        try allowOnly(object, ["network", "writable", "hosts", "allowed_ips", "enforcement"], "\(context) sandbox")
         var policy = MCPSandboxPolicy()
         if let raw = object["network"] {
             guard let flag = raw.boolValue else { throw MCPConfigurationError.invalid("\(context) sandbox.network must be true or false") }
@@ -698,6 +723,15 @@ enum MCPConfigurationDecoding {
         }
         if let raw = object["allowed_ips"] {
             policy.allowedIPs = try allowedIPs(raw, hosts: policy.hosts, context)
+        }
+        if let raw = object["enforcement"] {
+            guard let text = raw.stringValue, let enforcement = MCPSandboxEnforcement(rawValue: text) else {
+                throw MCPConfigurationError.invalid(#"\#(context) sandbox.enforcement must be "enforce" or "audit""#)
+            }
+            guard enforcement == .enforce || policy.hosts.isEmpty == false else {
+                throw MCPConfigurationError.invalid("\(context) sandbox.enforcement audit needs sandbox.hosts to audit")
+            }
+            policy.enforcement = enforcement
         }
         return policy
     }
