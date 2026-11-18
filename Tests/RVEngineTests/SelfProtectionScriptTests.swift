@@ -107,6 +107,55 @@ struct SelfProtectionScriptTests {
         "echo 'rv uninstall' | at now",
         "printf 'rv uninstall' | xargs -0 sh -c",
         #"echo . | xargs -I{} find {} -exec rv uninstall \;"#,
+        // Second review round: other descriptors, globbed paths, loaders,
+        // the environment, braced and undecodable escapes.
+        "bash /dev/fd/3 3<<< 'rv uninstall'",
+        "echo 'rv uninstall' | bash /dev/stdi?",
+        #"awk -f /dev/fd/3 3<<<'BEGIN{system("rv uninstall")}'"#,
+        #"python3 /dev/fd/3 3<<< 'import os; os.system("rv uninstall")'"#,
+        #"echo 'system "rv uninstall"' | perl -e 'do "/dev/stdin"'"#,
+        #"echo 'import os; os.system("rv uninstall")' | python3 -c 'import runpy;runpy.run_path("/dev/stdin")'"#,
+        #"echo 'system "rv uninstall"' | ruby -e 'load "/dev/stdin"'"#,
+        #"echo '<?php system("rv uninstall");' | php -r 'include "php://stdin";'"#,
+        #"V='rv uninstall' perl -e 'open(F,"|$ENV{V}")'"#,
+        #"perl -e 'system "rv \x{75}ninstall"'"#,
+        #"node -e 'require("child_process").execSync("rv \u{75}ninstall")'"#,
+        #"python3 -c 'import os;os.system("rv \N{LATIN SMALL LETTER U}ninstall")'"#,
+        #"perl -e 'system "rv \LUNINSTALL"'"#,
+        // Third review round: sudo values that split, finds run by xargs,
+        // shell option values.
+        "echo 'rv uninstall' | sudo -p 'Enter pw' -s",
+        #"echo 'rv uninstall' | sudo -u "$(whoami)" -s"#,
+        "echo 'rv uninstall' | sudo -u $(id -un; true) -s",
+        "echo 'rv uninstall' | sudo -R /tmp -s",
+        "echo 'rv uninstall' | doas -a bsdauth -s",
+        "xargs find . -exec rv < f",
+        #"echo . | xargs find . -exec /usr/local/bin/r? uninstall \;"#,
+        #"xargs -I% sh -c 'find . -exec r[v] uninstall \;'"#,
+        #"echo . | xargs find . -exec rv $(printf un)install \;"#,
+        "echo 'rv uninstall' | bash -oe pipefail",
+        "echo 'rv uninstall' | zsh --emulate sh",
+        // Fourth review round: command boundaries that are not, fd's exec
+        // flag through a variable, stdin run without a loader name.
+        "echo 'rv uninstall' | sudo 2>&1 -s",
+        #"echo 'rv uninstall' | sudo -p "$(echo ";")" -s"#,
+        #"echo 'rv uninstall' | sudo -p $'\';' -s"#,
+        "X=-x; fd . $X rv uninstall",
+        "fd . $(printf %s -x) rv uninstall",
+        #"echo 'os.execute("rv uninstall")' | lua -e '_G.dofile()'"#,
+        #"echo 'system "rv uninstall"' | ruby -e 'Kernel.instance_eval($stdin.read)'"#,
+        #"echo 'import os;os.system("rv uninstall")' | python3 -c 'import code,sys;code.InteractiveInterpreter().runsource(sys.stdin.read())'"#,
+        #"echo 'require("child_process").execSync("rv uninstall")' | node -e 'process.stdin.on("data",d=>globalThis["ev"+"al"](""+d))'"#,
+        #"echo 'import os;os.system("rv uninstall")' | python3 -c 'breakpoint()'"#,
+        #"echo 'import os;os.system("rv uninstall")' | python3 -c 'import code;code.interact()'"#,
+        #"echo 'system "rv uninstall"' | perl -e 'open F,"<&=0"; s//join"",<F>/ee'"#,
+        #"echo 'x; rv uninstall' | xargs -I% find . -exec sh -c 'echo %' \;"#,
+        // Fifth review round: escaped fd flags, bash single-dash long
+        // options, a dynamic head that may be xargs under find under xargs.
+        #"fd \-x rv uninstall"#,
+        #"fd --\exec rv uninstall"#,
+        "echo 'rv uninstall' | bash -init-file x",
+        #"xargs -I@ find @ -exec "$X" -I% sh -c % ';'"#,
     ]
 
     static let harmless: [String] = [
@@ -120,6 +169,7 @@ struct SelfProtectionScriptTests {
         "rv policy show --json > p.json; python3 analyze.py < p.json",
         "echo 'print(1)' | python3 -m code",
         "sudo -u root ls -la",
+
         #"python3 -c 'print(1)' ~/CodingProjects/rv/policy"#,
         #"python3 -c 'import json,sys; print(set(json.load(sys.stdin)))' < rv/data.json"#,
         #"node -e 'console.log(process.version)'"#,
@@ -133,16 +183,43 @@ struct SelfProtectionScriptTests {
         "find . -type f -delete",
         "echo 'ls -la' | sh",
         "bash Scripts/preflight.sh && rv policy show",
-        "rv policy show --json | python3 -c 'import json,sys; print(json.load(sys.stdin))'",
         "rv packs list | python3 -m json.tool",
         "rv packs list --json | python3 tool.py",
         "rv packs list | awk '{print $1}'",
         "rv policy show | jq .",
-        "rv packs list --json | node -e 'process.stdin.pipe(process.stdout)'",
         "echo rv uninstall",
         "git commit -m 'rv uninstall docs'",
         "grep -rn 'rv uninstall' docs",
     ]
+
+    /// Floored though harmless, by design: an inline program that reads
+    /// stdin may run it, an option before a script name may take it as a
+    /// value, a runner's operands are a shell command, sudo's options are
+    /// not modelled, and script text is opaque; each line holds an rv binary
+    /// and verb. `jq`, `python3 -m json.tool` and a script file stay allowed.
+    static let acceptedFloors: [String] = [
+        "rv policy show --json | python3 -c 'import json,sys; print(json.load(sys.stdin))'",
+        "rv packs list --json | node -e 'process.stdin.pipe(process.stdout)'",
+        #"sudo ls; git commit -s -m "rv policy fix""#,
+        "bash -x Scripts/preflight.sh && rv policy show",
+        "fd secrets ~/CodingProjects/rv",
+        "node --inspect app.js; rv packs list",
+        "watch rv packs list",
+        #"node -e 'console.log("rv policy show")'"#,
+    ]
+
+    @Test("accepted floors stay floored", arguments: acceptedFloors)
+    func acceptedFloorsFlagged(command: String) {
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    /// Dynamic heads between `-exec`s branch at every word; the followed
+    /// set is deduplicated and capped, so this ends quickly (and flags).
+    @Test("find -exec with dynamic heads is bounded", .timeLimit(.minutes(1)))
+    func findExecDynamicHeadsBounded() {
+        let command = "find . " + String(repeating: "-exec $F ", count: 40) + "\\;"
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)))
+    }
 
     @Test("rv admin commands run through a script, find, or stdin are flagged", arguments: weakening)
     func weakeningFlagged(command: String) {
