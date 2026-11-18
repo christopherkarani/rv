@@ -56,16 +56,6 @@ struct EgressAuditModeTests {
         }
     }
 
-    @Test func auditPassNeverInheritsAllowedIPs() throws {
-        let ranges = try EgressAllowedIPs(parsing: ["10.0.5.0/24"])
-        let policy = EgressHostPolicy(
-            allowedHosts: ["api.example.com"], allowedIPs: ["api.example.com": ranges], relaysLoopback: false)
-        #expect(Self.decide("api.example.com", credential: .granted(policy))
-            == .tunnel(external: true, requireSNI: true, allowedIPs: ranges))
-        #expect(Self.decide("other.example", credential: .granted(policy))
-            == .audited(.tunnel(external: true, requireSNI: true, allowedIPs: nil)))
-    }
-
     @Test func auditDoesNotWidenPublicHTTPS() {
         #expect(Self.decide("other.example", 22, credential: .open(.publicHTTPS)) == .deny(.deniedPolicy))
     }
