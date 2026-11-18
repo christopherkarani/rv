@@ -604,20 +604,33 @@ public final class EgressProxy: @unchecked Sendable {
             tunnel(client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI)
         case .forward(let external):
             forward(client: client, header: header, target: target, leftover: leftover, external: external)
-        case .audited(let admitted):
-            // An audit pass goes out only once its would-be block is durable.
-            let wouldBe = EgressProxyDenial(
-                host: target.host, port: target.port, reason: .deniedPolicy, recordedAt: Date())
-            guard let audit, audit.record(wouldBe) else {
-                deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
-                return
-            }
-            execute(admitted, client: client, header: header, target: target, leftover: leftover)
+        case .audited(.tunnel(let external, let requireSNI)):
+            tunnel(
+                client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI,
+                audited: true)
+        case .audited(.forward(let external)):
+            forward(client: client, header: header, target: target, leftover: leftover, external: external, audited: true)
+        case .audited:
+            // The ladder never nests or audits a deny; anything else refuses.
+            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
         }
     }
 
+    /// Writes an audit pass's would-be block after every other check and
+    /// before the dial, so no byte goes upstream unlogged. False when it is
+    /// not durable (or this instance has no audit mode): the caller refuses.
+    private func recordAuditPass(_ target: EgressTarget) -> Bool {
+        guard let audit else { return false }
+        return audit.record(
+            EgressProxyDenial(host: target.host, port: target.port, reason: .deniedPolicy, recordedAt: Date()))
+    }
+
     /// Executes an admitted CONNECT.
-    private func tunnel(client: Int32, target: EgressTarget, leftover: [UInt8], external: Bool, requireSNI: Bool) {
+    /// `audited`: an audit pass, recorded once SNI checked out (a bare
+    /// CONNECT never mints one) and before dialing.
+    private func tunnel(
+        client: Int32, target: EgressTarget, leftover: [UInt8], external: Bool, requireSNI: Bool, audited: Bool = false
+    ) {
         // A `requireSNI` tunnel (credentialed allowlist, external, TLS port)
         // is bound to the origin it dials: the ClientHello's SNI must be
         // that host, so a co-hosted tenant on the same address is not
@@ -640,6 +653,16 @@ public final class EgressProxy: @unchecked Sendable {
                 return
             }
             hello = first
+        }
+        if audited, recordAuditPass(target) == false {
+            if established {
+                // The 200 is out, so no refusal body: close and record.
+                close(client)
+                record(EgressProxyDenial(host: target.host, port: target.port, reason: .deniedPolicy, recordedAt: Date()))
+            } else {
+                deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
+            }
+            return
         }
         guard
             let upstream = dialUpstream(
@@ -666,7 +689,13 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// Executes an admitted absolute-URI request.
-    private func forward(client: Int32, header: String, target: EgressTarget, leftover: [UInt8], external: Bool) {
+    private func forward(
+        client: Int32, header: String, target: EgressTarget, leftover: [UInt8], external: Bool, audited: Bool = false
+    ) {
+        if audited, recordAuditPass(target) == false {
+            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
+            return
+        }
         guard
             let upstream = dialUpstream(
                 host: target.host,

@@ -127,10 +127,34 @@ struct EgressAuditModeTests {
         harness.awaitDenials(1)
         #expect(harness.denials.map(\.reason) == [.sniMismatch])
         #expect(harness.resolveCalls == 0)
-        #expect(harness.wouldBe.map(\.host) == ["other.example"])
+        // A bare or mismatched CONNECT never mints an audit record.
+        #expect(harness.wouldBe.isEmpty)
 
         let unauthenticated = exchange(port: port, request: "CONNECT other.example:443 HTTP/1.1\r\n\r\n")
         #expect(unauthenticated.hasPrefix("HTTP/1.1 407"))
+        #expect(harness.wouldBe.isEmpty)
+
+        _ = exchange(
+            port: port, request: "CONNECT other.example:443 HTTP/1.1\r\n\(auth)\r\n", then: clientHello("other.example"))
+        harness.awaitDenials(3)
+        #expect(harness.wouldBe.map(\.host) == ["other.example"])
+        #expect(harness.resolveCalls == 1)
+        #expect(harness.denials.last?.reason == .dnsFailed)
+    }
+
+    @Test func credentialedAuditRecordFailureClosesWithoutDialing() throws {
+        let harness = Harness(resolveAnswer: [], recordSucceeds: false)
+        let credential = EgressProxyCredential()
+        let proxy = harness.proxy(audit: true, credential: credential)
+        let port = try proxy.start().get()
+        defer { proxy.stop() }
+        _ = exchange(
+            port: port,
+            request: "CONNECT other.example:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n",
+            then: clientHello("other.example"))
+        harness.awaitDenials(1)
+        #expect(harness.denials.map(\.reason) == [.deniedPolicy])
+        #expect(harness.resolveCalls == 0)
         #expect(harness.wouldBe.count == 1)
     }
 }
