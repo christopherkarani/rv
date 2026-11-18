@@ -627,7 +627,24 @@ enum MCPRun {
         // custodian's key context; end that window so signing prompts for
         // itself, after this review rather than before it.
         environment.approvalSigning.beginFreshAuth()
-        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
+        let sign = { MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) }
+        let signed: Bool
+        if let event = sandboxAuditChange(configuration, sha256: digest, method: method) {
+            // Audit mode loosens sandbox.hosts: record it before signing, or refuse.
+            do {
+                signed = try ConfigChangeAudit.commit(event, configDirectory: environment.configDirectory) {
+                    guard sign() else { throw MCPTrustSigningFailed() }
+                    return true
+                }
+            } catch let unrecorded as ConfigChangeUnrecorded {
+                return .failure(CommandFailure("\(unrecorded)", exitCode: ConfigChangeRefusal.exitCode))
+            } catch {
+                signed = false
+            }
+        } else {
+            signed = sign()
+        }
+        guard signed else {
             return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
         }
         guard environment.integrity == .trusted else {
@@ -640,6 +657,20 @@ enum MCPRun {
                 detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
             configDirectory: environment.configDirectory)
         return .success("trusted mcp.json; rv signs it again on every change it makes\n")
+    }
+
+    /// The `config.changed` event for trusting a file that puts servers in
+    /// sandbox audit mode, or nil when every `sandbox.hosts` enforces.
+    static func sandboxAuditChange(_ configuration: MCPConfiguration, sha256: String, method: String) -> AuditEvent? {
+        let servers = configuration.servers.filter { $0.sandbox?.enforcement == .audit }.map(\.name)
+        guard servers.isEmpty == false else { return nil }
+        return ConfigChangeAudit.event(
+            .configChanged, subject: "mcp.sandbox.enforcement",
+            detail: [
+                "setting": "mcp.sandbox.enforcement", "new": MCPSandboxEnforcement.audit.rawValue,
+                "servers": ConfigChangeAudit.list(servers), "sha256": sha256, "authorized_by": "owner (\(method))",
+            ],
+            direction: .loosening)
     }
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
@@ -1496,7 +1527,7 @@ struct MCPTrust: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp trust", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         switch await MCPRun.trust(environment: environment, show: { ctx.writeStdout($0) }) {
-        case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -1677,3 +1708,7 @@ enum DenialAudit {
         }
     }
 }
+
+/// `rv mcp trust` signing failed inside `ConfigChangeAudit.commit`, so the
+/// audit log gets its `failed` copy.
+private struct MCPTrustSigningFailed: Error {}
