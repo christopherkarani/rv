@@ -21,7 +21,7 @@ import RVDomain
 /// shell or interpreter reads from stdin (`echo … | sh`, `sh <<< …`).
 public enum SelfProtectionGuard {
     public static func weakensPolicy(_ command: ShellCommand) -> Bool {
-        let launched = followingFindExec(launchedCommandHeads(command.rawValue), depth: 0)
+        let launched = followingFindExec(launchedCommandHeads(command.rawValue))
         if launched.contains(where: { launchWeakens($0, xargsDepth: 0) }) { return true }
         // A program read from stdin, or a script that runs its input or
         // names rv, takes words from elsewhere on the line (a producer,
@@ -35,16 +35,32 @@ public enum SelfProtectionGuard {
 private func launchWeakens(_ launched: LaunchedCommand, xargsDepth: Int) -> Bool {
     // Truncated input cannot be followed: unknown, so flagged. A dynamic
     // or glob head may resolve to rv: judged as rv (fail closed). A script
-    // is judged as opaque text (`SelfProtectionScripts`); a `find -exec`
-    // command is re-fed like an xargs program (`xargs find . -exec rv …`).
+    // is judged as opaque text (`SelfProtectionScripts`). At the top level
+    // `followingFindExec` has re-fed every `find -exec` command; one an
+    // xargs runs is checked here (`findUnderXargsWeakens`).
     launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
         || xargsFeedsWeakeningInvocation(launched, depth: xargsDepth)
         || opaqueScriptText(launched).map(carriesWeakeningRV) == true
-        || findExecCommands(launched.guardArgv).contains { argv in
-            launchedCommandHeads(argv: argv, depth: xargsDepth + 1).contains {
-                launchWeakens($0, xargsDepth: xargsDepth + 1)
-            }
+        || (xargsDepth > 0 && findUnderXargsWeakens(launched, depth: xargsDepth))
+}
+
+/// A `find -exec` command an xargs runs (`xargs find . -exec rv`, with
+/// `uninstall ;` on stdin): each clause is re-fed through the resolver and
+/// judged like a launched command, a dynamic head and an unmodelled verb
+/// included, and like an xargs program (stdin pasted into a script, a head
+/// stdin chose, a dynamic head that may be xargs). A clause that runs
+/// another find is not followed further: it is refused (fail closed, and
+/// bounded); another xargs is followed up to `maxXargsDepth`.
+private func findUnderXargsWeakens(_ launched: LaunchedCommand, depth: Int) -> Bool {
+    findExecCommands(launched.guardArgv).contains { clause in
+        scriptTakesStdin(clause) || launchedCommandHeads(argv: clause, depth: depth + 1).contains { fed in
+            fed.truncated || fed.head.contains(xargsStdinWord)
+                || isWeakeningInvocation(fed.guardArgv, headMayBeRV: fed.headIsDynamic)
+                || opaqueScriptText(fed).map(carriesWeakeningRV) == true
+                || findExecCommands(fed.guardArgv).isEmpty == false
+                || xargsFeedsWeakeningInvocation(fed, depth: depth + 1)
         }
+    }
 }
 
 /// Stands in for the words `xargs` appends from stdin, and for each

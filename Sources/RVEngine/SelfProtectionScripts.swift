@@ -26,6 +26,12 @@ private let shellRunnerNames: Set<String> = [
     "nsenter", "systemd-run", "parallel", "dtach", "fd", "fdfind", "crontab", "at", "batch",
 ]
 
+/// A shell runner. `fd` counts with or without a visible `-x`: an escaped
+/// or expanded flag (`\-x`, `$X`) is not worth modelling (fail closed).
+private func isShellRunner(_ argv: [String]) -> Bool {
+    argv.first.map(shellRunnerNames.contains) ?? false
+}
+
 private func isInterpreter(_ program: String) -> Bool {
     // `python3.13t`, `pypy3`: free-threaded and alternative builds.
     isInterpreterExecutable(program) || program.hasPrefix("python") || program.hasPrefix("pypy")
@@ -39,7 +45,7 @@ private func isInterpreter(_ program: String) -> Bool {
 func opaqueScriptText(_ launched: LaunchedCommand) -> String? {
     let argv = launched.guardArgv
     guard let program = argv.first else { return nil }
-    if launched.headIsDynamic || isInterpreter(program) || shellRunnerNames.contains(program) {
+    if launched.headIsDynamic || isInterpreter(program) || isShellRunner(argv) {
         return argv.dropFirst().joined(separator: " ")
     }
     if case .sed(let scripts)? = inlineProgram(argv) {
@@ -50,17 +56,47 @@ func opaqueScriptText(_ launched: LaunchedCommand) -> String? {
 }
 
 /// A script whose rv words may come from elsewhere on the line: it names
-/// an rv binary (`awk '{system("rv " $0)}'`, `V=x python3 -c '… rv $V'`),
-/// spawns or evals (`perl -ne 'system $_'`, `exec(sys.stdin.read())`), or
-/// is a sed `e`, a runner, or a dynamic head. The caller then scans the
-/// whole line.
+/// an rv binary (`awk '{system("rv " $0)}'`), spawns or evals (`perl -ne
+/// 'system $_'`), loads or reads code or words from stdin, a descriptor or
+/// the environment (`do "/dev/stdin"`, `runpy`, `$ENV{V}`), runs with an
+/// assignment (`V=x python3 -c …`), or is a sed `e`, a runner, or a dynamic
+/// head. The caller then scans the whole line. Reading stdin as data
+/// (`json.load(sys.stdin)`) cannot be told apart from running it without
+/// a denylist an agent can dodge, so it counts too.
 func scriptReachesPastItself(_ launched: LaunchedCommand) -> Bool {
     guard let script = opaqueScriptText(launched), let program = launched.guardArgv.first else { return false }
-    if launched.headIsDynamic || shellRunnerNames.contains(program) || isInterpreter(program) == false {
+    if launched.headIsDynamic || isShellRunner(launched.guardArgv) || isInterpreter(program) == false
+        || launched.assignments.isEmpty == false
+    {
         return true
     }
     if scriptViews(script).contains(where: { scriptTokens($0).contains(where: namesRVBinary) }) { return true }
+    if outsideInputMarkers.contains(where: script.contains) { return true }
+    if codeIdentifiers(script).contains(where: loaderIdentifiers.contains) { return true }
     return scriptIsRisky(script, kind: programKind(program), secrets: noSecretPaths)
+}
+
+/// Text through which a script takes input from outside its own text:
+/// stdin, a descriptor, a URL wrapper, the environment, a pipe open.
+private let outsideInputMarkers: [String] = [
+    "stdin", "STDIN", "/dev/", "/proc/", "php://", "io.read", "ENV", "environ", "getenv", "process.env", "ARGF",
+    "$<", "<>", "<&", "|\"", "\"|", "|'", "'|",
+]
+
+/// Calls that load and run code, or start a process, beyond
+/// `scriptIsRisky`'s list, and deserializers that can run code.
+private let loaderIdentifiers: Set<String> = [
+    "pickle", "marshal", "yaml", "dill", "shelve", "gets", "input", "readline", "readlines", "breakpoint",
+    "interact", "runsource", "runcode",
+    "do", "load", "require", "require_once", "include", "include_once", "run_path", "run_module", "runpy",
+    "compile", "exec_module", "import_module", "loadfile", "dofile", "loadstring", "posix_spawnp",
+    "create_subprocess_shell", "create_subprocess_exec", "instance_eval", "class_eval", "module_eval", "send",
+    "source",
+]
+
+private func codeIdentifiers(_ text: String) -> Set<String> {
+    Set(text.split(whereSeparator: { ($0.isASCII && ($0.isLetter || $0.isNumber)) == false && $0 != "_" })
+        .map(String.init))
 }
 
 private let noSecretPaths = SecretPathCatalog(rules: [])
@@ -91,22 +127,27 @@ private let scriptWeakeningWords: Set<String> = subcommandVerbs.union([
 /// True when `text`, read as opaque script, names an rv binary (`rv`,
 /// `rv-cli`, any path ending in one) and a weakening word, in any view.
 func carriesWeakeningRV(_ text: String) -> Bool {
-    scriptViews(text).contains { view in
-        let tokens = scriptTokens(view)
-        return tokens.contains(where: namesRVBinary) && tokens.contains(where: holdsWeakeningWord)
-    }
+    let views = scriptViews(text)
+    let namingRV = views.filter { scriptTokens($0).contains(where: namesRVBinary) }
+    if namingRV.contains(where: { scriptTokens($0).contains(where: holdsWeakeningWord) }) { return true }
+    // Named characters (`\N{…}`) and Perl case escapes (`\L…`, `\l`) are not
+    // decoded: with rv named, they may spell a verb. Fail closed.
+    return namingRV.isEmpty == false && undecodedEscapes.contains(where: text.contains)
 }
+
+private let undecodedEscapes = ["\\N{", "\\L", "\\l"]
 
 /// `text` as written; with escapes decoded (`rv\x20uninstall`, printf's
 /// `\\` and `\n`); and each of those with line continuations joined and
 /// quoting removed (`r''v`, `"r""v"`, `'r'$'v'`, `r\v`, `r\<LF>v`); and with
-/// every letter escape read as a blank (`\cI`, Ruby's `\s`). Views without
-/// `rv` in any case are dropped before tokenizing: every rv token holds it.
+/// every letter escape read as a blank (`\cI`, Ruby's `\s`); and with
+/// braced escapes decoded (`\x{75}`, `\u{75}`). Views without `rv` in any
+/// case are dropped before tokenizing: every rv token holds it.
 private func scriptViews(_ text: String) -> [String] {
     let decoded = decodingAnsiCEscapes(text)
     let views = [
         text, decoded, unquoted(joinedContinuations(text)), unquoted(joinedContinuations(decoded)),
-        unquoted(blankingLetterEscapes(text)),
+        unquoted(blankingLetterEscapes(text)), unquoted(decodingBracedEscapes(text)),
     ]
     return views.filter { $0.lowercased().contains("rv") }
 }
@@ -147,6 +188,27 @@ private func blankingLetterEscapes(_ text: String) -> String {
         } else {
             out.append(char)
             out.append(next)
+        }
+    }
+    return out
+}
+
+/// `\x{HEX}`, `\u{HEX}`, `\U{HEX}` (Perl, Ruby, JavaScript, Rust) as the
+/// character they name; anything else is kept.
+private func decodingBracedEscapes(_ text: String) -> String {
+    let chars = Array(text)
+    var out = ""
+    var index = 0
+    while index < chars.count {
+        if chars[index] == "\\", index + 2 < chars.count, "xuU".contains(chars[index + 1]), chars[index + 2] == "{",
+           let close = chars[(index + 3)..<min(chars.count, index + 12)].firstIndex(of: "}"),
+           let value = UInt32(String(chars[(index + 3)..<close]), radix: 16), let scalar = Unicode.Scalar(value)
+        {
+            out.append(Character(scalar))
+            index = close + 1
+        } else {
+            out.append(chars[index])
+            index += 1
         }
     }
     return out
@@ -215,15 +277,35 @@ private func findExecClauses(_ argv: [String], from start: Int) -> [[String]] {
     return commands
 }
 
+/// Distinct `find -exec` commands followed per line, and words across the
+/// commands they launch; past either, a truncated marker (flagged).
+/// Dynamic heads (`find . -exec $F -exec $F …`) would otherwise branch at
+/// every word.
+private let maxFollowedFindCommands = 256
+private let maxFollowedFindWords = 16384
+
 /// `launched` plus every command a `find -exec` among them runs, followed
-/// through nested finds. The resolver's depth cap ends the recursion (past
-/// it, a truncated marker, which the caller flags).
-func followingFindExec(_ launched: [LaunchedCommand], depth: Int) -> [LaunchedCommand] {
-    launched + launched.flatMap { command in
-        findExecCommands(command.guardArgv).flatMap { argv in
-            followingFindExec(launchedCommandHeads(argv: argv, depth: depth + 1), depth: depth + 1)
+/// through nested finds, each distinct command once. The resolver's depth
+/// cap bounds nesting (past it, a truncated marker, which callers flag).
+func followingFindExec(_ launched: [LaunchedCommand]) -> [LaunchedCommand] {
+    var out = launched
+    var depths = Array(repeating: 0, count: launched.count)
+    var followed: Set<[String]> = []
+    var words = 0
+    var index = 0
+    while index < out.count {
+        let (command, depth) = (out[index], depths[index])
+        index += 1
+        for argv in findExecCommands(command.guardArgv) where followed.insert(argv).inserted {
+            guard followed.count <= maxFollowedFindCommands else { return out + [.truncatedMarker] }
+            let fed = launchedCommandHeads(argv: argv, depth: depth + 1)
+            words += fed.reduce(0) { $0 + $1.guardArgv.count }
+            guard words <= maxFollowedFindWords else { return out + [.truncatedMarker] }
+            out += fed
+            depths += Array(repeating: depth + 1, count: fed.count)
         }
     }
+    return out
 }
 
 // MARK: - stdin programs
@@ -247,14 +329,16 @@ func readsProgramFromStdin(_ launched: LaunchedCommand) -> Bool {
     let argv = launched.guardArgv
     guard let program = argv.first else { return false }
     let isShell = shellNames.contains(program) || program == "source" || program == "."
-    guard isShell || launched.headIsDynamic || isInterpreter(program) || shellRunnerNames.contains(program) else {
-        return false
-    }
-    if shellRunnerNames.contains(program) { return true }
+    if isShellRunner(argv) { return true }
+    guard isShell || launched.headIsDynamic || isInterpreter(program) else { return false }
     let operands = argv.dropFirst().map(unescapeBackslashPairs)
-    // An inline program reads stdin as data (its text may say `sys.stdin`);
-    // awk's program is an operand, but `-f -` reads it from stdin.
-    if awkNames.contains(program) { return operands.contains(where: isStdinPath) }
+    // An inline program reads stdin as data (`scriptReachesPastItself`
+    // judges one that runs it); awk's program is an operand, but `-f -`,
+    // `-f /dev/fd/3` or `-f $X` may read it from stdin or a descriptor.
+    if awkNames.contains(program) {
+        return operands.contains(where: isStdinPath)
+            || zip(operands, operands.dropFirst()).contains { $0 == "-f" && isUnmodelledOperand($1) }
+    }
     if inlineProgram(argv) != nil { return false }
     if operands.contains(where: isStdinPath) { return true }
     if isShell, operands.contains(where: { $0.hasPrefix("-") && $0.hasPrefix("--") == false && $0.contains("s") }) {
@@ -262,22 +346,31 @@ func readsProgramFromStdin(_ launched: LaunchedCommand) -> Bool {
     }
     if let module = pythonModule(program, operands) { return pythonDataModules.contains(module.lowercased()) == false }
     for (index, operand) in operands.enumerated() where isOptionWord(operand) == false {
-        // A word after an option may be that option's value: keep looking.
-        if index > 0, isOptionWord(operands[index - 1]) { continue }
-        return false
+        // A word after an option may be that option's value (bash alone
+        // takes `-o x`, `-init-file x`, `--rcfile x`): keep looking.
+        if index > 0, isOptionWord(operands[index - 1]), operands[index - 1].contains("=") == false { continue }
+        // The script operand; one that may expand to anything may be stdin.
+        return isUnmodelledOperand(operand)
     }
     return true
+}
+
+/// `$X`, a backtick or a glob: may expand to any path, stdin included.
+private func isUnmodelledOperand(_ word: String) -> Bool {
+    word.contains(where: { "$`*?[{".contains($0) })
 }
 
 private func isOptionWord(_ word: String) -> Bool {
     word.count > 1 && (word.hasPrefix("-") || word.hasPrefix("+"))
 }
 
-/// `-`, any path naming `stdin`, an `fd/0` path, or process substitution.
+/// `-`, any path naming `stdin`, any descriptor path (`/dev/fd/3`,
+/// `/proc/$$/fd/0`: a here-string can feed any descriptor), or process
+/// substitution.
 private func isStdinPath(_ word: String) -> Bool {
     if word == "-" || (word.contains("/") && word.contains("stdin")) || word.hasPrefix("<(") { return true }
     let components = word.split(separator: "/")
-    return components.last == "0" && components.contains("fd")
+    return components.contains("fd") && (components.last?.allSatisfy(\.isNumber) ?? false)
 }
 
 /// The module `python -m` runs (attached or the next word); `-W`/`-X`
@@ -296,14 +389,21 @@ private func pythonModule(_ program: String, _ operands: [String]) -> String? {
 
 /// `sudo -s`/`-i`/`--shell`/`--login` and `doas -s` start a shell on
 /// stdin and launch no command the resolver can see. Judged on the line's
-/// words, quoted payloads split too: a launcher word followed anywhere by
-/// such a flag counts (fail closed).
+/// words, quoted payloads split too (`sh -c '… | sudo -s'`): a sudo/doas
+/// word followed anywhere on the line by such a flag counts. Option values
+/// and command boundaries are not modelled (a quoted prompt, `$(whoami)`,
+/// `2>&1` or `$'…'` would mislead either): fail closed.
 func startsShellOnStdin(_ raw: String) -> Bool {
-    let words = raw.split(whereSeparator: { $0.isWhitespace || "'\";&|()<>`".contains($0) }).map(String.init)
+    let words = raw.split(whereSeparator: { $0.isWhitespace || "'\";&|()<>`".contains($0) })
+        .map { unescapeBackslashPairs(String($0)) }
     guard let launcher = words.firstIndex(where: { ["sudo", "doas"].contains(commandName($0)) }) else { return false }
-    return words[(launcher + 1)...].contains { word in
-        let word = unescapeBackslashPairs(word)
-        if word == "--shell" || word == "--login" { return true }
-        return word.hasPrefix("-") && word.hasPrefix("--") == false && word.dropFirst().contains(where: { $0 == "s" || $0 == "i" })
+    return words[(launcher + 1)...].contains(where: startsShellFlag)
+}
+
+private func startsShellFlag(_ word: String) -> Bool {
+    if word.hasPrefix("--") {
+        let name = String(word.dropFirst(2).prefix { $0 != "=" })
+        return name.isEmpty == false && ("shell".hasPrefix(name) || "login".hasPrefix(name))
     }
+    return word.hasPrefix("-") && word.dropFirst().contains(where: { $0 == "s" || $0 == "i" })
 }
