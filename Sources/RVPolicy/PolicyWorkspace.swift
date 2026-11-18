@@ -76,15 +76,78 @@ public struct PolicyWorkspace: Sendable {
     /// throws `PolicyCeilingError.invalidFile`, so the door fails closed as
     /// for an invalid `policy.toml`.
     public func loadEffectiveRules(builtin: [TypedRule] = []) throws -> [TypedRule] {
+        try loadEffective(builtin: builtin).rules
+    }
+
+    /// One step of `loadEffective`, in the order it runs.
+    enum LoadStep {
+        case machine, repo, ceiling
+    }
+
+    /// The documents `loadEffectiveRules` reads and the rules it merges.
+    struct EffectiveLoad {
+        var machine: PolicyDocument
+        var repo: PolicyDocument
+        var ceiling: PolicyCeiling?
+        var rules: [TypedRule]
+    }
+
+    /// The only typed-policy load: evaluation (via `loadEffectiveRules`) and
+    /// `loadStatus` both run it. `entering` names each step before it runs,
+    /// so a throw belongs to the last step named.
+    func loadEffective(
+        builtin: [TypedRule] = [],
+        entering: (LoadStep) -> Void = { _ in }
+    ) throws -> EffectiveLoad {
+        entering(.machine)
         let machine = try loadMachineDocument()
+        entering(.repo)
         let repo = try loadRepoDocument()
+        entering(.ceiling)
         let ceiling = try loadCeiling()
-        return TypedRuleStore.merge(
+        let rules = TypedRuleStore.merge(
             builtin: builtin,
             machine: machine.typedRules(origin: .machine),
             repo: repo.typedRules(origin: .repo),
             ceiling: ceiling?.typedRules ?? []
         )
+        return EffectiveLoad(machine: machine, repo: repo, ceiling: ceiling, rules: rules)
+    }
+
+    /// What evaluation loads here right now, from the same `loadEffective`.
+    /// Reads only; takes no lock and never consults the revision log
+    /// (evaluation does not either). A failed load is reported, never
+    /// replaced by an earlier policy: evaluation fails closed on it.
+    public func loadStatus() -> PolicyLoadStatus {
+        var step = LoadStep.machine
+        let location = (configDirectory: machineDirectory?.path, workspace: workspace?.path)
+        let load: EffectiveLoad
+        do {
+            load = try loadEffective { step = $0 }
+        } catch {
+            let failure: PolicyLoadStatus.Failure = switch step {
+            case .machine: .machineInvalid
+            case .repo: .repoInvalid
+            case .ceiling: .ceilingInvalid
+            }
+            return PolicyLoadStatus(
+                state: .failed, failure: failure,
+                configDirectory: location.configDirectory, workspace: location.workspace)
+        }
+        func layer(_ document: PolicyDocument) -> PolicyLoadStatus.Layer {
+            PolicyLoadStatus.Layer(
+                hash: PolicyRevisionIdentity.hash(document),
+                ruleCount: document.rules.count,
+                exceedsCeiling: load.ceiling.map { $0.check(document).isContained == false } ?? false)
+        }
+        return PolicyLoadStatus(
+            state: .loaded,
+            machine: machineDirectory == nil ? nil : layer(load.machine),
+            repo: workspace == nil ? nil : layer(load.repo),
+            ceilingRuleCount: load.ceiling?.rules.count,
+            effectiveRuleCount: load.rules.count,
+            configDirectory: location.configDirectory,
+            workspace: location.workspace)
     }
 
     /// Replaces the owner's ceiling. Under the machine policy locks, the
@@ -289,8 +352,10 @@ public struct PolicyWorkspace: Sendable {
         }
     }
 
-    public func upsert(_ rule: PolicyDocumentRule, layer: PolicyDocumentLayer) throws {
-        _ = try mergeIncoming(PolicyDocument(rules: [rule]), layer: layer, save: true)
+    /// Returns the saved layer document.
+    @discardableResult
+    public func upsert(_ rule: PolicyDocumentRule, layer: PolicyDocumentLayer) throws -> PolicyDocument {
+        try mergeIncoming(PolicyDocument(rules: [rule]), layer: layer, save: true)
     }
 
     /// Merges `incoming` rules into the layer. With `save`, the load, merge,
