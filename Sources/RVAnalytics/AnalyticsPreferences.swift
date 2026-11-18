@@ -16,9 +16,13 @@ public struct AnalyticsPreferences: Sendable, Equatable {
     /// Reads `analytics.enabled` nested (`{"analytics": {"enabled": true}}`)
     /// or in the flat dotted form the README documents
     /// (`{"analytics.enabled": true}`), matching how `guard.mode` is read.
-    /// A missing, unreadable or undecodable config, a missing or non-boolean
-    /// key, or a key repeated anywhere in the document reads as off. When both
-    /// forms are present and disagree, off wins.
+    ///
+    /// On only for an unambiguous boolean true: at least one form is present,
+    /// and every form that is present is the boolean `true`. Off for a missing,
+    /// unreadable or undecodable config; a key repeated anywhere in the
+    /// document; an `analytics` value that is not an object; or either form
+    /// present with anything but `true` (`false`, `null`, a string, a number,
+    /// an array or an object).
     public static func load(from paths: AnalyticsPaths, fileManager: FileManager = .default) -> AnalyticsPreferences {
         guard let data = fileManager.contents(atPath: paths.configFile.path),
               JSONDuplicateKeys.allObjectKeysDistinct(data),
@@ -26,14 +30,14 @@ public struct AnalyticsPreferences: Sendable, Equatable {
         else {
             return .disabledByDefault
         }
-        let nested = root["analytics"]?.asObject?["enabled"]?.bool
-        let flat = root["analytics.enabled"]?.bool
-        if nested == false || flat == false {
+        let analytics = root["analytics"]
+        if let analytics, analytics.asObject == nil {
             return .disabledByDefault
         }
-        if nested == true || flat == true {
-            return AnalyticsPreferences(isEnabled: true)
+        let present = [analytics?["enabled"], root["analytics.enabled"]].compactMap { $0 }
+        guard present.isEmpty == false, present.allSatisfy({ $0.bool == true }) else {
+            return .disabledByDefault
         }
-        return .disabledByDefault
+        return AnalyticsPreferences(isEnabled: true)
     }
 }

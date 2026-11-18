@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 
@@ -212,6 +217,7 @@ public enum AnalyticsBootstrap {
         }
         let preferences = AnalyticsPreferences.load(from: paths)
         guard preferences.isEnabled else {
+            discardUsageCounts(in: paths)
             return nil
         }
         let identity: AnalyticsIdentity
@@ -243,5 +249,16 @@ public enum AnalyticsBootstrap {
             productVersion: productVersion,
             platform: .makeLive()
         )
+    }
+
+    /// Usage counts gathered without an opt-in must never be sent, so while
+    /// analytics is off the counters and hosts files (left by installs from
+    /// when analytics was on by default) are removed. Best effort and silent.
+    /// `unlink` removes the name only: it never follows a symlink and never
+    /// removes a directory. The id and the install marker are left alone.
+    private static func discardUsageCounts(in paths: AnalyticsPaths) {
+        for file in [paths.countersFile, paths.hostsFile] {
+            _ = file.path.withCString { unlink($0) }
+        }
     }
 }
