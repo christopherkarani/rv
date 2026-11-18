@@ -1,7 +1,7 @@
 import Foundation
 
-/// The files that keep rv wired in: agent-host hook registrations and
-/// adapters that `rv setup` writes, rv's installed binaries and pack
+/// The files that keep rv wired in: agent-host hook registrations,
+/// adapters and the rv agent skill that `rv setup` writes, rv's installed binaries and pack
 /// bundle, and its LaunchAgent / systemd user units. An agent that edits
 /// one of these unhooks or replaces the guard watching it.
 ///
@@ -44,6 +44,11 @@ public enum RVWiringPaths {
         [".config", "opencode", "rv-guard-tui-ask"],
         [".openclaw", "extensions", "rv-guard"],
         [".hermes", "plugins", "rv-guard"],
+        // The rv agent skill each host loads: an agent that rewrites it
+        // drops the rules it is told to follow.
+        [".claude", "skills", "rv"],
+        [".agents", "skills", "rv"],
+        [".config", "opencode", "skills", "rv"],
         // systemd's user manager reads these into every user service's
         // environment, rvd included: an `LD_PRELOAD=` line here runs agent
         // code inside rvd at the next login.
@@ -127,6 +132,7 @@ public enum RVWiringPaths {
             ".config/systemd/user/dev.rv.evaluate.service",
             ".openclaw/extensions/rv-guard/index.js",
             ".hermes/plugins/rv-guard/__init__.py", ".hermes/plugins/rv-guard/plugin.yaml",
+            ".claude/skills/rv/SKILL.md", ".agents/skills/rv/SKILL.md", ".config/opencode/skills/rv/SKILL.md",
         ] + units
         return homeEntries.map { ([home] + $0).joined(separator: "/") } + extra.map { home + "/" + $0 }
     }

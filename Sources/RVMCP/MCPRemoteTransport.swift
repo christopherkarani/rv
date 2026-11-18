@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import RVIsolation
 
 /// Incremental `text/event-stream` parser (WHATWG server-sent events). An
 /// event that is still open when the stream ends is dropped, as the spec says.
@@ -83,6 +84,12 @@ struct MCPEventStream {
 enum MCPHTTPExchange {
     static let maximumBodyBytes = MCPGatewayRuntime.maximumLineBytes
     static let requestTimeout: TimeInterval = 300
+
+    /// `URLSessionDelegateQueue.serial`: answers arrive even while GCD's
+    /// shared global queues are all held.
+    static func delegateQueue(_ label: String) -> OperationQueue {
+        URLSessionDelegateQueue.serial(label)
+    }
 
     static func request(
         url: URL, method: String, headers: [String: String], sessionID: String?, protocolVersion: String?, body: Data?

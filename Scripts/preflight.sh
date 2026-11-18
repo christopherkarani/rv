@@ -114,10 +114,33 @@ check_value_types() {
   #            idle watchdog), mirroring RVService; and
   #            RVMCP/CustodianXPCClient.swift — its libxpc client handle,
   #            mirroring XPCEvaluateClient. The key logic stays value-only.
+  #   RVMCP/MCPShutdownSignals.swift Heard and rv-mcp-signal-probe Count —
+  #            each holds a Mutex shared by escaping signal-source handlers
+  #            and the code that reads it; a struct holding a Mutex is
+  #            noncopyable and cannot be captured by an escaping closure and
+  #            still read elsewhere, so the shared state is a reference.
+  #            MCPShutdownSignals itself holds the signal sources and the
+  #            dispositions it replaced, has one owner (serve, or the
+  #            probe) and is cancelled once by it. MCPPlanning (same file)
+  #            is one plan's result and wake-up, shared by the planning
+  #            thread that fills it and serve's thread that waits on it.
+  #   RVMCP/MCPOutbox.swift MCPOutbox, MCPLogRelay, MCPBacklog,
+  #            MCPWriteProgress — each is one queue or count shared by the
+  #            thread that drains or charges it and every thread that adds
+  #            to it or reads it, waited on through a lock and condition:
+  #            a copy would be a second queue that nobody drains.
+  #   RVMCP/MCPProcessGroup.swift MCPProcessGroup and MCPExitGate, and
+  #            RVMCP/MCPLaunchEnd.swift MCPLaunchEnd — one live process
+  #            group (its pid, signalled only while its leader is unreaped)
+  #            and the reap it reports, shared by its supervisor thread, the
+  #            reader thread and the gateway queue; `MCPSupervisedGroup` is
+  #            an AnyObject protocol, as SecretPlaceholderGroup is.
+  #   rv-mcp-probe GatewaySink — the secrets gateway's `SecretResponseSink`
+  #            is an `AnyObject` protocol, so the probe's sink is a class.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
-  # modifier (public/internal/…/final) must not hide a declaration, so we match
-  # the keyword on a line that may start with any run of those tokens.
-  local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |internal |private |fileprivate |open |final )*(class|actor) '
+  # modifier (public/package/internal/…/final) must not hide a declaration, so
+  # we match the keyword on a line that may start with any run of those tokens.
+  local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |package |internal |private |fileprivate |open |final )*(class|actor) '
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVXPC/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
@@ -126,6 +149,17 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
+    | grep -vE 'Sources/RVMCP/MCPShutdownSignals.swift:[0-9]+:\s*(package |private )?final class (MCPShutdownSignals|Heard)[: ]' \
+    | grep -v 'Sources/RVMCP/MCPShutdownSignals.swift:.*private final class MCPPlanning<T>: @unchecked Sendable' \
+    | grep -v 'Sources/RVMCP/MCPOutbox.swift:[0-9]*:final class MCPOutbox: @unchecked Sendable' \
+    | grep -v 'Sources/RVMCP/MCPOutbox.swift:[0-9]*:final class MCPLogRelay: Sendable' \
+    | grep -v 'Sources/RVMCP/MCPOutbox.swift:[0-9]*:final class MCPBacklog: @unchecked Sendable' \
+    | grep -v 'Sources/RVMCP/MCPOutbox.swift:[0-9]*:final class MCPWriteProgress: Sendable' \
+    | grep -v 'Sources/RVMCP/MCPProcessGroup.swift:[0-9]*:final class MCPProcessGroup: MCPSupervisedGroup' \
+    | grep -v 'Sources/RVMCP/MCPProcessGroup.swift:[0-9]*:final class MCPExitGate: Sendable' \
+    | grep -v 'Sources/RVMCP/MCPLaunchEnd.swift:[0-9]*:final class MCPLaunchEnd: Sendable' \
+    | grep -v 'Sources/rv-mcp-signal-probe/main.swift:.*final class Count' \
+    | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class GatewaySink: SecretResponseSink' \
     | grep -v 'Sources/RVMCP/CustodianSocketClient.swift:' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
@@ -377,7 +411,7 @@ check_no_main_in_library() {
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local count
@@ -393,7 +427,7 @@ check_no_main_in_library() {
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local acount

@@ -163,6 +163,9 @@ public enum RuntimeResourcePolicyStore {
         if let defaultID = document.defaultProfile {
             guard identifier(defaultID), ids.contains(defaultID) else { return false }
         }
+        if let limits = document.limits {
+            guard limits.isValid else { return false }
+        }
         return true
     }
 

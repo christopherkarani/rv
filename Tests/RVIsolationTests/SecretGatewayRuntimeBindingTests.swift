@@ -177,7 +177,8 @@ struct SecretGatewayRuntimeBindingTests {
         defer { gateway.stop() }
 
         #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 200)
-        #expect(verdicts.withLock { $0 } == [.member])
+        // Once before the head is read, once after.
+        #expect(verdicts.withLock { $0 } == [.member, .member])
         #expect(GatewayPeerCheck.runtime.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), group) == .outsider)
         var stale = group
         stale.startMicroseconds += 1

@@ -352,7 +352,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
         let operands = operands.drop(while: { foldedWord($0) == "--" })
         let raw = operands.joined(separator: " ")
         let decoded = operands.map { $0.ansiCDecodedIfMarked }.joined(separator: " ")
-        for variant in Set([raw, decoded]) {
+        for variant in distinctInOrder([raw, decoded]) {
             out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1).map { $0.inheriting(assignments) })
         }
     }
@@ -504,7 +504,16 @@ extension String {
 }
 
 private func payloadVariants(_ word: String) -> [String] {
-    Array(Set([word, word.ansiCDecodedIfMarked, unescapeBackslashPairs(word)]))
+    distinctInOrder([word, word.ansiCDecodedIfMarked, unescapeBackslashPairs(word)])
+}
+
+/// `variants` without repeats, each where first given (as written, then
+/// decoded): the commands they launch come out in the same order in every
+/// process, not in a hash seed's.
+private func distinctInOrder(_ variants: [String]) -> [String] {
+    var out: [String] = []
+    for variant in variants where out.contains(variant) == false { out.append(variant) }
+    return out
 }
 
 private func decodedCommandName(_ word: String) -> String {

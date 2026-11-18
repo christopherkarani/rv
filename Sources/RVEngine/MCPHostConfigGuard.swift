@@ -11,7 +11,8 @@ import RVDomain
 ///   written or resolved, is a guarded file, a resolved alias of one, or —
 ///   for a move or overwrite — a directory that holds one.
 /// - Unmodeled commands (`mcpHostConfigUnmodeledWrite`): host CLIs that edit
-///   MCP servers, behind any launcher; copy verbs with an option word after
+///   MCP servers, behind any launcher or in any text a command carries (a
+///   quoted command line, inline program code); copy verbs with an option word after
 ///   an operand (BSD `cp` writes to the last word); and, once any guarded
 ///   name appears, any program rv does not model, any consumer (`xargs`, a
 ///   shell), any command run with an environment assignment, git with a
@@ -99,15 +100,35 @@ private func foldedPath(_ path: String) -> String {
 func mcpHostConfigUnmodeledWrite(
     _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext
 ) -> Bool {
+    var reads = HostTextReads()
+    return mcpHostConfigUnmodeledWrite(raw, guard: guarded, context: context, reads: &reads)
+}
+
+/// `mcpHostConfigUnmodeledWrite` spending `reads`, whose counters say why
+/// carried text counted.
+func mcpHostConfigUnmodeledWrite(
+    _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext,
+    reads: inout HostTextReads
+) -> Bool {
     let launched = launchedCommandHeads(raw)
-    if launched.contains(where: isHostMCPMutation) { return true }
-    // A shell or `xargs` reading stdin may run a command line another word
-    // carries (`echo 'claude mcp add x' | sh`, `bash <<< '…'`).
-    if launched.contains(where: { consumerPrograms.contains(commandName($0.head)) }),
-       launched.contains(where: { $0.argv.dropFirst().contains(where: carriesHostMCPMutation) })
+    reads.commandsArePlain = commandsMayBeRedefined(raw, launched) == false
+    if launchedRunHostMCPMutation(launched, reads: &reads) { return true }
+    // Input the launcher parser stopped following, or a segment the splitter
+    // could not scan (`{claude,zzqx} mcp add`), may hide a host CLI.
+    if launched.contains(where: { $0.truncated || isUnscannedLaunch($0) }),
+       mayNameHostMCP(raw, budget: &reads.spelling)
     {
         return true
     }
+    // So may text the tokenizer splits or quotes unlike a shell
+    // (`watch "sh -c \"claude mcp add x\""`, zsh `=(…)`).
+    if hostMCPTextIsUnfollowable(raw, launched, reads: &reads) { return true }
+    // Any program may run a command line another word carries (`echo
+    // 'claude mcp add x' | sh`, `| at now`, `$(echo '…')`, `bash <<< '…'`,
+    // `python3 -c 'os.system("…")'`). Only text on a line nothing runs is
+    // read as data (`git commit -m 'add mcp install docs'`).
+    if carriesHostMCPText(launched, reads: &reads, line: raw) { return true }
+    if hostMCPTextNamesMutation(raw, reads: &reads) { return true }
     if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }
@@ -197,6 +218,174 @@ private func mayShadowOrMoveCopy(_ command: LaunchedCommand) -> Bool {
 private func mayDefineCommands(_ raw: String) -> Bool {
     raw.contains("()") || raw.contains("PATH=") || raw.contains("PATH+=")
 }
+
+/// Whether a plain command name on `raw` may run something other than the
+/// program it names: a function definition (`ls() …`, `ls ( ) …`,
+/// `function ls …`), an alias or hash entry (`alias`, `BASH_ALIASES[ls]=`,
+/// zsh `aliases[ls]=`), a `PATH` change (zsh's tied `path` too, an
+/// assignment rv parsed under a quoted name, `read`, `printf -v`, `for`), a
+/// shell startup file (`BASH_ENV`, `ENV`, `ZDOTDIR`), or a command whose
+/// effect on the shell rv does not read (`source`, `.`, `eval`, `trap`,
+/// `autoload`, a dynamic program).
+func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
+    if mayDefineCommands(raw) || namesLookupVariable(raw) || envMayMoveLookup(raw) { return true }
+    if launched.contains(where: setsFunctionFlag) || assignsExpandedName(launched) { return true }
+    let unblanked = raw.filter { $0.isWhitespace == false }
+    if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
+    let spaced = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+    if loopOverLookupVariable.contains(where: { spaced.contains($0) }) { return true }
+    return launched.contains {
+        $0.headIsDynamic || redefiningCommands.contains(commandName($0.head)) || setsLookupVariable($0)
+    }
+}
+
+private let redefiningText = [
+    "aliases[", "functions[", "commands[", "BASH_ALIASES", "BASH_CMDS", "BASH_FUNC_", "path=(", "path+=(", "path[",
+]
+
+/// Variables that move which program a plain name runs, or make a shell run
+/// a file first, compared case-folded (zsh ties `path` to `PATH`).
+private let lookupVariables: Set<String> = ["path", "bash_env", "env", "zdotdir"]
+
+private let loopOverLookupVariable = ["for path in", "select path in"]
+
+/// Whether `command` sets a `lookupVariables` name: as an assignment rv
+/// parsed (`env 'PA'TH=…`, `BASH_ENV=… bash -c …`), or as an operand of a
+/// builtin that assigns it (`read PATH`, `printf -v PATH`, `export
+/// BASH_ENV=…`).
+private func setsLookupVariable(_ command: LaunchedCommand) -> Bool {
+    let names: (String) -> Bool = { word in
+        let name = unescapeBackslashPairs(word).prefix { $0 != "=" && $0 != "[" }
+        return lookupVariables.contains(String(name.hasSuffix("+") ? name.dropLast() : name).lowercased())
+    }
+    if command.assignments.contains(where: names) { return true }
+    return variableSetters.contains(commandName(command.head)) && command.guardArgv.dropFirst().contains(where: names)
+}
+
+private let variableSetters: Set<String> = ["read", "printf", "export", "declare", "typeset", "local", "readonly"]
+
+/// Whether some command of `launched` is a builtin that assigns its
+/// operands (`variableSetters`, `printf` only through `-v`, and `unset`,
+/// `mapfile`, `readarray`) given an operand whose name part (the text
+/// before `=` or `[`, or the whole word) holds `$` or a backtick: the name
+/// may be built from escapes or expansions (`export P$'\x41'TH=./bin`,
+/// `export ${N}TH=…`), which `namesLookupVariable` does not decode. A value
+/// expansion after `=` is not read (`export FOO=$BAR`), though with `-n`
+/// it names a nameref's target (`declare -n R=${N}TH`): a known limit.
+private func assignsExpandedName(_ launched: [LaunchedCommand]) -> Bool {
+    let assigners: Set<String> = [
+        "read", "export", "declare", "typeset", "local", "readonly", "unset", "mapfile", "readarray",
+    ]
+    let expanded = { (word: Substring) in
+        word.prefix { $0 != "=" && $0 != "[" }.contains { $0 == "$" || $0 == "`" }
+    }
+    return launched.contains { command in
+        let head = commandName(command.head)
+        let operands = Array(command.guardArgv.dropFirst())
+        if head == "printf" {
+            return operands.indices.contains { index in
+                let word = operands[index]
+                if word == "-v" { return index + 1 < operands.count && expanded(Substring(operands[index + 1])) }
+                return word.hasPrefix("-v") && expanded(word.dropFirst(2))
+            }
+        }
+        return assigners.contains(head) && operands.contains { expanded(Substring($0)) }
+    }
+}
+
+/// Names that move which program a plain name runs or which file a shell
+/// runs first, as each shell spells them (zsh ties `path`, `fpath` and
+/// `module_path` to their upper-case forms).
+private let lookupNames: Set<String> = [
+    "PATH", "path", "FPATH", "fpath", "MODULE_PATH", "module_path", "BASH_ENV", "ENV", "ZDOTDIR",
+]
+
+/// Whether `text` names a lookup variable anywhere but where it can only be
+/// read, once line continuations, a `$` opening a quote (`$'PATH'`,
+/// `$"PATH"`), quotes and backslashes are removed (`env 'PA'TH=…`,
+/// `PA\<newline>TH=…`). Only these count as reads: `$NAME`, `${NAME…}`
+/// where a read's operator follows the name (`lookupNameIsRead`), an option
+/// word (`find -path`), and a path component or file name (`~/path/x`,
+/// `os.path`). Any other mention of the name as written counts as a change:
+/// an assignment (`path=`, `PATH[1,0]=`, `fpath+=`, `let 'PATH = 1'`, `((
+/// PATH = 1 ))`), a setter's operand (`unset`, `read -a`, `mapfile`,
+/// `readarray`, `declare -n p=PATH`), a loop variable, and a name glued to
+/// a short option (`printf -vPATH`). A name built from escapes
+/// (`$'PA\x54H'`) is not recognised here (`assignsExpandedName`).
+private func namesLookupVariable(_ text: String) -> Bool {
+    let unquoted = text.replacingOccurrences(of: "\\\n", with: "")
+        .replacingOccurrences(of: "$'", with: "'").replacingOccurrences(of: "$\"", with: "\"")
+    let chars = Array(unquoted.filter { "'\"\\".contains($0) == false })
+    let isWordChar = { (char: Character) in char == "_" || (char.isASCII && (char.isLetter || char.isNumber)) }
+    var index = 0
+    while index < chars.count {
+        guard isWordChar(chars[index]) else {
+            index += 1
+            continue
+        }
+        let start = index
+        while index < chars.count, isWordChar(chars[index]) { index += 1 }
+        let run = String(chars[start..<index])
+        if lookupNames.contains(run) {
+            if lookupNameIsRead(chars, start: start, end: index) == false { return true }
+        } else if start > 0, chars[start - 1] == "-", start < 2 || chars[start - 2] != "-",
+                  lookupNames.contains(where: { run.hasSuffix($0) && run.count - $0.count <= 3 })
+        {
+            return true
+        }
+    }
+    return false
+}
+
+/// Whether the lookup name at `start..<end` of `chars` can only be read.
+private func lookupNameIsRead(_ chars: [Character], start: Int, end: Int) -> Bool {
+    let before = start > 0 ? chars[start - 1] : nil
+    let after = end < chars.count ? chars[end] : nil
+    if before == "$" || before == "-" || before == "/" || before == "." || after == "/" || after == "." {
+        return true
+    }
+    // `${NAME…}`, `${#NAME}`, `${!NAME}`: a read only where a read's
+    // operator follows the name (`}`, `%`, `#`, `/`, `-`, `+`, `?`, `^`,
+    // `,`, `@`, and `:` before `-`, `+`, `?`, a digit or a blank). Anything
+    // else may assign (`${NAME:=…}`, zsh `${NAME::=…}`, `${name[1]:=…}`).
+    let brace = before == "{" ? start - 1 : (before == "#" || before == "!") ? start - 2 : nil
+    guard let brace, brace >= 1, chars[brace] == "{", chars[brace - 1] == "$", let after else { return false }
+    if "}%#/-+?^,@".contains(after) { return true }
+    guard after == ":", end + 1 < chars.count else { return false }
+    let next = chars[end + 1]
+    return "-+?".contains(next) || next.isWhitespace || (next.isASCII && next.isNumber)
+}
+
+/// Whether an `env` on the line may be told to search another path or
+/// split a string into a command (`env -P ./bin`, `env -P./bin`, `env -iS
+/// '…'`, `--split-string`): any later short-option word holding `P` or
+/// `S`, or `--split-string` or a GNU abbreviation of it (`--split`, `--s`).
+private func envMayMoveLookup(_ raw: String) -> Bool {
+    let words = raw.filter { "'\"\\".contains($0) == false }
+        .split(whereSeparator: { $0.isWhitespace || ";&|(){}".contains($0) }).map(String.init)
+    guard let first = words.firstIndex(where: { commandName($0) == "env" }) else { return false }
+    return words[(first + 1)...].contains { word in
+        if word.hasPrefix("--") {
+            let option = word.prefix { $0 != "=" }
+            return word.hasPrefix("--split-string") || (option.count >= 3 && "--split-string".hasPrefix(option))
+        }
+        return word.hasPrefix("-") && (word.contains("P") || word.contains("S"))
+    }
+}
+
+/// A builtin given a function flag (`typeset -fu ls`, zsh's autoload;
+/// `declare -f`, `export -f`): it may load or define a command.
+private func setsFunctionFlag(_ command: LaunchedCommand) -> Bool {
+    let setters: Set<String> = ["typeset", "declare", "local", "export", "readonly", "functions"]
+    guard setters.contains(commandName(command.head)) else { return false }
+    return command.guardArgv.dropFirst().contains { word in
+        (word.hasPrefix("-") || word.hasPrefix("+")) && word.hasPrefix("--") == false && word.contains("f")
+    }
+}
+
+private let redefiningCommands: Set<String> = [
+    "alias", "function", "hash", "enable", "source", ".", "eval", "trap", "autoload", "functions",
+]
 
 private enum MCPCommandClass {
     case reader

@@ -229,7 +229,7 @@ public enum HelpDispatch {
             }
             if token == "--workspace" || token == "--rows" || token == "--columns"
                 || token == "--resource-profile" || token == "--hook"
-                || token == "--expected-content-digest-sha256"
+                || token == "--expected-content-digest-sha256" || token == "--timeout"
             {
                 let value = tokens.index(after: index)
                 guard value < tokens.endIndex else { return false }
@@ -239,6 +239,7 @@ public enum HelpDispatch {
             if token.hasPrefix("--workspace=") || token.hasPrefix("--rows=")
                 || token.hasPrefix("--columns=") || token.hasPrefix("--resource-profile=")
                 || token.hasPrefix("--hook=") || token.hasPrefix("--expected-content-digest-sha256=")
+                || token.hasPrefix("--timeout=")
             {
                 index = tokens.index(after: index)
                 continue
