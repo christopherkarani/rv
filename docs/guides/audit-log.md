@@ -120,16 +120,28 @@ Plain allows are not logged. Every hook deny is recorded whatever
 `rv blocks` keeps.
 
 A command rv could not finish evaluating ("Run it in Terminal") is
-refused too, and recorded as the same `command.denied` row marked
-`detail.verdict: indeterminate`. Its `subject` is
+refused too. Each such refusal by the hook or file-tool guard is recorded as
+a `command.denied` row marked `detail.verdict: indeterminate`. Its `subject` is
 `rv.indeterminate:<reason>` and `reason` holds the reason class, never the
 command: `selfProtection` (an rv command that would weaken rv),
 `packageScriptUnresolved`, `unresolvedInvocation`,
 `inlineProgramNeedsJudge`, `commandTooLarge`, `budgetExhausted` or
-`corePacksUnavailable`. Observe mode lets these run (except
-`selfProtection`, which it keeps refusing) and records them as
-`command.observed` with `would_be: deny`. They are not rule denies, so
-`rv blocks` does not list them.
+`corePacksUnavailable`. `rv test` and `rv explain` record nothing.
+
+Observe mode keeps refusing the ones that touch rv's own protection, and
+records them as that same `command.denied`: an rv command that would
+weaken rv, a command naming rv's config, its hook or service files, a host
+settings file or rv's Linux secret store, and one that stops rvd or writes
+rv's install. For example, `$EDITOR ~/.claude/settings.json`
+(`unresolvedInvocation`) is still refused. Observe lets every other one
+run and records it as `command.observed` with `would_be: deny`. Observe
+never records an `inlineProgramNeedsJudge` as `command.observed`: when no
+judge can score such a program, observe counts it as a would-be allow, which
+is not logged.
+
+`rv report` counts these rows with the other `command.denied` (and
+`command.observed`) events. They are not rule denies, so `rv blocks` does
+not list them.
 
 ### Changes to rv's own rules
 
