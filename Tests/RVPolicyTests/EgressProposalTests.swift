@@ -77,6 +77,25 @@ struct EgressProposalTests {
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "")) == nil)
     }
 
+    /// An agent proposal names host and port only: neither the
+    /// fingerprint nor the live rule's Codable form can carry
+    /// `allowed_ips`, so only the owner's config opens a private range.
+    @Test func proposalCannotRequestAllowedIPs() {
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:db.corp.lan:443:10.0.0.0/8")) == nil)
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:db.corp.lan:10.0.0.0/8")) == nil)
+        #expect(EgressProposal.parse(
+            .make("egress", [.field("db.corp.lan"), .field("443"), .field("10.0.0.0/8")])) == nil)
+        #expect(EgressProposal.parse(.make("egress", [.field("10.0.5.20"), .field("443")])) == nil)
+        let smuggled = Data(#"{"host":"db.corp.lan","port":443,"allowed_ips":["10.0.0.0/8"]}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(LiveNetworkRule.self, from: smuggled)
+        }
+        let snapshot = Data(
+            #"{"schemaVersion":1,"generation":1,"rules":[{"host":"db.corp.lan","port":443,"allowed_ips":["10.0.0.0/8"]}],"approvalIDs":[],"updatedAt":0}"#
+                .utf8)
+        #expect(EgressLoadedSnapshot.parse(snapshot) == nil)
+    }
+
     @Test func requestIsHumanByDefault() throws {
         let (id, directory) = try egressWorkspace()
         let rule = LiveNetworkRule(host: "api.example.com", port: 443)!

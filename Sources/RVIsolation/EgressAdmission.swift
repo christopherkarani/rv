@@ -37,9 +37,11 @@ enum EgressAdmissionVerdict: Sendable, Equatable {
     case deny(EgressDenialReason, binaryPath: String? = nil)
     /// CONNECT admitted. `requireSNI` binds the tunnel to the CONNECT
     /// authority: the first TLS record must name it before dialing.
-    case tunnel(external: Bool, requireSNI: Bool)
+    /// `allowedIPs` is the owner-set private range of the policy endpoint
+    /// that admitted the host; nil dials public unicast only.
+    case tunnel(external: Bool, requireSNI: Bool, allowedIPs: EgressAllowedIPs? = nil)
     /// Absolute-URI admitted: forward the request upstream.
-    case forward(external: Bool)
+    case forward(external: Bool, allowedIPs: EgressAllowedIPs? = nil)
 }
 
 /// Pure admission ladder shared by both request shapes. Order (SEC-001):
@@ -84,15 +86,19 @@ enum EgressAdmission {
         guard external || loopback else {
             return .deny(.deniedPolicy)
         }
+        // Private ranges ride only a policy admission: a live supplement
+        // rule (agent-proposed, human-approved) or a loopback target never
+        // inherits an owner-set endpoint's `allowed_ips`.
+        let allowedIPs = policyAllows ? policy.allowedIPs(forHost: target.host) : nil
         switch shape {
         case .connect:
             // Credentialed allowlist grants (the per-server MCP sandbox
             // shape) bind external TLS tunnels to their origin. Generic
             // public-HTTPS grants and port-80 tunnels stay dial-first.
             let requireSNI = credentialed && external && tlsPort && policy.mode == .allowlist
-            return .tunnel(external: external, requireSNI: requireSNI)
+            return .tunnel(external: external, requireSNI: requireSNI, allowedIPs: allowedIPs)
         case .absoluteHTTP:
-            return .forward(external: external)
+            return .forward(external: external, allowedIPs: allowedIPs)
         }
     }
 
