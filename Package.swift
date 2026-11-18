@@ -54,8 +54,7 @@ let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService", "rv-mcp-cu
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
-// rv-run-probe: SecretRunProbeTests runs it.
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim", "rv-run-probe"]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
 let mcpTestHelperDependencies: [Target.Dependency] = []
 let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService"]
 #endif
