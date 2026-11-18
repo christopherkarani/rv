@@ -13,10 +13,12 @@ struct ContainmentTreeTeardownTests {
     @Test func tearDownDetachesAWorkspaceThatNeverClosed() throws {
         let tree = try ContainmentTree()
         let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
-        let lifeLog = tree.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")
         let supervisor = try WorkspaceSessionSupervisor.open(
             directory,
-            lifecycleLog: .file(lifeLog)
+            lifecycleLog: .file(tree.rootURL.appendingPathComponent("workspace.jsonl")),
+            runtimeLog: tree.rootURL.appendingPathComponent("runtimes.jsonl"),
+            instanceJournal: .file(tree.rootURL.appendingPathComponent("instances.jsonl")),
+            reviewConfigDirectory: nil
         ).get()
         let attached = ContainmentTree.attachedWorkspaceImages(under: tree.rootURL.path)
         let image = try #require(attached.first, "open must mount an rv image under the tree")
@@ -35,10 +37,12 @@ struct ContainmentTreeTeardownTests {
         let other = try ContainmentTree()
         defer { other.tearDown() }
         let directory = try #require(WorkingDirectory(validating: other.workspaceURL.path))
-        let lifeLog = other.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")
         let supervisor = try WorkspaceSessionSupervisor.open(
             directory,
-            lifecycleLog: .file(lifeLog)
+            lifecycleLog: .file(other.rootURL.appendingPathComponent("workspace.jsonl")),
+            runtimeLog: other.rootURL.appendingPathComponent("runtimes.jsonl"),
+            instanceJournal: .file(other.rootURL.appendingPathComponent("instances.jsonl")),
+            reviewConfigDirectory: nil
         ).get()
         defer { _ = supervisor.close() }
 
