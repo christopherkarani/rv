@@ -75,16 +75,32 @@ private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand, depth: I
     }
 }
 
-/// A shell or `eval` with the stdin stand-in in any later word: xargs pastes
-/// stdin into the script text (`xargs -I% sh -c 'echo %'` with stdin
-/// `x; rv uninstall`), so stdin may run any command. Any later word counts,
-/// not only a `-c` payload, and the shell may follow a wrapper: fail closed.
+/// A shell or `eval` with the stdin stand-in after it: xargs pastes stdin
+/// into the script text (`xargs -I% sh -c 'echo %'` with stdin
+/// `x; rv uninstall`), so stdin may run any command. Words are split at
+/// whitespace, quotes and shell operators first, since one word may carry
+/// a whole command line (`env -S 'sh -c "echo %"'`). Any later token
+/// counts, not only a `-c` payload, and the shell may follow a wrapper:
+/// fail closed.
 private func scriptTakesStdin(_ argv: [String]) -> Bool {
-    argv.indices.contains { index in
-        let name = commandName(argv[index])
-        return (shellNames.contains(name) || name == "eval")
-            && argv[(index + 1)...].contains { $0.contains(xargsStdinWord) }
-    }
+    let tokens = argv.flatMap { $0.split(whereSeparator: isScriptTokenSeparator).map(String.init) }
+    guard let lastStdin = tokens.lastIndex(where: { $0.contains(xargsStdinWord) }) else { return false }
+    return tokens[..<lastStdin].contains(where: namesScriptRunner)
+}
+
+private func isScriptTokenSeparator(_ character: Character) -> Bool {
+    character.isWhitespace || "'\";&|()<>`".contains(character)
+}
+
+private let scriptRunnerNames: Set<String> = shellNames.union(["eval"])
+
+/// A shell or `eval` token, also glued behind option letters (`-S/bin/sh`,
+/// `-vSsh` as `env` takes them): any suffix of an option token counts.
+private func namesScriptRunner(_ token: String) -> Bool {
+    if scriptRunnerNames.contains(commandName(token)) { return true }
+    guard token.hasPrefix("-") else { return false }
+    let name = commandName(token)
+    return scriptRunnerNames.contains { name.hasSuffix($0) }
 }
 
 /// Programs that may run a command their stdin or operands name.
