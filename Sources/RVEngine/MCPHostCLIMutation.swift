@@ -533,6 +533,20 @@ private let hostRunners: Set<String> = argvFeeders.union([
     "tmux", "screen",
 ])
 
+/// Tracing, sandbox and scheduling wrappers that take options of their own
+/// and then run the command they are given (`strace -f CMD`, `firejail
+/// --quiet CMD`, `systemd-run --user CMD`), and that neither `hostRunners`
+/// nor the parser's launcher stripping (`nice`, `nohup`, `timeout`, ...)
+/// already covers. Only `carriesHostMCPText` uses it: after such a
+/// wrapper's options a dynamic word may be the program it runs. Each entry
+/// makes the gate stricter; any other program's dynamic option value is
+/// no program it runs.
+let optionTailWrappers: Set<String> = [
+    "strace", "ltrace", "dtruss", "valgrind", "xvfb-run", "firejail", "bwrap", "unshare", "nsenter",
+    "sandbox-exec", "systemd-run", "faketime", "proxychains", "proxychains4", "torsocks", "numactl",
+    "fakeroot", "eatmydata",
+]
+
 /// The Python MCP SDK's and FastMCP's CLIs write Claude Desktop and other
 /// host configs: `mcp install server.py`, `fastmcp install cursor`.
 private let pythonInstallers: Set<String> = ["mcp", "fastmcp"]
@@ -555,11 +569,9 @@ private let hostGroups: [String: Set<String>] = [
     "cursor-agent": ["mcp"],
 ]
 
-/// Whether `word` may be the program of a host command a wrapper runs: a
-/// host CLI's name, or a dynamic word rv cannot read.
-func mayHeadHostCommand(_ word: String) -> Bool {
-    let folded = foldedWord(word)
-    return hostGroups[commandName(folded)] != nil || wordIsDynamic(folded)
+/// Whether `word` names a host CLI (`claude`, `/usr/local/bin/codex`).
+func namesHostCLI(_ word: String) -> Bool {
+    hostGroups[commandName(foldedWord(word))] != nil
 }
 
 /// Group words a dynamic program (`$C`) may be given.

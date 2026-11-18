@@ -331,8 +331,10 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
             printed.append(contentsOf: operands)
         }
         // After options of a program rv does not list as a runner, a host
-        // name or a dynamic word may be the program it runs (`strace -f
-        // claude $SUB add`, `strace -o log $C mcp add`): read from there.
+        // name may be the program it runs (`strace -f claude $SUB add`),
+        // and so may a dynamic word after a listed wrapper's options
+        // (`optionTailWrappers`: `strace -o log $C mcp add`, named by path
+        // too): read from there.
         // Only the command as written, not a re-split of it, which starts
         // at such a word already; and from every such word, each one an
         // option or its value after an option, so decoy hosts before the
@@ -344,8 +346,10 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
            let firstOption = args.firstIndex(where: { $0.hasPrefix("-") })
         {
             let pathOptions = reads.commandsArePlain ? pathValueOptions(of: command) : []
+            let wraps = optionTailWrappers.contains(commandName(foldedWord(command.head)))
             let starts = args.indices.filter { start in
-                start > firstOption && mayHeadHostCommand(args[start])
+                start > firstOption
+                    && (namesHostCLI(args[start]) || (wraps && wordIsDynamic(foldedWord(args[start]))))
                     && pathOptions.contains(args[start - 1]) == false
                     && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
             }
