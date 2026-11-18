@@ -26,6 +26,30 @@ struct MCPHostConfigCorpusTests {
         }
     }
 
+    /// Rows an earlier stage judges indeterminate before the guard runs
+    /// (each row's `note` says which, `reason_contains` pins the reason): so
+    /// with the guard on or off.
+    @Test func indeterminateRowsStayIndeterminateWithOrWithoutTheGuard() throws {
+        let harness = try StressHarness.dayOne()
+        let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "indeterminate" }
+        #expect(rows.isEmpty == false)
+        for row in rows {
+            guard let command = row.command else { continue }
+            guard let expected = row.reasonContains else {
+                Issue.record("\(row.id) must pin its reason in reason_contains")
+                continue
+            }
+            for guarded in [true, false] {
+                let result = door(harness, command, guarded: guarded)
+                guard case .indeterminate(let reason) = result.decision else {
+                    Issue.record("\(row.id) must be indeterminate, got \(describeDecision(result)): \(command)")
+                    continue
+                }
+                #expect(reason.rawValue == expected, "\(row.id) guarded: \(guarded)")
+            }
+        }
+    }
+
     @Test func allowRowsStayAllowedWhileTheGatewayIsInUse() throws {
         let harness = try StressHarness.dayOne()
         let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "allow" }
@@ -42,8 +66,10 @@ struct MCPHostConfigCorpusTests {
     /// In-repository writes that only the MCP guard denies: the guard owns
     /// the verdict, an owner can approve it (not pinned), and with no gateway
     /// configured the same commands allow. A name piped to `python3 x.py`
-    /// is not one of them: that unwrap is limited with or without the guard
-    /// (`mcp.deny.review3.echo-python`), so the stdin row is `perl -ne`.
+    /// is not one of them: the unwrap stage pins a deny on it
+    /// (`builtin.action:unwrap-limited`) with or without the guard, and its
+    /// corpus row (`mcp.deny.review3.echo-python`) still checks the deny; so
+    /// the stdin row is `perl -ne`.
     @Test("in-repository config writes are core.mcp and unlockable", arguments: [
         "echo '{\"mcpServers\":{}}' > .mcp.json",
         "printf '{}' | tee .cursor/mcp.json",
@@ -145,6 +171,51 @@ struct MCPHostConfigCorpusTests {
         #expect(launchedCommands("GIT_PAGER=cat git log -p") == [["git", "log", "-p"]])
     }
 
+    /// Through the product door, commands that spend the guard's text budget
+    /// ask (`MCPHostCLITextTests.guardAsksWhenItsBudgetRunsOut` and
+    /// `guardAsksPastTheDepthCap` assert the read and depth caps by counter).
+    /// The time bound only catches a hang.
+    @Test func carriedTextReadsAreBounded() throws {
+        let harness = try StressHarness.dayOne()
+        var nested = "watch xmcp end"
+        for _ in 0..<12 { nested = "watch xmcp$(" + nested + ")" }
+        let many = "echo " + (0..<600).map { "'xmcp a\($0)'" }.joined(separator: " ") + " | sh"
+        for command in [nested, many] {
+            let start = ContinuousClock.now
+            let result = door(harness, command, guarded: true)
+            #expect(result.decision != .allow, "\(command.prefix(80))")
+            #expect(ContinuousClock.now - start < .seconds(600), "\(command.prefix(80))")
+        }
+    }
+
+    /// Through the product door, a host mutation hidden by quoting the shell
+    /// tokenizer misreads (an escaped quote or blank, zsh `=(…)` or `=cmd`)
+    /// does not allow while the gateway is in use.
+    @Test("misread quoting does not hide a host mutation", arguments: [
+        "watch \"sh -c \\\"claude mcp add evil -- x\\\"\"",
+        "watch 'sh -c '\\''claude mcp add evil -- x'\\'''",
+        "watch claude\\ mcp\\ add\\ evil -- x",
+        "cat =(claude mcp add evil -- x)",
+        "=claude mcp add evil -- x",
+    ])
+    func misreadQuotingDoesNotHideAHostMutation(command: String) throws {
+        let harness = try StressHarness.dayOne()
+        let result = door(harness, command, guarded: true)
+        #expect(result.decision != .allow, "\(command): \(describeDecision(result))")
+    }
+
+    /// A long quoted argument is judged by what it names, not its size: one
+    /// past the guard's per-text cap with no host word judges as with the
+    /// guard off; the same text naming a host mutation does not allow.
+    @Test func longTextIsJudgedByWhatItNames() throws {
+        let harness = try StressHarness.dayOne()
+        let words = (0..<5_000).map { "w\($0)" }
+        let plain = "grep '" + words.joined(separator: " ") + "' notes.txt"
+        #expect(door(harness, plain, guarded: true).decision == door(harness, plain, guarded: false).decision)
+        let named = "grep '" + (words + ["claude mcp add x -- y"]).joined(separator: " ") + "' notes.txt"
+        #expect(door(harness, named, guarded: true).decision != .allow)
+    }
+
     /// With the gateway in use, commands that name no guarded file and run
     /// no host MCP CLI judge exactly as with it off: no ask pattern keys on
     /// a bare word like `mcp`, `install` or a host name used as data.
@@ -158,6 +229,20 @@ struct MCPHostConfigCorpusTests {
         "npm config set registry https://registry.example", "git config --get user.email",
         "rsync -av src/ dst/ --delete", "pnpm exec vitest run", "deno run -A main.ts",
         "npx github:owner/some-tool --help", "echo 'npm test' | sh", "cd tools/gemini-cli-docs",
+        "git tag -a v1 -m 'mcp install notes'", "grep -n 'mcp install' README.md",
+        "echo 'remember to mcp install later'", "grep mcp install notes.txt",
+        "gh pr create --title 'mcp install docs' --body 'run mcp install srv'",
+        "make --directory mcp install", "npm -w mcp install lodash", "bun --cwd mcp install",
+        "git commit -m \"fix \\\"mcp install\\\" docs\"",
+        // Brace, glob and dynamic look-alikes that name no host and no `mcp`.
+        "ls *.md", "cp {a,b}.txt dst/", "make install", "echo ${HOME}",
+        "npm install {lodash,react}", "git add src/*.swift",
+        // A dynamic word or `$IFS` with no host word and no stem.
+        "npm install $PKG", "echo $IFS", "make $TARGET install",
+        // Spellings where nothing runs them, or that cannot be a host word.
+        "grep -rn claude *", "rg codex *", "grep -rn claude * | head", "tr '[:upper:]' '[:lower:]'",
+        "claude -p \"explain function f() { ... }\"", "codex exec \"fix {x} in ../src\"",
+        "touch f{1..100}", "mkdir -p src/{a,b,c}", "ls *", "npm install np{l..m}",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()

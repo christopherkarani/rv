@@ -418,8 +418,12 @@ How it starts the command:
   launcher, before its stop, as they would in the command after it.
 - `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
   command's group, each followed by `SIGCONT` so a stopped group gets it,
-  until the leader exits; nothing is signalled once it is reaped. One rv
-  inherited ignored (`nohup`) stays ignored for the command. The
+  until the leader exits; nothing is signalled once it is reaped. A
+  signal before the resume abandons the launch, and nothing is forwarded
+  to the suspended child after it. Any signal rv resets for the command
+  (`SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGTERM`, `SIGTSTP`, `SIGTTIN`,
+  `SIGTTOU`, `SIGPIPE`, `SIGWINCH`, `SIGINFO`) that rv inherited ignored
+  (`nohup`, a parent that ignores `SIGPIPE`) stays ignored for it. The
   dispositions are process-wide and installed once however many guards
   are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
   behind rv. macOS ignores the four signals and reads them from a signal
@@ -434,13 +438,34 @@ How it starts the command:
   terminal on only while it holds the foreground and its process group
   holds nothing but rv and its own parents (read with
   `proc_listpgrppids`; on Linux from one pass over `/proc`, and a `/proc`
-  that cannot be listed counts as shared). In a pipeline (`rv run -- x | less`) the other
-  commands share rv's group, so the terminal stays with them: Ctrl-C
-  reaches the command only because rv forwards it, and Ctrl-Z stops rv but
-  not the command. rv takes the terminal back only from the command's
+  that cannot be listed counts as shared), and it did not inherit `SIGINT`
+  ignored (an asynchronous list, `rv run … &`, in a script without job
+  control: the terminal stays with the script). In a pipeline
+  (`rv run -- x | less`) the other commands share rv's group, so the
+  terminal stays with them: Ctrl-C reaches the command only because rv
+  forwards it, and Ctrl-Z stops rv but not the command. rv says so once on
+  stderr, also when the group could not be read. If the group comes to be
+  shared only after rv's check before the spawn, rv says so at the
+  command's first stop, and says nothing if the command never stops
+  (nothing is written between the spawn and the resume). rv takes the
+  terminal back only from the command's
   group, or from a group nobody is in any more: if the shell gave it to
   another job while rv was stopped, that job keeps it. Terminal modes are
-  saved when rv takes it back and re-applied when it hands it on. rv exits with
+  saved when rv takes it back and re-applied when it hands it on. rv
+  re-decides the hand-off only when it continues after stopping itself
+  for its command's stop. If rv alone is stopped (a `SIGSTOP` or
+  `SIGTSTP` sent to rv's pid), then `bg` and `fg`, the terminal stays with
+  rv's group and the command in the background, so Ctrl-Z then stops rv
+  but not the command. A command that reads the terminal stops on
+  `SIGTTIN`, rv stops with it, and the next `fg` hands the terminal over.
+  A Ctrl-C that lands just as the capability probe below finishes can be
+  dropped (press it again). One that lands outside a guard (while rv
+  resolves the secrets and stages the lease, or after the command was
+  reaped) ends rv at once with the default action; no child exists then,
+  and the placeholders and the gateway are in rv's memory only, so they
+  end with it. Without a terminal, a stopped command stays stopped until
+  something continues it; a signal rv forwards continues it.
+  rv exits with
   the command's code, or 128 plus the signal that ended it; 125 means
   `rv run` refused and the command never ran (126: could not be started,
   127: not found).
@@ -482,6 +507,336 @@ it may not read other processes, the Linux launcher missing), is refused
 with exit 125 and the command never starts. On Linux a missing
 launcher is named as such (`rv-isolation-exec is not installed beside
 rv ... reinstall rv`).
+
+## Stdio MCP servers (`rv mcp serve`)
+
+A local server in mcp.json gets the real value of every secret in its
+`secrets` map and in `${secret:NAME}` arguments, as before. It can list
+secrets under `placeholders` instead:
+
+```json
+{ "name": "llm", "command": "llm-mcp",
+  "placeholders": ["OPENAI_API_KEY"],
+  "sandbox": { "network": false } }
+```
+
+Each one is staged for that server's launch only, as `rv run` stages it:
+rv hands the server the placeholder and the base URL (the AWS endpoint and
+stand-in credentials for an `awsSigV4` secret), not the real value, and
+`rv mcp serve`'s own gateway honors the placeholder only for that server's
+process group. That is the guarantee: rv does not give the server the
+value. Whether the server can get it some other way is down to the cage,
+which is not a deny-everything one (see "What it does not" below).
+
+The field is for local (`command`) servers; a remote server with it is
+rejected. Names are listed once, and a secret a server also gets as a real
+value (`secrets` or `args`) is rejected: a server gets a secret one way.
+
+`rv mcp trust` shows each placeholder, the variables it sets and the
+upstream (`scheme://host[:port]`) its real value goes to, and signs nothing
+whose review leaves one out. Those details come from secrets.json, which
+the mcp.json signature does not cover: trust signs nothing while
+secrets.json cannot be read or does not define a listed placeholder, and
+once a server is running bound, `rv mcp serve` writes to stderr each of its
+placeholders with the variables it set and the upstream it goes to, taken
+from the definitions the server's lease loaded (not from serve's own read
+of secrets.json, and not for a server that failed to start). A later
+change to secrets.json changes what serve binds without a new review; read
+that line.
+
+An untrusted mcp.json fails the whole of `rv mcp serve`, as before: no
+server starts. Otherwise each of these refuses that server, with the
+reason on serve's stderr, and the other servers still start:
+
+- The platform is not macOS, or the server has no enforced `sandbox` with
+  `network` false (list the hosts it needs in `sandbox.hosts`).
+- A listed secret is not in secrets.json, has `environment` delivery, is
+  read from rv's own environment (a `hostEnvironment` source), has an
+  upstream that is neither https nor loopback, has an `agents` filter (an
+  MCP server carries no agent tag), or has `approve` rules. No approver can
+  answer for an MCP server, so these are refused before any value is
+  resolved rather than per request as in `rv run`.
+- A variable the lease stages is already set by the server's `env` or
+  `secrets` (checked against serve's read of secrets.json before the
+  lease, and against the lease's own read after it), or by the base
+  environment (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`; after the lease).
+- The host fails `SecretRunCapability.check` (asked once per serve), or
+  the lease cannot be staged.
+- The launch would hold a real value of one of its placeholders under any
+  name: another secret in its `secrets` map or arguments with the same
+  value, an `env` literal, or an argument. Stricter than `rv run`, since
+  here a match refuses a launch rather than dropping a variable: an
+  argument or variable equal to a real value as is or trimmed, or, for a
+  value of 8 bytes or more, containing it anywhere, as is, base64
+  (standard or URL-safe, padded or not, at any offset), hex (either case)
+  or percent-encoded. A shorter value is matched only exactly. A value
+  split across variables or arguments, base64 broken across lines, or any
+  other encoding is not recognised. Or the sandbox hook would not run it
+  under `sandbox-exec`.
+
+The refusals in the first two items, the collision check against serve's
+read, and the capability check come before anything is resolved, so such
+a server prompts for nothing and unlocks nothing. Staging the lease resolves the placeholder secrets themselves (a
+keychain prompt, a provider unlock), one after another, so a refusal from
+the lease (a later name that cannot be resolved), the collision checks
+after it, and the last two items can come after a prompt. The server's own
+`secrets` and `${secret:}` arguments are resolved only once all of those
+but the last two have passed.
+
+A `hostEnvironment` source is refused because its value sits in the
+environment rv was started with, which the MCP client that started rv
+also holds and may pass to every other server it starts.
+
+Other processes' arguments and environment, as measured on macOS 27.
+Uncaged, `sysctl` `KERN_PROCARGS2` answers a same-user caller with the
+arguments and the whole exec-time environment of any of your processes
+that is not an Apple platform binary. That includes `rv mcp serve` (whose
+environment holds the host's tokens that the server's own environment is
+stripped of), the MCP client that started it, and every other server
+serve starts, whose environment and arguments hold the real values of
+its `secrets` and `${secret:}` arguments. The cage refuses it: the
+profile denies `sysctl-read` of names starting `kern.procargs` and
+`process-info-pidinfo` of every process outside the server's own
+sandbox, and the kernel needs both. Each `sandbox-exec` is a sandbox of
+its own, so another caged server is outside it too. Neither rule alone
+refused the read, nor did `(target others)` in place of
+`(require-not (target same-sandbox))`. The live tests read, from inside
+the cage, its parent (the test process, running serve's runtime
+in-process), a process outside the cage started with a marker in its
+environment, and a second `sandbox-exec` of the same profile: each fails
+"Operation not permitted", while this process still reads the outside
+one. What the server still reads: its own arguments and environment and
+those of its children while they are alive (a child it started is in the
+same sandbox and stays readable until it exits; once it has exited its pid
+is outside every sandbox and reads "Operation not permitted" like any
+other), and every process's pid, parent pid and short command name
+(`pgrep` and `KERN_PROC_ALL` still list them). `task_name_for_pid` stays
+allowed too: it returns a task's name port, which gives no access to its
+memory, threads or arguments but may still yield `task_info` basic
+counters (sizes and times), the kind of resource counters the rusage
+deny below hides (from the Mach API; not probed here). The behaviour
+change:
+`proc_pidinfo`, and now `proc_pidfdinfo` and `proc_pid_rusage`, are
+refused for every process outside the cage, so a tool that asks about one
+by pid through those calls gets nothing — its open-file paths, socket
+endpoints and resource counters included (`lsof -p` of the parent printed
+nothing); signals still
+reach them. `proc_listpids` is not denied, so pid and command-name
+enumeration still works. `ps` already failed (it is setuid). Python, Node
+22 and git ran unchanged. Other ways to read another process
+(`task_for_pid`, the remaining `proc_info` calls, launchd's environment
+for rvd) were not tested. This refusal is of the cage's own calls; the
+cage also denies LaunchServices and Apple events (below), so a server
+cannot have either start or drive a process outside the cage to read the
+arguments for it. A `network` true server can still reach daemons outside
+the cage through their Unix sockets, and any caged server XPC services
+(see "What a `network` true server can still reach" below).
+
+How it starts the server:
+
+- The cage may dial only the gateway's loopback port (and, with
+  `sandbox.hosts`, the egress proxy's). With `sandbox.hosts`, `NO_PROXY`
+  is `127.0.0.1`: the proxy does not relay loopback.
+- `posix_spawn` starts `sandbox-exec` stopped as the leader of its own
+  process group, with only stdio inherited. `sandbox-exec` and `env` exec
+  in place, so the server keeps that pid and group. rv binds the lease to
+  the group and then sends `SIGCONT`. If the group cannot be read or the
+  resume fails, the stopped child is killed and reaped before it ran, and
+  the lease is revoked.
+- One thread per server waits for the leader to exit, kills what is left
+  of its group, reaps it and revokes the lease, in that order. When the
+  client goes away serve closes the server's stdin; once the plain
+  servers have stopped, it sends `SIGTERM` to each placeholder server's
+  group 2 seconds after that group's own shutdown began and `SIGKILL` a
+  second after the `SIGTERM`. A server that exits is not restarted, and
+  its stdout closing ends its group.
+- When a server it serves lists `placeholders`, serve catches `SIGINT`,
+  `SIGTERM` and `SIGHUP` from before it plans (the capability check holds
+  a stopped child) with a handler that does nothing, so the signal runs
+  that same shutdown instead of ending rv. A handler, unlike `SIG_IGN`, is
+  reset across `exec`, so plain servers start with the defaults; one rv
+  inherited ignored (`nohup`) stays ignored. If no server ends up bound,
+  the defaults are back before any server starts; a signal heard while
+  planning stops serve before it starts any, but only once planning has
+  finished: planning (resolving secret values, the capability check) is
+  not cut short, and a second signal during it does not end rv either.
+  A terminating signal serve does not catch (`SIGKILL`, `SIGQUIT`, `SIGUSR1` and the
+  like) still ends rv at once, planning or not. Once servers run, a
+  second signal skips the rest of the grace and kills every server still running at once. After a
+  signal serve exits 128 plus its number, as a serve the signal had ended
+  would report. `SIGKILL` to rv still ends it at once: its gateway goes
+  with it, so the placeholders are dead, but the server's group is left
+  running.
+- The staged records and every gateway record for these placeholders
+  carry `runtime` `mcp:<server>`.
+
+Who can spend them, and who outlives the server: the gateway honors a
+placeholder for the leader and its live descendants, not for the process
+group. A process reparented to launchd is no longer a descendant, so it
+cannot spend them; while it stays in the group it is killed with it when
+the leader exits. A process that left the group (`setsid`, `setpgid`, or
+`posix_spawn`'s `SETSID`/`SETPGROUP`, which this cage does not block) is
+not killed then. While the leader lives, such a process can still spend
+the placeholders as long as its parent chain leads back to the leader;
+once the leader exits the lease is revoked and nobody can.
+
+What it does not:
+
+- The cage is `(allow default)` minus file writes outside the server's
+  scratch, temporary and package-cache directories (`~/Library/Caches`,
+  `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links
+  except among those, clones of directories outside those (the kernel
+  copies a cloned directory's whole tree while Seatbelt checks only its
+  top, so cloning `~/.config` would copy `~/.config/gh`), clones,
+  renames and removals of a credential's ancestors that lie inside
+  those, reads, writes, links and clones of credential directories and
+  rv's config directory, and the network but for the gateway (and proxy)
+  port. An ancestor that is a symlink is named at the link itself as well
+  as where it resolves, since a rename or removal acts on the link, and
+  so is a link a `..` in a credential link's target steps out of (`l` in
+  `~/.ssh` → `W/l/../keys`): the cage can neither move, remove, rename
+  over nor swap one for another link (live tests). An ancestor inside
+  those that is missing cannot be created by the cage at all: not as a
+  symlink, a link or directory renamed onto it, or a hard link, which
+  would hold the credential once its owner writes it. Seatbelt checks a
+  plain `mkdir` as the same create as a directory renamed in, so the
+  cage cannot `mkdir` one either (`mkdir -p` of a missing
+  `~/Library/Application Support/Google` fails when the home is inside
+  those directories, with `sandbox.writable: ["~/"]` for example); making one that exists still fails "File exists". This has a first-run cost: with
+  the whole home writable and `~/.config` absent, the cage names
+  `~/.config` and the credential directories under it (`rv`, `gh`,
+  `gcloud`, `opencode`), so a server's own `mkdir -p ~/.config/<app>` is
+  refused — it cannot even create the intermediate `~/.config`. Creating
+  `~/.config` once outside the cage cures the intermediate, after which a
+  non-credential app's directory under it creates as usual; a protected
+  credential directory (`~/.config/rv` itself) stays refused, since the
+  cage never lets a server create its own credential directory (live
+  test). This holds
+  for the paths the profile names when the server starts; a link an
+  uncaged process retargets later is covered below. When a
+  credential's path goes through a symlink and a name on it is missing
+  (`~/.config` linked to `~/dotfiles/config` without `gcloud`), and the
+  cage could create that name (an entry on the path lies inside those
+  directories), the profile also denies every directory a link created
+  there could send it to, up to `/`: with `~/.config` linked into a
+  `sandbox.writable` directory and a credential under it missing, that
+  denies `/Users` and the home, and the server cannot use its scratch.
+  Elsewhere the cage cannot create the name by its own calls (live test:
+  a symlink, a directory, a cloned link, a rename and a hard link onto it
+  all fail), so only the credential paths are denied and such a server
+  runs as usual. "By its own calls" leans on the cage also denying
+  LaunchServices and Apple events (below), so a server cannot have either
+  start or drive a process outside the cage to make the create, or a
+  credential read, for it. Of the routes we know of, that leaves XPC
+  services, which no caged server is denied, for a `network` false server
+  (every placeholder server), which cannot connect to a Unix socket
+  either; a `network` true server can also ask a daemon outside the cage
+  through its socket (below). That rests on Seatbelt's behaviour and the
+  routes tested, not on a proof that no other route exists, and it does
+  not cover a later one: an uncaged tool of yours that afterwards uses
+  what the caged server wrote into a shared write root (the package
+  caches, the temporary directory, `sandbox.writable`). File copies and
+  file clones are not affected: `cp -c -R`, uv, Rust's `std::fs::copy`
+  and Node's `fs.cpSync` copy a tree file by file; only a raw
+  `clonefile(2)` of a directory from outside those is refused, so a tool
+  that clones whole package
+  directories out of a cache elsewhere (bun's `clonefile` backend, with
+  its cache in `~/.bun/install/cache`) gets "Operation not permitted":
+  add that cache to `sandbox.writable`. A profile over 288 KiB is refused
+  before launch rather than compiled (an everyday one is about 24 KB; a
+  letter-heavy home fills about 274 KB, and a home under the temporary
+  directory, spelled through `/var`, can pass the cap). The cap is set for
+  libsandbox's real limit, which is on filter count, not bytes: measured on
+  macOS 27 it refuses about 2700 deny rules as "profile too large", cleanly,
+  on both the compile thread and under `sandbox-exec`, and the stack it
+  recurses on grows with that count. Dense short filters reach the limit at
+  fewer bytes than long ones, so the byte cap is set for the densest shape:
+  at 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
+  4x inside the 8 MB stack `sandbox-exec` recompiles the text on in the
+  child, ~8x inside the compile thread — and compiles in about 0.7 s. A credential reached through a symlink (the credential itself or
+  a directory above it) is denied at the link and at the target it
+  resolves to when the server starts; if a process outside the cage
+  retargets that link while the server runs, the new target stays
+  readable until the server restarts. Seatbelt checks paths, not inodes:
+  a hard link that another process, running as you outside the cage,
+  made under one of those directories before or while the server runs
+  still lets the server write the file it points at. Ordinary tools make
+  such links: uv with `link-mode = "hardlink"` links a project's `.venv`
+  files to their copies in `~/.cache/uv`, and ccache with `hard_link`
+  links build outputs into its cache, so a caged server that writes its
+  cache copy changes a file in a project it cannot otherwise write. rv
+  does not scan for such links (the workspace cage does, and mounts the
+  workspace on its own volume; caches cannot be moved to one). Giving
+  each server its own cache directories instead of the shared cache roots
+  is the known way to close this; rv does not do that yet. It does not deny Mach or XPC lookups, so it
+  does not stop a server asking the keychain (`securityd`, for example
+  `security find-generic-password`), a password manager's local agent, or
+  a provider CLI that reaches one, for the real value. rv's keychain items
+  have the default access list, so a first read by another program should
+  prompt you; that prompt was not tested, and you can approve it.
+- It denies LaunchServices (`lsopen`) and Apple events
+  (`appleevent-send`), as the macOS guest profile does. LaunchServices
+  starts what it opens outside the caller's sandbox, and an Apple event
+  can ask an already-running app to run a command outside it; either would
+  undo every rule above, so a caged server that writes a tiny `.app` into
+  its scratch and runs `open` on it, or sends an `osascript` event to a
+  running app, could reach an uncaged process. The behaviour change: a
+  caged server can no longer open a browser or any app — `open`, `open -a`
+  and an `osascript` Apple event to a running app are refused (live
+  tests), and `launchctl submit` was already refused (live test), so that
+  route to a fresh launchd job is closed too. `launchctl bootstrap` was not
+  tried: a test of it would load a job into your own launchd domain. A
+  narrow, safe allowance would have to name a single helper and confirm
+  LaunchServices runs it inside the same sandbox (it does not by
+  default); this round adds no switch for it.
+- What a `network` true server can still reach. Those two denies are the
+  only launch routes the cage closes, and a `network` true server (no
+  `sandbox.hosts`) has no socket deny at all: besides the internet it can
+  connect to the Unix-domain control sockets of daemons running outside
+  the cage (by reading the profile; not probed), and each of them acts
+  outside it — a tmux or screen server (runs any command it is sent), the
+  Docker socket (starts containers, host mounts included), ssh-agent
+  (signs with your keys), gpg-agent and a password manager's agent over
+  its socket (one reached over XPC stays reachable from any cage). XPC
+  services reached by Mach lookup (the Shortcuts runner, `nsurlsessiond`
+  and the rest) are not denied for any
+  caged server (above) and were not probed. A `network` false server, and
+  so every placeholder server, is not affected by the socket route:
+  `(deny network*)` refuses AF_UNIX as well as TCP and UDP (the rule has
+  no path or socket-type filter), and the only allow on top of it is TCP
+  to the gateway's (and proxy's) loopback port. Live test, with and
+  without that loopback allow: a caged stream `connect`, datagram
+  `connect` and datagram `sendto` to sockets the test itself listens on,
+  inside the cage's own temporary write root, each fail "Operation not
+  permitted" and deliver nothing, while uncaged ones to the same
+  listeners before and after succeed. rv adds no socket
+  deny for `network` true, since a server such as a Docker MCP server
+  needs its socket. An opt-in "no local sockets" setting would add a deny
+  of outbound Unix-socket connects to a `network` true profile, with an
+  allow for each socket path the server lists in `sandbox`; it would need
+  the same live test to show the narrower deny refuses every connect the
+  way `(deny network*)` does, and it would not touch XPC.
+- It keeps nothing else from the server: other variables, the server's
+  own `secrets`, and files outside the denied directories are as for any
+  caged server.
+- Tested (macOS, live test through the real planner, sandbox hook and
+  `sandbox-exec`): the server's environment and arguments hold the
+  placeholder and not the real value; the placeholder is spent from the
+  server and refused from outside its group; its `KERN_PROCARGS2` read
+  of its parent and of a process outside the cage fails "Operation not
+  permitted" while its read of itself parses (see above);
+  the whole group ends with
+  serve. Not tested: keychain or provider access from inside the cage,
+  `task_for_pid`, and `nsurlsessiond` or other XPC services reached from
+  it.
+
+Also: `rv mcp check` and `rv mcp list` do not show placeholders, only
+`rv mcp trust` and serve's stderr do. Placeholders are macOS only; on
+Linux each such server is refused. A client that ignores the base-URL
+variable and calls the upstream directly simply fails: with `network`
+false it cannot connect, and with the upstream in `sandbox.hosts` it gets
+there through the proxy holding only the placeholder, which the upstream
+rejects.
 
 ## Binary binding
 
@@ -866,6 +1221,236 @@ shape as `allow`. A request they match needs a human's yes, every time:
 | `approvalDenied` | 403 | no | the human denied it, it expired or was cancelled, or the approval could not be consumed. The next request files a new one |
 | `approvalUnavailable` | 403 | no | no approval service for this runtime, no live agent principal, or the service declined to file it (for example, 8 approvals already open for the agent) |
 
+## Connections and slow clients
+
+The gateway serves at most 64 connections from its runtimes at once. Past
+that, a connection gets `503 gateway busy`. Each connection holds its slot
+until its answer has been written, so the gateway bounds how long a client
+may take:
+
+- **Request head:** 10 s from being accepted. Each read also waits at most
+  30 s for bytes. A client that sends its head a byte at a time is answered
+  `408` (`requestTimeout`, "the request did not arrive in time") and closed
+  at the deadline.
+- **Request body:** 60 s from the moment the head is accepted, answered
+  `408` the same way past it.
+- **Writing the answer:** a client the gateway has bytes waiting for must
+  take in at least 16 KiB over every 30 s the gateway spends writing to it,
+  or it is cut off: its answer ends without the chunked terminator, its
+  upstream request is cancelled, and its slot, threads, session and
+  upstream connection are given back. A write that blocks for 30 s with
+  nothing taken in is cut the same way. Time spent waiting for the
+  upstream does not count, so a stream with nothing to send, such as SSE
+  between events, stays open as long as its upstream does. Before, each
+  write that moved a few bytes started the 30 s timeout again, so a client
+  taking 1 KiB every 29 s held all of that for as long as it liked. The
+  windows are counted one after another, so a client is cut at most two
+  windows after it slowed down. A window is checked only when a write
+  returns, and one write can block for the whole 30 s send timeout, so a
+  window can run out to about 60 s: the slowest client kept takes in about
+  273 bytes a second.
+
+Any local process can connect, and a head deadline alone does not stop one
+that reconnects: 64 connections opened again every 10 s would keep every
+runtime's request waiting for a slot, an outage for as long as it kept
+going. So before reading a byte, and before it takes any slot, the gateway
+checks the connecting process against every registered runtime, as it does
+a placeholder's runtime after the head. At most 8 connections are checked
+at once; the next waits, unread, and those after it wait in the listen
+backlog of 128. Only a connection found inside a runtime takes one of the
+64 slots. One from none of them, or that arrives while no runtime is
+registered, takes one of 8 slots of its own, with 2 s for its head; past
+those 8 it gets `503 gateway busy` unread, and no audit record. Its head is
+still read, so a placeholder spent from outside is refused as
+`runtimeMismatch` naming its runtime. It is never forwarded: if its process
+passes the check after its head is read, it is refused as
+`runtimeUnverified`. A connection whose process cannot be placed at all
+(the kernel could not answer, or some runtime could not be read) waits
+the same way, and the full check after its head decides: placed in the
+runtime its placeholder names, it moves to one of the 64 slots and is
+forwarded; still unplaced, it is refused as `runtimeUnverified`. The check
+runs again after the head for every connection, so a socket handed to
+another process in between is refused as before.
+
+Outsiders can still keep each other out, and they can slow the runtimes
+down. The gateway no longer turns a runtime away for them: a runtime's
+connection waits behind the outsiders being checked, never holds a slot
+they hold, and is not answered `503` for them, with one exception: a
+runtime's connection whose process cannot be placed when it connects
+waits as an outsider, in one of the 8 outsider slots with their 2 s head
+deadline, and gets `503 gateway busy` while 8 outsiders hold them. A
+burst of a runtime's own connections also waits behind the checks, 8 at
+a time, before taking a slot; the cost of one check was not measured. A
+check lists the host's
+processes and walks each registered runtime's, once per runtime for an
+outsider, so a flood of outsiders delays each runtime's connection by up
+to that many checks, 8 at a time. The kernel can still turn one away:
+past the 128 waiting in the backlog, it refuses new connections, the
+runtimes' included, until there is room, and it can drop one after its
+`connect` returned, which then reads nothing. Sixteen threads connecting
+and resetting as fast as they could filled it on macOS, and a runtime
+dialled again; every connection the gateway itself took was answered.
+The same test passed on the code from before outsiders were told apart
+first too (5 of 5, once the kernel's drops were told apart from the
+gateway's answers), so a flood was not shown to turn runtimes away
+before. It cannot show either way: its 16 threads each hold at most one
+connection at a time and cannot hold the 64 slots, so it shows only that
+a runtime is answered through such a flood now. Outsiders slow to tell
+apart did turn a runtime away on that code. A connection reset while it
+waits there still holds its place until the gateway accepts and closes it. Refusals from
+outside every runtime are recorded at most once a second, with how many
+were left out since the record before: every `malformed` or
+`requestTimeout` refusal, whatever its head holds, since it is refused
+before its head is checked for a live placeholder, and an `unknownRoute`
+refusal or any refusal of a request naming a secret, a made-up one
+included, unless its head presents a live placeholder. One whose parsed
+head presents a live placeholder is always recorded, raw, percent-encoded
+or inside `Basic` credentials, the forms substitution itself finds. The last refusal left
+out is written when the gateway stops, saying how many came before it;
+with neither a later refusal nor a stop, that count is not written. A
+refusal still being made as the gateway stops is written as it comes, and
+a gateway started again bounds afresh, never writing an earlier run's
+count.
+
+A client that resets its connection before the gateway accepts it ends
+only that connection. On Darwin, one that resets it just after, before
+the gateway has set it up, is closed unanswered and unaudited: the socket
+of such a connection refuses `SO_NOSIGPIPE`, and the gateway's answer to
+it raised SIGPIPE, which ends any process that does not ignore that signal.
+On Linux every write passes `MSG_NOSIGNAL`, and such a connection is an
+outsider whose head cannot be read, refused as one.
+A local process connecting and resetting at once could end it that way.
+The gateway runs in rv-workspace-host and `rv mcp`, which ignore SIGPIPE,
+and in the `rv` process of `rv run --secret`, which does not and could be
+ended this way; it ended the test process, where it was found. rvd does
+not host the gateway. Every send on the gateway's sockets now also passes
+`MSG_NOSIGNAL` on Darwin, as on Linux.
+
+### Answers larger than the client takes in
+
+What the upstream has sent and the client has not yet taken waits in
+memory. The upstream request is never suspended: corelibs-foundation's
+`suspend` drops the transfer and `resume` sends the request, and its
+secret, again. Darwin's session went on reading a suspended request, so
+suspending bounded nothing there.
+
+Every request in flight has a URLSession and delegate queue of its own, so
+one request's wait never holds up another's.
+
+**macOS.** Darwin's session stops reading while its delegate's callback has
+not returned. The callback waits while more than 256 KiB waits for the
+client, so a slow client slows its upstream to its own pace, and an answer
+of any size reaches a client that keeps reading, sent once, within three
+limits, each a visible cut (no terminator): the session's request timeout
+fires while the callback waits, so a client that takes more than 300 s
+over 256 KiB is cut; the minimum pace above applies; and no transfer
+lasts more than 3600 s (`timeoutIntervalForResource`). Each request holds
+about one of Darwin's bodies (up to 4 MiB) and 256 KiB at most. A session that served its request to the end is kept, up to 64,
+so requests one after another share one upstream connection and TLS
+handshake; requests at the same time each have their own (16 at once used
+15 connections).
+
+**Linux.** corelibs-foundation goes on reading while a callback waits, and
+queues what arrives without bound, so nothing waits and two limits apply:
+
+- at most 64 MiB for one answer;
+- at most 256 MiB for all answers together, counting only what each holds
+  beyond its first 1 MiB; at most 320 MiB with 64 connections.
+
+When an answer would pass the first limit it fails. When the second is
+full, the request holding the most fails, even if its upstream has already
+finished. A failed request's upstream request is cancelled, and its client's
+answer ends cut short, without the chunked terminator. **On Linux an answer
+over 64 MiB from an upstream faster than the gateway forwards it is
+therefore cut off, with no terminator.** On loopback the gateway forwarded
+144–373 MB/s to a client reading as fast as it could: a 64 MiB answer from
+an unthrottled upstream arrived whole with 43 MiB waiting, and a 256 MiB
+one was cut off after 32 MiB. From an upstream sending 125 MB/s a client
+could stop reading for 0.2 s and get a 128 MiB answer whole; one that
+stopped for 1 s was cut off. Each Linux request also has its session to
+itself and is invalidated after: libcurl sent a request again on a reused
+connection that dropped before an answer, and a request with a body went
+again without it and then waited 300 s for it. So every Linux request opens
+its own connection and TLS handshake.
+
+The terminator is written only after every byte before it, so a client never
+reads a cut-off answer as a complete one. A client may take several minutes
+over a long answer, which streaming answers such as SSE depend on; on
+macOS the 3600 s limit above is the only overall one.
+
+### Requests sent again
+
+Counted at a loopback upstream that closes the connection without
+answering, on a fresh connection and on one an earlier request left open:
+on Linux every method, with or without a body, is sent once. On macOS a
+POST, PUT, PATCH, DELETE or OPTIONS is sent once, and a GET or HEAD up to
+three times, its credential with it each time: Darwin's URLSession retries
+those on a dropped connection whatever the request says (`Connection:
+close` included), and has no setting to stop it.
+
+An upstream that answers `401` with a challenge: Darwin's URLSession
+answered a `Basic` or `Digest` challenge by sending the request again, for
+every method, body and brokered credential included; a `Bearer` challenge
+or a bare `401` was sent once, and Linux sent each once. The gateway's
+sessions now cancel every credential challenge (Basic, Digest, NTLM,
+Negotiate, a proxy's `407` and any other), which also keeps default
+handling from offering the upstream an ambient credential such as a
+Kerberos ticket, and they keep no credential storage. The server's
+certificate is still checked as URLSession always checks it. A server's
+request for a client certificate is declined (`rejectProtectionSpace`),
+so no keychain identity is offered: against a loopback server that only
+asks for one, the request completed as it did with default handling;
+against one that requires one, both fail the handshake. Measured:
+after the cancel, Darwin delivers no response and ends the request
+cancelled; corelibs-foundation delivers the `401` first. Either way the
+`401` that carried the challenge reaches the response writer, which, as
+for any `401`, answers its client `502` ("the brokered credential was
+rejected upstream") and records the upstream's `401`. When Darwin gives a
+cancelled challenge no failure response, the gateway hands the writer a
+`401` of its own making: the client still gets the `502`, and the audit
+records an upstream `401` the upstream may not have sent. Counted at the
+upstream, each of GET, POST with a body and PUT, against Basic, Digest,
+Bearer and bare `401`s, now arrives once on both systems.
+
+The title of commit a4d6069a, "nothing is sent twice", was wrong: a macOS
+GET or HEAD is sent up to three times on a dropped connection, and before
+this change a request challenged with Basic or Digest was sent twice.
+History is not rewritten.
+
+### Measurements
+
+Measured on loopback with rv's transport, response writer and scrubber
+built `-O` into a test binary, against a local upstream sending as fast as
+it can unless a rate is given (macOS 27 with Swift 6.4, and Linux in a
+container with Swift 6.4.2). Clients count the chunked body as they read
+it. "Waiting" is the most the transport held for clients at once; resident
+memory is the whole process's, sampled every 0.5 s. A stalled client reads
+nothing for 5 s (20 s for the 256 MiB answers), then reads everything.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| one 64 MiB answer, client reading at once | whole, 387 MB/s, 4.2 MiB waiting, 31 MiB resident | whole, 373 MB/s, 43 MiB waiting, 75 MiB resident |
+| one 256 MiB answer, client reading at once | whole, 471 MB/s, 4.1 MiB waiting | cut off after 32 MiB |
+| 128 MiB at 125 MB/s, client stops 0.05 s / 0.2 s / 1 s | whole / whole / whole | whole / whole / cut off |
+| 128 MiB unthrottled, client stops 0.05 s / 0.2 s / 1 s | whole / whole / whole | cut off / cut off / cut off |
+| 128 MiB at 250 MB/s, client reading at once | whole | whole, 4.8 MiB waiting |
+| 128 MiB at 12.5 MB/s, client stops 1 s | whole | whole |
+| one 64 MiB answer stalled | whole; 23 MiB resident while stalled | whole; 62 MiB waiting, 94 MiB resident |
+| 16 such answers stalled | all whole; 58 MiB waiting, 102 MiB resident while stalled, 240 MiB peak once all read at once; 55 threads | 4 whole, 12 cut off; 265 MiB waiting, 310 MiB resident; 40 threads |
+| 64 such answers stalled | all whole; 194 MiB waiting, 373 MiB resident while stalled, 821 MiB peak once all read at once; 199 threads | 4 whole, 60 cut off; 300 MiB waiting, 559 MiB resident; 137 threads |
+| 16 / 64 answers of 256 MiB stalled 20 s | all whole; 103 / 374 MiB resident, unchanged over the 20 s; 240 / 762 MiB peak once all read | not measured |
+| a 64 MiB answer beside 16 stalled ones | whole, 438 MB/s (446 MB/s alone) | whole, 11 MB/s (154–307 MB/s alone) |
+| 16 requests one after another / at once | 1 / 15 upstream connections | 16 / 16 |
+
+Before this change both systems cut a client off once 8 MiB waited for it,
+and the docs said a client that keeps up gets an answer however large. In
+these runs that cut off even a client reading as fast as it could: an
+unthrottled 64 MiB answer reached it cut short after 0.9 MiB on macOS and
+2.5 MiB on Linux. Of the rate rows above, only the 125 MB/s answer with a
+0.05 s stop arrived whole on both, with 250 MB/s on macOS and 12.5 MB/s on
+Linux. 16 stalled 64 MiB answers held 100 MiB resident on macOS and 79 MiB
+on Linux, all cut off.
+
 ## Audit
 
 Every gateway request writes `secret.use` events to `audit.jsonl`. None of
@@ -881,7 +1466,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable` | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable`, `requestTimeout` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
   | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
   | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |

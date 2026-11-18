@@ -55,6 +55,60 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
     }
 
+    /// Every row after the timeout sweep, terminal rows included: one
+    /// consistent snapshot read under the store lock. Review displays
+    /// derive from it so what is shown and what is bound agree.
+    public func records(now: Date) async throws(PendingApprovalError) -> [PendingApproval] {
+        try persistSweep(now: now)
+    }
+
+    /// `resolve`, but only while `stillHolds` is true for the swept
+    /// ledger. The check runs inside the same file lock as the write, so
+    /// no other resolve can land between check and write. Returns nil and
+    /// writes nothing when the check fails.
+    ///
+    /// The ledger's own refusals come first, so `stillHolds` judges only a
+    /// readable ledger in which the row still awaits: an unreadable file
+    /// throws `encodeFailed` (never an empty ledger), and an unknown,
+    /// resolved, expired or timed-out row throws its usual error.
+    public func resolve(
+        id: ApprovalID,
+        decision: ApprovalDecision,
+        fingerprint: ActionFingerprint,
+        identity: ApprovalIdentity,
+        now: Date,
+        onlyIf stillHolds: @Sendable ([PendingApproval]) -> Bool
+    ) async throws(PendingApprovalError) -> PendingApproval? {
+        let outcome: (PendingApproval, [PendingApprovalEvent])?
+        do {
+            outcome = try withFileLock {
+                let loaded = try store.loadChecked().filter { $0.schemaVersion == 1 }.map(\.approval)
+                let (record, next) = try PendingApprovalLedger.resolve(
+                    records: loaded,
+                    id: id,
+                    decision: decision,
+                    fingerprint: fingerprint,
+                    identity: identity,
+                    now: now
+                )
+                guard stillHolds(PendingApprovalLedger.sweep(loaded, now: now)) else { return nil }
+                try writeRecords(next)
+                return (record, timeoutEvents(before: loaded, after: next) + [.resolved(record)])
+            }
+        } catch let error as PendingApprovalError {
+            throw error
+        } catch {
+            throw PendingApprovalError.lockFailed
+        }
+        guard let outcome else { return nil }
+        publish(outcome.1)
+        return outcome.0
+    }
+
+    /// Record a human decision exactly once. Unbound: network (egress)
+    /// approvals must use `resolve(…, onlyIf:)` with their review token
+    /// (`EgressReview`), so an approval cannot apply against grant state
+    /// the owner never saw.
     public func resolve(
         id: ApprovalID,
         decision: ApprovalDecision,

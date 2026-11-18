@@ -80,6 +80,8 @@ Two loopback residuals are measured Seatbelt limits, locked in by `SeatbeltLoopb
 
     The GET is HTTPS only. RV canonicalizes the URL before policy, resolves a DNS name once, and dials one pinned address. A public address is a built-in allow. Loopback, private, link-local, unique-local, 6to4, Teredo, and other non-public answers are a built-in deny, including when a public-looking name resolves to one. Redirects are not followed. The request carries no cookies and no ambient credentials. The response body stops at 65536 bytes. The request budget is 10 seconds, of which the connect waits at most 5. Name lookup shares that budget and stops when the contained process has exited, so a stuck resolver cannot keep the process group alive. This is not MCP, a secret broker, or a general network capability.
 
+11. Before `sandbox-exec`, `rv-pty-claim` lowers the leader's limits (and those of every admitted one-shot): `RLIMIT_CORE` 0, `RLIMIT_NOFILE` (default 65536) and `RLIMIT_FSIZE` (default 64 GiB; a write past it gets `SIGXFSZ`, or `EFBIG` when that signal is ignored). A limit is only ever lowered (hard = min(cap, inherited hard), soft = min(inherited soft, new hard)); one the kernel refuses stops the helper before exec, so the runtime does not start. `RLIMIT_NPROC` is left out: on Darwin it counts every process the uid owns, not the cage. `RLIMIT_AS`/`RLIMIT_DATA` are not enforced by Darwin and are left out too. `limits.cpuSeconds` is also set as `RLIMIT_CPU`, but XNU only delivers `SIGXCPU` for it and never kills, so a payload that ignores the signal keeps running; the cap is therefore enforced by the watchdog below, which SIGKILLs any tracked process whose user+system CPU time passes it. The cap is per process, not for the tree, and is checked every 100 ms, so a process can run about that much past it; a fork starts its own count at zero, so a payload that keeps forking resets the cap. A deadline (`rv workspace run --timeout`, or `limits.timeoutSeconds`, which also caps the flag) is measured on the continuous clock, so time asleep counts. The host ends the runtime through the cancel path and records `runtime.ended` with reason `timeout`; the terminal's exit notice carries the deadline it applied, and `rv workspace run` then exits 124 and prints `rv: runtime stopped after its N-second timeout`. Exit 124 together with that line is rv's deadline; a runtime that itself exits 124 (for example `timeout 5 cmd` inside the cage) passes through as a bare 124, and any other SIGKILL, the CPU-cap kill included, keeps its status. A leader that has already exited when the deadline is checked keeps its own status and is not a timeout. When a deadline or a CPU cap is set, the helper arms a watchdog outside the group and outside the sandbox (the profile only lets the cage signal its own sandbox); a leader that cannot arm it does not start. The watchdog tracks the runtime's tree: the leader's process group plus every descendant it has seen, including ones that moved to their own group or session (`POSIX_SPAWN_SETPGROUP`/`POSIX_SPAWN_SETSID`, job-control jobs), each pinned by its start time so a reused pid is never signalled. A terminal runtime's watchdog also sweeps the leader's session. An admitted one-shot is spawned by the host, not by the leader, so its own helper arms a watchdog on the runtime's leader (`--owner-pid`) and ends the one-shot's tree when that leader exits; an owner already gone refuses the one-shot. Five seconds after the deadline, as soon as the leader exits, or when it can no longer track the tree (more than 4096 processes), it stops every tracked process and the group, then kills them, so the deadline holds when `rvd` or the workspace host is gone. Residuals, all with the host gone: a process that forks and calls `setsid` can escape when its parent exits before the next 100 ms poll, because the orphan is reparented to launchd with nothing linking it to the runtime; such a process escapes the deadline, the CPU cap and the group kill alike. (A plain double fork stays in the leader's group and is killed with it.) A tracked process that execs a setuid binary is dropped, because `proc_pidinfo` then fails with EPERM and the watchdog cannot pin or signal it. The kill of the group on leader exit names the group id, which the kernel could reuse only once every member had exited. The owner is named by pid alone, so a one-shot armed after its runtime's leader exited and its pid was reused would wait on the wrong process. The workspace host reads `runtime-resources.json` once, when it starts, like the profiles; restart the workspace host to apply a changed limit. Micro-VM runtimes and caged MCP servers do not get these limits or the policy deadline; an explicit `--timeout` with `--microvm`/`--macvm` is refused.
+
 Knowing a `RuntimeSessionID` or a `WorkspaceSessionID` is not authentication. Another local process that does not hold the pipe and the capability cannot submit the action. Runtime A's pipe cannot act as runtime B. The workspace does not have a shared capability. Admission events include the parent workspace id. HTTP stays bound to the runtime that presented its own capability; there is no workspace-wide HTTP token. A capability copied after the session is finished is rejected.
 
 Two threats are outside this boundary. The contained agent is the untrusted caller. A same-user or root process that can kill RV, force-unmount the workspace volume, or debug RV has the same authority as the person running RV. This phase does not add anti-tamper protection against that second case. If RV itself is SIGKILLed, pipe cleanup does not run.
@@ -411,6 +413,18 @@ the seatbelt profile is untouched.
 - Exact-row bind: the applier re-parses the rule strictly from the loaded
   row and requires it to equal the intake key, so a file swap after
   approval fails closed (pinned by `driftedRowFailsClosed`).
+- Review bind (`EgressReview`): an approval binds a review token, a hash
+  of the proposal as shown plus the workspace's live grant set (its
+  network-proposal rows whose resolution authorizes a rule; the static
+  policy is compiled in and cannot move inside one process). `rv egress
+  approve <id>` binds the state read right before the owner prompt; the
+  `rv tui` pane binds the token of the row it showed. The resolve
+  re-checks the token inside the pending store's file lock, so a grant
+  landing between display and apply refuses the approval ("egress
+  grants changed since you reviewed this"). A missing token is refused,
+  and so is an unreadable pending store (never read as empty). The
+  token is not a credential: owner authentication still decides who
+  approves. Denials are not bound (denying stale state is safe).
 - Supplement admissions always dial the filtered external path, and
   supplement rules are DNS-only by construction (IP literals and
   single-label names are unrepresentable), so a live rule cannot open
@@ -982,8 +996,8 @@ the 3 pre-existing environmental failures.
 The seam wires the F1 rollback paths through the F3 gate and reconciles
 the two revision-log designs that grew in parallel:
 
-- **Rollback gate.** All three store rollbacks (`rollbackMachine(to:)`,
-  `rollbackMachine(toRevision:)`, `rollbackRepo`) compare the
+- **Rollback gate.** All store rollbacks (`rollbackMachine(to:expected:)`,
+  its internal `rollbackMachine(toRevision:expected:interlock:)`, `rollbackRepo(to:workspace:expected:)`) compare the
   restored document against both baselines — the live policy file
   enforcement loads and the sealed/JSONL history head — and throw
   `blockedByFindings` before writing anything when the restore is
@@ -1403,7 +1417,7 @@ Production (`PolicyWorkspace`) called only the unverified
 list/rollback (BYPASS-1) and a deleted `.jsonl` silently
 re-minted r1 over sealed history (BYPASS-2); the sealed HMAC
 chain had zero production readers. Fix (machine scope):
-`listMachineRevisions` and `rollbackMachine(to:)` read a
+`listMachineRevisions` and `rollbackMachine(to:expected:)` read a
 single locked snapshot and cross-check every `.jsonl` entry
 against the sealed chain as generation sequences (sealed
 same-hash runs compress away first — identical re-saves seal

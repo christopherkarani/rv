@@ -63,6 +63,30 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         guard let data = try? Data(contentsOf: fileURL) else {
             return []
         }
+        return Self.decodeLines(data)
+    }
+
+    /// `load`, but a file that exists and cannot be read throws `ioFailed`
+    /// instead of reading as an empty store. A missing file is still `[]`.
+    /// For callers that must not mistake an unreadable store for one with
+    /// no rows. Hold `withLock` so the file cannot appear mid-check.
+    public func loadChecked() throws(FileLockedJSONLStoreError) -> [Record] {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            var info = stat()
+            let missing = fileURL.withUnsafeFileSystemRepresentation { path -> Bool in
+                guard let path else { return false }
+                return lstat(path, &info) != 0 && errno == ENOENT
+            }
+            if missing { return [] }
+            throw .ioFailed
+        }
+        return Self.decodeLines(data)
+    }
+
+    private static func decodeLines(_ data: Data) -> [Record] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         // Split the raw Data on LF bytes (stdlib: identical on Darwin and

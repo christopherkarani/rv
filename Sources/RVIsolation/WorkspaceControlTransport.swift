@@ -290,9 +290,12 @@ enum WorkspaceControlSocket {
                 return false
             }
             if state.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return false }
+            // send, not write: a peer can close between the poll and this
+            // call, and SO_NOSIGPIPE is refused on a socket accepted after
+            // its peer was gone, so the flag is what keeps SIGPIPE out.
             let count = bytes.withUnsafeBytes { buffer -> Int in
                 guard let base = buffer.baseAddress else { return -1 }
-                return Darwin.write(fd, base.advanced(by: offset), bytes.count - offset)
+                return Darwin.send(fd, base.advanced(by: offset), bytes.count - offset, Int32(MSG_NOSIGNAL))
             }
             if count > 0 {
                 offset += count

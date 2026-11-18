@@ -30,6 +30,9 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// An upstream MCP tool listed with a definition the user did not
     /// trust (changed, new, or unverifiable pins); its calls ask.
     public static let mcpToolChanged = AuditEventKind(rawValue: "mcp.tool.changed")
+    /// `rv mcp serve` started while host configs run MCP servers around
+    /// the gateway or hold unreviewed ones; counts only.
+    public static let mcpHostsUngoverned = AuditEventKind(rawValue: "mcp.hosts.ungoverned")
     /// A new machine or repo policy revision (`ConfigChangeAudit.policy`).
     public static let policyChanged = AuditEventKind(rawValue: "policy.changed")
     /// The organization bundle: a new serial accepted, or a bundle that

@@ -12,26 +12,51 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
     public var transport: MCPRemoteTransport
     /// From `rv mcp connect`; only for servers without an Authorization header.
     public var oauth: MCPOAuthTokens?
+    /// How long a request may go without a byte of its reply before the
+    /// HTTP layer gives up on it; see `answerTimeout(callTimeoutSeconds:startTimeoutSeconds:)`.
+    public var answerTimeout: TimeInterval
 
     public init(
         server: String, url: URL, headers: [String: String] = [:], transport: MCPRemoteTransport = .http,
-        oauth: MCPOAuthTokens? = nil
+        oauth: MCPOAuthTokens? = nil,
+        answerTimeout: TimeInterval = MCPRemoteLaunch.answerTimeout(
+            callTimeoutSeconds: MCPServerDefinition.defaultCallTimeoutSeconds,
+            startTimeoutSeconds: MCPServerDefinition.defaultStartTimeoutSeconds)
     ) {
         self.server = server
         self.url = url
         self.headers = headers
         self.transport = transport
         self.oauth = oauth
+        self.answerTimeout = answerTimeout
+    }
+
+    /// Past every limit the gateway core sets for this server (a call's
+    /// total limit, `initialize`, a `tools/list` page) by a minute, so the
+    /// core's deadline is the one that fires: it records the call as timed
+    /// out, tells the client why and asks the server to cancel.
+    public static func answerTimeout(callTimeoutSeconds: Int, startTimeoutSeconds: Int) -> TimeInterval {
+        let core = max(
+            TimeInterval(callTimeoutSeconds) * MCPGatewayCore.callTimeoutCeilingFactor,
+            TimeInterval(startTimeoutSeconds), MCPGatewayDeadlines.standardList)
+        return core + 60
     }
 }
 
 public enum MCPUpstreamConnection: Sendable, Equatable {
     case process(MCPUpstreamLaunch)
+    /// Started suspended in its own process group, its lease bound to that
+    /// group, then resumed; it holds placeholders, not those secrets' values.
+    case placeholderBound(MCPUpstreamLaunch, MCPPlaceholderBinding)
+    /// Not started; the reason is logged and the server reported exited.
+    case refused(server: String, MCPPlaceholderRefusal)
     case remote(MCPRemoteLaunch)
 
     public var server: String {
         switch self {
         case .process(let launch): launch.server
+        case .placeholderBound(let launch, _): launch.server
+        case .refused(let server, _): server
         case .remote(let launch): launch.server
         }
     }
@@ -64,7 +89,25 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// from the server go to `deliver`; a request that gets no answer (network
 /// error, HTTP error, closed stream) is answered with a JSON-RPC error, so the
 /// gateway core needs no transport knowledge. Redirects are never followed.
-final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+///
+/// On Linux each POST has a session of its own, invalidated once the POST is
+/// over, so none goes out on a reused connection: libcurl sends a request
+/// again, on a new connection, when a reused connection drops before an
+/// answer, and without its body, so a `tools/call` would reach the server a
+/// second time (or hang until `answerTimeout`). The event stream and the
+/// session DELETE keep the shared session. On Darwin every request shares
+/// it, connections and all. Exchanges are keyed by their task object, which
+/// no other session could share; task identifiers are numbered per session.
+///
+/// What the server sends goes to `deliver`, and its going away to `exited`,
+/// in the order it came, from a thread of their own: `deliver` may wait for
+/// the gateway, and the delegate queue never waits with it, so a POST is
+/// let go of and its bytes stop counting however far behind the gateway
+/// is. The server is never slowed down (a waiting delegate queue does not
+/// stop corelibs from reading, and no task is suspended): once more than
+/// `deliveryLimit` bytes of what it sent wait for `deliver`, nothing more
+/// is delivered and `overflowed` is told, once.
+package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
             case post(JSONValue, retried: Bool)
@@ -78,39 +121,138 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         var events = MCPEventStream()
         var answered = false
         var token: String?
+        var task: URLSessionDataTask?
+        /// rv cancelled the request and closed this POST itself.
+        var closed = false
+        /// A notification's (or reply's) POST that rv let go at its bound
+        /// (`notificationLifetime`, `notificationAfterHead`): not a failure;
+        /// what its status already said (a 401, a 404) is still acted on.
+        var bounded = false
+        /// Numbers this exchange, so a bound's timer finds only its own.
+        var serial = 0
+        /// rv cut the reply off itself, past this limit (what it names: an
+        /// event, or a reply body, larger than so many bytes).
+        var oversized: String?
+        /// Told once, when this POST's body has all gone out or the POST
+        /// is over, whichever is first (a 401 retry takes it over if it is
+        /// not told yet, or counts its body again through `recharge`).
+        var completed: (@Sendable () -> Void)?
+        /// The size of this POST's body.
+        var bodyBytes = 0
+        /// How much of it has gone out, summed from each report, so no
+        /// running total the HTTP layer may or may not keep is relied on.
+        var sentBytes: Int64 = 0
+        /// This POST's own session, on Linux; invalidated when it is over.
+        var ownSession: URLSession?
     }
+
+    #if canImport(Darwin)
+    static let sessionPerPost = false
+    #else
+    static let sessionPerPost = true
+    #endif
 
     let launch: MCPRemoteLaunch
     private let authorizer: MCPRemoteAuthorizer?
     private let deliver: @Sendable (JSONValue) -> Void
     private let exited: @Sendable () -> Void
     private let log: @Sendable (String) -> Void
+    private let overflowed: @Sendable () -> Void
+    private let recharge: @Sendable (Int) -> (@Sendable () -> Void)?
+    private let whileReceiving: @Sendable (JSONValue) -> Void
+    /// What waits for `deliver`, by the bytes it came in.
+    private let deliveries: MCPOutbox
     private let lock = NSLock()
     private var session: URLSession?
-    private var exchanges: [Int: Exchange] = [:]
+    private let delegateQueue = MCPHTTPExchange.delegateQueue("rv.mcp.remote")
+    private var exchanges: [ObjectIdentifier: Exchange] = [:]
+    /// POST sessions made and not yet invalidated (a test seam).
+    private var liveSessions = 0
     private var sessionID: String?
     private var protocolVersion: String?
     private var initializeID: JSONValue?
     private var endpoint: URL?
-    private var held: [JSONValue] = []
+    private var held: [(message: JSONValue, completed: (@Sendable () -> Void)?)] = []
     private var stopped = false
+    /// Requests rv cancelled lately, so one between a 401 and its retry is
+    /// not sent again. The most recent `cancelledMemory`.
+    private var cancelledIDs: [JSONValue] = []
+    static let cancelledMemory = 256
 
-    init(
+    /// The most requests (POSTs of any kind) one remote server has in
+    /// flight; each remote has its own. On Linux each is a session and a
+    /// connection of its own, so this bounds what one remote holds of rv's
+    /// descriptors whatever it does (several remotes add up). 160: the 64
+    /// calls the gateway lets a remote have
+    /// (`MCPGatewayCore.maximumRemoteCallsInFlight`), a cancel for each, and
+    /// 32 for listings, pings and notifications. `send` checks it; a 401
+    /// retry or the legacy SSE endpoint's flush posts from the delegate
+    /// queue meanwhile, so the count can pass it by those for a moment.
+    package static let maximumRequestsInFlight = 160
+    /// How long a notification's (or reply's) POST may stay open after it
+    /// is sent, however the server answers: a list page's time.
+    package static let notificationLifetime = MCPGatewayDeadlines.standardList
+    /// How long it may stay open once its response head is in.
+    package static let notificationAfterHead: TimeInterval = 5
+    private let requestLimit: Int
+    private let lifetime: TimeInterval
+    private let afterHead: TimeInterval
+    private let bounds = DispatchQueue(label: "rv.mcp.remote.bounds")
+    private var nextSerial = 0
+
+    package init(
         launch: MCPRemoteLaunch,
         authorizer: MCPRemoteAuthorizer? = nil,
         deliver: @escaping @Sendable (JSONValue) -> Void,
         exited: @escaping @Sendable () -> Void,
-        log: @escaping @Sendable (String) -> Void
+        log: @escaping @Sendable (String) -> Void,
+        deliveryLimit: Int = MCPGatewayRuntime.writeBufferBytes,
+        overflowed: @escaping @Sendable () -> Void = {},
+        recharge: @escaping @Sendable (Int) -> (@Sendable () -> Void)? = { _ in nil },
+        whileReceiving: @escaping @Sendable (JSONValue) -> Void = { _ in },
+        requestLimit: Int = MCPRemoteUpstream.maximumRequestsInFlight,
+        notificationLifetime: TimeInterval = MCPRemoteUpstream.notificationLifetime,
+        notificationAfterHead: TimeInterval = MCPRemoteUpstream.notificationAfterHead
     ) {
+        self.requestLimit = requestLimit
+        lifetime = notificationLifetime
+        afterHead = notificationAfterHead
         self.launch = launch
         self.authorizer = authorizer
         self.deliver = deliver
         self.exited = exited
         self.log = log
+        self.overflowed = overflowed
+        self.recharge = recharge
+        self.whileReceiving = whileReceiving
+        self.deliveries = MCPOutbox(limit: deliveryLimit)
         super.init()
     }
 
+    deinit {
+        deliveries.close()
+    }
+
     private var name: String { launch.server }
+
+    /// Queued for the delivery thread, after everything the server sent
+    /// before. Past the limit nothing more is taken.
+    private func hand(cost: Int, _ work: @escaping @Sendable () -> Void) {
+        guard deliveries.submit(cost: cost, work) == .overflow else { return }
+        deliveries.abandon()
+        overflowed()
+    }
+
+    private func hand(_ message: JSONValue, cost: Int) {
+        let deliver = deliver
+        hand(cost: cost) { deliver(message) }
+    }
+
+    /// `exited`, after what the server sent before it went away.
+    private func exit() {
+        let exited = exited
+        hand(cost: 0) { exited() }
+    }
 
     private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
@@ -118,55 +260,133 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         return body()
     }
 
-    func start() {
+    package func start() {
+        let session = makeSession()
+        locked { self.session = session }
+        guard launch.transport == .sse else { return }
+        openStream(session: session, retried: false)
+    }
+
+    /// Every session of this upstream calls back on one serial queue.
+    private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = MCPHTTPExchange.requestTimeout
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
-        locked { self.session = session }
-        guard launch.transport == .sse else { return }
-        openStream(session: session, retried: false)
+        configuration.timeoutIntervalForRequest = launch.answerTimeout
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
     }
+
+    /// Test seam: POST sessions made and not yet invalidated.
+    var postSessionsLive: Int { locked { liveSessions } }
 
     private func openStream(session: URLSession, retried: Bool) {
         let (sent, token) = headers()
         var request = MCPHTTPExchange.request(
             url: launch.url, method: "GET", headers: sent, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
-        // Create under the lock stop() holds while invalidating: a task
-        // created on an invalidated session raises instead of failing.
+        // Create under the lock, after checking `stopped`: stop() sets it
+        // under this lock before it invalidates the session, so a task made
+        // here comes first. One made on an invalidated session raises
+        // instead of failing.
         let task: URLSessionDataTask? = locked {
             guard stopped == false, self.session === session else { return nil }
             let task = session.dataTask(with: request)
-            exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token)
+            exchanges[ObjectIdentifier(task)] = Exchange(kind: .stream(retried: retried), token: token, task: task)
             return task
         }
         task?.resume()
     }
 
-    func send(_ message: JSONValue) {
-        let target: URL? = locked {
-            if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
-            guard launch.transport == .sse else { return launch.url }
-            guard let endpoint else {
-                held.append(message)
-                return nil
-            }
-            return endpoint
-        }
-        if let target { post(message, to: target, retried: false) }
+    /// Requests posted (or waiting for a legacy SSE server's endpoint) and
+    /// not yet over.
+    package var requestsInFlight: Int {
+        locked { postsInFlight }
     }
 
-    func stop() {
-        let (session, closing): (URLSession?, String?) = locked {
-            stopped = true
-            return (self.session, launch.transport == .http ? sessionID : nil)
+    private var postsInFlight: Int {
+        held.count + exchanges.values.filter { if case .post = $0.kind { true } else { false } }.count
+    }
+
+    /// Sends `message`; `completed` is told once its body has all gone out,
+    /// or its POST is over (answered, failed, or closed) before that, so
+    /// what waits in the HTTP layer for the server to take it can be bounded.
+    /// False when `requestLimit` requests are already in flight: then
+    /// nothing is posted (`completed` is told at once, and a line logged),
+    /// though a cancel still closes the request it names. Only the remote's
+    /// one sender calls this; a 401 retry or the SSE endpoint's flush can
+    /// post meanwhile from the delegate queue, so the count can pass the
+    /// limit by those for a moment.
+    @discardableResult
+    package func send(_ message: JSONValue, completed: (@Sendable () -> Void)? = nil) -> Bool {
+        let target: Result<URL?, Never>? = locked {
+            // rv's own ping goes out whatever else is in flight, so a full
+            // remote can still be judged; the core has one at a time.
+            let ping = MCPHTTPExchange.isRequest(message) && message["method"]?.stringValue == "ping"
+            guard ping || postsInFlight < requestLimit else { return nil }
+            if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
+            guard launch.transport == .sse else { return .success(launch.url) }
+            guard let endpoint else {
+                held.append((message, completed))
+                return .success(nil)
+            }
+            return .success(endpoint)
         }
+        guard case .success(let url) = target else {
+            let method = message["method"]?.stringValue ?? "a reply"
+            log("MCP server \(name) has \(requestLimit) requests in flight; not sending \(MCPDisplayedText.field(method))")
+            completed?()
+            closeCancelled(message)
+            return false
+        }
+        if let url { post(message, to: url, retried: false, completed: completed) }
+        closeCancelled(message)
+        return true
+    }
+
+    /// A request rv cancelled gets no more of its reply, so its POST, if it
+    /// is still open, is closed: a quiet one would otherwise hold a
+    /// connection until `answerTimeout`.
+    private func closeCancelled(_ message: JSONValue) {
+        guard message["method"]?.stringValue == "notifications/cancelled", let target = message["params"]?["requestId"] else {
+            return
+        }
+        let tasks: [URLSessionDataTask] = locked {
+            cancelledIDs.append(target)
+            if cancelledIDs.count > Self.cancelledMemory { cancelledIDs.removeFirst() }
+            var tasks: [URLSessionDataTask] = []
+            for (id, exchange) in exchanges {
+                guard case .post(let request, _) = exchange.kind, Self.closes(request, cancelling: target),
+                    let task = exchange.task
+                else { continue }
+                exchanges[id]?.closed = true
+                tasks.append(task)
+            }
+            return tasks
+        }
+        tasks.forEach { $0.cancel() }
+    }
+
+    /// Whether a cancel of `target` closes the POST that carried `request`.
+    static func closes(_ request: JSONValue, cancelling target: JSONValue) -> Bool {
+        MCPHTTPExchange.isRequest(request) && request["id"] == target
+    }
+
+    package func stop() {
+        let (session, closing, posts): (URLSession?, String?, [URLSession]) = locked {
+            stopped = true
+            // Taken out, so the completions that follow do not invalidate them again.
+            var posts: [URLSession] = []
+            for key in Array(exchanges.keys) {
+                if let own = exchanges[key]?.ownSession { posts.append(own) }
+                exchanges[key]?.ownSession = nil
+            }
+            return (self.session, launch.transport == .http ? sessionID : nil, posts)
+        }
+        // What still waits for the gateway is for nobody now.
+        deliveries.abandon()
+        posts.forEach { $0.invalidateAndCancel() }
         guard let session else { return }
         if let closing {
             let request = MCPHTTPExchange.request(
@@ -188,30 +408,82 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         return (headers, token)
     }
 
-    private func post(_ message: JSONValue, to url: URL, retried: Bool) {
-        let (session, sessionID, version): (URLSession?, String?, String?) = locked {
-            (stopped ? nil : self.session, launch.transport == .http ? self.sessionID : nil, protocolVersion)
-        }
-        guard let session else { return }
+    /// Also called from the delegate queue (a 401 retry, the SSE endpoint
+    /// flush), so it can race `stop()`: the task is created under the lock,
+    /// as `openStream` does. A retry of a request rv cancelled is not sent
+    /// (its cancel was): checked under that same lock, which
+    /// `closeCancelled` takes too, so a cancel either comes first and is
+    /// seen here, or finds the retry's exchange and closes it.
+    private func post(_ message: JSONValue, to url: URL, retried: Bool, completed: (@Sendable () -> Void)?) {
         let (sent, token) = headers()
-        let request = MCPHTTPExchange.request(
-            url: url, method: "POST", headers: sent, sessionID: sessionID, protocolVersion: version,
-            body: Data(message.compactText.utf8))
-        let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token) }
+        let body = Data(message.compactText.utf8)
+        var serial = 0
+        let task: URLSessionDataTask? = locked {
+            guard stopped == false, let shared = self.session else { return nil }
+            if retried, MCPHTTPExchange.isRequest(message), cancelledIDs.contains(message["id"] ?? .null) { return nil }
+            var request = MCPHTTPExchange.request(
+                url: url, method: "POST", headers: sent, sessionID: launch.transport == .http ? sessionID : nil,
+                protocolVersion: protocolVersion, body: body)
+            request.timeoutInterval = launch.answerTimeout
+            // An upload task: corelibs reports a body's progress only for one.
+            request.httpBody = nil
+            let own = Self.sessionPerPost ? makeSession() : nil
+            if own != nil { liveSessions += 1 }
+            let task = (own ?? shared).uploadTask(with: request, from: body)
+            nextSerial += 1
+            serial = nextSerial
+            exchanges[ObjectIdentifier(task)] = Exchange(
+                kind: .post(message, retried: retried), token: token, task: task, serial: serial, completed: completed,
+                bodyBytes: body.count, ownSession: own)
+            return task
+        }
+        guard let task else {
+            completed?()
+            return
+        }
+        // A notification (or a reply) is owed no answer: its POST is let go
+        // at most `lifetime` after it is sent, bytes arriving or not.
+        if MCPHTTPExchange.isRequest(message) == false {
+            bound(ObjectIdentifier(task), serial: serial, after: lifetime)
+        }
         task.resume()
     }
 
     // MARK: URLSessionDataDelegate (serial delegate queue)
 
-    func urlSession(
+    package func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        locked {
+            if session !== self.session { liveSessions -= 1 }
+        }
+    }
+
+    package func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
     }
 
-    func urlSession(
+    /// A POST whose body has all gone out no longer counts against the
+    /// bound, answered or not.
+    package func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        let id = ObjectIdentifier(task)
+        let taken: (@Sendable () -> Void)? = locked {
+            guard var exchange = exchanges[id] else { return nil }
+            exchange.sentBytes += max(0, bytesSent)
+            let done = exchange.sentBytes >= Int64(exchange.bodyBytes)
+            let completed = done ? exchange.completed : nil
+            if done { exchange.completed = nil }
+            exchanges[id] = exchange
+            return completed
+        }
+        taken?()
+    }
+
+    package func urlSession(
         _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
@@ -220,33 +492,72 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             return
         }
         let contentType = MCPHTTPExchange.header(http, "Content-Type")?.lowercased() ?? ""
-        locked {
-            exchanges[dataTask.taskIdentifier]?.status = http.statusCode
-            exchanges[dataTask.taskIdentifier]?.isEventStream = contentType.hasPrefix("text/event-stream")
+        let id = ObjectIdentifier(dataTask)
+        let notification: Int? = locked {
+            exchanges[id]?.status = http.statusCode
+            exchanges[id]?.isEventStream = contentType.hasPrefix("text/event-stream")
             if launch.transport == .http, (200..<300).contains(http.statusCode),
                 let assigned = MCPHTTPExchange.header(http, "Mcp-Session-Id"), MCPHTTPExchange.isSessionID(assigned)
             {
                 sessionID = assigned
             }
+            guard let exchange = exchanges[id], case .post(let message, _) = exchange.kind,
+                MCPHTTPExchange.isRequest(message) == false
+            else { return nil }
+            return exchange.serial
         }
         completionHandler(.allow)
+        // Its head is in: the rest of a notification's response may take
+        // `afterHead` at most, whatever its status. A normal one ends first.
+        if let serial = notification { bound(id, serial: serial, after: afterHead) }
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let id = dataTask.taskIdentifier
-        guard var exchange = locked({ exchanges[id] }) else { return }
-        var incoming: [JSONValue] = []
+    /// Lets go of a notification's POST `seconds` from now, on a timer of
+    /// its own, if it is still open then.
+    private func bound(_ id: ObjectIdentifier, serial: Int, after seconds: TimeInterval) {
+        bounds.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.closeBounded(id, serial: serial) }
+    }
+
+    /// Its place is freed once, by its completion; nothing is stopped.
+    private func closeBounded(_ id: ObjectIdentifier, serial: Int) {
+        let closing: (task: URLSessionDataTask, method: String)? = locked {
+            guard let exchange = exchanges[id], exchange.serial == serial, exchange.bounded == false,
+                let task = exchange.task, case .post(let message, _) = exchange.kind
+            else { return nil }
+            exchanges[id]?.bounded = true
+            return (task, message["method"]?.stringValue ?? "a reply")
+        }
+        guard let closing else { return }
+        log("MCP server \(name) kept rv's \(MCPDisplayedText.field(closing.method)) open past its bound; closed it")
+        closing.task.cancel()
+    }
+
+    package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let id = ObjectIdentifier(dataTask)
+        // A reply rv cut off for its size: what still comes of it is dropped
+        // (corelibs goes on delivering what it already read after a cancel).
+        // Taken out with its buffers left behind empty, so what is appended
+        // here copies nothing; put back below, keeping a close made meanwhile.
+        guard var exchange = locked({ () -> Exchange? in
+            guard let taken = exchanges[id], taken.oversized == nil else { return nil }
+            exchanges[id]?.body = Data()
+            exchanges[id]?.events = MCPEventStream()
+            return taken
+        }) else { return }
+        if case .post(let message, _) = exchange.kind { whileReceiving(message) }
+        var incoming: [(message: JSONValue, cost: Int)] = []
         var endpointEvent: String?
         if exchange.isEventStream, (200..<300).contains(exchange.status) {
             for event in exchange.events.feed(data) {
                 if event.name == "endpoint" {
                     endpointEvent = event.data
                 } else if event.name == "message", let message = try? JSONValue.parse(Data(event.data.utf8)) {
-                    incoming.append(message)
+                    incoming.append((message, event.data.utf8.count))
                 }
             }
             if exchange.events.overflowed {
                 log("MCP server \(name) sent an event larger than \(MCPEventStream.maximumEventBytes) bytes; closing the stream")
+                exchange.oversized = "an event larger than \(MCPEventStream.maximumEventBytes) bytes"
                 dataTask.cancel()
             }
         } else if exchange.body.count + data.count <= MCPHTTPExchange.maximumBodyBytes {
@@ -254,17 +565,33 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         } else {
             log("MCP server \(name) sent a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes; dropped")
             exchange.body = Data()
+            exchange.oversized = "a reply larger than \(MCPHTTPExchange.maximumBodyBytes) bytes"
             dataTask.cancel()
         }
-        for message in incoming { note(message, answering: &exchange) }
-        locked { exchanges[id] = exchange }
+        for item in incoming { note(item.message, answering: &exchange) }
+        locked {
+            // Gone meanwhile (stopped): not put back.
+            guard let current = exchanges[id] else { return }
+            exchange.closed = exchange.closed || current.closed
+            exchange.bounded = exchange.bounded || current.bounded
+            // `stop()` takes the session out to invalidate it itself.
+            exchange.ownSession = current.ownSession
+            exchanges[id] = exchange
+        }
         if let endpointEvent { useEndpoint(endpointEvent, stream: dataTask) }
-        incoming.forEach(deliver)
+        for item in incoming { hand(item.message, cost: item.cost) }
+        // Answered: what a server sends on a request's stream after its
+        // answer is not waited for, so a stream held open holds nothing.
+        if case .post = exchange.kind, exchange.isEventStream, exchange.answered { dataTask.cancel() }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let id = task.taskIdentifier
-        guard let exchange = locked({ exchanges.removeValue(forKey: id) }), locked({ stopped }) == false else {
+    package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let id = ObjectIdentifier(task)
+        guard let exchange = locked({ exchanges.removeValue(forKey: id) }) else { return }
+        // Its connection goes with it; a retry gets a session of its own.
+        exchange.ownSession?.finishTasksAndInvalidate()
+        guard locked({ stopped }) == false else {
+            exchange.completed?()
             return
         }
         switch exchange.kind {
@@ -281,31 +608,68 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
                 ? (error.map { "event stream failed: \($0.localizedDescription)" } ?? "event stream closed")
                 : "event stream refused (HTTP \(exchange.status))"
             log("MCP server \(name) \(reason)")
-            exited()
+            exit()
         case .post(let message, let retried):
-            completePost(message, exchange: exchange, error: error, retried: retried)
+            // A retry takes the completion over; otherwise this POST is over.
+            if completePost(message, exchange: exchange, error: error, retried: retried) == false {
+                exchange.completed?()
+            }
         }
     }
 
-    private func completePost(_ message: JSONValue, exchange: Exchange, error: Error?, retried: Bool) {
+    /// True when a 401 retry took the completion over.
+    private func completePost(_ message: JSONValue, exchange: Exchange, error: Error?, retried: Bool) -> Bool {
         var exchange = exchange
         func fail(_ text: String) {
             if let reply = MCPHTTPExchange.failure(for: message, text) {
-                deliver(reply)
+                hand(reply, cost: text.utf8.count)
             } else {
                 log(text)
             }
         }
-        if let error, exchange.answered == false {
-            fail("could not reach MCP server \(name): \(error.localizedDescription)")
-            return
+        // The server answered, too large to pass on: this request ends with
+        // that error, and the session is left as it is. Whether the cancel
+        // rv made ends the task with an error or (on corelibs, which had
+        // already read the whole reply) without one.
+        if let oversized = exchange.oversized, exchange.answered == false, exchange.closed == false {
+            fail("MCP server \(name) sent \(oversized), which rv does not pass on")
+            return false
+        }
+        // A notification let go at its bound did not fail: what its status
+        // said (a 401, a 404) is acted on below, once.
+        if let error, exchange.answered == false, exchange.bounded == false {
+            // Neither is the server's answer. rv closed this one after
+            // cancelling it; the HTTP layer gives up only after the core's
+            // own deadline has ended the request, and a failure delivered
+            // for it would be recorded as the tool having run.
+            if exchange.closed { return false }
+            if MCPHTTPExchange.isRequest(message), (error as? URLError)?.code == .timedOut {
+                log("MCP server \(name) sent nothing on a request for \(Int(launch.answerTimeout)) s; "
+                    + "rv stopped waiting at the HTTP level")
+                return false
+            }
+            // Whether the server took the request is unknown, so it is not
+            // its answer: the connection to it is gone, and so is it (a call
+            // on it may have run).
+            log("could not reach MCP server \(name): \(error.localizedDescription)")
+            if MCPHTTPExchange.isRequest(message) { exit() }
+            return false
         }
         let status = exchange.status
         if status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token) {
-            if let target = locked({ launch.transport == .sse ? endpoint : launch.url }) {
-                post(message, to: target, retried: true)
-            }
-            return
+            // `post` sends nothing for a request cancelled meanwhile.
+            guard let target = locked({ launch.transport == .sse ? endpoint : launch.url }) else { return false }
+            // Its body goes out again, and counts again as the first did.
+            post(message, to: target, retried: true, completed: exchange.completed ?? recharge(exchange.bodyBytes))
+            return true
+        }
+        // The server ended the session: it is gone for rv, which starts a
+        // new one (an answer still owed on it may have run).
+        if status == 404, launch.transport == .http, locked({ sessionID }) != nil {
+            locked { sessionID = nil }
+            log("MCP server \(name) ended the session (HTTP 404)")
+            exit()
+            return false
         }
         var incoming: [JSONValue] = []
         if exchange.isEventStream == false, exchange.body.isEmpty == false {
@@ -313,8 +677,10 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         }
         incoming = incoming.filter { $0["jsonrpc"]?.stringValue == "2.0" }
         for item in incoming { note(item, answering: &exchange) }
-        incoming.forEach(deliver)
-        guard exchange.answered == false, MCPHTTPExchange.isRequest(message) else { return }
+        // A batch is counted at its share of the body.
+        let cost = exchange.body.count / max(incoming.count, 1)
+        for item in incoming { hand(item, cost: cost) }
+        guard exchange.answered == false, MCPHTTPExchange.isRequest(message) else { return false }
         switch status {
         case 200..<300:
             if launch.transport == .http {
@@ -323,12 +689,10 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         case 401, 403:
             let hint = authorizer == nil ? "check its headers in mcp.json" : "run `rv mcp connect \(name)`"
             fail("MCP server \(name) refused the credentials (HTTP \(status)); \(hint)")
-        case 404 where locked({ sessionID }) != nil:
-            locked { sessionID = nil }
-            fail("MCP server \(name) ended the session (HTTP 404); restart the MCP client")
         default:
             fail("MCP server \(name) returned HTTP \(status)")
         }
+        return false
     }
 
     /// Marks the exchange answered and learns the negotiated protocol version.
@@ -358,13 +722,13 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: launch.url)?.absoluteURL else {
             return
         }
-        let flushed: [JSONValue] = locked {
+        let flushed: [(message: JSONValue, completed: (@Sendable () -> Void)?)] = locked {
             guard endpoint == nil else { return [] }
             endpoint = url
             defer { held = [] }
             return held
         }
-        for message in flushed { post(message, to: url, retried: false) }
+        for item in flushed { post(item.message, to: url, retried: false, completed: item.completed) }
     }
 
     /// Nil when `text` may receive the bearer token. The refusal is a phrase

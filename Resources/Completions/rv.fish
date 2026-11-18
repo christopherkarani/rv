@@ -54,6 +54,7 @@ complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subco
 complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "validate" -d "Validate"
 complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "export" -d "Export"
 complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "apply" -d "Apply"
+complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "rollback" -d "Restore an earlier revision"
 complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "check" -d "Check against the ceiling"
 complete -c rv -n "__fish_seen_subcommand_from policy; and not __fish_seen_subcommand_from ceiling" -a "ceiling" -d "Show or set the ceiling"
 complete -c rv -n "__fish_seen_subcommand_from policy; and __fish_seen_subcommand_from ceiling" -a "show" -d "Print ceiling.toml"

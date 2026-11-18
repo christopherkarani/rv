@@ -32,6 +32,13 @@ $ rv test 'git status'
 {"decision":"allow","schema":"rv.test.v1"}
 ```
 
+**User guides:** [install and first run](docs/guides/install.md) ·
+[secrets placeholders](docs/guides/secrets-placeholders.md) ·
+[MCP gateway](docs/guides/mcp-gateway.md) ·
+[audit log](docs/guides/audit-log.md) ·
+[troubleshooting](docs/guides/troubleshooting.md) ·
+[known limits](docs/guides/known-limits.md)
+
 ## Install (30 seconds)
 
 ```sh
@@ -216,8 +223,13 @@ rv is one binary, 25 commands. The rest of the surface:
   placeholders are bound to its process tree, and the loopback gateway
   swaps the real value in only for requests from that tree. It is not a
   sandbox.
-  Hook-guarded agents get secret-path blocking instead; stdio MCP servers
-  receive the real value. `rv secrets scan` + a git pre-commit hook
+  Hook-guarded agents get secret-path blocking instead. Stdio MCP servers
+  receive the real value of each secret in their `secrets` map; one that
+  lists a secret under `"placeholders"` in mcp.json is handed a
+  placeholder and base URL instead (macOS, sandboxed servers only),
+  spendable only by that server and its live descendants; its cage does
+  not stop it asking your keychain or a provider for the value itself.
+  `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
 - **App logins, once** — `rv login connect vercel` imports the Vercel or
   GitHub login you already have (CLI auth file, token variable, or
@@ -233,12 +245,79 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
+  A server that does not answer `initialize` within its
+  `"startTimeoutSeconds"` in mcp.json (1 to 600, default 60), or answers it
+  with an error, is stopped and fails for the session; until every server
+  has settled, every `tools/list` and `tools/call` waits, so one slow
+  server's start limit holds back every tool. When a server leaves a
+  `tools/list` page unanswered for 30 s (not configurable), the listing
+  ends with the pages it already returned; a `tools/call` unanswered for the server's
+  `"callTimeoutSeconds"` in mcp.json (1 to 86400, default 300; each
+  progress notification for the call restarts it) fails with an error
+  and is never sent again: rv asks the server to cancel and stops
+  waiting; it cannot make the server stop. Progress cannot
+  keep a call open past 10 times its `"callTimeoutSeconds"` in all
+  (50 minutes by default); a tool that legitimately runs longer needs a
+  larger `"callTimeoutSeconds"`. These limits run on a clock that stops
+  while the machine sleeps and ignores changes to the time of day.
+  Stopping a local server sends SIGTERM, then SIGKILL 2 s later if it is
+  still running. Each local server runs as the leader of its own process
+  group and both go to the whole group, while its leader is not yet
+  reaped, so what it started in a session of its own (`setsid`), or
+  outside rv (the container of a `docker run` server), is not stopped by
+  them. A terminal's Ctrl-C or a host's process-group kill reaches
+  serve, not the servers: every `rv mcp serve` catches SIGINT, SIGTERM
+  and SIGHUP and stops its servers itself (a second signal kills them at
+  once). A server starts with every signal at its default, even one rv
+  inherited ignored; it cannot `setsid()` itself (its children can); and
+  a launcher that starts the real server and exits counts as the server
+  exiting. On Linux a server inherits only descriptors 0, 1 and 2.
+  A server that was ready and then goes away (it exits, ends its
+  session, loses its connection, stops reading its input, or does not
+  answer rv's `ping` within 10 s after a call timed out, which a server
+  that handles one request at a time cannot do while busy with a slow
+  call, so whatever it was running is cut off) is started again after 1,
+  2, 4, 8, then 16 s, at most 5 times in any 10 minutes, then stays
+  failed. The 10 minutes slide: a server that goes away every two minutes
+  or so is restarted for as long as serve runs, its secrets resolved
+  again each time. One that was never ready is not restarted. A restart
+  must start and answer `initialize` within its `"startTimeoutSeconds"`
+  (counted once rv has reaped its last process), or it counts toward
+  that cap. It is started from the mcp.json serve verified at start and
+  listed again before any call reaches it: a changed tool asks, an
+  approval for the old definition does not carry over, and only tools
+  that server lists again can be called (others are refused and
+  audited). The client is told its tools changed. A call in flight is
+  never sent again: it fails saying it may have run, and a call made
+  while the server is coming back is refused at once; a prompt accepted
+  then, or one the client cancels, is audited as declined. An answer a
+  server wrote just before it exited that rv has not read 1 s later is
+  dropped, and its call counts as may have run. On Linux each POST to a
+  remote server goes on a connection of its own, since libcurl would
+  send a request again when a kept-alive connection drops before its
+  answer. A remote server is never slowed down: once more than 128 MiB
+  of what it sent waits for the gateway, rv stops it (and restarts it as
+  above). Each remote server has at most 64 calls, and about 160
+  requests of any kind, in flight (a retry or a legacy stream's first
+  messages can pass it briefly); past that a request is not sent (a call
+  ends not run, and an approved call's approval is used up), though rv's
+  own ping always goes out. A signal
+  while serve plans its servers (a secret provider's
+  unlock prompt, say) ends serve at once. A client that takes nothing rv
+  writes for 30 s ends `rv mcp serve` with exit status 1 (on a blocking
+  pipe a client must take at least 1 MiB per 30 s, about 35 KiB/s).
+  Each `rv mcp serve` process also warns once at start, on stderr and in
+  the audit log, when host configs bypass the gateway, run a server
+  mcp.json blocks, or hold unreviewed servers (a host set up by
+  `rv mcp setup` runs one serve per server).
   Tool definitions are pinned only by `rv mcp trust`, which shows every
   field it pins: a tool that is new or changed since you trusted it
   always asks and reaches the agent as its name, rv's marker saying it
-  is not trusted, an empty object schema and four boolean hints, nothing
-  else.
-  Tools named other than 1-64 of `A-Z a-z 0-9 _ . -` are hidden. Start
+  is not trusted and an empty object schema, nothing else.
+  A tool whose name is longer than 64 bytes or uses any character
+  outside `A-Z a-z 0-9 _ . -` (a `/` or `:`, say) is hidden and cannot be
+  called, pinned or not; `rv mcp serve` names one such tool per server
+  on stderr. Start
   your MCP host once so `rv mcp serve` queues the tools, run
   `rv mcp trust`, then restart the host (a running serve keeps the pins
   it started with). Tool result text is forwarded byte for byte;
@@ -267,12 +346,134 @@ rv is one binary, 25 commands. The rest of the surface:
   (`~/.claude.json`, `.mcp.json`, Cursor, Codex, Gemini, Claude Code
   plugins, ...) and host CLIs that add servers (`claude mcp add`, `npx
   @anthropic-ai/claude-code mcp add`, `mcp install`, `@smithery/cli`) ask
-  or deny as `core.mcp:mcp-host-config`. *Known limits:* a nested agent
+  or deny as `core.mcp:mcp-host-config`. Where a word may run (the
+  program, any word after a runner, or an operand of a program not known
+  to leave its operands alone), a brace or glob spelling of a host
+  program, its group word or `mcp install` is resolved by every word it
+  can produce, as bash expands comma groups and `{x..y}` ranges, into
+  several words where bash splits them, a blank inside an alternative
+  included (`claude m{c,}p add`, `clau?e mcp add`, `chronic m[c]p
+  install`, `chronic mc{o..p} install`, `{claude,mcp} add`, `claude
+  {mcp,add,srv,"x y"}`, `mcp {,} install`). The filesystem is not
+  consulted, so a wildcard or class is assumed satisfiable; a POSIX class
+  matches any one character, and a bracket range is judged as any range
+  its case-folded text may have been (`cl[M-c]ude` and `cl[!A-Z]ude` may
+  be `claude`). A word with a blank outside every brace is only itself,
+  and a word past the spelling budget (over 256 characters, unless it
+  holds no brace and its shortest match is longer than any host word,
+  such as a presigned URL; over 64 brace words; or 1,000,000 matching
+  steps per command) may be any words. `ls`, `cp`, `mv`, `rm`, `mkdir`,
+  `touch`, `cat` and `git add|status|diff|rm`, run by their plain names
+  (no path, no git option first; behind `sudo`, `env`, `nice`,
+  `timeout`, `command`, `exec`, `nohup`, `time`, `doas` or `busybox`
+  too, but not `stdbuf`, `xargs` or `watch`), never run an operand, so
+  only their operands' literal words and carried text count (`ls mcp *`,
+  `cp -r packages/mcp "$DEST"`, `touch {a..z}{0..9}` allow; `ls mcp
+  install` and `stdbuf -o0 ls mcp $DIR` ask), unless the line, or the
+  carried text being read, may define or redefine a command (a function,
+  alias or hash entry; `PATH`, zsh's `path`, `FPATH`/`fpath`,
+  `module_path`, `BASH_ENV`, `ENV` or `ZDOTDIR` named as written anywhere
+  but where it is only read, such as `$PATH`, `${PATH%%:*}`, `${PATH:-…}`,
+  `find -path` or `~/path/x`, once line continuations, a `$` opening a
+  quote, and quotes are removed (`export $'PATH'=…` and zsh's
+  `${PATH::=…}` count); a name built from escapes or expansions is not
+  recognised, so instead any operand of an assigning builtin, or
+  `printf -v` name, whose name before `=` or `[` holds `$` or a backtick
+  counts (`export P$'\x41'TH=…`, `export ${N}TH=…`; `export FOO=$BAR`
+  does not); `env -P` or `-S`, or `--split-string` or an abbreviation such
+  as `--split`; a function flag such as `typeset -fu`; `source`/`.`, `eval`,
+  `trap`, `autoload` or a dynamic program: `ls() { "$@"; }; ls mcp $X`,
+  `: "${PATH:=./bin}"; ls mcp $X` and `echo 'alias ls=eval; ls mcp $X' |
+  sh` ask, as does a printer's text read beside output rv cannot read,
+  `{ cat ./defs.sh; echo 'ls mcp $X'; } | sh`). A segment rv's splitter cannot scan
+  (a head still `{` or `(` that does not peel, such as `{claude,zzqx} mcp
+  add`) asks when its line may name a host CLI; so do odd heads that only
+  look like a group, such as `{claude}mcp` or `{claude,codex}-helper
+  --version`.
+  Carried text is read when it holds a host stem (also one broken only by
+  `[…]` extras a package spec drops, `install-m[x]cp`) or such a word
+  (`watch 'chronic m?p install srv'`). The text is split at blanks and
+  `;|&()<>`; where a brace or class span holds one of those, each run of
+  pieces the span joins is spelled as one more word (`watch "'cl[;a]ude'
+  'm[;c]p' add s -- x"`). Text where two such runs cross (share a piece
+  without one holding the other, `'{c?aude,x y}{,a b}'`), whose joined
+  words pass four times its length, or whose brace word expands past 64
+  words counts as naming a host. The 64-word rule has one exception: an
+  integer range in a word with no glob character is judged as one word,
+  since only its digits differ (`touch f{1..100}`). These are guesses at the shell's words once
+  quotes are gone, and classes are closed on the text as written, before
+  braces expand. Where nothing runs the word (a `grep` or
+  `rg` operand, a commit message) and in text such a command carries,
+  only literal words count (`grep -rn claude * | head` allows). A
+  variable or substitution rv cannot read (`$c`, `"$SUB"`, `${x}`,
+  `$(…)`, and ANSI-C `$'…'`, which rv cannot tell from a variable there),
+  used as the program at any position after a runner it does not strip
+  and followed anywhere by a group word (`stdbuf -o0 $c mcp add`, and so
+  `node "$ENTRY" mcp list`; also a `find` start path or option value and
+  an `xargs` or `watch` option value, since rv cannot tell `"$N"` from an
+  unquoted `$N` that splits into a program: `find . -maxdepth "$DEPTH"
+  -name config` and `xargs -P "$N" grep -l config` ask), or in a
+  completing position of a `claude`, `codex`, `gemini`, `opencode` or
+  `cursor-agent` mutation, counts as that word; so does one in the
+  subcommand position after a literal `mcp` or `fastmcp` where it may run
+  (`chronic mcp "$SUB" srv`, `chronic mcp $(…) srv`). `$IFS` or
+  `${IFS}`, in any quoting, on a line that runs something and may name a
+  host CLI asks as text rv's tokenizer cannot follow (`claude${IFS}mcp
+  add`, `sh -c 'claude${IFS}mcp add'`). *Known limits:* a nested agent
   started with servers rv does not govern (`claude --mcp-config …`,
   `claude --plugin-dir …`, `codex -c mcp_servers…`), and a program that
-  writes a config without its name on the command line (a script, a
-  shell fed an expansion, or a git hook — which `git commit -m` still
-  runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
+  writes a config without its name on the command line (a script or a
+  scheduled job written to disk earlier, by the shell or the file tool;
+  a shell fed an expansion; text decoded or rendered by a program such
+  as `base64 -d`, `rev`, `tr` or a `printf` format (`'cla%sude …' u`);
+  output joined across commands other than `echo`/`printf`/`print`, such
+  as two `cat <<<…`; a tarball, directory or URL whose name the agent
+  chooses; Claude Code's native build reached through the working
+  directory, a variable or a renamed copy (`cd …/claude/versions &&
+  ./2.0.14 …`, `$D/versions/…`); or a git hook — which `git commit -m`
+  still runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
+  Also not caught: a value rv cannot read standing for the `mcp` host
+  word of the `mcp install` installer, in any position and after any
+  runner (`chronic $M install srv`, `stdbuf $M install srv`; asking there
+  would fire on every `$PM install`); a glob the filesystem expands into
+  several words that supply both a host and its group (`* add x` in a
+  directory holding only `claude` and `mcp`); a brace, glob or dynamic
+  spelling of a stem inside opaque text never re-parsed as a shell command line
+  (`python3 -c "os.system('claude m{c,}p add')"`); a config file name
+  written through a brace or glob spelling (`echo {} > .{mcp,x}.json`);
+  in carried text, a class only a brace alternative closes
+  (`watch "'cl[{],x};a]ude' 'm[{],x};c]p' add s -- x"`); and a lookup
+  variable reached through a nameref whose target is an expansion
+  (`N=PA; declare -n R=${N}TH; R=./bin; ls mcp $X`).
+  Text that names a host mutation asks even as data (`git commit -m 'run
+  claude mcp add x'`, `grep 'claude mcp add' docs/`, `grep claude "$f"`),
+  as do dynamic programs given `config` (`"$GIT" config user.name`) and
+  carried text that may name a host CLI or installer and runs past the
+  guard's read budget. `mcp install` asks wherever a program may run it,
+  whatever the server (`op run -- mcp install srv`, `mcp -- install srv`,
+  `watch '…'`, `ssh host '…'`, `echo '…' | sh`), so the two words as any
+  other program's operands ask too (`ls mcp install`). It is left alone
+  as the value of a tool's own directory, workspace or filter option
+  (`make -C|--directory`, `npm -C|--prefix|-w|--workspace`, `pnpm
+  -C|--dir|--filter`, `bun --cwd|-F|--filter`: `make -C mcp install`;
+  `pnpm -w mcp install` and `yarn --cwd mcp install` ask) and as text on a
+  line that runs nothing: one `grep`, `rg` (no `--pre` or
+  `--hostname-bin`), `echo`, `printf`, `git commit|tag` or `gh pr|issue
+  create|comment|edit`, written with no
+  backslash in its program or subcommand, and no pipe, list, redirect,
+  substitution or parenthesis anywhere (`git commit -m 'add mcp install
+  docs'`; after `cd x &&` it asks). Text that may name a host CLI and
+  that rv's shell tokenizer cannot follow asks on any other line: a
+  backslash before a quote or blank (`watch "sh -c \"claude mcp add
+  x\""`, `'\''`, `claude\ mcp`), `\'` inside `$'…'`, and zsh `=(…)`; so
+  does such text with a glob that may be a host word, which any bare `*`
+  or `dir/*` word may be. This also asks for some harmless commands, such
+  as `cat ~/Library/Application\ Support/Claude/…`, any such line with a
+  bare wildcard (`ls ~/Library/Application\ Support/*`, `grep -rn
+  "\"version\"" * | head`), `jq ".a[\"x\"]" config.json` or a commit
+  message with `\"` after `cd x &&`; and for a brace word over 256
+  characters where it may run, such as a long JSON body given to `curl
+  -d`. zsh `=claude` counts as `claude`.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review

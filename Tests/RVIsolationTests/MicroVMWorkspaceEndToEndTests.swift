@@ -278,7 +278,7 @@ final class E2ETranscript: Sendable {
             switch notice {
             case .replay(_, let bytes), .output(_, let bytes):
                 state.bytes.append(bytes)
-            case .exited(let status):
+            case .exited(let status, _):
                 state.exit = status
             default:
                 break

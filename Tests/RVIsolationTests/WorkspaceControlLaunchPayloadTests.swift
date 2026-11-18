@@ -88,6 +88,59 @@ struct LaunchParityWireTests {
             #expect(WorkspaceControlCodec.encodeRequest(decoded) == body)
         }
     }
+
+    @Test func launchTimeoutRoundTripsAndOutOfRangeIsRefused() throws {
+        let request = WorkspaceControlRequestFrame(
+            id: LaunchParityFixtures.id,
+            payload: .launchRuntime(.init(executable: "/bin/sh", timeoutSeconds: 90))
+        )
+        let body = try #require(WorkspaceControlCodec.encodeRequest(request))
+        #expect(String(decoding: body, as: UTF8.self).contains("\"timeout\":90"))
+        #expect(WorkspaceControlCodec.decodeRequest(body) == .frame(request))
+        let range = RuntimeProcessLimits.timeoutSecondsRange
+        for seconds in [0, range.upperBound + 1] {
+            let raw = "{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\",\"timeout\":\(seconds)}"
+            #expect(WorkspaceControlCodec.decodeRequest(Data(raw.utf8)) == .invalid, "timeout \(seconds)")
+        }
+    }
+
+    @Test func runtimeExitedCarriesTheHostsTimeoutAndNothingElseDoes() throws {
+        let runtime = LaunchParityFixtures.runtime
+        let frame = WorkspaceControlResponseFrame(
+            ok: true,
+            payload: .runtimeExited(.init(runtime: runtime, running: false, exitStatus: 9, timedOutAfter: 30))
+        )
+        let body = try #require(WorkspaceControlCodec.encodeResponse(frame))
+        #expect(String(decoding: body, as: UTF8.self).contains("\"timedOutAfter\":30"))
+        #expect(WorkspaceControlCodec.decodeResponse(body) == .frame(frame))
+        let id = runtime.uuidString
+        for raw in [
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":0}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":604801}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":-1}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":1.5}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":\"30\"}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":18446744073709551615}",
+            "{\"v\":1,\"ok\":true,\"op\":\"terminalOutput\",\"runtime\":\"\(id)\",\"timedOutAfter\":30}",
+            "{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\",\"timedOutAfter\":30}",
+        ] {
+            #expect(WorkspaceControlCodec.decodeResponse(Data(raw.utf8)) == .invalid, "\(raw)")
+        }
+    }
+
+    @Test func aTimeoutOnAnyOtherOpIsRefused() {
+        // Only launchRuntime honours a timeout; elsewhere it would be
+        // silently dropped, so the codec refuses the frame instead.
+        let frames = [
+            "{\"v\":1,\"op\":\"launchAgentRuntime\",\"agentDefinitionID\":\"agent\",\"timeout\":30}",
+            "{\"v\":1,\"op\":\"launchCustomRuntime\",\"executable\":\"/bin/sleep\",\"timeout\":30}",
+            "{\"v\":1,\"op\":\"ensureTerminalRuntime\",\"executable\":\"/bin/sh\",\"io\":\"terminal\",\"rows\":24,\"cols\":80,\"timeout\":30}",
+            "{\"v\":1,\"op\":\"ping\",\"timeout\":30}",
+        ]
+        for raw in frames {
+            #expect(WorkspaceControlCodec.decodeRequest(Data(raw.utf8)) == .invalid, "\(raw)")
+        }
+    }
 }
 
 @Suite("Launch payload parse")
@@ -252,6 +305,10 @@ struct LaunchPayloadParseTests {
         #expect(EnsureTerminalRuntimePayload.parse(
             LaunchFields(hook: "not a tag!", io: "terminal", rows: 24, columns: 80)
         ) == .failure(.invalidRequest))
+        // A reused runtime keeps its deadline; a new one is not dropped silently.
+        #expect(EnsureTerminalRuntimePayload.parse(LaunchFields(
+            executable: "/bin/sh", io: "terminal", rows: 24, columns: 80, timeoutSeconds: 30
+        )) == .failure(.invalidRequest))
     }
 
     @Test func ensureParseDefersProfileLookup() {

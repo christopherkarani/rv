@@ -57,12 +57,20 @@ enum DarwinFrameIO {
         return data
     }
 
+    /// Every send's flags. Per send, not only `SO_NOSIGPIPE`, which Darwin
+    /// refuses to set on a socket whose peer is already gone. Here an
+    /// accepted socket inherits the option from the listening socket, and
+    /// one whose peer is gone when it is accepted has its receive timeout
+    /// refused too and is closed unanswered; the flag keeps a reply from
+    /// raising SIGPIPE if either stops being so.
+    static let sendFlags = Int32(MSG_NOSIGNAL)
+
     static func sendAll(fd: Int32, data: Data) throws {
         var offset = 0
         try data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { throw DarwinFrameError.eof }
             while offset < data.count {
-                let n = Darwin.send(fd, base + offset, data.count - offset, 0)
+                let n = Darwin.send(fd, base + offset, data.count - offset, sendFlags)
                 if n < 0 {
                     if errno == EINTR { continue }
                     throw DarwinFrameError.eof
@@ -111,6 +119,9 @@ public final class UnixSocketListener: Sendable {
     public let socketURL: URL
     private let limits: UnixConnectionLimits
     private let slots: UnixConnectionSlots
+    /// Test seam: runs on the accept queue after `accept`, before the
+    /// socket options are set.
+    private let afterAccept: @Sendable () -> Void
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-socket")
     /// Connections serve here, never on `queue`: each `serve` loop blocks in
@@ -136,17 +147,28 @@ public final class UnixSocketListener: Sendable {
         let source: DispatchSourceRead
     }
 
-    public init(
+    public convenience init(
         runtime: ServiceRuntime,
         watchdog: IdleWatchdog,
         socketURL: URL,
         limits: UnixConnectionLimits = .standard
+    ) {
+        self.init(runtime: runtime, watchdog: watchdog, socketURL: socketURL, limits: limits, afterAccept: {})
+    }
+
+    init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        socketURL: URL,
+        limits: UnixConnectionLimits,
+        afterAccept: @escaping @Sendable () -> Void
     ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.socketURL = socketURL
         self.limits = limits
         self.slots = UnixConnectionSlots(limit: limits.maxConnections)
+        self.afterAccept = afterAccept
     }
 
     public func start() throws {
@@ -207,6 +229,7 @@ public final class UnixSocketListener: Sendable {
         let listenFD = state.withLock { $0.listenFD }
         let client = Darwin.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
+        afterAccept()
         guard DarwinFrameIO.peerUID(fd: client) == Darwin.getuid() else {
             Darwin.close(client)
             return

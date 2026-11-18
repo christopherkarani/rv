@@ -250,7 +250,8 @@ extension SecretRunLaunchTests {
             """
         let result = SecretRunProcess.launch(
             executable: "/bin/sh", arguments: ["sh", "-c", script, "sh", directory.path],
-            environment: ["PATH=/usr/bin:/bin"], manageTerminal: false
+            environment: ["PATH=/usr/bin:/bin"], manageTerminal: false, signals: SecretRunSignals(),
+            notice: { _ in }
         ) { _ in .success(()) }
         #expect(result == .success(0))
         #expect(read(directory.appendingPathComponent("fds")) == "0 1 2")

@@ -23,7 +23,9 @@ enum TerminalNotice: Sendable, Equatable {
     case output(sequence: Int64, bytes: Data)
     case inputOwner(Bool)
     case window(rows: Int, columns: Int)
-    case exited(Int32)
+    /// `timedOutAfter` is the host's deadline in seconds when that
+    /// deadline stopped the runtime; nil for every other end.
+    case exited(Int32, timedOutAfter: UInt64? = nil)
     case overflow
 }
 
@@ -74,6 +76,8 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// Three independent axes: the master can close while the runtime still
     /// runs, and the reader can stop (EOF) while the master stays open.
     private var exitPhase = ExitPhase.running
+    /// Set once, by `finish`, before any exit notice is queued.
+    private var exitTimedOutAfter: UInt64?
     private var readerPhase = ReaderPhase.notStarted
     private var masterPhase = MasterPhase.open
     let slavePath: String
@@ -284,13 +288,14 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     /// Drains the master, then tells subscribers the runtime exited.
     /// Further attaches still see replay plus the exit status.
-    func finish(status: Int32?) {
+    func finish(status: Int32?, timedOutAfter: UInt64? = nil) {
         condition.lock()
         guard exitPhase == .running else {
             condition.unlock()
             return
         }
         exitPhase = .draining(status: status)
+        exitTimedOutAfter = timedOutAfter
         if inputOwner != nil {
             inputOwner = nil
             enqueueOwnerLocked(false)
@@ -300,7 +305,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         condition.lock()
         if case .draining(let status) = exitPhase {
             exitPhase = .delivered(status: status)
-            let notice = TerminalNotice.exited(status ?? -1)
+            let notice = TerminalNotice.exited(status ?? -1, timedOutAfter: exitTimedOutAfter)
             for subscriber in subscribers.values where subscriber.dropped == false && subscriber.stopped == false {
                 subscriber.chunks.append(notice)
             }
@@ -381,7 +386,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             subscriber.queuedBytes += chunk.bytes.count
         }
         if case .delivered(let status) = exitPhase {
-            subscriber.chunks.append(.exited(status ?? -1))
+            subscriber.chunks.append(.exited(status ?? -1, timedOutAfter: exitTimedOutAfter))
         }
         subscribers[client] = subscriber
         condition.unlock()
@@ -412,7 +417,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             subscriber.queuedBytes += chunk.bytes.count
         }
         if case .delivered(let status) = exitPhase {
-            subscriber.chunks.append(.exited(status ?? -1))
+            subscriber.chunks.append(.exited(status ?? -1, timedOutAfter: exitTimedOutAfter))
         }
         subscriber.deliver = true
         condition.broadcast()

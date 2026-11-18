@@ -123,9 +123,9 @@ private func substitutePlaceholder(
 // MARK: - xargs
 
 /// Short flags whose value is the rest of the word or the next word.
-private let xargsValueLetters: Set<Character> = ["n", "P", "L", "d", "s", "a", "E", "S", "R"]
+let xargsValueLetters: Set<Character> = ["n", "P", "L", "d", "s", "a", "E", "S", "R"]
 /// Short flags whose value, if any, must be attached (`-l5`, `-eEOF`).
-private let xargsOptionalLetters: Set<Character> = ["l", "e"]
+let xargsOptionalLetters: Set<Character> = ["l", "e"]
 /// Long options that need a value, as `--opt=value` or `--opt value`.
 private let xargsLongValueOptions: Set<String> = [
     "arg-file", "delimiter", "max-args", "max-chars", "max-procs", "process-slot-var",
@@ -169,13 +169,13 @@ private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: Workin
     return .next(renderCommand(rest), .xargs, workingDirectory)
 }
 
-private struct XargsOptionStep {
+struct XargsOptionStep {
     /// Words consumed: 1, or 2 when the option took the next word.
     var width: Int
     var replace: String?
 }
 
-private func xargsLongOption(_ token: String, next: String?) -> XargsOptionStep? {
+func xargsLongOption(_ token: String, next: String?) -> XargsOptionStep? {
     let body = token.dropFirst(2)
     let name = String(body.prefix { $0 != "=" })
     let attached = body.contains("=") ? String(body.drop { $0 != "=" }.dropFirst()) : nil
@@ -192,7 +192,7 @@ private func xargsLongOption(_ token: String, next: String?) -> XargsOptionStep?
 
 /// Walks a short-flag word such as `-0`, `-n1`, `-0I`, `-i`, `-iX`.
 /// `-I`/`-J` name the replacement string, GNU `-i` defaults it to `{}`.
-private func xargsShortCluster(_ token: String, next: String?) -> XargsOptionStep? {
+func xargsShortCluster(_ token: String, next: String?) -> XargsOptionStep? {
     let letters = Array(token.dropFirst())
     for (offset, letter) in letters.enumerated() {
         let attached = String(letters[(offset + 1)...])
