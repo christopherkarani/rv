@@ -12,16 +12,11 @@ the judge weights) were taken from the source and have not been run.
 
 ## Release status: read this first
 
-- The newest published release is **v0.2.1** (26 October 2026). It is
+- The newest published release is **v0.2.2** (18 November 2026). It is
   **not signed**: its macOS binaries carry no Developer ID signature, and
-  it has no `SHA256SUMS.sig`. It also predates most of what these guides
-  describe: it has no `rv run`, no Linux approvals custodian
-  (`rv-mcp-custodian`), no RVApprovals.app, and none of the MCP gateway's
-  timeouts and restarts.
-- The guides describe the code on the release branch. The installer
-  (`install.sh`) is written to install that code once a release of it is
-  published. Until then, `curl … | sh` installs v0.2.1, and the guides do
-  not match what you get.
+  it has no `SHA256SUMS.sig`.
+- The guides describe the code on the release branch, which may be ahead
+  of v0.2.2. `curl … | sh` installs the newest published release.
 - Signature checking is wired but switched off. `install.sh` checks every
   download against the release's `SHA256SUMS`. It does **not** yet check
   `SHA256SUMS` itself against rv's release key (the key is not pinned in
@@ -174,7 +169,7 @@ rv mcp custodian status
 
 The full threat model is in
 [docs/security/mcp-linux-custodian.md](../security/mcp-linux-custodian.md).
-v0.2.1 does not ship `rv-mcp-custodian`, so this needs a newer release.
+Releases before v0.2.2 do not ship `rv-mcp-custodian`.
 
 ### Owner authentication
 
