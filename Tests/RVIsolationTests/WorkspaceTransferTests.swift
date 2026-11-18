@@ -108,6 +108,19 @@ struct WorkspaceUploadTests {
         #expect(summary.ignored == 3)
     }
 
+    @Test func aCRLFGitignoreKeepsHostSecretsOut() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.host + "/proj/.gitignore", ".env\r\nnode_modules/\r\n")
+        try fixture.write(fixture.host + "/proj/.env", "TOKEN=secret")
+        try fixture.write(fixture.host + "/proj/node_modules/x.js", "x")
+        try fixture.write(fixture.host + "/proj/main.js", "m")
+        _ = try fixture.upload(fixture.host + "/proj").get()
+        #expect(fixture.exists(fixture.workspace + "/proj/.env") == false)
+        #expect(fixture.exists(fixture.workspace + "/proj/node_modules") == false)
+        #expect(fixture.read(fixture.workspace + "/proj/main.js") == "m")
+    }
+
     @Test func noGitignoreCopiesEverything() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }

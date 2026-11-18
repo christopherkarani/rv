@@ -40,8 +40,10 @@ struct GitignoreRules: Sendable, Equatable {
     /// In place, so a tree walk can push a directory's rules and `truncate`
     /// them on the way out instead of copying the stack per level.
     mutating func append(_ text: String, base: [String]) {
-        for line in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
-            if let rule = Self.parse(String(line), base: base) {
+        // Split on the scalar: Swift reads "\r\n" as one Character, so a
+        // Character split would leave a CRLF file as one line (no rules).
+        for line in text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let rule = Self.parse(String(Substring(line)), base: base) {
                 rules.append(rule)
                 heldBytes += rule.byteCount
             }

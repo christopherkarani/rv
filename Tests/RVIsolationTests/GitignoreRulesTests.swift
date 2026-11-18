@@ -80,6 +80,16 @@ struct GitignoreRulesTests {
         #expect(rules.isIgnored(["only-here"], isDirectory: false) == false)
     }
 
+    @Test func crlfAndMixedLineEndingsAreSplit() {
+        #expect(ignored(".env\r\nnode_modules/\r\n", ".env"))
+        #expect(ignored(".env\r\nnode_modules/\r\n", "node_modules", directory: true))
+        let mixed = ".env\r\n*.log\nbuild/\r\n!keep.log\n"
+        #expect(ignored(mixed, ".env"))
+        #expect(ignored(mixed, "a.log"))
+        #expect(ignored(mixed, "keep.log") == false)
+        #expect(ignored(mixed, "build", directory: true))
+    }
+
     @Test func pathologicalStarsStayBounded() {
         let pattern = String(repeating: "*a", count: 40) + "b\n"
         let name = String(repeating: "a", count: 200)
