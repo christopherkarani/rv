@@ -518,8 +518,8 @@ extension IPCResult {
                 key: "policyStatus",
                 id: id,
                 result: .policyStatus(
-                    PolicyStatusReply(
-                        status: PolicyLoadStatus(
+                    PolicyStatusReply.status(
+                        PolicyLoadStatus(
                             state: .loaded,
                             machine: .init(hash: "abc", ruleCount: 2, exceedsCeiling: true),
                             ceilingRuleCount: 1,
@@ -534,9 +534,10 @@ extension IPCResult {
                 key: "policyStatus",
                 id: id,
                 result: .policyStatus(
-                    PolicyStatusReply(status: PolicyLoadStatus(state: .failed, failure: .ceilingInvalid))
+                    PolicyStatusReply.status(PolicyLoadStatus(state: .failed, failure: .ceilingInvalid))
                 )
             ),
+            NamedResult(key: "policyStatus", id: id, result: .policyStatus(.busy)),
             NamedResult(
                 key: "error",
                 id: id,

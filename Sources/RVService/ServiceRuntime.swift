@@ -56,6 +56,8 @@ public actor ServiceRuntime {
     /// `HookDeadline.budget` in rvd: only this module's internal init sets
     /// it, so no caller, request or launch environment can stretch it.
     let hookBudget: Duration
+    /// `policyStatus` loads: off the cooperative pool, at most two at once.
+    let policyStatusService: PolicyStatusService
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -104,10 +106,12 @@ public actor ServiceRuntime {
         actionCeremonies: ActionApprovalCeremonyService? = nil,
         hookCeremonies: HookReviewCeremonyService? = nil,
         ownerPresence: OwnerPresence = OwnerPresence(),
-        hookBudget: Duration = HookDeadline.budget
+        hookBudget: Duration = HookDeadline.budget,
+        policyStatusService: PolicyStatusService = PolicyStatusService()
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
+        self.policyStatusService = policyStatusService
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
         // Built before the hook ceremony below: the ceremony captures
@@ -968,15 +972,12 @@ public actor ServiceRuntime {
     }
 
     /// The typed-policy load hooks run (`PolicyStoreInputs`), for rvd's
-    /// HOME and the caller's cwd. Off the actor: a ceiling containment
-    /// check over a large repo layer can take seconds, and hook
-    /// evaluations must not queue behind it.
+    /// HOME and the caller's cwd. Off the actor and the cooperative pool,
+    /// capped (`PolicyStatusService`): a ceiling containment check over a
+    /// large repo layer can take seconds, and hook evaluations must not
+    /// queue behind it.
     private func policyStatus(_ params: PolicyStatusParams) async -> PolicyStatusReply {
-        let home = configHome
-        let status = await Task.detached {
-            PolicyStoreInputs.loadStatus(home: home, cwd: params.cwd)
-        }.value
-        return PolicyStatusReply(status: status)
+        await policyStatusService.status(home: configHome, cwd: params.cwd)
     }
 
     private func logIfNeeded(request: IPCRequest, result: IPCResult, started: DispatchTime) {

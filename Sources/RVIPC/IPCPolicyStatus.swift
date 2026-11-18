@@ -14,11 +14,40 @@ public struct PolicyStatusParams: Sendable, Equatable, Codable {
     }
 }
 
-public struct PolicyStatusReply: Sendable, Equatable, Codable {
-    public var status: PolicyLoadStatus
+/// rvd's load, or `busy`: rvd runs only a few status loads at once (each
+/// may block on file I/O for seconds) and refuses more rather than queue
+/// them. A busy reply says nothing about the policy.
+///
+/// Wire: `{"status": {...}}` or `{"busy": true}`.
+public enum PolicyStatusReply: Sendable, Equatable, Codable {
+    case status(PolicyLoadStatus)
+    case busy
 
-    public init(status: PolicyLoadStatus) {
-        self.status = status
+    private enum CodingKeys: String, CodingKey {
+        case status, busy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let status = try container.decodeIfPresent(PolicyLoadStatus.self, forKey: .status) {
+            self = .status(status)
+        } else if try container.decodeIfPresent(Bool.self, forKey: .busy) == true {
+            self = .busy
+        } else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "policyStatus reply has neither status nor busy"))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .status(let status):
+            try container.encode(status, forKey: .status)
+        case .busy:
+            try container.encode(true, forKey: .busy)
+        }
     }
 }
 
