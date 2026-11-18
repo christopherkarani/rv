@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - The OCSF audit export (`rv audit export --format ocsf`, `rv audit forward`) carries a stable reason code in `status_code` on every denial and would-be denial (for example `rv.egress.denied-policy`, `rv.secret.foreign-placeholder`, `rv.command.denied-secret-path`), and declares its OCSF profiles in `metadata.profiles`. Every audit kind is now validated in CI against vendored OCSF 1.3.0 schemas; API and Process Activity events always name an `actor`, and Process Activity a `process.uid`, as 1.3.0 requires. The codes are listed in `docs/guides/audit-log.md`.
 
+### Security
+
+- The shared launcher resolver now sees through transparent exec wrappers (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, including `flock FILE -c CMD`, `unbuffer`, `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`), parsing each one's options and leading operands. Redirects never fill an option value or operand slot, and a variable or glob there is judged unmodelled. `firejail`, and `chpst`'s environment, root and directory options, are never treated as transparent. Before, `setsid rv uninstall` or `stdbuf -oL rv packs disable core.git` slipped past the self-protection floor, and the same wrappers hid commands from the other floors that use the resolver. A wrapper option rv does not model fails closed: every later operand is judged as a possible command.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed

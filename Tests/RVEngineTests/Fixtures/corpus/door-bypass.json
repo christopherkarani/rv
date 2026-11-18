@@ -438,6 +438,20 @@
     {"id": "db.sp.allow-r4-00", "command": "ls {src,Tests}", "expected": "allow"},
     {"id": "db.sp.allow-r4-01", "command": "echo {a,b}", "expected": "allow"},
     {"id": "db.sp.allow-r4-02", "command": "cp f{,.bak}", "expected": "allow"},
-    {"id": "db.sp.allow-r4-04", "command": "git diff {main,HEAD}", "expected": "allow"}
+    {"id": "db.sp.allow-r4-04", "command": "git diff {main,HEAD}", "expected": "allow"},
+    {"id": "db.sp.deny-wrap-00", "command": "setsid rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-01", "command": "setsid -w rv packs disable core.git", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-02", "command": "stdbuf -oL rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-03", "command": "stdbuf -o L rv safety normal", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-04", "command": "ionice -c 3 -n 7 rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-05", "command": "chrt -f 10 rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-06", "command": "taskset -c 0-3 rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-07", "command": "taskset 0x3 rv allow-once redeem 123456", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-08", "command": "flock -w 5 /tmp/l rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-09", "command": "flock /tmp/l -c 'rv uninstall'", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-10", "command": "unbuffer -p rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-11", "command": "caffeinate -i rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-12", "command": "nohup setsid -f stdbuf -oL rv uninstall", "expected": "self-protection"},
+    {"id": "db.sp.deny-wrap-13", "command": "stdbuf -Z q rv uninstall", "expected": "self-protection"}
   ]
 }
