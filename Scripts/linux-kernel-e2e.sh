@@ -131,10 +131,12 @@ build_initramfs() {
 }
 
 # Exact check count guest-init.c runs per regime (ABI check + refusal cases
-# below ABI 3; ABI check + argv lock + enforcement at 3+). A dropped or added
-# case fails the lane until this is updated with it.
-CHECKS_REFUSAL=5
-CHECKS_ENFORCEMENT=21
+# below ABI 3; ABI check + argv lock + enforcement at 3+; the MCP server
+# confinement adds 2 refusal checks below ABI 4 and 48 from it on). A
+# dropped or added case fails the lane until this is updated with it.
+CHECKS_REFUSAL=7
+CHECKS_ENFORCEMENT=23
+CHECKS_CONFINEMENT=69
 
 # One boot. Pass only on exactly one PASS result line, with the regime's
 # exact check count, from a kernel whose release matches the lane; a timeout,
@@ -144,6 +146,7 @@ run_lane() {
   local deb vmlinuz="$WORK/vmlinuz-$lane" log="$WORK/serial-$lane.log" status=0
   local accel_args=() want=$CHECKS_REFUSAL
   [[ "$abi" -ge 3 ]] && want=$CHECKS_ENFORCEMENT
+  [[ "$abi" -ge 4 ]] && want=$CHECKS_CONFINEMENT
   # Called under `if !`, where set -e is off: check each step explicitly.
   deb="$(fetch_deb "$sha" "$url")" || return 1
   extract_vmlinuz "$deb" "$vmlinuz" || return 1
