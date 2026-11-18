@@ -611,6 +611,8 @@ struct MCPHostSpellingTests {
         "strace -f $C $G add evil -- x",
         // An unlisted wrapper is not read, as before the change.
         "gdb --args claude $SUB add evil -- x",
+        // A launcher prefix the resolver strips leaves that same command.
+        "stdbuf -o0 gdb --args claude $SUB add evil -- x",
     ])
     func dynamicProgramBehindNonWrapperIsKnownGap(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
