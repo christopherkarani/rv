@@ -116,8 +116,11 @@ private func splitStringTakesStdin(_ argv: [String]) -> Bool {
 private func isSplitStringOption(_ word: String) -> Bool {
     let word = unescapeBackslashPairs(word)
     guard word.hasPrefix("-") else { return false }
-    guard word.hasPrefix("--") else { return word.dropFirst().contains("S") }
     let name = word.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)[0]
+    // A variable, substitution, glob, or the stand-in may spell `-S`
+    // (`-$'\x53'`, `-?`, `--s*`, `-%` fed from stdin): fail closed.
+    if isUnmodelledWord(String(name)) { return true }
+    guard word.hasPrefix("--") else { return word.dropFirst().contains("S") }
     return name.count > 2 && "--split-string".hasPrefix(name)
 }
 
