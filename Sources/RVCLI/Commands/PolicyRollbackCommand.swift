@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 /// `rv policy rollback <revision> [--repo] [--save]`: re-submits an earlier
@@ -77,7 +78,8 @@ enum PolicyRollbackRun {
     }
 
     /// The whole command after argument parsing. `confirm` is the owner
-    /// check (`OwnerConfirmation.require` in the CLI); tests inject it to
+    /// check (`OwnerConfirmation.require` in the CLI) and returns the
+    /// authorization the audit event records; tests inject it to
     /// model what happens between approval and write. The write is bound
     /// to the previewed head, so a layer that moved after the preview
     /// refuses `headChanged`, and the store re-runs the relax gate under
@@ -88,7 +90,7 @@ enum PolicyRollbackRun {
         revision: Int,
         save: Bool,
         robot: Bool,
-        confirm: (String) async throws -> Void
+        confirm: (String) async throws -> String
     ) async throws {
         let repo = layer == .repo
         let preview: PolicyWorkspace.RollbackPreview
@@ -109,20 +111,33 @@ enum PolicyRollbackRun {
             CommandContext.writeStdout(try render(preview, outcome: .unchanged, robot: robot))
             return
         }
+        if let refusal = preview.ceilingRefusal {
+            // Like `policy apply --save`: outside the owner's ceiling, no prompt.
+            try refuseCeiling(refusal, preview, robot: robot)
+        }
         if robot == false {
             // The owner sees what they approve before the prompt.
             CommandContext.writeStdout(pretty(preview, outcome: .preview, footer: false))
         }
-        try await confirm("roll the \(layerName(layer)) policy back to r\(revision)")
+        let authorization = try await confirm("roll the \(layerName(layer)) policy back to r\(revision)")
         let restored: PolicyRevision
         do {
-            restored = try session.rollback(
-                layer: layer, to: revision,
-                expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
+            restored = try ConfigChangeAudit.$authorization.withValue(authorization) {
+                try session.rollback(
+                    layer: layer, to: revision,
+                    expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
+            }
+        } catch let unrecorded as ConfigChangeUnrecorded {
+            try ConfigChangeRefusal.fail(command: "policy rollback", unrecorded)
         } catch PolicyDiffRiskError.blockedByFindings(let report) {
             var refused = preview
             refused.risk = report
             try refuseBlocked(refused, robot: robot)
+        } catch let error as PolicyCeilingError {
+            // The ceiling changed after the preview; re-checked under the lock.
+            var refused = preview
+            refused.ceilingRefusal = error
+            try refuseCeiling(error, refused, robot: robot)
         } catch {
             try CommandContext.fail(failure(error, revision: revision, repo: repo))
         }
@@ -136,6 +151,13 @@ enum PolicyRollbackRun {
     private static func refuseBlocked(_ preview: PolicyWorkspace.RollbackPreview, robot: Bool) throws -> Never {
         CommandContext.writeStdout(try render(preview, outcome: .blocked, robot: robot))
         try CommandContext.fail("rv policy rollback: blocked by policy risk findings\n", exitCode: 2)
+    }
+
+    private static func refuseCeiling(
+        _ refusal: PolicyCeilingError, _ preview: PolicyWorkspace.RollbackPreview, robot: Bool
+    ) throws -> Never {
+        CommandContext.writeStdout(try render(preview, outcome: .blocked, robot: robot))
+        try CommandContext.fail("rv policy rollback: refused: \(refusal.refusal); nothing was changed\n")
     }
 
     struct EffectiveDiff: Equatable, Sendable, Codable {
@@ -222,13 +244,19 @@ enum PolicyRollbackRun {
             lines.append("  (unavailable: a policy file does not parse)")
         }
         lines += preview.risk.previewLines
+        if let refusal = preview.ceilingRefusal {
+            lines.append("ceiling: \(refusal.refusal)")
+        }
         if footer {
             switch outcome {
             case .preview:
+                // Same order as `execute`: risk, no-op, ceiling.
                 if preview.risk.hasBlockingFindings {
                     lines.append("preview only: --save would be refused")
                 } else if preview.isNoOp {
                     lines.append("preview only: r\(preview.target.revision) is already the current policy")
+                } else if preview.ceilingRefusal != nil {
+                    lines.append("preview only: --save would be refused")
                 } else {
                     lines.append("preview only: nothing was written; add --save to restore")
                 }
@@ -300,14 +328,17 @@ enum PolicyRollbackRun {
             restoredAs: restoredAs,
             liveParses: preview.liveParses,
             effective: effectiveDiff(preview),
-            risk: .init(preview.risk)
+            risk: .init(preview.risk),
+            ceilingRefusal: preview.ceilingRefusal?.refusal
         )
     }
 }
 
 /// `rv policy rollback --json`. `restored_as` appears only when the
 /// rollback was written; `effective` is absent when a policy file does
-/// not parse. Revisions carry metadata only, never the TOML.
+/// not parse. `ceiling_refusal` appears only when the restored revision is
+/// outside the owner's policy ceiling (or `ceiling.toml` is invalid), so
+/// `--save` would refuse. Revisions carry metadata only, never the TOML.
 struct PolicyRollbackRobotDocument: Equatable, Sendable, Codable {
     struct Revision: Equatable, Sendable, Codable {
         var revision: Int
@@ -361,6 +392,7 @@ struct PolicyRollbackRobotDocument: Equatable, Sendable, Codable {
     var liveParses: Bool
     var effective: PolicyRollbackRun.EffectiveDiff?
     var risk: Risk
+    var ceilingRefusal: String?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -372,5 +404,6 @@ struct PolicyRollbackRobotDocument: Equatable, Sendable, Codable {
         case liveParses = "live_parses"
         case effective
         case risk
+        case ceilingRefusal = "ceiling_refusal"
     }
 }

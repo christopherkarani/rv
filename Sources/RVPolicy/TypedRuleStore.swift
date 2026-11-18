@@ -270,6 +270,17 @@ public struct TypedRuleStore: Sendable {
         try commitMachine { try transform(try loadMachineDocument()) }
     }
 
+    /// Runs `body` with the live machine document under both machine save
+    /// locks (log-lock then file-lock, the save order), so no machine save
+    /// interleaves. `body` must not call back into this store's saves.
+    func withMachineLocked<T>(_ body: (PolicyDocument) throws -> T) throws -> T {
+        try withFileLock(at: machineLogLockURL) {
+            try withFileLock(at: machineLockURL) {
+                try body(try loadMachineDocument())
+            }
+        }
+    }
+
     /// The one machine save path. `next` runs with both locks held, right
     /// before the write.
     ///
@@ -364,6 +375,7 @@ public struct TypedRuleStore: Sendable {
     func rollbackMachine(
         toRevision target: Int,
         expected: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil,
         interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
@@ -406,6 +418,9 @@ public struct TypedRuleStore: Sendable {
                     historyHead: sealedHead.document,
                     incoming: match.document
                 )
+                // Caller's admission check (the owner's policy ceiling),
+                // under the same locks as the write.
+                try admit?(match.document)
                 let pending = try preparedRevisionLine(
                     document: match.document,
                     text: match.toml,
@@ -619,22 +634,30 @@ public struct TypedRuleStore: Sendable {
     /// `expected` binds the rollback to the target and head a preview
     /// showed: when either differs in the display log under the lock, it
     /// throws `headChanged` before the gate and before the rollback writes.
+    /// `admit` runs on the restored document under the write locks, after
+    /// the gate; a throw refuses with nothing written. `PolicyWorkspace`
+    /// passes the policy-ceiling containment check here.
     public func rollbackMachine(
         to revision: Int,
-        expected: PolicyRollbackBinding
+        expected: PolicyRollbackBinding,
+        admit: ((PolicyDocument) throws -> Void)? = nil
     ) throws -> PolicyRevision {
-        try rollbackMachine(to: revision, binding: expected)
+        try rollbackMachine(to: revision, binding: expected, admit: admit)
     }
 
     /// `rollbackMachine(to:expected:)` with an optional binding, for tests
     /// of the gate itself.
-    func rollbackMachine(to revision: Int, binding: PolicyRollbackBinding?) throws -> PolicyRevision {
+    func rollbackMachine(
+        to revision: Int,
+        binding: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil
+    ) throws -> PolicyRevision {
         // One implementation: the sealed, byte-exact, single-lock path.
         // Public revisions are generations in both spellings (see
         // `machineHistory()`), so this is a forwarder, not a second
         // rollback with its own numbering and lock discipline.
         do {
-            return try rollbackMachine(toRevision: revision, expected: binding, interlock: nil)
+            return try rollbackMachine(toRevision: revision, expected: binding, admit: admit, interlock: nil)
         } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
@@ -649,13 +672,15 @@ public struct TypedRuleStore: Sendable {
     ///
     /// `.policy.lock` is held across the live re-read, both gates, and
     /// the write. `loadRepoDocument` does not take that lock.
-    /// `expected` is the same preview binding as on the machine layer.
+    /// `expected` is the same preview binding as on the machine layer, and
+    /// `admit` the same admission check.
     public func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        expected: PolicyRollbackBinding
+        expected: PolicyRollbackBinding,
+        admit: ((PolicyDocument) throws -> Void)? = nil
     ) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, expected: expected, interlock: nil)
+        try rollbackRepo(to: revision, workspace: workspace, expected: expected, admit: admit, interlock: nil)
     }
 
     /// `expected` nil (no binding) is for tests of the gate only.
@@ -663,6 +688,7 @@ public struct TypedRuleStore: Sendable {
         to revision: Int,
         workspace: URL,
         expected: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil,
         interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
@@ -693,6 +719,7 @@ public struct TypedRuleStore: Sendable {
                 historyHead: head.document,
                 incoming: targetDocument
             )
+            try admit?(targetDocument)
             interlock?.beforeWrite?()
             try saveUnlocked(
                 targetDocument,
@@ -896,27 +923,20 @@ public struct TypedRuleStore: Sendable {
         }
     }
 
-    public func loadEffective(builtin: [TypedRule], workspace: URL?) throws -> [TypedRule] {
-        let machine = try loadMachine()
-        let repo: [TypedRule]
-        if let workspace {
-            repo = try loadRepo(workspace: workspace)
-        } else {
-            repo = []
-        }
-        return Self.merge(builtin: builtin, machine: machine, repo: repo)
-    }
-
     /// Restrict-only: later layers may tighten, never drop an earlier deny or ask.
+    /// The owner's policy ceiling goes last, as a machine-origin layer: its
+    /// deny and ask rules hold whatever the other layers say.
     public static func merge(
         builtin: [TypedRule],
         machine: [TypedRule],
-        repo: [TypedRule]
+        repo: [TypedRule],
+        ceiling: [TypedRule] = []
     ) -> [TypedRule] {
         var merged: [TypedRule] = []
         overlay(&merged, builtin, origin: .builtin)
         overlay(&merged, machine, origin: .machine)
         overlay(&merged, repo, origin: .repo)
+        overlay(&merged, ceiling, origin: .machine)
         return merged
     }
 

@@ -173,6 +173,102 @@ struct RollbackPreviewTests {
         }
     }
 
+    @Test(arguments: [PolicyDocumentLayer.machine, .repo])
+    func restoreOutsideThePolicyCeilingIsPreviewedAndRefused(layer: PolicyDocumentLayer) throws {
+        // r1 asks on force-push, r2 dropped it; the owner then set a
+        // ceiling that denies force-push. Restoring r1 tightens the layer
+        // (the risk gate passes) but asks where the ceiling denies, which
+        // every layer save refuses: so does rollback, writing nothing.
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let session = PolicyWorkspace(configDirectory: config, workspace: workspace)
+        let store = TypedRuleStore(baseDirectory: config)
+        let ask = try PolicyDocumentTOML.parse(ceilingAskForcePush).rules
+        switch layer {
+        case .machine:
+            try store.saveMachine(PolicyDocument(rules: ask))
+            try store.saveMachine(PolicyDocument(rules: []))
+        case .repo:
+            try store.saveRepo(PolicyDocument(rules: ask), workspace: workspace)
+            try store.saveRepo(PolicyDocument(rules: []), workspace: workspace)
+        }
+        try ceilingDenyForcePush.write(
+            to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        let before = try directorySnapshot(config)
+        let beforeWorkspace = try directorySnapshot(workspace)
+
+        let preview = try session.previewRollback(layer: layer, to: 1)
+
+        #expect(preview.risk.hasBlockingFindings == false)
+        guard case .exceeds = preview.ceilingRefusal else {
+            Issue.record("expected a ceiling refusal, got \(String(describing: preview.ceilingRefusal))")
+            return
+        }
+        // Both effective sets carry the ceiling's deny.
+        let ceilingDeny = try #require(try session.loadCeiling()?.typedRules.first)
+        #expect(preview.currentEffective?.contains { $0.predicate == ceilingDeny.predicate && $0.verdict == .deny } == true)
+        #expect(preview.restoredEffective?.contains { $0.predicate == ceilingDeny.predicate && $0.verdict == .deny } == true)
+        do {
+            _ = try session.rollback(layer: layer, to: 1, expected: binding(preview))
+            Issue.record("expected a ceiling refusal")
+        } catch let error as PolicyCeilingError {
+            #expect(error == preview.ceilingRefusal)
+        }
+        #expect(try directorySnapshot(config) == before)
+        #expect(try directorySnapshot(workspace) == beforeWorkspace)
+    }
+
+    @Test func invalidCeilingFailsTheRollbackClosed() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let session = PolicyWorkspace(configDirectory: config, workspace: workspace)
+        let store = TypedRuleStore(baseDirectory: config)
+        try store.saveMachine(PolicyDocument(rules: [previewDeny, previewAsk]))
+        try store.saveMachine(PolicyDocument(rules: [previewDeny]))
+        try "not toml [[".write(
+            to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        let before = try directorySnapshot(config)
+
+        let preview = try session.previewRollback(layer: .machine, to: 1)
+
+        #expect(preview.ceilingRefusal == .invalidFile)
+        #expect(preview.currentEffective == nil)
+        #expect(preview.restoredEffective == nil)
+        #expect(throws: PolicyCeilingError.invalidFile) {
+            _ = try session.rollback(layer: .machine, to: 1, expected: binding(preview))
+        }
+        #expect(try directorySnapshot(config) == before)
+    }
+
+    @Test func restoreWithinThePolicyCeilingProceeds() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let session = PolicyWorkspace(configDirectory: config, workspace: workspace)
+        let store = TypedRuleStore(baseDirectory: config)
+        try store.saveMachine(PolicyDocument(rules: [previewDeny, previewAsk]))
+        try store.saveMachine(PolicyDocument(rules: [previewDeny]))
+        try ceilingDenyForcePush.write(
+            to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+
+        let preview = try session.previewRollback(layer: .machine, to: 1)
+
+        #expect(preview.ceilingRefusal == nil)
+        let restored = try session.rollback(layer: .machine, to: 1, expected: binding(preview))
+        #expect(restored.revision == 3)
+    }
+
     @Test func repoPreviewWithDeletedRvDirectoryCreatesNothing() throws {
         let config = try isolatedPreviewDirectory()
         let workspace = try isolatedPreviewDirectory()
@@ -375,6 +471,26 @@ private let previewAsk = PolicyDocumentRule(
     verdict: .ask,
     predicate: .gitReset(mode: nil)
 )
+
+private let ceilingAskForcePush = """
+    schema_version = 1
+
+    [[rule]]
+    id = "typed.git:ask-force"
+    verdict = "ask"
+    predicate = "gitPush"
+    force = "force"
+    """
+
+private let ceilingDenyForcePush = """
+    schema_version = 1
+
+    [[rule]]
+    id = "typed.git:no-force-push"
+    verdict = "deny"
+    predicate = "gitPush"
+    force = "force"
+    """
 
 private func previewAllowOn(_ predicate: PolicyPredicate) -> PolicyDocumentRule {
     PolicyDocumentRule(id: RuleID(pack: .coreGit, pattern: "force-push-main"), verdict: .allow, predicate: predicate)

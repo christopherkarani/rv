@@ -79,8 +79,6 @@ struct PolicyWorkspaceTests {
 
         let session = PolicyWorkspace(home: home, workspace: workspace)
         let effective = try session.loadEffectiveRules()
-        let oracle = try store.loadEffective(builtin: [], workspace: workspace)
-        #expect(effective == oracle)
         #expect(
             effective == TypedRuleStore.merge(
                 builtin: [],

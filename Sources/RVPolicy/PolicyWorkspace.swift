@@ -70,18 +70,44 @@ public struct PolicyWorkspace: Sendable {
         )
     }
 
+    /// Merged typed rules. The owner's policy ceiling goes last as a
+    /// restrict-only overlay, so its deny and ask rules hold whatever the
+    /// layers say, at O(rules) per action. An unreadable or invalid ceiling
+    /// throws `PolicyCeilingError.invalidFile`, so the door fails closed as
+    /// for an invalid `policy.toml`.
     public func loadEffectiveRules(builtin: [TypedRule] = []) throws -> [TypedRule] {
-        if let directory = machineDirectory {
-            return try TypedRuleStore(baseDirectory: directory)
-                .loadEffective(builtin: builtin, workspace: workspace)
+        let machine = try loadMachineDocument()
+        let repo = try loadRepoDocument()
+        let ceiling = try loadCeiling()
+        return TypedRuleStore.merge(
+            builtin: builtin,
+            machine: machine.typedRules(origin: .machine),
+            repo: repo.typedRules(origin: .repo),
+            ceiling: ceiling?.typedRules ?? []
+        )
+    }
+
+    /// Replaces the owner's ceiling. Under the machine policy locks, the
+    /// live machine layer is re-checked against the new ceiling (a layer
+    /// that asks where it denies is refused with the witness), then
+    /// `ceiling.toml` is written and one revision line appended. Callers
+    /// confirm the device owner first, as for a machine `policy.toml` save.
+    public func replaceCeiling(_ ceiling: PolicyCeiling) throws {
+        guard let directory = machineDirectory else {
+            throw PolicyWorkspaceError.missingLayer(.machine)
         }
-        let repo: [TypedRule]
-        if let workspace {
-            repo = try TypedRuleStore(baseDirectory: workspace).loadRepo(workspace: workspace)
-        } else {
-            repo = []
+        try TypedRuleStore(baseDirectory: directory).withMachineLocked { machine in
+            try ceiling.requireContained(machine)
+            try PolicyCeilingStore(configDirectory: directory).commitLocked(ceiling, recordedAt: Date())
         }
-        return TypedRuleStore.merge(builtin: builtin, machine: [], repo: repo)
+    }
+
+    /// The owner's ceiling, or nil when none is set or there is no machine
+    /// directory to hold one. Throws `PolicyCeilingError.invalidFile` for a
+    /// ceiling file that exists but does not parse.
+    public func loadCeiling() throws -> PolicyCeiling? {
+        guard let directory = machineDirectory else { return nil }
+        return try PolicyCeilingStore(configDirectory: directory).load()
     }
 
     /// Machine + repo **document** fields only. Does not read `config.json`.
@@ -130,7 +156,10 @@ public struct PolicyWorkspace: Sendable {
     /// `expected` (from a preview) makes the rollback refuse `headChanged`
     /// when the layer's head or the target moved since that preview. It is
     /// a required argument; it binds only as tightly as the preview it came
-    /// from.
+    /// from. Like every layer save, the restored document must stay within
+    /// the owner's policy ceiling: one that asks where the ceiling denies,
+    /// or an invalid `ceiling.toml`, refuses with `PolicyCeilingError`
+    /// under the write lock, with nothing written.
     public func rollback(
         layer: PolicyDocumentLayer,
         to revision: Int,
@@ -142,20 +171,28 @@ public struct PolicyWorkspace: Sendable {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
             return try TypedRuleStore(baseDirectory: directory)
-                .rollbackMachine(to: revision, expected: expected)
+                .rollbackMachine(to: revision, expected: expected, admit: admitWithinCeiling)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
             return try revisionRepoStore(workspace: workspace)
-                .rollbackRepo(to: revision, workspace: workspace, expected: expected)
+                .rollbackRepo(to: revision, workspace: workspace, expected: expected, admit: admitWithinCeiling)
         }
+    }
+
+    /// The ceiling check `mergeIncoming` runs on a save, for rollback.
+    private func admitWithinCeiling(_ document: PolicyDocument) throws {
+        try loadCeiling()?.requireContained(document)
     }
 
     /// A layer rollback preview plus the effective rules before and after.
     /// `currentEffective` is nil when a live layer file does not parse;
     /// `restoredEffective` is nil when the other layer's file does not.
     /// `liveHash` is the live layer document's identity (nil: unparseable).
+    /// Both effective sets include the owner's policy ceiling (nil when
+    /// `ceiling.toml` is invalid). `ceilingRefusal` is why `rollback` would
+    /// refuse the restored document against that ceiling, or nil.
     public struct RollbackPreview: Sendable, Equatable {
         public var layer: PolicyDocumentLayer
         public var target: PolicyRevision
@@ -165,6 +202,7 @@ public struct PolicyWorkspace: Sendable {
         public var risk: PolicyDiffRiskReport
         public var currentEffective: [TypedRule]?
         public var restoredEffective: [TypedRule]?
+        public var ceilingRefusal: PolicyCeilingError?
 
         /// Restoring would change nothing: the target is the head and the
         /// live file already holds that content.
@@ -202,10 +240,28 @@ public struct PolicyWorkspace: Sendable {
         case .repo:
             otherRules = try Self.nilWhenUnparseable { try loadMachineDocument().typedRules(origin: .machine) }
         }
-        let restoredEffective = otherRules.map { other in
+        // An invalid ceiling.toml leaves both effective sets unavailable
+        // and refuses the save, as for an unparseable layer.
+        var ceiling: PolicyCeiling?
+        var ceilingRefusal: PolicyCeilingError?
+        do {
+            ceiling = try loadCeiling()
+        } catch PolicyCeilingError.invalidFile {
+            ceilingRefusal = .invalidFile
+        }
+        if let ceiling {
+            do {
+                try ceiling.requireContained(preview.target.document)
+            } catch let error as PolicyCeilingError {
+                ceilingRefusal = error
+            }
+        }
+        let ceilingParses = ceilingRefusal != .invalidFile
+        let ceilingRules = ceiling?.typedRules ?? []
+        let restoredEffective = ceilingParses == false ? nil : otherRules.map { other in
             layer == .machine
-                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other)
-                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules)
+                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other, ceiling: ceilingRules)
+                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules, ceiling: ceilingRules)
         }
         return RollbackPreview(
             layer: layer,
@@ -215,7 +271,8 @@ public struct PolicyWorkspace: Sendable {
             liveHash: preview.live.map(PolicyRevisionIdentity.hash),
             risk: preview.risk,
             currentEffective: try Self.nilWhenUnparseable { try loadEffectiveRules(builtin: builtin) },
-            restoredEffective: restoredEffective
+            restoredEffective: restoredEffective,
+            ceilingRefusal: ceilingRefusal
         )
     }
 
@@ -226,6 +283,8 @@ public struct PolicyWorkspace: Sendable {
         do {
             return try load()
         } catch TypedRuleStoreError.invalidFile {
+            return nil
+        } catch PolicyCeilingError.invalidFile {
             return nil
         }
     }
@@ -253,7 +312,14 @@ public struct PolicyWorkspace: Sendable {
         guard save else {
             return merge(try loadWritableDocument(layer))
         }
-        return try updateDocument(layer: layer, merge)
+        // A save that would leave the layer asking where the ceiling denies
+        // writes nothing. The ceiling is read under the save lock, so a
+        // machine save serializes with `replaceCeiling`.
+        return try updateDocument(layer: layer) { existing in
+            let merged = merge(existing)
+            try loadCeiling()?.requireContained(merged)
+            return merged
+        }
     }
 
     private var machineDirectory: URL? {
