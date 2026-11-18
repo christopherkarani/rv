@@ -7,6 +7,24 @@ import Foundation
 import RVDomain
 import RVIsolation
 
+/// The tool definition an approval was asked for. A grant is consumed only
+/// while the tool is still listed with this definition and pin status, so
+/// a definition that changes after approval asks again.
+public struct MCPToolBinding: Sendable, Equatable {
+    /// Hash of the tool object as listed this session; empty when it was
+    /// not listed.
+    public var definitionHash: String
+    public var pinStatus: MCPToolPinStatus
+
+    public init(definitionHash: String, pinStatus: MCPToolPinStatus) {
+        self.definitionHash = definitionHash
+        self.pinStatus = pinStatus
+    }
+
+    /// No listing to bind to: callers outside the gateway, and tests.
+    public static let unbound = MCPToolBinding(definitionHash: "", pinStatus: .pinned)
+}
+
 /// One `ask` tool call waiting for, or holding, a human decision. Bound to
 /// the exact arguments so an approval cannot be reused for a different call.
 public struct MCPApprovalRequest: Sendable, Equatable {
@@ -20,6 +38,8 @@ public struct MCPApprovalRequest: Sendable, Equatable {
     public var tool: String
     public var argumentsHash: String
     public var argumentKeys: [String]
+    /// The definition the call was made against; part of every MAC.
+    public var binding: MCPToolBinding
     public var requestedAt: Date
     public var state: State
     /// Written by `rv mcp approve`; a grant without a valid MAC is forged.
@@ -30,6 +50,7 @@ public struct MCPApprovalRequest: Sendable, Equatable {
 
     public init(
         id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String],
+        binding: MCPToolBinding = .unbound,
         requestedAt: Date, state: State, grantMAC: String? = nil, codeMAC: String? = nil, argumentKeysMAC: String? = nil
     ) {
         self.id = id
@@ -37,6 +58,7 @@ public struct MCPApprovalRequest: Sendable, Equatable {
         self.tool = tool
         self.argumentsHash = argumentsHash
         self.argumentKeys = argumentKeys
+        self.binding = binding
         self.requestedAt = requestedAt
         self.state = state
         self.grantMAC = grantMAC
@@ -55,7 +77,9 @@ public struct MCPApprovalRequest: Sendable, Equatable {
     public var argumentKeysMAC: String?
 
     var grantFields: [String] {
-        [id, server, tool, argumentsHash, Self.argumentKeyField(argumentKeys)]
+        MCPApprovalStore.boundFields(
+            id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
+            binding: binding)
     }
 }
 
@@ -79,16 +103,18 @@ public enum MCPGrantLookup: Sendable, Equatable {
 
 /// What the gateway core needs from approvals; tests pass in-memory closures.
 public struct MCPApprovalGate: Sendable {
-    /// A granted approval for exactly this call, consumed on use.
+    /// A granted approval for exactly this call against this definition, consumed on use.
     public var consumeGrant: @Sendable (
-        _ server: String, _ tool: String, _ argumentsHash: String, _ argumentKeys: [String]
+        _ server: String, _ tool: String, _ argumentsHash: String, _ argumentKeys: [String], _ binding: MCPToolBinding
     ) -> MCPGrantLookup
     /// Records (or reuses) a pending request. Nil when it could not be stored.
-    public var request: @Sendable (_ server: String, _ tool: String, _ argumentsHash: String, _ keys: [String]) -> MCPApprovalTicket?
+    public var request: @Sendable (
+        _ server: String, _ tool: String, _ argumentsHash: String, _ keys: [String], _ binding: MCPToolBinding
+    ) -> MCPApprovalTicket?
 
     public init(
-        consumeGrant: @escaping @Sendable (String, String, String, [String]) -> MCPGrantLookup,
-        request: @escaping @Sendable (String, String, String, [String]) -> MCPApprovalTicket?
+        consumeGrant: @escaping @Sendable (String, String, String, [String], MCPToolBinding) -> MCPGrantLookup,
+        request: @escaping @Sendable (String, String, String, [String], MCPToolBinding) -> MCPApprovalTicket?
     ) {
         self.consumeGrant = consumeGrant
         self.request = request
@@ -96,8 +122,8 @@ public struct MCPApprovalGate: Sendable {
 
     public static func store(_ store: MCPApprovalStore) -> MCPApprovalGate {
         MCPApprovalGate(
-            consumeGrant: { store.consumeGrant(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3) },
-            request: { store.request(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3) })
+            consumeGrant: { store.consumeGrant(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3, binding: $4) },
+            request: { store.request(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3, binding: $4) })
     }
 }
 
@@ -128,7 +154,9 @@ public struct MCPApprovalStore: Sendable {
     }
 
     /// Reusing a pending request mints a fresh code: only the newest printed code works.
-    public func request(server: String, tool: String, argumentsHash: String, argumentKeys: [String]) -> MCPApprovalTicket? {
+    public func request(
+        server: String, tool: String, argumentsHash: String, argumentKeys: [String], binding: MCPToolBinding = .unbound
+    ) -> MCPApprovalTicket? {
         guard signing.honorsGrants else { return nil }
         return withLockedRequests { requests in
             // The code exists only if its MAC could be made (this enrolls
@@ -139,20 +167,22 @@ public struct MCPApprovalStore: Sendable {
                 signing.mac(
                     .code, Self.codeFields(
                         id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
-                        code: codeCandidate),
+                        binding: binding, code: codeCandidate),
                     true)
             }
             func keysMAC(_ id: String) -> String? {
                 signing.mac(
                     .argumentKeys, Self.boundFields(
-                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys),
+                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
+                        binding: binding),
                     true)
             }
             func liveCode(for mac: String?) -> String? {
                 mac == nil ? nil : codeCandidate
             }
             if let index = requests.firstIndex(where: {
-                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .pending
+                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.binding == binding
+                    && $0.state == .pending
             }) {
                 requests[index].argumentKeys = argumentKeys
                 requests[index].argumentKeysMAC = keysMAC(requests[index].id)
@@ -165,7 +195,7 @@ public struct MCPApprovalStore: Sendable {
             let code = liveCode(for: mac)
             let request = MCPApprovalRequest(
                 id: id, server: server, tool: tool, argumentsHash: argumentsHash,
-                argumentKeys: argumentKeys, requestedAt: clock(), state: .pending,
+                argumentKeys: argumentKeys, binding: binding, requestedAt: clock(), state: .pending,
                 codeMAC: mac, argumentKeysMAC: keysMAC(id))
             requests.append(request)
             while requests.count > Self.maximumRequests {
@@ -179,13 +209,16 @@ public struct MCPApprovalStore: Sendable {
         } ?? nil
     }
 
+    /// A grant signed for this call against this tool definition. A grant
+    /// for another definition (the tool changed since) stays unused.
     public func consumeGrant(
-        server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+        server: String, tool: String, argumentsHash: String, argumentKeys: [String], binding: MCPToolBinding = .unbound
     ) -> MCPGrantLookup {
         guard signing.honorsGrants else { return .none }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: {
-                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .granted
+                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.binding == binding
+                    && $0.state == .granted
             }) else { return MCPGrantLookup.none }
             // The hash alone is not the call. A grant signed for other key names stays put.
             guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
@@ -219,7 +252,7 @@ public struct MCPApprovalStore: Sendable {
         // row as it stands now, not one swapped in during a key load.
         return signing.verify(request.codeMAC, .code, Self.codeFields(
             id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
-            argumentKeys: request.argumentKeys, code: typed)) == .valid
+            argumentKeys: request.argumentKeys, binding: request.binding, code: typed)) == .valid
     }
 
     public func hasCode(id: String) -> Bool {
@@ -232,13 +265,15 @@ public struct MCPApprovalStore: Sendable {
     /// that changed after the user was shown `server`/`tool`/`argumentsHash`
     /// or the argument key names is left pending and unsigned.
     public func grant(
-        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String],
+        binding: MCPToolBinding = .unbound
     ) -> MCPApprovalRequest? {
         guard signing.honorsGrants else { return nil }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: { $0.id == id && $0.state == .pending }) else { return nil }
             guard requests[index].server == server, requests[index].tool == tool,
-                requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys
+                requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys,
+                requests[index].binding == binding
             else { return nil }
             guard signing.verify(requests[index].argumentKeysMAC, .argumentKeys, requests[index].grantFields) == .valid,
                 let grantMAC = signing.mac(.grant, requests[index].grantFields, true)
@@ -250,16 +285,22 @@ public struct MCPApprovalStore: Sendable {
     }
 
     static func boundFields(
-        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String],
+        binding: MCPToolBinding
     ) -> [String] {
-        [id, server, tool, argumentsHash, MCPApprovalRequest.argumentKeyField(argumentKeys)]
+        [
+            id, server, tool, argumentsHash, MCPApprovalRequest.argumentKeyField(argumentKeys),
+            binding.definitionHash, binding.pinStatus.rawValue,
+        ]
     }
 
     static func codeFields(
-        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String], code: String
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String],
+        binding: MCPToolBinding, code: String
     ) -> [String] {
         boundFields(
-            id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys
+            id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
+            binding: binding
         ) + [MCPConfirmationCode.normalize(code)]
     }
 
@@ -318,6 +359,8 @@ public struct MCPApprovalStore: Sendable {
                 object["tool"] = .string(request.tool)
                 object["argumentsHash"] = .string(request.argumentsHash)
                 object["argumentKeys"] = .array(request.argumentKeys.map(JSONValue.string))
+                object["definitionHash"] = .string(request.binding.definitionHash)
+                object["pinStatus"] = .string(request.binding.pinStatus.rawValue)
                 object["requestedAt"] = .string(formatter.string(from: request.requestedAt))
                 object["state"] = .string(request.state.rawValue)
                 if let mac = request.grantMAC { object["grantMAC"] = .string(mac) }
@@ -337,9 +380,14 @@ public struct MCPApprovalStore: Sendable {
                 let requested = item["requestedAt"]?.stringValue.flatMap(formatter.date(from:)),
                 let state = item["state"]?.stringValue.flatMap(MCPApprovalRequest.State.init(rawValue:))
             else { return nil }
+            // A row without a readable binding decodes as unverified; its
+            // MACs then do not verify, so it is never shown or granted.
+            let binding = MCPToolBinding(
+                definitionHash: item["definitionHash"]?.stringValue ?? "",
+                pinStatus: item["pinStatus"]?.stringValue.flatMap(MCPToolPinStatus.init(rawValue:)) ?? .unverified)
             return MCPApprovalRequest(
                 id: id, server: server, tool: tool, argumentsHash: hash,
-                argumentKeys: item["argumentKeys"]?.stringArray ?? [], requestedAt: requested, state: state,
+                argumentKeys: item["argumentKeys"]?.stringArray ?? [], binding: binding, requestedAt: requested, state: state,
                 grantMAC: item["grantMAC"]?.stringValue, codeMAC: item["codeMAC"]?.stringValue,
                 argumentKeysMAC: item["argumentKeysMAC"]?.stringValue)
         }

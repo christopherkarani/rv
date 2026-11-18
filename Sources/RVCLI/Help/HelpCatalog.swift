@@ -33,6 +33,7 @@ enum HelpCatalog {
         case .mcp: mcp
         case .managed: managed
         case .report: report
+        case .run: run
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -51,6 +52,7 @@ enum HelpCatalog {
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
+                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
@@ -104,6 +106,44 @@ enum HelpCatalog {
                 HelpRow(name: "rv help <command>"),
                 HelpRow(name: "rv help service status"),
             ]),
+        ]
+    )
+
+    static let run = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv run --secret <name> [--secret <name>]... -- <command> [args...]"),
+                HelpRow(name: "rv run --all -- <command> [args...]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--secret", description: "A secret from secrets.json to stage as a placeholder; repeatable. It must use gateway or awsSigV4 delivery and have no agents filter, or the launch is refused"),
+                HelpRow(name: "--all", description: "Every secret that can be a placeholder; the ones it skips are named on stderr, and their variables are removed from the command's environment"),
+                HelpRow(name: "--", description: "Everything after it is the command, including --help"),
+            ]),
+            HelpSection(heading: "Protects", rows: [
+                HelpRow(name: "values", description: "The command's environment holds per-launch placeholders, never the real values: the parent's copies of those variables, a hostEnvironment source's variable, and any variable holding one of those values (or containing one 12 bytes or longer) are removed (named on stderr), so it cannot print, log, or paste into a transcript a value it was never given"),
+                HelpRow(name: "use", description: "The loopback gateway swaps a placeholder for the real value only on a connection from the command or a process it started, and only for requests the secret's allow rules permit. Requests an approve rule matches are refused: there is no approver outside a workspace"),
+                HelpRow(name: "lifetime", description: "When the command exits, its placeholders are revoked, the gateway stops, and what is left of its process group is killed"),
+            ]),
+            HelpSection(heading: "Does not", rows: [
+                HelpRow(name: "cage", description: "rv run is not a sandbox. The command runs as you, with your files and network. It can read anything your user can, which may include where the real values live (a .env file, ~/.aws/credentials, a signed-in password manager CLI), and it may be able to read the environments of its parent processes, rv's included"),
+                HelpRow(name: "other secrets", description: "Every other variable passes through unchanged, including secrets you did not select"),
+                HelpRow(name: "escape", description: "A process in a new session or group (setsid) can still spend the placeholders while its chain of parents reaches the command. Only one reparented to launchd (its parent exited) cannot, and it keeps running after rv run exits"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "command", description: "A bare name is searched in PATH's absolute directories; a name with a slash is a path"),
+                HelpRow(name: "terminal", description: "When rv holds the terminal alone, the command gets it, so Ctrl-C and Ctrl-Z reach it. In a pipeline (rv run -- x | less) the terminal stays with the pipeline: Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops rv but not the command. SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to rv are forwarded to its process group; one rv inherited ignored (nohup) stays ignored for the command"),
+                HelpRow(name: "store login", description: "When a selected secret comes from Vault, rv's own Vault login (VAULT_TOKEN) is removed as well; ~/.vault-token is not. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
+                HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
+                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. On Linux the suspended start needs rv-isolation-exec installed beside rv"),
+            ]),
+        ],
+        examples: [
+            "rv run --secret OPENAI_API_KEY -- codex",
+            "rv run --all -- claude",
+            "rv run --secret GITHUB_TOKEN -- gh pr list",
         ]
     )
 
@@ -673,6 +713,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
                 HelpRow(name: "rv mcp trust"),
                 HelpRow(name: "rv mcp connect <server> [--client-id <id>] [--scope <s>] [--no-browser] [--forget]"),
+                HelpRow(name: "sudo rv mcp custodian install | uninstall [--purge]; rv mcp custodian status"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
                 HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
@@ -687,7 +728,7 @@ enum HelpCatalog {
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",
-                    description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
+                    description: "\"sandbox\" cages the server (macOS, Linux 6.7+); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
                     name: "enforcement",
@@ -713,6 +754,10 @@ enum HelpCatalog {
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
                 HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
                 HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
+                HelpRow(
+                    name: "custodian",
+                    description: "Linux: trust and approvals need the key custodian (systemd, PAM), installed once with sudo; signing then asks for your login password at your terminal"
+                ),
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",

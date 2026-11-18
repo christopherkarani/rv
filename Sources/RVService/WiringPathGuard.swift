@@ -48,7 +48,7 @@ enum WiringPathGuard {
 
     /// Absolute, lexically collapsed spelling; nil for a relative path
     /// with no cwd to anchor it.
-    private static func absolute(_ typed: String, home: String, cwd: WorkingDirectory?) -> String? {
+    static func absolute(_ typed: String, home: String, cwd: WorkingDirectory?) -> String? {
         var path = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         if case .expanded(let expanded) = expandTildeUser(path) { path = expanded }
         for alias in ["~", "$HOME", "${HOME}"] {

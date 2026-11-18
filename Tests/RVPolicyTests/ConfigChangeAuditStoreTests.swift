@@ -90,7 +90,7 @@ struct ConfigChangeAuditStoreTests {
         #expect(throws: ConfigChangeUnrecorded.self) {
             try HostModeStore(configDirectory: directory).saveGlobalObserve()
         }
-        #expect(HostModeStore(configDirectory: directory).load().isEmpty)
+        #expect(HostModeStore(configDirectory: directory).read() == .entries([:]))
     }
 
     @Test func anUnrecordableTighteningSettingIsStillWritten() throws {
@@ -103,7 +103,7 @@ struct ConfigChangeAuditStoreTests {
         #expect(store.loadMachine() == .strict)
         let hosts = HostModeStore(configDirectory: directory)
         try hosts.save(.block, for: .cursor)
-        #expect(hosts.load()[.cursor] == .block)
+        #expect(hosts.read() == .entries([.cursor: .block]))
     }
 
     @Test func settingDirectionsFollowTheGate() {

@@ -30,7 +30,10 @@ public enum RebaseRecovery: Sendable {
         return HookAuthorization.isPinned(result)
     }
 
+    /// The host MCP config guard is never lifted: restoring `.mcp.json`
+    /// mid-rebase is still a write of a host MCP config.
     private static func isNeverEligibleRule(_ ruleID: RuleID) -> Bool {
+        if ruleID == MCPHostConfigPaths.ruleID { return true }
         switch ruleID.pattern {
         case "reset-hard", "reset-merge", "clean-force":
             return true

@@ -99,6 +99,10 @@ public enum MCPLaunchPlanner {
                 if policy.network {
                     return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
                 }
+            } else if configuration.managed?.mcp.requireSandbox == true {
+                // No cage here (`requireSandbox` is the platform's cage):
+                // the organization's rule is kept only by not starting it.
+                return .failure(.sandbox(MCPPlatformSupport.organizationSandboxUnenforced(server: name)))
             }
             var environment = sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
