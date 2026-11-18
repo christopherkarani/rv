@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVTheme
 @testable import RVCLI
@@ -320,6 +321,7 @@ struct PolicyRollbackCommandTests {
                         confirmed.summaries.append(summary)
                         // The head stays r2; only the live file gains an ask.
                         try edited.write(to: fixture.store.machineFileURL, atomically: true, encoding: .utf8)
+                        return OwnerConfirmation.testAuthorization
                     }
                 }
             }
@@ -348,6 +350,7 @@ struct PolicyRollbackCommandTests {
                         session: fixture.session, layer: .machine, revision: 1, save: true, robot: false
                     ) { _ in
                         try fixture.saveMachine([denyPush, allowDiscard, askReset])
+                        return OwnerConfirmation.testAuthorization
                     }
                 }
             }
@@ -402,6 +405,7 @@ struct PolicyRollbackCommandTests {
                     session: fixture.session, layer: .machine, revision: 2, save: true, robot: false
                 ) { summary in
                     confirmed.summaries.append(summary)
+                    return OwnerConfirmation.testAuthorization
                 }
             }
 
@@ -409,6 +413,77 @@ struct PolicyRollbackCommandTests {
             #expect(output.stdout.contains("already the current policy") == false)
             #expect(output.stdout.contains("restored r2 as r"))
             #expect(try fixture.session.loadMachineDocument().rules == [denyPush, allowDiscard])
+        }
+    }
+
+    @Test func theAuditEventRecordsTheOwnerCheckThatAuthorizedTheRollback() async throws {
+        try await withRollbackFixture { fixture in
+            try fixture.saveMachine([denyPush])
+            try fixture.saveMachine([denyPush, allowDiscard])
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path,
+                ownerAuthOutcome: .authenticated, output: CLIOutputCapture()
+            ) {
+                try await PolicyRollbackCommand.parse(["1", "--save"]).run()
+            }
+
+            let events = AuditLedger(configDirectory: fixture.config)
+                .events(AuditFilter(kinds: ["policy.changed"]))
+                .filter { $0.detail["change"] == "rollback" }
+            #expect(events.count == 1, "\(events)")
+            #expect(events.first?.detail["authorized_by"] == OwnerConfirmation.testAuthorization)
+        }
+    }
+
+    @Test func aRestoreOutsideThePolicyCeilingIsRefusedBeforeTheOwnerPrompt() async throws {
+        try await withRollbackFixture { fixture in
+            // r1 asked on reset, r2 dropped it; the ceiling now denies reset.
+            try fixture.saveMachine([askReset])
+            try fixture.saveMachine([])
+            try """
+                schema_version = 1
+
+                [[rule]]
+                id = "typed.git:no-reset"
+                verdict = "deny"
+                predicate = "gitReset"
+                """.write(
+                to: RVPolicyPaths.policyCeilingFile(inConfigDir: fixture.config), atomically: true, encoding: .utf8)
+            let before = try fixture.snapshot()
+            let preview = CLIOutputCapture()
+            let robot = CLIOutputCapture()
+            let saved = CLIOutputCapture()
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: preview
+            ) {
+                try await PolicyRollbackCommand.parse(["1"]).run()
+            }
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: robot
+            ) {
+                try await PolicyRollbackCommand.parse(["1", "--json"]).run()
+            }
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: saved
+            ) {
+                // No owner auth here: reaching the prompt would refuse with
+                // the owner-check exit code instead of 1.
+                await #expect(throws: ExitCode(1)) {
+                    try await PolicyRollbackCommand.parse(["1", "--save"]).run()
+                }
+            }
+
+            #expect(preview.stdout.contains("ceiling: git reset --soft exceeds the policy ceiling"), "\(preview.stdout)")
+            #expect(preview.stdout.hasSuffix("preview only: --save would be refused\n"))
+            let json = try jsonObject(robot.stdout)
+            #expect(json["outcome"] as? String == "preview")
+            #expect((json["ceiling_refusal"] as? String)?.hasPrefix("git reset --soft exceeds the policy ceiling") == true)
+            #expect(saved.stdout.hasSuffix("refused: nothing was written\n"))
+            #expect(saved.stderr.hasPrefix("rv policy rollback: refused: git reset --soft exceeds the policy ceiling"), "\(saved.stderr)")
+            #expect(saved.stderr.hasSuffix("; nothing was changed\n"))
+            #expect(try fixture.snapshot() == before)
         }
     }
 

@@ -22,7 +22,7 @@ _rv() {
       if [[ $COMP_CWORD -eq 3 && "${COMP_WORDS[2]}" == ceiling ]]; then
         COMPREPLY=( $(compgen -W "show set" -- "$cur") )
       else
-        COMPREPLY=( $(compgen -W "show list draft validate export apply check ceiling rollback" -- "$cur") )
+        COMPREPLY=( $(compgen -W "show list draft validate export apply rollback check ceiling" -- "$cur") )
       fi
       ;;
     scan)

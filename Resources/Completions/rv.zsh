@@ -63,7 +63,7 @@ _rv() {
             _describe -t commands 'policy ceiling' pc
           else
             local -a po
-            po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply' 'check:Check against the ceiling' 'ceiling:Show or set the ceiling' 'rollback:Restore an earlier revision')
+            po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply' 'rollback:Restore an earlier revision' 'check:Check against the ceiling' 'ceiling:Show or set the ceiling')
             _describe -t commands 'policy' po
           fi
           ;;

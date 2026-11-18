@@ -5,7 +5,7 @@ import RVDomain
 /// `weakensPolicy` is true when any launched command is an `rv` invocation
 /// that lowers protection: uninstalling, disabling packs, lowering safety,
 /// adding allowlist entries, redeeming or minting allow-once permits,
-/// applying, saving, or rolling back policy or its ceiling, approving egress/MCP calls, trusting an
+/// applying, saving, or rolling back policy, saving its ceiling, approving egress/MCP calls, trusting an
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
@@ -312,10 +312,10 @@ private func isWeakeningSub(
     case "allow-once":
         return sub == "redeem" || sub == "mint" || isUnlockCode(sub)
     case "policy":
-        // `ceiling` replaces the owner's bound; only `show` (the default) reads.
-        if sub == "ceiling" { return third.map { $0 != "show" } ?? false }
         // `draft --save` and `rollback --save` write the layer; a variable
         // or glob may carry the flag. Without it both are read-only previews.
+        // `ceiling` replaces the owner's bound; only `show` (the default) reads.
+        if sub == "ceiling" { return third.map { $0 != "show" } ?? false }
         let writesLayer = flags.contains("--save") || tail.contains(where: isUnmodelledWord)
         return sub == "apply" || ((sub == "draft" || sub == "rollback") && writesLayer)
     case "egress", "mcp":

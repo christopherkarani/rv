@@ -375,6 +375,7 @@ public struct TypedRuleStore: Sendable {
     func rollbackMachine(
         toRevision target: Int,
         expected: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil,
         interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
@@ -417,6 +418,9 @@ public struct TypedRuleStore: Sendable {
                     historyHead: sealedHead.document,
                     incoming: match.document
                 )
+                // Caller's admission check (the owner's policy ceiling),
+                // under the same locks as the write.
+                try admit?(match.document)
                 let pending = try preparedRevisionLine(
                     document: match.document,
                     text: match.toml,
@@ -630,22 +634,30 @@ public struct TypedRuleStore: Sendable {
     /// `expected` binds the rollback to the target and head a preview
     /// showed: when either differs in the display log under the lock, it
     /// throws `headChanged` before the gate and before the rollback writes.
+    /// `admit` runs on the restored document under the write locks, after
+    /// the gate; a throw refuses with nothing written. `PolicyWorkspace`
+    /// passes the policy-ceiling containment check here.
     public func rollbackMachine(
         to revision: Int,
-        expected: PolicyRollbackBinding
+        expected: PolicyRollbackBinding,
+        admit: ((PolicyDocument) throws -> Void)? = nil
     ) throws -> PolicyRevision {
-        try rollbackMachine(to: revision, binding: expected)
+        try rollbackMachine(to: revision, binding: expected, admit: admit)
     }
 
     /// `rollbackMachine(to:expected:)` with an optional binding, for tests
     /// of the gate itself.
-    func rollbackMachine(to revision: Int, binding: PolicyRollbackBinding?) throws -> PolicyRevision {
+    func rollbackMachine(
+        to revision: Int,
+        binding: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil
+    ) throws -> PolicyRevision {
         // One implementation: the sealed, byte-exact, single-lock path.
         // Public revisions are generations in both spellings (see
         // `machineHistory()`), so this is a forwarder, not a second
         // rollback with its own numbering and lock discipline.
         do {
-            return try rollbackMachine(toRevision: revision, expected: binding, interlock: nil)
+            return try rollbackMachine(toRevision: revision, expected: binding, admit: admit, interlock: nil)
         } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
@@ -660,13 +672,15 @@ public struct TypedRuleStore: Sendable {
     ///
     /// `.policy.lock` is held across the live re-read, both gates, and
     /// the write. `loadRepoDocument` does not take that lock.
-    /// `expected` is the same preview binding as on the machine layer.
+    /// `expected` is the same preview binding as on the machine layer, and
+    /// `admit` the same admission check.
     public func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        expected: PolicyRollbackBinding
+        expected: PolicyRollbackBinding,
+        admit: ((PolicyDocument) throws -> Void)? = nil
     ) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, expected: expected, interlock: nil)
+        try rollbackRepo(to: revision, workspace: workspace, expected: expected, admit: admit, interlock: nil)
     }
 
     /// `expected` nil (no binding) is for tests of the gate only.
@@ -674,6 +688,7 @@ public struct TypedRuleStore: Sendable {
         to revision: Int,
         workspace: URL,
         expected: PolicyRollbackBinding?,
+        admit: ((PolicyDocument) throws -> Void)? = nil,
         interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
@@ -704,6 +719,7 @@ public struct TypedRuleStore: Sendable {
                 historyHead: head.document,
                 incoming: targetDocument
             )
+            try admit?(targetDocument)
             interlock?.beforeWrite?()
             try saveUnlocked(
                 targetDocument,

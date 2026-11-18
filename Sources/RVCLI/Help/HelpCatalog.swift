@@ -984,9 +984,9 @@ enum HelpCatalog {
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
+                HelpRow(name: "rv policy rollback <revision> [--repo] [--save] [--json]"),
                 HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
                 HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
-                HelpRow(name: "rv policy rollback <revision> [--repo] [--save] [--json]"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -994,20 +994,20 @@ enum HelpCatalog {
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
                 ),
                 HelpRow(
-                    name: "ceiling",
-                    description: "ceiling.toml: deny/ask rules every evaluation applies on top of the layers, plus optional egress.hosts for approvals. Saves that ask where it denies are refused; check prints a witness to rv explain."
-                ),
-                HelpRow(
                     name: "rollback",
                     description: "Previews the restore (effective-rule diff and risk); --save re-submits it as a new head after owner approval. A restore that drops or relaxes a deny or ask is refused (exit 2)."
+                ),
+                HelpRow(
+                    name: "ceiling",
+                    description: "ceiling.toml: deny/ask rules every evaluation applies on top of the layers, plus optional egress.hosts for approvals. Saves that ask where it denies are refused; check prints a witness to rv explain."
                 ),
             ]),
         ],
         examples: [
             "rv policy show",
             "rv policy draft --english 'never allow force-push to main'",
-            "rv policy check --ceiling",
             "rv policy rollback r2",
+            "rv policy check --ceiling",
         ]
     )
 

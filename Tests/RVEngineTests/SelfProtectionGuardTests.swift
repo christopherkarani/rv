@@ -150,6 +150,8 @@ struct SelfProtectionGuardTests {
         "ls | xargs -I% sh -c 'cp % /tmp'",
         "rv policy ceiling set ceiling.toml",
         "rv policy ceiling $SUB ceiling.toml",
+        "echo set | xargs rv policy ceiling",
+        "echo x | xargs rv policy ceiling set",
         "rv egress approve 1",
         "rv mcp approve 1",
         "rv mcp trust",

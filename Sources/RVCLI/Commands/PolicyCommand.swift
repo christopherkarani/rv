@@ -7,10 +7,10 @@ import RVPolicy
 struct Policy: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "policy",
-        abstract: "Show, list, draft, share, or roll back compiled typed rules.",
+        abstract: "Show, list, draft, share, check, or roll back compiled typed rules.",
         subcommands: [
             Show.self, List.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self,
-            PolicyCheck.self, PolicyCeilingCommand.self, PolicyRollbackCommand.self,
+            PolicyRollbackCommand.self, PolicyCheck.self, PolicyCeilingCommand.self,
         ],
         defaultSubcommand: Show.self
     )

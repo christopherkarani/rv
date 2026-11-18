@@ -156,7 +156,10 @@ public struct PolicyWorkspace: Sendable {
     /// `expected` (from a preview) makes the rollback refuse `headChanged`
     /// when the layer's head or the target moved since that preview. It is
     /// a required argument; it binds only as tightly as the preview it came
-    /// from.
+    /// from. Like every layer save, the restored document must stay within
+    /// the owner's policy ceiling: one that asks where the ceiling denies,
+    /// or an invalid `ceiling.toml`, refuses with `PolicyCeilingError`
+    /// under the write lock, with nothing written.
     public func rollback(
         layer: PolicyDocumentLayer,
         to revision: Int,
@@ -168,20 +171,28 @@ public struct PolicyWorkspace: Sendable {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
             return try TypedRuleStore(baseDirectory: directory)
-                .rollbackMachine(to: revision, expected: expected)
+                .rollbackMachine(to: revision, expected: expected, admit: admitWithinCeiling)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
             return try revisionRepoStore(workspace: workspace)
-                .rollbackRepo(to: revision, workspace: workspace, expected: expected)
+                .rollbackRepo(to: revision, workspace: workspace, expected: expected, admit: admitWithinCeiling)
         }
+    }
+
+    /// The ceiling check `mergeIncoming` runs on a save, for rollback.
+    private func admitWithinCeiling(_ document: PolicyDocument) throws {
+        try loadCeiling()?.requireContained(document)
     }
 
     /// A layer rollback preview plus the effective rules before and after.
     /// `currentEffective` is nil when a live layer file does not parse;
     /// `restoredEffective` is nil when the other layer's file does not.
     /// `liveHash` is the live layer document's identity (nil: unparseable).
+    /// Both effective sets include the owner's policy ceiling (nil when
+    /// `ceiling.toml` is invalid). `ceilingRefusal` is why `rollback` would
+    /// refuse the restored document against that ceiling, or nil.
     public struct RollbackPreview: Sendable, Equatable {
         public var layer: PolicyDocumentLayer
         public var target: PolicyRevision
@@ -191,6 +202,7 @@ public struct PolicyWorkspace: Sendable {
         public var risk: PolicyDiffRiskReport
         public var currentEffective: [TypedRule]?
         public var restoredEffective: [TypedRule]?
+        public var ceilingRefusal: PolicyCeilingError?
 
         /// Restoring would change nothing: the target is the head and the
         /// live file already holds that content.
@@ -228,10 +240,28 @@ public struct PolicyWorkspace: Sendable {
         case .repo:
             otherRules = try Self.nilWhenUnparseable { try loadMachineDocument().typedRules(origin: .machine) }
         }
-        let restoredEffective = otherRules.map { other in
+        // An invalid ceiling.toml leaves both effective sets unavailable
+        // and refuses the save, as for an unparseable layer.
+        var ceiling: PolicyCeiling?
+        var ceilingRefusal: PolicyCeilingError?
+        do {
+            ceiling = try loadCeiling()
+        } catch PolicyCeilingError.invalidFile {
+            ceilingRefusal = .invalidFile
+        }
+        if let ceiling {
+            do {
+                try ceiling.requireContained(preview.target.document)
+            } catch let error as PolicyCeilingError {
+                ceilingRefusal = error
+            }
+        }
+        let ceilingParses = ceilingRefusal != .invalidFile
+        let ceilingRules = ceiling?.typedRules ?? []
+        let restoredEffective = ceilingParses == false ? nil : otherRules.map { other in
             layer == .machine
-                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other)
-                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules)
+                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other, ceiling: ceilingRules)
+                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules, ceiling: ceilingRules)
         }
         return RollbackPreview(
             layer: layer,
@@ -241,7 +271,8 @@ public struct PolicyWorkspace: Sendable {
             liveHash: preview.live.map(PolicyRevisionIdentity.hash),
             risk: preview.risk,
             currentEffective: try Self.nilWhenUnparseable { try loadEffectiveRules(builtin: builtin) },
-            restoredEffective: restoredEffective
+            restoredEffective: restoredEffective,
+            ceilingRefusal: ceilingRefusal
         )
     }
 
@@ -252,6 +283,8 @@ public struct PolicyWorkspace: Sendable {
         do {
             return try load()
         } catch TypedRuleStoreError.invalidFile {
+            return nil
+        } catch PolicyCeilingError.invalidFile {
             return nil
         }
     }
