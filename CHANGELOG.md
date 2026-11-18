@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - The shared launcher resolver now sees through transparent exec wrappers (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, including `flock FILE -c CMD`, `unbuffer`, `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`), parsing each one's options and leading operands. Redirects never fill an option value or operand slot, and a variable or glob there is judged unmodelled. `firejail`, and `chpst`'s environment, root and directory options, are never treated as transparent. Before, `setsid rv uninstall` or `stdbuf -oL rv packs disable core.git` slipped past the self-protection floor, and the same wrappers hid commands from the other floors that use the resolver. A wrapper option rv does not model fails closed: every later operand is judged as a possible command.
 
+### Changed
+
+- Analytics is now off unless you turn it on with `"analytics.enabled": true` (nested or flat) in `~/.config/rv/config.json`. Before, it was on by default and sent anonymous usage events to PostHog (`us.i.posthog.com`) with no consent step; installs that never wrote the key now send nothing after upgrade. A missing, unreadable or ambiguous config, or the two forms disagreeing, means off, and while off rv mints no install id and writes no analytics files.
+
 ### Fixed
 
 - A program piped to an interpreter is judged again when an option's value names stdin (`node -r /dev/stdin app.js`, `ruby -r /dev/fd/0 main.rb`, `-`, `/proc/self/fd/0`). 0.2.2 skipped the value as an option's argument and took the next word for a script file, so the piped program was not sent to the judge. `curl ... | ruby -E UTF-8` is now read as Ruby running stdin too; `ruby -E 'code'` asks as before.

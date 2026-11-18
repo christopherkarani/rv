@@ -313,6 +313,8 @@ Or run `rv setup` without `exec` and `exit` with its status.
   That is a documented known limit.
 - **Analytics.** On by default and sent to a third-party host
   (`us.i.posthog.com`). The installer doesn't mention it; the README does.
+  *Note, 2026-11-19: analytics is now off unless config.json turns it on
+  (`analytics.enabled: true`); see the CHANGELOG.*
 - **Headless servers have no Secret Service.** There, `rv secrets set`
   cannot store values. The refusal says to use a desktop or SSH login, but
   an SSH login on a server usually has no keyring either.

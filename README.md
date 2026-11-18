@@ -540,9 +540,16 @@ If rvd is not running, you confirm at the terminal with your login password
 to start rvd.
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
-Anonymous usage counters are on by default; opt out with
-`"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
-in `~/.config/rv/config.json`.
+Anonymous usage analytics are off unless you turn them on. To turn them
+on, set `"analytics.enabled": true` (or `{"analytics": {"enabled": true}}`)
+in `~/.config/rv/config.json`; anything else, including no config file,
+leaves them off. When on, rv sends PostHog (`us.i.posthog.com`, a third
+party) an install event and one event a day with a random install id, the
+rv version, the OS version and build, the day's allow, deny and
+indeterminate counts, the enabled pack ids, and which host agents are
+wired; PostHog also sees the address the request comes from. rv never
+sends commands, paths or secrets. The id and counters live
+in `~/.config/rv/analytics-*`; `rv uninstall` deletes them.
 
 ## For developers
 

@@ -668,7 +668,7 @@ evaluation **[C48]**.
 
 | Destination | What | When |
 | --- | --- | --- |
-| PostHog (`https://us.i.posthog.com`) | A random install UUID, rv version, OS version and build, daily allow/deny/indeterminate counts, enabled pack ids, which host agents are wired **[C179]** | The preference defaults to on (`analytics.enabled: false` opts out; no environment opt-out) **[C180]**, but the API key compiled into this tree is empty and an empty key disables sending; a key can be supplied with `RV_POSTHOG_API_KEY` **[C181]**. No release script that injects a key was found. Whether published binaries carry a key: not verified. |
+| PostHog (`https://us.i.posthog.com`) | A random install UUID, rv version, OS version and build, daily allow/deny/indeterminate counts, enabled pack ids, which host agents are wired **[C179]** | The preference defaults to off: only `analytics.enabled: true` turns it on, and no environment variable changes that **[C180]**. The API key compiled into this tree is empty and an empty key disables sending; a key can be supplied with `RV_POSTHOG_API_KEY` **[C181]**. No release script that injects a key was found. Whether published binaries carry a key: not verified. |
 | The organization's or user's audit sink | Events from `audit.jsonl` and six other local ledgers (denials, egress denials, runtime admission, workspace and runtime sessions, agent instances), as rv JSON or OCSF; OCSF includes the device hostname. Only `audit.jsonl` is hash-chained **[C182]** | Only when `rv audit forward` runs: by hand, or on macOS as a LaunchAgent installed with `--install` (on Linux `--install` only prints a cron hint). `audit.forward` in organization policy supplies the default destination and headers. HTTPS, or HTTP to localhost only; no redirects **[C183]** |
 | Secret upstreams, Vault, OAuth token endpoints, provider CLIs | Requests with the real credential | When a placeholder is spent or a secret is read **[C77] [C73]** |
 | Remote MCP servers and their OAuth endpoints | MCP traffic | As configured in `mcp.json` |
@@ -1044,7 +1044,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C177 | install.sh:75; Sources/RVCLI/Setup/OwnedPaths.swift:67 |
 | C178 | Sources/RVMCP/CustodianSocketStore.swift:24-34; Sources/rv-mcp-custodian-linux/main.swift:98-101; Sources/RVCLI/Commands/MCPCustodianCommand.swift:237 |
 | C179 | Sources/RVAnalytics/AnalyticsCredentials.swift:9; Sources/RVAnalytics/AnalyticsSink.swift:67; Sources/RVAnalytics/AnalyticsIdentity.swift:14; Sources/RVAnalytics/AnalyticsCoordinator.swift:110-118; Sources/RVAnalytics/AnalyticsCoordinator.swift:135-139 |
-| C180 | Sources/RVAnalytics/AnalyticsPreferences.swift:12-13; Sources/RVAnalytics/AnalyticsPreferences.swift:25-29 |
+| C180 | Sources/RVAnalytics/AnalyticsPreferences.swift:13-14; Sources/RVAnalytics/AnalyticsPreferences.swift:23-37 |
 | C181 | Sources/RVAnalytics/AnalyticsCredentials.swift:3-6; Sources/RVAnalytics/AnalyticsCredentials.swift:19-34; Sources/RVAnalytics/AnalyticsCoordinator.swift:226-229 |
 | C182 | Sources/RVHistory/AuditLedger.swift:15-23; Sources/RVHistory/AuditCursor.swift:49; Sources/RVHistory/AuditOCSF.swift:49; Sources/RVCLI/Commands/AuditForward.swift:141 |
 | C183 | Sources/RVCLI/Commands/AuditForward.swift:49-71; Sources/RVCLI/Commands/AuditForward.swift:174-176; Sources/RVCLI/Commands/AuditForward.swift:194-201; Sources/RVCLI/Commands/AuditForward.swift:343-363 |
