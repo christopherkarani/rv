@@ -10,7 +10,10 @@ import Testing
 @testable import RVMCP
 
 /// Polls `condition` for up to `seconds`; never blocks in a wait call.
-private func eventually(_ seconds: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
+/// The default is a ceiling, not a pace: on macOS a signal is heard on
+/// GCD's shared pool, and a starved CI runner has held that pool for the
+/// best part of a minute while the rest of the bundle ran.
+private func eventually(_ seconds: TimeInterval = 120, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(seconds)
     while condition() == false {
         guard Date() < deadline else { return false }
@@ -114,7 +117,7 @@ struct MCPShutdownSignalTests {
     /// nothing. On macOS the test changes no disposition (`catching:
     /// false`); on Linux a signal is heard only through a handler, which
     /// `cancel` takes away again.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aHandledSignalReachesTheHandlerUntilCancelled() {
         let heard = Mutex<[Int32]>([])
         let signals = MCPShutdownSignals([SIGURG], catching: false)
@@ -130,7 +133,7 @@ struct MCPShutdownSignalTests {
 
     /// A signal heard before serve has a runtime to stop (while it plans,
     /// and probes with a stopped child) is passed on once it has one.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aSignalHeardBeforeForwardingIsPassedOnOnce() {
         let signals = MCPShutdownSignals([SIGURG], catching: false)
         defer { signals.cancel() }
@@ -198,7 +201,7 @@ struct MCPShutdownSignalTests {
     /// that ignores SIGTERM is killed at once instead of being sent SIGTERM
     /// after about 2 s and SIGKILL a second later. The server notes every
     /// SIGTERM it gets, so the test checks which path ran, not how fast.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aSecondShutdownRequestKillsWithoutTheGrace() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-hurry-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
