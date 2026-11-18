@@ -42,19 +42,28 @@ enum EgressAdmissionVerdict: Sendable, Equatable {
     case tunnel(external: Bool, requireSNI: Bool, allowedIPs: EgressAllowedIPs? = nil)
     /// Absolute-URI admitted: forward the request upstream.
     case forward(external: Bool, allowedIPs: EgressAllowedIPs? = nil)
+    /// Audit mode: only the allowlist's host test refused this. The proxy
+    /// runs `admitted` (an external tunnel or forward) once the would-be
+    /// block is durably recorded, and denies `denied-policy` otherwise.
+    /// `admitted` never carries `allowedIPs`: an unlisted host dials public
+    /// unicast only.
+    indirect case audited(EgressAdmissionVerdict)
 }
 
 /// Pure admission ladder shared by both request shapes. Order (SEC-001):
 /// credential, binary gate, plaintext-to-443 (absolute-URI only), then
-/// policy or live supplement, else loopback. Effectful inputs (credential
-/// lookup, binary gate, supplement read) arrive as values.
+/// policy or live supplement, else loopback, else audit. Effectful inputs
+/// (credential lookup, binary gate, supplement read) arrive as values.
+/// `auditsAllowlist` is the instance's `EgressAuditMode`; it turns only the
+/// last `denied-policy` into `.audited`, never an earlier refusal.
 enum EgressAdmission {
     static func decide(
         target: EgressTarget,
         shape: EgressRequestShape,
         credential: EgressAdmissionCredential,
         binaryGateDenial: EgressBinaryGateDenial?,
-        supplementAllows: Bool
+        supplementAllows: Bool,
+        auditsAllowlist: Bool = false
     ) -> EgressAdmissionVerdict {
         let policy: EgressHostPolicy
         let credentialed: Bool
@@ -84,7 +93,17 @@ enum EgressAdmission {
         let external = policyAllows || (!credentialed && supplementAllows)
         let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
         guard external || loopback else {
-            return .deny(.deniedPolicy)
+            guard auditsAllowlist, policy.auditAdmits(host: target.host, port: target.port) else {
+                return .deny(.deniedPolicy)
+            }
+            // Same plaintext-to-TLS-port rule as a listed host.
+            if shape == .absoluteHTTP, credentialed, tlsPort {
+                return .deny(.deniedPolicy)
+            }
+            return .audited(
+                shape == .connect
+                    ? .tunnel(external: true, requireSNI: credentialed && tlsPort)
+                    : .forward(external: true))
         }
         // Private ranges ride only a policy admission: a live supplement
         // rule (agent-proposed, human-approved) or a loopback target never
