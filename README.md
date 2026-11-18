@@ -70,7 +70,7 @@ RHEL 10+), libcurl and libsqlite3; the installer checks these first. musl
 (containers, WSL without systemd, `su`/`sudo -u` logins), `/run/user/<uid>`
 must exist, owned by you, mode 0700, or `XDG_RUNTIME_DIR` must name such a
 directory: `rvd` keeps its socket there and only root can create it
-(`sudo mkdir -p -m 0700 /run/user/$(id -u) && sudo chown $(id -u) /run/user/$(id -u)`).
+(`sudo install -d -m 0755 /run/user && sudo install -d -m 0700 -o $(id -u) /run/user/$(id -u)`).
 `/run` is usually a tmpfs, so make it again after a reboot or container
 restart. The installer checks this before downloading. Linux downloads are
 checked against the release's
