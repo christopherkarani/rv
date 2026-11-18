@@ -6,9 +6,13 @@ import RVDomain
 /// Segments come from `splitSegments` (chains, pipes, grouping, and
 /// `$(...)`/backtick inners). Leading `NAME=value` assignments, redirects and
 /// plain launchers (`sudo`, `env`, `command`, `exec`, `nohup`, `time`, `nice`,
-/// `timeout`, `doas`, `builtin`, `busybox`) are dropped, argv0 is reduced to
-/// its `commandName`, and `sh`/`bash`/`zsh -c`, `eval` and `env -S` payloads
-/// recurse. Shared by the inline-program and self-protection floors; never
+/// `timeout`, `doas`, `builtin`, `busybox`) and transparent exec wrappers
+/// (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, `unbuffer`,
+/// `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`, `firejail`; see
+/// `execWrappers`) are dropped, argv0 is reduced to its `commandName`, and
+/// `sh`/`bash`/`zsh -c`, `eval`, `env -S` and `flock -c` payloads recurse. A
+/// wrapper option the grammar does not model keeps the wrapper as the head
+/// and resolves every later operand suffix speculatively (fail closed). Shared by the inline-program and self-protection floors; never
 /// evaluates policy.
 package func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommandHeads(raw).filter { $0.speculative == false && $0.truncated == false }.map(\.argv)
@@ -214,6 +218,7 @@ func joiningLineContinuations(_ text: String) -> String {
 private let braceSensitiveNames: Set<String> = {
     var names: Set<String> = ["rv", "rv-cli", "sudo", "env", "timeout", "busybox", "eval"]
     names.formUnion(plainLaunchers)
+    names.formUnion(execWrappers.keys)
     names.formUnion(shellNames)
     return names
 }()
@@ -311,6 +316,26 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
             out.append(contentsOf: dynamicCandidates(Array(words[index...]), depth: depth, expand: expand))
         }
         let name = decodedCommandName(word)
+        if let grammar = execWrappers[name] {
+            switch skipWrapper(grammar, words, from: index + 1) {
+            case .command(let at):
+                index = at
+                launcher = nil
+                continue
+            case .shell(let payload):
+                // `flock FILE -c CMD` runs CMD through `sh -c`.
+                words = ["sh", "-c", payload]
+                index = 0
+                launcher = nil
+                continue
+            case .unknown(let at):
+                // An option the grammar does not model may take any number
+                // of operands: every later operand may start the real
+                // command (fail closed). The wrapper itself stays the head.
+                if expand { out.append(contentsOf: speculativeSuffixes(Array(words[(at + 1)...]), depth: depth)) }
+            }
+            break
+        }
         if name == "sudo" || name == "env" || name == "timeout" || name == "busybox" || plainLaunchers.contains(name) {
             launcher = name
             optionsEnded = false
@@ -351,6 +376,20 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
     var command = LaunchedCommand.make(head: head, program: program, args: args, headIsDynamic: isDynamicHead(head))
     command.assignments = assignments
     out.append(command)
+    return out
+}
+
+/// Every operand suffix of `slice`, and every spaced operand as a command
+/// line (`flock --x F -c 'rv ...'`), resolved as a fail-closed guess.
+private func speculativeSuffixes(_ slice: [String], depth: Int) -> [LaunchedCommand] {
+    guard slice.count <= maxDynamicOperands else { return [.truncatedMarker] }
+    var out: [LaunchedCommand] = []
+    for start in slice.indices where isRedirectWord(slice[start]) == false {
+        out.append(contentsOf: resolve(Array(slice[start...]), depth: depth + 1, expand: false).map(\.asSpeculative))
+        if slice[start].contains(where: \.isWhitespace) {
+            out.append(contentsOf: launchedCommandHeads(slice[start], depth: depth + 1).map(\.asSpeculative))
+        }
+    }
     return out
 }
 
@@ -479,6 +518,149 @@ private func launcherOption(_ launcher: String, _ word: String, next: String?) -
         }
     }
     return .consume(1)
+}
+
+/// Option grammar of a transparent exec wrapper: `wrapper [options]
+/// [operands] command...`. Every one stops option parsing at its first
+/// non-option word (getopt `+`), so the command never precedes an option.
+struct ExecWrapperGrammar {
+    /// Short options without a value.
+    var flags: Set<Character> = []
+    /// Short options whose value is attached or the next word.
+    var valued: Set<Character> = []
+    /// Short options whose optional value can only be attached (`-n1024`).
+    var optional: Set<Character> = []
+    var longFlags: [String] = []
+    var longValued: [String] = []
+    /// Long options whose optional value can only follow `=`.
+    var longOptional: [String] = []
+    /// A long option given as `--name=value` is one word even if unknown
+    /// (firejail spells every valued option that way).
+    var attachedLongIsOneWord = false
+    /// Operands before the command (`taskset MASK`, `flock FILE`).
+    var operands = 0
+    /// `chrt [priority] command`: a leading integer is the priority.
+    var numericOperand = false
+    /// `flock FILE -c CMD` / `--command CMD` runs CMD via `sh -c`.
+    var shellCommandAfterOperands = false
+}
+
+/// Wrappers that exec their command operand with altered scheduling,
+/// buffering, session, locking or limits. Distinct from `plainLaunchers`:
+/// their options are parsed by grammar, and an unmodelled one fails closed.
+let execWrappers: [String: ExecWrapperGrammar] = [
+    "setsid": ExecWrapperGrammar(flags: ["c", "f", "w", "h", "V"], longFlags: ["ctty", "fork", "wait", "help", "version"]),
+    "stdbuf": ExecWrapperGrammar(
+        flags: [], valued: ["i", "o", "e"], longFlags: ["help", "version"], longValued: ["input", "output", "error"]),
+    "ionice": ExecWrapperGrammar(
+        flags: ["t", "h", "V"], valued: ["c", "n", "p", "P", "u"],
+        longFlags: ["ignore", "help", "version"], longValued: ["class", "classdata", "pid", "pgid", "uid"]),
+    "chrt": ExecWrapperGrammar(
+        flags: ["a", "b", "d", "e", "f", "i", "o", "r", "R", "m", "p", "v", "h", "V"], valued: ["T", "P", "D"],
+        longFlags: [
+            "all-tasks", "batch", "deadline", "ext", "fifo", "idle", "other", "rr", "reset-on-fork", "max", "pid",
+            "verbose", "help", "version",
+        ],
+        longValued: ["sched-runtime", "sched-period", "sched-deadline"], numericOperand: true),
+    "taskset": ExecWrapperGrammar(
+        flags: ["a", "c", "p", "h", "V"], longFlags: ["all-tasks", "cpu-list", "pid", "help", "version"], operands: 1),
+    "flock": ExecWrapperGrammar(
+        flags: ["s", "x", "e", "u", "n", "o", "F", "h", "V"], valued: ["w", "E"],
+        longFlags: ["shared", "exclusive", "unlock", "nonblock", "nb", "close", "no-fork", "verbose", "help", "version"],
+        longValued: ["wait", "timeout", "conflict-exit-code"], operands: 1, shellCommandAfterOperands: true),
+    "unbuffer": ExecWrapperGrammar(flags: ["p"]),
+    "caffeinate": ExecWrapperGrammar(flags: ["d", "i", "m", "s", "u"], valued: ["t", "w"]),
+    "nocache": ExecWrapperGrammar(valued: ["n"]),
+    "numactl": ExecWrapperGrammar(
+        flags: ["a", "b", "l", "s", "H", "S"], valued: ["i", "m", "N", "C", "p", "P", "w"],
+        longFlags: ["all", "balancing", "localalloc", "show", "hardware", "huge", "strict", "touch"],
+        longValued: [
+            "interleave", "weighted-interleave", "membind", "cpunodebind", "physcpubind", "preferred", "preferred-many",
+        ]),
+    "prlimit": ExecWrapperGrammar(
+        flags: ["h", "V"], valued: ["p", "o"],
+        optional: ["c", "d", "e", "f", "i", "l", "m", "n", "q", "r", "s", "t", "u", "v", "x", "y"],
+        longFlags: ["noheadings", "raw", "verbose", "help", "version"], longValued: ["pid", "output"],
+        longOptional: [
+            "core", "data", "nice", "fsize", "sigpending", "memlock", "rss", "nofile", "msgqueue", "rtprio", "stack",
+            "cpu", "nproc", "as", "locks", "rttime",
+        ]),
+    "chpst": ExecWrapperGrammar(
+        flags: ["v", "P", "0", "1", "2"],
+        valued: ["u", "U", "b", "e", "/", "C", "n", "l", "L", "m", "d", "o", "p", "f", "c", "r", "t"]),
+    "firejail": ExecWrapperGrammar(attachedLongIsOneWord: true),
+]
+
+enum WrapperSkip: Equatable {
+    /// The real command starts at this index (may be past the end).
+    case command(at: Int)
+    /// A command string run through `sh -c`.
+    case shell(payload: String)
+    /// The option at this index is not modelled.
+    case unknown(at: Int)
+}
+
+/// Skips a wrapper's options and leading operands in `words` from `start`.
+func skipWrapper(_ grammar: ExecWrapperGrammar, _ words: [String], from start: Int) -> WrapperSkip {
+    var index = start
+    func next() -> Int? { index < words.count ? index : nil }
+    while let at = next() {
+        let word = unescapeBackslashPairs(words[at])
+        if isRedirectWord(words[at]) {
+            index += 1
+            continue
+        }
+        guard word.hasPrefix("-"), word != "-" else { break }
+        if word == "--" {
+            index += 1
+            break
+        }
+        guard let width = wrapperOptionWidth(grammar, word) else { return .unknown(at: at) }
+        index += width
+    }
+    var operands = grammar.operands
+    if grammar.numericOperand, let at = next(), unescapeBackslashPairs(words[at]).allSatisfy(\.isNumber),
+       words[at].isEmpty == false
+    {
+        operands += 1
+    }
+    while operands > 0, let at = next() {
+        index += 1
+        if isRedirectWord(words[at]) == false { operands -= 1 }
+    }
+    if grammar.shellCommandAfterOperands, let at = next() {
+        let word = unescapeBackslashPairs(words[at])
+        if word == "-c" || word == "--command" {
+            return .shell(payload: at + 1 < words.count ? words[at + 1] : "")
+        }
+    }
+    return .command(at: index)
+}
+
+/// Words one option occupies (1 or 2), or nil when the grammar does not
+/// model it (unknown letter, unknown or ambiguous long name).
+private func wrapperOptionWidth(_ grammar: ExecWrapperGrammar, _ word: String) -> Int? {
+    if word.hasPrefix("--") {
+        let body = word.dropFirst(2)
+        let name = String(body.prefix { $0 != "=" })
+        let attached = body.contains("=")
+        let names = grammar.longFlags + grammar.longValued + grammar.longOptional
+        // getopt_long: an exact name wins, else a unique prefix.
+        let matches = names.contains(name) ? [name] : names.filter { $0.hasPrefix(name) }
+        guard name.isEmpty == false, matches.count == 1, let match = matches.first else {
+            return grammar.attachedLongIsOneWord && attached && name.isEmpty == false ? 1 : nil
+        }
+        if grammar.longValued.contains(match), attached == false { return 2 }
+        return 1
+    }
+    let chars = Array(word.dropFirst())
+    for (offset, char) in chars.enumerated() {
+        if grammar.flags.contains(char) { continue }
+        if grammar.optional.contains(char) { return 1 }
+        if grammar.valued.contains(char) { return offset + 1 < chars.count ? 1 : 2 }
+        return nil
+    }
+    return 1
 }
 
 /// Unescaped word (`\-S` -> `-S`) for flag and verb matching.
