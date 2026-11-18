@@ -110,8 +110,9 @@ struct MCPSandboxRefusalTests {
     }
 
     /// Through the real runtime: the refused server is never spawned (its
-    /// command would create `marker`), serve says why on its log, and the
-    /// caged server's tools are listed and called.
+    /// command would create `marker`), serve says why on its log, the
+    /// caged server's tools are listed and called, and a call to the
+    /// refused server is answered by rv and audited as not run.
     @Test(.enabled(if: python3Available)) func theOtherServersServeWhileTheRefusedOneNeverStarts() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-refused-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -125,7 +126,8 @@ struct MCPSandboxRefusalTests {
                 name: "fixture", command: "python3", args: ["-u", script.path],
                 tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]),
                 sandbox: MCPSandboxPolicy(network: false)),
-            MCPServerDefinition(name: "bare", command: "touch", args: [marker.path]),
+            MCPServerDefinition(
+                name: "bare", command: "touch", args: [marker.path], tools: MCPToolPolicy(allow: ["*"])),
         ])
         var base = ProcessInfo.processInfo.environment
         base["PATH"] = "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:" + (base["PATH"] ?? "")
@@ -136,6 +138,7 @@ struct MCPSandboxRefusalTests {
         ).get()
 
         let client = LineClient()
+        let audits = RecordedAudits()
         let logs = Mutex<[String]>([])
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
@@ -145,7 +148,7 @@ struct MCPSandboxRefusalTests {
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
-            audit: { _ in },
+            audit: { record in audits.items.withLock { $0.append(record) } },
             log: { line in logs.withLock { $0.append(line) } })
         let done = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
@@ -159,14 +162,23 @@ struct MCPSandboxRefusalTests {
 
         client.send(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
         let tools = client.receive()?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue }
-        #expect(tools == ["echo", "whoami"])
+        // Two servers in mcp.json: tools are listed under `<server>__`.
+        #expect(tools == ["fixture__echo", "fixture__whoami"])
 
-        client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}"#)
+        client.send(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture__echo","arguments":{"text":"hello"}}}"#)
         #expect(client.receive()?["result"]?["content"]?.arrayValue?.first?["text"] == .string("hello"))
+
+        client.send(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"bare__echo","arguments":{"text":"hi"}}}"#)
+        let refused = client.receive()
+        let message = refused?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.contains("MCP server bare is unavailable"), "\(String(describing: refused))")
 
         try client.toGateway.fileHandleForWriting.close()
         #expect(done.wait(timeout: .now() + 10) == .success)
         #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        let bare = audits.items.withLock { $0 }.filter { $0.server == "bare" }
+        #expect(bare.count == 1)
+        #expect(bare.allSatisfy { $0.isError && $0.outcome == .notRun })
         let logged = logs.withLock { $0 }
         #expect(
             logged.contains(#"not starting MCP server bare: sandbox: bare needs a sandbox; add "sandbox" to its mcp.json entry"#),
