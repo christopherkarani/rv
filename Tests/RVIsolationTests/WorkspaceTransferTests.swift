@@ -44,23 +44,38 @@ private struct TransferFixture {
 
     func upload(
         _ source: String, to destination: String? = nil, gitignore: Bool = true,
-        limits: WorkspaceTransferLimits = .standard
+        limits: WorkspaceTransferLimits = .standard, afterPlan: (@Sendable () -> Void)? = nil
     ) -> Result<WorkspaceTransferSummary, WorkspaceTransferRefusal> {
-        WorkspaceTransfer.upload(WorkspaceUploadRequest(
+        var request = WorkspaceUploadRequest(
             source: source, workspace: workspace, destination: destination,
             protectedRoots: [configDir], gitignore: gitignore, limits: limits
-        ))
+        )
+        request.afterPlan = afterPlan
+        return WorkspaceTransfer.upload(request)
     }
 
     func download(
         _ source: String, to destination: String, gitignore: Bool = true,
-        limits: WorkspaceTransferLimits = .standard
+        limits: WorkspaceTransferLimits = .standard, afterPlan: (@Sendable () -> Void)? = nil
     ) -> Result<WorkspaceTransferSummary, WorkspaceTransferRefusal> {
-        WorkspaceTransfer.download(WorkspaceDownloadRequest(
+        var request = WorkspaceDownloadRequest(
             workspace: workspace, source: source, destination: destination,
             protectedRoots: [configDir], gitignore: gitignore, limits: limits
-        ))
+        )
+        request.afterPlan = afterPlan
+        return WorkspaceTransfer.download(request)
     }
+}
+
+private func isChanged<T>(_ result: Result<T, WorkspaceTransferRefusal>) -> Bool {
+    if case .failure(.changed) = result { return true }
+    return false
+}
+
+/// Swaps `directory` for a symlink to `target`, keeping the original aside.
+private func swapForSymlink(_ directory: String, to target: String) {
+    _ = rename(directory, directory + "-moved")
+    _ = symlink(target, directory)
 }
 
 private func refusal<T>(_ result: Result<T, WorkspaceTransferRefusal>) -> WorkspaceTransferRefusal? {
@@ -151,6 +166,18 @@ struct WorkspaceUploadTests {
         try fixture.write(fixture.workspace + "/inside.txt", "w")
         #expect(refusal(fixture.upload(fixture.workspace + "/inside.txt", to: "copy.txt")) == .protectedSource(fixture.workspace + "/inside.txt"))
         #expect(refusal(fixture.upload(fixture.root, to: "everything")) == .protectedSource(fixture.root))
+    }
+
+    @Test func refusesASourceParentSwappedForASymlinkAfterPlanning() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.host + "/a/data/x", "mine")
+        try fixture.write(fixture.outside + "/data/x", "secret")
+        let parent = fixture.host + "/a"
+        let outside = fixture.outside
+        let result = fixture.upload(parent + "/data", afterPlan: { swapForSymlink(parent, to: outside) })
+        #expect(isChanged(result))
+        #expect(fixture.exists(fixture.workspace + "/data") == false)
     }
 
     @Test func refusesAHardLinkedSourceFile() throws {
@@ -261,6 +288,39 @@ struct WorkspaceDownloadTests {
         #expect(refusal(fixture.download("top-link", to: fixture.host + "/results")) == .symlink("top-link"))
         #expect(refusal(fixture.download("top-link/secret", to: fixture.host + "/results")) == .symlink("top-link"))
         #expect(fixture.exists(fixture.host + "/results") == false)
+    }
+
+    @Test func refusesADestinationParentSwappedForASymlinkAfterPlanning() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/x.plist", "agent")
+        try FileManager.default.createDirectory(atPath: fixture.host + "/a", withIntermediateDirectories: true)
+        let parent = fixture.host + "/a"
+        let outside = fixture.outside
+        let result = fixture.download("x.plist", to: parent + "/x.plist", afterPlan: { swapForSymlink(parent, to: outside) })
+        #expect(isChanged(result))
+        #expect(fixture.exists(fixture.outside + "/x.plist") == false)
+        #expect(fixture.exists(fixture.host + "/a-moved/x.plist") == false)
+    }
+
+    @Test func refusesWhenTheParentNoLongerResolvesToTheApprovedOne() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/f", "agent")
+        var request = WorkspaceDownloadRequest(
+            workspace: fixture.workspace, source: "f", destination: fixture.host + "/f",
+            protectedRoots: [fixture.configDir], gitignore: true
+        )
+        request.approvedParent = fixture.outside
+        #expect(isChanged(WorkspaceTransfer.download(request)))
+        #expect(fixture.exists(fixture.host + "/f") == false)
+        // realpath, as the CLI computes it (Foundation keeps `/var`, realpath gives `/private/var`).
+        let real = realpath(fixture.host, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        }
+        request.approvedParent = real
+        #expect(refusal(WorkspaceTransfer.download(request)) == nil)
     }
 
     @Test func refusesSpecialFiles() throws {

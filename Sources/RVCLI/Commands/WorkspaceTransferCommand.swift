@@ -69,15 +69,17 @@ enum WorkspaceTransferRun {
         let project = try WorkspaceCommandRun.requireProject(raw)
         let hostSource = absolute(source)
         let target = destination ?? URL(fileURLWithPath: hostSource).lastPathComponent
+        let resolved = resolvedParent(of: hostSource)
         try await OwnerConfirmation.require(
-            "upload \(WorkspaceTransfer.escaped(hostSource)) into the workspace at \(project) as \(WorkspaceTransfer.escaped(target))"
+            "upload \(WorkspaceTransfer.escaped(resolved.display)) into the workspace at \(project) as \(WorkspaceTransfer.escaped(target))"
                 + (gitignore ? "" : ", ignoring .gitignore")
         )
         let workspace = try liveWorkspaceVolume(project)
-        let request = WorkspaceUploadRequest(
+        var request = WorkspaceUploadRequest(
             source: hostSource, workspace: workspace, destination: destination,
             protectedRoots: try protectedRoots(includingInstall: false), gitignore: gitignore
         )
+        request.approvedParent = resolved.parent
         switch WorkspaceTransfer.upload(request) {
         case .success(let summary):
             emit("uploaded \(lines(summary)) to \(WorkspaceTransfer.escaped(target))")
@@ -93,15 +95,17 @@ enum WorkspaceTransferRun {
         #else
         let project = try WorkspaceCommandRun.requireProject(raw)
         let hostDestination = absolute(destination)
+        let resolved = resolvedParent(of: hostDestination)
         try await OwnerConfirmation.require(
-            "download \(WorkspaceTransfer.escaped(source)) from the workspace at \(project) to \(WorkspaceTransfer.escaped(hostDestination))"
+            "download \(WorkspaceTransfer.escaped(source)) from the workspace at \(project) to \(WorkspaceTransfer.escaped(resolved.display))"
                 + (gitignore ? "" : ", ignoring .gitignore")
         )
         let workspace = try liveWorkspaceVolume(project)
-        let request = WorkspaceDownloadRequest(
+        var request = WorkspaceDownloadRequest(
             workspace: workspace, source: source, destination: hostDestination,
             protectedRoots: try protectedRoots(includingInstall: true), gitignore: gitignore
         )
+        request.approvedParent = resolved.parent
         switch WorkspaceTransfer.download(request) {
         case .success(let summary):
             emit("downloaded \(lines(summary)) to \(WorkspaceTransfer.escaped(hostDestination))")
@@ -114,6 +118,18 @@ enum WorkspaceTransferRun {
     static func lines(_ summary: WorkspaceTransferSummary) -> String {
         let ignored = summary.ignored == 0 ? "" : ", \(summary.ignored) ignored"
         return "\(summary.files) file\(summary.files == 1 ? "" : "s") (\(summary.bytes) bytes\(ignored))"
+    }
+
+    /// The path the owner approves: its parent with every symlink resolved
+    /// (as the transfer will open it), plus the final name. The transfer is
+    /// refused if the parent later resolves anywhere else. An unresolvable
+    /// parent is shown as typed; the transfer then refuses it.
+    static func resolvedParent(of path: String) -> (parent: String?, display: String) {
+        let url = URL(fileURLWithPath: path)
+        guard let real = realpath(url.deletingLastPathComponent().path, nil) else { return (nil, path) }
+        let parent = String(cString: real)
+        free(real)
+        return (parent, (parent == "/" ? "" : parent) + "/" + url.lastPathComponent)
     }
 
     /// Relative to the shell's directory, not standardized: a `..` the

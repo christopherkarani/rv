@@ -105,6 +105,11 @@ public struct WorkspaceUploadRequest: Sendable {
     public let protectedRoots: [String]
     public let gitignore: Bool
     public let limits: WorkspaceTransferLimits
+    /// The resolved parent directory the owner approved; a transfer whose
+    /// parent now resolves elsewhere is refused (`changed`).
+    public var approvedParent: String?
+    /// Tests only: runs between planning and the re-check before copying.
+    var afterPlan: (@Sendable () -> Void)?
 
     public init(
         source: String, workspace: String, destination: String?, protectedRoots: [String],
@@ -131,6 +136,11 @@ public struct WorkspaceDownloadRequest: Sendable {
     public let protectedRoots: [String]
     public let gitignore: Bool
     public let limits: WorkspaceTransferLimits
+    /// The resolved parent directory the owner approved; a transfer whose
+    /// parent now resolves elsewhere is refused (`changed`).
+    public var approvedParent: String?
+    /// Tests only: runs between planning and the re-check before copying.
+    var afterPlan: (@Sendable () -> Void)?
 
     public init(
         workspace: String, source: String, destination: String, protectedRoots: [String],
@@ -375,9 +385,10 @@ private struct ResolvedNode {
         chain = identityChain(resolved)
     }
 
-    func isInsideOrEqual(_ other: ResolvedNode) -> Bool {
-        if folded == other.folded || folded.hasPrefix(other.folded == "/" ? "/" : other.folded + "/") { return true }
-        return other.identity.map(chain.contains) ?? false
+    /// Whether `resolved` (an absolute resolved path) is this node or below it.
+    func lexicallyContains(_ resolved: String) -> Bool {
+        let candidate = resolved.lowercased()
+        return candidate == folded || candidate.hasPrefix(folded == "/" ? "/" : folded + "/")
     }
 }
 
@@ -413,6 +424,8 @@ private struct TreePlanner {
     let label: [String]
     let device: UInt64
     let refuseHardLinks: Bool
+    /// Directories no upload may read (rv's config dir, the workspace).
+    var forbidden: Set<NodeIdentity> = []
     var plan = TransferPlan()
 
     private static let maxGitignoreBytes = 256 * 1024
@@ -453,6 +466,7 @@ private struct TreePlanner {
         if UInt64(truncatingIfNeeded: info.st_dev) != device { return .otherDevice(display(path)) }
         let size = kind == .file ? UInt64(max(0, Int64(info.st_size))) : 0
         if kind == .file, refuseHardLinks, info.st_nlink > 1 { return .hardLinked(display(path)) }
+        if kind == .directory, forbidden.contains(NodeIdentity(info)) { return .protectedSource(display(path)) }
         plan.entries.append(PlannedEntry(
             path: path, isDirectory: kind == .directory, identity: NodeIdentity(info),
             size: size, executable: info.st_mode & 0o100 != 0
@@ -539,6 +553,54 @@ struct PreparedTransfer {
     }
 }
 
+/// Opens a resolved absolute directory one component at a time from `/`
+/// with `O_NOFOLLOW`, so a component swapped for a symlink after
+/// `realpath` refuses (`changed`) instead of being followed.
+private func openDirectoryNoFollow(_ path: String, display: String) -> Result<(fd: Int32, info: stat), WorkspaceTransferRefusal> {
+    var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard current >= 0 else { return .failure(.io(display, errno)) }
+    for part in path.split(separator: "/") {
+        let next = String(part).withCString { openat(current, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        let code = errno
+        close(current)
+        guard next >= 0 else {
+            switch code {
+            case ENOENT: return .failure(.missing(display))
+            case ELOOP, ENOTDIR: return .failure(.changed(display))
+            default: return .failure(.io(display, code))
+            }
+        }
+        current = next
+    }
+    guard let info = fstatOf(current) else {
+        let code = errno
+        close(current)
+        return .failure(.io(display, code))
+    }
+    return .success((current, info))
+}
+
+/// Identities of the open directory and every directory above it, found
+/// through `..` from the descriptor itself (not a path), up to `/`. Nil
+/// when a step cannot be read: the caller cannot rule out a protected
+/// ancestor and refuses.
+private func ancestorIdentities(_ fd: Int32) -> Set<NodeIdentity>? {
+    var chain = Set<NodeIdentity>()
+    var current = dup(fd)
+    for _ in 0..<4096 {
+        guard current >= 0, let info = fstatOf(current) else { break }
+        guard chain.insert(NodeIdentity(info)).inserted else {
+            close(current)
+            return chain
+        }
+        let parent = "..".withCString { openat(current, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC) }
+        close(current)
+        current = parent
+    }
+    if current >= 0 { close(current) }
+    return nil
+}
+
 private func openResolvedDirectory(_ path: String, display: String) -> Result<(fd: Int32, info: stat), WorkspaceTransferRefusal> {
     let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard fd >= 0 else {
@@ -567,17 +629,13 @@ extension WorkspaceTransfer {
         guard let realParent = realpathString(source.parent) else {
             return .failure(errno == ENOENT ? .missing(escaped(request.source)) : .io(escaped(request.source), errno))
         }
-        let sourceNode = ResolvedNode(joined(realParent, source.name))
-        let workspaceNode = ResolvedNode(request.workspace)
-        let sourceDisplay = escaped(request.source)
-        for root in request.protectedRoots.map(ResolvedNode.init) + [workspaceNode] {
-            if sourceNode.isInsideOrEqual(root) || root.isInsideOrEqual(sourceNode) {
-                return .failure(.protectedSource(sourceDisplay))
-            }
+        if let approved = request.approvedParent, approved != realParent {
+            return .failure(.changed(escaped(source.parent)))
         }
-
+        let sourceDisplay = escaped(request.source)
+        // Pinned once, by descriptor; every check below and the copy use it.
         let parent: (fd: Int32, info: stat)
-        switch openResolvedDirectory(realParent, display: sourceDisplay) {
+        switch openDirectoryNoFollow(realParent, display: escaped(realParent)) {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): parent = value
         }
@@ -590,13 +648,32 @@ extension WorkspaceTransfer {
             close(parent.fd)
             return .failure(.symlink(sourceDisplay))
         }
+        guard var chain = ancestorIdentities(parent.fd) else {
+            close(parent.fd)
+            return .failure(.io(escaped(realParent), errno))
+        }
+        let topIdentity = NodeIdentity(top)
+        chain.insert(topIdentity)
+        let sourcePath = joined(realParent, source.name)
+        let sourceNode = ResolvedNode(sourcePath)
+        let workspaceNode = ResolvedNode(request.workspace)
+        let roots = request.protectedRoots.map(ResolvedNode.init) + [workspaceNode]
+        for root in roots {
+            let inside = root.lexicallyContains(sourcePath) || (root.identity.map(chain.contains) ?? false)
+            let holds = sourceNode.lexicallyContains(root.path) || root.chain.contains(topIdentity)
+            if inside || holds {
+                close(parent.fd)
+                return .failure(.protectedSource(sourceDisplay))
+            }
+        }
         if NodeKind(top) == .file, destination.isEmpty {
             close(parent.fd)
             return .failure(.unsafePath("."))
         }
         var planner = TreePlanner(
             limits: request.limits, gitignore: request.gitignore, label: [source.name],
-            device: UInt64(truncatingIfNeeded: top.st_dev), refuseHardLinks: true
+            device: UInt64(truncatingIfNeeded: top.st_dev), refuseHardLinks: true,
+            forbidden: Set(roots.compactMap(\.identity))
         )
         if let refusal = planner.planTop(parent: parent.fd, name: source.name) {
             close(parent.fd)
@@ -605,6 +682,11 @@ extension WorkspaceTransfer {
         for entry in planner.plan.entries where isProtectedWorkspacePath(destination + entry.path) {
             close(parent.fd)
             return .failure(.protectedDestination(escaped((destination + entry.path).joined(separator: "/"))))
+        }
+        request.afterPlan?()
+        if let refusal = stillAt(realParent, parent.info) {
+            close(parent.fd)
+            return .failure(refusal)
         }
 
         let workspace: (fd: Int32, info: stat)
@@ -648,15 +730,33 @@ extension WorkspaceTransfer {
         guard let realParent = realpathString(destination.parent) else {
             return .failure(errno == ENOENT ? .missing(escaped(destination.parent)) : .io(escaped(destination.parent), errno))
         }
+        if let approved = request.approvedParent, approved != realParent {
+            return .failure(.changed(escaped(destination.parent)))
+        }
+        // Pinned once, by descriptor; the protected-root check walks up from
+        // this descriptor, and the copy writes only below it.
+        let parent: (fd: Int32, info: stat)
+        switch openDirectoryNoFollow(realParent, display: escaped(realParent)) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let value): parent = value
+        }
+        guard let chain = ancestorIdentities(parent.fd) else {
+            close(parent.fd)
+            return .failure(.io(escaped(realParent), errno))
+        }
         let workspaceNode = ResolvedNode(request.workspace)
-        let destinationNode = ResolvedNode(joined(realParent, destination.name))
-        for root in request.protectedRoots.map(ResolvedNode.init) + [workspaceNode] where destinationNode.isInsideOrEqual(root) {
+        let destinationPath = joined(realParent, destination.name)
+        for root in request.protectedRoots.map(ResolvedNode.init) + [workspaceNode]
+        where root.lexicallyContains(destinationPath) || (root.identity.map(chain.contains) ?? false) {
+            close(parent.fd)
             return .failure(.protectedDestination(destinationDisplay))
         }
 
         let workspace: (fd: Int32, info: stat)
         switch openResolvedDirectory(workspaceNode.path, display: escaped(request.workspace)) {
-        case .failure(let refusal): return .failure(refusal)
+        case .failure(let refusal):
+            close(parent.fd)
+            return .failure(refusal)
         case .success(let value): workspace = value
         }
         let device = UInt64(truncatingIfNeeded: workspace.info.st_dev)
@@ -667,6 +767,7 @@ extension WorkspaceTransfer {
             switch descend(workspace.fd, through: source.dropLast(), device: device, create: false) {
             case .failure(let refusal):
                 close(workspace.fd)
+                close(parent.fd)
                 return .failure(refusal)
             case .success(let fd):
                 sourceParent = fd
@@ -678,7 +779,9 @@ extension WorkspaceTransfer {
             let url = URL(fileURLWithPath: workspaceNode.path)
             close(workspace.fd)
             switch openResolvedDirectory(url.deletingLastPathComponent().path, display: escaped(request.workspace)) {
-            case .failure(let refusal): return .failure(refusal)
+            case .failure(let refusal):
+                close(parent.fd)
+                return .failure(refusal)
             case .success(let value): sourceParent = value.fd
             }
             sourceName = url.lastPathComponent
@@ -688,15 +791,14 @@ extension WorkspaceTransfer {
         )
         if let refusal = planner.planTop(parent: sourceParent, name: sourceName) {
             close(sourceParent)
+            close(parent.fd)
             return .failure(refusal)
         }
-
-        let parent: (fd: Int32, info: stat)
-        switch openResolvedDirectory(realParent, display: escaped(destination.parent)) {
-        case .failure(let refusal):
+        request.afterPlan?()
+        if let refusal = stillAt(realParent, parent.info) {
             close(sourceParent)
+            close(parent.fd)
             return .failure(refusal)
-        case .success(let value): parent = value
         }
         let (existing, code) = lstatAt(parent.fd, destination.name)
         guard existing == nil, code == ENOENT else {
@@ -758,6 +860,20 @@ extension WorkspaceTransfer {
             current = next
         }
         return .success(current)
+    }
+
+    /// The pinned directory must still be what its resolved path names, or
+    /// the tree around it moved while the transfer was planned.
+    private static func stillAt(_ resolved: String, _ pinned: stat) -> WorkspaceTransferRefusal? {
+        switch openDirectoryNoFollow(resolved, display: escaped(resolved)) {
+        case .failure(.io(let path, let code)):
+            return .io(path, code)
+        case .failure:
+            return .changed(escaped(resolved))
+        case .success(let reopened):
+            close(reopened.fd)
+            return NodeIdentity(reopened.info) == NodeIdentity(pinned) ? nil : .changed(escaped(resolved))
+        }
     }
 
     private static func realpathString(_ path: String) -> String? {

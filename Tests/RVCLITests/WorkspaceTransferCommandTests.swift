@@ -54,6 +54,21 @@ struct WorkspaceTransferCommandTests {
         }
     }
 
+    @Test func theOwnerApprovesTheResolvedParent() throws {
+        let created = FileManager.default.temporaryDirectory.appendingPathComponent("rv-transfer-cli-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: created + "/real", withIntermediateDirectories: true)
+        let root = try #require(realpath(created, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        #expect(symlink(root + "/real", root + "/link") == 0)
+        let resolved = WorkspaceTransferRun.resolvedParent(of: root + "/link/out")
+        #expect(resolved.parent == root + "/real")
+        #expect(resolved.display == root + "/real/out")
+        #expect(WorkspaceTransferRun.resolvedParent(of: root + "/missing/out").parent == nil)
+    }
+
     @Test func summaryLine() {
         let summary = WorkspaceTransferSummary(files: 2, directories: 1, bytes: 10, ignored: 3)
         #expect(WorkspaceTransferRun.lines(summary) == "2 files (10 bytes, 3 ignored)")
