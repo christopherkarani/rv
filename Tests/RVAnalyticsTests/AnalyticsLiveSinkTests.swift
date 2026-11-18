@@ -54,6 +54,7 @@ struct AnalyticsLiveSinkTests {
         let server = try LoopbackHTTPServer.start(statusCode: 200)
         defer { server.stop() }
         let fakeHome = try temporaryConfigRoot()
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
         let coordinator = try #require(
             AnalyticsBootstrap.makeLive(
                 productVersion: "1.0.0",
@@ -74,6 +75,7 @@ struct AnalyticsLiveSinkTests {
         let server = try LoopbackHTTPServer.start(statusCode: 500)
         defer { server.stop() }
         let fakeHome = try temporaryConfigRoot()
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
         let coordinator = try #require(
             AnalyticsBootstrap.makeLive(
                 productVersion: "1.0.0",

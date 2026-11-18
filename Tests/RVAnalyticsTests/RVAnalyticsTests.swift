@@ -4,11 +4,13 @@ import Testing
 
 @Suite("AnalyticsPreferences")
 struct AnalyticsPreferencesTests {
-    @Test func missingConfigDefaultsEnabled() throws {
+    // Analytics is opt-in: it is on only when config.json says
+    // `analytics.enabled` is true. Anything else reads as off.
+    @Test func missingConfigDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         let prefs = AnalyticsPreferences.load(from: paths)
-        #expect(prefs.isEnabled == true)
+        #expect(prefs.isEnabled == false)
     }
 
     @Test func configCanDisable() throws {
@@ -37,11 +39,11 @@ struct AnalyticsPreferencesTests {
         #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 
-    @Test func flatNonBoolDefaultsEnabled() throws {
+    @Test func flatNonBoolDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         try Data(#"{"analytics.enabled":"no"}"#.utf8).write(to: paths.configFile)
-        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 
     @Test func configCanEnableExplicitly() throws {
@@ -51,32 +53,64 @@ struct AnalyticsPreferencesTests {
         #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
     }
 
-    @Test func invalidJSONDefaultsEnabled() throws {
+    @Test func flatDottedKeyCanEnable() throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics.enabled":true}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+    }
+
+    @Test func bothFormsTrueEnable() throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics":{"enabled":true},"analytics.enabled":true}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+    }
+
+    @Test func invalidJSONDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         try Data("{".utf8).write(to: paths.configFile)
-        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 
-    @Test func missingAnalyticsObjectDefaultsEnabled() throws {
+    @Test func unreadableConfigDisablesAnalytics() throws {
+        // config.json is a directory: it exists but cannot be read as a file.
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try FileManager.default.createDirectory(at: paths.configFile, withIntermediateDirectories: true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+    }
+
+    @Test func duplicateEnabledKeyDisablesAnalytics() throws {
+        // Parsers disagree on which duplicate wins; an ambiguous opt-in is no opt-in.
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics":{"enabled":false,"enabled":true}}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+        try Data(#"{"analytics.enabled":false,"analytics.enabled":true}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+    }
+
+    @Test func missingAnalyticsObjectDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         try Data(#"{"other":true}"#.utf8).write(to: paths.configFile)
-        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 
-    @Test func analyticsValueNotObjectDefaultsEnabled() throws {
+    @Test func analyticsValueNotObjectDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         try Data(#"{"analytics":"nope"}"#.utf8).write(to: paths.configFile)
-        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 
-    @Test func enabledNonBoolDefaultsEnabled() throws {
+    @Test func enabledNonBoolDisablesAnalytics() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)
         try Data(#"{"analytics":{"enabled":"yes"}}"#.utf8).write(to: paths.configFile)
-        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
     }
 }
 
@@ -143,6 +177,42 @@ struct AnalyticsBootstrapTests {
         )
     }
 
+    @Test func noConfigReturnsNilAndWritesNothing() async throws {
+        let fakeHome = try temporaryConfigRoot()
+        let sink = RecordingAnalyticsSink()
+        let result = AnalyticsBootstrap.makeLive(
+            productVersion: "1.0.0",
+            sink: sink,
+            environment: ["HOME": fakeHome.path]
+        )
+        #expect(result == nil)
+        await result?.captureInstall(hosts: ["pi": "wired"])
+        #expect(await sink.events.isEmpty)
+        let configDir = fakeHome
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("rv", isDirectory: true)
+        let paths = AnalyticsPaths(configDirectory: configDir)
+        for artifact in [paths.identityFile, paths.countersFile, paths.installSentFile, paths.hostsFile] {
+            #expect(FileManager.default.fileExists(atPath: artifact.path) == false)
+        }
+    }
+
+    @Test func configWithoutAnalyticsKeyReturnsNilAndMintsNoIdentity() throws {
+        let fakeHome = try temporaryConfigRoot()
+        let configDir = try writeRVConfig(home: fakeHome, json: #"{"guard":{"mode":"enforce"}}"#)
+        let result = AnalyticsBootstrap.makeLive(
+            productVersion: "1.0.0",
+            sink: RecordingAnalyticsSink(),
+            environment: ["HOME": fakeHome.path]
+        )
+        #expect(result == nil)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: AnalyticsPaths(configDirectory: configDir).identityFile.path
+            ) == false
+        )
+    }
+
     @Test func missingHomeReturnsNil() {
         #expect(
             AnalyticsBootstrap.makeLive(productVersion: "1.0.0", environment: [:]) == nil
@@ -160,9 +230,11 @@ struct AnalyticsBootstrapTests {
 
     @Test func identityCreateFailureReturnsNil() throws {
         let fakeHome = try temporaryConfigRoot()
-        try Data("not-a-directory".utf8).write(
-            to: fakeHome.appendingPathComponent(".config", isDirectory: false)
-        )
+        let configDir = try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
+        // A non-empty directory where the identity file belongs: the id cannot be written.
+        let identityFile = AnalyticsPaths(configDirectory: configDir).identityFile
+        try FileManager.default.createDirectory(at: identityFile, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: identityFile.appendingPathComponent("occupied", isDirectory: false))
         #expect(
             AnalyticsBootstrap.makeLive(
                 productVersion: "1.0.0",
@@ -173,6 +245,7 @@ struct AnalyticsBootstrapTests {
 
     @Test func enabledFakeSinkCapturesWithoutCommandFields() async throws {
         let fakeHome = try temporaryConfigRoot()
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsBootstrap.makeLive(
             productVersion: "1.2.3",
@@ -199,6 +272,7 @@ struct AnalyticsBootstrapTests {
 
     @Test func emptyAPIKeyUsesNoOpSink() async throws {
         let fakeHome = try temporaryConfigRoot()
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
         let coordinator = try #require(
             AnalyticsBootstrap.makeLive(
                 productVersion: "1.0.0",
@@ -215,6 +289,7 @@ struct AnalyticsBootstrapTests {
 
     @Test func apiKeyConstructsLiveSinkWithoutSending() throws {
         let fakeHome = try temporaryConfigRoot()
+        try writeRVConfig(home: fakeHome, json: analyticsOptInJSON)
         let coordinator = AnalyticsBootstrap.makeLive(
             productVersion: "1.0.0",
             environment: [
@@ -318,7 +393,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -356,7 +431,7 @@ struct AnalyticsCoordinatorTests {
         let sink = FailingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -368,7 +443,7 @@ struct AnalyticsCoordinatorTests {
         let okSink = RecordingAnalyticsSink()
         let retry = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
@@ -386,7 +461,7 @@ struct AnalyticsCoordinatorTests {
         let sink = FailingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -399,7 +474,7 @@ struct AnalyticsCoordinatorTests {
         let okSink = RecordingAnalyticsSink()
         let next = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
@@ -441,7 +516,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -462,7 +537,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -484,7 +559,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -503,7 +578,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -531,7 +606,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -550,7 +625,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
@@ -570,7 +645,7 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .enabledByDefault,
+            preferences: AnalyticsPreferences(isEnabled: true),
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",

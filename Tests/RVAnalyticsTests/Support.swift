@@ -56,6 +56,20 @@ func temporaryConfigRoot() throws -> URL {
     return root
 }
 
+/// The config that turns analytics on. Analytics is opt-in.
+let analyticsOptInJSON = #"{"analytics":{"enabled":true}}"#
+
+/// Writes `json` as `config.json` under `home/.config/rv` and returns that directory.
+@discardableResult
+func writeRVConfig(home: URL, json: String) throws -> URL {
+    let configDir = home
+        .appendingPathComponent(".config", isDirectory: true)
+        .appendingPathComponent("rv", isDirectory: true)
+    try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+    try Data(json.utf8).write(to: configDir.appendingPathComponent("config.json", isDirectory: false))
+    return configDir
+}
+
 func day(_ year: Int, _ month: Int, _ day: Int) -> Date {
     var components = DateComponents()
     components.calendar = Calendar(identifier: .gregorian)

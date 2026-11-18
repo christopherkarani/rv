@@ -168,7 +168,7 @@ private func makeAnalyticsFixture() throws -> AnalyticsFixture {
     let sink = RecordingAnalyticsSink()
     let coordinator = AnalyticsCoordinator(
         paths: AnalyticsPaths(configDirectory: analyticsURL),
-        preferences: .enabledByDefault,
+        preferences: AnalyticsPreferences(isEnabled: true),
         identity: AnalyticsIdentity(distinctID: "user-1"),
         sink: sink,
         productVersion: "1.0.0",
