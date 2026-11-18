@@ -167,6 +167,24 @@ public enum UnixSocketPath {
         try removeStaleSocket(at: socketURL)
     }
 
+    /// The uid-derived runtime directory (`<root>/<uid>`) when rvd would
+    /// bind under it (XDG_RUNTIME_DIR unset), nothing is at that path, and
+    /// `prepareRuntime` could not create it for `uid`: not root, and the
+    /// root missing or not writable by this process. Nil otherwise, so it
+    /// names only a start that cannot succeed. `rv setup` asks before it
+    /// starts rvd itself.
+    public static func uncreatableUserRuntimeDirectory(
+        xdgRuntimeDir: String?,
+        uid: UInt32,
+        userRuntimeRoot: String = userRuntimeRoot
+    ) -> String? {
+        guard xdgRuntimeDir == nil, uid != 0 else { return nil }
+        let directory = "\(userRuntimeRoot)/\(uid)"
+        guard lstatKind(directory) == nil else { return nil }
+        if lstatKind(userRuntimeRoot) != nil, access(userRuntimeRoot, W_OK | X_OK) == 0 { return nil }
+        return directory
+    }
+
     /// The one-line fix for a missing uid-derived runtime directory, shared
     /// by rvd's refusal and by `rv setup`'s.
     public static func userRuntimeDirectoryFix(directory: String, uid: UInt32) -> String {

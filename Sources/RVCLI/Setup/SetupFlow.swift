@@ -1,6 +1,7 @@
 import Foundation
 import RVPolicy
 import RVPresentation
+import RVService
 
 /// Which lifecycle operation an intent asks for. Selects the orchestration
 /// path and the failure-output prefix (`setup` vs `uninstall`).
@@ -199,6 +200,11 @@ extension SetupEnvironment {
         setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
 #if os(Linux)
         setup.directRvd = ProcessDirectRvd()
+        // The directly started rvd inherits this environment.
+        let xdgRuntimeDir = environment["XDG_RUNTIME_DIR"]
+        setup.uncreatableRuntimeDirectory = {
+            UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
+        }
 #endif
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup

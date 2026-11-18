@@ -139,6 +139,37 @@ struct UnixSocketPathTests {
         #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
+    /// Setup's up-front check names only a start `prepareRuntime` cannot
+    /// make work: XDG unset, not root, nothing at `<root>/<uid>`, and a root
+    /// this process cannot write.
+    @Test func uncreatableUserRuntimeDirectoryNamesOnlyAStartThatCannotWork() throws {
+        let missing = shortRuntimeDir("n")
+        #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+            xdgRuntimeDir: nil, uid: 4242, userRuntimeRoot: missing.path) == missing.path + "/4242")
+        #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+            xdgRuntimeDir: "/somewhere", uid: 4242, userRuntimeRoot: missing.path) == nil)
+        #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+            xdgRuntimeDir: nil, uid: 0, userRuntimeRoot: missing.path) == nil)
+
+        let root = shortRuntimeDir("w")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A root this process can write: rvd makes `<root>/<uid>` itself.
+        #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+            xdgRuntimeDir: nil, uid: 4242, userRuntimeRoot: root.path) == nil)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("4243"), withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path) }
+        // Something already at `<root>/<uid>`: not this check's case.
+        #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+            xdgRuntimeDir: nil, uid: 4243, userRuntimeRoot: root.path) == nil)
+        if getuid() != 0 {
+            #expect(UnixSocketPath.uncreatableUserRuntimeDirectory(
+                xdgRuntimeDir: nil, uid: 4242, userRuntimeRoot: root.path) == root.path + "/4242")
+        }
+    }
+
     @Test func productionEmptyXDGThrows() throws {
         let previous = liveXDG()
         setenv("XDG_RUNTIME_DIR", "", 1)
