@@ -83,7 +83,7 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     /// Exact DNS names reached through a per-server allowlist proxy; the
     /// cage itself can dial only that proxy.
     public var hosts: [String]
-    /// As written; `MCPConfiguration.sandboxEnforcement(for:)` is what applies.
+    /// As written; `MCPConfiguration.sandboxEnforcement(for:integrity:)` is what applies.
     public var enforcement: MCPSandboxEnforcement
 
     public init(
@@ -284,11 +284,14 @@ public struct MCPConfiguration: Sendable, Equatable {
     }
 
     /// The enforcement `rv mcp serve` gives a server's `sandbox.hosts`. Audit
-    /// loosens the owner's own list, so it holds only in a file rv trusts
-    /// with no organization policy installed; anything else enforces.
-    public func sandboxEnforcement(for server: MCPServerDefinition) -> MCPSandboxEnforcement {
+    /// loosens the owner's own list, so it needs positive proof: `integrity`
+    /// must be `.trusted` (the signature over these bytes verified) and no
+    /// organization policy may be installed. Anything else enforces.
+    public func sandboxEnforcement(
+        for server: MCPServerDefinition, integrity: MCPIntegrityStatus
+    ) -> MCPSandboxEnforcement {
         guard let sandbox = server.sandbox, sandbox.hosts.isEmpty == false, sandbox.enforcement == .audit,
-            untrusted == false, managed == nil
+            integrity == .trusted, untrusted == false, managed == nil
         else { return .enforce }
         return .audit
     }

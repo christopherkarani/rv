@@ -207,8 +207,22 @@ enum MCPRun {
             integrityProblem: integrity.problem,
             rows: rows,
             problems: problems,
-            sandboxAudit: auditing.filter { configuration.sandboxEnforcement(for: $0) == .audit }.map(\.name),
-            sandboxAuditIgnored: auditing.filter { configuration.sandboxEnforcement(for: $0) == .enforce }.map(\.name))
+            sandboxAudit: auditing.filter {
+                configuration.sandboxEnforcement(for: $0, integrity: integrity) == .audit
+            }.map(\.name),
+            sandboxAuditIgnored: auditing.filter {
+                configuration.sandboxEnforcement(for: $0, integrity: integrity) == .enforce
+            }.map(\.name))
+    }
+
+    /// The sandbox enforcement `rv mcp serve` applies: judged against the
+    /// integrity of the same bytes it launches from.
+    static func serveEnforcement(
+        _ bound: MCPBoundConfiguration
+    ) -> @Sendable (MCPServerDefinition) -> MCPSandboxEnforcement {
+        let configuration = bound.configuration
+        let integrity = bound.integrity
+        return { configuration.sandboxEnforcement(for: $0, integrity: integrity) }
     }
 
     /// Audit mode is the owner's choice, so it warns instead of failing check.
@@ -1628,11 +1642,12 @@ struct MCPServe: AsyncParsableCommand {
         func fail(_ message: String) throws -> Never {
             try ctx.emit(stdout: "", stderr: "rv mcp serve: \(message)\n", exitCode: 1)
         }
-        let configuration: MCPConfiguration
-        switch MCPRun.configuration(environment) {
+        let bound: MCPRun.MCPBoundConfiguration
+        switch MCPRun.boundConfiguration(environment) {
         case .failure(let failure): try fail(failure.message)
-        case .success(let loaded): configuration = loaded
+        case .success(let loaded): bound = loaded
         }
+        let configuration = bound.configuration
         var seen = Set<String>()
         let names = (servers.isEmpty ? configuration.servers.map(\.name) : servers).filter { seen.insert($0).inserted }
         guard names.isEmpty == false else { try fail("mcp.json defines no servers; see `rv mcp import`") }
@@ -1648,7 +1663,7 @@ struct MCPServe: AsyncParsableCommand {
             sandbox: MCPSandbox.apply(
                 configDirectory: environment.configDirectory, home: environment.home,
                 denied: DenialAudit.forwarder(configDirectory: environment.configDirectory),
-                enforcement: { configuration.sandboxEnforcement(for: $0) },
+                enforcement: MCPRun.serveEnforcement(bound),
                 audited: DenialAudit.observed(configDirectory: environment.configDirectory)))
         {
         case .failure(let failure): try fail(failure.message)
@@ -1907,14 +1922,41 @@ enum DenialAudit {
         }
     }
 
-    /// Audit-mode passes (`sandbox.enforcement: audit`). Never coalesced:
-    /// each one let a request out, so each is its own fsync'd
-    /// `egress.observed` event, and a failed append returns false so the
-    /// proxy denies. Only the caged server holding the proxy credential
-    /// reaches this path.
-    static func observed(configDirectory: URL) -> @Sendable (String, EgressProxyDenial) -> Bool {
-        { server, wouldBe in
-            AuditLog.append(
+    /// Audit passes each server may make per minute. Past it the proxy
+    /// denies `denied-policy` (audited like any denial, through
+    /// `forwarder`), so a caged server cannot grow audit.jsonl without bound.
+    static let observedPerMinute = 60
+
+    /// Audit-mode passes (`sandbox.enforcement: audit`). Each one let a
+    /// request out, so each is its own fsync'd `egress.observed` event,
+    /// written after the SNI check and before the dial. It means "admitted
+    /// past the host list"; a following `egress.denied` for the same host
+    /// (dial filter, DNS) means the request still failed. Returns false (the
+    /// proxy denies) when the append fails or the server's per-minute budget
+    /// is spent. Only the caged server holding the proxy credential reaches
+    /// this path.
+    static func observed(
+        configDirectory: URL, perMinute budget: Int = observedPerMinute
+    ) -> @Sendable (String, EgressProxyDenial) -> Bool {
+        let windows = Mutex<[String: (start: Date, count: Int)]>([:])
+        return { server, wouldBe in
+            let admitted = windows.withLock { table -> Bool in
+                let now = wouldBe.recordedAt
+                if let window = table[server], now.timeIntervalSince(window.start) < 60 {
+                    guard window.count < budget else { return false }
+                    table[server] = (window.start, window.count + 1)
+                    return true
+                }
+                // Server names come from mcp.json, but keep the table bounded.
+                if table[server] == nil, table.count >= 512 {
+                    table = table.filter { now.timeIntervalSince($0.value.start) < 60 }
+                    if table.count >= 512 { return false }
+                }
+                table[server] = (now, 1)
+                return budget > 0
+            }
+            guard admitted else { return false }
+            return AuditLog.append(
                 AuditEvent(
                     time: wouldBe.recordedAt, kind: .egressObserved, decision: .info,
                     subject: "\(wouldBe.host):\(wouldBe.port)", reason: wouldBe.reason.rawValue, source: "rv mcp serve",

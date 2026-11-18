@@ -48,17 +48,22 @@ struct MCPSandboxAuditTests {
     @Test func auditHoldsOnlyInATrustedFileWithoutOrganizationPolicy() throws {
         var configuration = try MCPConfiguration.decode(Self.file(#"{"hosts": ["api.github.com"], "enforcement": "audit"}"#)).get()
         let gh = try #require(configuration.server(named: "gh"))
-        #expect(configuration.sandboxEnforcement(for: gh) == .audit)
+        #expect(configuration.sandboxEnforcement(for: gh, integrity: .trusted) == .audit)
+
+        // A freshly decoded file proves nothing: only a verified signature does.
+        for integrity: MCPIntegrityStatus in [.noConfiguration, .untrusted("unsigned"), .unsupportedPlatform] {
+            #expect(configuration.sandboxEnforcement(for: gh, integrity: integrity) == .enforce)
+        }
 
         configuration.untrusted = true
-        #expect(configuration.sandboxEnforcement(for: gh) == .enforce)
+        #expect(configuration.sandboxEnforcement(for: gh, integrity: .trusted) == .enforce)
 
         configuration.untrusted = false
         configuration.managed = try ManagedPolicy.decode(Data(#"{"version": 1}"#.utf8)).get()
-        #expect(configuration.sandboxEnforcement(for: gh) == .enforce)
+        #expect(configuration.sandboxEnforcement(for: gh, integrity: .trusted) == .enforce)
 
         let enforced = try MCPConfiguration.decode(Self.file(#"{"hosts": ["api.github.com"]}"#)).get()
-        #expect(enforced.sandboxEnforcement(for: try #require(enforced.server(named: "gh"))) == .enforce)
+        #expect(enforced.sandboxEnforcement(for: try #require(enforced.server(named: "gh")), integrity: .trusted) == .enforce)
     }
 
     @Test func hostsProxyAuditsOnlyWhenEnforcementIsAudit() {

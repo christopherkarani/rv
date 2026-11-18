@@ -95,7 +95,7 @@ public enum MCPSandbox {
     /// `notice` hears what rv says about a cage it built (on Linux, what
     /// the kernel's Landlock leaves open); it goes to stderr by default.
     /// `enforcement` is the configuration's effective answer per server
-    /// (`MCPConfiguration.sandboxEnforcement(for:)`); `audited` must record
+    /// (`MCPConfiguration.sandboxEnforcement(for:integrity:)`); `audited` must record
     /// each audit pass durably and return false when it could not.
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,

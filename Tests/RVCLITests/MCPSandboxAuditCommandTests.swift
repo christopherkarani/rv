@@ -79,6 +79,26 @@ struct MCPSandboxAuditCommandTests {
         #expect(ocsf["disposition"] as? String == "Logged")
     }
 
+    @Test func floodPastTheBudgetIsDeniedAndTheLogStopsGrowing() throws {
+        let fixture = Fixture()
+        let record = DenialAudit.observed(configDirectory: fixture.config, perMinute: 3)
+        let start = Date()
+        func pass(_ server: String, _ n: Int, at offset: TimeInterval = 0) -> Bool {
+            record(server, EgressProxyDenial(
+                host: "x\(n).example", port: 443, reason: .deniedPolicy, recordedAt: start.addingTimeInterval(offset)))
+        }
+        #expect((0..<3).map { pass("gh", $0) } == [true, true, true])
+        let log = AuditLog.fileURL(configDirectory: fixture.config)
+        let size = try FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int
+        #expect((3..<50).map { pass("gh", $0, at: 1) }.allSatisfy { $0 == false })
+        #expect(try FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int == size)
+        // Budgets are per server, and the window rolls over.
+        #expect(pass("other", 0, at: 2))
+        #expect(pass("gh", 99, at: 61))
+        let events = AuditLedger(configDirectory: fixture.config).events(AuditFilter(kinds: ["egress.observed"]))
+        #expect(events.count == 5)
+    }
+
     @Test func unwritableAuditLogReportsFailure() throws {
         let fixture = Fixture()
         try FileManager.default.createDirectory(at: fixture.home, withIntermediateDirectories: true)
@@ -88,10 +108,29 @@ struct MCPSandboxAuditCommandTests {
         #expect(DenialAudit.observed(configDirectory: blocked)("gh", Self.wouldBe("uploads.example.com")) == false)
     }
 
-    @Test func listAndCheckNameEveryServerInAuditMode() throws {
+    @Test func serveWiringEnforcesAnUnsignedFileAndAuditsATrustedOne() async throws {
         let fixture = Fixture()
+        try fixture.writeMCP(#"{"hosts":["api.github.com"],"enforcement":"audit"}"#)
+        let unsigned = try MCPRun.boundConfiguration(fixture.environment()).get()
+        let gh = try #require(unsigned.configuration.server(named: "gh"))
+        #expect(MCPRun.serveEnforcement(unsigned)(gh) == .enforce)
+        let report = MCPRun.report(
+            fixture.environment(), project: nil, configuration: unsigned.configuration, rvExecutable: "")
+        #expect(report.sandboxAudit.isEmpty)
+        #expect(report.sandboxAuditIgnored == ["gh"])
+
+        _ = try await MCPRun.trust(environment: fixture.environment(), show: { _ in }).get()
+        let trusted = try MCPRun.boundConfiguration(fixture.environment()).get()
+        #expect(MCPRun.serveEnforcement(trusted)(gh) == .audit)
+    }
+
+    @Test func listAndCheckNameEveryServerInAuditMode() async throws {
+        let fixture = Fixture()
+        try fixture.writeMCP(#"{"hosts":["api.github.com"],"enforcement":"audit"}"#)
+        _ = try await MCPRun.trust(environment: fixture.environment(), show: { _ in }).get()
         let environment = fixture.environment()
-        let report = MCPRun.report(environment, project: nil, configuration: Self.auditing(.audit), rvExecutable: "")
+        let report = MCPRun.report(
+            environment, project: nil, configuration: try MCPRun.configuration(environment).get(), rvExecutable: "")
         #expect(report.sandboxAudit == ["gh"])
         for text in [MCPRun.listText(report, home: fixture.home), MCPRun.checkText(report, home: fixture.home)] {
             #expect(text.contains("warning: gh sandbox.hosts is in audit mode"))
