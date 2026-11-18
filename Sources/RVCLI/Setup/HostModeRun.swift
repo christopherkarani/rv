@@ -126,8 +126,8 @@ enum HostModeRun {
             // Two questions, each with its own conservative reading of an
             // unreadable config: for "is this a loosening?" the host is
             // `block` (any move away needs the owner); for "is the host
-            // leaving `off`?" it is `off`, so the trusted-daemon check and
-            // the re-wire run (re-wiring a wired host rewrites the same hook).
+            // leaving `off`?" it is `off`, so the trusted-daemon check runs.
+            // The save then refuses the file, so nothing is stored or re-wired.
             let current = stored.mode(for: host, ifUnreadable: .block)
             let wiredFrom = stored.mode(for: host, ifUnreadable: .off)
             // Only loosening asks the owner; tightening needs no check.
@@ -162,6 +162,10 @@ enum HostModeRun {
                 }
             } catch let error as SetupError {
                 return failure(error, command: .hostMode)
+            } catch HostModeStoreError.unreadableConfig {
+                return SetupOutcome(
+                    stdout: "", stderr: ConfigUnreadableRefusal.message(prefix: "rv host mode failed"),
+                    exitCode: ConfigUnreadableRefusal.exitCode)
             } catch let unrecorded as ConfigChangeUnrecorded {
                 return SetupOutcome(
                     stdout: "", stderr: ConfigChangeRefusal.message(command: "host mode", unrecorded),

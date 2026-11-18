@@ -22,8 +22,10 @@ public enum StoredHostModes: Sendable, Equatable {
 }
 
 public enum HostModeStoreError: Error, Sendable, Equatable {
-    /// `config.json` exists but is not a JSON object, or its `guard` /
-    /// `guard.hosts` value is not one: writing would drop or replace keys
+    /// `config.json` exists but is not a JSON object, its text is one
+    /// `JSONDuplicateKeys` rejects (a repeated key, a U+FEFF key, nesting
+    /// past 64, not UTF-8), or its `guard` / `guard.hosts` value is not an
+    /// object: writing would drop, replace or pick between keys
     /// rv cannot read, so nothing is written.
     case unreadableConfig
 }
@@ -64,8 +66,8 @@ public struct HostModeStore: Sendable {
     /// Writes one host's entry, `block` included: an explicit `block` must
     /// outrank a global `guard.mode: observe`. Every other key is kept. The
     /// read, the checks and the write share one lock; a config that is not
-    /// an object, or a non-object `guard` / `guard.hosts`, throws
-    /// `unreadableConfig` and nothing is written.
+    /// an object, text `JSONDuplicateKeys` rejects, or a non-object
+    /// `guard` / `guard.hosts` throws `unreadableConfig` and nothing is written.
     /// Records `config.changed` (`guard.hosts.<host>`) write-ahead when the
     /// stored entry changes. `beforeWrite` runs after that record and before
     /// the file moves (`rv host mode <host> off` detaches the hooks there,
@@ -86,7 +88,7 @@ public struct HostModeStore: Sendable {
                 guardObject["hosts"] = .object(hosts)
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }
@@ -106,7 +108,7 @@ public struct HostModeStore: Sendable {
                 guardObject["mode"] = .string("observe")
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }

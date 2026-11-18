@@ -180,14 +180,21 @@ struct SetupObserveTests {
         }
     }
 
-    @Test func unreadableGuardObject_refusesBeforeWiring() async throws {
+    /// A non-object `guard`, or duplicate `guard` keys (rvd reads those as
+    /// enforce; a rewrite would keep one copy), is not rewritten.
+    @Test(arguments: [
+        #"{"guard":"loud"}"#,
+        #"{"guard":{"mode":"enforce"},"guard":{"mode":"observe"}}"#,
+    ])
+    func unreadableGuardObject_refusesBeforeWiring(config: String) async throws {
         try await withObserveHome { home, layout, environment in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
-            try writeConfig(home, #"{"guard":"loud"}"#)
+            try writeConfig(home, config)
             let outcome = await observeSetup(environment, probe: ObserveAuthProbe(allow: true))
-            #expect(outcome.exitCode == 73)
-            #expect(outcome.stderr.contains("unable to write guard.mode"))
-            #expect(try String(contentsOf: configURL(home), encoding: .utf8) == #"{"guard":"loud"}"#)
+            #expect(outcome.exitCode == EX_DATAERR)
+            #expect(outcome.stderr.contains("config.json cannot be rewritten safely"))
+            #expect(outcome.stderr.contains("fix config.json by hand"))
+            #expect(try String(contentsOf: configURL(home), encoding: .utf8) == config)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
         }
     }
