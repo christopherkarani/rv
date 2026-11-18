@@ -229,6 +229,22 @@ struct GatedEffectTests {
         #expect(stale.hasTripped)
     }
 
+    /// As for a deny: past the hook deadline an indeterminate refusal asks
+    /// for no denial row (`HookDoor` answers with the timeout deny).
+    @Test("enforce: a late indeterminate apply asks for no denial row")
+    func lateIndeterminateApplyEmitsNoDenialRow() async throws {
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        let decided = await HookDeadline.$current.withValue(stale) {
+            await Self.decide(.apply, ShellCommand(rawValue: "rv host mode claude off"), mode: .enforce)
+        }
+        guard case .indeterminate = decided.result.decision else {
+            Issue.record("rv administration from the agent must be indeterminate, got \(decided.result.decision)")
+            return
+        }
+        #expect(!decided.effects.contains { if case .denialRow = $0 { true } else { false } })
+        #expect(stale.hasTripped)
+    }
+
     @Test("observe: every shell door asks for one would-be judge row; apply adds an observed denial row", arguments: [
         EvaluationIntent.peek, .apply,
     ])

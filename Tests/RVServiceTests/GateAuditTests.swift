@@ -327,17 +327,18 @@ struct GateAuditTests {
     }
 
     /// Recording changes no verdict: for each indeterminate candidate on
-    /// the shell door, in each mode, apply returns what peek returns, and
-    /// an audit log that cannot be written leaves that verdict as it is.
+    /// the shell door, in each mode, apply returns what peek returns and
+    /// asks for exactly one marked record, and an audit log that cannot be
+    /// written leaves that verdict as it is.
     @Test func recordingAnIndeterminateNeverChangesTheVerdict() async throws {
-        let cases: [(command: ShellCommand, mode: GuardMode, expected: Decision)] = [
-            (Self.selfProtected, .enforce, .indeterminate(.selfProtection)),
-            (Self.selfProtected, .observe, .indeterminate(.selfProtection)),
-            (Self.oversized, .enforce, .indeterminate(.commandTooLarge)),
+        let cases: [(command: ShellCommand, mode: GuardMode, expected: Decision, reason: String, kind: AuditEventKind)] = [
+            (Self.selfProtected, .enforce, .indeterminate(.selfProtection), "selfProtection", .commandDenied),
+            (Self.selfProtected, .observe, .indeterminate(.selfProtection), "selfProtection", .commandDenied),
+            (Self.oversized, .enforce, .indeterminate(.commandTooLarge), "commandTooLarge", .commandDenied),
             // Observe lets an unfinished evaluation run (recorded as observed).
-            (Self.oversized, .observe, .allow),
+            (Self.oversized, .observe, .allow, "commandTooLarge", .commandObserved),
         ]
-        for (command, mode, expected) in cases {
+        for (command, mode, expected, reason, kind) in cases {
             let label = "\(command.rawValue.prefix(24)) \(mode)"
             let (home, url) = try home()
             defer { try? FileManager.default.removeItem(at: url) }
@@ -345,12 +346,22 @@ struct GateAuditTests {
             let applied = await decide(.apply, home: home, command: command, guardMode: mode)
             #expect(peeked.result.decision == expected, "\(label)")
             #expect(applied.result.decision == expected, "\(label)")
+            // With a writable log, apply's effects are exactly one marked
+            // record, so the unwritable half below drops a real row.
+            GatedEvaluate.perform(applied.effects, home: home)
+            let events = try chained(home)
+            #expect(events.map(\.kind) == [kind], "\(label)")
+            #expect(events.first?.reason == reason, "\(label)")
+            #expect(events.first?.detail["verdict"] == "indeterminate", "\(label)")
+
+            let (broken, brokenURL) = try self.home()
+            defer { try? FileManager.default.removeItem(at: brokenURL) }
             // A directory where audit.jsonl belongs: every append fails.
-            let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: broken))
             try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
             let gated = await GatedEvaluate().gated(
                 .apply, EvaluationRequest(command: command, enabledPacks: dayOnePackIDs),
-                cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+                cwd: wd("/tmp/ws"), home: broken, grants: EphemeralAllowOnceTable(), now: Self.now,
                 allowlist: { .empty }, host: .hook(.claude), tool: .bash,
                 inputs: EvaluationInputs(
                     guardMode: mode,
