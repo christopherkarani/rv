@@ -28,7 +28,8 @@ picks the file from an event's `class_uid` and `metadata.profiles`.
 - Fetched 2026-11-18, reformatted with `python3 -m json.tool --indent 2`,
   otherwise unchanged.
 - Licence: Apache License 2.0, copyright the OCSF contributors. The licence
-  text is in `LICENSE` beside this file.
+  text is in `LICENSE` beside this file, and the project's `NOTICE` (from
+  the same tag) beside it, as the licence's section 4(d) requires.
 
 ## Refreshing or adding a class
 
