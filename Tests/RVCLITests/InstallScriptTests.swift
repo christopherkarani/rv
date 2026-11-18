@@ -2233,6 +2233,7 @@ private func runChecksumInstall(
     libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
     lddBanner: String = "ldd (GNU libc) 2.39",
     uid: Int = 0,
+    extraShims: [String: String] = [:],
     afterSums: (URL) throws -> Void = { _ in }
 ) throws -> ChecksumRun {
     let root = FileManager.default.temporaryDirectory
@@ -2266,6 +2267,9 @@ private func runChecksumInstall(
         try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner, uid: uid)
     }
     try writeCurlShim(in: shim, assets: assets, latestTag: "v1.2.3", servedTag: servedTag)
+    for (name, contents) in extraShims {
+        try writeExecutable(shim.appendingPathComponent(name), contents: contents)
+    }
 
     var env = [
         "HOME": home.path,
@@ -2522,7 +2526,8 @@ func installSh_linuxStopsBeforeDownloadingWhenNoRuntimeDirectory() throws {
     #expect(run.status == 1, "\(run.stderr)")
     #expect(run.stderr.contains("XDG_RUNTIME_DIR is unset and \(directory) does not exist"), "\(run.stderr)")
     #expect(
-        run.stderr.contains("fix: as root, mkdir -p -m 0700 \(directory) && chown \(uid) \(directory)"),
+        run.stderr.contains(
+            "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o \(uid) \(directory)"),
         "\(run.stderr)")
     #expect(run.curlLog.isEmpty, "nothing may download: \(run.curlLog)")
     try expectOldInstallIntact(run)
@@ -2554,6 +2559,29 @@ func installSh_downloadRemovesItsTempDirectoryBeforeRunningSetup(mode: String) t
     #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv-workspace-host").path))
     let left = try FileManager.default.contentsOfDirectory(atPath: tmp.path).filter { $0.hasPrefix("rv-install.") }
     #expect(left.isEmpty, "download directory left behind: \(left)")
+}
+
+/// Removing the download directory is best effort: a failed `rm` must not
+/// stop the install after the binaries are in place but before `rv setup`.
+@Test func installSh_unremovableDownloadDirectoryStillRunsSetup() throws {
+    let rm = """
+        #!/bin/sh
+        for arg in "$@"; do
+          case "$arg" in
+            */rv-install.*/*) ;;
+            */rv-install.*) echo "rm: cannot remove '$arg': Permission denied" >&2; exit 1 ;;
+          esac
+        done
+        exec /bin/rm "$@"
+        """
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-tmpdir-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": tmp.path], extraShims: ["rm": rm])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("Permission denied"), "the shim must have refused: \(run.stderr)")
 }
 
 @Test func releaseWorkflow_glibcFloorMatchesInstallScript() throws {

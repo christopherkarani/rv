@@ -170,6 +170,15 @@ struct UnixSocketPathTests {
         }
     }
 
+    /// The fix sets both modes itself: under root's umask 027 a `mkdir -p`
+    /// that also makes `/run/user` leaves it 0750, which the user cannot
+    /// search.
+    @Test func userRuntimeDirectoryFixSetsBothModesWhateverTheUmask() {
+        #expect(UnixSocketPath.userRuntimeDirectoryFix(directory: "/run/user/4242", uid: 4242)
+            == "as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
+            + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents")
+    }
+
     @Test func productionEmptyXDGThrows() throws {
         let previous = liveXDG()
         setenv("XDG_RUNTIME_DIR", "", 1)

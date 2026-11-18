@@ -119,7 +119,7 @@ import Testing
                     + "no login manager (logind) created it, and only root can"), "\(outcome.stderr)")
             #expect(outcome.stderr.contains("no hooks were wired"), "\(outcome.stderr)")
             #expect(outcome.stderr.contains(
-                "fix: as root, mkdir -p -m 0700 /run/user/4242 && chown 4242 /run/user/4242; "
+                "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
                     + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"),
                 "\(outcome.stderr)")
             #expect(outcome.stderr.contains("did not answer") == false, "\(outcome.stderr)")
@@ -140,7 +140,8 @@ import Testing
             #expect(outcome.stderr.hasPrefix(
                 "rv service start failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "),
                 "\(outcome.stderr)")
-            #expect(outcome.stderr.contains("fix: as root, mkdir -p -m 0700 /run/user/4242 && chown 4242 /run/user/4242"))
+            #expect(outcome.stderr.contains(
+                "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242"))
             #expect(direct.events.isEmpty)
         }
     }
