@@ -1009,7 +1009,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "status",
-                    description: "Asks rvd whether it loads the current machine and repo policy, and which revisions. rvd re-reads policy on every evaluation; a policy it cannot load denies every action (typed-rules-invalid), never an earlier one. Exit 1 when the load fails. --wait on a save blocks until rvd loads it (--wait-timeout, default 10s)."
+                    description: "Asks rvd whether it loads the current machine and repo policy, and which revisions. rvd re-reads policy on every evaluation; a policy it cannot load denies every action (typed-rules-invalid), never an earlier one. Exit 1 when the load fails; exit 3 when rvd did not answer (the report is then this CLI's own load, unconfirmed by rvd). --wait on a save blocks until rvd loads it (--wait-timeout, default 10s)."
                 ),
                 HelpRow(
                     name: "ceiling",

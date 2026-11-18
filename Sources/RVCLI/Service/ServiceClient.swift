@@ -580,22 +580,30 @@ public struct ServiceClient: Sendable {
 
     /// rvd's own typed-policy load for `cwd` (`rv policy status`), over the
     /// hook-consult session and daemon-identity rule hooks use.
-    func policyStatus(cwd: WorkingDirectory?) async -> PolicyStatusObservation {
+    /// `timeout` bounds this one call (capped at `policyStatusTimeoutMs`),
+    /// so a `--wait` deadline is not overshot by a slow answer.
+    func policyStatus(cwd: WorkingDirectory?, timeout: Duration) async -> PolicyStatusObservation {
         switch await route() {
         case .xpc(let transport, _):
             do {
                 let reply = try await send(
                     PolicyStatusCall(params: PolicyStatusParams(cwd: cwd)),
                     using: transport,
-                    timeoutMs: Self.policyStatusTimeoutMs,
+                    timeoutMs: Self.policyStatusCallTimeoutMs(timeout),
                     hookConsult: true
                 )
-                return .rvd(reply.status)
-            } catch IPCCallError.service {
-                // An rvd from before this route cannot decode it.
-                return .unavailable("rvd did not answer the request (restart it: rv service restart)")
+                switch reply {
+                case .status(let status):
+                    return .rvd(status)
+                case .busy:
+                    return .unavailable("rvd is busy with other status requests")
+                }
+            } catch let error as IPCCallError {
+                return .unavailable(Self.policyStatusFailure(error))
             } catch {
-                return .unavailable("request failed")
+                // A reply that does not decode is malformed; anything else is transport.
+                let failure = Self.diagnosticFailure(from: error)
+                return .unavailable(failure == .invalidResponse ? Self.policyStatusRestartHint : failure.statusMessage)
             }
         case .down:
             return .unavailable("rvd is not running")
@@ -608,6 +616,32 @@ public struct ServiceClient: Sendable {
 
     /// A ceiling containment check over a large repo layer can take seconds.
     static let policyStatusTimeoutMs = 5_000
+
+    static func policyStatusCallTimeoutMs(_ timeout: Duration) -> Int {
+        let ms = timeout.components.seconds * 1_000 + timeout.components.attoseconds / 1_000_000_000_000_000
+        return Int(max(1, min(Int64(policyStatusTimeoutMs), ms)))
+    }
+
+    /// An rvd from before the route (or one replying in another shape)
+    /// cannot answer it; restarting onto the installed binary fixes that.
+    static let policyStatusRestartHint = "rvd did not understand the request (restart it: rv service restart)"
+
+    /// Only an unknown method or a malformed reply means rvd predates the
+    /// route; every other refusal is reported as itself.
+    private static func policyStatusFailure(_ error: IPCCallError) -> String {
+        switch error {
+        case .unexpectedResult, .service(.unknownMethod), .service(.decodeFailed):
+            policyStatusRestartHint
+        case .service(.authorizationDenied):
+            "rvd refused the request (authorization denied)"
+        case .service(.protocolSkew(let reason)):
+            "rvd reported protocol skew (\(reason.rawValue))"
+        case .identityMismatch:
+            "rvd's reply did not match the request"
+        case .service:
+            "rvd returned an error"
+        }
+    }
 
     private func localDiagnostic(
         cause: ServiceFallbackCause,

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
-- `rv policy status [--json]` reports whether rvd loads the current machine and repo policy, which revisions, and why not. rvd answers from the load hooks run. A policy rvd cannot load denies every action (`typed-rules-invalid`); rv never falls back to an earlier policy. `rv policy draft|apply|rollback --save --wait [--wait-timeout s]` blocks until rvd loads the saved policy.
+- `rv policy status [--json]` reports whether rvd loads the current machine and repo policy, which revisions, and why not. rvd answers from the load hooks run. A policy rvd cannot load denies every action (`typed-rules-invalid`); rv never falls back to an earlier policy. `rv policy draft|apply|rollback --save --wait [--wait-timeout s]` blocks until rvd loads the saved policy. Exit 1 on a failed load; exit 3 when rvd did not answer and the report is the CLI's own load. Policy files (machine, repo and ceiling) that are symlinks, FIFOs or other non-regular files, or larger than 1 MiB (256 KiB for the ceiling), now fail closed instead of being followed or read.
 
 ### Security
 

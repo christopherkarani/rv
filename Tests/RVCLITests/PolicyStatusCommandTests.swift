@@ -91,7 +91,10 @@ struct PolicyStatusCommandTests {
         try await withFixture { fixture in
             let output = CLIOutputCapture()
 
-            try await fixture.run(["status", "--json"], source: nil, output: output)
+            // Exit 3: a clean local load must not pass `rv policy status && …`.
+            await #expect(throws: ExitCode(3)) {
+                try await fixture.run(["status", "--json"], source: nil, output: output)
+            }
 
             let object = try jsonObject(output.stdout)
             #expect(object["source"] as? String == "local")
@@ -129,7 +132,7 @@ struct PolicyStatusCommandTests {
         let started = clock.now
         let outcome = await PolicyLoadWait.run(
             layer: .machine, hash: "h", cwd: nil, timeout: .milliseconds(300), pollInterval: .milliseconds(50),
-            observe: { _ in .unavailable("rvd is not running") })
+            observe: { _, _ in .unavailable("rvd is not running") })
         #expect(outcome == .timedOut(.unavailable("rvd is not running")))
         #expect(clock.now - started >= .milliseconds(300))
     }
@@ -138,7 +141,7 @@ struct PolicyStatusCommandTests {
         let calls = Counter()
         let outcome = await PolicyLoadWait.run(
             layer: .repo, hash: "new", cwd: nil, timeout: .seconds(5), pollInterval: .milliseconds(10),
-            observe: { _ in
+            observe: { _, _ in
                 let hash = calls.next() < 2 ? "old" : "new"
                 return .rvd(PolicyLoadStatus(
                     state: .loaded, repo: .init(hash: hash, ruleCount: 0, exceedsCeiling: false)))
@@ -151,8 +154,85 @@ struct PolicyStatusCommandTests {
         let failed = PolicyLoadStatus(state: .failed, failure: .repoInvalid)
         let outcome = await PolicyLoadWait.run(
             layer: .machine, hash: "h", cwd: nil, timeout: .seconds(30),
-            observe: { _ in .rvd(failed) })
+            observe: { _, _ in .rvd(failed) })
         #expect(outcome == .failed(failed))
+    }
+
+    @Test func wait_timesOutWhileRvdKeepsReportingAnotherHash() async {
+        let other = PolicyStatusObservation.rvd(PolicyLoadStatus(
+            state: .loaded, machine: .init(hash: "old", ruleCount: 1, exceedsCeiling: false)))
+        let calls = Counter()
+        let outcome = await PolicyLoadWait.run(
+            layer: .machine, hash: "new", cwd: nil, timeout: .milliseconds(300), pollInterval: .milliseconds(20),
+            observe: { _, _ in
+                _ = calls.next()
+                return other
+            })
+        #expect(outcome == .timedOut(other))
+        #expect(calls.value > 1)
+    }
+
+    /// A slow rvd cannot carry the wait past its timeout: each call is
+    /// bounded by what is left, never the full per-call 5 s.
+    @Test func wait_boundsEachCallByWhatIsLeft() async {
+        let clock = ContinuousClock()
+        let started = clock.now
+        let bounds = Recorder<Duration>()
+        let outcome = await PolicyLoadWait.run(
+            layer: .machine, hash: "h", cwd: nil, timeout: .milliseconds(400), pollInterval: .milliseconds(10),
+            observe: { _, bound in
+                bounds.append(bound)
+                // A transport that spends its whole bound, then gives up.
+                try? await Task.sleep(for: bound)
+                return .unavailable("request failed")
+            })
+        let elapsed = clock.now - started
+        #expect(outcome == .timedOut(.unavailable("request failed")))
+        #expect(elapsed < .milliseconds(400) + .seconds(1))
+        #expect(bounds.values.isEmpty == false)
+        #expect(bounds.values.allSatisfy { $0 <= .milliseconds(400) && $0 > .zero })
+    }
+
+    @Test func callTimeout_isCappedAtFiveSecondsAndNeverZero() {
+        #expect(ServiceClient.policyStatusCallTimeoutMs(.seconds(30)) == 5_000)
+        #expect(ServiceClient.policyStatusCallTimeoutMs(.milliseconds(1_250)) == 1_250)
+        #expect(ServiceClient.policyStatusCallTimeoutMs(.zero) == 1)
+    }
+
+    @Test func applySaveWait_rvdCannotLoad_failsWithTheReason_exit1() async throws {
+        try await withFixture { fixture in
+            let share = try fixture.share([denyReset])
+            let output = CLIOutputCapture()
+            let failed = PolicyLoadStatus(state: .failed, failure: .repoInvalid)
+
+            await #expect(throws: ExitCode(1)) {
+                try await fixture.run(
+                    ["apply", share.path, "--save", "--wait"], source: { _, _ in .rvd(failed) }, output: output)
+            }
+
+            #expect(output.stderr.contains(
+                "rv policy apply: saved, but rvd cannot load policy: repo .rv/policy.toml cannot be read or parsed;"
+                    + " every evaluation denies until it is fixed"))
+            #expect(output.stdout.contains("rvd loaded") == false)
+            #expect(try fixture.session.loadMachineDocument().rules.map(\.id) == [denyReset.id])
+        }
+    }
+
+    @Test func applySaveWait_rvdKeepsAnotherHash_timesOutNamingIt() async throws {
+        try await withFixture { fixture in
+            let share = try fixture.share([denyReset])
+            let output = CLIOutputCapture()
+            let stale = PolicyLoadStatus(state: .loaded, machine: .init(hash: "old", ruleCount: 0, exceedsCeiling: false))
+
+            await #expect(throws: ExitCode(1)) {
+                try await fixture.run(
+                    ["apply", share.path, "--save", "--wait", "--wait-timeout", "1"],
+                    source: { _, _ in .rvd(stale) }, output: output)
+            }
+
+            #expect(output.stderr.contains(
+                "rv policy apply: saved, but rvd did not confirm it within 1s (rvd still reports another machine policy)"))
+        }
     }
 
     @Test func applySaveWait_confirmsWhenRvdLoadsIt() async throws {
@@ -206,6 +286,12 @@ private let askReset = PolicyDocumentRule(
 private let allowDiscard = PolicyDocumentRule(
     id: RuleID(rawValue: "typed.git:discard-allow")!, verdict: .allow, predicate: .gitDiscardWorktree(pathspec: nil))
 
+private final class Recorder<Value: Sendable>: Sendable {
+    private let state = Mutex<[Value]>([])
+    var values: [Value] { state.withLock { $0 } }
+    func append(_ value: Value) { state.withLock { $0.append(value) } }
+}
+
 private final class Counter: Sendable {
     private let state = Mutex(0)
     var value: Int { state.withLock { $0 } }
@@ -222,7 +308,7 @@ private struct StatusFixture {
     /// Stands in for rvd sharing this HOME: its answer is the same load.
     var rvdAnswer: PolicyStatusSource {
         let home = home
-        return { cwd in
+        return { cwd, _ in
             .rvd(PolicyWorkspace(home: home, workspace: cwd.map { URL(fileURLWithPath: $0.rawValue) }).loadStatus())
         }
     }

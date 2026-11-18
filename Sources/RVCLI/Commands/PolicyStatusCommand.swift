@@ -10,7 +10,8 @@ enum PolicyStatusObservation: Sendable, Equatable {
     case unavailable(String)
 }
 
-typealias PolicyStatusSource = @Sendable (WorkingDirectory?) async -> PolicyStatusObservation
+/// One status request for `cwd`, bounded by the given timeout.
+typealias PolicyStatusSource = @Sendable (WorkingDirectory?, Duration) async -> PolicyStatusObservation
 
 /// `rv policy status [--json]`: whether rvd loads the current machine and
 /// repo policy, and which revisions. rvd answers from its own load (the
@@ -31,7 +32,8 @@ struct PolicyStatusCommand: AsyncParsableCommand {
         let home = try ctx.requireHome()
         let workspace = URL(fileURLWithPath: CLIProcess.workspacePath(), isDirectory: true)
         let session = PolicyWorkspace(home: home, workspace: workspace)
-        let observation = await PolicyStatusRun.source()(WorkingDirectory(validating: workspace.path))
+        let observation = await PolicyStatusRun.source()(
+            WorkingDirectory(validating: workspace.path), PolicyStatusRun.callTimeout)
         let report = PolicyStatusRun.report(observation, session: session)
         if ctx.explicitRobot {
             do {
@@ -42,8 +44,8 @@ struct PolicyStatusCommand: AsyncParsableCommand {
         } else {
             ctx.writeStdout(PolicyStatusRun.pretty(report))
         }
-        if report.state == .failed {
-            throw ExitCode(1)
+        if let code = PolicyStatusRun.exitCode(report) {
+            throw ExitCode(code)
         }
     }
 }
@@ -85,14 +87,28 @@ struct PolicyStatusReport: Sendable, Equatable, Codable {
 }
 
 enum PolicyStatusRun {
+    /// One request's bound: a containment check over a large repo layer
+    /// can take seconds.
+    static let callTimeout: Duration = .milliseconds(ServiceClient.policyStatusTimeoutMs)
+
+    /// Exit 3 when rvd did not answer: the report is this CLI's own load
+    /// and nothing confirms rvd enforces it, so `rv policy status && …`
+    /// must not pass. Otherwise exit 1 when the load fails.
+    static let rvdUnavailableExitCode: Int32 = 3
+
+    static func exitCode(_ report: PolicyStatusReport) -> Int32? {
+        if report.source == .local { return rvdUnavailableExitCode }
+        return report.state == .failed ? 1 : nil
+    }
+
     /// rvd's answer. An installed CLI context (tests) never reaches the
     /// live daemon: its seam, or "unavailable".
     static func source() -> PolicyStatusSource {
         if let context = CLIProcess.context {
-            return context.policyStatusSource ?? { _ in .unavailable("rvd is not reachable from this context") }
+            return context.policyStatusSource ?? { _, _ in .unavailable("rvd is not reachable from this context") }
         }
         let client = ServiceClient.probing(home: CLIProcess.home())
-        return { cwd in await client.policyStatus(cwd: cwd) }
+        return { cwd, timeout in await client.policyStatus(cwd: cwd, timeout: timeout) }
     }
 
     static func report(_ observation: PolicyStatusObservation, session: PolicyWorkspace) -> PolicyStatusReport {
@@ -252,13 +268,19 @@ enum PolicyLoadWait {
         cwd: WorkingDirectory?,
         timeout: Duration,
         pollInterval: Duration = .milliseconds(200),
+        callTimeout: Duration = PolicyStatusRun.callTimeout,
         observe: PolicyStatusSource
     ) async -> Outcome {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         var last: PolicyStatusObservation?
         while true {
-            let observation = await observe(cwd)
+            // Each call gets only what is left, so a slow answer cannot
+            // carry the wait past --wait-timeout. No call starts at the
+            // deadline: it could only fail and hide the last real answer.
+            let remaining = clock.now.duration(to: deadline)
+            guard remaining > .zero else { return .timedOut(last) }
+            let observation = await observe(cwd, min(callTimeout, remaining))
             last = observation
             if case .rvd(let status) = observation {
                 if status.state == .failed {
@@ -269,9 +291,7 @@ enum PolicyLoadWait {
                     return .loaded
                 }
             }
-            let now = clock.now
-            guard now < deadline else { return .timedOut(last) }
-            try? await Task.sleep(until: min(now.advanced(by: pollInterval), deadline), clock: clock)
+            try? await Task.sleep(until: min(clock.now.advanced(by: pollInterval), deadline), clock: clock)
         }
     }
 
