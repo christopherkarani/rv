@@ -425,14 +425,20 @@ the seatbelt profile is untouched.
   and so is an unreadable pending store (never read as empty). The
   token is not a credential: owner authentication still decides who
   approves. Denials are not bound (denying stale state is safe).
-- Related approvals, not supersession (`EgressReview.related`). OpenShell
-  auto-rejects older pending proposals an approval makes redundant. rv
-  does not retire any row: a proposal is exactly (workspace, host, port)
-  with no binary dimension, and the ledger already folds a second
-  same-workspace proposal for one host:port into the first, so an
-  approval covers no other awaiting row. A same-host row on another port
-  asks for a grant the approval does not give, so it stays pending and
-  the review surfaces name the approval beside it. Only approvals of the
+- Related approvals, not supersession (`EgressReview.related`). When a
+  new proposal is submitted, OpenShell auto-rejects older pending
+  proposals for the same (host, port, binary), and it rejects a new
+  proposal on arrival when an approved one already covers it. rv does
+  not retire any row: a proposal is exactly (workspace, host, port) with
+  no binary dimension, the ledger folds a new same-workspace proposal for
+  one host:port into the awaiting one, and `NetworkReviewQueue` files no
+  proposal for a rule already loaded or approved in this supervisor
+  lifetime. So
+  an approval covers no other awaiting row. A same-host row on another
+  port asks for a grant the approval does not give, so it stays pending
+  and the review surfaces name the approval beside it (any port of the
+  same host, including the same port approved before a host restart
+  dropped the live rule). Only approvals of the
   same workspace identity count; denials and other workspaces relate
   nothing. The annotation is drawn from the grant set the review token
   hashes, in the same snapshot, so a review shown without it cannot
