@@ -100,7 +100,7 @@ struct TypedRuleStoreTests {
 
         try store.saveMachine([machineDeny])
         try store.saveRepo([repoAllow], workspace: workspace)
-        let merged = try store.loadEffective(builtin: [], workspace: workspace)
+        let merged = try PolicyWorkspace(configDirectory: config, workspace: workspace).loadEffectiveRules()
 
         #expect(merged == [machineDeny])
         #expect(try store.loadRepo(workspace: workspace) == [repoAllow])

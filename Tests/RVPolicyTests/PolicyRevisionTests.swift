@@ -258,7 +258,7 @@ struct PolicyRevisionTests {
         try store.saveMachine(PolicyDocument(rules: [], safetyLevel: .normal))
         _ = try store.rollbackMachine(to: 1)
 
-        let effective = try store.loadEffective(builtin: [], workspace: workspace)
+        let effective = try PolicyWorkspace(configDirectory: config, workspace: workspace).loadEffectiveRules()
         #expect(effective == [machineDeny])
         #expect(try store.loadMachineDocument().safetyLevel == .strict)
     }
