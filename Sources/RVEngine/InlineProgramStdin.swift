@@ -143,7 +143,11 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
     if awkNames.contains(program) { return awkStdinRead(argv) }
     let explicitOnly = program == "deno" || program == "bun"
     if explicitOnly, argv.count > 1, argv[1] == "run" { argv.remove(at: 1) }
+    // Ruby's `-E` names an encoding, not inline code as Perl's does
+    // (`inlineProgram` asks for both), so it never hides the stdin program
+    // (`ruby -E UTF-8`, `ruby -E /dev/stdin main.rb`).
     let options = argv.prefix { stdinOperands.contains($0) == false }
+        .filter { isRubyExecutable(program) == false || $0 != "-E" }
     guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(Array(options)) == nil
     else { return nil }
     var read = StdinRead(kind: kind)
@@ -161,9 +165,13 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
         } else if arg.hasPrefix("-") {
             // An option's separate value (`python3 -W ignore`, `node -r
             // dotenv/config`, `ruby -r json`) is no script, and never a
-            // redirect (`python3 -W <<< …`).
+            // redirect (`python3 -W <<< …`). A value naming stdin (`node -r
+            // /dev/stdin app.js`, `ruby -r - main.rb`) is not skipped: the
+            // interpreter may load it as code, so it counts as the stdin
+            // operand on the next word (fail closed).
             if separateValueOptions(program).contains(arg), index < argv.count,
-               argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false
+               argv[index].hasPrefix("<") == false, argv[index].hasPrefix(">") == false,
+               stdinOperands.contains(argv[index]) == false
             {
                 index += 1
             }

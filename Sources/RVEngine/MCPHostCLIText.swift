@@ -331,19 +331,33 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
             printed.append(contentsOf: operands)
         }
         // After options of a program rv does not list as a runner, a host
-        // name or a dynamic word may be the program it runs (`strace -f
-        // claude $SUB add`, `strace -o log $C mcp add`): read from there.
+        // name may be the program it runs (`strace -f claude $SUB add`),
+        // and so may a dynamic word after a listed wrapper's options
+        // (`optionTailWrappers`: `strace -o log $C mcp add`, named by path
+        // too): read from there.
         // Only the command as written, not a re-split of it, which starts
-        // at such a word already; and from the first few such words, each
-        // one an option or its value after the last option.
+        // at such a word already; and from every such word, each one an
+        // option or its value after an option, so decoy hosts before the
+        // real one hide nothing. Their words together past
+        // `maxOptionTailWords` count (fail closed).
         if reads.resplit == false, literalOnly == false, isPrinter == false,
            let firstOption = args.firstIndex(where: { $0.hasPrefix("-") })
         {
+            let wraps = optionTailWrappers.contains(commandName(foldedWord(command.head)))
             let starts = args.indices.filter { start in
-                start > firstOption && mayHeadHostCommand(args[start])
+                start > firstOption
+                    && (namesHostCLI(args[start]) || (wraps && wordIsDynamic(foldedWord(args[start]))))
                     && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
             }
-            for start in starts.prefix(maxOptionTails) { tails.append(Array(args[start...])) }
+            guard starts.reduce(0, { $0 + args.count - $1 }) <= maxOptionTailWords else { return true }
+            // A dynamic program a listed wrapper runs, given a later word rv
+            // cannot read either (`strace -f $C $G add`), may be any host
+            // command with any group: it counts (fail closed).
+            let dynamicProgramTakesDynamicWord = starts.contains { start in
+                namesHostCLI(args[start]) == false && args[(start + 1)...].contains { wordIsDynamic(foldedWord($0)) }
+            }
+            if dynamicProgramTakesDynamicWord { return true }
+            for start in starts { tails.append(Array(args[start...])) }
         }
         for tail in tails where tail.isEmpty == false {
             if joinedReadsRun(tail, &reads, dataOnly: dataOnly, literalOnly: literalOnly) { return true }
@@ -449,8 +463,11 @@ private func decodedWord(_ word: String) -> String {
 
 private let printers: Set<String> = ["echo", "printf", "print"]
 
-/// How many re-reads from after a wrapper's options one command gets.
-private let maxOptionTails = 4
+/// How many words the re-reads from after a wrapper's options may hold in
+/// one command before it counts: the reads themselves are bounded by
+/// `HostTextReads`, this bounds building their text (quadratic in the
+/// command's words).
+private let maxOptionTailWords = HostTextReads.maxWordVisits
 
 /// Every shell word of `raw`, as written and decoded, read as program text
 /// (`textNamesHostMCPMutation`): inline interpreter code, quoted strings
