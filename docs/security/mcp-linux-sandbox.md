@@ -239,8 +239,9 @@ Limits of the mechanism rather than of what it blocks:
   macOS. With `"enforcement": "audit"` in a trusted mcp.json and no
   organization policy, the proxy also passes any other DNS name on port
   443, each one written as an `egress.observed` audit event first (and
-  refused if that write fails); IP literals, loopback names, SNI binding
-  and the public-address dial filter still hold.
+  refused if that write fails, or past 60 audit passes a minute per
+  server); IP literals, loopback names, SNI binding and the
+  public-address dial filter still hold.
 - **arm64 has not been run.** The filter is written for x86-64 and
   arm64; every test and every kernel lane ran on x86-64.
 
