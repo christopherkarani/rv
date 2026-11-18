@@ -111,6 +111,14 @@ func launchedCommandHeads(_ raw: String) -> [LaunchedCommand] {
     launchedCommandHeads(raw, depth: 0)
 }
 
+/// What one simple command already split into words (`guardArgv` operands)
+/// launches: the same launcher, shell `-c`, `eval` and dynamic-head
+/// resolution `raw` segments get. Lets a caller re-feed a program another
+/// program runs (xargs) through the shared resolver.
+func launchedCommandHeads(argv: [String], depth: Int) -> [LaunchedCommand] {
+    resolve(argv, depth: depth, expand: true)
+}
+
 private let maxLaunchDepth = 8
 private let maxDynamicOperands = 512
 private let maxBraceExpansions = 64
@@ -566,7 +574,7 @@ func commandName(_ word: String) -> String {
     unescapeBackslashPairs(basename(word)).folding(options: .caseInsensitive, locale: nil)
 }
 
-private let shellNames: Set<String> = [
+let shellNames: Set<String> = [
     "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh",
     "ksh93", "rbash", "yash", "pwsh", "nu", "xonsh",
 ]

@@ -405,7 +405,7 @@ struct RollbackRiskGateTests {
         let plantedDocument = PolicyDocument(rules: [keep, narrowing, planted])
 
         let report = try expectBlockedReport {
-            try store.rollbackRepo(to: 2, workspace: workspace, interlock: RepoRollbackInterlock(
+            try store.rollbackRepo(to: 2, workspace: workspace, expected: nil, interlock: RepoRollbackInterlock(
                 beforeLiveRead: {
                     probe.readLockHeld = RepoRollbackInterlock.policyLockIsHeld(at: lock)
                     try? Data(PolicyDocumentTOML.render(plantedDocument).utf8).write(to: file)
@@ -441,7 +441,7 @@ struct RollbackRiskGateTests {
         let lock = file.deletingLastPathComponent().appendingPathComponent(".policy.lock")
         let probe = RollbackLockProbe()
 
-        let head = try store.rollbackRepo(to: 1, workspace: workspace, interlock: RepoRollbackInterlock(
+        let head = try store.rollbackRepo(to: 1, workspace: workspace, expected: nil, interlock: RepoRollbackInterlock(
             beforeLiveRead: {
                 probe.readLockHeld = RepoRollbackInterlock.policyLockIsHeld(at: lock)
             },
@@ -631,7 +631,7 @@ struct RollbackRiskGateTests {
         let plantedDocument = PolicyDocument(rules: [keep, narrowing, planted])
 
         let report = try expectBlockedReport {
-            try store.rollbackMachine(toRevision: 2, interlock: RollbackInterlock(
+            try store.rollbackMachine(toRevision: 2, expected: nil, interlock: RollbackInterlock(
                 beforeLiveRead: {
                     probe.readLockHeld = RollbackInterlock.policyLockIsHeld(at: lock)
                     try? Data(PolicyDocumentTOML.render(plantedDocument).utf8)
@@ -666,7 +666,7 @@ struct RollbackRiskGateTests {
         let lock = RVPolicyPaths.policyLockFile(inConfigDir: config)
         let probe = RollbackLockProbe()
 
-        _ = try store.rollbackMachine(toRevision: 1, interlock: RollbackInterlock(
+        _ = try store.rollbackMachine(toRevision: 1, expected: nil, interlock: RollbackInterlock(
             beforeLiveRead: {
                 probe.readLockHeld = RollbackInterlock.policyLockIsHeld(at: lock)
             },

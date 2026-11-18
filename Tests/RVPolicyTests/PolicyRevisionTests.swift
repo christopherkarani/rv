@@ -290,7 +290,9 @@ struct PolicyRevisionTests {
             ),
             layer: .machine
         )
-        let head = try session.rollback(layer: .machine, to: 1)
+        let preview = try session.previewRollback(layer: .machine, to: 1)
+        let head = try session.rollback(
+            layer: .machine, to: 1, expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
         #expect(head.revision == 3)
         #expect(try session.loadMachineDocument().rules == [deny])
         #expect(try session.listRevisions(layer: .machine).count == 3)
@@ -308,7 +310,7 @@ struct PolicyRevisionTests {
             _ = try session.listRevisions(layer: .repo)
         }
         #expect(throws: PolicyWorkspaceError.missingLayer(.machine)) {
-            _ = try session.rollback(layer: .repo, to: 1)
+            _ = try session.rollback(layer: .repo, to: 1, expected: .unchecked)
         }
         #expect(try session.loadRepoDocument() == PolicyDocument())
     }
@@ -322,10 +324,10 @@ struct PolicyRevisionTests {
             _ = try session.listRevisions(layer: .repo)
         }
         #expect(throws: PolicyWorkspaceError.missingLayer(.machine)) {
-            _ = try session.rollback(layer: .machine, to: 1)
+            _ = try session.rollback(layer: .machine, to: 1, expected: .unchecked)
         }
         #expect(throws: PolicyWorkspaceError.missingLayer(.repo)) {
-            _ = try session.rollback(layer: .repo, to: 1)
+            _ = try session.rollback(layer: .repo, to: 1, expected: .unchecked)
         }
     }
 

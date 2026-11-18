@@ -996,8 +996,8 @@ the 3 pre-existing environmental failures.
 The seam wires the F1 rollback paths through the F3 gate and reconciles
 the two revision-log designs that grew in parallel:
 
-- **Rollback gate.** All three store rollbacks (`rollbackMachine(to:)`,
-  `rollbackMachine(toRevision:)`, `rollbackRepo`) compare the
+- **Rollback gate.** All store rollbacks (`rollbackMachine(to:expected:)`,
+  its internal `rollbackMachine(toRevision:expected:interlock:)`, `rollbackRepo(to:workspace:expected:)`) compare the
   restored document against both baselines — the live policy file
   enforcement loads and the sealed/JSONL history head — and throw
   `blockedByFindings` before writing anything when the restore is
@@ -1417,7 +1417,7 @@ Production (`PolicyWorkspace`) called only the unverified
 list/rollback (BYPASS-1) and a deleted `.jsonl` silently
 re-minted r1 over sealed history (BYPASS-2); the sealed HMAC
 chain had zero production readers. Fix (machine scope):
-`listMachineRevisions` and `rollbackMachine(to:)` read a
+`listMachineRevisions` and `rollbackMachine(to:expected:)` read a
 single locked snapshot and cross-check every `.jsonl` entry
 against the sealed chain as generation sequences (sealed
 same-hash runs compress away first — identical re-saves seal
