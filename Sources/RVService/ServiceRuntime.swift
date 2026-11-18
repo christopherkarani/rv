@@ -302,7 +302,7 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .hookEvaluate(let params):
             return params.clientSemver
-        case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot,
+        case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot, .policyStatus,
             .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
             .proposeWorkspaceLaunch, .launchProposalStatus:
             return nil
@@ -360,6 +360,8 @@ public actor ServiceRuntime {
             }
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
+        case .policyStatus(let params):
+            result = .policyStatus(await policyStatus(params))
         case .pendingList:
             switch await approvals.pendingListResult() {
             case .success(let reply): result = .pendingList(reply)
@@ -965,6 +967,18 @@ public actor ServiceRuntime {
         )
     }
 
+    /// The typed-policy load hooks run (`PolicyStoreInputs`), for rvd's
+    /// HOME and the caller's cwd. Off the actor: a ceiling containment
+    /// check over a large repo layer can take seconds, and hook
+    /// evaluations must not queue behind it.
+    private func policyStatus(_ params: PolicyStatusParams) async -> PolicyStatusReply {
+        let home = configHome
+        let status = await Task.detached {
+            PolicyStoreInputs.loadStatus(home: home, cwd: params.cwd)
+        }.value
+        return PolicyStatusReply(status: status)
+    }
+
     private func logIfNeeded(request: IPCRequest, result: IPCResult, started: DispatchTime) {
         let method: String
         var decision: String?
@@ -984,6 +998,8 @@ public actor ServiceRuntime {
             method = "setPackEnabled"
         case .doctorSnapshot:
             method = "doctorSnapshot"
+        case .policyStatus:
+            method = "policyStatus"
         case .pendingList:
             method = "pendingList"
         case .pendingWatch:

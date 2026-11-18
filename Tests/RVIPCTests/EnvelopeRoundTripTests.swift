@@ -405,6 +405,12 @@ extension IPCMethod {
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: true))
             ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
+            NamedMethod(
+                key: "policyStatus",
+                id: id,
+                method: .policyStatus(PolicyStatusParams(cwd: WorkingDirectory(validating: "/tmp/repo")))
+            ),
+            NamedMethod(key: "policyStatus", id: id, method: .policyStatus(PolicyStatusParams(cwd: nil))),
             NamedMethod(key: "pendingList", id: id, method: .pendingList),
             NamedMethod(
                 key: "pendingWatch",
@@ -506,6 +512,29 @@ extension IPCResult {
                         packsEnabled: [.coreGit],
                         checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
                     )
+                )
+            ),
+            NamedResult(
+                key: "policyStatus",
+                id: id,
+                result: .policyStatus(
+                    PolicyStatusReply(
+                        status: PolicyLoadStatus(
+                            state: .loaded,
+                            machine: .init(hash: "abc", ruleCount: 2, exceedsCeiling: true),
+                            ceilingRuleCount: 1,
+                            effectiveRuleCount: 3,
+                            configDirectory: "/home/u/.config/rv",
+                            workspace: "/tmp/repo"
+                        )
+                    )
+                )
+            ),
+            NamedResult(
+                key: "policyStatus",
+                id: id,
+                result: .policyStatus(
+                    PolicyStatusReply(status: PolicyLoadStatus(state: .failed, failure: .ceilingInvalid))
                 )
             ),
             NamedResult(
