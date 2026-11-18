@@ -9,6 +9,7 @@ import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
+        try RVDLaunch.requireHome(environment: ProcessInfo.processInfo.environment)
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let hosts = LiveWorkspaceHostRegistry()
@@ -48,7 +49,7 @@ public enum RVDProcess {
         do {
             try listeners.unix.start()
         } catch {
-            FileHandle.standardError.write(
+            try? FileHandle.standardError.write(contentsOf:
                 Data(RVDLogFile.line("rvd: unix socket unavailable (\(error)); continuing with XPC only").utf8)
             )
         }
@@ -87,6 +88,7 @@ import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
+        try RVDLaunch.requireHome(environment: ProcessInfo.processInfo.environment)
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let ceremonies = WorkspaceOperatorCeremonyService()

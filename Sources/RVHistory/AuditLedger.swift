@@ -184,7 +184,8 @@ public struct AuditLedger: Sendable {
             kind: kind,
             decision: blocked == nil ? .info : .failed,
             subject: f.string("originalPath") ?? "workspace",
-            reason: blocked,
+            // `runtime.ended` carries why rv stopped it (`timeout`).
+            reason: blocked ?? f.string("endReason"),
             workspace: f.string("workspace"),
             runtime: f.string("runtime"),
             source: source.rawValue,

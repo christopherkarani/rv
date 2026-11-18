@@ -55,6 +55,11 @@ public struct ConfirmOwnerActionReply: Sendable, Equatable, Codable {
         /// This system cannot check the owner: no `unix_chkpwd` on Linux, or
         /// no Touch ID or passcode prompt available to rvd on macOS.
         case unavailable
+        /// The owner approved, but rvd could not write the approval to
+        /// `audit.jsonl` (or has no home to write it under), so nothing was
+        /// approved. Refused exactly as `unavailable`; an older CLI fails to
+        /// decode it and refuses too.
+        case auditUnwritable
     }
 
     /// How rvd checked the owner for an `.approved` outcome.

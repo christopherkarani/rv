@@ -1211,7 +1211,7 @@ private func drainTerminal(_ client: WorkspaceClient, seconds: TimeInterval) -> 
         case .success(.waiting):
             continue
         case .success(.event(let event)):
-            if case .exited(let status) = event.body {
+            if case .exited(let status, _) = event.body {
                 return status
             }
         }

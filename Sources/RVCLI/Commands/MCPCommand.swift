@@ -43,6 +43,20 @@ struct MCPEnvironment: Sendable {
     }
 }
 
+/// What serve launches: the mcp.json `MCPRun.upstreamLaunches` verified,
+/// and what it planned from it. Only that function makes one, so serve's
+/// relaunches (`MCPRun.relaunch(plan:)`) cannot be planned from any other
+/// read of mcp.json.
+struct MCPServePlan {
+    let configuration: MCPConfiguration
+    let launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
+
+    fileprivate init(configuration: MCPConfiguration, launches: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]) {
+        self.configuration = configuration
+        self.launches = launches
+    }
+}
+
 enum MCPRun {
     struct Row: Encodable, Equatable {
         var host: String
@@ -651,14 +665,24 @@ enum MCPRun {
             case .success(let review): tools = review
             }
         }
+        // Nothing of a configured server to pin: still drop queued tools of
+        // servers no longer in mcp.json, so they stop taking queue space.
+        // Only by a server list the owner stands behind: the signed mcp.json
+        // here, or this one once the owner has confirmed and it is signed.
+        let pruneUnconfigured = tools.isEmpty && environment.approvalSigning.honorsGrants && pinningSkipped == nil
         if configTrusted, tools.isEmpty {
+            if pruneUnconfigured { pinStore.pruneReview(configured: Set(configuration.servers.map(\.name))) }
             return .success("mcp.json already matches rv's signature; nothing to trust\n" + tools.waitingHint)
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
         var review = ""
         var prompt = ""
         if configTrusted == false {
-            review = trustReview(configuration) + "\nsha256 \(digest)"
+            let secrets = SecretsConfiguration.load(configDirectory: environment.configDirectory)
+            if let refusal = placeholderSigningRefusal(configuration, secrets: secrets) {
+                return .failure(CommandFailure(refusal))
+            }
+            review = trustReview(configuration, secrets: secrets) + "\nsha256 \(digest)"
             guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
                 return .failure("trust review omitted a literal value; nothing signed")
             }
@@ -697,6 +721,7 @@ enum MCPRun {
                 configDirectory: environment.configDirectory)
             done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
+        if pruneUnconfigured { pinStore.pruneReview(configured: Set(configuration.servers.map(\.name))) }
         if tools.isEmpty == false {
             switch pinStore.trust(
                 reviewed: tools.reviewed, expectedPins: tools.expectedPins, configured: Set(configuration.servers.map(\.name))
@@ -752,7 +777,8 @@ enum MCPRun {
         var waitingHint: String {
             guard serversWithoutPins.isEmpty == false else { return "" }
             return "no tools of \(MCPRun.capped(serversWithoutPins.map(MCPRun.visible))) are trusted or waiting for review; "
-                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n"
+                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again "
+                + "(a tool named with more than 64 bytes or anything but A-Z a-z 0-9 _ . - is hidden and never queued)\n"
         }
     }
 
@@ -802,7 +828,12 @@ enum MCPRun {
         return .success(review)
     }
 
-    static func trustReview(_ configuration: MCPConfiguration) -> String {
+    /// `secrets` is secrets.json as it reads now: it only says which
+    /// variables a placeholder sets and where its real value goes.
+    static func trustReview(
+        _ configuration: MCPConfiguration,
+        secrets: Result<SecretsConfiguration, SecretsConfigurationError> = .success(.empty)
+    ) -> String {
         var lines = [
             "mcp.json: default deny for tools without a rule",
             "  unlisted tools deny; local servers need a sandbox; network only through sandbox.hosts",
@@ -841,6 +872,7 @@ enum MCPRun {
             for variable in server.secrets.keys.sorted() {
                 lines.append("    \(variable) → secret \(visible(server.secrets[variable] ?? ""))")
             }
+            lines += placeholderLines(server, secrets: secrets)
             lines += bindingLines(server, indent: "    ")
             let tools = server.tools
             if tools.allow.isEmpty == false { rules.append("allow " + tools.allow.map(visible).joined(separator: ", ")) }
@@ -880,6 +912,60 @@ enum MCPRun {
             lines.append("  blocked: " + quotedReviewFields(configuration.blocked))
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Each placeholder a server gets, then what it sets and where the real
+    /// value goes: the server holds only the placeholder.
+    static func placeholderLines(
+        _ server: MCPServerDefinition, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> [String] {
+        server.placeholders.flatMap { name -> [String] in
+            ["    placeholder \(visible(name))", "      " + placeholderDetail(name, secrets: secrets)]
+        }
+    }
+
+    private static func placeholderDetail(
+        _ name: String, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> String {
+        guard case .success(let loaded) = secrets else { return "secrets.json unreadable: variables and upstream unknown" }
+        guard let secret = loaded.secret(named: name) else { return "not defined in secrets.json: serve refuses this server" }
+        guard let upstream = MCPPlaceholderPlanning.upstream(secret) else {
+            return "environment delivery: serve refuses this server"
+        }
+        if SecretPlaceholderBroker.isHostEnvironmentSourced(secret) {
+            return "read from rv's own environment: serve refuses this server"
+        }
+        let variables = secret.stagedVariables.map(visible).joined(separator: ", ")
+        return "sets \(variables) · real value only to \(visible(MCPPlaceholderPlanning.origin(upstream)))"
+    }
+
+    /// Why `rv mcp trust` signs nothing: the signature covers mcp.json, not
+    /// secrets.json, so a review that cannot say where a placeholder's real
+    /// value goes is not one to sign.
+    static func placeholderSigningRefusal(
+        _ configuration: MCPConfiguration, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> String? {
+        for server in configuration.servers where server.placeholders.isEmpty == false {
+            guard case .success(let loaded) = secrets else {
+                return "secrets.json cannot be read, so the review cannot say where \(visible(server.name))'s "
+                    + "placeholders go; nothing signed"
+            }
+            for name in server.placeholders where loaded.secret(named: name) == nil {
+                return "secrets.json does not define placeholder \(visible(name)) of \(visible(server.name)); nothing signed"
+            }
+        }
+        return nil
+    }
+
+    /// One stderr line per placeholder of a server once it runs bound: the
+    /// secret, the variables it set and the upstream that gets the value,
+    /// from the definitions its lease staged.
+    static func placeholderBindingLog(server: String, definitions: [SecretDefinition]) -> [String] {
+        let staged = SecretsConfiguration(secrets: definitions)
+        return definitions.map { definition in
+            "MCP server \(visible(server)): placeholder \(visible(definition.name)) "
+                + placeholderDetail(definition.name, secrets: .success(staged))
+        }
     }
 
     static func connect(
@@ -966,10 +1052,11 @@ enum MCPRun {
     }
 
     /// Appends, or says so on stderr: silently losing audit on a full disk
-    /// would let calls proceed unrecorded.
+    /// would let calls proceed unrecorded. Through the gateway's stderr
+    /// writer, which fails on a closed stderr where `FileHandle` raised.
     static func auditOrLog(_ event: AuditEvent, configDirectory: URL) {
         if AuditLog.append(event, configDirectory: configDirectory) == false {
-            FileHandle.standardError.write(Data("rv mcp: could not append the audit log\n".utf8))
+            MCPGatewayRuntime.writeStderrLine("rv mcp: could not append the audit log\n")
         }
     }
 
@@ -1085,15 +1172,17 @@ enum MCPRun {
 
     /// Plans upstream processes. An untrusted mcp.json is refused before any
     /// command, argument, sandbox, or secret is resolved into a launch.
-    /// The plan uses the bytes this call verified. A configuration captured
-    /// earlier is not launched when it differs.
+    /// The plan uses the bytes this call verified, and carries that
+    /// configuration for relaunches (`relaunch(plan:)`). A configuration
+    /// captured earlier is not launched when it differs.
     static func upstreamLaunches(
         names: [String], configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
         resolver: SecretResolver,
-        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch in
+        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch, _ in
             .success(launch)
-        }
-    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], CommandFailure> {
+        },
+        placeholders: MCPPlaceholderLeasing = .unavailable
+    ) -> Result<MCPServePlan, CommandFailure> {
         let verified: MCPConfiguration
         switch boundConfiguration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -1119,7 +1208,8 @@ enum MCPRun {
         }
         switch MCPLaunchPlanner.plan(
             servers: names, configuration: verified, secrets: secrets, resolver: resolver,
-            baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox)
+            baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox,
+            placeholders: placeholders)
         {
         case .failure(let error):
             if case .secretUnavailable(let server, let secret, _) = error {
@@ -1132,7 +1222,43 @@ enum MCPRun {
                     configDirectory: environment.configDirectory)
             }
             return .failure(CommandFailure(error.message))
-        case .success(let planned): return .success(planned)
+        case .success(let planned): return .success(MCPServePlan(configuration: verified, launches: planned))
+        }
+    }
+
+    /// How serve starts a server again after it went away: planned alone,
+    /// as at serve start, from the configuration `plan` was made from (the
+    /// one serve verified and started with; mcp.json is not read again).
+    /// Its secrets are resolved again, a placeholder server gets a new
+    /// lease, and a caged one a new cage and proxy (the old proxy is
+    /// stopped), as a first launch gets them.
+    static func relaunch(
+        plan: MCPServePlan, environment: MCPEnvironment, secrets: SecretsConfiguration,
+        resolver: SecretResolver, placeholders: MCPPlaceholderLeasing,
+        sandbox: @escaping @Sendable () -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>
+    ) -> MCPGatewayRuntime.Relaunch {
+        let configuration = plan.configuration
+        return { server in
+            switch MCPLaunchPlanner.plan(
+                servers: [server], configuration: configuration, secrets: secrets, resolver: resolver,
+                baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load,
+                sandbox: sandbox(), placeholders: placeholders)
+            {
+            case .failure(let error):
+                if case .secretUnavailable(let server, let secret, _) = error {
+                    // Only the names, as at serve start.
+                    auditOrLog(
+                        AuditEvent(
+                            time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
+                            reason: "secret refused at relaunch", source: "rv mcp serve",
+                            detail: ["server": server, "secret": secret]),
+                        configDirectory: environment.configDirectory)
+                }
+                return .failure(error)
+            case .success(let planned):
+                guard let first = planned.first else { return .failure(.unknownServer(server)) }
+                return .success(first)
+            }
         }
     }
 
@@ -1391,6 +1517,9 @@ enum MCPRun {
             lines.append("    host \(visible(host))")
         }
         if let sandbox = server.sandbox { lines += allowedIPLines(sandbox) }
+        for name in server.placeholders {
+            lines.append("    placeholder \(visible(name))")
+        }
         return lines
     }
 
@@ -1438,6 +1567,9 @@ enum MCPRun {
         }
         if let sandbox = server.sandbox {
             for line in allowedIPLines(sandbox) where lines.contains(line) == false { return false }
+        }
+        for name in server.placeholders where lines.contains("    placeholder \(visible(name))") == false {
+            return false
         }
         return true
     }
@@ -1582,8 +1714,14 @@ struct MCPServe: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp serve", json: false, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
         let environment = MCPEnvironment.live(home: home)
+        // Through the gateway's stderr writer, so a closed stderr cannot end
+        // serve by SIGPIPE before it says why it stops; a test's captured
+        // output still gets the line.
         func fail(_ message: String) throws -> Never {
-            try ctx.emit(stdout: "", stderr: "rv mcp serve: \(message)\n", exitCode: 1)
+            let line = "rv mcp serve: \(message)\n"
+            guard CLIProcess.context?.output == nil else { try ctx.emit(stdout: "", stderr: line, exitCode: 1) }
+            MCPGatewayRuntime.writeStderrLine(line)
+            throw ExitCode(1)
         }
         let configuration: MCPConfiguration
         switch MCPRun.configuration(environment) {
@@ -1598,26 +1736,65 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let error): try fail(error.message)
         case .success(let loaded): secrets = loaded
         }
-        let planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
-        switch MCPRun.upstreamLaunches(
-            names: names, configuration: configuration, environment: environment, secrets: secrets,
-            resolver: .live(home: home.rawValue),
-            sandbox: MCPSandbox.apply(
-                configDirectory: environment.configDirectory, home: environment.home,
-                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)))
-        {
-        case .failure(let failure): try fail(failure.message)
-        case .success(let result): planned = result
+        // A signal ends serve through its normal shutdown: from before
+        // planning, whose capability probe holds a stopped child, until the
+        // last group is reaped. Every server runs in a process group of its
+        // own, which a terminal's or a host's signal no longer reaches, so
+        // every serve catches them. A second signal kills what is left at
+        // once. A signal while planning ends serve at once, however long a
+        // secret provider holds the plan: no server runs yet, the proxies
+        // planning started are stopped, and its leases end with the broker.
+        let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
+        defer { signals.cancel() }
+        guard signals.installed else {
+            try fail("rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; "
+                + "not serving")
         }
+        // Its gateway serves only the servers that list `placeholders`, each
+        // lease bound to that server's process group; it stops with serve.
+        let placeholderBroker = SecretPlaceholderBroker(
+            configDirectory: environment.configDirectory, resolver: .live(home: home.rawValue))
+        defer { placeholderBroker.stop() }
+        // Relaunches are planned from this plan, which only
+        // `upstreamLaunches` makes: from the configuration it verified for
+        // these launches, never the read above.
+        let plan: MCPServePlan
+        let outcome = signals.plan {
+            MCPRun.upstreamLaunches(
+                names: names, configuration: configuration, environment: environment, secrets: secrets,
+                resolver: .live(home: home.rawValue),
+                sandbox: MCPSandbox.apply(
+                    configDirectory: environment.configDirectory, home: environment.home,
+                    denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)),
+                placeholders: .broker(placeholderBroker))
+        }
+        guard let outcome, signals.first == nil else {
+            MCPSandbox.stopProxies()
+            throw ExitCode(128 + (signals.first ?? SIGTERM))
+        }
+        switch outcome {
+        case .failure(let failure): try fail(failure.message)
+        case .success(let result): plan = result
+        }
+        let planned = plan.launches
         let configDirectory = environment.configDirectory
+        // As `MCPGatewayRuntime.run` does, before the pin-store and
+        // host-check lines below. Lines through the gateway's stderr writer
+        // no longer need it (a closed stderr fails their write whatever the
+        // disposition, during planning too); anything else serve writes
+        // does. Not before planning: a child it starts with raw
+        // `posix_spawn` (unlike Foundation `Process`) would inherit it.
+        // Upstreams are spawned later, by `run`, as before.
+        signal(SIGPIPE, SIG_IGN)
         let log: @Sendable (String) -> Void = { message in
-            FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
+            MCPGatewayRuntime.writeStderrLine("rv mcp: \(message)\n")
         }
         // Read and verified once, beside the mcp.json check above. An
         // unreadable or unverifiable store pins nothing: every tool asks.
-        let (pinning, pinFailure) = MCPToolPinStore(
-            configDirectory: configDirectory, signing: environment.approvalSigning
-        ).pinning()
+        // Each server in mcp.json gets an equal share of the review queue.
+        var pinStore = MCPToolPinStore(configDirectory: configDirectory, signing: environment.approvalSigning)
+        pinStore.configuredServers = configuration.servers.count
+        let (pinning, pinFailure) = pinStore.pinning()
         if pinFailure == .unprotected {
             log("\(MCPToolPinStore.LoadFailure.unprotected.reason); every MCP tool asks")
         } else if let pinFailure {
@@ -1628,17 +1805,47 @@ struct MCPServe: AsyncParsableCommand {
                     reason: pinFailure.reason, source: "mcp-gateway", detail: ["status": "unverified"]),
                 configDirectory: configDirectory)
         }
+        // Warns only, on stderr and in one event; waits at most
+        // `hostCheckTimeout` for the check and its audit append together,
+        // and never stops serving.
+        MCPRun.checkHostsBeforeServing(
+            environment, configuration: configuration, project: MCPRun.projectURL(nil), log: log)
         let core = MCPRun.serveCore(
             configuration: configuration, upstreams: planned.map { $0.0 }, environment: environment, pinning: pinning)
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },
             oauthStore: environment.oauthTokens,
+            relaunch: MCPRun.relaunch(
+                plan: plan, environment: environment, secrets: secrets,
+                resolver: .live(home: home.rawValue), placeholders: .broker(placeholderBroker),
+                sandbox: {
+                    MCPSandbox.apply(
+                        configDirectory: environment.configDirectory, home: environment.home,
+                        denied: DenialAudit.forwarder(configDirectory: environment.configDirectory))
+                }),
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
-            log: log)
-        runtime.run()
+            log: log,
+            placeholdersBound: { server, definitions in
+                for line in MCPRun.placeholderBindingLog(server: server, definitions: definitions) { log(line) }
+            })
+        // Heard since planning: nothing was spawned, and the leases end with
+        // the broker. Exits as a signal-killed serve would report it.
+        if let number = signals.first {
+            MCPSandbox.stopProxies()
+            throw ExitCode(128 + number)
+        }
+        let code = signals.serve(runtime)
         MCPSandbox.stopProxies()
+        if let code { throw ExitCode(code) }
+    }
+
+    /// How serve exits once the runtime returns: as killed by a signal it
+    /// heard, 1 when the client stopped reading (the runtime said why on
+    /// stderr), otherwise successfully (nil).
+    static func exitCode(_ ending: MCPGatewayRuntime.Ending, signal: Int32?) -> Int32? {
+        MCPShutdownSignals.exitCode(ending, signal: signal)
     }
 }
 

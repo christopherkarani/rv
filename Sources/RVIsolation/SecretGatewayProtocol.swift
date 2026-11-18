@@ -254,6 +254,8 @@ public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
     /// The upstream's answer carried a `SecretAccessKey`: credentials minted
     /// by the call, which would otherwise reach the agent unscrubbed.
     case awsCredentialsInResponse = "awsCredentialsInResponse"
+    /// The request head, or its body, did not arrive by its deadline.
+    case requestTimeout = "requestTimeout"
 
     /// Seconds a client should wait before retrying, sent as `Retry-After`.
     var retryAfter: Int? { self == .approvalPending ? 5 : nil }
@@ -270,7 +272,7 @@ public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
             .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .awsUnsignedPayload,
-            .awsCredentialsInResponse, .approvalPending, .approvalDenied, .approvalUnavailable:
+            .awsCredentialsInResponse, .approvalPending, .approvalDenied, .approvalUnavailable, .requestTimeout:
             false
         }
     }
@@ -289,6 +291,7 @@ public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
             .approvalUnavailable, .binaryMismatch:
             403
         case .tooLarge: 413
+        case .requestTimeout: 408
         case .echoMethod: 405
         }
     }
@@ -326,6 +329,7 @@ public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
             "unsigned payload modes are accepted for S3 only; send the body with a payload hash for this service"
         case .awsCredentialsInResponse:
             "the AWS response carried new credentials, which are never passed to the agent"
+        case .requestTimeout: "the request did not arrive in time"
         }
     }
 }

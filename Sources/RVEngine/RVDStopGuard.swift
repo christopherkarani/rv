@@ -194,7 +194,7 @@ private func stops(argv: [String], _ context: StopContext) -> Bool {
     case "pkill": return pkillSelectsRVD(args)
     case "killall": return killallSelectsRVD(args)
     case "kill": return killStops(args, context)
-    case "xargs": return xargsStops(args, context)
+    case "xargs", "gxargs": return xargsStops(args, context)
     case "busctl", "gdbus", "dbus-send", "systemd-run", "loginctl":
         // Linux D-Bus / systemd manager calls that name rv's bus or unit.
         let folded = context.raw.folding(options: .caseInsensitive, locale: nil)

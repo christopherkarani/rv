@@ -29,6 +29,12 @@ package struct SecretRunContext: Sendable {
     var manageTerminal: Bool
     /// One stderr line, already prefixed.
     var notice: @Sendable (String) -> Void
+    /// Opens the signal guard for the probe and for the launch. Tests open
+    /// detached ones, so the test process keeps its dispositions.
+    var signals: @Sendable () -> SecretRunSignals = { SecretRunSignals() }
+    /// Told the command's group once it is bound; tests record it to kill
+    /// the group if a launch hangs.
+    var bound: @Sendable (ProcessGroupFact) -> Void = { _ in }
 
     /// `~/.config/rv` from a validated HOME, the live providers, and the
     /// kernel peer check.
@@ -58,7 +64,7 @@ package enum SecretRun {
         // Before anything is resolved: a launch that cannot be bound must not
         // prompt or unlock. Guarded, so a Ctrl-C cannot end rv while its
         // suspended probe child is alive (it would be left stopped forever).
-        let probing = SecretRunSignals()
+        let probing = context.signals()
         let refusal = context.capability(context.peers)
         let interrupted = probing.interrupted
         probing.restore()
@@ -108,7 +114,7 @@ package enum SecretRun {
             .filter { name in lease.environment.contains { $0.name == name } == false }
         if copies.isEmpty == false {
             context.notice("rv run: removed \(copies.joined(separator: ", ")) from the command's environment: "
-                + "each held a selected secret's real value")
+                + "each held or contained a selected secret's real value")
         }
         context.notice(
             "rv run: \(selection.names.joined(separator: ", ")) staged as placeholders for this command only. "
@@ -116,10 +122,11 @@ package enum SecretRun {
         let runtime = "rv-run-" + UUID().uuidString
         let launched = SecretRunProcess.launch(
             executable: executable, arguments: request.command, environment: SecretRunEnvironment.entries(environment),
-            manageTerminal: context.manageTerminal
+            manageTerminal: context.manageTerminal, signals: context.signals(), notice: context.notice
         ) { group in
             broker.bind(lease, runtime: runtime)
             broker.bind(lease, processGroup: group)
+            context.bound(group)
             return .success(())
         }
         return launched.map(SecretRunExit.code(waitStatus:))

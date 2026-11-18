@@ -33,6 +33,7 @@ struct SecretGatewayRefusalCodeTests {
         (.binaryMismatch, "binaryMismatch"),
         (.awsUnsignedPayload, "awsUnsignedPayload"),
         (.awsCredentialsInResponse, "awsCredentialsInResponse"),
+        (.requestTimeout, "requestTimeout"),
     ]
 
     @Test func everyRefusalCodeIsPinned() {

@@ -9,6 +9,12 @@ public enum MCPDisplayedText {
         DisplayedText.field(text)
     }
 
+    /// True when `text` holds any scalar `DisplayedText.needsEscape` flags,
+    /// TAB and LF included.
+    static func hidesText(_ text: String) -> Bool {
+        text.unicodeScalars.contains(where: DisplayedText.needsEscape)
+    }
+
     /// Prose an upstream wrote for the model and the person (a tool's
     /// `description` and `title`). Line breaks, tabs, and backslashes stay
     /// as written, so the text means what the server meant. Only scalars
