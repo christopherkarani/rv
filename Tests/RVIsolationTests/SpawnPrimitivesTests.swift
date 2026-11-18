@@ -152,18 +152,19 @@ struct SpawnPrimitivesTests {
     /// EOF for the reader and keep a low number occupied.
     @Test func relocatedOwnedPipeFreesItsStdioSlot() throws {
         let code = try inStdioFreeChild {
-            var pair: [Int32] = [-1, -1]
-            let opened = pair.withUnsafeMutableBufferPointer { buffer -> Int32 in
-                guard let base = buffer.baseAddress else { return -1 }
-                return pipe(base)
+            // A tuple, not an array: no heap allocation in the forked
+            // child of a multithreaded process (malloc's lock may be held).
+            var pair: (Int32, Int32) = (-1, -1)
+            let opened = withUnsafeMutablePointer(to: &pair) { tuple -> Int32 in
+                tuple.withMemoryRebound(to: Int32.self, capacity: 2) { pipe($0) }
             }
-            guard opened == 0, pair[0] == 0, pair[1] == 1 else { return 10 }
-            var writeEnd = pair[1]
+            guard opened == 0, pair.0 == 0, pair.1 == 1 else { return 10 }
+            var writeEnd = pair.1
             guard relocateDescriptor(&writeEnd, above: 64), writeEnd >= 64 else { return 11 }
             guard fcntl(1, F_GETFD) == -1, errno == EBADF else { return 12 }
             _ = close(writeEnd)
             var byte: UInt8 = 0
-            let count = withUnsafeMutableBytes(of: &byte) { read(pair[0], $0.baseAddress, 1) }
+            let count = withUnsafeMutableBytes(of: &byte) { read(pair.0, $0.baseAddress, 1) }
             guard count == 0 else { return 13 }
             return 0
         }
