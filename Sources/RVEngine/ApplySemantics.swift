@@ -26,7 +26,7 @@ public func applySemantics(
         enabledPacks: enabledPacks,
         policy: policy
     )
-    return applyFilesystemSemantics(
+    let afterFilesystem = applyFilesystemSemantics(
         pack: afterGit,
         analysis: analysis,
         command: command,
@@ -34,6 +34,13 @@ public func applySemantics(
         enabledPacks: enabledPacks,
         policy: policy
     )
+    // Host MCP config writes the filesystem parser cannot see
+    // (`mcpHostConfigUnmodeledWrite`), only while the guard is on.
+    guard case .allow = afterFilesystem.decision, case .probed(let context) = filesystemWorld,
+          let guarded = context.mcpHostConfigGuard,
+          mcpHostConfigUnmodeledWrite(command.rawValue, guard: guarded, context: context)
+    else { return afterFilesystem }
+    return mcpHostConfigDeny(pack: afterFilesystem, analysis: analysis)
 }
 
 extension EvaluationResult {

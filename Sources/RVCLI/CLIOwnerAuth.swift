@@ -33,20 +33,23 @@ enum CLIOwnerAuth {
     /// macOS: runs LocalAuthentication. Linux: the owner's login password,
     /// verified by rvd (`OwnerConfirmation`), never just read and trusted
     /// here: a password this process merely reads proves nothing.
-    static func requireAuthenticated(reason: String) async throws {
+    /// Returns how the owner was checked, for the change's audit event.
+    @discardableResult
+    static func requireAuthenticated(reason: String) async throws -> String {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
             }
-            return
+            return OwnerConfirmation.testAuthorization
         }
         #if canImport(LocalAuthentication)
         guard await liveOutcome(reason: reason) == .authenticated else {
             throw AllowOnceAuthError.required
         }
+        return "owner (Touch ID or password)"
         #else
         do {
-            try await OwnerConfirmation.check(reason)
+            return try await OwnerConfirmation.check(reason)
         } catch {
             CommandContext.writeStderr("\(error)\n")
             throw AllowOnceAuthError.required

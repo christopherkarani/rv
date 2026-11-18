@@ -118,9 +118,13 @@ enum LoginRun {
         }
         // Existing secrets keep their stored delivery; `secrets set`
         // only accepts a delivery when the secret is first defined.
+        // A new login gets the curated least-privilege allow rules for its
+        // name; a provider without curated rules gets read-only, never everything.
         let definition: SecretsRun.Definition? = existing
             ? nil
-            : .gateway(upstream: provider.upstream, baseURLEnv: provider.baseURLEnv, placeholderPrefix: "")
+            : .gateway(
+                upstream: provider.upstream, baseURLEnv: provider.baseURLEnv, placeholderPrefix: "",
+                allow: KnownSecretDefaults.gateway(for: provider.secretName)?.allow ?? [.preset(.readOnly)])
         switch SecretsRun.set(
             name: provider.secretName, value: value, definition: definition, agents: [],
             description: existing ? nil : "\(provider.displayName) login (\(origin))",

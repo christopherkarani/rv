@@ -102,7 +102,7 @@ struct Setup: AsyncParsableCommand {
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
         }
-        let observing = JudgeRuntime.configuredGuardMode(home: home) == .observe
+        let observing = GuardConfig.read(home: home).machineMode == .observe
         outcome.stderr += (observing ? SetupServiceWarning.observeText : SetupServiceWarning.text) + "\n"
     }
 

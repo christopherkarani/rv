@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVService
 
@@ -10,10 +11,12 @@ enum SafetyRun {
     }
 
     static func set(_ level: SafetyLevel, home: HomeDirectory) async throws {
-        try await OwnerConfirmation.require("set safety to \(level.rawValue)")
-        try SafetyStore(
-            configDirectory: RVPolicyPaths.configDirectory(home: home)
-        ).saveMachine(level)
+        let authorization = try await OwnerConfirmation.require("set safety to \(level.rawValue)")
+        try await ConfigChangeAudit.$authorization.withValue(authorization) {
+            try SafetyStore(
+                configDirectory: RVPolicyPaths.configDirectory(home: home)
+            ).saveMachine(level)
+        }
     }
 }
 
@@ -38,6 +41,11 @@ struct Safety: AsyncParsableCommand {
                 // Owner check refused (its line is already on stderr), not
                 // "could not write config".
                 throw refusal
+            } catch let unrecorded as ConfigChangeUnrecorded {
+                try ConfigChangeRefusal.fail(command: "safety", unrecorded)
+            } catch MachineConfigJSONError.unreadableConfig {
+                try CommandContext.fail(
+                    ConfigUnreadableRefusal.message(prefix: "rv safety"), exitCode: ConfigUnreadableRefusal.exitCode)
             } catch {
                 try CommandContext.fail("rv safety: could not write config\n")
             }

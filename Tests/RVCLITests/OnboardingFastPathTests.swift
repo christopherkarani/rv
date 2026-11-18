@@ -58,20 +58,30 @@ struct OnboardingFastPathTests {
         #expect(weaker.note == nil)
     }
 
-    @Test func definitionForSetInfersOnlyForNewKnownSecrets() {
+    @Test func definitionForSetInfersOnlyForNewKnownSecrets() throws {
         let inferred = SecretsRun.definitionForSet(
             name: "OPENAI_API_KEY", isNew: true, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "", environment: false)
+        let modelAPI = try #require(GatewayAllowance("GET,POST /v1/**"))
         #expect(inferred.definition == .gateway(
             upstream: "https://api.openai.com/v1", baseURLEnv: "OPENAI_BASE_URL",
-            placeholderPrefix: "sk-"))
+            placeholderPrefix: "sk-", allow: [modelAPI]))
         #expect(inferred.note?.contains("known defaults") == true)
+        #expect(inferred.note?.contains("Allowed: GET,POST /v1/**.") == true)
         let prefixed = SecretsRun.definitionForSet(
             name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "ghp-", environment: false)
         #expect(prefixed.definition == .gateway(
             upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL",
-            placeholderPrefix: "ghp-"))
+            placeholderPrefix: "ghp-", allow: [.preset(.githubRead)]))
+        // An explicit --allow replaces the curated rules, so a user can widen them.
+        let widened = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil,
+            placeholderPrefix: "", environment: false, allow: [.preset(.githubRead), modelAPI])
+        #expect(widened.definition == .gateway(
+            upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL",
+            placeholderPrefix: "", allow: [.preset(.githubRead), modelAPI]))
+        #expect(widened.note?.contains("Allowed:") == false)
         let existing = SecretsRun.definitionForSet(
             name: "OPENAI_API_KEY", isNew: false, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "", environment: false)
@@ -175,15 +185,15 @@ struct OnboardingFastPathTests {
         #expect(configuration.toolMode == .search)
         let report = MCPRun.report(
             fixture.environment(), project: nil, configuration: configuration, rvExecutable: rv.path)
-        #if os(macOS)
-        // Onboarded local servers carry no sandbox yet: check fails until
-        // one is added and the file is re-trusted.
-        #expect(report.passes == false)
-        #expect(report.problems.contains { $0.message.contains("github has no sandbox") })
-        #else
-        // No cage off macOS yet: bare servers serve, so check reports no sandbox problem.
-        #expect(report.problems.contains { $0.message.contains("sandbox") } == false)
-        #endif
+        if MCPSandbox.enforced {
+            // Onboarded local servers carry no sandbox yet: check fails until
+            // one is added and the file is re-trusted.
+            #expect(report.passes == false)
+            #expect(report.problems.contains { $0.message.contains("github has no sandbox") })
+        } else {
+            // No cage on this host: check names the bare server as uncaged.
+            #expect(report.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
+        }
     }
 
     @Test func onboardDryRunWritesNothing() async throws {

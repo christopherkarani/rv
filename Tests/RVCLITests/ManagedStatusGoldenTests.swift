@@ -1,5 +1,6 @@
 import Foundation
 import RVPolicy
+import RVMCP
 import Testing
 @testable import RVCLI
 
@@ -7,12 +8,10 @@ import Testing
 /// model can change shape without changing what operators and fleet tooling see.
 @Suite("rv managed status golden output")
 struct ManagedStatusGoldenTests {
-    #if os(macOS)
-    private static let sandboxLine = "mcp: every local server must be sandboxed (remote servers are exempt)"
-    #else
-    private static let sandboxLine =
-        "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
-    #endif
+    /// Follows whether this host cages MCP servers, not its name.
+    private static let sandboxLine = MCPSandbox.enforced
+        ? "mcp: every local server must be sandboxed (remote servers are exempt)"
+        : "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
 
     private func bundle(signed: Bool, key: Int?, highest: Int?) throws -> ManagedPolicyState {
         let policy = try ManagedPolicy.decode(Data(#"{"version": 1, "organization": "Acme", "serial": 8}"#.utf8)).get()

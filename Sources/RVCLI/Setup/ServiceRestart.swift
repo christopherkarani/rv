@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVPolicy
 import RVService
 
@@ -127,7 +128,7 @@ enum ServiceRestart {
                 throw SetupError.directRvdNotAnswering(
                     rvdPath: env.rvdPath, logPath: RVDLogFile.path(home: env.home.rawValue))
             }
-            let observing = JudgeRuntime.configuredGuardMode(home: env.home) == .observe
+            let observing = GuardConfig.read(home: env.home).machineMode == .observe
             return SetupOutcome(
                 stdout: "rv \(command.rawValue): rvd is running\n",
                 stderr: DirectRvd.notice(

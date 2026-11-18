@@ -40,6 +40,7 @@ struct LoginCommandTests {
         }
         #expect(binding.upstream.absoluteString == "https://api.vercel.com")
         #expect(binding.baseURLEnv == "VERCEL_BASE_URL")
+        #expect(binding.allow == [.preset(.readOnly)])
 
         let report = LoginRun.list(configuration, profiles: [], environment: environment)
         #expect(report.logins.map(\.provider) == ["vercel", "github"])

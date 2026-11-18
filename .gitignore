@@ -5,6 +5,7 @@ xcuserdata/
 .worktrees/
 # Agent / editor leftovers — not product
 .agents/
+.claude/worktrees/
 .claude-plugin/
 .grok/
 .cursor/
