@@ -10,6 +10,9 @@ struct HostAttachWrite: Equatable, Sendable {
     var prelude: HostAttachPrelude
     var adapter: HostAdapterWrite
     var companions: [HostCompanionWrite]
+    /// The rv agent skill this host loads (`AgentSkill`), written after the
+    /// hook is wired; nil for a host with no user skill directory.
+    var agentSkill: String? = nil
 }
 
 enum HostAttachPrelude: Equatable, Sendable {
@@ -65,6 +68,8 @@ enum HostDetachOperation: Equatable, Sendable {
     case removeMuseSettingsKey(settingsPath: String, hooksPath: String)
     case stripOpenCodeAskPlugin
     case removeEmptyDirectory(String)
+    /// Removes the agent skill only when rv's seal still checks out.
+    case removeAgentSkill(String)
 }
 
 /// Exhaustive attach recipe for every `HookHost`. Adding a host is a new row here,
@@ -105,7 +110,8 @@ enum HostArtifacts {
                 existing: existing,
                 prelude: row.forcePrelude,
                 adapter: adapter,
-                companions: row.companions
+                companions: row.companions,
+                agentSkill: layout.agentSkill(for: host)
             )
         }
         let existing: HostExistingData
@@ -121,7 +127,8 @@ enum HostArtifacts {
             existing: existing,
             prelude: .none,
             adapter: adapter,
-            companions: row.companions
+            companions: row.companions,
+            agentSkill: layout.agentSkill(for: host)
         )
     }
 
@@ -147,6 +154,12 @@ enum HostArtifacts {
         }
         for companion in row.companions {
             remove.append(contentsOf: invert(companion, layout: layout))
+        }
+        // The skill is ours whatever state the hook is in: an occupied
+        // settings file does not make rv's sealed skill someone else's.
+        if let skill = layout.agentSkill(for: host) {
+            remove.append(.removeAgentSkill(skill))
+            leaveOccupied.append(.removeAgentSkill(skill))
         }
         return HostDetachWrite(
             host: host,

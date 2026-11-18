@@ -91,12 +91,22 @@ public struct MCPToolPinStore: Sendable {
     /// Longest definition kept for review; a longer one stays unpinned.
     static let maximumDefinitionBytes = 64 * 1024
     static let maximumChanged = 512
-    /// One server's share of the review queue.
-    static let serverReviewBudget = 256 * 1024
-    static let maximumChangedPerServer = 128
+    /// Servers the queue is shared between when the configured count is
+    /// not known.
+    static let defaultShareCount = 8
 
     public var configDirectory: URL
     public var signing: MCPApprovalSigning
+    /// The number of servers in mcp.json. Each gets an equal share of the
+    /// review queue (an eighth when nil), so every configured server can
+    /// queue tools however noisy the others are.
+    public var configuredServers: Int?
+
+    private var shareCount: Int { max(1, configuredServers ?? Self.defaultShareCount) }
+    /// One server's share of the review queue, in bytes.
+    var serverReviewBudget: Int { Self.reviewBudget / shareCount }
+    /// One server's share of the review queue, in entries.
+    var maximumChangedPerServer: Int { max(1, Self.maximumChanged / shareCount) }
     /// How long a writer waits for another writer before giving up. A
     /// writer that gives up writes nothing, so every tool keeps asking.
     public var lockTimeout: TimeInterval = 5
@@ -186,6 +196,7 @@ public struct MCPToolPinStore: Sendable {
             var serverCount = changed[server]?.count ?? 0
             var serverBytes = (changed[server] ?? [:]).reduce(0) { $0 + Self.entryBytes(server: server, tool: $1.key, $1.value) }
             var dropped: [String] = []
+            var updated = false
             for (tool, definition) in definitions.sorted(by: { $0.key < $1.key }) {
                 let size = Self.entryBytes(server: server, tool: tool, definition)
                 guard definition.canonicalText.utf8.count <= Self.maximumDefinitionBytes else {
@@ -194,9 +205,9 @@ public struct MCPToolPinStore: Sendable {
                 }
                 let previous = changed[server]?[tool].map { Self.entryBytes(server: server, tool: tool, $0) } ?? 0
                 let isNew = changed[server]?[tool] == nil
-                guard isNew == false || (count < Self.maximumChanged && serverCount < Self.maximumChangedPerServer),
+                guard isNew == false || (count < Self.maximumChanged && serverCount < maximumChangedPerServer),
                     bytes - previous + size <= Self.reviewBudget,
-                    serverBytes - previous + size <= Self.serverReviewBudget
+                    serverBytes - previous + size <= serverReviewBudget
                 else {
                     dropped.append(tool)
                     continue
@@ -207,8 +218,12 @@ public struct MCPToolPinStore: Sendable {
                 }
                 bytes += size - previous
                 serverBytes += size - previous
+                if changed[server]?[tool] != definition { updated = true }
                 changed[server, default: [:]][tool] = definition
             }
+            // Nothing new to keep (every offer dropped, or already queued):
+            // the file is left as it is, not rewritten on every listing.
+            guard updated else { return dropped.isEmpty ? .recorded : .dropped(dropped) }
             let body = Data(Self.encodeReview(changed).compactText.utf8)
             guard body.count <= Self.reviewBudget, OwnerOnlyFile.write(body, to: reviewURL) else { return .failed }
             return dropped.isEmpty ? .recorded : .dropped(dropped)
@@ -252,6 +267,19 @@ public struct MCPToolPinStore: Sendable {
             }
             return .trusted
         } ?? .failed
+    }
+
+    /// Drops queued tools of servers not in `configured` (mcp.json) when
+    /// there is nothing to pin; the pins are not touched. Only ever removes
+    /// unsigned review entries. False when the queue could not be rewritten.
+    @discardableResult
+    public func pruneReview(configured: Set<String>) -> Bool {
+        withLock { () -> Bool in
+            guard case .read(let changed) = readReview() else { return true }
+            let kept = changed.filter { configured.contains($0.key) }
+            guard kept.count != changed.count else { return true }
+            return OwnerOnlyFile.write(Data(Self.encodeReview(kept).compactText.utf8), to: reviewURL)
+        } ?? false
     }
 
     /// Both files for `rv mcp trust`. Fails only when the pins file is

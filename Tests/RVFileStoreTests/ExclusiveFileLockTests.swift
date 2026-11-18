@@ -93,6 +93,95 @@ struct ExclusiveFileLockTests {
         }
         #expect(FileManager.default.fileExists(atPath: missingRoot.path) == false)
     }
+
+    // MARK: - withExistingLock
+
+    @Test func existingLockMissingFileRunsUnlockedAndCreatesNothing() throws {
+        let root = try makeDirectory("existing-missing")
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        let ran = try ExclusiveFileLock.withExistingLock(at: lockURL) { true }
+        #expect(ran)
+        #expect(FileManager.default.fileExists(atPath: lockURL.path) == false)
+    }
+
+    @Test func existingLockKeepsAnExistingFileMode() throws {
+        let root = try makeDirectory("existing-mode")
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        FileManager.default.createFile(
+            atPath: lockURL.path, contents: Data(), attributes: [.posixPermissions: 0o644]
+        )
+        let ran = try ExclusiveFileLock.withExistingLock(at: lockURL) { true }
+        #expect(ran)
+        #expect(try posixMode(lockURL) == 0o644)
+    }
+
+    @Test func existingLockRefusesASymlink() throws {
+        let root = try makeDirectory("existing-symlink")
+        let target = root.appendingPathComponent("target.lock")
+        FileManager.default.createFile(atPath: target.path, contents: Data())
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        try FileManager.default.createSymbolicLink(at: lockURL, withDestinationURL: target)
+        #expect(throws: ExclusiveFileLock.LockError.lockFailed) {
+            try ExclusiveFileLock.withExistingLock(at: lockURL) {}
+        }
+    }
+
+    @Test func existingLockRefusesADirectory() throws {
+        let root = try makeDirectory("existing-directory")
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        try FileManager.default.createDirectory(at: lockURL, withIntermediateDirectories: false)
+        #expect(throws: ExclusiveFileLock.LockError.lockFailed) {
+            try ExclusiveFileLock.withExistingLock(at: lockURL) {}
+        }
+    }
+
+    @Test func existingLockRefusesAFIFOWithoutHanging() throws {
+        let root = try makeDirectory("existing-fifo")
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        #expect(mkfifo(lockURL.path, 0o600) == 0)
+        let done = DispatchSemaphore(value: 0)
+        let outcome = OutcomeBox()
+        Thread.detachNewThread {
+            do {
+                try ExclusiveFileLock.withExistingLock(at: lockURL) {}
+                outcome.set("ran")
+            } catch ExclusiveFileLock.LockError.lockFailed {
+                outcome.set("lockFailed")
+            } catch {
+                outcome.set("other")
+            }
+            done.signal()
+        }
+        let finished = done.wait(timeout: .now() + 5) == .success
+        if finished == false {
+            // Unblock a reader stuck in open(2) so the thread can exit.
+            let writer = open(lockURL.path, O_WRONLY | O_NONBLOCK)
+            if writer >= 0 { close(writer) }
+        }
+        #expect(finished, "open(2) on a FIFO must not block")
+        #expect(outcome.get() == "lockFailed")
+    }
+
+    @Test func existingLockWaitsForAHeldLock() throws {
+        let root = try makeDirectory("existing-held")
+        let lockURL = root.appendingPathComponent(".probe.lock")
+        let holding = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let entered = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            try? ExclusiveFileLock.withLock(at: lockURL) {
+                holding.signal()
+                release.wait()
+            }
+        }
+        holding.wait()
+        Thread.detachNewThread {
+            try? ExclusiveFileLock.withExistingLock(at: lockURL) { entered.signal() }
+        }
+        #expect(entered.wait(timeout: .now() + 0.3) == .timedOut, "body ran while the lock was held")
+        release.signal()
+        #expect(entered.wait(timeout: .now() + 10) == .success)
+    }
 }
 
 /// `Mutex` is `~Copyable` and cannot be captured into a sending task body.
@@ -110,6 +199,18 @@ private final class TicketLog: Sendable {
 
     func snapshot() -> [Int] {
         tickets.withLock { $0 }
+    }
+}
+
+private final class OutcomeBox: Sendable {
+    private let value = Mutex<String?>(nil)
+
+    func set(_ outcome: String) {
+        value.withLock { $0 = outcome }
+    }
+
+    func get() -> String? {
+        value.withLock { $0 }
     }
 }
 

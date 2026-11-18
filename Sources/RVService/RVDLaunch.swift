@@ -1,4 +1,5 @@
 import RVDomain
+import RVPolicy
 
 public struct RVDConfiguration: Sendable, Equatable {
     public var idleExitSeconds: Int
@@ -8,10 +9,28 @@ public struct RVDConfiguration: Sendable, Equatable {
 public enum RVDLaunchError: Error, Sendable, Equatable {
     case socketUnsupported
     case invalidIdleExit
+    /// No absolute HOME: no `~/.config/rv`, so no policy and no
+    /// `audit.jsonl` to record overrides and owner approvals in.
+    case homeRequired
 }
 
 public enum RVDLaunch {
     public static let versionLine = ProductVersion.semver
+
+    /// rvd serves only with a home: without one it would gate with none of
+    /// the owner's policy and could record no override or approval. macOS
+    /// already needed HOME for its socket path; Linux did not.
+    public static func requireHome(environment: [String: String]) throws {
+        guard validatedHome(environment: environment) != nil else { throw RVDLaunchError.homeRequired }
+    }
+
+    /// `HOME` from `environment` when it is absolute and NUL-free (the
+    /// check `HomeDirectory.processValidatedHome()` applies); nil otherwise.
+    /// Pure: never reads the process environment.
+    public static func validatedHome(environment: [String: String]) -> String? {
+        guard let home = environment["HOME"], HomeDirectory.configRoot(for: home) != nil else { return nil }
+        return home
+    }
 
     public static func parse(arguments: [String]) throws -> RVDConfiguration {
         if arguments.contains(where: { $0 == "--socket" || $0.hasPrefix("--socket=") }) {

@@ -245,6 +245,8 @@ final class WorkspaceHostServer: Sendable {
             _ = endpointFile.path.withCString { unlink($0) }
             return .failure(.endpointUnavailable)
         }
+        // Before the first launch can arrive: every runtime starts capped.
+        supervisor.configureProcessLimits(resourcePolicy.limits)
         let server = WorkspaceHostServer(
             supervisor: supervisor,
             hostID: hostID,
@@ -260,6 +262,7 @@ final class WorkspaceHostServer: Sendable {
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
                 WorkspaceControlFeature.terminalReplayBatchesV1,
                 WorkspaceControlFeature.microVMLaunchV1,
+                WorkspaceControlFeature.runtimeTimeoutV1,
             ],
             admission: admission,
             listenFD: listened.0,
@@ -756,7 +759,8 @@ final class WorkspaceHostServer: Sendable {
             microVM: payload.microVM,
             admission: admission,
             sessionStore: sessionStore,
-            runningLimit: WorkspaceControlLimits.maxRuntimes
+            runningLimit: WorkspaceControlLimits.maxRuntimes,
+            timeoutSeconds: payload.timeoutSeconds
         )
         return launchResponse(request, responseOp: responseOp, io: payload.io, result: result)
     }
@@ -858,10 +862,11 @@ final class WorkspaceHostServer: Sendable {
         let client = connection.id
         let windowNotices = fields.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
         let replayBatches = fields.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
+        let exitReasons = fields.features?.contains(WorkspaceControlFeature.runtimeExitReasonV1) == true
         switch supervisor.subscribeTerminal(
             runtime: runtime, client: client,
             emit: { notice in
-                connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+                connection.send(workspaceTerminalMessage(notice, runtime: runtime, exitReasons: exitReasons))
             },
             windowNotices: windowNotices,
             replayBatches: replayBatches
@@ -1165,9 +1170,10 @@ final class WorkspaceHostServer: Sendable {
     }
 }
 
-private func workspaceTerminalMessage(
+func workspaceTerminalMessage(
     _ notice: TerminalNotice,
-    runtime: UUID
+    runtime: UUID,
+    exitReasons: Bool
 ) -> WorkspaceControlResponseFrame {
     switch notice {
     case .replayBegin(let batch, let truncated, let byteCount):
@@ -1213,11 +1219,12 @@ private func workspaceTerminalMessage(
             ok: true,
             payload: .terminalWindow(.init(runtime: runtime, rows: rows, columns: columns))
         )
-    case .exited(let status):
+    case .exited(let status, let timedOutAfter):
         WorkspaceControlResponseFrame(
             ok: true,
             payload: .runtimeExited(.init(
-                runtime: runtime, running: false, exitStatus: status
+                runtime: runtime, running: false, exitStatus: status,
+                timedOutAfter: exitReasons ? timedOutAfter : nil
             ))
         )
     case .overflow:

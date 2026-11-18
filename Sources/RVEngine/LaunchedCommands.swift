@@ -111,6 +111,14 @@ func launchedCommandHeads(_ raw: String) -> [LaunchedCommand] {
     launchedCommandHeads(raw, depth: 0)
 }
 
+/// What one simple command already split into words (`guardArgv` operands)
+/// launches: the same launcher, shell `-c`, `eval` and dynamic-head
+/// resolution `raw` segments get. Lets a caller re-feed a program another
+/// program runs (xargs) through the shared resolver.
+func launchedCommandHeads(argv: [String], depth: Int) -> [LaunchedCommand] {
+    resolve(argv, depth: depth, expand: true)
+}
+
 private let maxLaunchDepth = 8
 private let maxDynamicOperands = 512
 private let maxBraceExpansions = 64
@@ -344,7 +352,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
         let operands = operands.drop(while: { foldedWord($0) == "--" })
         let raw = operands.joined(separator: " ")
         let decoded = operands.map { $0.ansiCDecodedIfMarked }.joined(separator: " ")
-        for variant in Set([raw, decoded]) {
+        for variant in distinctInOrder([raw, decoded]) {
             out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1).map { $0.inheriting(assignments) })
         }
     }
@@ -496,7 +504,16 @@ extension String {
 }
 
 private func payloadVariants(_ word: String) -> [String] {
-    Array(Set([word, word.ansiCDecodedIfMarked, unescapeBackslashPairs(word)]))
+    distinctInOrder([word, word.ansiCDecodedIfMarked, unescapeBackslashPairs(word)])
+}
+
+/// `variants` without repeats, each where first given (as written, then
+/// decoded): the commands they launch come out in the same order in every
+/// process, not in a hash seed's.
+private func distinctInOrder(_ variants: [String]) -> [String] {
+    var out: [String] = []
+    for variant in variants where out.contains(variant) == false { out.append(variant) }
+    return out
 }
 
 private func decodedCommandName(_ word: String) -> String {
@@ -557,7 +574,7 @@ func commandName(_ word: String) -> String {
     unescapeBackslashPairs(basename(word)).folding(options: .caseInsensitive, locale: nil)
 }
 
-private let shellNames: Set<String> = [
+let shellNames: Set<String> = [
     "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh",
     "ksh93", "rbash", "yash", "pwsh", "nu", "xonsh",
 ]

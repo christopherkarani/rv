@@ -134,7 +134,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "command", description: "A bare name is searched in PATH's absolute directories; a name with a slash is a path"),
-                HelpRow(name: "terminal", description: "When rv holds the terminal alone, the command gets it, so Ctrl-C and Ctrl-Z reach it. In a pipeline (rv run -- x | less) the terminal stays with the pipeline: Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops rv but not the command. SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to rv are forwarded to its process group; one rv inherited ignored (nohup) stays ignored for the command"),
+                HelpRow(name: "terminal", description: "When rv holds the terminal alone, the command gets it, so Ctrl-C and Ctrl-Z reach it. In a pipeline (rv run -- x | less), or when started with & from a script, the terminal stays where it is (rv says so on stderr for a pipeline): Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops rv but not the command. SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to rv are forwarded to its process group; a signal rv inherited ignored (nohup) stays ignored for the command"),
                 HelpRow(name: "store login", description: "When a selected secret comes from Vault, rv's own Vault login (VAULT_TOKEN) is removed as well; ~/.vault-token is not. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
                 HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
                 HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. On Linux the suspended start needs rv-isolation-exec installed beside rv"),
@@ -179,7 +179,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] [--timeout <duration>] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
@@ -195,6 +195,7 @@ enum HelpCatalog {
                 HelpRow(name: "--microvm", description: "Run inside a network-less Linux micro-VM booted from this OCI image (macOS 26+, Apple silicon); the executable is a path inside the guest"),
                 HelpRow(name: "--macvm", description: "Run inside a network-less macOS VM cloned from an image built with rv-macvm prepare (macOS 27); the executable is a path inside the guest"),
                 HelpRow(name: "--cpus / --memory-mib", description: "VM size, with --microvm or --macvm"),
+                HelpRow(name: "--timeout", description: "Kill the runtime's process group after N, Ns, Nm or Nh, even if the workspace host dies; capped by limits.timeoutSeconds in runtime-resources.json (Seatbelt only)"),
             ]),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
@@ -978,11 +979,13 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv policy show [--base] [--effective]"),
+                HelpRow(name: "rv policy show --revision <n> [--repo]"),
                 HelpRow(name: "rv policy list [--repo]"),
                 HelpRow(name: "rv policy draft --english <text> [--save]"),
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
+                HelpRow(name: "rv policy rollback <revision> [--repo] [--save] [--json]"),
                 HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
                 HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
             ]),
@@ -990,6 +993,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "draft",
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
+                ),
+                HelpRow(
+                    name: "rollback",
+                    description: "Previews the restore (effective-rule diff and risk); --save re-submits it as a new head after owner approval. A restore that drops or relaxes a deny or ask is refused (exit 2)."
                 ),
                 HelpRow(
                     name: "ceiling",
@@ -1000,6 +1007,7 @@ enum HelpCatalog {
         examples: [
             "rv policy show",
             "rv policy draft --english 'never allow force-push to main'",
+            "rv policy rollback r2",
             "rv policy check --ceiling",
         ]
     )

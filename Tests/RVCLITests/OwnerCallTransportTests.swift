@@ -96,6 +96,27 @@ struct OwnerConfirmationPresenceTests {
         }
     }
 
+    /// G1: an approval rvd could not record is refused like `unavailable`,
+    /// and the refusal names the audit log, not Touch ID or the session.
+    @Test func anApprovalRvdCouldNotRecordIsRefusedAndNamesTheAuditLog() throws {
+        do {
+            try OwnerConfirmation.accept(
+                .success(ConfirmOwnerActionReply(outcome: .auditUnwritable)), summary: "set safety to normal")
+            Issue.record("an unrecorded approval must not proceed")
+        } catch let refused as OwnerConfirmation.Refused {
+            #expect(refused.message.contains("audit.jsonl"))
+            #expect(refused.message.contains("set safety to normal was not done"))
+            #expect(refused.message.contains("rv audit verify"))
+            #expect(refused.message.contains("Touch ID") == false)
+        }
+    }
+
+    @Test func auditUnwritableRoundTripsOnTheWire() throws {
+        let data = try JSONEncoder().encode(ConfirmOwnerActionReply(outcome: .auditUnwritable))
+        #expect(String(decoding: data, as: UTF8.self).contains("\"outcome\":\"auditUnwritable\""))
+        #expect(try JSONDecoder().decode(ConfirmOwnerActionReply.self, from: data).outcome == .auditUnwritable)
+    }
+
     @Test func presenceRoundTripsOnTheWire() throws {
         let reply = ConfirmOwnerActionReply(outcome: .approved, presence: .daemonPrompt)
         let data = try JSONEncoder().encode(reply)

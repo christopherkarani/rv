@@ -53,7 +53,7 @@
     { "id": "db.deny.r2-doas-nu", "command": "doas -nu root rm -r ~", "expected": "deny" },
     { "id": "db.deny.r2-sudo-nu", "command": "sudo -nu root rm -r ~", "expected": "deny" },
     { "id": "db.deny.r2-sudo-Eu", "command": "sudo -Eu root rm -r ~", "expected": "deny" },
-    { "id": "db.deny.r2-xargs-i-sh", "command": "xargs -i sh -c \"rm -r {}\"", "expected": "deny" },
+    { "id": "db.deny.r2-xargs-i-sh", "command": "xargs -i sh -c \"rm -r {}\"", "expected": "self-protection" },
     { "id": "db.deny.r2-xargs-arg-file", "command": "xargs --arg-file l rm -r", "expected": "deny" },
     { "id": "db.deny.r2-xargs-delimiter", "command": "xargs --delimiter x rm -r", "expected": "deny" },
     { "id": "db.deny.r2-xargs-eof-eq", "command": "xargs --eof=x rm -r", "expected": "deny" },

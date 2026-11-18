@@ -777,8 +777,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             switch effect {
             case .loadReview(let sequence):
                 event = .reviewLoaded(sequence: sequence, result: await source.load(now: Date()))
-            case .approveEgress(let id):
-                event = .reviewActionCompleted(id: id, outcome: await source.approve(egress: id))
+            case .approveEgress(let id, let reviewToken):
+                event = .reviewActionCompleted(
+                    id: id, outcome: await source.approve(egress: id, reviewToken: reviewToken))
             case .denyEgress(let id, let reason):
                 event = .reviewActionCompleted(id: id, outcome: await source.deny(egress: id, reason: reason))
             default:

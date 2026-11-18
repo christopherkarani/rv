@@ -153,19 +153,139 @@ public struct PolicyWorkspace: Sendable {
     /// downgrade the safety level, or widen secret exemptions refuse with
     /// `blockedByFindings` before anything is written. Dropping an allow
     /// still succeeds. The gate compares the live policy file.
-    public func rollback(layer: PolicyDocumentLayer, to revision: Int) throws -> PolicyRevision {
+    /// `expected` (from a preview) makes the rollback refuse `headChanged`
+    /// when the layer's head or the target moved since that preview. It is
+    /// a required argument; it binds only as tightly as the preview it came
+    /// from. Like every layer save, the restored document must stay within
+    /// the owner's policy ceiling: one that asks where the ceiling denies,
+    /// or an invalid `ceiling.toml`, refuses with `PolicyCeilingError`
+    /// under the write lock, with nothing written.
+    public func rollback(
+        layer: PolicyDocumentLayer,
+        to revision: Int,
+        expected: PolicyRollbackBinding
+    ) throws -> PolicyRevision {
         switch layer {
         case .machine:
             guard let directory = machineDirectory else {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
-            return try TypedRuleStore(baseDirectory: directory).rollbackMachine(to: revision)
+            return try TypedRuleStore(baseDirectory: directory)
+                .rollbackMachine(to: revision, expected: expected, admit: admitWithinCeiling)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
             return try revisionRepoStore(workspace: workspace)
-                .rollbackRepo(to: revision, workspace: workspace)
+                .rollbackRepo(to: revision, workspace: workspace, expected: expected, admit: admitWithinCeiling)
+        }
+    }
+
+    /// The ceiling check `mergeIncoming` runs on a save, for rollback.
+    private func admitWithinCeiling(_ document: PolicyDocument) throws {
+        try loadCeiling()?.requireContained(document)
+    }
+
+    /// A layer rollback preview plus the effective rules before and after.
+    /// `currentEffective` is nil when a live layer file does not parse;
+    /// `restoredEffective` is nil when the other layer's file does not.
+    /// `liveHash` is the live layer document's identity (nil: unparseable).
+    /// Both effective sets include the owner's policy ceiling (nil when
+    /// `ceiling.toml` is invalid). `ceilingRefusal` is why `rollback` would
+    /// refuse the restored document against that ceiling, or nil.
+    public struct RollbackPreview: Sendable, Equatable {
+        public var layer: PolicyDocumentLayer
+        public var target: PolicyRevision
+        public var head: PolicyRevision
+        public var liveParses: Bool
+        public var liveHash: String?
+        public var risk: PolicyDiffRiskReport
+        public var currentEffective: [TypedRule]?
+        public var restoredEffective: [TypedRule]?
+        public var ceilingRefusal: PolicyCeilingError?
+
+        /// Restoring would change nothing: the target is the head and the
+        /// live file already holds that content.
+        public var isNoOp: Bool {
+            target.hash == head.hash && liveHash == target.hash
+        }
+    }
+
+    /// Read-only: what `rollback(layer:to:)` would restore and whether its
+    /// gate would refuse. Writes nothing; same errors as the rollback.
+    public func previewRollback(
+        layer: PolicyDocumentLayer,
+        to revision: Int,
+        builtin: [TypedRule] = []
+    ) throws -> RollbackPreview {
+        let preview: PolicyRollbackPreview
+        switch layer {
+        case .machine:
+            guard let directory = machineDirectory else {
+                throw PolicyWorkspaceError.missingLayer(.machine)
+            }
+            preview = try TypedRuleStore(baseDirectory: directory).previewMachineRollback(to: revision)
+        case .repo:
+            guard let workspace else {
+                throw PolicyWorkspaceError.missingLayer(.repo)
+            }
+            preview = try revisionRepoStore(workspace: workspace)
+                .previewRepoRollback(to: revision, workspace: workspace)
+        }
+        let restoredRules = preview.target.document.typedRules(origin: layer == .machine ? .machine : .repo)
+        let otherRules: [TypedRule]?
+        switch layer {
+        case .machine:
+            otherRules = try Self.nilWhenUnparseable { try loadRepoDocument().typedRules(origin: .repo) }
+        case .repo:
+            otherRules = try Self.nilWhenUnparseable { try loadMachineDocument().typedRules(origin: .machine) }
+        }
+        // An invalid ceiling.toml leaves both effective sets unavailable
+        // and refuses the save, as for an unparseable layer.
+        var ceiling: PolicyCeiling?
+        var ceilingRefusal: PolicyCeilingError?
+        do {
+            ceiling = try loadCeiling()
+        } catch PolicyCeilingError.invalidFile {
+            ceilingRefusal = .invalidFile
+        }
+        if let ceiling {
+            do {
+                try ceiling.requireContained(preview.target.document)
+            } catch let error as PolicyCeilingError {
+                ceilingRefusal = error
+            }
+        }
+        let ceilingParses = ceilingRefusal != .invalidFile
+        let ceilingRules = ceiling?.typedRules ?? []
+        let restoredEffective = ceilingParses == false ? nil : otherRules.map { other in
+            layer == .machine
+                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other, ceiling: ceilingRules)
+                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules, ceiling: ceilingRules)
+        }
+        return RollbackPreview(
+            layer: layer,
+            target: preview.target,
+            head: preview.head,
+            liveParses: preview.live != nil,
+            liveHash: preview.live.map(PolicyRevisionIdentity.hash),
+            risk: preview.risk,
+            currentEffective: try Self.nilWhenUnparseable { try loadEffectiveRules(builtin: builtin) },
+            restoredEffective: restoredEffective,
+            ceilingRefusal: ceilingRefusal
+        )
+    }
+
+    /// An unparseable policy file (`invalidFile`) is a state the preview
+    /// reports, since rollback is its repair path; any other failure
+    /// (lock, I/O) propagates instead of reading as "unavailable".
+    private static func nilWhenUnparseable<T>(_ load: () throws -> T) throws -> T? {
+        do {
+            return try load()
+        } catch TypedRuleStoreError.invalidFile {
+            return nil
+        } catch PolicyCeilingError.invalidFile {
+            return nil
         }
     }
 

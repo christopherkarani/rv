@@ -5,8 +5,9 @@ import Synchronization
 
 /// How a workspace terminal session ended without a failure.
 public enum WorkspaceTerminalOutcome: Sendable, Equatable {
-    /// The runtime exited with this status.
-    case exited(Int32)
+    /// The runtime exited with this status. `timedOutAfter` is the host's
+    /// deadline in seconds when that deadline stopped it, else nil.
+    case exited(Int32, timedOutAfter: UInt64? = nil)
     /// The local input ended on purpose (Ctrl-D). The runtime keeps running.
     case inputEnded
 }
@@ -111,8 +112,8 @@ public enum WorkspaceTerminalSession {
                 continue
             case .write(let bytes):
                 guard writeOutput(bytes, to: output) == .written else { throw .outputClosed }
-            case .exited(let status):
-                return .exited(status)
+            case .exited(let status, let timedOutAfter):
+                return .exited(status, timedOutAfter: timedOutAfter)
             case .failed(let failure):
                 throw failure
             }
@@ -123,7 +124,7 @@ public enum WorkspaceTerminalSession {
     enum Step: Sendable, Equatable {
         case idle
         case write(Data)
-        case exited(Int32)
+        case exited(Int32, timedOutAfter: UInt64? = nil)
         case failed(WorkspaceTerminalSessionFailure)
     }
 
@@ -141,8 +142,8 @@ public enum WorkspaceTerminalSession {
             switch event.body {
             case .replay(_, let bytes), .output(_, let bytes):
                 return .write(bytes)
-            case .exited(let status):
-                return .exited(status)
+            case .exited(let status, let timedOutAfter):
+                return .exited(status, timedOutAfter: timedOutAfter)
             case .overflow:
                 return .failed(.fellBehind)
             case .replayBegin, .replayEnd, .inputOwner, .window:

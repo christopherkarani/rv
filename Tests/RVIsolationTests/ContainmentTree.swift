@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import Testing
+@testable import RVIsolation
 
 /// Temp `root/repo/ws` + sibling used by Seatbelt, Landlock, and conformance.
 struct ContainmentTree {
@@ -50,6 +51,9 @@ struct ContainmentTree {
     }
 
     func tearDown() {
+        #if os(macOS)
+        Self.detachWorkspaceImages(under: rootURL.path)
+        #endif
         try? FileManager.default.removeItem(at: rootURL)
     }
 
@@ -98,3 +102,52 @@ struct ContainmentTree {
         }
     }
 }
+
+#if os(macOS)
+extension ContainmentTree {
+    /// A failed close keeps its disk attached for rv's next-start recovery,
+    /// which tests never run. Detach and delete what this tree still holds;
+    /// images mounted under other trees are left alone.
+    static func detachWorkspaceImages(under root: String) {
+        for image in attachedWorkspaceImages(under: root) {
+            guard let device = image.device else { continue }
+            let detached = detachWorkspaceDisk(device, mountPoint: image.mountPoint)
+            unlinkImageIfDetached(image.imagePath, detachSucceeded: detached)
+        }
+    }
+
+    /// rv workspace images mounted at or below `root`.
+    static func attachedWorkspaceImages(under root: String) -> [AttachedWorkspaceImage] {
+        // The kernel reports `/private/tmp/…`; `URL` paths may say `/tmp/…`.
+        let roots = Set([root, realpath(root, nil).map { resolved in
+            defer { free(resolved) }
+            return String(cString: resolved)
+        } ?? root])
+        func isUnderRoot(_ mountPoint: String) -> Bool {
+            roots.contains { mountPoint == $0 || mountPoint.hasPrefix($0 + "/") }
+        }
+        // Only mounted images match, so the cheap kernel table rules out the
+        // common case (nothing left) without running `hdiutil`.
+        let mounts = WorkspaceHosts.mountTable()
+        guard mounts.values.contains(where: isUnderRoot),
+            let info = boundedHdiutilInfo()
+        else { return [] }
+        let images = AttachedWorkspaceImage.parse(hdiutilInfo: info, mounts: mounts) ?? []
+        return images.filter { image in
+            image.mountPoint.map(isUnderRoot) ?? false
+        }
+    }
+
+    /// `hdiutil info -plist` through `runTool`, so it takes the same
+    /// one-helper-at-a-time lock as rv's own attach, mount, and detach
+    /// instead of piling onto diskimagesd while another test attaches.
+    /// Bounded: DiskArbitration can wedge.
+    private static func boundedHdiutilInfo(timeout: TimeInterval = 30) -> Data? {
+        let info = runTool(["/usr/bin/hdiutil", "info", "-plist"], deadline: timeout)
+        guard info.status == 0, info.timedOut == false, info.helperStillAlive == false else {
+            return nil
+        }
+        return Data(info.stdout.utf8)
+    }
+}
+#endif

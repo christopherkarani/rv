@@ -61,6 +61,7 @@ enum SetupRun {
                 stderr: observeNotice(guardRequest, env: env)
                     + serviceWarning(report, observing: observing)
                     + direct
+                    + agentSkillWarning(report)
                     + refusals.joined(),
                 exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: json ? false : formatted.emitted
@@ -119,6 +120,27 @@ enum SetupRun {
             stderr: stderr,
             exitCode: exitCode
         )
+    }
+
+    /// Names each agent skill setup kept or could not write. The hook
+    /// works without it; the agent just does not get rv's instructions.
+    static func agentSkillWarning(_ report: SetupReport) -> String {
+        report.agentSkillNotes.map { note in
+            switch note {
+            case .kept(let path):
+                return """
+                    rv setup: kept \(path): it is not rv's copy (changed outside rv, a link, or not a plain file)
+                    fix: the hook is wired either way; to install rv's agent skill, move that file or link aside, then run rv setup again
+
+                    """
+            case .writeFailed(let path, let reason):
+                return """
+                    rv setup: could not write \(path): \(reason)
+                    fix: the hook is wired either way; to install rv's agent skill, make every folder on that path a folder you own, then run rv setup again
+
+                    """
+            }
+        }.joined()
     }
 
     /// Hooks wired with no service behind them deny every tool call (under

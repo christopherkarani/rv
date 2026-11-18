@@ -373,6 +373,9 @@ struct AllowOnceTTYTests {
             (.mintAllowOnce(MintAllowOnceReply(alreadyPending: true)), nil, .alreadyPending),
             (.mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .declined))),
              .notApproved(ConfirmOwnerActionReply(outcome: .declined)), nil),
+            // G1: an approval rvd could not record mints nothing.
+            (.mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .auditUnwritable))),
+             .notApproved(ConfirmOwnerActionReply(outcome: .auditUnwritable)), nil),
             (.mintAllowOnce(MintAllowOnceReply(code: "not-a-code")), .serviceDenied, nil),
             (.mintAllowOnce(MintAllowOnceReply()), .serviceDenied, nil),
             (.error(.authorizationDenied), .serviceDenied, nil),
@@ -398,6 +401,12 @@ struct AllowOnceTTYTests {
             }
             #expect(await store.list(now: now).isEmpty)
         }
+    }
+
+    @Test func anUnrecordedPreArmNamesTheAuditLog() {
+        let text = AllowOnceCLI.mintNotApprovedMessage(ConfirmOwnerActionReply(outcome: .auditUnwritable))
+        #expect(text.contains("audit.jsonl"))
+        #expect(text.contains("nothing was minted"))
     }
 
     @Test func theMintedMessageSaysTheCodeDiesWithRvd() {

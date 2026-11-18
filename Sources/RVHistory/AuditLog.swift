@@ -19,22 +19,68 @@ public enum AuditLog {
         configDirectory.appendingPathComponent(AuditLedger.Source.audit.rawValue, isDirectory: false)
     }
 
-    /// How long an append waits for the log's locks when the caller names
-    /// no bound of its own.
+    /// How long one append waits, in all, for the in-process lock and the
+    /// file lock together, when the caller names no bound of its own.
     public static let defaultLockTimeout: Duration = .seconds(2)
 
     /// Each line's `prev` is the SHA-256 of the line before it (see `AuditChain`).
     /// A torn last line is closed with a newline first, so it stays one bad line.
     ///
     /// `lockTimeout` bounds the wait for the in-process and cross-process
-    /// locks (non-blocking retries): a stopped process holding the log must
-    /// not hang a caller that has to answer, or every thread waiting behind
-    /// it. It is bounded unless the caller says otherwise: false, with
-    /// nothing written, when it passes. Nil waits as long as it takes.
+    /// locks together (non-blocking retries), on the monotonic clock, from
+    /// the call: a stopped process holding the log must not hang a caller
+    /// that has to answer, and every thread queued behind it gives up on its
+    /// own deadline instead of waiting its turn first. It is bounded unless
+    /// the caller says otherwise: false, with nothing written, when it
+    /// passes. Nil waits as long as it takes.
     @discardableResult
     public static func append(
         _ event: AuditEvent, configDirectory: URL, lockTimeout: Duration? = defaultLockTimeout
     ) -> Bool {
+        append(event, configDirectory: configDirectory, wait: LockWait(timeout: lockTimeout))
+    }
+
+    /// One append's lock budget: a deadline fixed when it is made, shared by
+    /// the in-process lock and `flock`. Several appends given the same value
+    /// share its deadline: a second append after a failed first one waits
+    /// only for what is left. No deadline (a nil timeout) waits as long as
+    /// it takes. `now` and `pause` are seams for tests, so this is package
+    /// API, not public: a frozen `now` would never expire.
+    package struct LockWait: Sendable {
+        let now: @Sendable () -> ContinuousClock.Instant
+        let pause: @Sendable () -> Void
+        let deadline: ContinuousClock.Instant?
+
+        package init(
+            timeout: Duration?,
+            now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+            pause: @escaping @Sendable () -> Void = { usleep(2_000) }
+        ) {
+            self.now = now
+            self.pause = pause
+            // A negative timeout gets one attempt, no wait; an absurd one is
+            // held to an hour.
+            self.deadline = timeout.map { now().advanced(by: min(max(.zero, $0), .seconds(3600))) }
+        }
+
+        package init(
+            timeout: TimeInterval,
+            now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+            pause: @escaping @Sendable () -> Void = { usleep(2_000) }
+        ) {
+            // A non-finite timeout gets one attempt, no wait.
+            let seconds = timeout.isFinite ? min(max(0, timeout), 3600) : 0
+            self.init(timeout: Duration.seconds(seconds), now: now, pause: pause)
+        }
+
+        var expired: Bool {
+            guard let deadline else { return false }
+            return now() >= deadline
+        }
+    }
+
+    @discardableResult
+    package static func append(_ event: AuditEvent, configDirectory: URL, wait: LockWait) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -48,48 +94,74 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
-        let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
-        guard fd >= 0 else { return false }
+        // The log's first entry is named by its directory, so the file is
+        // neither opened nor created before that entry is held: an append
+        // that times out on the directory's entry leaves nothing behind.
+        // One that times out on the file's entry has opened the file, which
+        // another thread then has open, so it existed already.
         var identity = stat()
-        guard fstat(fd, &identity) == 0 else {
-            close(fd)
-            return false
+        guard stat(configDirectory.path, &identity) == 0 else { return false }
+        let log = AppendLock.Log(identity, .directory)
+        // This process's locks for the log (its directory's, then its
+        // file's), then the file's own lock, all against `wait`'s one
+        // deadline. They are per log: a thread waiting for a log another
+        // process holds, or writing a long line, keeps no other log in this
+        // process waiting.
+        return AppendLock.withLock(log, wait) {
+            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { return false }
+            // The file reached through another directory (a hard link, or
+            // this one swapped since the `stat`) is still one log: its own
+            // entry, always taken second, so a thread holding a file's
+            // entry never waits for a directory's.
+            var file = stat()
+            guard fstat(fd, &file) == 0 else {
+                close(fd)
+                return false
+            }
+            var entered = false
+            let written = AppendLock.withLock(AppendLock.Log(file, .file), wait) {
+                entered = true
+                // Closed before either entry is given up: where `flock` is
+                // counted per process, closing a descriptor that held the
+                // lock drops it for every thread, the next one to take it
+                // included.
+                defer { close(fd) }
+                return appendLine(event, to: fd, wait: wait, encoder: encoder)
+            }
+            // Never entered: this descriptor took no lock. Closing it is
+            // harmless where each open has its own `flock` (local Darwin and
+            // Linux filesystems). Where locks are counted per process (some
+            // network filesystems), a waiter that timed out here, through a
+            // second directory, can drop the holder's lock by closing it:
+            // narrower than before the file's entry, when both would have
+            // written.
+            if entered == false { close(fd) }
+            return written
         }
-        let log = AppendLock.Log(
-            device: UInt64(truncatingIfNeeded: identity.st_dev), inode: UInt64(truncatingIfNeeded: identity.st_ino))
-        // This process's lock for the log, then the file's. The first is
-        // per log: a thread waiting for a log another process holds, or
-        // writing a long line, keeps no other log in this process waiting.
-        var entered = false
-        let written = AppendLock.withLock(log, until: deadline) {
-            entered = true
-            // Closed before the log's entry is given up: where `flock` is
-            // counted per process, closing a descriptor that held the lock
-            // drops it for every thread, the next one to take it included.
-            defer { close(fd) }
-            guard lock(fd, until: deadline) else { return false }
-            defer { _ = flock(fd, LOCK_UN) }
-            guard let tail = lastLine(fd) else { return false }
-            var chained = event
-            chained.prev = tail.hash
-            chained.chainHead = nil
-            guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
-            // A line the verifier or the next append's tail scan would
-            // reject is never written: refusing keeps the chain usable. The
-            // scan reads at most `maximumLineBytes` back from the end, which
-            // must include the newline before the last line.
-            guard encoded.count < AuditChain.maximumLineBytes else { return false }
-            var data = Data()
-            if tail.isTorn { data.append(UInt8(ascii: "\n")) }
-            data.append(encoded)
-            data.append(UInt8(ascii: "\n"))
-            guard writeAll(fd, data) else { return false }
-            return sync(fd)
-        }
-        // Never entered: this descriptor held no lock.
-        if entered == false { close(fd) }
-        return written
+    }
+
+    /// The locked part of `append`: the file's lock, the chained line, and
+    /// its `fsync`. Callers hold both of the log's entries.
+    private static func appendLine(_ event: AuditEvent, to fd: Int32, wait: LockWait, encoder: JSONEncoder) -> Bool {
+        guard lock(fd, wait) else { return false }
+        defer { _ = flock(fd, LOCK_UN) }
+        guard let tail = lastLine(fd) else { return false }
+        var chained = event
+        chained.prev = tail.hash
+        chained.chainHead = nil
+        guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
+        // A line the verifier or the next append's tail scan would
+        // reject is never written: refusing keeps the chain usable. The
+        // scan reads at most `maximumLineBytes` back from the end, which
+        // must include the newline before the last line.
+        guard encoded.count < AuditChain.maximumLineBytes else { return false }
+        var data = Data()
+        if tail.isTorn { data.append(UInt8(ascii: "\n")) }
+        data.append(encoded)
+        data.append(UInt8(ascii: "\n"))
+        guard writeAll(fd, data) else { return false }
+        return sync(fd)
     }
 
     /// The encoded line with every display hazard (ESC, bidi controls, tag
@@ -166,44 +238,60 @@ public enum AuditLog {
     }
 
     /// Threads in this process appending to one log, for a filesystem
-    /// whose `flock` would not exclude them. One lock per log, named by the
-    /// file's device and inode (so by the file, however its path was
-    /// spelled).
+    /// whose `flock` would not exclude them. Two entries per append: the
+    /// directory's device and inode (so the log however its path was
+    /// spelled, taken before the file exists), then, inside it, the open
+    /// file's (so one file reached through two directories is one log).
+    /// Always directory then file, and a thread holding a file's entry
+    /// waits only for `flock`, never for another entry: two directories
+    /// reaching one file both wait on the file's entry, never on each
+    /// other's, so no two appends can wait on each other in a cycle.
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
-    private enum AppendLock {
+    enum AppendLock {
         struct Log: Hashable {
+            /// Part of the key, so a directory's entry and a file's are never
+            /// equal, even where a filesystem gives both the same numbers:
+            /// an append would otherwise wait on its own directory entry.
+            enum Kind: Hashable {
+                case directory
+                case file
+            }
+
             var device: UInt64
             var inode: UInt64
+            var kind: Kind
         }
 
-        /// The logs a thread holds: waiting for the file's lock, or appending.
-        private static let busy = Mutex<Set<Log>>([])
+        /// The entries threads hold, directories' and files': waiting for
+        /// the file's lock, or appending. Held only to insert or remove one, never across a
+        /// wait, so taking it outright costs no deadline.
+        static let mutex = Mutex<Set<Log>>([])
 
-        /// `false` when `deadline` passes before `log` is free. Tries at
-        /// least once, whatever the deadline.
-        static func withLock(_ log: Log, until deadline: ContinuousClock.Instant?, _ body: () -> Bool) -> Bool {
-            while busy.withLock({ $0.insert(log).inserted }) == false {
-                if let deadline, ContinuousClock.now >= deadline { return false }
-                usleep(retryMicroseconds)
+        /// `body` under `log`'s lock, or false when the lock is not free
+        /// before `wait`'s deadline. Tries at least once, whatever the
+        /// deadline; only `log` being held makes it pause, never another
+        /// thread changing the set at the same moment.
+        static func withLock(_ log: Log, _ wait: LockWait, _ body: () -> Bool) -> Bool {
+            while mutex.withLock({ $0.insert(log).inserted }) == false {
+                guard wait.expired == false else { return false }
+                wait.pause()
             }
-            defer { busy.withLock { _ = $0.remove(log) } }
+            defer { mutex.withLock { _ = $0.remove(log) } }
             return body()
         }
     }
 
-    private static let retryMicroseconds: useconds_t = 5_000
-
     /// Excludes other processes and, on a local filesystem, this one's
-    /// other opens of the file. Callers already hold the log's
-    /// `AppendLock`. With a deadline,
-    /// non-blocking attempts until it passes.
-    private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> Bool {
-        if let deadline {
+    /// other opens of the file, until `wait`'s deadline, the one the
+    /// in-process lock already spent from. Callers already hold the log's
+    /// `AppendLock`. With a deadline, non-blocking attempts until it passes.
+    private static func lock(_ fd: Int32, _ wait: LockWait) -> Bool {
+        if wait.deadline != nil {
             while true {
                 if flock(fd, LOCK_EX | LOCK_NB) == 0 { return true }
                 guard errno == EWOULDBLOCK || errno == EINTR else { return false }
-                guard ContinuousClock.now < deadline else { return false }
-                usleep(retryMicroseconds)
+                guard wait.expired == false else { return false }
+                wait.pause()
             }
         }
         for _ in 0..<16 {
@@ -241,5 +329,13 @@ public enum AuditLog {
             }
         }
         return false
+    }
+}
+
+extension AuditLog.AppendLock.Log {
+    /// The key of `kind` for what `info` describes (`stat` or `fstat`).
+    init(_ info: stat, _ kind: Kind) {
+        self.init(
+            device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino), kind: kind)
     }
 }
