@@ -337,12 +337,16 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         // at such a word already; and from every such word, each one an
         // option or its value after an option, so decoy hosts before the
         // real one hide nothing. Their words together past
-        // `maxOptionTailWords` count (fail closed).
+        // `maxOptionTailWords` count (fail closed). Never from the value of
+        // an option that names a path (`git -C "$REPO" config`), on a line
+        // that defines no command: that program never runs it.
         if reads.resplit == false, literalOnly == false, isPrinter == false,
            let firstOption = args.firstIndex(where: { $0.hasPrefix("-") })
         {
+            let pathOptions = reads.commandsArePlain ? pathValueOptions(of: command) : []
             let starts = args.indices.filter { start in
                 start > firstOption && mayHeadHostCommand(args[start])
+                    && pathOptions.contains(args[start - 1]) == false
                     && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
             }
             guard starts.reduce(0, { $0 + args.count - $1 }) <= maxOptionTailWords else { return true }
@@ -457,6 +461,29 @@ private let printers: Set<String> = ["echo", "printf", "print"]
 /// `HostTextReads`, this bounds building their text (quadratic in the
 /// command's words).
 private let maxOptionTailWords = HostTextReads.maxWordVisits
+
+/// Per program, the options whose separate value is a directory, file or
+/// context name the program never runs as a command: git's global `-C`,
+/// tar's `-C`/`--directory`, docker's `-f`/`--file` (a compose file,
+/// Dockerfile, filter or format, or a flag before a container name; no
+/// docker subcommand runs the word after it), and kubectl's `--context`.
+/// Matched as written, so an escaped or case-changed option is not one.
+private let pathValueOptionTable: [String: Set<String>] = [
+    "git": ["-C"],
+    "tar": ["-C", "--directory"],
+    "docker": ["-f", "--file"],
+    "kubectl": ["--context"],
+]
+
+/// The path-valued options (`pathValueOptionTable`) of `command`, run by
+/// its plain name; none for a dynamic or path head.
+private func pathValueOptions(of command: LaunchedCommand) -> Set<String> {
+    let head = foldedWord(command.head)
+    guard command.headIsDynamic == false, head.contains("/") == false, commandName(command.head) == head else {
+        return []
+    }
+    return pathValueOptionTable[head] ?? []
+}
 
 /// Every shell word of `raw`, as written and decoded, read as program text
 /// (`textNamesHostMCPMutation`): inline interpreter code, quoted strings
