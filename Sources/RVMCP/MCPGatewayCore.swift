@@ -7,6 +7,21 @@ public enum MCPGatewayInput: Sendable, Equatable {
     case clientUnparseable
     case upstream(server: String, message: JSONValue)
     case upstreamExited(server: String)
+    /// The runtime started this server again after `restartUpstream` for
+    /// this `launch`.
+    case upstreamRelaunched(server: String, launch: Int)
+    /// Every earlier launch of this server has ended (reaped, a placeholder
+    /// server's lease revoked): the runtime now plans and starts `launch`,
+    /// and its `startTimeoutSeconds` counts from here.
+    case upstreamReaped(server: String, launch: Int)
+    /// The runtime did not send this request to `server` (a remote with its
+    /// most requests in flight): what waited on it ends now.
+    case upstreamUnsent(server: String, id: JSONValue)
+    /// Time passed: deadlines are checked, as they are on every input. The
+    /// runtime sends one about every second.
+    case tick
+    /// Serving ends: what is still in flight gets its last record.
+    case gatewayStopping
 }
 
 public enum MCPGatewayOutput: Sendable, Equatable {
@@ -16,6 +31,25 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Any other audit event (for example a rejected forged grant).
     case event(AuditEvent)
     case log(String)
+    /// Stop this upstream now: kill its process, or close its connection.
+    /// The core already counts it failed; its exit may still be reported.
+    case stopUpstream(server: String)
+    /// Start this server again, as it was started at serve start. `launch`
+    /// numbers this try; the core waits for no other (`awaitsRelaunch`).
+    case restartUpstream(server: String, launch: Int)
+}
+
+/// How long the gateway waits for each `tools/list` page. An `initialize`
+/// waits its server's `startTimeoutSeconds`, a `tools/call` its
+/// `callTimeoutSeconds`.
+public struct MCPGatewayDeadlines: Sendable, Equatable {
+    public static let standardList: TimeInterval = 30
+
+    public var list: TimeInterval
+
+    public init(list: TimeInterval = standardList) {
+        self.list = list
+    }
 }
 
 /// How an `ask` call got its approval.
@@ -51,8 +85,10 @@ public struct MCPCallRecord: Sendable, Equatable {
         case forwarding(grant: Grant?)
         /// Stopped for an approval nobody has answered yet.
         case awaiting(approvalID: String?)
-        /// The prompt ended without a yes: the user refused, the prompt failed
-        /// or timed out, or its upstream exited while it was shown.
+        /// The prompt ended and its call was not run: the user refused, the
+        /// prompt failed or timed out, its upstream exited while it was
+        /// shown, or the user said yes but rv could not run it (its server
+        /// was not ready, or no longer listed the tool, or the tool changed).
         case declined(approvalID: String)
         /// Nothing went upstream: rv refused before any grant, or answered itself (search).
         case notRun
@@ -128,6 +164,26 @@ public struct MCPGatewayCore {
         case starting
         case ready
         case failed(String)
+        /// It was ready this session, then went away for `reason`; it is
+        /// being brought back. Settled: a call gets an error at once.
+        case restarting(String, RestartStage)
+    }
+
+    enum RestartStage: Equatable {
+        /// rv stopped it; its exit has not been seen yet.
+        case stopping
+        /// Its exit was seen; it is started again at this time.
+        case waiting(until: Date)
+        /// `restartUpstream` was sent for this launch: rv waits for its last
+        /// process to be reaped (no deadline here: the runtime bounds that
+        /// wait and reports an exit past it), then plans and starts it.
+        /// Past `until` (its `startTimeoutSeconds` after the reap) it counts
+        /// as gone again, and a late start of this launch is not taken.
+        case launching(Int, until: Date?)
+        /// The runtime started it: it is initialized (by the same `until`),
+        /// then listed again, all of the listing within its own `until`
+        /// (`relistPages` list pages' time, set once the listing starts).
+        case relisting(until: Date?)
     }
 
     struct Approval {
@@ -136,18 +192,49 @@ public struct MCPGatewayCore {
         var grant: MCPCallRecord.Grant { MCPCallRecord.Grant(approvalID: id, channel: channel) }
     }
 
+    /// A `tools/call` the upstream has not answered.
+    struct Call {
+        var client: JSONValue
+        var server: String
+        var tool: String
+        var keys: [String]
+        var approval: Approval?
+        var started: Date
+        /// Past this the client is told the call timed out. Valid progress
+        /// for the call moves it, never past `ceiling`.
+        var deadline: Date
+        /// The total limit: `callTimeoutCeilingFactor` times the server's
+        /// call timeout after `started`, however much progress arrives.
+        var ceiling: Date
+    }
+
+    /// Every request rv sends upstream, until it is answered or expires.
     enum Pending {
-        case initialize(server: String)
-        case list(fanout: Int, server: String)
-        case call(client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, started: Date)
-        case cancelled
+        case initialize(server: String, deadline: Date)
+        case list(fanout: Int, server: String, deadline: Date)
+        case call(Call)
+        /// Cancelled by the client, or timed out: a late answer is dropped.
+        /// Forgotten at `until`, or when its server exits.
+        case cancelled(server: String, until: Date)
+        /// rv's own `ping`, sent after a call to this server timed out. Its
+        /// answer is taken here, never forwarded.
+        case ping(server: String, deadline: Date)
 
         /// The upstream that owns this request; nil once cancelled. A reply
         /// from any other upstream must not consume the entry.
         var owner: String? {
             switch self {
-            case .initialize(let server), .list(_, let server), .call(_, let server, _, _, _, _): server
+            case .initialize(let server, _), .list(_, let server, _), .ping(let server, _): server
+            case .call(let call): call.server
             case .cancelled: nil
+            }
+        }
+
+        var deadline: Date {
+            switch self {
+            case .initialize(_, let deadline), .list(_, _, let deadline), .ping(_, let deadline): deadline
+            case .call(let call): call.deadline
+            case .cancelled(_, let until): until
             }
         }
     }
@@ -165,6 +252,11 @@ public struct MCPGatewayCore {
         /// Each server's listed tools, held until its listing ends so they
         /// are checked against its pins as one listing.
         var listed: [String: [JSONValue]] = [:]
+        /// The server rv lists again itself after a relaunch, before any call
+        /// reaches it; nobody gets this listing.
+        var relaunch: String?
+        /// Servers whose listing ended without a result.
+        var failed: Set<String> = []
     }
 
     /// Pagination bounds for one `tools/list` fanout.
@@ -211,8 +303,21 @@ public struct MCPGatewayCore {
     /// event says the rest are suppressed. Those tools still ask and are
     /// still queued for `rv mcp trust`, within the queue's budget.
     static let maximumChangeEvents = 64
+    /// Tools per server whose definitions a session tracks against the
+    /// pins, across all of its listings. A tool past this is never pinned:
+    /// it asks, or, once its server listed a hiding tool past this
+    /// (`hidingUntracked`), is hidden and refused. One listing already
+    /// lists at most this many.
+    static let maximumTrackedTools = maximumListedTools
+    /// Definitions per server a session offers to the review queue. Past
+    /// this a new definition is not queued (its tool still asks).
+    static let maximumTrackedChanges = 1024
     /// Longest progress `message` passed to the client, in UTF-8 bytes.
     static let maximumProgressMessageBytes = 512
+    /// Longest spelling of a forwarded progress `progress` or `total`.
+    static let maximumProgressNumberBytes = 32
+    /// Most bytes of an upstream's `initialize` error text that reach stderr.
+    static let maximumInitializeErrorBytes = 512
 
     /// Upstream tool names rv lists and routes. Any other name (prose,
     /// controls, separators, over 64 bytes) is neither listed nor called.
@@ -238,29 +343,72 @@ public struct MCPGatewayCore {
     /// Writes the `mcp.call` record for a call about to go upstream; false
     /// when it could not be written, and the call is then refused.
     let recordForward: @Sendable (MCPCallRecord) -> Bool
+    /// Wall time; stamps audit events.
     let clock: () -> Date
+    /// Deadlines, held prompts and call durations: a monotonic timeline on
+    /// which only differences mean anything.
+    let deadlineClock: () -> Date
+    let deadlines: MCPGatewayDeadlines
     let version: String
 
     /// server → tool → definition hash the user trusted; nil when the pin
     /// store could not be read or verified. The gateway never adds pins.
     let pins: [String: [String: String]]?
-    /// server → tool → hash of the definition this session last listed.
+    /// server → tool → hash of the definition this session last listed. At
+    /// most `maximumTrackedTools` tools per server; a tool past that is
+    /// never observed, so it is unverified and asks, or is refused once its
+    /// server is in `hidingUntracked`.
     var observed: [String: [String: String]] = [:]
     /// `server\0tool` listed this session with a definition that differs
     /// from its pin or from another listing. Sticky: such a tool is never
-    /// pinned again this session, whatever it lists next.
+    /// pinned again this session, whatever it lists next. Only observed
+    /// tools are tainted, so this is bounded with `observed`.
     var tainted: Set<String> = []
-    /// `server\0tool\0hash` already audited as not pinned.
-    var reportedChanges: Set<String> = []
+    /// server → `tool\0hash` offered to the review queue and not dropped by
+    /// it; at most `maximumTrackedChanges` per server.
+    var reportedChanges: [String: Set<String>] = [:]
+    /// server → `tool\0hash` already audited as not pinned; bounded by
+    /// `maximumChangeEvents` per server.
+    var eventedChanges: [String: Set<String>] = [:]
+    /// Servers already told on stderr that the review queue did not keep
+    /// some of their tools.
+    var queueNoticed: Set<String> = []
+    /// Servers already told on stderr that they list more tools than rv tracks.
+    var untrackedNoticed: Set<String> = []
+    /// Servers already told (stderr and one event) that they reached
+    /// `maximumTrackedChanges`, so later changed definitions are not queued.
+    var trackingFullNoticed: Set<String> = []
     /// Servers already reported on stderr as having untrusted tools.
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
     var unservedNoticed: Set<String> = []
+    /// server → tools a listing this session named with a schema
+    /// `schemaNamesHideText` rejects, until a later listing shows them with
+    /// one it does not; neither listed nor called. With pinning enforced,
+    /// only tools in `observed`, so bounded with it.
+    var hidingSchemas: [String: Set<String>] = [:]
+    /// Servers that listed such a tool past `maximumTrackedTools`: every
+    /// tool of theirs not in `observed` is refused like one in `hidingSchemas`.
+    var hidingUntracked: Set<String> = []
+    /// Servers already reported on stderr as listing such tools.
+    var hidingSchemaNoticed: Set<String> = []
     /// server → `mcp.tool.changed` events written this session.
     var changeEvents: [String: Int] = [:]
     /// pending call id → the `progressToken` the client sent with it.
     var progressTokens: [Int: JSONValue] = [:]
     var phases: [String: UpstreamPhase] = [:]
+    /// Servers that answered `initialize` this session: only these restart.
+    var everReady: Set<String> = []
+    /// server → when it was relaunched, within the last `restartWindow`.
+    var relaunches: [String: [Date]] = [:]
+    /// server → the tool names its current launch listed, for a server rv
+    /// started again this session. A call to any other tool of it is
+    /// refused: what an earlier launch listed says nothing about this one.
+    /// At most `maximumListedTools` names; a name past that is refused.
+    var launchListed: [String: Set<String>] = [:]
+    /// A `tools/list` answer gave the client at least one tool, so a server
+    /// going or coming back changes what it was told.
+    var clientToldTools = false
     var pending: [Int: Pending] = [:]
     var fanouts: [Int: ListFanout] = [:]
     var waiting: [JSONValue] = []
@@ -275,7 +423,9 @@ public struct MCPGatewayCore {
         pinning: MCPToolPinning,
         recordForward: @escaping @Sendable (MCPCallRecord) -> Bool,
         version: String = "1",
-        clock: @escaping () -> Date = { Date() }
+        clock: @escaping () -> Date = { Date() },
+        deadlineClock: @escaping () -> Date = MCPGatewayCore.uptime,
+        deadlines: MCPGatewayDeadlines = MCPGatewayDeadlines()
     ) {
         self.configuration = configuration
         self.upstreams = Dictionary(upstreams.map { ($0.definition.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -285,8 +435,25 @@ public struct MCPGatewayCore {
         self.pins = pinning.pins
         self.recordForward = recordForward
         self.clock = clock
+        self.deadlineClock = deadlineClock
+        self.deadlines = deadlines
         self.version = version
     }
+
+    /// Time since the gateway first looked, on `SuspendingClock`
+    /// (CLOCK_UPTIME_RAW on Darwin, CLOCK_MONOTONIC on Linux), as a `Date`
+    /// that is never compared with wall time. Setting the wall clock does
+    /// not move it, so a step back cannot hold a call open; it stands still
+    /// while the machine sleeps, so waking does not time out every call at
+    /// once: each gets the rest of its time.
+    public static let uptime: @Sendable () -> Date = {
+        let origin = SuspendingClock.Instant.now
+        return {
+            let elapsed = origin.duration(to: .now).components
+            return Date(timeIntervalSinceReferenceDate:
+                TimeInterval(elapsed.seconds) + TimeInterval(elapsed.attoseconds) / 1e18)
+        }
+    }()
 
     /// A value the upstream holds from now on (a refreshed OAuth token), scrubbed like the rest.
     public mutating func addSecret(server: String, name: String, value: String) {
@@ -308,29 +475,41 @@ public struct MCPGatewayCore {
     public mutating func start() -> [MCPGatewayOutput] {
         order.map { server in
             phases[server] = .starting
-            let id = allocate(.initialize(server: server))
-            return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
-                "protocolVersion": .string(Self.upstreamVersion),
-                "capabilities": .object([:]),
-                "clientInfo": .object(["name": .string("rv-mcp-gateway"), "version": .string(version)]),
-            ])))
+            return initialize(server)
         }
     }
 
+    /// `initialize`, waited for up to the server's `startTimeoutSeconds`,
+    /// or until `deadline` when one is given.
+    mutating func initialize(_ server: String, by deadline: Date? = nil) -> MCPGatewayOutput {
+        let deadline = deadline ?? deadlineClock().addingTimeInterval(startTimeout(server))
+        let id = allocate(.initialize(server: server, deadline: deadline))
+        return .toUpstream(server: server, message: Self.request(id: .int(id), method: "initialize", params: .object([
+            "protocolVersion": .string(Self.upstreamVersion),
+            "capabilities": .object([:]),
+            "clientInfo": .object(["name": .string("rv-mcp-gateway"), "version": .string(version)]),
+        ])))
+    }
+
     public mutating func handle(_ input: MCPGatewayInput) -> [MCPGatewayOutput] {
+        if case .gatewayStopping = input { return gatewayStopping() }
         // An elicitation answer dispatches before expiry runs: on an idle
         // gateway the user's own (possibly late) answer is the next input,
         // and expiring first would drop it silently.
         if case .client(let message) = input, message["method"] == nil,
             let key = message["id"]?.stringValue, held[key] != nil {
-            return clientMessage(message) + expireHeld()
+            return clientMessage(message) + expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         }
-        var outputs = expireHeld()
+        var outputs = expireHeld() + expireDeadlines() + expireLaunches() + dueRestarts()
         switch input {
         case .client(let message): outputs += clientMessage(message)
         case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
         case .upstream(let server, let message): outputs += upstreamMessage(server, message)
         case .upstreamExited(let server): outputs += upstreamExited(server)
+        case .upstreamRelaunched(let server, let launch): outputs += upstreamRelaunched(server, launch: launch)
+        case .upstreamReaped(let server, let launch): upstreamReaped(server, launch: launch)
+        case .upstreamUnsent(let server, let id): outputs += upstreamUnsent(server, id: id)
+        case .tick, .gatewayStopping: break
         }
         return outputs
     }
@@ -338,7 +517,7 @@ public struct MCPGatewayCore {
     /// Fails held elicitations nobody answered in time, so prompts cannot
     /// pin their arguments — or the 64 slots — for the whole session.
     mutating func expireHeld() -> [MCPGatewayOutput] {
-        let cutoff = clock().addingTimeInterval(-Self.heldLifetime)
+        let cutoff = deadlineClock().addingTimeInterval(-Self.heldLifetime)
         let expired = held.filter { $0.value.heldAt < cutoff }.sorted { $0.key < $1.key }
         guard expired.isEmpty == false else { return [] }
         var outputs: [MCPGatewayOutput] = []
@@ -355,6 +534,100 @@ public struct MCPGatewayCore {
                 "rv's approval prompt for \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)) was not answered in time; the call was not run.")))
         }
         return outputs
+    }
+
+    /// A call may run at most this many times its server's call timeout in
+    /// all, so an upstream that keeps sending progress cannot hold it open
+    /// forever.
+    static let callTimeoutCeilingFactor: TimeInterval = 10
+
+    /// How long `server` may take to answer `initialize`.
+    func startTimeout(_ server: String) -> TimeInterval {
+        TimeInterval(upstreams[server]?.definition.startTimeoutSeconds ?? MCPServerDefinition.defaultStartTimeoutSeconds)
+    }
+
+    /// How long a `tools/call` to `server` may go unanswered.
+    func callTimeout(_ server: String) -> TimeInterval {
+        TimeInterval(upstreams[server]?.definition.callTimeoutSeconds ?? MCPServerDefinition.defaultCallTimeoutSeconds)
+    }
+
+    static func seconds(_ interval: TimeInterval) -> String {
+        interval == interval.rounded() ? String(Int(interval)) : String(interval)
+    }
+
+    /// Ends every request whose deadline passed, oldest first: an
+    /// `initialize` fails its server, a `tools/list` page ends that server's
+    /// part of the listing, a `tools/call` fails the client's request (it is
+    /// cancelled upstream, never sent again), and a cancelled entry is
+    /// forgotten.
+    mutating func expireDeadlines() -> [MCPGatewayOutput] {
+        let now = deadlineClock()
+        var outputs: [MCPGatewayOutput] = []
+        for (id, entry) in pending.filter({ $0.value.deadline <= now }).sorted(by: { $0.key < $1.key }) {
+            switch entry {
+            case .initialize(let server, _):
+                pending[id] = nil
+                let limit = Self.seconds(startTimeout(server))
+                outputs += stopped(server, "it did not answer initialize within \(limit) s (its startTimeoutSeconds)")
+                outputs.append(.log(
+                    "MCP server \(MCPDisplayedText.field(server)) did not answer initialize within \(limit) s; stopping it "
+                        + "(raise its startTimeoutSeconds in mcp.json if it needs longer to start)"))
+                outputs.append(.stopUpstream(server: server))
+                outputs += releaseWaiting()
+            case .list(let fanout, let server, _):
+                // Asked to stop, as a timed-out call is; a late page is dropped.
+                pending[id] = .cancelled(server: server, until: now.addingTimeInterval(deadlines.list))
+                outputs.append(.toUpstream(server: server, message: Self.notification("notifications/cancelled", .object([
+                    "requestId": .int(id), "reason": .string("rv stopped waiting after \(Self.seconds(deadlines.list)) s"),
+                ]))))
+                outputs += listPage(
+                    fanout: fanout, server: server, message: .null,
+                    failure: "did not list tools within \(Self.seconds(deadlines.list)) s")
+            case .call(let call):
+                outputs += callTimedOut(id, call, now: now) + ping(call.server, now: now)
+            case .cancelled:
+                pending[id] = nil
+            case .ping(let server, _):
+                pending[id] = nil
+                outputs += pingUnanswered(server)
+            }
+        }
+        return outputs
+    }
+
+    /// The client is told, the upstream is asked to stop, and the record
+    /// says the call was interrupted. A late answer is then dropped.
+    mutating func callTimedOut(_ id: Int, _ call: Call, now: Date) -> [MCPGatewayOutput] {
+        let limit = callTimeout(call.server)
+        pending[id] = .cancelled(server: call.server, until: now.addingTimeInterval(limit))
+        progressTokens[id] = nil
+        let shownServer = MCPDisplayedText.field(call.server)
+        let shownTool = MCPDisplayedText.field(call.tool)
+        let reason: String, waited: String, answer: String
+        if call.deadline >= call.ceiling {
+            let total = Self.seconds(call.started.distance(to: call.ceiling))
+            reason = "timed out: total limit of \(total) s reached"
+            waited = total
+            answer = "did not finish tool \(shownTool) within its total limit of \(total) s"
+        } else {
+            let seconds = Self.seconds(limit)
+            reason = "timed out: no answer within \(seconds) s"
+            waited = seconds
+            answer = "did not answer tool \(shownTool) within \(seconds) s"
+        }
+        return [
+            .audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                argumentKeys: call.keys, isError: true, reason: reason,
+                outcome: .interrupted(grant: call.approval?.grant))),
+            .toUpstream(server: call.server, message: Self.notification("notifications/cancelled", .object([
+                "requestId": .int(id), "reason": .string("rv stopped waiting after \(waited) s"),
+            ]))),
+            .toClient(Self.error(
+                id: call.client, code: -32603,
+                message: "MCP server \(shownServer) \(answer); "
+                    + "rv stopped waiting. The call may still have run, so check before calling it again.")),
+        ]
     }
 
     // MARK: Client side
@@ -451,7 +724,18 @@ public struct MCPGatewayCore {
         }
         guard phases[call.server] == .ready else {
             return unavailable(
-                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approved: true)
+                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
+        }
+        // As `callTool`: only a tool this launch listed, whatever order the
+        // inputs came in, and not past the remote's calls in flight.
+        if let listed = launchListed[call.server], listed.contains(call.tool) == false {
+            let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
+            return notListedSinceRestart(
+                client: call.client, server: call.server, tool: call.tool, exposed: exposed, keys: call.keys, approvalID: key)
+        }
+        if remoteCallsFull(call.server) {
+            return tooManyRemoteCalls(
+                client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys, approvalID: key)
         }
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
@@ -465,6 +749,18 @@ public struct MCPGatewayCore {
                 .toClient(Self.toolError(
                     id: call.client,
                     "rv refused \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)): \(reason). The call was not run.")),
+            ]
+        }
+        // Refused as `callTool` would now: the prompt may predate a listing
+        // that left an untracked tool's binding unchanged. The record closes
+        // the prompt's `ask` row, as a changed binding's does.
+        if let reason = hiddenRefusal(server: call.server, tool: call.tool) {
+            let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys, isError: true,
+                    reason: reason, outcome: .declined(approvalID: key))),
+                .toClient(Self.error(id: call.client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
         return forward(
@@ -490,7 +786,12 @@ public struct MCPGatewayCore {
                     message: "rv could not write the audit record for \(shownServer) tool \(shownTool); the call was not run")),
             ]
         }
-        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
+        let started = deadlineClock()
+        let timeout = callTimeout(server)
+        let id = allocate(.call(Call(
+            client: client, server: server, tool: tool, keys: keys, approval: approval, started: started,
+            deadline: started.addingTimeInterval(timeout),
+            ceiling: started.addingTimeInterval(timeout * Self.callTimeoutCeilingFactor))))
         if let token = params["_meta"]?["progressToken"] { progressTokens[id] = token }
         return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(params)))]
     }
@@ -498,20 +799,42 @@ public struct MCPGatewayCore {
 
     mutating func clientNotification(_ method: String, _ params: JSONValue?) -> [MCPGatewayOutput] {
         guard method == "notifications/cancelled", let target = params?["requestId"] else { return [] }
-        if let key = held.first(where: { $0.value.client == target })?.key {
+        // Still waiting for the servers to start: it is never run.
+        if let index = waiting.firstIndex(where: { $0["id"] == target }) {
+            waiting.remove(at: index)
+            return []
+        }
+        // A prompt still shown: its `awaiting` row ends declined, and the
+        // client's prompt is withdrawn.
+        if let entry = held.first(where: { $0.value.client == target }) {
+            let key = entry.key, call = entry.value
             held[key] = nil
-            return [.toClient(Self.notification("notifications/cancelled", .object([
-                "requestId": .string(key), "reason": .string("the tool call was cancelled"),
-            ])))]
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
+                    isError: true, reason: "cancelled by client", outcome: .declined(approvalID: key))),
+                .toClient(Self.notification("notifications/cancelled", .object([
+                    "requestId": .string(key), "reason": .string("the tool call was cancelled"),
+                ]))),
+            ]
         }
         for (id, entry) in pending {
-            guard case .call(let client, let server, _, _, _, _) = entry, client == target else { continue }
-            pending[id] = .cancelled
+            guard case .call(let call) = entry, call.client == target else { continue }
+            let server = call.server
+            pending[id] = .cancelled(server: server, until: deadlineClock().addingTimeInterval(callTimeout(server)))
             progressTokens[id] = nil
             var forwarded = JSONObject()
             forwarded["requestId"] = .int(id)
             if let reason = params?["reason"] { forwarded["reason"] = reason }
-            return [.toUpstream(server: server, message: Self.notification("notifications/cancelled", .object(forwarded)))]
+            // The `.forwarding` record gets its one terminal record here; a
+            // late answer is dropped.
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                    argumentKeys: call.keys, isError: true, reason: "cancelled by client",
+                    outcome: .interrupted(grant: call.approval?.grant))),
+                .toUpstream(server: server, message: Self.notification("notifications/cancelled", .object(forwarded))),
+            ]
         }
         return []
     }
@@ -531,8 +854,9 @@ public struct MCPGatewayCore {
         let fanout = nextID
         nextID += 1
         fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [], search: search)
+        let deadline = deadlineClock().addingTimeInterval(deadlines.list)
         return ready.map { server in
-            let id = allocate(.list(fanout: fanout, server: server))
+            let id = allocate(.list(fanout: fanout, server: server, deadline: deadline))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))
         }
     }
@@ -607,8 +931,25 @@ public struct MCPGatewayCore {
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
+        // Not listed either: its schema names a property a client may show
+        // raw, or it may and rv could not track it.
+        if let reason = hiddenRefusal(server: server, tool: tool) {
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                    reason: reason, outcome: .notRun)),
+                .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
+            ]
+        }
         guard phases[server] == .ready else {
-            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approved: false)
+            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
+        }
+        if let listed = launchListed[server], listed.contains(tool) == false {
+            return notListedSinceRestart(
+                client: client, server: server, tool: tool, exposed: exposed, keys: keys, approvalID: nil)
+        }
+        if remoteCallsFull(server) {
+            return tooManyRemoteCalls(client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: nil)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -667,7 +1008,7 @@ public struct MCPGatewayCore {
             nextID += 1
             held[key] = HeldCall(
                 client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys,
-                binding: binding, shown: message, heldAt: clock())
+                binding: binding, shown: message, heldAt: deadlineClock())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: false,
@@ -744,8 +1085,8 @@ public struct MCPGatewayCore {
     }
 
     /// The whole listed description of a tool that is not pinned. Such a
-    /// tool is listed with only its name, this marker, an empty object
-    /// schema and the four boolean hints (`exposedTool`).
+    /// tool is listed with only its name, this marker and an empty object
+    /// schema (`exposedTool`).
     static func pinMarker(_ status: MCPToolPinStatus) -> String? {
         let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]"
         return switch status {
@@ -795,18 +1136,123 @@ public struct MCPGatewayCore {
         ]
     }
 
+    /// A call whose server is not ready. Nothing is forwarded: a prompt the
+    /// user accepted (`approvalID`) ends declined, any other call `notRun`.
     func unavailable(
         client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
-        approved: Bool
+        approvalID: String?
     ) -> [MCPGatewayOutput] {
+        if case .restarting(let why, _)? = phases[server] {
+            return restarting(
+                client: client, server: server, tool: tool, decision: decision, keys: keys, approvalID: approvalID, reason: why)
+        }
         let reason: String
         if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
         return [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
-                reason: "upstream unavailable: \(reason)", outcome: approved ? .interrupted(grant: nil) : .notRun)),
+                reason: "upstream unavailable: \(reason)", outcome: Self.notForwarded(approvalID))),
             .toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) is unavailable: \(reason)")),
         ]
+    }
+
+    /// A call to a tool the server's current launch has not listed since rv
+    /// started it again: refused, never forwarded, until a listing of this
+    /// launch names it.
+    /// A prompt the user accepted (`approvalID`) ends declined; any other
+    /// call `notRun`.
+    func notListedSinceRestart(
+        client: JSONValue, server: String, tool: String, exposed: String, keys: [String], approvalID: String?
+    ) -> [MCPGatewayOutput] {
+        [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                reason: "the server has not listed this tool since rv restarted it", outcome: Self.notForwarded(approvalID))),
+            .toClient(Self.error(
+                id: client, code: -32602,
+                message: "Unknown tool: \(MCPDisplayedText.field(exposed)). MCP server \(MCPDisplayedText.field(server)) "
+                    + "did not list it after rv restarted it; the call was not run.")),
+        ]
+    }
+
+    /// How many calls one remote server may have in flight. Each holds an
+    /// HTTP request open (on Linux a connection and a session of its own),
+    /// so a server that takes calls and never answers cannot make rv hold
+    /// more; local servers are not limited.
+    static let maximumRemoteCallsInFlight = 64
+
+    /// Whether `server` is remote and already has
+    /// `maximumRemoteCallsInFlight` calls forwarded and unanswered.
+    func remoteCallsFull(_ server: String) -> Bool {
+        guard upstreams[server]?.definition.remote != nil else { return false }
+        var count = 0
+        for entry in pending.values {
+            guard case .call(let call) = entry, call.server == server else { continue }
+            count += 1
+            if count >= Self.maximumRemoteCallsInFlight { return true }
+        }
+        return false
+    }
+
+    /// A call past its remote's calls in flight: not sent, and nothing in
+    /// flight is touched. A prompt the user accepted (`approvalID`) ends
+    /// declined; any other call `notRun`.
+    func tooManyRemoteCalls(
+        client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String], approvalID: String?
+    ) -> [MCPGatewayOutput] {
+        let limit = Self.maximumRemoteCallsInFlight
+        return [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
+                reason: "\(limit) calls to this server are already in flight", outcome: Self.notForwarded(approvalID))),
+            .toClient(Self.error(
+                id: client, code: -32603,
+                message: "MCP server \(MCPDisplayedText.field(server)) already has \(limit) calls in flight, the most rv "
+                    + "sends a remote server at once; the call was not run. Try it again once one of them has finished.")),
+        ]
+    }
+
+    /// A request rv did not send to `server`. A call ends not run (an
+    /// approved one declined, its approval spent), with its error to the
+    /// client; a listing page fails as an unanswered page does; a ping is
+    /// dropped with no verdict. An `initialize` is left to its own
+    /// deadline, which fails closed.
+    mutating func upstreamUnsent(_ server: String, id: JSONValue) -> [MCPGatewayOutput] {
+        guard let key = id.intValue, let entry = pending[key] else { return [] }
+        switch entry {
+        case .call(let call) where call.server == server:
+            pending[key] = nil
+            progressTokens[key] = nil
+            let reason = "not sent: MCP server \(MCPDisplayedText.field(server)) has its most requests in flight"
+            // An approved call keeps its approval id on its last row; the
+            // approval is spent.
+            let spent = call.approval == nil ? "" : " Its approval was used up, so it must be approved again."
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask, argumentKeys: call.keys,
+                    isError: true, reason: reason, outcome: Self.notForwarded(call.approval?.id))),
+                .toClient(Self.error(
+                    id: call.client, code: -32603,
+                    message: "MCP server \(MCPDisplayedText.field(server)) has too many requests in flight; tool "
+                        + "\(MCPDisplayedText.field(call.tool)) was not run. Try it again once some have finished." + spent)),
+            ]
+        case .ping(let owner, _) where owner == server:
+            // Not sent, so not unanswered: no verdict that the server hung.
+            pending[key] = nil
+            return [.log("MCP server \(MCPDisplayedText.field(server)) has too many requests in flight to be pinged; "
+                + "it is not judged hung")]
+        case .list(let fanout, let owner, _) where owner == server:
+            pending[key] = nil
+            return listPage(fanout: fanout, server: server, message: .null, failure: "has too many requests in flight to list tools")
+        default:
+            return []
+        }
+    }
+
+    /// The outcome of a call that never went upstream: declined with its
+    /// prompt's approval id, or `notRun` when nothing was asked.
+    static func notForwarded(_ approvalID: String?) -> MCPCallRecord.Outcome {
+        approvalID.map { .declined(approvalID: $0) } ?? .notRun
     }
 
     /// Longest configured `<server>__` prefix. A tie (two exposed names that
@@ -858,19 +1304,28 @@ public struct MCPGatewayCore {
         switch entry {
         case .initialize:
             if message["result"]?.objectValue != nil {
+                let initialized = MCPGatewayOutput.toUpstream(
+                    server: server, message: Self.notification("notifications/initialized", nil))
+                // Relaunched: listed again before any call reaches it.
+                if case .restarting(_, .relisting)? = phases[server] { return [initialized] + relist(server) }
                 phases[server] = .ready
-                return [.toUpstream(server: server, message: Self.notification("notifications/initialized", nil))]
-                    + releaseWaiting()
+                everReady.insert(server)
+                return [initialized] + releaseWaiting()
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
-            let reason = MCPDisplayedText.field(scrubText(raw, for: server))
+            let reason = MCPCallRecord.bounded(
+                MCPDisplayedText.field(scrubText(raw, for: server)), Self.maximumInitializeErrorBytes)
             // The upstream's text goes to stderr only: a server's error is
-            // not a channel to the client or the model.
-            phases[server] = .failed("it failed to initialize")
-            return [.log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)")] + releaseWaiting()
-        case .list(let fanout, _):
+            // not a channel to the client or the model. It is stopped, as
+            // one that never answers is.
+            return stopped(server, "it failed to initialize") + [
+                .log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)"),
+                .stopUpstream(server: server),
+            ] + releaseWaiting()
+        case .list(let fanout, _, _):
             return listPage(fanout: fanout, server: server, message: message)
-        case .call(let client, _, let tool, let keys, let approval, let started):
+        case .call(let call):
+            let client = call.client, tool = call.tool, keys = call.keys, approval = call.approval, started = call.started
             // The reply is rebuilt from the upstream's result or error;
             // no other field of its message reaches the client.
             let visible = clientVisibleReply(message, server: server)
@@ -885,7 +1340,7 @@ public struct MCPGatewayCore {
                     message: "MCP server \(MCPDisplayedText.field(server)) answered with neither a result nor an error")
             }
             let isError = message["result"] == nil || message["result"]?["isError"]?.boolValue == true
-            let duration = Int((clock().timeIntervalSince(started) * 1000).rounded())
+            let duration = Int((deadlineClock().timeIntervalSince(started) * 1000).rounded())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
@@ -893,12 +1348,14 @@ public struct MCPGatewayCore {
                     outcome: .ran(durationMilliseconds: max(0, duration), grant: approval?.grant))),
                 .toClient(reply),
             ]
-        case .cancelled:
+        case .cancelled, .ping:
             return []
         }
     }
 
-    mutating func listPage(fanout: Int, server: String, message: JSONValue) -> [MCPGatewayOutput] {
+    mutating func listPage(
+        fanout: Int, server: String, message: JSONValue, failure: String = "did not list tools"
+    ) -> [MCPGatewayOutput] {
         guard var state = fanouts[fanout] else { return [] }
         var outputs: [MCPGatewayOutput] = []
         if upstreams[server] != nil, let tools = message["result"]?["tools"]?.arrayValue {
@@ -912,19 +1369,25 @@ public struct MCPGatewayCore {
                 let key = server + "\0" + cursor
                 if state.seenCursors.contains(key) || state.pages[server, default: 0] >= Self.maximumListPagesPerServer {
                     outputs.append(.log("MCP server \(server) cycled or over-paged its tool list; stopping pagination"))
+                    // rv's own listing after a relaunch is then not complete.
+                    if state.relaunch == server { state.failed.insert(server) }
                 } else {
                     state.seenCursors.insert(key)
                     fanouts[fanout] = state
-                    let id = allocate(.list(fanout: fanout, server: server))
+                    let id = allocate(.list(
+                        fanout: fanout, server: server, deadline: deadlineClock().addingTimeInterval(deadlines.list)))
                     return outputs + [.toUpstream(server: server, message: Self.request(
                         id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
                 }
             }
         } else {
-            outputs.append(.log("MCP server \(server) did not list tools"))
+            outputs.append(.log("MCP server \(server) \(failure)"))
+            state.failed.insert(server)
         }
         if let upstream = upstreams[server] {
-            let settled = settleListing(state.listed.removeValue(forKey: server) ?? [], upstream: upstream)
+            let listed = state.listed.removeValue(forKey: server) ?? []
+            noteLaunchListed(listed, server: server)
+            let settled = settleListing(listed, upstream: upstream)
             state.tools += settled.tools
             outputs += settled.outputs
         }
@@ -934,6 +1397,10 @@ public struct MCPGatewayCore {
             return outputs
         }
         fanouts[fanout] = nil
+        if let relaunched = state.relaunch {
+            return outputs + relisted(relaunched, failed: state.failed.contains(relaunched))
+        }
+        if state.search == nil, state.tools.isEmpty == false { clientToldTools = true }
         if let search = state.search {
             return outputs + [
                 .audit(MCPCallRecord(
@@ -952,6 +1419,9 @@ public struct MCPGatewayCore {
     /// most `maximumChangeEvents` per server) and kept in the review queue
     /// for `rv mcp trust`. A tool whose name `servesToolName` rejects is
     /// neither listed, observed nor queued; stderr says so once per server.
+    /// A tool whose schema `schemaNamesHideText` rejects is observed (so
+    /// its pin is still checked) but neither listed, called nor queued;
+    /// stderr says so once per server too.
     mutating func settleListing(
         _ listed: [JSONValue], upstream: Upstream
     ) -> (tools: [JSONValue], outputs: [MCPGatewayOutput]) {
@@ -965,13 +1435,44 @@ public struct MCPGatewayCore {
                 "MCP server \(shownServer) lists \(unserved.count) tool(s) whose names rv does not serve "
                     + "(only A-Z a-z 0-9 _ . -, at most 64 bytes), such as \"\(shown)\"; they are hidden"))
         }
+        let scrubbed = listed.map { scrub($0, for: server) }
+        let hidingOrder = scrubbed.filter(Self.schemaNamesHideText).compactMap { tool in
+            tool["name"]?.stringValue.flatMap { Self.servesToolName($0) ? $0 : nil }
+        }
+        let hiding = Set(hidingOrder)
+        // A tool once listed hiding stays refused until a listing shows it
+        // with a definition that does not hide: a listing that omits it (a
+        // partial page, an error reply, a dead upstream) clears nothing.
+        let listedNames = Set(scrubbed.compactMap { $0["name"]?.stringValue })
+        hidingSchemas[server] = (hidingSchemas[server] ?? []).subtracting(listedNames).union(hiding)
+        if let first = hidingOrder.first, hidingSchemaNoticed.insert(server).inserted {
+            // `first` conforms to `servesToolName` (ASCII, at most 64 bytes);
+            // escaped and bounded anyway, as for the name notice. The
+            // property name that hides text is never quoted.
+            let shown = MCPDisplayedText.field(MCPCallRecord.bounded(first, 64))
+            outputs.append(.log(
+                "MCP server \(shownServer) lists \(hidingOrder.count) tool(s) with schema property names rv does not serve "
+                    + "(control, separator or format characters), such as \"\(shown)\"; they are hidden"))
+        }
         if pinning.enforced {
             var seen: [String: String] = [:]
             var definitions: [String: JSONValue] = [:]
+            let known = observed[server] ?? [:]
+            var tracked = known.count
+            var untracked = 0
             for tool in listed {
                 guard let definition = MCPToolPinStore.definition(of: scrub(tool, for: server)),
                     let name = definition["name"]?.stringValue, Self.servesToolName(name)
                 else { continue }
+                // Past the per-server cap a new name is never observed, so
+                // it stays unverified and asks; it is not queued either.
+                if known[name] == nil, seen[name] == nil {
+                    guard tracked < Self.maximumTrackedTools else {
+                        untracked += 1
+                        continue
+                    }
+                    tracked += 1
+                }
                 let hash = MCPToolPinStore.hash(definition)
                 if let earlier = seen[name] ?? observed[server]?[name], earlier != hash {
                     tainted.insert(server + "\0" + name)
@@ -981,17 +1482,62 @@ public struct MCPGatewayCore {
                 definitions[name] = definition
             }
             observed[server, default: [:]].merge(seen) { _, new in new }
+            // Keep only tracked hiding tools; one past the cap is refused
+            // through `hidingUntracked` instead, so it never merely asks.
+            if let hidden = hidingSchemas[server] {
+                let tracked = hidden.filter { observed[server]?[$0] != nil }
+                if tracked.count < hidden.count, hidingUntracked.insert(server).inserted {
+                    outputs.append(.log(
+                        "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools, and one past them "
+                            + "names schema properties with control, separator or format characters; \(Self.untrackedHidingNotice) "
+                            + "every tool of it that rv does not track until `rv mcp serve` restarts. Have the server list "
+                            + "fewer tools, then restart the MCP host"))
+                }
+                hidingSchemas[server] = tracked
+            }
+            if untracked > 0, hidingUntracked.contains(server) == false, untrackedNoticed.insert(server).inserted {
+                outputs.append(.log(
+                    "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools; "
+                        + "rv cannot check the rest against your trusted tools, so they always ask"))
+            }
             var unpinned: [String: JSONValue] = [:]
             var untrusted = 0
             for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
                 let status = pinStatus(server: server, tool: name)
                 guard status != .pinned else { continue }
-                untrusted += 1
+                // A hidden tool is checked against its pin above and audited
+                // below, but never counted or offered for review: it would
+                // not be served once trusted.
+                let hidden = hiding.contains(name)
+                if hidden == false { untrusted += 1 }
                 let hash = seen[name] ?? ""
-                guard reportedChanges.insert(server + "\0" + name + "\0" + hash).inserted else { continue }
-                // The pinned definition itself, listed again after another
-                // one, asks for this session but has nothing to review.
-                if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                let change = name + "\0" + hash
+                // Offered to the review queue once per definition, again
+                // only after the queue did not keep it; at most
+                // `maximumTrackedChanges` per server, and the tool asks either way.
+                if hidden == false, reportedChanges[server]?.contains(change) != true {
+                    if (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges {
+                        reportedChanges[server, default: []].insert(change)
+                        // The pinned definition itself, listed again after another
+                        // one, asks for this session but has nothing to review.
+                        if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                    } else if pins?[server]?[name] != hash, trackingFullNoticed.insert(server).inserted {
+                        // Not queued, and possibly past the event budget too:
+                        // say once that this session stopped queueing.
+                        let reason = "MCP tool tracking is full for \(server); later changed definitions are not queued "
+                            + "for review. They still ask. Restart `rv mcp serve` after `rv mcp trust`"
+                        outputs.append(.log(
+                            "MCP tool tracking is full for \(shownServer) (\(Self.maximumTrackedChanges) definitions this "
+                                + "session); later changed definitions are not queued for review and still ask. "
+                                + "Restart `rv mcp serve` after `rv mcp trust`"))
+                        outputs.append(.event(AuditEvent(
+                            time: clock(), kind: .mcpToolChanged, decision: .pending, subject: server,
+                            reason: reason, source: "mcp-gateway", detail: ["server": server, "trackingFull": "true"])))
+                    }
+                }
+                // Audited once per definition, even when the queue keeps
+                // offering it; a later, different definition is audited anew.
+                guard eventedChanges[server]?.contains(change) != true else { continue }
                 let written = changeEvents[server, default: 0]
                 guard written <= Self.maximumChangeEvents else { continue }
                 changeEvents[server] = written + 1
@@ -1003,11 +1549,16 @@ public struct MCPGatewayCore {
                         source: "mcp-gateway", detail: ["server": server, "suppressed": "true"])))
                     continue
                 }
+                eventedChanges[server, default: []].insert(change)
+                var detail = ["server": server, "tool": name, "status": status.rawValue, "sha256": hash]
+                if hidden { detail["hidden"] = "true" }
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
-                    reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
-                    source: "mcp-gateway",
-                    detail: ["server": server, "tool": name, "status": status.rawValue, "sha256": hash])))
+                    reason: hidden
+                        ? "MCP tool definition names a schema property with a control, separator or format character; "
+                            + "rv does not serve it"
+                        : "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
+                    source: "mcp-gateway", detail: detail)))
             }
             if untrusted > 0, untrustedNoticed.insert(server).inserted {
                 outputs.append(.log(untrusted == 1
@@ -1019,18 +1570,39 @@ public struct MCPGatewayCore {
                 case .recorded:
                     break
                 case .dropped(let names):
-                    // Not kept, so not reported: a later listing offers them again.
-                    for name in names { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    // Not kept: a later listing offers them again, without a
+                    // second audit event or stderr line.
+                    for name in names { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    }
                 case .failed:
-                    for name in unpinned.keys { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    for name in unpinned.keys { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    }
                 }
             }
         }
-        return (listed.compactMap { exposedTool($0, upstream: upstream) }, outputs)
+        // A name refused as hidden is not listed either, whichever of its
+        // entries (a clean duplicate, one on another page) is exposed.
+        let shown = zip(listed, scrubbed).filter { _, tool in
+            tool["name"]?.stringValue.map { hiddenRefusal(server: server, tool: $0) != nil } != true
+        }
+        return (shown.compactMap { exposedTool($0.0, upstream: upstream) }, outputs)
+    }
+
+    /// Why a call to `tool` on `server` is refused as hidden, or nil: it
+    /// was listed with a schema `schemaNamesHideText` rejects
+    /// (`hidingSchemaReason`), or its server listed such a tool past
+    /// `maximumTrackedTools` and rv does not track this one
+    /// (`untrackedHidingReason`).
+    func hiddenRefusal(server: String, tool: String) -> String? {
+        if hidingSchemas[server]?.contains(tool) == true { return Self.hidingSchemaReason }
+        if hidingUntracked.contains(server), observed[server]?[tool] == nil { return Self.untrackedHidingReason }
+        return nil
     }
 
     /// Tools whose name or description holds every term; name matches first.
@@ -1090,20 +1662,23 @@ public struct MCPGatewayCore {
     ]
 
     /// Denied tools are hidden, and so is every tool whose name
-    /// `servesToolName` rejects. `ask` tools say so in their description,
+    /// `servesToolName` rejects or whose schema `schemaNamesHideText`
+    /// rejects. `ask` tools say so in their description,
     /// and so do tools whose arguments can change the decision. A tool that
     /// is not pinned (changed, new, or unverifiable) always asks and is
     /// listed with no upstream string but its name: its description is rv's
     /// marker, its input schema `{"type":"object"}`, it has no output
-    /// schema, and its annotations are only `withheldHints` with boolean
-    /// values. For a pinned tool the prose fields (`description`, `title`,
-    /// `annotations.title`, and every `description`/`title` string in its
+    /// schema and no annotations. For a pinned tool the prose fields (`description`, `title`,
+    /// `annotations.title`, and every `schemaProseKeywords` string in its
     /// schemas) keep line breaks and backslashes and lose only hiding
-    /// scalars (`MCPDisplayedText.description`). Everything else is
-    /// forwarded as the upstream sent it, after secret scrubbing.
+    /// scalars (`MCPDisplayedText.description`); one that is not a string
+    /// is dropped. Everything else is forwarded as the upstream sent it,
+    /// after secret scrubbing.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
         let scrubbed = scrub(tool, for: upstream.definition.name)
-        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue, Self.servesToolName(name) else {
+        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue, Self.servesToolName(name),
+            Self.schemaNamesHideText(scrubbed) == false
+        else {
             return nil
         }
         let rawDescription = object["description"]?.stringValue
@@ -1123,27 +1698,21 @@ public struct MCPGatewayCore {
         }
         var walked = object
         if let marker = Self.pinMarker(pinStatus(server: upstream.definition.name, tool: name)) {
-            // No upstream string but the (conforming) name: an empty object
+            // No upstream field but the (conforming) name: an empty object
             // schema, so the arguments an approved call forwards are the
-            // client's own, and only the four boolean hints.
+            // client's own, and no annotations (an unreviewed
+            // `readOnlyHint: true` could let a host skip its own prompt).
             var withheld = JSONObject()
             withheld["name"] = .string(listedName)
             withheld["description"] = .string(marker)
             withheld["inputSchema"] = .object(["type": .string("object")])
-            if let annotations = object["annotations"]?.objectValue {
-                var flags = JSONObject()
-                for key in Self.withheldHints {
-                    if let value = annotations[key], value.boolValue != nil { flags[key] = value }
-                }
-                if flags.isEmpty == false { withheld["annotations"] = .object(flags) }
-            }
             return .object(withheld)
         }
         let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
-        if rawDescription != nil { walked["description"] = .string(shownDescription) }
-        if let title = object["title"]?.stringValue { walked["title"] = .string(MCPDisplayedText.description(title)) }
-        if var annotations = object["annotations"]?.objectValue, let title = annotations["title"]?.stringValue {
-            annotations["title"] = .string(MCPDisplayedText.description(title))
+        walked["description"] = rawDescription.map { _ in JSONValue.string(shownDescription) }
+        walked["title"] = object["title"]?.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
+        if var annotations = object["annotations"]?.objectValue, annotations["title"] != nil {
+            annotations["title"] = annotations["title"]?.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
             walked["annotations"] = .object(annotations)
         }
         for key in ["inputSchema", "outputSchema"] {
@@ -1159,19 +1728,81 @@ public struct MCPGatewayCore {
         return .object(walked)
     }
 
-    /// The only annotations a tool that is not pinned keeps, and only with
-    /// boolean values: the keys are rv's, not the upstream's.
-    static let withheldHints = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]
+    /// Keywords whose values are data, kept byte-exact: a client sends them
+    /// back verbatim. A hiding scalar in a `const`, `enum`, `default` or
+    /// `examples` value is an accepted residual (`rv mcp trust` showed it
+    /// escaped); `dependentRequired` names properties, so
+    /// `schemaNamesHideText` checks it first and serves no tool it rejects.
+    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
+    /// Keywords whose members are named subschemas (or, for
+    /// `dependencies`, property-name lists); a member may be called
+    /// `description` or `title`.
+    static let schemaMapKeywords: Set<String> = [
+        "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies",
+    ]
+    /// Schema keywords whose string value is display text.
+    static let schemaProseKeywords: Set<String> = ["description", "title", "$comment", "markdownDescription"]
+    /// Why a call to a tool `schemaNamesHideText` rejects is refused.
+    static let hidingSchemaReason = "rv does not serve tools whose schema property names hide text"
+    /// Why a call to an untracked tool of a server in `hidingUntracked` is refused.
+    static let untrackedHidingReason = "the server listed more tools than rv tracks, one of them with schema property "
+        + "names that hide text, so rv does not serve its tools it does not track"
+    /// The words the stderr notice for such a server uses.
+    static let untrackedHidingNotice = "rv now hides and refuses"
 
-    /// Keywords whose values are data, kept byte-exact.
-    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]
-    /// Keywords whose members are named subschemas; a member may be
-    /// called `description` or `title`.
-    static let schemaMapKeywords: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
+    /// True when a tool's `inputSchema` or `outputSchema` names a property
+    /// (a `properties`, `dependencies` or `dependentSchemas` member, a
+    /// `required` entry, a `dependentRequired` member or entry, a
+    /// `dependencies` list entry) with a scalar `MCPDisplayedText.hidesText`
+    /// flags. Those names are data rv forwards exactly and a client may
+    /// show raw, so rv serves no such tool, as for a name `servesToolName`
+    /// rejects. A name list of another shape fails closed: every string and
+    /// key in it is checked.
+    static func schemaNamesHideText(_ tool: JSONValue) -> Bool {
+        ["inputSchema", "outputSchema"].contains { key in tool[key].map(namesHideText) ?? false }
+    }
 
-    /// A pinned tool's JSON Schema with every `description`/`title` string
-    /// shown with hiding scalars neutralised. `pattern` and the value
-    /// keywords are left byte-exact.
+    private static func namesHideText(_ schema: JSONValue) -> Bool {
+        func hides(_ text: String) -> Bool { MCPDisplayedText.hidesText(text) }
+        func anyHides(_ value: JSONValue) -> Bool {
+            switch value {
+            case .string(let text): return hides(text)
+            case .array(let items): return items.contains(where: anyHides)
+            case .object(let members): return members.entries.contains { hides($0.key) || anyHides($0.value) }
+            default: return false
+            }
+        }
+        switch schema {
+        case .array(let items):
+            return items.contains(where: namesHideText)
+        case .object(let object):
+            return object.entries.contains { entry in
+                let (key, value) = entry
+                switch key {
+                case "required", "dependentRequired":
+                    return anyHides(value)
+                case "properties", "dependencies", "dependentSchemas":
+                    guard let members = value.objectValue else { return anyHides(value) }
+                    return members.entries.contains { member in
+                        hides(member.key) || (member.value.objectValue == nil ? anyHides(member.value) : namesHideText(member.value))
+                    }
+                case _ where schemaValueKeywords.contains(key):
+                    return false
+                case _ where schemaMapKeywords.contains(key):
+                    return value.objectValue?.entries.contains { namesHideText($0.value) } ?? namesHideText(value)
+                default:
+                    return namesHideText(value)
+                }
+            }
+        default:
+            return false
+        }
+    }
+
+    /// A pinned tool's JSON Schema with every `schemaProseKeywords` string
+    /// shown with hiding scalars neutralised, and such a keyword whose
+    /// value is not a string dropped. `pattern` and the value keywords
+    /// are left byte-exact.
     static func schemaProse(_ schema: JSONValue) -> JSONValue {
         switch schema {
         case .array(let items):
@@ -1181,8 +1812,8 @@ public struct MCPGatewayCore {
             for (key, value) in object.entries {
                 if schemaValueKeywords.contains(key) {
                     copy[key] = value
-                } else if key == "description" || key == "title", let text = value.stringValue {
-                    copy[key] = .string(MCPDisplayedText.description(text))
+                } else if schemaProseKeywords.contains(key) {
+                    copy[key] = value.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
                 } else if schemaMapKeywords.contains(key), let members = value.objectValue {
                     var mapped = JSONObject()
                     for (member, subschema) in members.entries { mapped[member] = schemaProse(subschema) }
@@ -1200,20 +1831,41 @@ public struct MCPGatewayCore {
     /// A progress notification for a call this upstream is running, rebuilt
     /// from the fields the protocol defines: the client's own token, the
     /// numbers, and a bounded, scrubbed, display-escaped `message`. Nil
-    /// (dropped) when no pending call from `server` carries the token.
-    func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
+    /// (dropped) when no pending call from `server` carries the token, or
+    /// when `progress` (or a `total` that is present) is not a finite number
+    /// spelled in at most `maximumProgressNumberBytes`. The token sent on is
+    /// the one the client gave, never the upstream's copy of it. Progress
+    /// that is sent on restarts the call's deadline, up to its ceiling.
+    mutating func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
         func runs(_ id: Int) -> Bool {
-            guard case .call(_, let owner, _, _, _, _)? = pending[id] else { return false }
-            return owner == server
+            guard case .call(let call)? = pending[id] else { return false }
+            return call.server == server
         }
-        guard let token = params?["progressToken"],
-            progressTokens.contains(where: { $0.value == token && runs($0.key) }),
-            let done = params?["progress"], case .number = done
+        func finite(_ value: JSONValue?) -> Bool {
+            guard case .number(let spelling)? = value,
+                spelling.utf8.count <= Self.maximumProgressNumberBytes,
+                let number = Double(spelling)
+            else { return false }
+            return number.isFinite
+        }
+        guard let sent = params?["progressToken"],
+            // A token the client reused on two live calls counts for the
+            // older one, whatever the dictionary's order.
+            let match = progressTokens.filter({ $0.value == sent && runs($0.key) }).min(by: { $0.key < $1.key }),
+            let done = params?["progress"], finite(done)
         else { return nil }
+        let id = match.key
+        let token = match.value
+        let total = params?["total"]
+        guard total == nil || finite(total) else { return nil }
+        if case .call(var call)? = pending[id] {
+            call.deadline = min(deadlineClock().addingTimeInterval(callTimeout(server)), call.ceiling)
+            pending[id] = .call(call)
+        }
         var rebuilt = JSONObject()
         rebuilt["progressToken"] = token
         rebuilt["progress"] = done
-        if let total = params?["total"], case .number = total { rebuilt["total"] = total }
+        if let total { rebuilt["total"] = total }
         if let text = params?["message"]?.stringValue {
             rebuilt["message"] = .string(MCPCallRecord.bounded(
                 MCPDisplayedText.field(scrubText(text, for: server)), Self.maximumProgressMessageBytes))
@@ -1231,24 +1883,35 @@ public struct MCPGatewayCore {
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {
         guard upstreams[server] != nil else { return [] }
-        let reason = "process exited"
+        // Gone already, waiting out its delay: nothing of it is left.
+        if case .restarting(_, .waiting)? = phases[server] { return [] }
         let wasStarting = phases[server] == .starting
-        phases[server] = .failed(reason)
         var outputs: [MCPGatewayOutput] = [.log("MCP server \(server) exited")]
+        outputs += afterExit(server)
         for (id, entry) in pending.sorted(by: { $0.key < $1.key }) {
             switch entry {
-            case .initialize(let owner) where owner == server:
+            case .initialize(let owner, _) where owner == server, .ping(let owner, _) where owner == server:
                 pending[id] = nil
-            case .list(let fanout, let owner) where owner == server:
+            case .list(let fanout, let owner, _) where owner == server && fanouts[fanout]?.relaunch != nil:
+                // rv's own listing after a relaunch: nobody waits for it.
+                pending[id] = nil
+                fanouts[fanout] = nil
+            case .list(let fanout, let owner, _) where owner == server:
                 pending[id] = nil
                 outputs += listPage(fanout: fanout, server: server, message: .null)
-            case .call(let client, let owner, let tool, let keys, let approval, _) where owner == server:
+            case .call(let call) where call.server == server:
                 pending[id] = nil
                 progressTokens[id] = nil
                 outputs.append(.audit(MCPCallRecord(
-                    server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys,
-                    isError: true, reason: "upstream exited", outcome: .interrupted(grant: approval?.grant))))
-                outputs.append(.toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) exited")))
+                    server: server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                    argumentKeys: call.keys, isError: true, reason: "upstream exited",
+                    outcome: .interrupted(grant: call.approval?.grant))))
+                outputs.append(.toClient(Self.error(
+                    id: call.client, code: -32603,
+                    message: "MCP server \(server) exited before answering tool \(MCPDisplayedText.field(call.tool)). "
+                        + "The call may have run, so check before calling it again.")))
+            case .cancelled(let owner, _) where owner == server:
+                pending[id] = nil
             default:
                 continue
             }
@@ -1264,6 +1927,29 @@ public struct MCPGatewayCore {
             outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
         }
         return wasStarting ? outputs + releaseWaiting() : outputs
+    }
+
+    /// Serving ends: each call in flight gets its last record (it may still
+    /// have run), and each prompt still shown ends declined. Nothing is
+    /// sent: the runtime stops every upstream next.
+    mutating func gatewayStopping() -> [MCPGatewayOutput] {
+        var outputs: [MCPGatewayOutput] = []
+        for (id, entry) in pending.sorted(by: { $0.key < $1.key }) {
+            guard case .call(let call) = entry else { continue }
+            pending[id] = nil
+            progressTokens[id] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: call.approval == nil ? .allow : .ask,
+                argumentKeys: call.keys, isError: true, reason: "gateway stopped; the call may still have run",
+                outcome: .interrupted(grant: call.approval?.grant))))
+        }
+        for (key, call) in held.sorted(by: { $0.key < $1.key }) {
+            held[key] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
+                isError: true, reason: "gateway stopped", outcome: .declined(approvalID: key))))
+        }
+        return outputs
     }
 
     mutating func releaseWaiting() -> [MCPGatewayOutput] {

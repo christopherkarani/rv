@@ -416,7 +416,7 @@ public final class EgressProxy: @unchecked Sendable {
             return .failure(.resolveLoopbackFailed(code: gai))
         }
         defer { freeaddrinfo(first) }
-        let fd = socket(first.pointee.ai_family, first.pointee.ai_socktype, first.pointee.ai_protocol)
+        let fd = socket(first.pointee.ai_family, first.pointee.ai_socktype | egressSocketCloexec, first.pointee.ai_protocol)
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
@@ -492,7 +492,7 @@ public final class EgressProxy: @unchecked Sendable {
             var acceptError: Int32 = 0
             let fd: Int32 = withUnsafeMutablePointer(to: &peer) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                    let accepted = accept(listen, address, &peerLength)
+                    let accepted = egressAccept(listen, address, &peerLength)
                     if accepted < 0 { acceptError = errno }
                     return accepted
                 }
@@ -1162,7 +1162,7 @@ public final class EgressProxy: @unchecked Sendable {
             }
         }
         for candidate in candidates {
-            let fd = socket(candidate.family, candidate.socktype, candidate.proto)
+            let fd = socket(candidate.family, candidate.socktype | egressSocketCloexec, candidate.proto)
             if fd >= 0 {
                 var storage = candidate.address
                 let connected = withUnsafePointer(to: &storage) { pointer in
@@ -1316,11 +1316,9 @@ public final class EgressProxy: @unchecked Sendable {
 
     @discardableResult
     private static func writeAll(_ fd: Int32, bytes: [UInt8]) -> Bool {
-        #if canImport(Darwin)
-        let flags: Int32 = 0
-        #else
+        // On Darwin too: suppressSIGPIPE is refused on a socket whose peer
+        // is already gone, and its result is not checked.
         let flags = Int32(MSG_NOSIGNAL)
-        #endif
         var offset = 0
         while offset < bytes.count {
             let written = bytes.withUnsafeBytes { pointer -> Int in
@@ -1337,7 +1335,7 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// A `send` on a closed peer must fail, not kill the host with SIGPIPE.
-    /// Linux sends with MSG_NOSIGNAL per call instead.
+    /// Best effort on Darwin; every send also passes MSG_NOSIGNAL.
     private static func suppressSIGPIPE(_ fd: Int32) {
         #if canImport(Darwin)
         var one: Int32 = 1
@@ -1366,8 +1364,9 @@ public final class EgressProxy: @unchecked Sendable {
         }
     }
 
+    /// Through `StderrWriter`: `FileHandle.write` raised on a closed stderr.
     private static func complain(_ text: String) {
-        FileHandle.standardError.write(Data((text + "\n").utf8))
+        StderrWriter.write(Data((text + "\n").utf8))
     }
 
     /// Module-visible so the supervisor can chain review-queue intake
@@ -1494,3 +1493,28 @@ final class EgressResolverBudget: Sendable {
         parent?.release()
     }
 }
+
+/// Linux: every socket the proxy makes or accepts is close-on-exec from
+/// the start, so a process another thread spawns meanwhile cannot get one.
+/// macOS has no such flag; rv's spawns there close everything not given
+/// (`POSIX_SPAWN_CLOEXEC_DEFAULT`).
+#if os(Linux)
+private let egressSocketCloexec = Int32(SOCK_CLOEXEC.rawValue)
+
+/// glibc's `accept4`, which the Glibc module does not export (it is
+/// declared only under `_GNU_SOURCE`).
+@_silgen_name("accept4")
+private func systemAccept4(
+    _ fd: Int32, _ address: UnsafeMutablePointer<sockaddr>?, _ length: UnsafeMutablePointer<socklen_t>?, _ flags: Int32
+) -> Int32
+
+private func egressAccept(_ fd: Int32, _ address: UnsafeMutablePointer<sockaddr>, _ length: UnsafeMutablePointer<socklen_t>) -> Int32 {
+    systemAccept4(fd, address, length, egressSocketCloexec)
+}
+#else
+private let egressSocketCloexec: Int32 = 0
+
+private func egressAccept(_ fd: Int32, _ address: UnsafeMutablePointer<sockaddr>, _ length: UnsafeMutablePointer<socklen_t>) -> Int32 {
+    accept(fd, address, length)
+}
+#endif

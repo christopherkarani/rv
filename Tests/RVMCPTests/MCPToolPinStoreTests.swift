@@ -152,31 +152,67 @@ struct MCPToolPinStoreTests {
         #expect(directory.store.recordChanged(server: "s0", definitions: ["big": tooLong]) == .dropped(["big"]))
     }
 
-    /// N5: one server's share of the queue is bounded, so a noisy server
-    /// cannot keep another server's tools out of `rv mcp trust`.
+    /// N5, Q1: one server's share of the queue is bounded, so noisy servers
+    /// cannot keep another server's tools out of `rv mcp trust`. Four
+    /// servers past their entry share, one past its byte share, then a
+    /// sixth, quiet one (with a quarter share each, four noisy servers
+    /// alone filled the queue's 512 entries).
     @Test func aNoisyServerCannotStarveAnother() throws {
         let directory = Directory()
         let many = Dictionary(uniqueKeysWithValues: (0..<600).map { index in
             let name = String(format: "t%03d", index)
             return (name, JSONValue.object(["name": .string(name)]))
         })
-        guard case .dropped(let dropped) = directory.store.recordChanged(server: "noisy", definitions: many) else {
-            Issue.record("a server past its share must drop the rest")
-            return
+        let noisy = (0..<4).map { "noisy\($0)" }
+        for server in noisy {
+            guard case .dropped(let dropped) = directory.store.recordChanged(server: server, definitions: many) else {
+                Issue.record("a server past its share must drop the rest")
+                return
+            }
+            #expect(dropped.count == 600 - directory.store.maximumChangedPerServer)
         }
-        #expect(dropped.count == 600 - MCPToolPinStore.maximumChangedPerServer)
-        let filler = String(repeating: "x", count: 60 * 1024)
-        let large = Dictionary(uniqueKeysWithValues: (0..<10).map { index in
-            let name = "big\(index)"
-            return (name, JSONValue.object(["name": .string(name), "description": .string(filler)]))
-        })
-        #expect(directory.store.recordChanged(server: "loud", definitions: large) != .recorded)
+        #expect(directory.store.recordChanged(server: "loud", definitions: Self.large) != .recorded)
         #expect(directory.store.recordChanged(server: "quiet", definitions: ["search": Self.search]) == .recorded)
         let changed = try directory.store.contents().get().changed
-        #expect(changed["noisy"]?.count == MCPToolPinStore.maximumChangedPerServer)
+        for server in noisy { #expect(changed[server]?.count == directory.store.maximumChangedPerServer) }
         #expect(changed["quiet"] == ["search": Self.search])
         let loudBytes = (changed["loud"] ?? [:]).reduce(0) { $0 + MCPToolPinStore.entryBytes(server: "loud", tool: $1.key, $1.value) }
-        #expect(loudBytes <= MCPToolPinStore.serverReviewBudget)
+        #expect(loudBytes <= directory.store.serverReviewBudget)
+    }
+
+    /// Ten definitions of 60 KiB: more than any server's byte share.
+    static let large = Dictionary(uniqueKeysWithValues: (0..<10).map { index in
+        let name = "big\(index)"
+        return (name, JSONValue.object(["name": .string(name), "description": .string(String(repeating: "x", count: 60 * 1024))]))
+    })
+
+    /// Q1: with the configured server count known, each server's share is
+    /// an equal part of the queue: the fifth of five servers still fits
+    /// after the other four have filled their shares.
+    @Test func eachConfiguredServerGetsAnEqualShare() throws {
+        let directory = Directory()
+        var store = directory.store
+        store.configuredServers = 5
+        #expect(store.serverReviewBudget == MCPToolPinStore.reviewBudget / 5)
+        for server in 0..<4 {
+            #expect(store.recordChanged(server: "loud\(server)", definitions: Self.large) != .recorded)
+        }
+        #expect(store.recordChanged(server: "quiet", definitions: ["search": Self.search]) == .recorded)
+        #expect(try store.contents().get().changed["quiet"] == ["search": Self.search])
+    }
+
+    /// Q2: an offer the queue cannot take leaves the file as it was.
+    @Test func aFullShareDoesNotRewriteTheQueue() throws {
+        let directory = Directory()
+        #expect(directory.store.recordChanged(server: "loud", definitions: Self.large) != .recorded)
+        let before = try Data(contentsOf: directory.review)
+        let stamp = Date(timeIntervalSince1970: 1_000_000)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: directory.review.path)
+        let extra = ["big99": JSONValue.object(["name": .string("big99"), "description": .string(String(repeating: "z", count: 60 * 1024))])]
+        #expect(directory.store.recordChanged(server: "loud", definitions: extra) == .dropped(["big99"]))
+        #expect(try Data(contentsOf: directory.review) == before)
+        let modified = try FileManager.default.attributesOfItem(atPath: directory.review.path)[.modificationDate] as? Date
+        #expect(modified == stamp)
     }
 
     /// N5: `trust` drops queued tools of servers no longer in mcp.json.

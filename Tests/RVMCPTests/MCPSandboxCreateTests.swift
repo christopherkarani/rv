@@ -365,7 +365,11 @@ struct MCPSandboxCreateTests {
         #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("MARKER").path))
     }
 
-    @Test func nonemptyNpmOrCacheSwapDoesNotCreateTheLeafOrAllowTheProject() throws {
+    /// A project moved into an existing `~/.npm` or `~/.cache` during
+    /// creation. The root still names the reviewed directory, so the scratch
+    /// is created: the same move a second after launch gives the cage the
+    /// same reach, and no launch-time check sees it (MCPSandboxWatchedRootTests).
+    @Test func projectMovedIntoAnExistingNpmOrCacheStillCreatesTheLeaf() throws {
         for name in [".npm", ".cache"] {
             let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-nonempty-\(name)-\(UUID().uuidString)", isDirectory: true)
@@ -386,22 +390,23 @@ struct MCPSandboxCreateTests {
             let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
                 try? FileManager.default.moveItem(at: project, to: landed.appendingPathComponent("project"))
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("rv-mcp").path) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: scratch.path))
             #expect(FileManager.default.fileExists(atPath: landed.appendingPathComponent("project/src/App.swift").path))
             let profile = MCPSandbox.profile(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
                 temporaryDirectory: temporary.path)
-            guard case .failure = profile else {
-                Issue.record("profile allowed nonempty \(name) after the project was moved there")
+            guard case .success = profile else {
+                Issue.record("profile refused \(name) with the project under it: \(profile)")
                 return
             }
-            #expect(String(describing: profile).contains("(subpath \"\(landed.path)\")") == false)
         }
     }
 
-    @Test func projectMovedUnderCachesDoesNotCreateTheLeafOrAllowCaches() throws {
+    /// A project moved into Caches itself during creation: Caches and every
+    /// held ancestor still name what was pinned, so the leaf is created.
+    @Test func projectMovedUnderCachesStillCreatesTheLeaf() throws {
         let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-caches-child-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -420,18 +425,17 @@ struct MCPSandboxCreateTests {
         let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
             try? FileManager.default.moveItem(at: project, to: landed)
         }
-        #expect(created == false)
-        #expect(FileManager.default.fileExists(atPath: scratch.path) == false)
+        #expect(created)
+        #expect(FileManager.default.fileExists(atPath: scratch.path))
         #expect(FileManager.default.fileExists(atPath: landed.appendingPathComponent("src/App.swift").path))
         let profile = MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false, writable: []),
             scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
             temporaryDirectory: temporary.path)
-        guard case .failure = profile else {
-            Issue.record("profile allowed Caches after the project was moved under it")
+        guard case .success = profile else {
+            Issue.record("profile refused Caches with the project under it: \(profile)")
             return
         }
-        #expect(String(describing: profile).contains("(subpath \"\(caches.path)\")") == false)
     }
 
     @Test func plantedScratchLeafDoesNotLetTheCachesSwapAllowTheProject() throws {
@@ -466,7 +470,9 @@ struct MCPSandboxCreateTests {
         #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("src/App.swift").path))
     }
 
-    @Test func projectNestedUnderAnExistingCacheChildDoesNotAllowTheCache() throws {
+    /// A project nested under an existing child of each root during
+    /// creation: off the scratch's path, so the leaf is created.
+    @Test func projectNestedUnderAnExistingCacheChildStillCreatesTheLeaf() throws {
         let nests = [
             (".npm", "_cacache"),
             (".cache", "pip"),
@@ -494,18 +500,17 @@ struct MCPSandboxCreateTests {
             let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
                 try? FileManager.default.moveItem(at: project, to: child.appendingPathComponent("project"))
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: scratch.path) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: scratch.path))
             #expect(FileManager.default.fileExists(atPath: child.appendingPathComponent("project/src/App.swift").path))
             let profile = MCPSandbox.profile(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
                 temporaryDirectory: temporary.path)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(watched.path) after the project moved under \(childName)")
+            guard case .success = profile else {
+                Issue.record("profile refused \(watched.path) with the project under \(childName): \(profile)")
                 return
             }
-            #expect(String(describing: profile).contains("(subpath \"\(watched.path)\")") == false)
         }
     }
 
@@ -711,7 +716,8 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(deseret).contains(zone.path))
     }
 
-    @Test func projectUnderAGrandchildOfACacheChildDoesNotAllowTheCache() throws {
+    /// The same, one level deeper.
+    @Test func projectUnderAGrandchildOfACacheChildStillCreatesTheLeaf() throws {
         let nests = [
             (".npm", "_cacache/content"),
             (".cache", "pip/http"),
@@ -739,18 +745,17 @@ struct MCPSandboxCreateTests {
             let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
                 try? FileManager.default.moveItem(at: project, to: child.appendingPathComponent("project"))
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: scratch.path) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: scratch.path))
             #expect(FileManager.default.fileExists(atPath: child.appendingPathComponent("project/src/App.swift").path))
             let profile = MCPSandbox.profile(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
                 temporaryDirectory: temporary.path)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(watched.path) after the project moved under \(childPath)")
+            guard case .success = profile else {
+                Issue.record("profile refused \(watched.path) with the project under \(childPath): \(profile)")
                 return
             }
-            #expect(String(describing: profile).contains("(subpath \"\(watched.path)\")") == false)
         }
     }
 
@@ -809,7 +814,9 @@ struct MCPSandboxCreateTests {
         }
     }
 
-    @Test func projectMovedIntoAGrandchildAfterTheLeafDoesNotAllowTheCache() throws {
+    /// A project moved under a root after the leaf, before the profile:
+    /// the roots and the leaf still name what was recorded.
+    @Test func projectMovedIntoAGrandchildAfterTheLeafStillAllowsTheProfile() throws {
         let nests = [
             (".npm", "_cacache/content"),
             (".cache", "pip/http"),
@@ -838,21 +845,25 @@ struct MCPSandboxCreateTests {
             let widened = MCPSandbox.unreviewedWrite(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, temporaryDirectory: temporary.path)
-            #expect(widened?.contains(scratch.path) == true)
+            #expect(widened == nil)
             let profile = MCPSandbox.profile(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
                 temporaryDirectory: temporary.path)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(watched.path) after the leaf was recorded")
+            guard case .success = profile else {
+                Issue.record("profile refused \(watched.path) after the leaf was recorded: \(profile)")
                 return
             }
-            #expect(String(describing: profile).contains("(subpath \"\(watched.path)\")") == false)
             #expect(FileManager.default.fileExists(atPath: child.appendingPathComponent("project/src/App.swift").path))
         }
     }
 
-    @Test func symlinkAtAGrandchildPathDoesNotAllowTheCache() throws {
+    /// A symlink planted under a root, pointing outside it, then a project
+    /// moved into its target, during creation. Seatbelt authorizes the
+    /// resolved path, so a write through the link lands outside every
+    /// allowed root and is denied (checked live with sandbox-exec); the
+    /// link is no write channel and the leaf is created.
+    @Test func symlinkAtAGrandchildPathStillCreatesTheLeaf() throws {
         let nests = [
             (".npm", "_cacache/content", "content"),
             (".cache", "pip/http", "http"),
@@ -882,18 +893,19 @@ struct MCPSandboxCreateTests {
                 _ = symlink(outside.path, child.path)
                 try? FileManager.default.moveItem(at: project, to: outside.appendingPathComponent("project"))
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: scratch.path) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: scratch.path))
             #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("project/src/App.swift").path))
             let profile = MCPSandbox.profile(
                 policy: MCPSandboxPolicy(network: false, writable: []),
                 scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
                 temporaryDirectory: temporary.path)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(watched.path) after a symlink replaced \(childPath)")
+            guard case .success(let text) = profile else {
+                Issue.record("profile refused \(watched.path) with a symlink at \(childPath): \(profile)")
                 return
             }
-            #expect(String(describing: profile).contains("(subpath \"\(watched.path)\")") == false)
+            // The link's target is never named as a write root.
+            #expect(text.contains(outside.path) == false)
         }
     }
 
@@ -1345,27 +1357,23 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
-    @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
+    /// A symlink under a root that names a directory outside it gives the
+    /// cage no reach there (Seatbelt authorizes the resolved path), so a
+    /// project moved into its target, before or during creation, changes
+    /// nothing rv checks: the leaf is created and the profile written.
+    @Test func preexistingSymlinkThenMoveStillAllowsTheProfile() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)
             defer { try? FileManager.default.removeItem(at: fixture.root) }
             let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
             #expect(MCPSandbox.createPinned(fixture.scratch, pinned: pin))
             try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
-            let profile = MCPSandbox.profile(
-                policy: MCPSandboxPolicy(network: false, writable: []),
-                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
-                temporaryDirectory: fixture.temporary)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(fixture.watched) through \(planted.homeLink)")
-                return
-            }
-            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            expectProfileAllowed(fixture, planted)
             #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
         }
     }
 
-    @Test func preexistingSymlinkMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+    @Test func preexistingSymlinkMoveInsideTheHookStillCreatesTheLeaf() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)
             defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -1373,18 +1381,10 @@ struct MCPSandboxCreateTests {
             let created = MCPSandbox.createPinned(fixture.scratch, pinned: pin) {
                 try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: fixture.scratch))
             #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
-            let profile = MCPSandbox.profile(
-                policy: MCPSandboxPolicy(network: false, writable: []),
-                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
-                temporaryDirectory: fixture.temporary)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(fixture.watched) after a move through \(planted.homeLink)")
-                return
-            }
-            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            expectProfileAllowed(fixture, planted)
         }
     }
 
@@ -1451,7 +1451,9 @@ struct MCPSandboxCreateTests {
         }
     }
 
-    @Test func unlistableSymlinkTargetThenMoveDoesNotAllowTheCache() throws {
+    /// An unlistable (0111) target is the same: rv never lists under a root,
+    /// so the mode neither blocks creation nor needs a chmod to read it.
+    @Test func unlistableSymlinkTargetThenMoveStillAllowsTheProfile() throws {
         for planted in plantedCacheLinks where planted.moveParentUnderRoot == planted.targetUnderRoot {
             let fixture = try plantedCacheLink(planted)
             defer {
@@ -1464,21 +1466,13 @@ struct MCPSandboxCreateTests {
             #expect(chmod(fixture.landing.path, 0o755) == 0)
             try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
             #expect(chmod(fixture.landing.path, 0o111) == 0)
-            let profile = MCPSandbox.profile(
-                policy: MCPSandboxPolicy(network: false, writable: []),
-                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
-                temporaryDirectory: fixture.temporary)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(fixture.watched) through unlistable \(planted.homeLink)")
-                return
-            }
-            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            expectProfileAllowed(fixture, planted)
             #expect(chmod(fixture.landing.path, 0o755) == 0)
             #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
         }
     }
 
-    @Test func unlistableSymlinkMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+    @Test func unlistableSymlinkMoveInsideTheHookStillCreatesTheLeaf() throws {
         for planted in plantedCacheLinks where planted.moveParentUnderRoot == planted.targetUnderRoot {
             let fixture = try plantedCacheLink(planted)
             defer {
@@ -1492,31 +1486,23 @@ struct MCPSandboxCreateTests {
                 try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
                 _ = chmod(fixture.landing.path, 0o111)
             }
-            #expect(created == false)
-            #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+            #expect(created)
+            #expect(FileManager.default.fileExists(atPath: fixture.scratch))
             #expect(chmod(fixture.landing.path, 0o755) == 0)
             #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
-            let profile = MCPSandbox.profile(
-                policy: MCPSandboxPolicy(network: false, writable: []),
-                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
-                temporaryDirectory: fixture.temporary)
-            guard case .failure = profile else {
-                Issue.record("profile allowed \(fixture.watched) after a move into unlistable \(planted.homeLink)")
-                return
-            }
-            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            expectProfileAllowed(fixture, planted)
         }
     }
 
-    @Test func unlistableSymlinkChildThenMoveDoesNotAllowTheCache() throws {
+    @Test func unlistableSymlinkChildThenMoveStillAllowsTheProfile() throws {
         for planted in plantedCacheLinks where planted.moveParentUnderRoot != planted.targetUnderRoot {
-            try denyMoveIntoUnlistableChild(planted, duringCreate: false)
+            try allowMoveIntoUnlistableChild(planted, duringCreate: false)
         }
     }
 
-    @Test func unlistableSymlinkChildMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+    @Test func unlistableSymlinkChildMoveInsideTheHookStillCreatesTheLeaf() throws {
         for planted in plantedCacheLinks where planted.moveParentUnderRoot != planted.targetUnderRoot {
-            try denyMoveIntoUnlistableChild(planted, duringCreate: true)
+            try allowMoveIntoUnlistableChild(planted, duringCreate: true)
         }
     }
 
@@ -1600,10 +1586,24 @@ private struct PlantedCacheLinkFixture {
     var landing: URL
 }
 
+/// The profile is written and names neither the link's target nor the
+/// project: a planted link under a root is not a write root.
+private func expectProfileAllowed(_ fixture: PlantedCacheLinkFixture, _ planted: PlantedCacheLink) {
+    let profile = MCPSandbox.profile(
+        policy: MCPSandboxPolicy(network: false, writable: []),
+        scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+        temporaryDirectory: fixture.temporary)
+    guard case .success(let text) = profile else {
+        Issue.record("profile refused \(fixture.watched) with a link at \(planted.homeLink): \(profile)")
+        return
+    }
+    #expect(text.contains(fixture.root.appendingPathComponent(planted.targetUnderRoot).path) == false)
+}
+
 /// The symlink target stays mode `0111`. The project lands in a directory
-/// that already exists under that target, so the target's own link count
-/// does not change.
-private func denyMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCreate: Bool) throws {
+/// that already exists under that target; rv reads nothing under a root, so
+/// creation and the profile go ahead.
+private func allowMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCreate: Bool) throws {
     let fixture = try plantedCacheLink(planted)
     let target = fixture.root.appendingPathComponent(planted.targetUnderRoot)
     defer {
@@ -1616,8 +1616,8 @@ private func denyMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCrea
         let created = MCPSandbox.createPinned(fixture.scratch, pinned: pin) {
             try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
         }
-        #expect(created == false)
-        #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+        #expect(created)
+        #expect(FileManager.default.fileExists(atPath: fixture.scratch))
     } else {
         #expect(MCPSandbox.createPinned(fixture.scratch, pinned: pin))
         try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
@@ -1630,15 +1630,7 @@ private func denyMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCrea
     #expect(String(decoding: (try? Data(contentsOf: URL(fileURLWithPath: opened))) ?? Data(), as: UTF8.self) == "app")
     let resolved = URL(fileURLWithPath: opened).resolvingSymlinksInPath().path
     #expect(resolved.hasSuffix(planted.moveParentUnderRoot + "/project/src/App.swift"))
-    let profile = MCPSandbox.profile(
-        policy: MCPSandboxPolicy(network: false, writable: []),
-        scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
-        temporaryDirectory: fixture.temporary)
-    guard case .failure = profile else {
-        Issue.record("profile allowed \(fixture.watched) through unlistable \(planted.homeLink)")
-        return
-    }
-    #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+    expectProfileAllowed(fixture, planted)
 }
 
 private func plantedCacheLink(_ planted: PlantedCacheLink) throws -> PlantedCacheLinkFixture {

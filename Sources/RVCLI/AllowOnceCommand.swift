@@ -122,6 +122,8 @@ enum AllowOnceCLI {
             #else
             return "rvd could not check your login password (unix_chkpwd missing or not answering, or this account has no local password, such as an SSSD, LDAP or systemd-homed account)"
             #endif
+        case .auditUnwritable:
+            return OwnerConfirmation.auditUnwritableMessage("nothing was allowed and the code stays live")
         case .proofRequired, .approved:
             return "rvd did not approve this request; nothing was allowed"
         }
@@ -260,6 +262,8 @@ enum AllowOnceCLI {
             return "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); nothing was minted"
         case .wrongPassword:
             return "wrong password; nothing was minted"
+        case .auditUnwritable:
+            return OwnerConfirmation.auditUnwritableMessage("nothing was minted")
         case .lockedOut, .busy, .unavailable, .proofRequired, .approved:
             return notApprovedMessage(refused)
         }

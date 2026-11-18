@@ -42,31 +42,33 @@ enum SecretRunProcess {
     static var isAvailable: Bool { SecretRunLauncher.path() != nil }
     #endif
 
-    /// `launch` with rv's controlling terminal (when `manageTerminal`) and
-    /// its own signal guard.
+    /// `launch` with rv's controlling terminal (when `manageTerminal`).
+    /// `signals` is restored when it returns.
     static func launch(
         executable: String, arguments: [String], environment: [String], manageTerminal: Bool,
+        signals: SecretRunSignals, notice: (String) -> Void,
         bind: (ProcessGroupFact) -> Result<Void, SecretRunRefusal>
     ) -> Result<Int32, SecretRunRefusal> {
         let terminal = manageTerminal ? SecretRunTerminal.controlling() : nil
         defer { terminal?.close() }
-        let signals = SecretRunSignals()
         defer { signals.restore() }
         return launch(
             executable: executable, arguments: arguments, environment: environment, terminal: terminal,
-            signals: signals, bind: bind)
+            signals: signals, notice: notice, bind: bind)
     }
 
     /// Spawns the command stopped, calls `bind` with its group, hands it the
     /// terminal when rv holds the foreground alone, resumes it, and returns
     /// its `waitpid` status. Any failure before the resume kills the child,
-    /// which never ran. `signals` must be installed for the whole call.
+    /// which never ran. `signals` must be open for the whole call.
     static func launch(
         executable: String, arguments: [String], environment: [String],
-        terminal: (any SecretRunTerminalControl)?, signals: SecretRunSignals,
+        terminal: (any SecretRunTerminalControl)?, signals: SecretRunSignals, notice: (String) -> Void,
         bind: (ProcessGroupFact) -> Result<Void, SecretRunRefusal>
     ) -> Result<Int32, SecretRunRefusal> {
         var job = SecretRunJobControl()
+        // Said before the spawn: no I/O between the spawn and the resume.
+        if let terminal { tellHeldBack(foregroundState(terminal), job: &job, notice: notice) }
         let pid: pid_t
         switch spawnSuspended(
             executable: executable, arguments: arguments, environment: environment,
@@ -76,31 +78,68 @@ enum SecretRunProcess {
         case .failure(let refusal): return .failure(refusal)
         case .success(let spawned): pid = spawned
         }
-        func abandon(_ refusal: SecretRunRefusal) -> Result<Int32, SecretRunRefusal> {
+        func abandon() {
             takeBack(terminal, &job)
             signals.release()
             discard(pid)
-            return .failure(refusal)
         }
         guard let group = ProcessGroupRecovery.capture(pid: pid) else {
-            return abandon(.bindFailed("its process group could not be read"))
+            abandon()
+            return .failure(.bindFailed("its process group could not be read"))
         }
-        if case .failure(let refusal) = bind(group) { return abandon(refusal) }
+        if case .failure(let refusal) = bind(group) {
+            abandon()
+            return .failure(refusal)
+        }
+        // Read again, but not told: if rv's group was shared only since, it
+        // is said after the next stop.
+        if let terminal, handOff(terminal, foregroundState(terminal), to: pid, job: &job, signals: signals) == false {
+            abandon()
+            return .failure(.spawnFailed("could not give it the terminal"))
+        }
+        // Armed last before the resume, so no failure above leaves a group
+        // that a forwarded signal (and its SIGCONT) could reach.
         if let pending = signals.target(pid) {
             // Interrupted before the command ran: it never will. The signal
             // number alone is the wait status of a process it killed.
-            signals.release()
-            discard(pid)
+            abandon()
             return .success(pending)
         }
-        if let terminal,
-            job.handsTerminal(rvInForeground: terminal.rvInForeground, sharesGroup: terminal.sharesGroup, to: pid),
-            terminal.hand(to: pid) == false
-        {
-            return abandon(.spawnFailed("could not give it the terminal"))
+        guard kill(pid, SIGCONT) == 0 else {
+            abandon()
+            return .failure(.spawnFailed("could not resume it"))
         }
-        guard kill(pid, SIGCONT) == 0 else { return abandon(.spawnFailed("could not resume it")) }
-        return .success(supervise(pid, terminal: terminal, job: &job, signals: signals))
+        return .success(supervise(pid, terminal: terminal, job: &job, signals: signals, notice: notice))
+    }
+
+    /// Whether rv holds the foreground, and whether its group holds anyone
+    /// else: read only while it does, since otherwise nothing is handed.
+    static func foregroundState(_ terminal: any SecretRunTerminalControl) -> (foreground: Bool, shares: Bool) {
+        let foreground = terminal.rvInForeground
+        return (foreground, foreground && terminal.sharesGroup)
+    }
+
+    /// Says once in a run why the terminal is held back, when `seen` has rv
+    /// sharing its group.
+    static func tellHeldBack(
+        _ seen: (foreground: Bool, shares: Bool), job: inout SecretRunJobControl, notice: (String) -> Void
+    ) {
+        if job.tellsHeldBack(rvInForeground: seen.foreground, sharesGroup: seen.shares) {
+            notice(SecretRunJobControl.heldBackNotice)
+        }
+    }
+
+    /// Hands the terminal to `pid`'s group when `job` decides so for `seen`.
+    /// False only when handing it failed.
+    static func handOff(
+        _ terminal: any SecretRunTerminalControl, _ seen: (foreground: Bool, shares: Bool), to pid: pid_t,
+        job: inout SecretRunJobControl, signals: SecretRunSignals
+    ) -> Bool {
+        guard job.handsTerminal(
+            rvInForeground: seen.foreground, sharesGroup: seen.shares,
+            rvIgnoresInterrupt: signals.inheritedIgnored.contains(SIGINT), to: pid)
+        else { return true }
+        return terminal.hand(to: pid)
     }
 
     /// Takes the terminal back if rv handed it away and nobody else holds it.
@@ -117,10 +156,11 @@ enum SecretRunProcess {
     /// image runs, so there is no moment where it executes unbound. Only
     /// `descriptors` (child fd: rv fd) are inherited; every other descriptor
     /// (the gateway listener among them) stays in rv. A signal in
-    /// `keepIgnored` stays ignored for the child, as rv inherited it.
+    /// `keepIgnored` stays ignored for the child, as rv inherited it. The
+    /// child starts in `workingDirectory` when one is given, rv's otherwise.
     static func spawnSuspended(
         executable: String, arguments: [String], environment: [String], descriptors: [Int32: Int32],
-        keepIgnored: Set<Int32> = []
+        keepIgnored: Set<Int32> = [], workingDirectory: String? = nil
     ) -> Result<pid_t, SecretRunRefusal> {
         var attributes: posix_spawnattr_t?
         guard posix_spawnattr_init(&attributes) == 0 else { return .failure(.spawnFailed("spawn attributes")) }
@@ -133,10 +173,7 @@ enum SecretRunProcess {
         sigemptyset(&emptyMask)
         var defaulted = sigset_t()
         sigemptyset(&defaulted)
-        for number in [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGPIPE, SIGWINCH, SIGINFO]
-        where keepIgnored.contains(number) == false {
-            sigaddset(&defaulted, number)
-        }
+        for number in defaultedSignals(keepIgnored: keepIgnored) { sigaddset(&defaulted, number) }
         guard posix_spawnattr_setflags(&attributes, flags) == 0,
             posix_spawnattr_setpgroup(&attributes, 0) == 0,
             posix_spawnattr_setsigmask(&attributes, &emptyMask) == 0,
@@ -152,6 +189,9 @@ enum SecretRunProcess {
                 ? posix_spawn_file_actions_addinherit_np(&actions, target)
                 : posix_spawn_file_actions_adddup2(&actions, source, target)
             guard added == 0 else { return .failure(.spawnFailed("spawn file actions")) }
+        }
+        if let workingDirectory, posix_spawn_file_actions_addchdir_np(&actions, workingDirectory) != 0 {
+            return .failure(.spawnFailed("spawn working directory"))
         }
         let argv = SpawnPointers(arguments)
         let envp = SpawnPointers(environment)
@@ -182,6 +222,14 @@ enum SecretRunProcess {
         flags != -1 && flags & FD_CLOEXEC == 0
     }
 
+    /// What the command gets the default for: every signal rv may have
+    /// inherited ignored or ignores itself while it supervises, except one
+    /// rv inherited ignored, which the command keeps ignoring as a shell's
+    /// child would.
+    static func defaultedSignals(keepIgnored: Set<Int32>) -> [Int32] {
+        (SecretRunSignals.forwarded + [SIGTTOU] + SecretRunSignals.untouched).filter { keepIgnored.contains($0) == false }
+    }
+
     /// For a child that must never run: kills its group and reaps it. The
     /// child is unreaped until then, so its pgid cannot have been reused.
     static func discard(_ pid: pid_t) {
@@ -192,20 +240,22 @@ enum SecretRunProcess {
     }
 
     /// Waits for the leader to exit, passing its signal stops through to
-    /// rv's own job control when there is a terminal. Before reaping, kills
-    /// what is left of its group, as a contained runtime's teardown does:
-    /// the unreaped leader keeps the group id from being reused, so the
-    /// signal cannot reach an unrelated group. Forwarding stops before the
-    /// reap, for the same reason. Returns the leader's `waitpid` status.
+    /// rv's own job control when there is a terminal; without one a stop is
+    /// only consumed, and the group stays stopped until something continues
+    /// it. Before reaping, kills what is left of its group, as a contained
+    /// runtime's teardown does: the unreaped leader keeps the group id from
+    /// being reused, so the signal cannot reach an unrelated group.
+    /// Forwarding stops before the reap, for the same reason. Returns the
+    /// leader's `waitpid` status.
     static func supervise(
         _ pid: pid_t, terminal: (any SecretRunTerminalControl)?, job: inout SecretRunJobControl,
-        signals: SecretRunSignals
+        signals: SecretRunSignals, notice: (String) -> Void
     ) -> Int32 {
-        let stops = terminal == nil ? 0 : WSTOPPED
         while true {
             var info = siginfo_t()
             // WNOWAIT: an exit is only observed here; the leader is reaped below, after the group kill.
-            if waitid(P_PID, id_t(pid), &info, WEXITED | stops | WNOWAIT) != 0 {
+            // WSTOPPED always: Darwin reports a stop even without it, and a stop is never an exit.
+            if waitid(P_PID, id_t(pid), &info, WEXITED | WSTOPPED | WNOWAIT) != 0 {
                 if errno == EINTR { continue }
                 // Not our unreaped child any more: its pgid may already be
                 // someone else's, so nothing is signalled.
@@ -232,9 +282,9 @@ enum SecretRunProcess {
             // with the shell. Either way the group continues.
             takeBack(terminal, &job)
             terminal.stopSelf()
-            if job.handsTerminal(rvInForeground: terminal.rvInForeground, sharesGroup: terminal.sharesGroup, to: pid) {
-                _ = terminal.hand(to: pid)
-            }
+            let seen = foregroundState(terminal)
+            tellHeldBack(seen, job: &job, notice: notice)
+            _ = handOff(terminal, seen, to: pid, job: &job, signals: signals)
             _ = kill(-pid, SIGCONT)
         }
         takeBack(terminal, &job)
@@ -291,6 +341,7 @@ enum SecretRunProcess {
 
     static func launch(
         executable _: String, arguments _: [String], environment _: [String], manageTerminal _: Bool,
+        signals _: SecretRunSignals, notice _: (String) -> Void,
         bind _: (ProcessGroupFact) -> Result<Void, SecretRunRefusal>
     ) -> Result<Int32, SecretRunRefusal> {
         .failure(.spawnUnavailable)

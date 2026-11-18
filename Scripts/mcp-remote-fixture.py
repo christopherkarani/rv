@@ -8,17 +8,48 @@ on stderr. Routes:
   GET /sse, POST /sse        legacy HTTP+SSE; the message endpoint is that same URL
   GET /sse-foreign       legacy stream whose endpoint is on another origin
 With --token T every MCP request needs "Authorization: Bearer T".
+With --hang-calls a tools/call is never answered: a legacy SSE one is accepted
+(202), a streamable HTTP one gets an event stream held open, with nothing on
+it, until the client closes it ("CLOSED call <id>" is logged).
 With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
 metadata, RFC 8414 metadata, RFC 7591 registration, PKCE S256, refresh
 rotation); MCP requests need a token it issued. POST /auth/expire revokes
 every access token so the next call must refresh.
+With --reset-calls a streamable HTTP tools/call is read and its connection
+reset with no reply ("RESET call <id>" is logged). POST /expire-sessions
+forgets every streamable HTTP session, so the next request on one gets 404.
+With --log-connections every POST is logged as it arrives, before its body is
+read ("ENTER POST <path> port=<client port>"), so a request sent again
+without its body still shows.
+With --stream-notifications a notification after initialized, or a reply,
+is answered 202 with a body that never ends, a comment every half second
+("CLOSED notification <method>" is logged once the client closes it).
+With --drip-notification-heads such a POST's response head is written a
+byte every half second and never finished ("CLOSED notification <method>"
+once the client closes it).
+With --endless-refusals a 401 or 404 has a body that never ends
+("CLOSED refusal <status>" once the client closes it).
+With --deaf-pings a ping is never answered ("DEAF ping" is logged).
+With --hold-replies a call's event-stream reply is sent whole and then
+held open ("CLOSED reply <id>" is logged once the client closes it).
+With --hang-notes a held call's event stream first carries one comment
+line, so the client reads part of a reply that never answers.
+With --deaf-over N a POST /mcp whose body is over N bytes is never read
+("DEAF POST <length>" is logged) and its connection is held open.
+The echo tool's arguments: "text", or "size" (and "char", default "x") for a
+text of that many characters; "noise" makes the note sent before a streamable
+HTTP answer carry that many bytes; "plain" sends that answer as a JSON body
+instead of an event stream.
 """
 import argparse
 import base64
 import hashlib
 import json
 import queue
+import select
+import socket
 import socketserver
+import struct
 import sys
 import threading
 import uuid
@@ -49,7 +80,7 @@ def answer(msg, headers):
     elif method == "tools/call":
         name, args = msg["params"]["name"], msg["params"].get("arguments", {})
         if name == "echo":
-            text = args.get("text", "")
+            text = args.get("char", "x") * args["size"] if "size" in args else args.get("text", "")
         elif name == "whoami":
             text = "authorization=%s team=%s" % (headers.get("Authorization", "none"), headers.get("X-Team", "none"))
         else:
@@ -78,6 +109,16 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     token = None
     oauth = False
+    hang_calls = False
+    hang_notes = False
+    hold_replies = False
+    stream_notifications = False
+    drip_notification_heads = False
+    endless_refusals = False
+    deaf_pings = False
+    reset_calls = False
+    log_connections = False
+    deaf_over = None
 
     def origin(self):
         return "http://" + self.headers.get("Host")
@@ -86,6 +127,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send(self, status, body=b"", content_type="application/json", extra=None):
+        if status in (401, 404) and self.endless_refusals and self.command == "POST":
+            return self.endless(status, extra)
         self.send_response(status)
         if body or status != 202:
             self.send_header("Content-Type", content_type)
@@ -106,6 +149,9 @@ class Handler(BaseHTTPRequestHandler):
             return True
         meta = self.origin() + "/.well-known/oauth-protected-resource/mcp"
         challenge_header = 'Bearer resource_metadata="%s", scope="mcp:tools"' % meta
+        # The whole request is taken before the refusal, so the client has
+        # sent its body (as a real server that reads first would see it).
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.close_connection = True
         self.send(401, b'{"error":"unauthorized"}', extra={"WWW-Authenticate": challenge_header, "Connection": "close"})
         log("REQ %s %s -> 401" % (self.command, self.path))
@@ -195,10 +241,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path)
+        if self.log_connections:
+            log("ENTER POST %s port=%s" % (path.path, self.client_address[1]))
         if self.oauth and (path.path.startswith("/auth/")):
             return self.oauth_post(path.path)
         if path.path == "/mcp":
+            length = int(self.headers.get("Content-Length", "0"))
+            if self.deaf_over is not None and length > self.deaf_over:
+                log("DEAF POST %d" % length)
+                threading.Event().wait()
             return self.streamable()
+        if path.path == "/expire-sessions":
+            with STATE["lock"]:
+                STATE["sessions"].clear()
+            log("EXPIRED every session")
+            return self.send_json(200, {})
         if path.path in ("/sse", "/messages"):
             return self.legacy_post(path.path, parse_qs(path.query).get("session", [""])[0])
         self.send(404)
@@ -243,15 +300,121 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404, b'{"error":"unknown session"}')
         if version != negotiated:
             return self.send(400, b'{"error":"bad MCP-Protocol-Version"}')
-        if "id" not in msg:
+        if "id" not in msg or "method" not in msg:
+            log("ACCEPTED %s session=%s" % (method, sid))
+            if self.stream_notifications and method != "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.drip(b": keepalive\n\n")
+                log("CLOSED notification %s" % method)
+                self.close_connection = True
+                return
+            if self.drip_notification_heads and method != "notifications/initialized":
+                for byte in b"HTTP/1.1 202 Accepted\r\n":
+                    self.drip_once(bytes([byte]))
+                self.drip(b"X")
+                log("CLOSED notification %s" % method)
+                self.close_connection = True
+                return
             return self.send(202)
+        if method == "ping" and self.deaf_pings:
+            log("DEAF ping")
+            return self.hang(msg.get("id"))
+        if method == "tools/call" and self.hang_calls:
+            return self.hang(msg.get("id"))
+        if method == "tools/call" and self.reset_calls:
+            log("RESET call %s" % msg.get("id"))
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            self.close_connection = True
+            return
         reply = answer(msg, self.headers)
-        if method == "tools/call":
-            note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "working"}}
+        arguments = msg.get("params", {}).get("arguments", {}) if method == "tools/call" else {}
+        if method == "tools/call" and not arguments.get("plain"):
+            data = "x" * arguments["noise"] if "noise" in arguments else "working"
+            note = {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": data}}
             body = ("event: message\ndata: %s\n\n: keepalive\n\nevent: message\ndata: %s\n\n" % (
                 json.dumps(note), json.dumps(reply))).encode()
+            if self.hold_replies:
+                return self.hold(msg.get("id"), body)
             return self.send(200, body, content_type="text/event-stream")
         self.send(200, json.dumps(reply).encode())
+
+    def hold(self, mid, body):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.wait_for_close()
+        log("CLOSED reply %s" % mid)
+        self.close_connection = True
+
+    def endless(self, status, extra=None):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        self.drip(b" ")
+        log("CLOSED refusal %d" % status)
+        self.close_connection = True
+
+    def drip(self, byte):
+        """Writes `byte` every half second until the client closes."""
+        while True:
+            try:
+                self.wfile.write(byte)
+                self.wfile.flush()
+            except OSError:
+                return
+            readable, _, _ = select.select([self.connection], [], [], 0.5)
+            if readable:
+                try:
+                    if not self.connection.recv(1, socket.MSG_PEEK):
+                        return
+                except OSError:
+                    return
+
+    def drip_once(self, byte):
+        try:
+            self.wfile.write(byte)
+            self.wfile.flush()
+        except OSError:
+            pass
+        select.select([], [], [], 0.5)
+
+    def wait_for_close(self):
+        while True:
+            readable, _, _ = select.select([self.connection], [], [], 0.2)
+            if not readable:
+                continue
+            try:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    return
+            except OSError:
+                return
+            select.select([], [], [], 0.2)
+
+    def hang(self, mid):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        if self.hang_notes:
+            self.wfile.write(b": waiting\n\n")
+        self.wfile.flush()
+        while True:
+            readable, _, _ = select.select([self.connection], [], [], 0.2)
+            if not readable:
+                continue
+            try:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    break
+            except OSError:
+                break
+            select.select([], [], [], 0.2)
+        log("CLOSED call %s" % mid)
+        self.close_connection = True
 
     def legacy_stream(self, foreign):
         if not self.authorized():
@@ -297,7 +460,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404)
         msg = self.read_json()
         log("REQ POST %s %s session=%s" % (path, msg.get("method"), sid))
-        if "id" in msg and "method" in msg:
+        if "id" in msg and "method" in msg and not (self.hang_calls and msg.get("method") == "tools/call"):
             outbox.put(answer(msg, self.headers))
         self.send(202)
 
@@ -307,9 +470,29 @@ def main():
     parser.add_argument("--token")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--oauth", action="store_true")
+    parser.add_argument("--hang-calls", action="store_true")
+    parser.add_argument("--hang-notes", action="store_true")
+    parser.add_argument("--hold-replies", action="store_true")
+    parser.add_argument("--stream-notifications", action="store_true")
+    parser.add_argument("--drip-notification-heads", action="store_true")
+    parser.add_argument("--endless-refusals", action="store_true")
+    parser.add_argument("--deaf-pings", action="store_true")
+    parser.add_argument("--reset-calls", action="store_true")
+    parser.add_argument("--log-connections", action="store_true")
+    parser.add_argument("--deaf-over", type=int)
     options = parser.parse_args()
     Handler.token = options.token
     Handler.oauth = options.oauth
+    Handler.hang_calls = options.hang_calls
+    Handler.hang_notes = options.hang_notes
+    Handler.hold_replies = options.hold_replies
+    Handler.stream_notifications = options.stream_notifications
+    Handler.drip_notification_heads = options.drip_notification_heads
+    Handler.endless_refusals = options.endless_refusals
+    Handler.deaf_pings = options.deaf_pings
+    Handler.reset_calls = options.reset_calls
+    Handler.log_connections = options.log_connections
+    Handler.deaf_over = options.deaf_over
     server = Server(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)

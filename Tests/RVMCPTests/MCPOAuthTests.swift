@@ -233,6 +233,74 @@ struct MCPOAuthTests {
         }
         #expect(connect(refused) == "the authorization server refused (access_deniedscript)")
     }
+
+    /// Any local process, of any user, can reach the redirect port. A knock
+    /// that resets before its 404 is written must not kill `rv mcp connect`
+    /// with SIGPIPE; the real callback after it is still taken. The
+    /// redirect's sockets have no `SO_NOSIGPIPE`, so a flags-0 answer to a
+    /// reset knock raised SIGPIPE, which Darwin sends to the process, not
+    /// the writing thread: this test died with signal 13 before the fix.
+    /// Waits on a plain thread, as `rv mcp connect` does from its main thread.
+    @Test func aKnockResetBeforeItsAnswerDoesNotEndTheSignIn() {
+        let outcome = SignInOutcome()
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            outcome.set(signInPastResetKnocks())
+            done.signal()
+        }.start()
+        #expect(done.wait(timeout: .now() + 20) == .success)
+        #expect(outcome.get() == "c")
+    }
+}
+
+private final class SignInOutcome: Sendable {
+    private let box = Mutex<String?>(nil)
+
+    func set(_ code: String?) { box.withLock { $0 = code } }
+    func get() -> String? { box.withLock { $0 } }
+}
+
+/// Three knocks that reset after their request line, then the real
+/// callback; returns the code the redirect took. Darwin keeps a reset
+/// connection queued with its line readable, so each is answered; fewer
+/// than the listen backlog of 8, or the callback is dropped unqueued.
+private func signInPastResetKnocks() -> String? {
+    guard let redirect = MCPLoopbackRedirect.open() else { return nil }
+    for _ in 0..<3 {
+        guard let knock = loopbackClient(port: redirect.port) else { return nil }
+        _ = Array("GET /x HTTP/1.1\r\n".utf8).withUnsafeBytes { send(knock, $0.baseAddress, $0.count, 0) }
+        var reset = linger(l_onoff: 1, l_linger: 0)
+        _ = setsockopt(knock, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
+        close(knock)
+    }
+    guard let browser = loopbackClient(port: redirect.port) else { return nil }
+    defer { close(browser) }
+    let line = Array("GET /callback?code=c&state=s HTTP/1.1\r\n\r\n".utf8)
+    _ = line.withUnsafeBytes { send(browser, $0.baseAddress, $0.count, 0) }
+    return redirect.wait(timeout: 10, state: "s")?["code"]
+}
+
+private func loopbackClient(port: Int) -> Int32? {
+    #if canImport(Darwin)
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+    guard fd >= 0 else { return nil }
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = UInt16(port).bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard connected == 0 else {
+        close(fd)
+        return nil
+    }
+    return fd
 }
 
 @Suite("MCP OAuth against the fixture", .enabled(if: python3Available))

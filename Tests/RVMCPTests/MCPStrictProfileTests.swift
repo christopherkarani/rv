@@ -128,7 +128,7 @@ struct MCPStrictProfileTests {
         }
     }
 
-    @Test func profileTextLetsTheCageReachOnlyItsProxy() {
+    @Test(.timeLimit(.minutes(1))) func profileTextLetsTheCageReachOnlyItsProxy() {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-strict-profile-\(UUID().uuidString)", isDirectory: true)
         try! FileManager.default.createDirectory(
@@ -140,7 +140,7 @@ struct MCPStrictProfileTests {
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = try! MCPSandbox.profile(
             policy: policy, scratch: scratch, home: home, configDirectory: home + "/.config/rv",
-            temporaryDirectory: root.appendingPathComponent("tmp").path, proxyPort: 4321).get()
+            temporaryDirectory: root.appendingPathComponent("tmp").path, loopbackPorts: [4321]).get()
         #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
         // The proxy port is the only localhost reach the profile grants.
         #expect(proxied.components(separatedBy: "localhost:").count == 2)
@@ -159,6 +159,255 @@ struct MCPStrictProfileTests {
         #expect(environment["NODE_USE_ENV_PROXY"] == "1")
         #expect(environment["NO_PROXY"] == nil && environment["no_proxy"] == nil)
         #expect(environment["PATH"] == "/bin")
+    }
+
+    /// A fresh directory under the temp directory, spelled as `realpath`
+    /// returns it. Foundation spells the temp directory `/var/folders/...`,
+    /// through the `/var` symlink, and a credential path spelled through a
+    /// symlink with a missing name makes the profile deny every place that
+    /// name could be linked to, the home included: about 830 KB of filters,
+    /// which libsandbox refuses as too large (measured on macOS 27).
+    static func resolvedTemporaryRoot(_ prefix: String) throws -> URL {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        return URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func gatewayPortIsTheOnlyLoopbackReachOfAClosedCage() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-gateway-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        // profile() runs after apply() created the scratch; a missing one is refused.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path,
+            loopbackPorts: MCPSandbox.cageNetwork([:], proxy: nil, reach: .secretsGateway(port: 5151)).loopbackPorts).get()
+        #expect(text.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:5151\"))"))
+        #expect(text.components(separatedBy: "localhost:").count == 2)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// LaunchServices and Apple events reach processes outside the cage, so
+    /// both are denied, after `(allow default)`, and nothing allows them.
+    @Test(.timeLimit(.minutes(1))) func launchServicesAndAppleEventsAreDenied() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-lsopen-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: true), scratch: root.appendingPathComponent("scratch").path,
+            home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let lines = text.split(separator: "\n").map(String.init)
+        let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
+        for deny in ["(deny lsopen)", "(deny appleevent-send)"] {
+            let index = try #require(lines.firstIndex(of: deny), "\(deny) missing")
+            #expect(index > allowDefault, "\(deny)")
+        }
+        #expect(lines.contains { $0.hasPrefix("(allow lsopen") || $0.hasPrefix("(allow appleevent") } == false)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// `proc_pidfdinfo` and `proc_pid_rusage` of another process are denied
+    /// for everything outside this sandbox, alongside the `pidinfo` deny, so
+    /// a caged server cannot read a neighbour's open-file paths or socket
+    /// endpoints; the `require-not same-sandbox` guard keeps its own children
+    /// readable, and nothing denies `proc_listpids`, so pid and command-name
+    /// enumeration still works.
+    @Test(.timeLimit(.minutes(1))) func peerFileAndResourceInfoAreDenied() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-pidinfo-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: true), scratch: root.appendingPathComponent("scratch").path,
+            home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let lines = text.split(separator: "\n").map(String.init)
+        let deny = "(deny process-info-pidfdinfo process-info-rusage (require-not (target same-sandbox)))"
+        #expect(lines.contains(deny), "\(deny) missing")
+        #expect(lines.contains { $0.contains("process-info-listpids") && $0.hasPrefix("(deny") } == false)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// Write-root membership folds full Unicode case, as the guest's path
+    /// comparison does: `ß` folds to `ss` and `ſ` to `s`. A write root named
+    /// with one still matches a path spelled with the other, so a missing
+    /// ancestor or an opening is never dropped on the fold. `lowercased()`
+    /// alone leaves `ß` and `ss` apart, which this would catch.
+    @Test func writeRootMembershipFoldsFullUnicodeCase() {
+        let inside = MCPSandbox.insideAny(["/Users/Straße"])
+        #expect(inside("/Users/STRASSE/x"))
+        #expect(inside("/Users/strasse"))
+        #expect("Straße".lowercased() != "strasse")
+        #expect(MCPSandbox.insideAny(["/Users/maſter"])("/Users/MASTER/key"))
+    }
+
+    /// The link and clone rules in Seatbelt's last-match order: links are
+    /// denied, then allowed among the write roots; a clone of a directory
+    /// outside the write roots is denied (the kernel copies the whole tree
+    /// and Seatbelt checks only its top); every ancestor of a credential
+    /// that lies inside a write root is denied a clone and a rename; the
+    /// credential deny comes last and covers links and clones. No line
+    /// allows a clone. A symlinked credential adds no read deny of its own:
+    /// the credential deny names the link and its target, nothing else, so
+    /// system libraries and the write roots stay readable.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func linksAndClonesAreRefusedWhereTheyCouldReachACredential(_ symlinkedCredential: Bool) throws {
+        let root = try Self.resolvedTemporaryRoot("rv-link-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        if symlinkedCredential {
+            let keys = root.appendingPathComponent("elsewhere/aws")
+            try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+            #expect(symlink(keys.path, home.appendingPathComponent(".aws").path) == 0)
+        }
+        let resolvedRoot = try #require(MCPSandbox.resolveExisting(root.path))
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home.path, configDirectory: home.path + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let lines = text.split(separator: "\n").map(String.init)
+        let writeAllow = try #require(lines.first { $0.hasPrefix("(allow file-write* ") })
+        let writeFilters = String(writeAllow.dropFirst("(allow file-write* ".count).dropLast())
+        let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
+        let deny = try #require(lines.firstIndex(of: "(deny file-link)"))
+        let allow = try #require(lines.firstIndex(of: "(allow file-link " + writeFilters + ")"))
+        let directoryClone = try #require(lines.firstIndex(
+            of: "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeFilters + "))))"))
+        // The fake home is under the temp directory, a write root, so its
+        // credentials' ancestors there are named one by one.
+        let ancestors = try #require(lines.firstIndex { $0.hasPrefix("(deny file-clone file-write-unlink ") })
+        let credential = try #require(lines.lastIndex { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        #expect(allowDefault < deny && deny < allow && allow < directoryClone)
+        #expect(directoryClone < ancestors && ancestors < credential)
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)/home\")"))
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)\")"))
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)/elsewhere\")") == symlinkedCredential)
+        #expect(lines[ancestors].contains("scratch") == false)
+        // One line allows a link, no line allows a clone, and every
+        // credential deny covers both.
+        #expect(lines.filter { $0.hasPrefix("(allow") && $0.contains("file-link") }.count == 1)
+        #expect(lines.filter { $0.contains("file-clone") }.allSatisfy { $0.hasPrefix("(deny ") })
+        #expect(lines.filter { $0.hasPrefix("(deny file-read* file-write* ") }
+            .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        // Reads are denied on the credentials and nowhere else: not every
+        // path, and not the home that holds a symlinked one.
+        #expect(lines.contains("(deny file-read*)") == false)
+        #expect(lines[credential].contains("(subpath \"\(home.path)\")") == false)
+        #expect(lines[credential].contains("(subpath \"\(resolvedRoot)/home\")") == false)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// More credential ancestors inside the write roots than the profile
+    /// names one by one: the profile is refused, never written without them.
+    @Test(.timeLimit(.minutes(1))) func tooManyCredentialAncestorsInsideAWriteRootRefuseTheProfile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-deep-profile-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let deep = (0..<(MCPSandbox.maximumCredentialAncestors + 1)).reduce(root) { url, _ in
+            url.appendingPathComponent("d", isDirectory: true)
+        }
+        let home = deep.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home.path, configDirectory: home.path + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path)
+        guard case .failure(let error) = result else {
+            Issue.record("a profile with \(MCPSandbox.maximumCredentialAncestors + 1)+ ancestors was written")
+            return
+        }
+        #expect(error.message.contains("ancestor"), "\(error.message)")
+    }
+
+    /// A symlinked directory above a credential, inside a write root, is
+    /// named by its own (link) path as well as by where it resolves: a
+    /// rename or unlink acts on the link, so naming only its target left
+    /// the link free to be swapped for one into the cage. Both shapes: a
+    /// credential link whose target runs through a linked directory
+    /// (`~/.aws` → `x/aws`, `x` → `y`), and a linked parent (`~/.config` →
+    /// `dotfiles/config`, for `~/.config/gh`).
+    @Test(.timeLimit(.minutes(1))) func aSymlinkedDirectoryAboveACredentialIsNamedByItsLinkPath() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-ancestor-link")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["tmp", "scratch", "home", "y/aws", "dotfiles/config/gh"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let home = root.appendingPathComponent("home")
+        try #require(symlink(root.appendingPathComponent("y").path, root.appendingPathComponent("x").path) == 0)
+        try #require(symlink(root.appendingPathComponent("x/aws").path, home.appendingPathComponent(".aws").path) == 0)
+        try #require(symlink(
+            root.appendingPathComponent("dotfiles/config").path, home.appendingPathComponent(".config").path) == 0)
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home.path, configDirectory: home.path + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let ancestors = try #require(text.split(separator: "\n").first { $0.hasPrefix("(deny file-clone file-write-unlink ") })
+        for path in ["x", "y", "home/.config", "dotfiles/config", "dotfiles", "home", ""] {
+            let full = path.isEmpty ? root.path : root.appendingPathComponent(path).path
+            #expect(ancestors.contains("(literal \"\(full)\")"), "\(full)")
+        }
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    @Test(.timeLimit(.minutes(1))) func hostsAndGatewayEachGetOneLoopbackRule() throws {
+        let root = try Self.resolvedTemporaryRoot("rv-gateway-profile")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        let ports = MCPSandbox.cageNetwork([:], proxy: (4321, "abc"), reach: .secretsGateway(port: 5151)).loopbackPorts
+        #expect(ports == [4321, 5151])
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, hosts: ["api.example.com"]),
+            scratch: root.appendingPathComponent("scratch").path, home: home, configDirectory: home + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path, loopbackPorts: ports).get()
+        #expect(text.contains(
+            "(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))\n"
+                + "(allow network-outbound (remote tcp \"localhost:5151\"))"))
+        #expect(text.components(separatedBy: "localhost:").count == 3)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
+    /// What `apply` puts in the cage: the gateway port only for a
+    /// placeholder server, and a proxy bypass that names only the gateway's
+    /// address only when a `sandbox.hosts` proxy is also set.
+    @Test func onlyAPlaceholderCageDialsTheGatewayAndItsRequestsSkipTheProxy() {
+        let base = ["PATH": "/bin"]
+        let both = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .secretsGateway(port: 5151))
+        #expect(both.loopbackPorts == [4321, 5151])
+        #expect(both.environment["NO_PROXY"] == "127.0.0.1" && both.environment["no_proxy"] == "127.0.0.1")
+        #expect(both.environment["HTTPS_PROXY"] == "http://abc@127.0.0.1:4321")
+        let gatewayOnly = MCPSandbox.cageNetwork(base, proxy: nil, reach: .secretsGateway(port: 5151))
+        #expect(gatewayOnly.loopbackPorts == [5151])
+        #expect(gatewayOnly.environment == base)
+        let proxyOnly = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .standard)
+        #expect(proxyOnly.loopbackPorts == [4321])
+        #expect(proxyOnly.environment == MCPSandbox.proxyEnvironment(base, port: 4321, credential: "abc"))
+        #expect(proxyOnly.environment["NO_PROXY"] == nil && proxyOnly.environment["no_proxy"] == nil)
+        let neither = MCPSandbox.cageNetwork(base, proxy: nil, reach: .standard)
+        #expect(neither.loopbackPorts.isEmpty)
+        #expect(neither.environment == base)
     }
 }
 
@@ -197,7 +446,7 @@ struct MCPSandboxHostsLiveTests {
         deinit { close(fd) }
     }
 
-    @Test func cagedServerReachesItsProxyButNothingElse() throws {
+    @Test(.timeLimit(.minutes(1))) func cagedServerReachesItsProxyButNothingElse() throws {
         // Under the real home directory, never the checkout: a checkout
         // under /tmp sits inside the cage's writable temp roots by design.
         let root = FileManager.default.homeDirectoryForCurrentUser
@@ -229,7 +478,7 @@ struct MCPSandboxHostsLiveTests {
         defer { proxy.stop() }
         let text = try MCPSandbox.profile(
             policy: try #require(definition.sandbox), scratch: scratch.path, home: home.path,
-            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory(), proxyPort: port).get()
+            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory(), loopbackPorts: [port]).get()
         var caged = launch
         caged.environment = MCPSandbox.proxyEnvironment(launch.environment, port: port, credential: credential)
         caged.executable = MCPSandbox.sandboxExec
@@ -251,6 +500,104 @@ struct MCPSandboxHostsLiveTests {
         #expect(output.contains("PROXY_OK"), "\(output)")
         #expect(output.contains("DIRECT_OK") == false, "\(output)")
         #expect(output.contains("DNS_OK") == false, "\(output)")
+    }
+
+    /// Inside the cage, a file outside every write root cannot be hard
+    /// linked into the scratch, and writing the would-be link's name leaves
+    /// it unchanged. It can be cloned, as it can be copied: a clone is its
+    /// own copy-on-write file, so writing the clone leaves it unchanged too
+    /// (Rust's `std::fs::copy` clones first and fails outright on `EPERM`).
+    /// A clone out of the scratch into that directory is refused. Links and
+    /// clones between files in the scratch work (package managers link and
+    /// clone inside their caches). The fake home is under the resolved temp
+    /// directory. The outside file cannot be: `seatbeltWriteRoots` makes all
+    /// of `/private/var/folders` and `/private/tmp` writable, a fake home's
+    /// spare corners included. It is in a fresh 0700 directory under
+    /// `/Users/Shared`, which no profile line names, never the real home;
+    /// skipped where `/Users/Shared` is not writable.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func cagedServerCannotLinkOrWriteAFileFromOutsideItsWriteRoots() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let config = home.appendingPathComponent(".config/rv")
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let project = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(project.path, 0o700) == 0, "could not create \(project.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: project) }
+        let outside = project.appendingPathComponent("App.swift")
+        try Data("original".utf8).write(to: outside)
+        var before = stat()
+        try #require(lstat(outside.path, &before) == 0)
+
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/linker", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: config.path, temporaryDirectory: tmp.path).get()
+        // No profile line names `/Users/Shared`: it is not a write root.
+        #expect(text.contains("/Users/Shared") == false, "\(text)")
+        let script = """
+            outside="$1"; s="$2"; project="$3"
+            /bin/ln "$outside" "$s/linked" 2> "$s/ln.err" && echo LINK_OUT_OK
+            grep -q "Operation not permitted" "$s/ln.err" && echo LINK_OUT_EPERM
+            printf changed > "$s/linked"
+            /bin/cp -c "$outside" "$s/cloned" && echo CLONE_OUT_OK
+            printf changed > "$s/cloned"
+            /bin/cp -c "$outside" "$project/escaped" 2> "$s/cp.err" && echo CLONE_ESCAPE_OK
+            grep -q "Operation not permitted" "$s/cp.err" && echo CLONE_ESCAPE_EPERM
+            /bin/cp "$outside" "$s/copied" && echo COPY_OK
+            printf inner > "$s/a"
+            /bin/ln "$s/a" "$s/b" && echo LINK_IN_OK
+            /bin/cp -c "$s/a" "$s/c" && echo CLONE_IN_OK
+            echo DONE
+            """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
+        process.arguments = ["-p", text, "/bin/sh", "-c", script, "sh", outside.path, scratch.path, project.path]
+        process.environment = ["PATH": "/usr/bin:/bin"]
+        process.currentDirectoryURL = scratch
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        // Hard bound: polls, never blocks in `waitid`; killed after 20 s.
+        let deadline = Date().addingTimeInterval(20)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            Issue.record("the caged link probe did not finish")
+            return
+        }
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("LINK_OUT_OK") == false, "\(output)")
+        #expect(output.contains("LINK_OUT_EPERM"), "\(output)")
+        #expect(output.contains("CLONE_OUT_OK"), "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_OK") == false, "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_EPERM"), "\(output)")
+        #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("escaped").path) == false)
+        #expect(output.contains("COPY_OK"), "\(output)")
+        #expect(output.contains("LINK_IN_OK"), "\(output)")
+        #expect(output.contains("CLONE_IN_OK"), "\(output)")
+        #expect(String(decoding: try Data(contentsOf: outside), as: UTF8.self) == "original")
+        var after = stat()
+        #expect(lstat(outside.path, &after) == 0)
+        #expect(after.st_nlink == 1 && after.st_ino == before.st_ino)
+        // What the write created in the scratch is its own file, not the outside inode.
+        var written = stat()
+        #expect(lstat(scratch.appendingPathComponent("linked").path, &written) == 0)
+        #expect(written.st_ino != before.st_ino)
+        var clone = stat()
+        #expect(lstat(scratch.appendingPathComponent("cloned").path, &clone) == 0)
+        #expect(clone.st_ino != before.st_ino)
     }
 }
 #endif

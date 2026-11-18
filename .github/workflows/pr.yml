@@ -581,12 +581,19 @@ jobs:
             swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
             swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
 
-      # Neither suite execs a workspace product, so only the two test
-      # targets are compiled.
+      # The two test targets, plus the two workspace products RVMCPTests
+      # execs: rv-mcp-probe (KERN_PROCARGS2 reads and the cage's peer
+      # checks) and rv-mcp-signal-probe (serve's real signals and
+      # dispositions); both run in a child, never in the test process.
+      # `--target` builds an executable dependency's module, not
+      # necessarily its linked binary, and the probe tests fail on a
+      # missing binary, so link both explicitly.
       - name: Compile MCP test targets
         run: |
           Scripts/swift-6.4 build --target RVMCPTests
           Scripts/swift-6.4 build --target RVMCPCustodianCoreTests
+          Scripts/swift-6.4 build --product rv-mcp-probe
+          Scripts/swift-6.4 build --product rv-mcp-signal-probe
 
       - name: Run RVMCPTests and RVMCPCustodianCoreTests
         run: |
