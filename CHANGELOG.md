@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `rv policy status [--json]` reports whether rvd loads the current machine and repo policy, which revisions, and why not. rvd answers from the load hooks run. A policy rvd cannot load denies every action (`typed-rules-invalid`); rv never falls back to an earlier policy. `rv policy draft|apply|rollback --save --wait [--wait-timeout s]` blocks until rvd loads the saved policy.
 
+### Security
+
+- The shared launcher resolver now sees through transparent exec wrappers (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, including `flock FILE -c CMD`, `unbuffer`, `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`), parsing each one's options and leading operands. Redirects never fill an option value or operand slot, and a variable or glob there is judged unmodelled. `firejail`, and `chpst`'s environment, root and directory options, are never treated as transparent. Before, `setsid rv uninstall` or `stdbuf -oL rv packs disable core.git` slipped past the self-protection floor, and the same wrappers hid commands from the other floors that use the resolver. A wrapper option rv does not model fails closed: every later operand is judged as a possible command.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed
