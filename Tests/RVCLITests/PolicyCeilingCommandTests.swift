@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVIPC
 import RVPolicy
 import Synchronization
@@ -176,6 +177,45 @@ struct PolicyCeilingCommandTests {
             let fromDirectory = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: directory)
             #expect(fromDirectory.saved == false)
         }
+    }
+
+    @Test func set_recordsTheOwnerAuthorization() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ceilingText.write(to: file, atomically: true, encoding: .utf8)
+            _ = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            let events = AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                .events(AuditFilter(kinds: ["config"]))
+            #expect(events.map(\.subject) == ["policy.ceiling"])
+            #expect(events.first?.detail["authorized_by"]?.hasPrefix("owner") == true, "\(events)")
+        }
+    }
+
+    @Test func set_whenALooseningCannotBeRecorded_exits74() async throws {
+        let (home, workspace) = try makeDirs()
+        defer { cleanup(home, workspace) }
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try writeCeiling(ceilingText, home: home)
+        let log = AuditLog.fileURL(configDirectory: config)
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        let file = workspace.appendingPathComponent("loose.toml")
+        try "schema_version = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        let output = CLIOutputCapture()
+        try await withCLIProcess(
+            home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated, output: output
+        ) {
+            var command = try PolicyCeilingCommand.SetCeiling.parse([file.path])
+            do {
+                try await command.run()
+                Issue.record("an unrecordable loosening was stored")
+            } catch let exit as ExitCode {
+                #expect(exit.rawValue == ConfigChangeRefusal.exitCode)
+            }
+        }
+        #expect(output.stderr.hasPrefix(
+            "rv policy ceiling set: the audit log could not record the policy.ceiling change"), "\(output.stderr)")
+        let store = PolicyCeilingStore(configDirectory: config)
+        #expect(try store.load()?.rules.count == 1)
     }
 
     @Test func set_refusesWhenMachineLayerAlreadyExceeds() async throws {

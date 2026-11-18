@@ -10,6 +10,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 
 public enum PolicyCeilingError: Error, Sendable, Equatable {
     /// `ceiling.toml` exists but cannot be read or parsed. Every check
@@ -305,12 +306,55 @@ public struct PolicyCeilingStore: Sendable {
         return text
     }
 
-    /// Appends one line to `ceiling-revisions.jsonl`, then renames a fresh
+    /// What `ceiling.toml` holds when a replacement is classified.
+    enum Current: Equatable {
+        case missing
+        /// Present but unreadable or unparseable: the change cannot be classified.
+        case invalid
+        case ceiling(PolicyCeiling)
+    }
+
+    /// Tightening only when the new ceiling keeps every deny and ask rule
+    /// of the current one (same predicate, no weaker verdict) and does not
+    /// widen `egress.hosts` (`PolicyCeilingDiff` finds nothing). A first
+    /// ceiling only adds restrictions; an invalid current one is
+    /// unclassified, so loosening.
+    static func direction(from current: Current, to new: PolicyCeiling) -> ConfigChangeAudit.Direction {
+        switch current {
+        case .missing:
+            return .tightening
+        case .invalid:
+            return .loosening
+        case .ceiling(let old):
+            return PolicyCeilingDiff.loosenings(from: old, to: new).isEmpty ? .tightening : .loosening
+        }
+    }
+
+    /// The live file, read under the caller's locks, and its content hash
+    /// (`unset` when missing).
+    private func current() -> (state: Current, hash: String) {
+        let text: String?
+        do {
+            text = try Self.readText(at: fileURL, followSymlinks: false)
+        } catch {
+            return (.invalid, "unreadable")
+        }
+        guard let text else { return (.missing, ConfigChangeAudit.unset) }
+        guard let ceiling = try? PolicyCeilingTOML.parse(text) else { return (.invalid, Self.sha256(text)) }
+        return (.ceiling(ceiling), Self.sha256(text))
+    }
+
+    /// Records `config.changed` (`policy.ceiling`: prior and new content
+    /// hash, rule count, egress bound, direction) in `audit.jsonl`, then
+    /// appends one line to `ceiling-revisions.jsonl`, then renames a fresh
     /// 0600 `ceiling.toml` into place, so every ceiling that goes live has
-    /// a revision line. Callers hold the machine policy locks and have
-    /// confirmed the owner: `PolicyWorkspace.replaceCeiling` is the one
-    /// caller. Every failure throws `writeFailed`; a failed rename after
-    /// the append leaves one line for a ceiling that never took effect.
+    /// an audit event and a revision line. An audit log that cannot record
+    /// a loosening change refuses it (`ConfigChangeUnrecorded`); a
+    /// tightening one is still made and recorded late. Callers hold the
+    /// machine policy locks and have confirmed the owner:
+    /// `PolicyWorkspace.replaceCeiling` is the one caller. Every write
+    /// failure throws `writeFailed`; a failed rename after the append
+    /// leaves one line for a ceiling that never took effect.
     func commitLocked(_ ceiling: PolicyCeiling, recordedAt: Date) throws {
         let text = PolicyCeilingTOML.render(ceiling)
         guard text.utf8.count <= PolicyCeiling.maximumBytes else {
@@ -324,6 +368,21 @@ public struct PolicyCeilingStore: Sendable {
         } catch {
             throw PolicyCeilingError.writeFailed("cannot prepare the config directory; nothing was written")
         }
+        let prior = current()
+        let event = ConfigChangeAudit.setting(
+            "policy.ceiling", from: prior.hash, to: Self.sha256(text),
+            direction: Self.direction(from: prior.state, to: ceiling),
+            detail: [
+                "rule_count": String(ceiling.rules.count),
+                "egress_hosts": ceiling.egressHosts.map { String($0.count) } ?? "unbounded",
+            ],
+            time: recordedAt)
+        try ConfigChangeAudit.commit(event, configDirectory: configDirectory) {
+            try writeLocked(text: text, line: line)
+        }
+    }
+
+    private func writeLocked(text: String, line: String) throws {
         let temp = fileURL.appendingPathExtension("tmp")
         unlink(temp.path)
         guard Self.writeOwnerOnly(Array(text.utf8), to: temp, flags: O_CREAT | O_EXCL) else {
@@ -349,7 +408,7 @@ public struct PolicyCeilingStore: Sendable {
             var sha256: String
             var toml: String
         }
-        let digest = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+        let digest = sha256(text)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let record = Line(
@@ -361,6 +420,10 @@ public struct PolicyCeilingStore: Sendable {
             throw PolicyCeilingError.invalidFile
         }
         return json + "\n"
+    }
+
+    static func sha256(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Opens with `O_NOFOLLOW` and mode 0600 and requires a regular file,

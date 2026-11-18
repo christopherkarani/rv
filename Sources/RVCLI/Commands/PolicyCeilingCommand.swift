@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 /// `rv policy check --ceiling`: read-only containment of the policy layers
@@ -94,10 +95,15 @@ struct PolicyCeilingCommand: AsyncParsableCommand {
         func run() async throws {
             let home = try CommandContext.requireHome(command: "policy ceiling set")
             let workspace = URL(fileURLWithPath: CLIProcess.workspacePath(), isDirectory: true)
-            let outcome = try await PolicyCeilingRun.set(
-                home: home, workspace: workspace, file: URL(fileURLWithPath: path)
-            ) { preview in
-                for line in preview { CommandContext.writeStdout(line + "\n") }
+            let outcome: PolicyCeilingRun.SetOutcome
+            do {
+                outcome = try await PolicyCeilingRun.set(
+                    home: home, workspace: workspace, file: URL(fileURLWithPath: path)
+                ) { preview in
+                    for line in preview { CommandContext.writeStdout(line + "\n") }
+                }
+            } catch let unrecorded as ConfigChangeUnrecorded {
+                try ConfigChangeRefusal.fail(command: "policy ceiling set", unrecorded)
             }
             for line in outcome.lines { CommandContext.writeStdout(line + "\n") }
             if outcome.saved == false {
@@ -289,9 +295,13 @@ enum PolicyCeilingRun {
         }
         lines += loosenings(session: session, to: ceiling)
         preview(lines)
-        try await OwnerConfirmation.require("replace the policy ceiling from \(file.path)")
+        let authorization = try await OwnerConfirmation.require("replace the policy ceiling from \(file.path)")
         do {
-            try session.replaceCeiling(ceiling)
+            try ConfigChangeAudit.$authorization.withValue(authorization) {
+                try session.replaceCeiling(ceiling)
+            }
+        } catch let unrecorded as ConfigChangeUnrecorded {
+            throw unrecorded
         } catch let error as PolicyCeilingError {
             switch error {
             case .writeFailed:

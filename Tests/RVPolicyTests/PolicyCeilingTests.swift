@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 @testable import RVPolicy
 
 @Suite("PolicyCeiling")
@@ -324,6 +325,67 @@ struct PolicyCeilingTests {
             #expect(lines.count == 1)
             #expect(FileManager.default.fileExists(atPath: store.fileURL.appendingPathExtension("tmp").path) == false)
         }
+    }
+
+    @Test func replaceCeiling_recordsConfigChangedWithItsDirection() throws {
+        try withPolicyDirs { workspace in
+            try ConfigChangeAudit.$authorization.withValue("owner (test)") {
+                try workspace.session.replaceCeiling(try PolicyCeilingTOML.parse(forcePushCeiling))
+            }
+            try workspace.session.replaceCeiling(PolicyCeiling())
+            let events = AuditLedger(configDirectory: workspace.config).events(AuditFilter(kinds: ["config"]))
+            #expect(events.map(\.kind) == [.configChanged, .configChanged])
+            #expect(events.map(\.subject) == ["policy.ceiling", "policy.ceiling"])
+            #expect(events.map { $0.detail["direction"] ?? "" } == ["tightening", "loosening"])
+            #expect(events.map { $0.detail["rule_count"] ?? "" } == ["1", "0"])
+            #expect(events.first?.detail["prior"] == ConfigChangeAudit.unset)
+            #expect(events.first?.detail["authorized_by"] == "owner (test)")
+            #expect(events.last?.detail["prior"] == events.first?.detail["new"])
+            // The event names the content hash the revision log records, never the body.
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            let log = try String(contentsOf: store.revisionsURL, encoding: .utf8)
+            for event in events {
+                #expect(log.contains("\"sha256\":\"\(event.detail["new"] ?? "-")\""))
+                #expect(event.detail.values.contains { $0.contains("gitPush") } == false)
+            }
+            let report = try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: workspace.config)).get()
+            #expect(report.isIntact)
+        }
+    }
+
+    @Test func replaceCeiling_unrecordable_refusesLooseningButStillTightens() throws {
+        try withPolicyDirs { workspace in
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            // audit.jsonl as a directory: every append fails.
+            try FileManager.default.createDirectory(
+                at: AuditLog.fileURL(configDirectory: workspace.config), withIntermediateDirectories: true)
+            let first = try PolicyCeilingTOML.parse(forcePushCeiling)
+            try workspace.session.replaceCeiling(first)
+            #expect(try store.load() == first)
+            #expect(throws: ConfigChangeUnrecorded.self) {
+                try workspace.session.replaceCeiling(PolicyCeiling())
+            }
+            #expect(try store.load() == first)
+            // An unreadable current ceiling cannot be classified: loosening.
+            try "not toml".write(to: store.fileURL, atomically: true, encoding: .utf8)
+            #expect(throws: ConfigChangeUnrecorded.self) {
+                try workspace.session.replaceCeiling(first)
+            }
+            let lines = try String(contentsOf: store.revisionsURL, encoding: .utf8).split(separator: "\n")
+            #expect(lines.count == 1)
+        }
+    }
+
+    @Test func ceilingDirection_tightensOnlyWhenNothingLoosens() throws {
+        let first = try PolicyCeilingTOML.parse(forcePushCeiling)
+        #expect(PolicyCeilingStore.direction(from: .missing, to: first) == .tightening)
+        #expect(PolicyCeilingStore.direction(from: .missing, to: PolicyCeiling()) == .tightening)
+        #expect(PolicyCeilingStore.direction(from: .ceiling(first), to: first) == .tightening)
+        #expect(PolicyCeilingStore.direction(from: .ceiling(first), to: PolicyCeiling()) == .loosening)
+        #expect(PolicyCeilingStore.direction(from: .invalid, to: first) == .loosening)
+        let bounded = PolicyCeiling(egressHosts: ["github.com"])
+        #expect(PolicyCeilingStore.direction(from: .ceiling(PolicyCeiling()), to: bounded) == .tightening)
+        #expect(PolicyCeilingStore.direction(from: .ceiling(bounded), to: PolicyCeiling()) == .loosening)
     }
 
     @Test func replaceCeiling_refusesAboveTheReadCap() throws {
