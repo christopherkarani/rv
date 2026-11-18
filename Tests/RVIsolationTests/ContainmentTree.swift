@@ -138,21 +138,16 @@ extension ContainmentTree {
         }
     }
 
-    /// `hdiutil info -plist`, killed after `timeout`: DiskArbitration can wedge.
+    /// `hdiutil info -plist` through `runTool`, so it takes the same
+    /// one-helper-at-a-time lock as rv's own attach, mount, and detach
+    /// instead of piling onto diskimagesd while another test attaches.
+    /// Bounded: DiskArbitration can wedge.
     private static func boundedHdiutilInfo(timeout: TimeInterval = 30) -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        process.arguments = ["info", "-plist"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let killer = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        killer.cancel()
-        return process.terminationStatus == 0 ? data : nil
+        let info = runTool(["/usr/bin/hdiutil", "info", "-plist"], deadline: timeout)
+        guard info.status == 0, info.timedOut == false, info.helperStillAlive == false else {
+            return nil
+        }
+        return Data(info.stdout.utf8)
     }
 }
 #endif
