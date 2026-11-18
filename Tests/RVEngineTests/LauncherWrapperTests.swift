@@ -78,6 +78,26 @@ struct LauncherWrapperTests {
         "caffeinate -q 1 rv uninstall",
         "ionice --p 1 rv uninstall",
         "chrt $PRIO rv uninstall",
+        // Redirects are not argv: they never fill a value or operand slot.
+        "stdbuf -o >/dev/null L rv uninstall",
+        "ionice -c 2>&1 3 rv uninstall",
+        "flock -w >x 5 /tmp/l rv uninstall",
+        "flock /tmp/l 2>/dev/null -c 'rv uninstall'",
+        "flock /tmp/l -c >/dev/null 'rv uninstall'",
+        "chrt -f -- 2>/dev/null 10 rv uninstall",
+        // chrt reads its priority with strtoimax.
+        "chrt -f +10 rv uninstall",
+        "chrt -f ' 10' rv uninstall",
+        "chrt -o -- -0 rv uninstall",
+        // A word that may word-split in a value or operand slot.
+        "stdbuf -o $X uninstall",
+        "stdbuf -o$X uninstall",
+        "taskset $M uninstall",
+        "flock * uninstall",
+        "numactl -S key rv uninstall",
+        "chpst -e ./env rv uninstall",
+        "firejail rv uninstall",
+        "firejail --shell=/bin/bash echo '$(rv uninstall)'",
         "stdbuf $OPT rv uninstall",
     ]
 
@@ -129,6 +149,21 @@ struct LauncherWrapperTests {
     func unknownOptionKeepsWrapper() {
         #expect(launchedCommands("stdbuf -Z q cat x") == [["stdbuf", "-Z", "q", "cat", "x"]])
         #expect(launchedCommands("ionice --p 1 cat x") == [["ionice", "--p", "1", "cat", "x"]])
+    }
+
+    @Test("a wrapper that runs no command stays the command itself")
+    func wrapperWithoutCommandStaysHead() {
+        #expect(launchedCommands("flock 9") == [["flock", "9"]])
+        #expect(launchedCommands("taskset -p 3") == [["taskset", "-p", "3"]])
+        #expect(launchedCommands("firejail --net=none") == [["firejail", "--net=none"]])
+    }
+
+    @Test("wrappers that swap the environment, root or shell stay unmodelled")
+    func environmentSwappingWrappersStayHead() {
+        #expect(launchedCommands("chpst -e ./env npm test") == [["chpst", "-e", "./env", "npm", "test"]])
+        #expect(launchedCommands("chpst -/ /x npm test") == [["chpst", "-/", "/x", "npm", "test"]])
+        #expect(launchedCommands("firejail npm test") == [["firejail", "npm", "test"]])
+        #expect(launchedCommands("chpst -u nobody npm test") == [["npm", "test"]])
     }
 
     @Test("a brace expansion naming a wrapper is judged unmodelled")

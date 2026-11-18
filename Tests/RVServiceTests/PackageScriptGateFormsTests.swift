@@ -222,7 +222,8 @@ struct PackageScriptGateFormsTests {
 
     @Test("dynamic, launcher-wrapped and env-overridden runners are never clear", arguments: [
         "$NPM test", #""$(which npm)" test"#, "xargs npm test", "watch npm test",
-        #"find . -name x -exec npm test \;"#, "caffeinate -Q npm test", "script -q /dev/null npm test",
+        #"find . -name x -exec npm test \;"#, "caffeinate -Q npm test", "chpst -e ./env npm test",
+        "firejail --env=NODE_OPTIONS=--require=/x npm test", "firejail npm test", "script -q /dev/null npm test",
         "export npm_config_script_shell=/x; npm test", "export NODE_OPTIONS=--require=/x && npm test",
         "PATH=/tmp/evil:$PATH npm test", "source ./env.sh && npm test",
     ])
