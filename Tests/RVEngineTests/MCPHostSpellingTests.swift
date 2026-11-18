@@ -503,6 +503,52 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
+    /// Host names before the real one do not use up the re-reads: every
+    /// host or dynamic word after the options is read from.
+    @Test("a host after decoy hosts in a wrapper's options asks", arguments: [
+        "strace -o cursor -o cursor -o cursor -o cursor -f claude $SUB add evil -- x",
+    ])
+    func decoyHostsBeforeWrappedHostAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// A dynamic word that is the value of an option naming a path or a
+    /// context (`git -C`, `tar -C`, `docker -f`, `kubectl --context`) is no
+    /// program those run, so a group word after it is no host's; nor are
+    /// many option values the re-reads go through.
+    @Test("a path option's dynamic value, or many option values, with a group word allow", arguments: [
+        "docker compose -f \"$COMPOSE_FILE\" config",
+        "git -C \"$REPO\" config --get remote.origin.url",
+        "kubectl --context \"$C\" config view",
+        "tar -C \"$D\" -xf x.tgz config",
+        "curl -H \"$A\" -H \"$B\" -H \"$C\" -H \"$D\" -H \"$E\" https://example.com/config",
+        "docker run -e A=\"$A\" -e B=\"$B\" -e C=\"$C\" -e D=\"$D\" -e E=\"$E\" image config",
+        "git -c a=\"$A\" -c b=\"$B\" -c c=\"$C\" -c d=\"$D\" -c e=\"$E\" config --list",
+    ])
+    func pathOptionValueWithGroupAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// The nearest ways those programs run something still ask: a word
+    /// after the path value, a program given to another option, a git
+    /// alias, a container or pod command, and a line that redefines the
+    /// program.
+    @Test("a command those programs run still asks", arguments: [
+        "git -C \"$REPO\" $C mcp add evil -- x",
+        "git -c alias.x='!claude mcp add evil' x",
+        "git -C \"$REPO\" -c alias.x='!claude mcp add evil' x",
+        "alias git=strace; git -C \"$C\" mcp add evil -- x",
+        "tar -C \"$D\" --to-command='claude mcp add evil' -xf x.tgz",
+        "tar -C \"$D\" -I \"$P\" -xf x.tgz mcp add evil",
+        "docker compose -f \"$F\" run svc claude mcp add evil -- x",
+        "docker compose -f \"$F\" exec -T svc $X mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- claude mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- $X mcp add evil -- x",
+    ])
+    func pathOptionProgramsStillAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
     /// Bounds, not pins: these allow because no group word follows the
     /// dynamic word (`*.json` cannot be one) or the parser drops it (a
     /// `timeout` duration), as they did before any runner operand was read.
