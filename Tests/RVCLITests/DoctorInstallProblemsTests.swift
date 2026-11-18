@@ -182,6 +182,25 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
     }
 }
 
+/// Ubuntu's pam_umask (002) leaves `~/.config` mode 775. rvd's socket is
+/// under `~/.config` only on macOS; on Linux it is under the runtime
+/// directory, so a 775 `~/.config` must not fail doctor there.
+@Test func doctorInstall_umask002Config_failsOnlyWhereTheSocketLivesUnderIt() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let config = fixture.root.path + "/.config"
+        try FileManager.default.setAttributes([.posixPermissions: 0o775], ofItemAtPath: config)
+        #if os(Linux)
+        #expect(problems(fixture).isEmpty)
+        #expect(doctorPretty(fixture).exitCode == 0)
+        #else
+        let problem = try #require(problems(fixture).first { $0.id == "config-dir" })
+        #expect(problem.summary.contains("mode 775"))
+        #expect(problem.fix == "chmod go-w '\(config)'")
+        #endif
+    }
+}
+
 @Test func doctorInstall_configIsAFile_saysMoveItAside() throws {
     try withInstallHome { fixture in
         try stageHealthyInstall(fixture)
