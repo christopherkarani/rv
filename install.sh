@@ -118,6 +118,7 @@ tmp_rvd=""
 tmp_host=""
 tmp_span=""
 tmp_isolation=""
+tmp_custodian=""
 tmp_models=""
 
 # Download progress. Same glyphs/width as Sources/RVTUI/SetupRenderer.swift.
@@ -137,6 +138,7 @@ cleanup() {
   [ -n "${tmp_host:-}" ] && rm -f "$tmp_host"
   [ -n "${tmp_span:-}" ] && rm -f "$tmp_span"
   [ -n "${tmp_isolation:-}" ] && rm -f "$tmp_isolation"
+  [ -n "${tmp_custodian:-}" ] && rm -f "$tmp_custodian"
   [ -n "${tmp_models:-}" ] && rm -rf "$tmp_models"
   [ -n "${tmp_fetch:-}" ] && rm -rf "$tmp_fetch"
   :
@@ -1170,10 +1172,13 @@ else
   progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_microvm + size_relay + size_macvm + size_macvm_agent + size_approvals))
   size_isolation=0
   size_swiftlibs=0
+  size_custodian=0
   if [ "$os" = "Linux" ]; then
     size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec-$target")")"
     size_swiftlibs="$(normalize_size "$(content_length "$release_base/rv-swiftlibs-$target.tar.gz")")"
-    progress_total=$((progress_total + size_isolation + size_swiftlibs))
+    # Optional: releases before the Linux approvals custodian omit it.
+    size_custodian="$(normalize_size "$(content_length "$release_base/rv-mcp-custodian-$target")")"
+    progress_total=$((progress_total + size_isolation + size_swiftlibs + size_custodian))
   fi
   progress_base=0
   progress_have=0
@@ -1211,6 +1216,10 @@ else
   if [ "$os" = "Linux" ]; then
     download_release_asset "$tmp_fetch" "rv-isolation-exec-$target" "$size_isolation" "rv-isolation-exec"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
+    if [ "$size_custodian" -gt 0 ]; then
+      download_release_asset "$tmp_fetch" "rv-mcp-custodian-$target" "$size_custodian" "rv-mcp-custodian"
+      chmod 755 "$tmp_fetch/rv-mcp-custodian"
+    fi
   fi
   fetch_pack_bundles "$tmp_fetch" "$size_packs"
   if [ "$os" = "Linux" ]; then
@@ -1273,6 +1282,13 @@ if [ "$os" = "Linux" ]; then
   rm -f "$tmp_isolation"
   cp "$src/rv-isolation-exec" "$tmp_isolation"
   chmod 755 "$tmp_isolation"
+  # What `sudo rv mcp custodian install` copies into place; nothing runs it from here.
+  if [ -x "$src/rv-mcp-custodian" ]; then
+    tmp_custodian="$bin/.rv-mcp-custodian.installing"
+    rm -f "$tmp_custodian"
+    cp "$src/rv-mcp-custodian" "$tmp_custodian"
+    chmod 755 "$tmp_custodian"
+  fi
 fi
 # Optional: older stages and the Darwin install fixtures omit it. A present
 # helper must land next to rv-workspace-host or contained PTY launches fail closed.
@@ -1299,6 +1315,11 @@ if [ "$os" = "Linux" ]; then
   rm -f "$bin/rv-isolation-exec"
   mv -f "$tmp_isolation" "$bin/rv-isolation-exec"
   tmp_isolation=""
+  if [ -n "$tmp_custodian" ]; then
+    rm -f "$bin/rv-mcp-custodian"
+    mv -f "$tmp_custodian" "$bin/rv-mcp-custodian"
+    tmp_custodian=""
+  fi
 fi
 if [ -n "$tmp_claim" ]; then
   rm -f "$bin/rv-pty-claim"

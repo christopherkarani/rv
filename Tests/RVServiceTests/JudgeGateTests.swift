@@ -74,12 +74,12 @@ struct JudgeEngineResolutionTests {
     @Test("config selects when env is absent")
     func configSelects() {
         let nested = JudgeRuntime.resolveEngine(
-            config: ["judge": ["engine": "ft"]],
+            config: GuardConfig(.object(["judge": .object(["engine": .string("ft")])])),
             bundleExists: Self.probe(ft: false, laya: true)
         )
         #expect(nested.engine == .ft && !nested.bundlePresent)
         let flat = JudgeRuntime.resolveEngine(
-            config: ["judge.engine": "laya"],
+            config: GuardConfig(.object(["judge.engine": .string("laya")])),
             bundleExists: Self.probe(ft: true, laya: true)
         )
         #expect(flat.engine == .laya && flat.bundlePresent)
@@ -88,7 +88,7 @@ struct JudgeEngineResolutionTests {
     @Test("default prefers ft when its bundle validates")
     func defaultPrefersFT() {
         let got = JudgeRuntime.resolveEngine(
-            config: nil, bundleExists: Self.probe(ft: true, laya: true)
+            config: .empty, bundleExists: Self.probe(ft: true, laya: true)
         )
         #expect(got.engine == .ft && got.bundlePresent)
     }
@@ -96,7 +96,7 @@ struct JudgeEngineResolutionTests {
     @Test("default falls back to stock when ft is missing")
     func defaultFallsBack() {
         let got = JudgeRuntime.resolveEngine(
-            config: nil, bundleExists: Self.probe(ft: false, laya: true)
+            config: .empty, bundleExists: Self.probe(ft: false, laya: true)
         )
         #expect(got.engine == .laya && got.bundlePresent)
     }
@@ -104,12 +104,12 @@ struct JudgeEngineResolutionTests {
     @Test("explicit engine with missing bundle stays selected, packs-only")
     func explicitMissingStaysSelected() {
         let forced = JudgeRuntime.resolveEngine(
-            config: ["judge": ["engine": "laya"]],
+            config: GuardConfig(.object(["judge": .object(["engine": .string("laya")])])),
             bundleExists: Self.probe(ft: true, laya: false)
         )
         #expect(forced.engine == .laya && !forced.bundlePresent)
         let neither = JudgeRuntime.resolveEngine(
-            config: nil, bundleExists: Self.probe(ft: false, laya: false)
+            config: .empty, bundleExists: Self.probe(ft: false, laya: false)
         )
         #expect(neither.engine == .laya && !neither.bundlePresent)
     }
@@ -117,7 +117,7 @@ struct JudgeEngineResolutionTests {
     @Test("unknown engine values are ignored")
     func unknownIgnored() {
         let got = JudgeRuntime.resolveEngine(
-            config: ["judge": ["engine": "nope"]],
+            config: GuardConfig(.object(["judge": .object(["engine": .string("nope")])])),
             bundleExists: Self.probe(ft: true, laya: false)
         )
         #expect(got.engine == .ft && got.bundlePresent)
@@ -126,7 +126,7 @@ struct JudgeEngineResolutionTests {
     @Test("config engine values are case-insensitive")
     func caseInsensitive() {
         let got = JudgeRuntime.resolveEngine(
-            config: ["judge": ["engine": "FT"]],
+            config: GuardConfig(.object(["judge": .object(["engine": .string("FT")])])),
             bundleExists: Self.probe(ft: true, laya: true)
         )
         #expect(got.engine == .ft)
@@ -408,9 +408,9 @@ struct JudgeRaisePinTests {
 
     @Test("nested and lowercase guard.mode config parses")
     func guardModeConfigForms() {
-        #expect(JudgeRuntime.configGuardMode(["guard": ["mode": "observe"]]) == "observe")
-        #expect(JudgeRuntime.configGuardMode(["guard.mode": "enforce"]) == "enforce")
-        #expect(JudgeRuntime.configGuardMode([:]) == nil)
+        #expect(GuardConfig(.object(["guard": .object(["mode": .string("observe")])])).mode == .observe)
+        #expect(GuardConfig(.object(["guard.mode": .string("enforce")])).mode == .enforce)
+        #expect(GuardConfig(.object([:])).mode == nil)
     }
 
     @Test("bundle health distinguishes missing from invalid installs")

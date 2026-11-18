@@ -27,6 +27,17 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     public static let mcpCall = AuditEventKind(rawValue: "mcp.call")
     /// Approvals granted, refused, or rejected as forged; trust of mcp.json.
     public static let mcpApproval = AuditEventKind(rawValue: "mcp.approval")
+    /// An upstream MCP tool listed with a definition the user did not
+    /// trust (changed, new, or unverifiable pins); its calls ask.
+    public static let mcpToolChanged = AuditEventKind(rawValue: "mcp.tool.changed")
+    /// A new machine or repo policy revision (`ConfigChangeAudit.policy`).
+    public static let policyChanged = AuditEventKind(rawValue: "policy.changed")
+    /// The organization bundle: a new serial accepted, or a bundle that
+    /// stopped verifying, went away, or verified again.
+    public static let policyManaged = AuditEventKind(rawValue: "policy.managed")
+    /// One gate setting: safety, a host mode, guard mode, packs, the
+    /// allowlist, secret definitions, an egress review.
+    public static let configChanged = AuditEventKind(rawValue: "config.changed")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")

@@ -3,6 +3,7 @@
 _rv() {
   local -a commands
   commands=(
+    'run:Run a command with secrets as placeholders'
     'opencode:Launch OpenCode with workspace write containment'
     'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'

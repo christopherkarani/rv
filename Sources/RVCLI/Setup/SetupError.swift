@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVService
 
@@ -88,9 +89,15 @@ enum SetupError: Error, Equatable, Sendable {
     /// `rv setup --observe` while an organization gate pins enforce: rvd
     /// would ignore the stored observe mode.
     case observePinnedByOrganization
-    /// `config.json` (or its `guard` value) is not an object, or could not
-    /// be written, so `guard.mode: observe` was not stored.
+    /// `config.json` could not be written, so `guard.mode: observe` was not
+    /// stored.
     case guardModeWriteFailed
+    /// `config.json` cannot be rewritten safely (`ConfigUnreadableRefusal`),
+    /// so `guard.mode: observe` was not stored.
+    case guardConfigUnreadable
+    /// The audit log could not record `guard.mode: observe`, so it was not
+    /// stored.
+    case guardModeUnrecorded(ConfigChangeUnrecorded)
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -241,7 +248,16 @@ private func setupFailureParts(
     case .guardModeWriteFailed:
         phrase = "unable to write guard.mode to config.json"
         exitCode = EX_CANTCREAT
-        detail.append("no hooks were wired; config.json must be a JSON object whose \"guard\" value is an object")
+        detail.append("no hooks were wired")
+    case .guardConfigUnreadable:
+        phrase = ConfigUnreadableRefusal.phrase
+        exitCode = ConfigUnreadableRefusal.exitCode
+        detail.append("no hooks were wired")
+        detail.append(contentsOf: ConfigUnreadableRefusal.detail)
+    case .guardModeUnrecorded(let unrecorded):
+        phrase = unrecorded.description
+        exitCode = ConfigChangeRefusal.exitCode
+        detail.append("no hooks were wired")
     }
     return (phrase, exitCode, detail)
 }

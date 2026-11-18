@@ -15,6 +15,8 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 
 **Secret refusal** — why a release did not happen: invalid organization policy, an organization rule, gateway-only, expired, a provider failure, or an unusable value. Callers own the wording; the decision is the release's. `SecretRefusal`.
 
+**Provider profile** — a shipped, reviewed recipe for one service's gateway secret: endpoints (upstream, surfaces, allow rules), the variables a client reads, and optional binaries. `rv secrets set --provider` expands one; flags may only narrow it. Not a secret *source* provider (Keychain, 1Password, ...). `ProviderProfile`, `ProviderCatalog`.
+
 **Gateway-only** — a value that is not a lasting token (an AWS credential set, an OAuth access token the gateway keeps fresh). Only a cage's gateway may spend it; stdio servers and headers are refused.
 
 **Lease** — what one launch gets from the launch broker: environment entries plus the gateway placeholders to revoke when the runtime ends. The broker builds a lease from released secrets.

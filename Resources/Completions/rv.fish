@@ -1,4 +1,5 @@
 complete -c rv -f
+complete -c rv -n "__fish_use_subcommand" -a "run" -d "Run a command with secrets as placeholders"
 complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with workspace write containment"
 complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persistent workspace host"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
@@ -64,3 +65,4 @@ complete -c rv -n "__fish_seen_subcommand_from secrets" -a "scan" -d "Scan a tre
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "describe" -d "Metadata only"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "import" -d "Import a Varlock schema"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "hook" -d "Git pre-commit hook"
+complete -c rv -n "__fish_seen_subcommand_from secrets" -a "providers" -d "Provider profiles"

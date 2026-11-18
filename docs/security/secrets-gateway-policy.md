@@ -84,8 +84,39 @@ match method and path only.
 From the CLI: `rv secrets set GITHUB_TOKEN --allow github-read` or
 `--allow "GET,HEAD /repos/**"` (repeatable). The flag applies only when the
 secret is first defined. Defining a gateway secret without rules prints a
-note. The curated defaults (`GITHUB_TOKEN`, `OPENAI_API_KEY`, and so on)
-still allow everything, so existing `gh` and API workflows keep working.
+note.
+
+The curated defaults for well-known names are least privilege. A new
+secret with one of these names (from `rv secrets set NAME` without
+`--gateway`, from `rv login connect`, or from a Varlock `@proxy` whose
+domain is the curated upstream's host) gets these rules:
+
+| name                                | upstream                    | default `allow`  |
+|-------------------------------------|-----------------------------|------------------|
+| `OPENAI_API_KEY`                    | `https://api.openai.com/v1` | `GET,POST /v1/**` |
+| `ANTHROPIC_API_KEY`                 | `https://api.anthropic.com` | `GET,POST /v1/**` |
+| `GITHUB_TOKEN`, `GH_TOKEN`          | `https://api.github.com`    | `github-read`    |
+| `STRIPE_SECRET_KEY`                 | `https://api.stripe.com`    | `read-only`      |
+| `VERCEL_TOKEN`                      | `https://api.vercel.com`    | `read-only`      |
+
+Where a narrow scope could not be fixed with confidence, the narrower one
+was chosen:
+
+- The model-provider keys reach only the `/v1` API with `GET` and `POST`
+  (model calls, token counts, listings). `DELETE` (files, batches, stored
+  responses) and paths outside `/v1` are refused.
+- `github-read` refuses GraphQL, which needs `POST /graphql`, so most `gh`
+  subcommands fail with `403` until widened. GraphQL can also mutate.
+- `STRIPE_SECRET_KEY` and `VERCEL_TOKEN` are read-only: a Stripe secret
+  key can move money, and a Vercel token can deploy and delete.
+
+To widen, pass `--allow` when the secret is first defined; it replaces the
+curated rules instead of adding to them. For example
+`rv secrets set GITHUB_TOKEN --allow github-read --allow "POST /graphql"`
+for `gh`, or `--allow "* /**"` for the full authority of the credential.
+For a secret already defined, edit `delivery.gateway.allow` in
+`secrets.json`. Secrets defined before this change keep the rules on file
+(none, for a curated default), so they still allow everything until edited.
 
 Enforcement:
 
@@ -104,6 +135,61 @@ Enforcement:
   after one decode (`%252e`). A path such as GitLab's
   `projects/group%2Fproject` therefore needs no rules on its binding.
 
+## Provider profiles
+
+`rv secrets providers` lists profiles rv ships in
+`Sources/RVIsolation/Resources/providers/providers.json`. Each one names
+one or more endpoints (an https upstream, its surfaces and allow rules), the
+variables clients read, and optionally `binaries`. `rv secrets set NAME
+--provider ID` turns the endpoint `NAME` belongs to into a gateway delivery.
+`--provider ID:ENDPOINT` picks another endpoint, which needs
+`--base-url-env` unless `NAME` is that endpoint's variable.
+
+| profile | upstream | allow |
+|---|---|---|
+| `anthropic`, `openai`, `openrouter`, `vercel`, `stripe` | the service API | any method and path |
+| `github` (`api`) | `https://api.github.com` | `github-read` |
+| `github` (`git`) | `https://github.com` | `github-clone` (no push) |
+| `npm` | `https://registry.npmjs.org` | `PUT /*`: publish one unscoped package |
+| `pypi` | `https://upload.pypi.org/legacy` | `POST /legacy/`: an upload |
+
+The profile is the ceiling. `--surface` must list surfaces the endpoint
+lists, and each `--allow` rule must fall inside one of its rules: methods a
+subset, every query condition kept, and a path glob that matches only paths
+the endpoint's glob matches. The check is conservative: a rule it cannot
+prove narrower is refused. `--base-url-env` and `--placeholder-prefix` rename
+things and carry no authority. Expansion happens once, when the secret is
+defined; `secrets.json` holds the result, and editing it remains possible
+like any other definition.
+
+The catalog is decoded as strictly as `secrets.json`. Unknown keys,
+duplicate keys or ids, a non-https upstream, an invalid glob or preset, or a
+variable claimed by two profiles refuse the whole catalog, and then
+`--provider` fails and no well-known name gets a default.
+
+Left out: `claude-code` (its credential and upstream are `anthropic`'s; the
+CLI's telemetry hosts carry no key) and `codex` (OAuth tokens, a refresh
+grant in the request body, and four hosts; the gateway substitutes in no
+body). Limits: GitHub GraphQL needs POST and stays refused under `github`,
+so `gh` commands that use it fail; npm escapes a scope's `/` as `%2f`,
+which the gateway refuses whenever rules are set, so scoped packages cannot
+be published through `npm`; PyPI tools must post to the base URL with a
+trailing slash.
+
+The `npm` refusals are by method and path only. Unpublish
+(`/<pkg>/-rev/<rev>`), dist-tags (`/-/package/...`), owner changes and
+`npm deprecate` (which first reads `GET /<pkg>?write=true`) are refused, but
+the body of an allowed `PUT /<pkg>` is opaque to rv: whatever the registry
+accepts in a package document goes through. `*` also matches an empty
+segment, so `PUT /` and `PUT /-` match `/*` too; they are accepted residuals
+left to the registry.
+
+Only `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`,
+`GITHUB_TOKEN`, `GH_TOKEN` and `VERCEL_TOKEN` get a default on a bare
+`rv secrets set`. The other catalog variables (`NPM_TOKEN`,
+`TWINE_PASSWORD`, `UV_PUBLISH_TOKEN`, `OPENROUTER_API_KEY`) are bound only
+through `--provider`, so their scope is never silently dropped.
+
 ## Runtime binding
 
 The gateway listens on `127.0.0.1`, and the cage may reach any loopback port
@@ -121,17 +207,24 @@ therefore honored only on a connection from the runtime it was leased to.
   could otherwise join this one. The same flag, and `POSIX_SPAWN_SETSID`
   (Node's `detached: true`), moves a child out of the group, and the
   descendant walk keeps those children in.
-- On each request, rv takes the connection's port pair and looks, with
-  libproc, for one of those processes holding the client socket: the leader
-  first, then the descendants (at most 4096), then the session. Each match
-  is re-checked after the scan so a reused pid does not count. Every
+- On each request, rv takes the connection's port pair and looks (libproc
+  on macOS, `/proc` on Linux; see below) for one of those processes holding
+  the client socket: the leader
+  first, then the descendants (at most 4096), then the session. The
+  listings only name candidates. A candidate found holding the socket is
+  proved a member again from fresh reads: it is the recorded leader, or
+  every parent link from it up to the leader holds (each process read
+  again after its parent was, and no parent younger than its child), or
+  it is in the session the leader leads. So a pid that exited and was
+  reused mid-scan, by the holder or by a process between it and the
+  leader, does not count. Every
   placeholder in the request is checked, so one runtime cannot spend
   another's placeholder beside its own.
 - Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
   finding. Another runtime, a host shell, or any other local process
   holding a copied placeholder lands here.
 - Cannot tell: `403`, refusal `runtimeUnverified`, no misuse finding. This
-  covers a libproc failure, a group whose leader is gone or was reused, a
+  covers a kernel read that failed, a group whose leader is gone or was reused, a
   descendant walk past its bound, and a placeholder whose runtime has no
   recorded group. The gateway fails closed.
 
@@ -140,9 +233,255 @@ its processes may spend the placeholder unless the secret lists `binaries`
 (next section). A process whose parent exited
 (reparented to launchd) is no longer a descendant, even if it stayed in the
 leader's group; unless it is in a terminal runtime's session, its requests are refused as
-`runtimeMismatch`. Linux has no check (no
-libproc), so every gateway request there is `runtimeUnverified`. Contained
-launches on Linux are already refused before exec.
+`runtimeMismatch`. On Linux the parent is init or the nearest subreaper
+(`systemd --user`), with the same effect.
+
+### Linux
+
+The check is the same scan; only the reads differ.
+
+- The connection is found in `/proc/self/net/tcp` and `tcp6`, which show
+  the reader's network namespace, the gateway's: the client end is the row
+  `127.0.0.1:<client port> -> 127.0.0.1:<gateway port>` (IPv4, or IPv6
+  v4-mapped for a dual-stack client socket). The gateway's own end must be
+  in the same tables, and exactly one held client end (inode not 0) must
+  be. A process holds it when one of its `/proc/<pid>/fd/*` links, or one
+  of a thread's `/proc/<pid>/task/<tid>/fd/*` (a thread that unshared its
+  table with `unshare(CLONE_FILES)`), reads `socket:[<inode>]`. A forked
+  child that inherited the socket is a holder too. The kernel may print a
+  row twice when the table changes while it is read; the same row twice
+  is one socket.
+- A socket registered with an io_uring instance
+  (`IORING_REGISTER_FILES`, direct descriptors) whose descriptor was then
+  closed is named by no `fd` link: the ring holds it. A process holding
+  the ring (`anon_inode:[io_uring]`) holds every socket the ring's
+  `/proc/<pid>/fdinfo/<fd>` lists under `UserFiles:`. A ring whose files
+  cannot be read (the kernel omits the list while the ring is busy), or
+  that holds another ring, leaves the scan undecided.
+- A process is identified by its pid and its start time (`/proc/<pid>/stat`
+  field 22, clock ticks after boot). The `comm` field is read from the last
+  `)`, as bytes, so a process cannot forge the fields after its name. A
+  `stat` that does not end in a newline is a read cut short and is refused.
+  So is one with fewer than the 50 fields Linux prints after the name
+  (since 3.5): a name may hold a newline, and the kernel prints at most 63
+  bytes of one, too few to hold 50 fields of its own. An emulator that
+  prints a shorter `stat` (QEMU user-mode prints 44 fields for the process
+  itself) is refused the same way, and `rv run` does not start there.
+- Descendants come from one pass over every process's `stat`, so every
+  `stat` on the host must be readable.
+- Each candidate's `stat` is read before and after its descriptors. A
+  change in between, or a process that exits after the scan listed it (it
+  may have been the holder), leaves the scan undecided: unless another
+  candidate is a holder, the answer is `runtimeUnverified`, not
+  `runtimeMismatch`. A process already gone when
+  the scan lists processes, or a zombie, is skipped, as on macOS. A
+  process whose main thread exited while other threads run reads as a
+  zombie in `stat` but is alive: it is kept while `/proc/<pid>/task` lists
+  more than one thread. Its main thread has no descriptors any more (and
+  the kernel gives that thread's `fd` directory to root), so only the
+  threads that run are read.
+- One decision reads a bounded amount of `/proc`: at most 2^20 files,
+  links and directory entries (a listing is one read per process on the
+  host; a descriptor scan is up to threads times descriptors per
+  candidate). Past that every read fails and the answer is
+  `runtimeUnverified`.
+- In a terminal runtime's session, a listed process whose session cannot
+  be read leaves the scan undecided too.
+- `runtimeUnverified` also covers: a `/proc` whose `self` is not rv's pid
+  (another pid namespace's: nothing at all is read from it, not one
+  process's `stat`), a `/proc` mounted with `hidepid` other than
+  `0`/`off` (a descendant running as another user could not be seen), an
+  unreadable descriptor table, the process's or any thread's (a setuid,
+  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, rv
+  itself confined by an LSM policy with no ptrace-read rule, or one that
+  exited mid-read), a socket table that is missing, truncated,
+  malformed, ambiguous, or lacks the gateway's end, and a client end no
+  process holds (inode 0: time-wait or orphaned). Yama's `ptrace_scope`
+  restricts attaching, not these reads, at every setting.
+- A process in another network namespace cannot reach the gateway's
+  loopback, so it is never a holder, even with the same port pair on its
+  own loopback. A listening socket shared with
+  `SO_REUSEPORT` does not matter: a connected 4-tuple is unique within a
+  namespace. A descendant in a pid namespace of its own (`unshare --pid`,
+  a rootless container) is still a process of rv's `/proc` and is read
+  like any other; `/proc` mounted with `subset=pid` hides nothing the
+  check reads.
+- Descriptors that change hands: holding the socket is the criterion,
+  however a process came to hold it. A runtime process that passes its
+  connection to a process outside the runtime (`SCM_RIGHTS`, `fork`) is
+  still a holder while it keeps its own descriptor, and the request is
+  served, as it would be if the runtime relayed it; once the runtime
+  closes its descriptor the connection is `runtimeMismatch`. The reverse
+  is a limit (the same on macOS): a runtime process that receives
+  descriptors from outside its runtime can be handed an outsider's
+  connection, and is then its holder.
+- Limits beyond macOS's:
+  - A recorded group's start time is ticks after boot, so it names a
+    process only until the host reboots, and only to the tick (10 ms): a
+    pid reused within one tick is the same identity.
+  - Socket inode numbers are 32 bits and the kernel reuses them after
+    2^32 allocations (the limit `ss -p` and `lsof` share). A local process
+    that can drive the counter around and land on the number of a socket
+    a runtime process holds would be attributed to the runtime. Driving
+    it takes on the order of hours of CPU.
+  - A socket in flight inside a Unix socket message (sent, not yet
+    received) is in no descriptor table: a request on it is
+    `runtimeMismatch` until a runtime process receives it. A child forked
+    after the scan listed processes, whose parent then exits, is missed
+    the same way.
+  - A process whose main thread exited has no readable `/proc/<pid>/exe`,
+    so binary binding on it is `runtimeUnverified`. A secret with
+    `binaries` is also `runtimeUnverified` while any runtime process has
+    an unreadable descriptor table (a setuid or non-dumpable child such
+    as `sudo` or `ssh-agent`): every holder must be read.
+  - A container started through a daemon (`docker run`) is the daemon's
+    child, not the runtime's: with host networking its requests are
+    `runtimeMismatch`.
+
+Verified on real kernels by `SecretGatewayLinuxPeerTests`,
+`SecretGatewayLinuxAttackTests` and `Scripts/linux-peer-binding-e2e.sh`,
+which runs the binding under `hidepid`, `subset=pid`, another pid
+namespace's `/proc`, root without `CAP_SYS_PTRACE`, an AppArmor-confined
+reader, Yama `ptrace_scope` 1 to 3, and a default Docker container.
+
+## Uncontained launches (`rv run`)
+
+`rv run --secret NAME -- COMMAND` (or `--all`) starts a command with no
+cage and the gateway in front of it. It is for running `claude`, `codex`,
+or a script with placeholders instead of real values, without a workspace.
+On Linux the whole path is run for real by `Scripts/linux-rv-run-e2e.sh`:
+an unprivileged account, a TLS upstream on localhost, the command's and
+its child's requests carrying the real value, the same placeholder from
+outside the command's tree refused, and rv's exit status.
+
+How it starts the command:
+
+- Only `gateway` and `awsSigV4` secrets are staged. A named secret with
+  `environment` delivery, or with an `agents` filter (`rv run` carries no
+  agent tag), is refused; `--all` skips those, names them on stderr, and
+  removes what they would have set (and a `hostEnvironment` source's
+  variable) from the command's environment. Nothing selected is refused.
+- The command's environment is rv's own, minus every variable a selected
+  secret stages (the shell's copy of the real value among them, and
+  `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), minus the
+  variable a `hostEnvironment` source reads, minus any variable whose
+  value (trimmed of surrounding whitespace or not) is a selected secret's
+  real value or one part of an AWS credential set, or contains one that is
+  12 bytes or longer (`Bearer <token>`, a connection URL with the password
+  in it), plus the lease: placeholders, base URLs, and the AWS endpoint,
+  key id and a throwaway signing key. A shorter value is matched only
+  exactly, so a short PIN does not take unrelated variables with it. The
+  names to strip come from the definitions the lease staged. When a
+  selected secret comes from Vault, rv's own Vault login (`VAULT_TOKEN`) is
+  removed too; `~/.vault-token` is not, and provider CLIs (`op`, `aws`,
+  `infisical`, `bws`, `gcloud`, `az`) read their own logins, which rv does
+  not name, so those pass through. Values are compared in memory as bytes;
+  the names removed by value are listed on stderr. A variable whose value
+  is not valid UTF-8 reaches rv already repaired by Foundation, so a real
+  value hidden in one is not recognised.
+- On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
+  `POSIX_SPAWN_START_SUSPENDED` creates the command as its own group leader
+  and stops it before its first instruction. rv records the leader's pid
+  and start time, binds the lease to it, hands it the terminal, and only
+  then sends `SIGCONT`. If any step fails, or a signal reaches rv before
+  the resume, the stopped child is killed. Only stdio is inherited.
+- On Linux, where `posix_spawn` cannot start a process stopped, the child
+  is a launcher: `rv-isolation-exec --stopped`, the helper installed
+  beside rv and found from `/proc/self/exe` (never `PATH`). It is spawned
+  as its own group leader (`POSIX_SPAWN_SETPGROUP`), closes every
+  descriptor above stdio with `close_range` (it exits 125 instead if the
+  kernel refuses, so a kernel before 5.9 cannot run `rv run`), stops
+  itself with `SIGSTOP`, and execs the command only once continued. rv
+  waits for that stop, and takes only a stop by `SIGSTOP` for it: a
+  launcher that exited, was killed, stopped for another reason, or has
+  not stopped within 10 seconds is killed and the launch refused. A
+  standard descriptor rv itself was started without (`<&-`) is closed for
+  the command too: its number may by then name something rv opened, and
+  every descriptor rv opens is close-on-exec, so a closed or close-on-exec
+  one is never passed on (the same rule applies on macOS). The launcher
+  is told rv's pid and checks that rv is still its parent before it stops
+  and after it is continued: if rv has died, it exits without running the
+  command (if rv dies while it is stopped and nothing continues it, it
+  stays stopped and never runs). The rest is the same code as on macOS:
+  rv records the stopped process's pid and start time, which survive
+  `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
+  So the command's image runs no instruction before its placeholders are
+  bound, and holds none of rv's descriptors. If `exec` then fails the
+  launcher says why on stderr and exits 126. A `SIGSTOP` sent to the new
+  child by another process before its own is indistinguishable from it:
+  rv binds and continues the launcher, which then stops once more at its
+  own. With a terminal rv stops with it, as for Ctrl-Z, and `fg` resumes
+  both; without one the command waits for a `SIGCONT` (any signal rv
+  forwards is followed by one). It is bound either way. The launcher is
+  an ordinary dynamically linked program started with the command's
+  environment, so loader variables in it (`LD_PRELOAD`) act in the
+  launcher, before its stop, as they would in the command after it.
+- `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
+  command's group, each followed by `SIGCONT` so a stopped group gets it,
+  until the leader exits; nothing is signalled once it is reaped. One rv
+  inherited ignored (`nohup`) stays ignored for the command. The
+  dispositions are process-wide and installed once however many guards
+  are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
+  behind rv. macOS ignores the four signals and reads them from a signal
+  source. Linux discards an ignored signal unread, so there each has a
+  handler that writes its number to a pipe one thread reads. A signal rv
+  inherited ignored gets no handler on Linux: it stays ignored for rv and
+  for the command, and is not forwarded. If that pipe cannot be made the
+  four stay ignored: rv forwards nothing and ends with the command. rv takes its terminal from `/dev/tty`, so a command reading
+  the terminal while stdin is a pipe still stops and resumes with job
+  control. Ctrl-Z stops rv with the command, and `fg` resumes both; `bg`
+  resumes both and leaves the terminal with the shell. rv hands the
+  terminal on only while it holds the foreground and its process group
+  holds nothing but rv and its own parents (read with
+  `proc_listpgrppids`; on Linux from one pass over `/proc`, and a `/proc`
+  that cannot be listed counts as shared). In a pipeline (`rv run -- x | less`) the other
+  commands share rv's group, so the terminal stays with them: Ctrl-C
+  reaches the command only because rv forwards it, and Ctrl-Z stops rv but
+  not the command. rv takes the terminal back only from the command's
+  group, or from a group nobody is in any more: if the shell gave it to
+  another job while rv was stopped, that job keeps it. Terminal modes are
+  saved when rv takes it back and re-applied when it hands it on. rv exits with
+  the command's code, or 128 plus the signal that ended it; 125 means
+  `rv run` refused and the command never ran (126: could not be started,
+  127: not found).
+- When the leader exits, rv kills what is left of its process group,
+  revokes the placeholders and stops the gateway, on every path.
+
+What it protects:
+
+- The real values are never in the command's environment, so it cannot
+  print, log, or paste into a transcript a value it was never given.
+- A placeholder is spent only on a connection from the command or a process
+  it started ([runtime binding](#runtime-binding)), only for requests the
+  secret's `allow` rules permit, and only while the command runs. Requests an
+  `approve` rule matches are refused: there is no approver outside a
+  workspace.
+
+What it does not:
+
+- It is not a sandbox. The command runs as you, with your files and
+  network. It can read whatever your user can, which may include where the
+  real values are stored: a `.env` file, `~/.aws/credentials`, a signed-in
+  password manager CLI, a keychain item it is allowed to read. It may also
+  be able to read the environments of its parent processes, rv's own
+  (which holds what rv inherited) included.
+- Other variables pass through unchanged, including secrets you did not
+  select (other than those `--all` skipped).
+- A process in a new session or group (`setsid`) can still spend the
+  placeholders while its chain of parents reaches the command. Only a
+  process reparented to launchd (its parent exited) cannot, and it is not
+  killed when the command exits.
+
+Before resolving any secret, `rv run` checks both things it relies on by
+doing them (`SecretRunCapability.check`): it spawns a suspended probe
+child holding one end of a loopback connection, and the gateway's peer
+check must call that connection the probe's and a second one not. A
+platform without a no-window spawn, or whose peer check cannot tell
+(`/proc` hidden or another pid namespace's, no libproc, rv confined so
+it may not read other processes, the Linux launcher missing), is refused
+with exit 125 and the command never starts. On Linux a missing
+launcher is named as such (`rv-isolation-exec is not installed beside
+rv ... reinstall rv`).
 
 ## Binary binding
 
@@ -182,6 +521,15 @@ to the processes running listed programs:
   scan and the walk, or during it, is `unverifiable`, as is a walk that
   hits the 64-level bound before reaching the leader or launchd. The kernel reports an executable by its real path, so a script's
   interpreter is what is matched.
+- What is compared. macOS: the path libproc reports (`proc_pidpath`) must
+  be the pinned path, and the file at that path must still be the pinned
+  file. Linux: the same, and the file the process actually runs, read
+  through `/proc/<pid>/exe` (`stat` follows it even to an unlinked file),
+  must be the pinned file too: same device, inode, size and change time.
+  That catches a process that bind-mounts another binary over the pinned
+  path in its own mount namespace. A target the kernel marks ` (deleted)`
+  (the binary was replaced or removed) never matches. Neither platform
+  compares a code signature or a content hash.
 - Mismatch: `403`, refusal `binaryMismatch`, and a `secret.misuse`
   finding. Cannot tell (a process exited or changed mid-walk, a descriptor
   table or path could not be read): `403`, `runtimeUnverified`, no
