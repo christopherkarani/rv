@@ -61,6 +61,10 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
     /// config or install dirs or inside the workspace.
     case protectedDestination(String)
     case destinationExists(String)
+    /// A download would create files host tools run or trust (`.envrc`,
+    /// `.claude/settings.json`, ...) at the top of the new directory. The
+    /// cage protects those names only at the workspace root.
+    case protectedEntries([String])
     /// An upload would put a file where a directory is, or the reverse.
     case destinationConflict(String)
     case tooManyEntries(Int)
@@ -83,6 +87,8 @@ public enum WorkspaceTransferRefusal: Error, Sendable, Equatable, CustomStringCo
         case .protectedSource(let path): "\(path) is, holds, or is inside rv's config dir or the workspace"
         case .protectedDestination(let path): "\(path) is a protected path"
         case .destinationExists(let path): "\(path) already exists; choose a new destination"
+        case .protectedEntries(let paths):
+            "would create files host tools run or trust: \(paths.joined(separator: ", ")); copy them by hand after reading them"
         case .destinationConflict(let path): "\(path) exists with a different type"
         case .tooManyEntries(let limit): "more than \(limit) files and directories"
         case .tooLarge(let limit): "more than \(limit) bytes"
@@ -493,7 +499,9 @@ private struct TreePlanner {
         }
         for name in names {
             let childPath = path + [name]
-            if gitignore, name == ".git" {
+            // Always skipped, any case: a `.git` carries config git runs
+            // (`core.fsmonitor`, hooks) wherever the tree lands.
+            if name.lowercased() == ".git" {
                 plan.ignored += 1
                 continue
             }
@@ -794,6 +802,12 @@ extension WorkspaceTransfer {
             close(parent.fd)
             return .failure(refusal)
         }
+        let offenders = protectedDownloadEntries(planner.plan, topName: destination.name)
+        if offenders.isEmpty == false {
+            close(sourceParent)
+            close(parent.fd)
+            return .failure(.protectedEntries(offenders))
+        }
         request.afterPlan?()
         if let refusal = stillAt(realParent, parent.info) {
             close(sourceParent)
@@ -860,6 +874,19 @@ extension WorkspaceTransfer {
             current = next
         }
         return .success(current)
+    }
+
+    /// Entries that would land on a control or run-later path of the new
+    /// directory (it may become a project root) or of its parent (the
+    /// owner's destination may sit in one). At most 20 are named.
+    static func protectedDownloadEntries(_ plan: TransferPlan, topName: String) -> [String] {
+        var offenders: [String] = []
+        for entry in plan.entries
+        where isProtectedWorkspacePath(entry.path) || isProtectedWorkspacePath([topName] + entry.path) {
+            offenders.append(escaped(([topName] + entry.path).joined(separator: "/")))
+            if offenders.count == 20 { break }
+        }
+        return offenders
     }
 
     /// The pinned directory must still be what its resolved path names, or

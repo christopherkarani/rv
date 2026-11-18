@@ -323,6 +323,45 @@ struct WorkspaceDownloadTests {
         #expect(refusal(WorkspaceTransfer.download(request)) == nil)
     }
 
+    @Test(arguments: [
+        ".claude/settings.json", ".claude/settings.local.json", "opencode.json", ".envrc",
+        ".vscode/tasks.json", ".mcp.json", ".claude/hooks/pre.sh", ".rv/policy.toml", ".config/rv/x",
+    ])
+    func refusesNestedGuestConfigThatWouldLandAtTheTop(name: String) throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/sub/ok.txt", "ok")
+        try fixture.write(fixture.workspace + "/sub/" + name, "planted")
+        // A protected tree (`.claude/hooks`, `.rv`) is named along with the file in it.
+        guard case .protectedEntries(let offenders) = refusal(fixture.download("sub", to: fixture.host + "/newproj")) else {
+            Issue.record("expected protectedEntries")
+            return
+        }
+        #expect(offenders.last == "newproj/" + name)
+        #expect(offenders.allSatisfy { ("newproj/" + name).hasPrefix($0) })
+        #expect(fixture.exists(fixture.host + "/newproj") == false)
+    }
+
+    @Test func aDestinationNamedLikeAControlDirectoryIsRefused() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/cfg/settings.json", "{}")
+        #expect(refusal(fixture.download("cfg", to: fixture.host + "/.claude")) == .protectedEntries([".claude/settings.json"]))
+    }
+
+    @Test func gitDirectoriesAreAlwaysSkipped() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/sub/ok.txt", "ok")
+        try fixture.write(fixture.workspace + "/sub/.git/config", "[core]\n\tfsmonitor = /tmp/x\n")
+        try fixture.write(fixture.workspace + "/sub/deep/.GIT/config", "[core]")
+        let summary = try fixture.download("sub", to: fixture.host + "/newproj", gitignore: false).get()
+        #expect(fixture.exists(fixture.host + "/newproj/.git") == false)
+        #expect(fixture.exists(fixture.host + "/newproj/deep/.GIT") == false)
+        #expect(fixture.read(fixture.host + "/newproj/ok.txt") == "ok")
+        #expect(summary.ignored == 2)
+    }
+
     @Test func refusesSpecialFiles() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }

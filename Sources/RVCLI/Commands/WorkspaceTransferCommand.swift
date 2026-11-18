@@ -16,7 +16,7 @@ struct WorkspaceUpload: AsyncParsableCommand {
 
     @OptionGroup var path: WorkspacePath
 
-    @Flag(name: .long, help: "Copy everything; by default .gitignore files in the copied tree and .git directories are skipped.")
+    @Flag(name: .long, help: "Ignore .gitignore files in the copied tree; .git directories are always skipped.")
     var noGitignore = false
 
     @Argument(help: "Host file or directory to copy. Never rv's config dir; symlinks are refused.")
@@ -40,7 +40,7 @@ struct WorkspaceDownload: AsyncParsableCommand {
 
     @OptionGroup var path: WorkspacePath
 
-    @Flag(name: .long, help: "Copy everything; by default .gitignore files in the copied tree and .git directories are skipped.")
+    @Flag(name: .long, help: "Ignore .gitignore files in the copied tree; .git directories are always skipped.")
     var noGitignore = false
 
     @Argument(help: "Workspace-relative file or directory; '.' is the whole workspace.")
