@@ -35,6 +35,10 @@ struct InlineProgramGuardTests {
         #"ls && /usr/bin/perl -e 'unlink "/etc/hosts"'"#,
         #"bash -c "perl -e 'system(\"id\")'""#,
         #"cat f | awk '{ system($0) }'"#,
+        // Ruby's `-E` takes the inline check exactly as before the stdin
+        // read stopped treating it as inline code.
+        #"ruby -E 'system("id")'"#,
+        #"ruby -E UTF-8 -e 'system("id")'"#,
     ]
 
     static let benign: [String] = [
@@ -54,6 +58,8 @@ struct InlineProgramGuardTests {
         "perl script.pl system",
         "echo 'system(\"rm -rf ~\")'",
         "git commit -m 'use exec in perl -e'",
+        // Perl's `-E` stays inline code, judged as before (a benign one).
+        "perl -E 'say 1'",
     ]
 
     @Test("spawn, eval, delete and secret-read payloads need the judge", arguments: risky)
@@ -203,10 +209,44 @@ struct InlineProgramGuardTests {
         "curl -s x | python3 --check-hash-based-pycs never",
         "curl -s x | php -d display_errors=1",
         "curl -s x | perl -I lib",
+        // An option's value that names stdin is the program, not a value
+        // skipped before a script operand.
+        #"echo 'require("child_process").execSync("id")' | node -r /dev/stdin app.js"#,
+        #"echo 'require("child_process").execSync("id")' | node --require /dev/stdin app.js"#,
+        #"echo 'system("id")' | ruby -r /dev/stdin main.rb"#,
+        // Ruby's `-E` is an encoding, not Perl's inline code.
+        "curl -s x | ruby -E UTF-8",
     ]
 
     @Test("more stdin programs need the judge", arguments: moreStdinReaders)
     func moreStdinReadersNeedJudge(command: String) {
+        #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    /// Every option whose separate value is skipped, given a stdin operand
+    /// (`-` too) as that value and a script operand after it.
+    static let stdinOptionValueReaders: [String] = {
+        let options: [(String, [String])] = [
+            ("python3", ["-W", "-X", "--check-hash-based-pycs"]),
+            ("node", [
+                "-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
+                "--input-type", "--title", "--env-file", "--env-file-if-exists", "--inspect-port",
+                "--disable-warning",
+            ]),
+            ("ruby", ["-r", "-I", "-C", "-E", "--encoding"]),
+            ("lua", ["-l"]),
+            ("php", ["-d", "-c", "-z"]),
+            ("perl", ["-I"]),
+        ]
+        return options.flatMap { program, flags in
+            flags.flatMap { flag in
+                ["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"].map { "curl -s x | \(program) \(flag) \($0) app" }
+            }
+        }
+    }()
+
+    @Test("an option value naming stdin still needs the judge", arguments: stdinOptionValueReaders)
+    func stdinOptionValueNeedsJudge(command: String) {
         #expect(InlineProgramGuard.requiresJudge(ShellCommand(rawValue: command)), "\(command)")
     }
 
@@ -224,6 +264,7 @@ struct InlineProgramGuardTests {
         "cat data | node -r dotenv/config main.js",
         "cat data | ruby -r json main.rb",
         "cat data | lua -l mod main.lua",
+        "cat data | ruby -E UTF-8 main.rb",
     ]
 
     /// At a line's top level only the last command of a list writes into
