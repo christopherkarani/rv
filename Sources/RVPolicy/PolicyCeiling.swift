@@ -278,32 +278,12 @@ public struct PolicyCeilingStore: Sendable {
     /// without blocking on a FIFO and without reading past the cap. Nil
     /// only for ENOENT; anything else throws `invalidFile`.
     public static func readText(at url: URL, followSymlinks: Bool) throws -> String? {
-        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | (followSymlinks ? 0 : O_NOFOLLOW))
-        guard fd >= 0 else {
-            if errno == ENOENT { return nil }
+        do {
+            return try PolicyFileRead.text(
+                at: url, maximumBytes: PolicyCeiling.maximumBytes, followSymlinks: followSymlinks)
+        } catch {
             throw PolicyCeilingError.invalidFile
         }
-        defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
-            info.st_size >= 0, Int(info.st_size) <= PolicyCeiling.maximumBytes
-        else {
-            throw PolicyCeilingError.invalidFile
-        }
-        var bytes = [UInt8]()
-        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-        while true {
-            let count = read(fd, &buffer, buffer.count)
-            if count < 0, errno == EINTR { continue }
-            guard count >= 0 else { throw PolicyCeilingError.invalidFile }
-            if count == 0 { break }
-            bytes.append(contentsOf: buffer.prefix(count))
-            guard bytes.count <= PolicyCeiling.maximumBytes else { throw PolicyCeilingError.invalidFile }
-        }
-        guard let text = String(validating: bytes, as: UTF8.self) else {
-            throw PolicyCeilingError.invalidFile
-        }
-        return text
     }
 
     /// What `ceiling.toml` holds when a replacement is classified.

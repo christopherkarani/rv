@@ -982,6 +982,9 @@ public struct TypedRuleStore: Sendable {
         RVPolicyPaths.policyRevisionLogTipFile(inConfigDir: baseDirectory)
     }
 
+    /// Largest `policy.toml` (or legacy JSON) a load reads; larger fails closed.
+    public static let maximumDocumentBytes = 1024 * 1024
+
     /// F1 decision: loads are documented direct-edit — they read the current
     /// `policy.toml` bytes as-is and never consult the revision log. The
     /// machine file is owner-only in a 0700 directory, so only the owner can
@@ -990,14 +993,16 @@ public struct TypedRuleStore: Sendable {
     /// `machineHistory` and `rollbackMachine` verify the full chain plus the
     /// sealed tip on every read, and rollback restores byte-exact verified
     /// content. Unparseable bytes still fail closed with `invalidFile`.
+    ///
+    /// Every hook evaluation runs this read, so it never blocks: a symlink,
+    /// FIFO, device, directory or file over `maximumDocumentBytes` at
+    /// either path throws `invalidFile` (evaluation denies) instead of
+    /// being followed, waited on or read whole.
     private func loadDocument(
         toml: URL,
         json: URL
     ) throws -> PolicyDocument {
-        if FileManager.default.fileExists(atPath: toml.path) {
-            guard let text = try? String(contentsOf: toml, encoding: .utf8) else {
-                throw TypedRuleStoreError.invalidFile
-            }
+        if let text = try Self.readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }) {
             do {
                 return try PolicyDocumentTOML.parse(text)
             } catch {
@@ -1007,12 +1012,25 @@ public struct TypedRuleStore: Sendable {
         return try loadLegacyJSON(from: json)
     }
 
-    private func loadLegacyJSON(from url: URL) throws -> PolicyDocument {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return PolicyDocument()
-        }
-        guard let data = try? Data(contentsOf: url) else {
+    /// Nil when no file exists at `url`. A missing parent directory, or a
+    /// path component that is a file, is absent too, as before hardening.
+    private static func readPolicyFile<T>(_ url: URL, as decode: ([UInt8]) -> T?) throws -> T? {
+        let bytes: [UInt8]?
+        do {
+            bytes = try PolicyFileRead.bytes(at: url, maximumBytes: maximumDocumentBytes, followSymlinks: false)
+        } catch .notDirectory {
+            return nil
+        } catch {
             throw TypedRuleStoreError.invalidFile
+        }
+        guard let bytes else { return nil }
+        guard let decoded = decode(bytes) else { throw TypedRuleStoreError.invalidFile }
+        return decoded
+    }
+
+    private func loadLegacyJSON(from url: URL) throws -> PolicyDocument {
+        guard let data = try Self.readPolicyFile(url, as: { Data($0) }) else {
+            return PolicyDocument()
         }
         let document: TypedRulesDocument
         do {
