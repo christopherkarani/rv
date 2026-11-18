@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVIsolation
 import RVPolicy
 @testable import RVCLI
 
@@ -131,6 +132,69 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         let command = try Uninstall.parse(["--remove-models"])
         #expect(command.removeModels)
         #expect(try Uninstall.parse([]).removeModels == false)
+    }
+
+    /// Plain uninstall keeps the user's secrets, MCP state and audit log,
+    /// and says what it kept and how to remove it: afterwards no rv binary
+    /// is left to do it.
+    @Test func plainUninstallNamesWhatItKeptAndHowToRemoveIt() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            for name in ["secrets.json", "mcp.json", "audit.jsonl"] {
+                #expect(exists(layout.configDirectory + "/" + name), "\(name) was not kept")
+            }
+            let note = outcome.stderr
+            #expect(note.contains(layout.configDirectory), "\(note)")
+            for name in ["secrets.json", "mcp.json", "audit.jsonl"] {
+                #expect(note.contains(name), "\(name) missing from: \(note)")
+            }
+            #expect(note.contains("2 secret values"), "\(note)")
+            #expect(note.contains(SecretKeychain.storeName), "\(note)")
+            #expect(note.contains("GH_TOKEN") && note.contains("NPM_TOKEN"), "\(note)")
+            #expect(note.contains("EXT_TOKEN") == false, "an external item is not rv's: \(note)")
+            #expect(note.contains("rv uninstall --purge"), "\(note)")
+            #expect(note.contains("rm -rf \(layout.configDirectory)"), "\(note)")
+            #if canImport(Security)
+            #expect(note.contains("security delete-generic-password -s rv.secrets -a GH_TOKEN"), "\(note)")
+            #expect(note.contains("security delete-generic-password -s rv.secrets -a NPM_TOKEN"), "\(note)")
+            #else
+            #expect(note.contains("secret-tool clear service rv.secrets"), "\(note)")
+            #endif
+        }
+    }
+
+    @Test func uninstallWithNothingKeptPrintsNoKeptNote() throws {
+        try withTempHome { home, layout, launchctl in
+            try touch(layout.localRv)
+            let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
+        }
+    }
+}
+
+/// secrets.json with two values rv stored (`rv.secrets`) and one item rv
+/// did not store, plus an mcp.json and an audit log.
+private func writeUserData(_ layout: OwnedPaths) throws {
+    let config = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+    let secrets = SecretsConfiguration(secrets: [
+        SecretDefinition(
+            name: "GH_TOKEN", source: .keychain(service: SecretKeychain.service, account: "GH_TOKEN"),
+            delivery: .environment),
+        SecretDefinition(
+            name: "NPM_TOKEN", source: .keychain(service: SecretKeychain.service, account: "NPM_TOKEN"),
+            delivery: .environment),
+        SecretDefinition(
+            name: "EXT_TOKEN", source: .keychain(service: "corp.tokens", account: "EXT_TOKEN"),
+            delivery: .environment),
+    ])
+    try secrets.write(configDirectory: config).get()
+    try touch(layout.configDirectory + "/mcp.json", "{}")
+    let audit = layout.configDirectory + "/audit.jsonl"
+    if exists(audit) == false {
+        try touch(audit, "")
     }
 }
 
