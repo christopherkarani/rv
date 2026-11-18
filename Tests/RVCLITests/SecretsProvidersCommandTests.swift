@@ -39,7 +39,7 @@ struct SecretsProvidersCommandTests {
         }
         #expect(failure.message.hasPrefix("the provider catalog is invalid:"))
         guard case .failure = SecretsRun.definitionForProvider(
-            "github", name: "GITHUB_TOKEN", isNew: true, baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
             allow: [], catalog: broken)
         else {
             Issue.record("an invalid catalog must not expand")
@@ -65,7 +65,7 @@ struct SecretsProvidersCommandTests {
         defer { fixture.tearDown() }
         let environment = fixture.environment()
         let expanded = try SecretsRun.definitionForProvider(
-            "github", name: "GITHUB_TOKEN", isNew: true, baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
             allow: []).get()
         #expect(expanded.definition == .gateway(
             upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "",
@@ -84,27 +84,41 @@ struct SecretsProvidersCommandTests {
         }
         #expect(binding.upstream.absoluteString == "https://api.github.com")
         #expect(binding.allow == [.preset(.githubRead)])
+
+        // The same --provider command run again stores a value; a different expansion is refused.
+        let defined = try Data(contentsOf: fixture.secretsFile)
+        _ = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-5678".utf8), definition: expanded.definition, agents: [],
+            description: nil, environment: environment).get()
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GITHUB_TOKEN"] } == Data("ghp-5678".utf8))
+        let narrowed = try SecretsRun.definitionForProvider(
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
+            allow: try SecretsRun.allowances(["GET /repos/**"]).get()).get()
+        #expect(SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-9999".utf8), definition: narrowed.definition, agents: [],
+            description: nil, environment: environment).map { _ in "" }
+            == .failure(CommandFailure(
+                "GITHUB_TOKEN is already defined; `rv secrets set GITHUB_TOKEN` with no delivery flags replaces its "
+                    + "value; edit secrets.json to change its delivery")))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GITHUB_TOKEN"] } == Data("ghp-5678".utf8))
+        #expect(try Data(contentsOf: fixture.secretsFile) == defined)
     }
 
     @Test func providerCanOnlyNarrow() throws {
         let narrowed = try SecretsRun.definitionForProvider(
-            "github", name: "GITHUB_TOKEN", isNew: true, baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
             allow: try SecretsRun.allowances(["GET /repos/**"]).get()).get()
         #expect(narrowed.definition == .gateway(
             upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "",
             surfaces: [.header], allow: [.rule(try #require(GatewayAccessRule(methods: ["GET"], path: "/repos/**")))]))
         #expect(SecretsRun.definitionForProvider(
-            "github", name: "GITHUB_TOKEN", isNew: true, baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
+            "github", name: "GITHUB_TOKEN", baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
             allow: try SecretsRun.allowances(["POST /repos/**"]).get()).map { $0.note }
             == .failure("--allow POST /repos/** is wider than provider github's rules; --provider can only be narrowed"))
         #expect(SecretsRun.definitionForProvider(
-            "pypi", name: "TWINE_PASSWORD", isNew: true, baseURLEnv: nil, placeholderPrefix: "", surfaces: [.query],
+            "pypi", name: "TWINE_PASSWORD", baseURLEnv: nil, placeholderPrefix: "", surfaces: [.query],
             allow: []).map { $0.note }
             == .failure("--surface query is wider than provider pypi allows"))
-        #expect(SecretsRun.definitionForProvider(
-            "github", name: "GITHUB_TOKEN", isNew: false, baseURLEnv: nil, placeholderPrefix: "", surfaces: nil,
-            allow: []).map { $0.note }
-            == .failure("GITHUB_TOKEN is already defined; edit secrets.json to change its delivery"))
     }
 
     @Test func bareSetOfAProviderOnlyNameStillNeedsADelivery() throws {

@@ -97,17 +97,15 @@ extension SecretsRun {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// The gateway delivery `--provider` expands to for a new secret, and the
-    /// line that says so. The profile is the ceiling: `--surface` and
-    /// `--allow` may only narrow it.
+    /// The gateway delivery `--provider` expands to, and the line that says
+    /// so. The profile is the ceiling: `--surface` and `--allow` may only
+    /// narrow it. On an existing secret, `set` accepts it only when it is
+    /// the definition already on file.
     static func definitionForProvider(
-        _ selector: String, name: String, isNew: Bool, baseURLEnv: String?, placeholderPrefix: String,
+        _ selector: String, name: String, baseURLEnv: String?, placeholderPrefix: String,
         surfaces: Set<GatewaySurface>?, allow: [GatewayAllowance],
         catalog: Result<ProviderCatalog, ProviderCatalogError> = ProviderCatalog.shipped
     ) -> Result<(definition: Definition, note: String), CommandFailure> {
-        guard isNew else {
-            return .failure("\(DisplayedText.field(name)) is already defined; edit secrets.json to change its delivery")
-        }
         let loaded: ProviderCatalog
         switch catalog {
         case .failure(let error): return .failure(CommandFailure(error.message))

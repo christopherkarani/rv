@@ -373,26 +373,26 @@ enum SecretsRun {
                     "\(DisplayedText.field(name)) reads from \(existing.source.locator); rv secrets set only stores values it reads "
                         + "from \(SecretKeychain.service)"))
             }
-            guard definition == nil, agents.isEmpty, description == nil else {
-                return .failure("\(DisplayedText.field(name)) is already defined; edit secrets.json to change its delivery")
+            // A re-run of the command that defined this secret (say, after its
+            // value failed to store) only stores the value, as a bare set does.
+            let rerun = definition.map {
+                rebuilds(existing, from: $0, agents: agents, description: description, in: current)
+            } ?? false
+            guard rerun || (definition == nil && agents.isEmpty && description == nil) else {
+                return .failure(CommandFailure(
+                    "\(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
+                        + "with no delivery flags replaces its value; edit secrets.json to change its delivery"))
             }
         } else {
             guard let definition else {
                 return .failure("\(DisplayedText.field(name)) is new: pass --gateway URL --base-url-env VAR, or --environment")
             }
-            let delivery: SecretDelivery
-            switch definition {
-            case .environment:
-                delivery = .environment
-            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow, let binaries):
-                guard let url = URL(string: upstream) else { return .failure("--gateway must be an https URL") }
-                delivery = .gateway(SecretGatewayBinding(
-                    upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
-                    allow: allow, limits: SecretGatewayLimits(binaries: binaries)))
+            switch newDefinition(
+                name: name, from: definition, agents: agents, description: description, source: source)
+            {
+            case .failure(let failure): return .failure(failure)
+            case .success(let secret): updated.secrets.append(secret)
             }
-            updated.secrets.append(SecretDefinition(
-                name: name, description: description, agents: agents.isEmpty ? nil : agents,
-                source: source, delivery: delivery))
         }
         if let index = updated.secrets.firstIndex(where: { $0.name == name }) {
             if let expires { updated.secrets[index].expires = expires }
@@ -423,7 +423,12 @@ enum SecretsRun {
             if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
                 return .failure(SecretsRun.failure(error))
             }
-            guard environment.keychain.store(SecretKeychain.service, name, value) else { return .failure(storeFailure) }
+            guard environment.keychain.store(SecretKeychain.service, name, value) else {
+                return .failure(CommandFailure(
+                    "\(storeFailure.message); its definition was saved to secrets.json, but no value is stored: "
+                        + "once \(SecretKeychain.storeName) is available, run this command again or "
+                        + "`rv secrets set \(DisplayedText.field(name))` to store it"))
+            }
         } else {
             // An existing secret takes its new value first: a store that
             // fails leaves the old value under its old expiry and refresh,
@@ -450,6 +455,50 @@ enum SecretsRun {
                 + "\(binding.upstream.host ?? binding.upstream.absoluteString); narrow it with --allow, e.g. --allow read-only.\n"
         }
         return .success(text)
+    }
+
+    /// The definition `set` adds for a new name from its flags.
+    static func newDefinition(
+        name: String, from definition: Definition, agents: [String], description: String?, source: SecretSource
+    ) -> Result<SecretDefinition, CommandFailure> {
+        let delivery: SecretDelivery
+        switch definition {
+        case .environment:
+            delivery = .environment
+        case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow, let binaries):
+            guard let url = URL(string: upstream) else { return .failure("--gateway must be an https URL") }
+            delivery = .gateway(SecretGatewayBinding(
+                upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
+                allow: allow, limits: SecretGatewayLimits(binaries: binaries)))
+        }
+        return .success(SecretDefinition(
+            name: name, description: description, agents: agents.isEmpty ? nil : agents,
+            source: source, delivery: delivery))
+    }
+
+    /// Whether these flags would define `existing` exactly as it is on file:
+    /// the same delivery, agents and description. What the flags never set
+    /// on an existing secret (expiry, refresh, type) is taken from the file,
+    /// and both sides go through the round trip a write applies.
+    static func rebuilds(
+        _ existing: SecretDefinition, from definition: Definition, agents: [String], description: String?,
+        in current: SecretsConfiguration
+    ) -> Bool {
+        guard
+            case .success(var rebuilt) = newDefinition(
+                name: existing.name, from: definition, agents: agents, description: description,
+                source: existing.source),
+            let index = current.secrets.firstIndex(where: { $0.name == existing.name })
+        else { return false }
+        rebuilt.type = existing.type
+        rebuilt.expires = existing.expires
+        do { try rebuilt.setRefresh(existing.refresh) } catch { return false }
+        var candidate = current
+        candidate.secrets[index] = rebuilt
+        guard case .success(let stored) = SecretsConfiguration.decode(current.encoded()),
+            case .success(let rerun) = SecretsConfiguration.decode(candidate.encoded())
+        else { return false }
+        return rerun == stored
     }
 
     static func remove(name: String, environment: SecretsEnvironment) -> Result<String, CommandFailure> {
@@ -998,10 +1047,15 @@ struct SecretsSet: AsyncParsableCommand {
         case .success(let loaded): configuration = loaded
         }
         let isNew = configuration.secret(named: name) == nil
+        // Flags that describe a definition still expand a well-known name's
+        // defaults on an existing secret, so the command that defined it can
+        // be run again to store its value; `set` refuses any other definition.
+        let describesDefinition = agents.isEmpty == false || description != nil || surfaces.isEmpty == false
+            || allow.isEmpty == false || placeholderPrefix.isEmpty == false
         let resolved: (definition: SecretsRun.Definition?, note: String?)
         if let provider {
             switch SecretsRun.definitionForProvider(
-                provider, name: name, isNew: isNew, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix,
+                provider, name: name, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix,
                 surfaces: try SecretsRun.surfaces(surfaces).get(), allow: try SecretsRun.allowances(allow).get())
             {
             case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
@@ -1009,7 +1063,7 @@ struct SecretsSet: AsyncParsableCommand {
             }
         } else {
             resolved = SecretsRun.definitionForSet(
-                name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
+                name: name, isNew: isNew || describesDefinition, gateway: gateway, baseURLEnv: baseURLEnv,
                 placeholderPrefix: placeholderPrefix, environment: self.environment,
                 surfaces: try? SecretsRun.surfaces(surfaces).get(),
                 allow: (try? SecretsRun.allowances(allow).get()) ?? [])
@@ -1020,7 +1074,8 @@ struct SecretsSet: AsyncParsableCommand {
         }
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
-                "rv secrets set: \(DisplayedText.field(name)) is already defined; edit secrets.json to change its surfaces or allow rules\n")
+                "rv secrets set: \(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
+                    + "with no delivery flags replaces its value; edit secrets.json to change its surfaces or allow rules\n")
         }
         let inferredNote = resolved.note
         if let profile {
