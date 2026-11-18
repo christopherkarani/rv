@@ -350,13 +350,6 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
                     && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
             }
             guard starts.reduce(0, { $0 + args.count - $1 }) <= maxOptionTailWords else { return true }
-            // A dynamic program a listed wrapper runs, given a later word rv
-            // cannot read either (`strace -f $C $G add`), may be any host
-            // command with any group: it counts (fail closed).
-            let dynamicProgramTakesDynamicWord = starts.contains { start in
-                namesHostCLI(args[start]) == false && args[(start + 1)...].contains { wordIsDynamic(foldedWord($0)) }
-            }
-            if dynamicProgramTakesDynamicWord { return true }
             for start in starts { tails.append(Array(args[start...])) }
         }
         for tail in tails where tail.isEmpty == false {
