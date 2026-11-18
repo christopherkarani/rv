@@ -78,7 +78,7 @@ if [ "$os" = "Linux" ] && [ -z "${XDG_RUNTIME_DIR+set}" ]; then
   if [ "$runtime_uid" != "0" ] && [ ! -e "$runtime_dir" ] && [ ! -L "$runtime_dir" ] && [ ! -w /run/user ]; then
     echo "rv: refusing to install: XDG_RUNTIME_DIR is unset and $runtime_dir does not exist: no login manager (logind) created it, and only root can" >&2
     echo "rv: rvd keeps its socket there, so rv setup could not start it; nothing was downloaded or installed" >&2
-    echo "rv: fix: as root, mkdir -p -m 0700 $runtime_dir && chown $runtime_uid $runtime_dir; or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents" >&2
+    echo "rv: fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o $runtime_uid $runtime_dir; or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents" >&2
     echo "rv: /run is usually a tmpfs, so $runtime_dir must be made again after a reboot or container restart" >&2
     exit 1
   fi
@@ -1415,7 +1415,8 @@ fi
 # exec replaces this shell, so the EXIT trap would never run: remove the
 # download directory now. Everything is copied out of $src by here, and
 # every .installing name above is already moved into place and cleared.
-cleanup
+# Best effort: with everything installed, a failed rm must not stop setup.
+cleanup || :
 trap - EXIT
 
 if [ "${RV_INSTALL_MODE:-}" = "observe" ]; then

@@ -186,9 +186,13 @@ public enum UnixSocketPath {
     }
 
     /// The one-line fix for a missing uid-derived runtime directory, shared
-    /// by rvd's refusal and by `rv setup`'s.
+    /// by rvd's refusal and by `rv setup`'s (install.sh prints the same).
+    /// `install -d -m` sets each mode outright: a `mkdir -p` that also made
+    /// the parent would leave it to root's umask (0750 under 027), which
+    /// the user cannot search.
     public static func userRuntimeDirectoryFix(directory: String, uid: UInt32) -> String {
-        "as root, mkdir -p -m 0700 \(directory) && chown \(uid) \(directory); "
+        let parent = URL(fileURLWithPath: directory).deletingLastPathComponent().path
+        return "as root, install -d -m 0755 \(parent) && install -d -m 0700 -o \(uid) \(directory); "
             + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents"
     }
 
