@@ -732,7 +732,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "allowed_ips",
-                    description: "\"allowed_ips\": {\"<host>\": [\"10.0.5.0/24\"]} lets a listed host reach those private networks (macOS MCP sandbox proxies only; port 443)"
+                    description: "\"allowed_ips\": {\"<host>\": [\"10.0.5.0/24\"]} lets a listed host reach those private networks (MCP sandbox proxies on macOS and Linux 6.7+; port 443)"
                 ),
                 HelpRow(
                     name: "defaults",
