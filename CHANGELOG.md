@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `rv workspace upload <host-path> [<workspace-path>]` and `rv workspace download <workspace-path> <new-host-path>` move files in and out of a live workspace mid-session, for Seatbelt and both VM guests (all of them work on the workspace volume). Both ask for owner authentication first and are refused when an agent issues them. Selection honours the copied tree's `.gitignore` files and skips `.git` (`--no-gitignore` copies everything). A transfer never reads, writes or copies through a symlink, refuses FIFOs, sockets, devices, unsafe names, and trees over 20,000 entries, 2 GiB or 64 levels; uploads refuse rv's config dir, hard-linked files and rv/git control and run-later paths in the workspace; downloads only create a new destination outside the workspace and rv's config and install dirs, drop set-id bits, and remove a partial copy on failure.
 
+### Security
+
+- The shared launcher resolver now sees through transparent exec wrappers (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, including `flock FILE -c CMD`, `unbuffer`, `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`), parsing each one's options and leading operands. Redirects never fill an option value or operand slot, and a variable or glob there is judged unmodelled. `firejail`, and `chpst`'s environment, root and directory options, are never treated as transparent. Before, `setsid rv uninstall` or `stdbuf -oL rv packs disable core.git` slipped past the self-protection floor, and the same wrappers hid commands from the other floors that use the resolver. A wrapper option rv does not model fails closed: every later operand is judged as a possible command.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed
