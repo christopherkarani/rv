@@ -297,14 +297,22 @@ package final class SecretPlaceholderGroup: Sendable {
     }
 
     private func waitThenReap() -> Int32 {
-        var info = siginfo_t()
-        // WNOWAIT: the exit is only observed here; the leader is reaped below, after the group kill.
-        while waitid(P_PID, id_t(leader), &info, WEXITED | WNOWAIT) != 0 {
-            guard errno == EINTR else {
+        while true {
+            var info = siginfo_t()
+            // WNOWAIT: the exit is only observed here; the leader is reaped below, after the group kill.
+            // WSTOPPED always: Darwin reports a stop even without it, and a stop is never an exit.
+            if waitid(P_PID, id_t(leader), &info, WEXITED | WSTOPPED | WNOWAIT) != 0 {
+                if errno == EINTR { continue }
                 // Not our unreaped child any more: its group id may be someone else's.
                 phase.withLock { $0 = .reaped }
                 return SIGKILL
             }
+            if SecretRunProcess.endsTheWait(reportCode: info.si_code) { break }
+            // A stop (or continue): consume it and wait on. There is no
+            // terminal to hand it to; whoever stopped the server continues
+            // it. The pause paces the loop should a report repeat.
+            _ = SecretRunProcess.consumeStop(leader)
+            usleep(10_000)
         }
         phase.withLock { phase in
             phase = .exited

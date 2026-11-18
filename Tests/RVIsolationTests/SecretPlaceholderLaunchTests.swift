@@ -333,6 +333,58 @@ struct SecretPlaceholderLaunchTests {
         #expect((misuse.first?["detail"] as? [String: String])?["refusal"] == "runtimeMismatch")
         #expect(fixture.auditText.contains(realOpenAI) == false)
     }
+
+    /// A stopped server has not exited: Darwin reports a stop even to a
+    /// wait that asked for exits alone, and the supervisor must not kill
+    /// the group and revoke the lease for it. Once continued, the server
+    /// runs on and its real exit is the one reported.
+    @Test(.enabled(if: hostBindsPlaceholders), .timeLimit(.minutes(1)))
+    func aStoppedServerIsNotTakenForExited() throws {
+        let fixture = try SecretsFixture(placeholderSecrets)
+        defer { fixture.tearDown() }
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let broker = SecretPlaceholderBroker(
+            configDirectory: fixture.directory, resolver: placeholderResolver,
+            transport: RecordingUpstream(status: 200).transport, peers: .runtime)
+        defer { broker.stop() }
+        let lease = try broker.lease(["OPENAI_API_KEY"], server: "fixture").get()
+        var environment = Dictionary(uniqueKeysWithValues: lease.environment.map { ($0.name, $0.value) })
+        environment["PATH"] = "/usr/bin:/bin"
+        let script = """
+            echo ready > "$1/ready"
+            while [ ! -e "$1/stop" ]; do sleep 0.05; done
+            exit 4
+            """
+        let status = Mutex<Int32?>(nil)
+        let group: SecretPlaceholderGroup
+        do throws(SecretPlaceholderLaunchError) {
+            group = try lease.launch(
+                executable: "/bin/sh", arguments: ["-c", script, "sh", directory.path], environment: environment,
+                descriptors: [:], workingDirectory: directory.path, exited: { code in status.withLock { $0 = code } })
+        } catch {
+            Issue.record("launch failed: \(error.message)")
+            return
+        }
+        defer {
+            group.signal(SIGKILL)
+            _ = group.waitUntilFinished(until: Date().addingTimeInterval(5))
+        }
+        try #require(eventually { contents(directory, "ready") == "ready" })
+
+        #expect(kill(group.leader, SIGSTOP) == 0)
+        #expect(group.waitUntilFinished(until: Date().addingTimeInterval(1)) == false)
+        #expect(group.hasExited == false)
+        #expect(status.withLock { $0 } == nil)
+        #expect(broker.broker.liveCount == 1)
+
+        #expect(kill(group.leader, SIGCONT) == 0)
+        try Data().write(to: directory.appendingPathComponent("stop"))
+        #expect(group.waitUntilFinished(until: Date().addingTimeInterval(10)))
+        let exitStatus = try #require(status.withLock { $0 })
+        #expect(exitStatus >> 8 == 4)
+        #expect(broker.broker.liveCount == 0)
+    }
     #endif
 }
 
