@@ -27,7 +27,7 @@ static void expect_config(const char *name, const char *json, const char *host, 
     }
 }
 
-/* Same resolution as JudgeRuntime.guardMode minus RV_GUARD_MODE:
+/* Same resolution as GuardModeResolution.resolve minus RV_GUARD_MODE:
  * guard.hosts.<host> > guard.mode (nested) > "guard.mode" (flat) > enforce. */
 static void test_resolution(void) {
     expect_config("nested_observe", "{\"guard\":{\"mode\":\"observe\"}}", "claude", 1);

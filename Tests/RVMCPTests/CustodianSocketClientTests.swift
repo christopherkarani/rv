@@ -24,6 +24,12 @@ struct CustodianSocketClientTests {
         /// The key daemon hangs up after this many answers on a connection
         /// (as it does when one has been idle); nil: never.
         let answersPerConnection = Mutex<Int?>(nil)
+        /// Run on a connection the key daemon hangs up, after its last
+        /// answer is written and before its descriptor is closed: where a
+        /// starved runner can leave the thread. Nil: straight on.
+        let whileHangingUp = Mutex<(@Sendable () -> Void)?>(nil)
+        /// Run once the helper has told the key daemon the owner answered.
+        let afterAttesting = Mutex<(@Sendable () -> Void)?>(nil)
         let connections = Mutex(0)
         private let listeners = Mutex<[Int32]>([])
         private let stopped = Mutex(false)
@@ -87,12 +93,23 @@ struct CustodianSocketClientTests {
             connections.withLock { $0 += 1 }
             var answered = 0
             while let request = MCPCustodianFrame.read(MCPCustodianSocketRequest.self, from: fd) {
-                guard let response = service.withLock({ $0.handle(id, request, now: .now) }),
-                    MCPCustodianFrame.write(response, to: fd)
-                else { return }
+                // The hello counts as one. The last answer comes from a
+                // daemon that has already forgotten the connection: once
+                // the client has read it the connection is gone, as it is
+                // for a daemon that hung up, however long this thread then
+                // takes to close the descriptor.
+                let last = answersPerConnection.withLock { $0 }.map { answered + 1 > $0 } ?? false
+                let response = service.withLock { service -> MCPCustodianSocketResponse? in
+                    let response = service.handle(id, request, now: .now)
+                    if last { service.close(id) }
+                    return response
+                }
+                guard let response, MCPCustodianFrame.write(response, to: fd) else { return }
                 answered += 1
-                // The hello counts as one.
-                if let limit = answersPerConnection.withLock({ $0 }), answered > limit { return }
+                if last {
+                    whileHangingUp.withLock { $0 }?()
+                    return
+                }
             }
         }
 
@@ -117,6 +134,7 @@ struct CustodianSocketClientTests {
                     return service.handle(0, .attest(challenge: challenge, uid: getuid()), now: .now)
                 }
                 result = attested == .attested(true) ? .proved : .rejected
+                afterAttesting.withLock { $0 }?()
             }
             _ = MCPCustodianFrame.write(MCPPresenceResponse.result(result), to: fd)
         }
@@ -285,6 +303,44 @@ struct CustodianSocketClientTests {
         #expect(why.contains("did not accept"), "\(why)")
         #expect(signing.mac(.grant, ["call"], true) == nil)
         #expect(host.prompts.withLock { $0 } == 1)
+    }
+
+    /// The key daemon's thread can be left, by a starved scheduler,
+    /// between writing a connection's last answer and closing it. The
+    /// client has read that answer by then, so for it the connection is
+    /// already gone: the proof it then asks for (on that connection's
+    /// challenge) unlocks nothing. Here every hang-up waits until the
+    /// helper has attested, which orders the close after the proof.
+    @Test(.timeLimit(.minutes(1)))
+    func aConnectionIsGoneOnceItsLastAnswerIsRead() throws {
+        let host = try Host()
+        defer { host.stop() }
+        host.answersPerConnection.withLock { $0 = 1 }
+        let attested = DispatchSemaphore(value: 0)
+        let held = Mutex(0)
+        let unordered = Mutex(false)
+        host.afterAttesting.withLock { $0 = { attested.signal() } }
+        host.whileHangingUp.withLock {
+            $0 = {
+                held.withLock { $0 += 1 }
+                if attested.wait(timeout: .now() + 20) == .timedOut { unordered.withLock { $0 = true } }
+                // Whoever waits next goes on too.
+                attested.signal()
+            }
+        }
+        let client = host.client()
+        let terminal = Terminal("right")
+        guard case .refused(let why) = client.provePresence(reason: "rv: x", terminal: terminal.value) else {
+            Issue.record("a proof for a closed connection was accepted")
+            return
+        }
+        #expect(why.contains("did not accept"), "\(why)")
+        let signing = MCPApprovalSigning.custodian(transport: client.transport(scope: scope, terminal: { nil }))
+        #expect(signing.mac(.grant, ["call"], true) == nil)
+        #expect(host.prompts.withLock { $0 } == 1)
+        // The ordering this test is for did happen.
+        #expect(held.withLock { $0 } >= 1)
+        #expect(unordered.withLock { $0 } == false)
     }
 
     /// The password prompt appears only once echo is off: nothing typed

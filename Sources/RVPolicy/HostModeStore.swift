@@ -2,32 +2,30 @@ import Foundation
 import RVDomain
 import RVHistory
 
-/// How rv guards one hook host. `block` enforces, `observe` allows and logs
-/// what enforcement would have blocked, `off` leaves the host unwired. A
-/// host with no stored entry follows the global `guard.mode` (enforce by
-/// default); a stored entry, `block` included, outranks it.
-public enum HostMode: String, Sendable, Equatable, CaseIterable {
-    case block
-    case observe
-    case off
+/// What `config.json` stores under `guard.hosts` (`HostModeStore.read`).
+public enum StoredHostModes: Sendable, Equatable {
+    /// The file is missing, or `GuardConfig` accepts it.
+    case entries([HookHost: HostMode])
+    /// The file exists but could not be read, or `GuardConfig` rejects it.
+    case unreadable
 
-    /// True when moving from `current` to `self` sheds oversight.
-    public func isLooser(than current: HostMode) -> Bool {
-        rank < current.rank
-    }
-
-    private var rank: Int {
+    /// The stored mode for `host`: its entry, else `block` (a host with no
+    /// entry follows `guard.mode`; reading it as `block` means pinning
+    /// `observe` over a global observe still needs the owner), else
+    /// `ifUnreadable` when the file is unreadable.
+    public func mode(for host: HookHost, ifUnreadable: HostMode) -> HostMode {
         switch self {
-        case .off: 0
-        case .observe: 1
-        case .block: 2
+        case .entries(let entries): entries[host] ?? .block
+        case .unreadable: ifUnreadable
         }
     }
 }
 
 public enum HostModeStoreError: Error, Sendable, Equatable {
-    /// `config.json` exists but is not a JSON object, or its `guard` /
-    /// `guard.hosts` value is not one: writing would drop or replace keys
+    /// `config.json` exists but is not a JSON object, its text is one
+    /// `JSONDuplicateKeys` rejects (a repeated key, a U+FEFF key, nesting
+    /// past 64, not UTF-8), or its `guard` / `guard.hosts` value is not an
+    /// object: writing would drop, replace or pick between keys
     /// rv cannot read, so nothing is written.
     case unreadableConfig
 }
@@ -46,26 +44,30 @@ public struct HostModeStore: Sendable {
         configDirectory.appendingPathComponent("config.json", isDirectory: false)
     }
 
-    /// Stored entries only; a host missing here follows `guard.mode`.
-    public func load() -> [HookHost: HostMode] {
-        guard let data = try? Data(contentsOf: configFile),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return Self.modes(inConfig: root)
-    }
-
-    /// The stored entry, or `block` when there is none. Callers that ask
-    /// "is this a loosening?" use it: treating a missing entry as `block`
-    /// means pinning `observe` over a global observe still needs the owner.
-    public func mode(for host: HookHost) -> HostMode {
-        load()[host] ?? .block
+    /// The stored `guard.hosts` entries. A missing file has none. A file
+    /// that exists but cannot be read, or that `GuardConfig` rejects (not
+    /// JSON, not an object, a repeated key, too deep, not UTF-8), is
+    /// `.unreadable`, never "no entries": rvd reads such a file as
+    /// enforce, and each caller picks the conservative reading for its own
+    /// question.
+    public func read() -> StoredHostModes {
+        let data: Data
+        do {
+            data = try Data(contentsOf: configFile)
+        } catch CocoaError.fileReadNoSuchFile {
+            return .entries([:])
+        } catch {
+            return .unreadable
+        }
+        guard let config = GuardConfig(validatingJSON: data) else { return .unreadable }
+        return .entries(config.hosts)
     }
 
     /// Writes one host's entry, `block` included: an explicit `block` must
     /// outrank a global `guard.mode: observe`. Every other key is kept. The
     /// read, the checks and the write share one lock; a config that is not
-    /// an object, or a non-object `guard` / `guard.hosts`, throws
-    /// `unreadableConfig` and nothing is written.
+    /// an object, text `JSONDuplicateKeys` rejects, or a non-object
+    /// `guard` / `guard.hosts` throws `unreadableConfig` and nothing is written.
     /// Records `config.changed` (`guard.hosts.<host>`) write-ahead when the
     /// stored entry changes. `beforeWrite` runs after that record and before
     /// the file moves (`rv host mode <host> off` detaches the hooks there,
@@ -86,7 +88,7 @@ public struct HostModeStore: Sendable {
                 guardObject["hosts"] = .object(hosts)
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }
@@ -106,7 +108,7 @@ public struct HostModeStore: Sendable {
                 guardObject["mode"] = .string("observe")
                 root["guard"] = .object(guardObject)
             }
-        } catch MachineConfigJSONError.notAnObject {
+        } catch MachineConfigJSONError.unreadableConfig {
             throw HostModeStoreError.unreadableConfig
         }
     }
@@ -123,22 +125,5 @@ public struct HostModeStore: Sendable {
         guard let value else { return [:] }
         guard let object = value.asObject else { throw .unreadableConfig }
         return object
-    }
-
-    /// Reads `guard.hosts` from an already-parsed config object (rvd parses
-    /// `config.json` once per evaluation).
-    public static func modes(inConfig config: [String: Any]?) -> [HookHost: HostMode] {
-        guard let guardObject = config?["guard"] as? [String: Any],
-              let hosts = guardObject["hosts"] as? [String: Any]
-        else { return [:] }
-        var modes: [HookHost: HostMode] = [:]
-        for (key, value) in hosts {
-            guard let host = HookHost(rawValue: key),
-                  let raw = value as? String,
-                  let mode = HostMode(rawValue: raw.lowercased())
-            else { continue }
-            modes[host] = mode
-        }
-        return modes
     }
 }
