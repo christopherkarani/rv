@@ -47,15 +47,15 @@ let isolationExecTargets: [Target] = [
         ]
     ),
 ]
-// rv-run-probe: SecretRunProbeTests runs it.
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec", "rv-run-probe"]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
 // The products these suites run: the cage's helper, the custodian binary.
 let mcpTestHelperDependencies: [Target.Dependency] = ["rv-isolation-exec"]
 let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService", "rv-mcp-custodian"]
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
+// rv-run-probe: SecretRunProbeTests runs it.
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim", "rv-run-probe"]
 let mcpTestHelperDependencies: [Target.Dependency] = []
 let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService"]
 #endif
