@@ -307,6 +307,8 @@ struct Policy: AsyncParsableCommand {
                     try ConfigChangeRefusal.fail(command: "policy apply", unrecorded)
                 } catch let error as PolicyCeilingError {
                     try CommandContext.fail("rv policy apply: refused: \(error.refusal)\n")
+                } catch TypedRuleStoreError.documentTooLarge {
+                    try CommandContext.fail("rv policy apply: refused: \(PolicySaveRefusal.tooLarge)\n")
                 } catch {
                     try CommandContext.fail("rv policy apply: write failed\n")
                 }
@@ -654,4 +656,10 @@ private func prettyOrigin(_ origin: TypedRuleOrigin, _ rules: [TypedRule]) -> St
 
 private func formatRule(_ rule: TypedRule) -> String {
     "\(DisplayedText.field(rule.id.rawValue)) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
+}
+
+/// Operator text for a policy save refused before anything is written.
+enum PolicySaveRefusal {
+    static let tooLarge =
+        "the policy would be larger than 1 MiB, which rv refuses to load; nothing was written"
 }

@@ -75,6 +75,7 @@ struct PolicyStatusReport: Sendable, Equatable, Codable {
     var rvdUnavailable: String?
     var state: PolicyLoadStatus.State
     var failure: PolicyLoadStatus.Failure?
+    var problem: PolicyLoadStatus.Problem?
     var reason: String?
     var machine: Layer?
     var repo: Layer?
@@ -130,7 +131,8 @@ enum PolicyStatusRun {
             rvdUnavailable: unavailable,
             state: status.state,
             failure: status.failure,
-            reason: status.failure.map(reason),
+            problem: status.problem,
+            reason: reason(status),
             machine: status.machine.map { layer($0, .machine, session) },
             repo: status.repo.map { layer($0, .repo, session) },
             ceilingRules: status.ceilingRuleCount,
@@ -141,11 +143,30 @@ enum PolicyStatusRun {
         )
     }
 
+    /// The failing step and, when known, why its file was refused.
+    static func reason(_ status: PolicyLoadStatus) -> String? {
+        guard let failure = status.failure else { return nil }
+        let base = reason(failure)
+        guard let problem = status.problem else { return base }
+        return "\(base): \(detail(problem, failure))"
+    }
+
     static func reason(_ failure: PolicyLoadStatus.Failure) -> String {
         switch failure {
         case .machineInvalid: "machine policy.toml cannot be read or parsed"
         case .repoInvalid: "repo .rv/policy.toml cannot be read or parsed"
         case .ceilingInvalid: "the policy ceiling (ceiling.toml) cannot be read or parsed"
+        }
+    }
+
+    private static func detail(_ problem: PolicyLoadStatus.Problem, _ failure: PolicyLoadStatus.Failure) -> String {
+        switch problem {
+        case .notRegularFile: "not a regular file"
+        case .symlink: "a symlink, which is never followed for the ceiling"
+        case .tooLarge: failure == .ceilingInvalid ? "larger than 256 KiB" : "larger than 1 MiB"
+        case .notUTF8: "not UTF-8"
+        case .unreadable: "unreadable"
+        case .unparseable: "not a valid policy document"
         }
     }
 
@@ -319,7 +340,7 @@ enum PolicyLoadWait {
                 CommandContext.writeStdout("rvd loaded the saved \(name) policy\n")
             }
         case .failed(let status):
-            let reason = status.failure.map(PolicyStatusRun.reason) ?? "load failed"
+            let reason = PolicyStatusRun.reason(status) ?? "load failed"
             try CommandContext.fail(
                 "rv \(command): saved, but rvd cannot load policy: \(reason);"
                     + " every evaluation denies until it is fixed\n")

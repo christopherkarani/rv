@@ -313,6 +313,8 @@ enum PolicyRollbackRun {
             return prefix + "could not lock the policy files\(unchanged)\n"
         case TypedRuleStoreError.invalidFile:
             return prefix + "invalid policy file\n"
+        case TypedRuleStoreError.documentTooLarge:
+            return prefix + "refused: \(PolicySaveRefusal.tooLarge)\n"
         default:
             return prefix + "failed\(unchanged)\n"
         }

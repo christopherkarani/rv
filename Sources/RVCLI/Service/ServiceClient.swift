@@ -592,12 +592,7 @@ public struct ServiceClient: Sendable {
                     timeoutMs: Self.policyStatusCallTimeoutMs(timeout),
                     hookConsult: true
                 )
-                switch reply {
-                case .status(let status):
-                    return .rvd(status)
-                case .busy:
-                    return .unavailable("rvd is busy with other status requests")
-                }
+                return Self.observation(reply)
             } catch let error as IPCCallError {
                 return .unavailable(Self.policyStatusFailure(error))
             } catch {
@@ -616,6 +611,15 @@ public struct ServiceClient: Sendable {
 
     /// A ceiling containment check over a large repo layer can take seconds.
     static let policyStatusTimeoutMs = 5_000
+
+    /// `busy` says nothing about the policy: it is "rvd did not answer",
+    /// so status falls back to the CLI's own load (exit 3).
+    static func observation(_ reply: PolicyStatusReply) -> PolicyStatusObservation {
+        switch reply {
+        case .status(let status): .rvd(status)
+        case .busy: .unavailable("rvd is busy with other status requests")
+        }
+    }
 
     static func policyStatusCallTimeoutMs(_ timeout: Duration) -> Int {
         let ms = timeout.components.seconds * 1_000 + timeout.components.attoseconds / 1_000_000_000_000_000

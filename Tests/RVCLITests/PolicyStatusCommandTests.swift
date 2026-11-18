@@ -103,6 +103,40 @@ struct PolicyStatusCommandTests {
         }
     }
 
+    /// `busy` is "rvd did not answer": the CLI's own view, exit 3.
+    @Test func rvdBusy_isTheLocalView_exit3() async throws {
+        try await withFixture { fixture in
+            let output = CLIOutputCapture()
+            let busy = ServiceClient.observation(.busy)
+
+            await #expect(throws: ExitCode(3)) {
+                try await fixture.run(["status", "--json"], source: { _, _ in busy }, output: output)
+            }
+
+            let object = try jsonObject(output.stdout)
+            #expect(object["source"] as? String == "local")
+            #expect(object["rvdUnavailable"] as? String == "rvd is busy with other status requests")
+        }
+    }
+
+    /// Exit 3 wins over a failed local load: the report is the CLI's view,
+    /// not what rvd enforces.
+    @Test func rvdUnavailable_localFailedLoad_stillExits3() async throws {
+        try await withFixture { fixture in
+            try FileManager.default.createDirectory(at: fixture.config, withIntermediateDirectories: true)
+            #expect(mkfifo(fixture.store.machineFileURL.path, 0o600) == 0)
+            let output = CLIOutputCapture()
+
+            await #expect(throws: ExitCode(3)) {
+                try await fixture.run(["status"], source: nil, output: output)
+            }
+
+            #expect(output.stdout.contains("policy: failed (this CLI's view; rvd unavailable:"))
+            #expect(output.stdout.contains(
+                "reason: machine policy.toml cannot be read or parsed: not a regular file"))
+        }
+    }
+
     @Test func handEdit_isReportedAsUnrecordedAgainstTheHead() async throws {
         try await withFixture { fixture in
             try fixture.store.saveMachine(PolicyDocument(rules: [denyReset]))
