@@ -54,9 +54,9 @@ indirect enum JSONValue: Decodable, Equatable {
 /// The JSON Schema subset the OCSF schema server's class exports use:
 /// `$ref` into `$defs`, `type`, `properties`, `additionalProperties`
 /// (boolean), `required`, `enum`, `const`, `items` and `anyOf` (OCSF's
-/// "at least one of" constraints). Anything else in a schema fails the
-/// check, so a refreshed export that needs more keywords cannot pass
-/// silently.
+/// "at least one of" constraints). Anything else anywhere in a vendored
+/// schema fails `init`, so a refreshed export that needs more keywords
+/// cannot pass silently.
 struct OCSFSchemaValidator {
     struct Violation: Equatable, CustomStringConvertible {
         var path: String
@@ -69,14 +69,16 @@ struct OCSFSchemaValidator {
         .deletingLastPathComponent()
         .appendingPathComponent("Fixtures/ocsf-\(version)", isDirectory: true)
 
-    static let understoodKeywords: Set<String> = [
-        "$schema", "$id", "$defs", "$ref", "title", "type", "properties", "additionalProperties", "required",
-        "enum", "const", "items", "anyOf",
-    ]
-
     /// Every vendored schema, keyed by its file stem
     /// (`<class>@<profile>+<profile>`, profiles sorted).
     let schemas: [String: JSONValue]
+
+    /// A vendored schema uses a keyword or shape this validator does not
+    /// understand, anywhere in it (visited by an event or not).
+    struct UnsupportedSchema: Error, CustomStringConvertible {
+        var problems: [String]
+        var description: String { problems.joined(separator: "\n") }
+    }
 
     init(directory: URL = Self.directory) throws {
         var schemas: [String: JSONValue] = [:]
@@ -85,7 +87,59 @@ struct OCSFSchemaValidator {
             let text = try String(contentsOf: file, encoding: .utf8)
             schemas[file.deletingPathExtension().lastPathComponent] = try JSONValue.parse(text)
         }
+        try self.init(schemas: schemas)
+    }
+
+    /// Walks every schema once, so a keyword in a `$def` no event reaches
+    /// fails as surely as one on the path an event takes.
+    init(schemas: [String: JSONValue]) throws {
+        var problems: [String] = []
+        for (stem, schema) in schemas.sorted(by: { $0.key < $1.key }) {
+            Self.audit(schema, path: stem + ":", into: &problems)
+        }
+        guard problems.isEmpty else { throw UnsupportedSchema(problems: problems) }
         self.schemas = schemas
+    }
+
+    private static func audit(_ schema: JSONValue, path: String, into problems: inout [String]) {
+        guard case .object(let rules) = schema else {
+            problems.append("\(path) schema node is not an object")
+            return
+        }
+        for (keyword, value) in rules {
+            let here = path + "/" + keyword
+            switch keyword {
+            case "$schema", "$id", "$ref", "title", "type":
+                if value.string == nil { problems.append("\(here) is not a string") }
+            case "$defs", "properties":
+                guard case .object(let members) = value else {
+                    problems.append("\(here) is not an object")
+                    continue
+                }
+                for (name, member) in members { audit(member, path: here + "/" + name, into: &problems) }
+            case "items":
+                audit(value, path: here, into: &problems)
+            case "anyOf":
+                guard case .array(let branches) = value else {
+                    problems.append("\(here) is not an array")
+                    continue
+                }
+                for (index, branch) in branches.enumerated() { audit(branch, path: here + "/\(index)", into: &problems) }
+            case "additionalProperties":
+                if case .bool = value {} else { problems.append("\(here) is not a boolean") }
+            case "required":
+                guard case .array(let names) = value, names.allSatisfy({ $0.string != nil }) else {
+                    problems.append("\(here) is not an array of strings")
+                    continue
+                }
+            case "enum":
+                if case .array = value {} else { problems.append("\(here) is not an array") }
+            case "const":
+                break
+            default:
+                problems.append("\(here): schema keyword \(keyword) is not supported")
+            }
+        }
     }
 
     /// The vendored schema for this event's class and declared profiles.
@@ -133,9 +187,6 @@ struct OCSFSchemaValidator {
         guard case .object(let rules) = schema else {
             violations.append(Violation(path: path, message: "schema node is not an object"))
             return
-        }
-        for keyword in rules.keys where Self.understoodKeywords.contains(keyword) == false {
-            violations.append(Violation(path: path, message: "schema keyword \(keyword) is not supported"))
         }
         if let reference = rules["$ref"]?.string {
             let prefix = "#/$defs/"

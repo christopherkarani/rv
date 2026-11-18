@@ -243,6 +243,35 @@ struct OCSFSchemaValidatorTests {
         #expect(try violations(fields).contains { $0.hasPrefix("/class_uid: no vendored OCSF 1.3.0 schema") })
     }
 
+    /// A keyword the validator does not understand fails at load, even in
+    /// a `$def` no event reaches.
+    @Test func rejectsUnsupportedKeywordInAnUnvisitedDef() throws {
+        let schema = try JSONValue.parse(#"""
+            {"type": "object", "properties": {"time": {"type": "integer"}},
+             "$defs": {"unused": {"type": "string", "pattern": "^x$"}}}
+            """#)
+        do {
+            _ = try OCSFSchemaValidator(schemas: ["test@host": schema])
+            Issue.record("a schema with pattern in an unvisited $def loaded")
+        } catch let error as OCSFSchemaValidator.UnsupportedSchema {
+            #expect(error.problems == ["test@host:/$defs/unused/pattern: schema keyword pattern is not supported"])
+        }
+    }
+
+    @Test func rejectsSchemaShapesItCannotCheck() throws {
+        let schema = try JSONValue.parse(#"""
+            {"type": ["object", "null"], "additionalProperties": {"type": "string"}}
+            """#)
+        do {
+            _ = try OCSFSchemaValidator(schemas: ["test@host": schema])
+            Issue.record("a type array and a schema-valued additionalProperties loaded")
+        } catch let error as OCSFSchemaValidator.UnsupportedSchema {
+            #expect(Set(error.problems) == [
+                "test@host:/type is not a string", "test@host:/additionalProperties is not a boolean",
+            ])
+        }
+    }
+
     @Test func rejectsNestedAtLeastOneViolation() throws {
         var fields = try sample()
         fields["device"] = .object(["type_id": .integer(0)])
