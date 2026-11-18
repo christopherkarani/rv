@@ -578,6 +578,37 @@ public struct ServiceClient: Sendable {
         }
     }
 
+    /// rvd's own typed-policy load for `cwd` (`rv policy status`), over the
+    /// hook-consult session and daemon-identity rule hooks use.
+    func policyStatus(cwd: WorkingDirectory?) async -> PolicyStatusObservation {
+        switch await route() {
+        case .xpc(let transport, _):
+            do {
+                let reply = try await send(
+                    PolicyStatusCall(params: PolicyStatusParams(cwd: cwd)),
+                    using: transport,
+                    timeoutMs: Self.policyStatusTimeoutMs,
+                    hookConsult: true
+                )
+                return .rvd(reply.status)
+            } catch IPCCallError.service {
+                // An rvd from before this route cannot decode it.
+                return .unavailable("rvd did not answer the request (restart it: rv service restart)")
+            } catch {
+                return .unavailable("request failed")
+            }
+        case .down:
+            return .unavailable("rvd is not running")
+        case .skew(let reason, _):
+            return .unavailable(reason.statusMessage)
+        case .failed(let failure):
+            return .unavailable(failure.statusMessage)
+        }
+    }
+
+    /// A ceiling containment check over a large repo layer can take seconds.
+    static let policyStatusTimeoutMs = 5_000
+
     private func localDiagnostic(
         cause: ServiceFallbackCause,
         corePacksReady: Bool,

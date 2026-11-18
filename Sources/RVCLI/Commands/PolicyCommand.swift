@@ -10,7 +10,7 @@ struct Policy: AsyncParsableCommand {
         abstract: "Show, list, draft, share, check, or roll back compiled typed rules.",
         subcommands: [
             Show.self, List.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self,
-            PolicyRollbackCommand.self, PolicyCheck.self, PolicyCeilingCommand.self,
+            PolicyRollbackCommand.self, PolicyCheck.self, PolicyCeilingCommand.self, PolicyStatusCommand.self,
         ],
         defaultSubcommand: Show.self
     )
@@ -249,6 +249,13 @@ struct Policy: AsyncParsableCommand {
         @Flag(name: .customLong("repo"), help: "Write the repo layer.")
         var repo = false
 
+        @OptionGroup
+        var waitFlags: PolicyWaitFlags
+
+        func validate() throws {
+            try waitFlags.check(save: save)
+        }
+
         func run() async throws {
             let home = try CommandContext.requireHome(command: "policy apply")
             let workspace = URL(
@@ -291,8 +298,9 @@ struct Policy: AsyncParsableCommand {
                 }
                 let authorization = try await OwnerConfirmation.require(
                     "apply policy from \(path) to the \(repo ? "repo" : "machine") layer")
+                let saved: PolicyDocument
                 do {
-                    _ = try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                    saved = try await ConfigChangeAudit.$authorization.withValue(authorization) {
                         try session.mergeIncoming(incoming, layer: layer, save: true)
                     }
                 } catch let unrecorded as ConfigChangeUnrecorded {
@@ -302,6 +310,9 @@ struct Policy: AsyncParsableCommand {
                 } catch {
                     try CommandContext.fail("rv policy apply: write failed\n")
                 }
+                try await PolicyLoadWait.confirm(
+                    command: "policy apply", layer: layer, hash: PolicyRevisionIdentity.hash(saved),
+                    flags: waitFlags, robot: false)
             }
         }
     }

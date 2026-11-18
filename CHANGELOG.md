@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `rv policy status [--json]` reports whether rvd loads the current machine and repo policy, which revisions, and why not. rvd answers from the load hooks run. A policy rvd cannot load denies every action (`typed-rules-invalid`); rv never falls back to an earlier policy. `rv policy draft|apply|rollback --save --wait [--wait-timeout s]` blocks until rvd loads the saved policy.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed

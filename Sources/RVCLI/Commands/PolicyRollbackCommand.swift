@@ -29,6 +29,13 @@ struct PolicyRollbackCommand: AsyncParsableCommand {
     @OptionGroup
     var format: FormatFlags
 
+    @OptionGroup
+    var waitFlags: PolicyWaitFlags
+
+    func validate() throws {
+        try waitFlags.check(save: save)
+    }
+
     func run() async throws {
         let ctx = CommandContext.current(command: "policy rollback", format: format)
         let home = try ctx.requireHome()
@@ -38,10 +45,16 @@ struct PolicyRollbackCommand: AsyncParsableCommand {
             layer: repo ? .repo : .machine,
             revision: revision.value,
             save: save,
-            robot: ctx.explicitRobot
-        ) { summary in
-            try await OwnerConfirmation.require(summary)
-        }
+            robot: ctx.explicitRobot,
+            confirm: { summary in
+                try await OwnerConfirmation.require(summary)
+            },
+            awaitLoad: { hash in
+                try await PolicyLoadWait.confirm(
+                    command: "policy rollback", layer: repo ? .repo : .machine, hash: hash,
+                    flags: waitFlags, robot: ctx.explicitRobot)
+            }
+        )
     }
 }
 
@@ -90,7 +103,8 @@ enum PolicyRollbackRun {
         revision: Int,
         save: Bool,
         robot: Bool,
-        confirm: (String) async throws -> String
+        confirm: (String) async throws -> String,
+        awaitLoad: (_ hash: String) async throws -> Void = { _ in }
     ) async throws {
         let repo = layer == .repo
         let preview: PolicyWorkspace.RollbackPreview
@@ -109,6 +123,7 @@ enum PolicyRollbackRun {
         if preview.isNoOp {
             // Nothing to restore: no owner prompt, nothing written.
             CommandContext.writeStdout(try render(preview, outcome: .unchanged, robot: robot))
+            try await awaitLoad(preview.target.hash)
             return
         }
         if let refusal = preview.ceilingRefusal {
@@ -146,6 +161,7 @@ enum PolicyRollbackRun {
         } else {
             CommandContext.writeStdout("restored r\(revision) as r\(restored.revision)\n")
         }
+        try await awaitLoad(restored.hash)
     }
 
     private static func refuseBlocked(_ preview: PolicyWorkspace.RollbackPreview, robot: Bool) throws -> Never {
