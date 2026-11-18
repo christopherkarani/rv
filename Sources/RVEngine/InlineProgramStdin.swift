@@ -143,7 +143,11 @@ private func stdinRead(_ written: [String]) -> StdinRead? {
     if awkNames.contains(program) { return awkStdinRead(argv) }
     let explicitOnly = program == "deno" || program == "bun"
     if explicitOnly, argv.count > 1, argv[1] == "run" { argv.remove(at: 1) }
+    // Ruby's `-E` names an encoding, not inline code as Perl's does
+    // (`inlineProgram` asks for both), so it never hides the stdin program
+    // (`ruby -E UTF-8`, `ruby -E /dev/stdin main.rb`).
     let options = argv.prefix { stdinOperands.contains($0) == false }
+        .filter { isRubyExecutable(program) == false || $0 != "-E" }
     guard let kind = explicitOnly ? ProgramKind.plain : stdinProgramKind(program), inlineProgram(Array(options)) == nil
     else { return nil }
     var read = StdinRead(kind: kind)

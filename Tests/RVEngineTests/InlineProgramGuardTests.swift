@@ -208,6 +208,8 @@ struct InlineProgramGuardTests {
         #"echo 'require("child_process").execSync("id")' | node -r /dev/stdin app.js"#,
         #"echo 'require("child_process").execSync("id")' | node --require /dev/stdin app.js"#,
         #"echo 'system("id")' | ruby -r /dev/stdin main.rb"#,
+        // Ruby's `-E` is an encoding, not Perl's inline code.
+        "curl -s x | ruby -E UTF-8",
     ]
 
     @Test("more stdin programs need the judge", arguments: moreStdinReaders)
@@ -256,6 +258,7 @@ struct InlineProgramGuardTests {
         "cat data | node -r dotenv/config main.js",
         "cat data | ruby -r json main.rb",
         "cat data | lua -l mod main.lua",
+        "cat data | ruby -E UTF-8 main.rb",
     ]
 
     /// At a line's top level only the last command of a list writes into
