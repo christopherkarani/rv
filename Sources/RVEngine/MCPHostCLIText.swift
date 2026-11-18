@@ -330,23 +330,23 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
             if name == "printf" { tails.append(Array(operands.dropFirst())) }
             printed.append(contentsOf: operands)
         }
-        // After options of a program rv does not list as a runner, a host
-        // name may be the program it runs (`strace -f claude $SUB add`),
-        // and so may a dynamic word after a listed wrapper's options
-        // (`optionTailWrappers`: `strace -o log $C mcp add`, named by path
-        // too): read from there.
-        // Only the command as written, not a re-split of it, which starts
-        // at such a word already; and from every such word, each one an
-        // option or its value after an option, so decoy hosts before the
-        // real one hide nothing. Their words together past
-        // `maxOptionTailWords` count (fail closed).
+        // After the options of a listed wrapper (`optionTailWrappers`,
+        // named by path too), a host name or a dynamic word may be the
+        // program it runs (`strace -f claude $SUB add`, `strace -o log $C
+        // mcp add`): read from there. Under any other program a host name
+        // or dynamic word after options is an option value or an operand
+        // (`git checkout -b codex "$BASE"`), not read. Only the command as
+        // written, not a re-split of it, which starts at such a word
+        // already; and from every such word, each one an option or its
+        // value after an option, so decoy hosts before the real one hide
+        // nothing. Their words together past `maxOptionTailWords` count
+        // (fail closed).
         if reads.resplit == false, literalOnly == false, isPrinter == false,
+           optionTailWrappers.contains(commandName(foldedWord(command.head))),
            let firstOption = args.firstIndex(where: { $0.hasPrefix("-") })
         {
-            let wraps = optionTailWrappers.contains(commandName(foldedWord(command.head)))
             let starts = args.indices.filter { start in
-                start > firstOption
-                    && (namesHostCLI(args[start]) || (wraps && wordIsDynamic(foldedWord(args[start]))))
+                start > firstOption && (namesHostCLI(args[start]) || wordIsDynamic(foldedWord(args[start])))
                     && (args[start - 1].hasPrefix("-") || (start >= 2 && args[start - 2].hasPrefix("-")))
             }
             guard starts.reduce(0, { $0 + args.count - $1 }) <= maxOptionTailWords else { return true }
