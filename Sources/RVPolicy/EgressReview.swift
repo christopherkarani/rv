@@ -15,6 +15,18 @@ public struct EgressReviewToken: RawRepresentable, Sendable, Hashable {
     }
 }
 
+/// An approved network proposal shown beside an awaiting one for the same
+/// host (`EgressReview.related`). Display only.
+public struct EgressRelatedGrant: Sendable, Equatable {
+    public let id: ApprovalID
+    public let rule: LiveNetworkRule
+
+    public init(id: ApprovalID, rule: LiveNetworkRule) {
+        self.id = id
+        self.rule = rule
+    }
+}
+
 /// Review binding for network proposals (OpenShell's proposal review
 /// token, fit to rv). The token hashes the proposal as shown plus the
 /// effective egress policy it was reviewed against. If either moves
@@ -69,6 +81,34 @@ public enum EgressReview: Sendable {
         ]
         fields += grants.map { "\($0.host):\($0.port)" }
         return EgressReviewToken(rawValue: RVDigest.sha256Hex(lengthPrefixed(fields)))
+    }
+
+    /// Approved proposals of the same workspace for the same host as the
+    /// awaiting network proposal `id`, any port, sorted by port then id.
+    /// Empty when `id` names no awaiting network proposal.
+    ///
+    /// Display only, never authority, and never a reason to retire a row
+    /// (OpenShell supersedes; rv annotates). A proposal is exactly
+    /// (workspace, host, port), so an approval covers no other awaiting
+    /// row: the ledger already folds a second same-workspace proposal for
+    /// one host:port into the first. A same-host row on another port asks
+    /// for something the approval does not grant, so it stays pending for
+    /// its own decision and only names the approval it relates to.
+    ///
+    /// Drawn from the grant set the review token hashes, so a display
+    /// built from one `records` snapshot shows what the approval binds.
+    public static func related(to id: ApprovalID, in records: [PendingApproval]) -> [EgressRelatedGrant] {
+        guard let proposal = records.first(where: { $0.id == id }),
+            case .awaitingHuman = proposal.state,
+            let host = EgressProposal.rule(for: proposal)?.host
+        else { return [] }
+        return records.compactMap { record -> EgressRelatedGrant? in
+            guard record.id != id, record.identity == proposal.identity, authorizes(record.state),
+                let rule = EgressProposal.rule(for: record), rule.host == host
+            else { return nil }
+            return EgressRelatedGrant(id: record.id, rule: rule)
+        }
+        .sorted { ($0.rule.port, $0.id.rawValue) < ($1.rule.port, $1.id.rawValue) }
     }
 
     private static func authorizes(_ state: PendingApprovalState) -> Bool {
