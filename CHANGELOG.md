@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-18
+
 ### Changed
 
 - `rv run` works on Linux (see its entry under Added). The gateway's Linux peer check now also follows a socket registered with io_uring, bounds its `/proc` reads, treats a `/proc` of another pid namespace or one that hides processes as unverifiable, and does not spend a placeholder on a request it cannot attribute.
@@ -341,7 +343,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - Single-source evaluation, explain and lock modules, closed evaluation outcome state machine, typed wire enums, and an agent harness. (#10, #11, #19, #20, #24, #34, #35, #48, #50, #52, #55, #56, #74)
 
-[Unreleased]: https://github.com/christopherkarani/rv/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/christopherkarani/rv/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/christopherkarani/rv/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/christopherkarani/rv/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/christopherkarani/rv/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/christopherkarani/rv/compare/v0.1.4...v0.1.5

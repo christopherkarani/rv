@@ -9,8 +9,7 @@ measurements; they were not run for these guides.
 
 ## Releases and platforms
 
-- **No signed release yet.** The newest release, v0.2.1, is unsigned and
-  predates most features described in these guides. The installer checks
+- **No signed release yet.** The newest release, v0.2.2, is unsigned. The installer checks
   downloads against `SHA256SUMS` but does not yet check `SHA256SUMS`
   against a release key, and on macOS an unsigned binary only warns. See
   [Install](install.md#release-status-read-this-first).
