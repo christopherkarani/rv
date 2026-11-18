@@ -43,9 +43,10 @@ enum EgressAdmissionVerdict: Sendable, Equatable {
     /// Absolute-URI admitted: forward the request upstream.
     case forward(external: Bool, allowedIPs: EgressAllowedIPs? = nil)
     /// Audit mode: only the allowlist's host test refused this. The proxy
-    /// runs `admitted` (an external tunnel or forward, public unicast only)
-    /// once the would-be block is durably recorded, and denies
-    /// `denied-policy` otherwise.
+    /// runs `admitted` (an external tunnel or forward) once the would-be
+    /// block is durably recorded, and denies `denied-policy` otherwise.
+    /// `admitted` never carries `allowedIPs`: an unlisted host dials public
+    /// unicast only.
     indirect case audited(EgressAdmissionVerdict)
 }
 
@@ -95,15 +96,14 @@ enum EgressAdmission {
             guard auditsAllowlist, policy.auditAdmits(host: target.host, port: target.port) else {
                 return .deny(.deniedPolicy)
             }
-            // Same plaintext-to-TLS-port rule as a listed host. An unlisted
-            // host has no owner-set `allowed_ips`: public unicast only.
+            // Same plaintext-to-TLS-port rule as a listed host.
             if shape == .absoluteHTTP, credentialed, tlsPort {
                 return .deny(.deniedPolicy)
             }
             return .audited(
                 shape == .connect
-                    ? .tunnel(external: true, requireSNI: credentialed && tlsPort, allowedIPs: nil)
-                    : .forward(external: true, allowedIPs: nil))
+                    ? .tunnel(external: true, requireSNI: credentialed && tlsPort)
+                    : .forward(external: true))
         }
         // Private ranges ride only a policy admission: a live supplement
         // rule (agent-proposed, human-approved) or a loopback target never

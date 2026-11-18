@@ -413,6 +413,7 @@ public struct MCPConfiguration: Sendable, Equatable {
             value["network"] = .bool(sandbox.network)
             if sandbox.writable.isEmpty == false { value["writable"] = .array(sandbox.writable.map(JSONValue.string)) }
             if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
+            if sandbox.enforcement == .audit { value["enforcement"] = .string(sandbox.enforcement.rawValue) }
             if sandbox.allowedIPs.isEmpty == false {
                 var ranges = JSONObject()
                 for host in sandbox.allowedIPs.keys.sorted() {
@@ -420,7 +421,6 @@ public struct MCPConfiguration: Sendable, Equatable {
                 }
                 value["allowed_ips"] = .object(ranges)
             }
-            if sandbox.enforcement == .audit { value["enforcement"] = .string(sandbox.enforcement.rawValue) }
             object["sandbox"] = .object(value)
         }
         if server.callTimeoutSeconds != MCPServerDefinition.defaultCallTimeoutSeconds {
@@ -721,6 +721,9 @@ enum MCPConfigurationDecoding {
             var seen = Set<String>()
             policy.hosts = hosts.map { $0.lowercased() }.filter { seen.insert($0).inserted }
         }
+        if let raw = object["allowed_ips"] {
+            policy.allowedIPs = try allowedIPs(raw, hosts: policy.hosts, context)
+        }
         if let raw = object["enforcement"] {
             guard let text = raw.stringValue, let enforcement = MCPSandboxEnforcement(rawValue: text) else {
                 throw MCPConfigurationError.invalid(#"\#(context) sandbox.enforcement must be "enforce" or "audit""#)
@@ -729,9 +732,6 @@ enum MCPConfigurationDecoding {
                 throw MCPConfigurationError.invalid("\(context) sandbox.enforcement audit needs sandbox.hosts to audit")
             }
             policy.enforcement = enforcement
-        }
-        if let raw = object["allowed_ips"] {
-            policy.allowedIPs = try allowedIPs(raw, hosts: policy.hosts, context)
         }
         return policy
     }

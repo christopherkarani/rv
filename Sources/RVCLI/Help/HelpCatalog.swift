@@ -732,12 +732,12 @@ enum HelpCatalog {
                     description: "\"sandbox\" cages the server (macOS, Linux 6.7+); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
-                    name: "allowed_ips",
-                    description: "\"allowed_ips\": {\"<host>\": [\"10.0.5.0/24\"]} lets a listed host reach those private networks (MCP sandbox proxies on macOS and Linux 6.7+; port 443)"
-                ),
-                HelpRow(
                     name: "enforcement",
                     description: "sandbox \"enforcement\": \"audit\" lets other hosts through, each one logged as egress.observed"
+                ),
+                HelpRow(
+                    name: "allowed_ips",
+                    description: "\"allowed_ips\": {\"<host>\": [\"10.0.5.0/24\"]} lets a listed host reach those private networks (MCP sandbox proxies on macOS and Linux 6.7+; port 443)"
                 ),
                 HelpRow(
                     name: "defaults",

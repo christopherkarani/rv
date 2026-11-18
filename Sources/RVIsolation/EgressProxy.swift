@@ -615,8 +615,8 @@ public final class EgressProxy: @unchecked Sendable {
                 client: client, header: header, target: target, leftover: leftover, external: external,
                 allowedIPs: allowedIPs
             )
-        // An audit pass is for an unlisted host, which has no owner-set
-        // `allowed_ips`: it dials public unicast only, whatever it carries.
+        // An audit pass is an unlisted host: it dials public unicast only and
+        // never takes owner-set private ranges, whatever the verdict carries.
         case .audited(.tunnel(let external, let requireSNI, _)):
             tunnel(
                 client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI,
