@@ -413,6 +413,18 @@ the seatbelt profile is untouched.
 - Exact-row bind: the applier re-parses the rule strictly from the loaded
   row and requires it to equal the intake key, so a file swap after
   approval fails closed (pinned by `driftedRowFailsClosed`).
+- Review bind (`EgressReview`): an approval binds a review token, a hash
+  of the proposal as shown plus the workspace's live grant set (its
+  network-proposal rows whose resolution authorizes a rule; the static
+  policy is compiled in and cannot move inside one process). `rv egress
+  approve <id>` binds the state read right before the owner prompt; the
+  `rv tui` pane binds the token of the row it showed. The resolve
+  re-checks the token inside the pending store's file lock, so a grant
+  landing between display and apply refuses the approval ("egress
+  grants changed since you reviewed this"). A missing token is refused,
+  and so is an unreadable pending store (never read as empty). The
+  token is not a credential: owner authentication still decides who
+  approves. Denials are not bound (denying stale state is safe).
 - Supplement admissions always dial the filtered external path, and
   supplement rules are DNS-only by construction (IP literals and
   single-label names are unrepresentable), so a live rule cannot open

@@ -26,13 +26,21 @@ public struct ReviewItem: Equatable, Sendable {
     public var at: Date
     public var summary: String
     public var detail: [String]
+    /// Pending egress only: the source's review token for the state this
+    /// row shows. An approve hands it back, so the source refuses the
+    /// approval when the state moved after the row was shown. Opaque.
+    public var reviewToken: String?
 
-    public init(id: ReviewItemID, kind: ReviewItemKind, at: Date, summary: String, detail: [String]) {
+    public init(
+        id: ReviewItemID, kind: ReviewItemKind, at: Date, summary: String, detail: [String],
+        reviewToken: String? = nil
+    ) {
         self.id = id
         self.kind = kind
         self.at = at
         self.summary = summary
         self.detail = detail
+        self.reviewToken = reviewToken
     }
 }
 
@@ -57,6 +65,8 @@ public enum ReviewActionOutcome: Equatable, Sendable {
 /// The pane only starts that flow.
 public protocol ReviewQueueSource: Sendable {
     func load(now: Date) async -> ReviewLoadResult
-    func approve(egress id: String) async -> ReviewActionOutcome
+    /// `reviewToken` is the shown row's `ReviewItem.reviewToken`; the
+    /// source refuses a nil or stale one.
+    func approve(egress id: String, reviewToken: String?) async -> ReviewActionOutcome
     func deny(egress id: String, reason: String) async -> ReviewActionOutcome
 }
