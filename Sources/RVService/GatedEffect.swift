@@ -21,7 +21,8 @@ enum GatedEffect: Sendable, Equatable {
     /// Row for the denial ledger. Apply and the file door only; the shell
     /// still honours `DenialLedgerPreferences` for the ledger, and always
     /// appends a `command.denied` event (`command.observed` for an
-    /// observe-mode would-be deny) to the hash-chained `audit.jsonl`.
+    /// observe-mode would-be deny) to the hash-chained `audit.jsonl`. An
+    /// indeterminate refusal is chained only (`DenialRow.indeterminate`).
     case denialRow(DenialRow)
     /// A deny the Policy gate turned into an allow (allow-once, allowlist,
     /// rebase recovery, contained delete). Appended to `audit.jsonl` as
@@ -82,6 +83,11 @@ enum GatedEffect: Sendable, Equatable {
         /// Observed rows: whether that enforced deny would have surfaced
         /// as an ask (`HookAuthorization.project`).
         var wouldBe: LedgerWouldBe = .deny
+        /// Set when the refusal is an indeterminate verdict, not a rule
+        /// deny: chained as a marked `command.denied` (`command.observed`
+        /// when observe let it run), never written to the rule-oriented
+        /// denial ledger.
+        var indeterminate: IndeterminateReason?
     }
 
     struct OverrideRow: Sendable, Equatable {

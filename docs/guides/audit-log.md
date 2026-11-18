@@ -119,6 +119,18 @@ forwarded events carry `rv_chain_head`, so compare it off the machine.
 Plain allows are not logged. Every hook deny is recorded whatever
 `rv blocks` keeps.
 
+A command rv could not finish evaluating ("Run it in Terminal") is
+refused too, and recorded as the same `command.denied` row marked
+`detail.verdict: indeterminate`. Its `subject` is
+`rv.indeterminate:<reason>` and `reason` holds the reason class, never the
+command: `selfProtection` (an rv command that would weaken rv),
+`packageScriptUnresolved`, `unresolvedInvocation`,
+`inlineProgramNeedsJudge`, `commandTooLarge`, `budgetExhausted` or
+`corePacksUnavailable`. Observe mode lets these run (except
+`selfProtection`, which it keeps refusing) and records them as
+`command.observed` with `would_be: deny`. They are not rule denies, so
+`rv blocks` does not list them.
+
 ### Changes to rv's own rules
 
 `config.changed` (safety level, host modes, `guard.mode`, packs, the
