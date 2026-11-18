@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVPolicy
 import RVPresentation
+import RVService
 #if os(macOS)
 import RVIsolation
 #endif
@@ -26,6 +27,15 @@ enum TrustManifestState: Equatable, Sendable {
     case notApplicable
 }
 
+/// Linux: the environment rvd resolves its socket base from
+/// (`UnixSocketPath.serverSocket`).
+struct SocketBaseEnvironment: Equatable, Sendable {
+    /// `XDG_RUNTIME_DIR` as doctor sees it; nil when unset.
+    var xdgRuntimeDir: String?
+    /// Parent of the uid-derived base used when `XDG_RUNTIME_DIR` is unset.
+    var userRuntimeRoot: String = UnixSocketPath.userRuntimeRoot
+}
+
 /// Install facts doctor cannot read from `rvd` itself.
 struct DoctorInstallProbes {
     var userID: uid_t
@@ -43,10 +53,14 @@ struct DoctorInstallProbes {
     /// Linux: does a systemd user manager answer `systemctl --user`? Nil
     /// off Linux or when not evaluated (tests).
     var systemdUserManagerReachable: Bool? = nil
+    /// Linux: what picks rvd's socket base directory. Nil off Linux or
+    /// when not evaluated (tests).
+    var socketBase: SocketBaseEnvironment? = nil
 
     static func live(
         home: HomeDirectory,
         pathEntries: [String] = [],
+        xdgRuntimeDir: String?,
         userID: uid_t = getuid(),
         launchctl: any LaunchctlApplying = ProcessLaunchctl()
     ) -> DoctorInstallProbes {
@@ -64,6 +78,7 @@ struct DoctorInstallProbes {
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
         probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
+        probes.socketBase = SocketBaseEnvironment(xdgRuntimeDir: xdgRuntimeDir)
 #endif
         probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
         probes.interpreterReplaceable = AdapterRuntime.userCanReplace
@@ -149,7 +164,7 @@ enum DoctorInstallChecks {
             installedBinaries(paths: paths, fileManager: fileManager),
             launchAgentProgram(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
-            configDirectory(paths: paths, userID: probes.userID),
+            socketBaseDirectory(paths: paths, probes: probes),
         ].compactMap { $0 }
     }
 
@@ -358,8 +373,18 @@ enum DoctorInstallChecks {
         )
     }
 
-    /// Mirrors rvd's socket base-directory rule: `~/.config` must be a
-    /// directory owned by this user and not group/world-writable.
+    /// The directory rvd's socket sits under: `~/.config` on macOS, the
+    /// runtime directory on Linux (`UnixSocketPath.production`).
+    static func socketBaseDirectory(paths: OwnedPaths, probes: DoctorInstallProbes) -> DoctorProblem? {
+#if os(Linux)
+        runtimeDirectory(probes.socketBase, userID: probes.userID)
+#else
+        configDirectory(paths: paths, userID: probes.userID)
+#endif
+    }
+
+    /// Mirrors rvd's socket base-directory rule on macOS: `~/.config` must be
+    /// a directory owned by this user and not group/world-writable.
     static func configDirectory(paths: OwnedPaths, userID: uid_t) -> DoctorProblem? {
         let config = paths.home.rawValue + "/.config"
         var info = stat()
@@ -387,6 +412,79 @@ enum DoctorInstallChecks {
                 severity: .fail,
                 summary: "\(config) is group/world-writable (mode \(String(mode, radix: 8))); rvd refuses to start",
                 fix: "chmod go-w '\(config)'"
+            )
+        }
+        return nil
+    }
+
+    /// Linux: mirrors what `UnixSocketPath.prepareRuntime` refuses, without
+    /// its side effects. The base is `$XDG_RUNTIME_DIR`, or `/run/user/<uid>`
+    /// when it is unset. rvd refuses an empty `XDG_RUNTIME_DIR`, a socket
+    /// path too long for `sockaddr_un`, a base that is not a directory (a
+    /// symlink included: rvd judges the link itself), one owned by another
+    /// uid or writable by group or others, and a missing uid-derived base,
+    /// which only root can create. rvd creates any other missing base.
+    static func runtimeDirectory(_ environment: SocketBaseEnvironment?, userID: uid_t) -> DoctorProblem? {
+        guard let environment else { return nil }
+        let ownerRuntime = "\(environment.userRuntimeRoot)/\(userID)"
+        let setRuntimeDirectory = "set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents"
+        let socket: URL
+        do {
+            socket = try UnixSocketPath.resolve(xdgRuntimeDir: environment.xdgRuntimeDir ?? ownerRuntime)
+        } catch UnixSocketPathError.runtimeDirectoryMissing {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "XDG_RUNTIME_DIR is set but empty; rvd refuses to start",
+                fix: "unset it (rvd then uses \(ownerRuntime)) or set it to a directory only you can access"
+            )
+        } catch {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "rvd's socket path under \(environment.xdgRuntimeDir ?? ownerRuntime) is too long "
+                    + "for a Unix socket; rvd refuses to start",
+                fix: "\(setRuntimeDirectory), with a shorter path"
+            )
+        }
+        let base = socket.deletingLastPathComponent().deletingLastPathComponent().path
+        let ownerBase = base == ownerRuntime
+        let rootFix = "as root, mkdir -p -m 0700 \(base) && chown \(userID) \(base); or \(setRuntimeDirectory)"
+        var info = stat()
+        guard lstat(base, &info) == 0 else {
+            guard ownerBase, userID != 0 else { return nil }
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is missing and only root can create it; rvd refuses to start",
+                fix: rootFix
+            )
+        }
+        if (info.st_mode & S_IFMT) != S_IFDIR {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is not a directory; rvd refuses to start",
+                fix: ownerBase
+                    ? "as root, mv '\(base)' '\(base).bak' && mkdir -m 0700 \(base) && chown \(userID) \(base)"
+                    : setRuntimeDirectory
+            )
+        }
+        if info.st_uid != userID {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is owned by uid \(info.st_uid), not uid \(userID); rvd refuses to start",
+                fix: "sudo chown \(userID) '\(base)'"
+            )
+        }
+        let mode = Int(info.st_mode) & 0o777
+        if mode & 0o022 != 0 {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is group/world-writable (mode \(String(mode, radix: 8))); rvd refuses to start",
+                fix: "chmod go-w '\(base)'"
             )
         }
         return nil
