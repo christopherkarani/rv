@@ -971,7 +971,7 @@ public struct MCPGatewayCore {
             case .forged(let id):
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpApproval, decision: .denied, subject: "\(server)/\(tool)",
-                    reason: "forged grant rejected", source: "mcp-gateway", detail: ["approval": id])))
+                    reason: MCPAuditVocabulary.forgedGrant, source: "mcp-gateway", detail: ["approval": id])))
                 let shownID = MCPDisplayedText.field(id)
                 let shownServer = MCPDisplayedText.field(server)
                 let shownTool = MCPDisplayedText.field(tool)
