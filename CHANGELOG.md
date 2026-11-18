@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
-- `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host beside a pending one on another port (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed: that approval does not grant its port, so it still needs its own decision. No row is retired or approved by another's approval.
+- `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host, any port, beside a pending one (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed and still needs its own decision. No row is retired or approved by another's approval.
+
+### Security
+
+- The shared launcher resolver now sees through transparent exec wrappers (`setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `flock`, including `flock FILE -c CMD`, `unbuffer`, `caffeinate`, `nocache`, `numactl`, `prlimit`, `chpst`), parsing each one's options and leading operands. Redirects never fill an option value or operand slot, and a variable or glob there is judged unmodelled. `firejail`, and `chpst`'s environment, root and directory options, are never treated as transparent. Before, `setsid rv uninstall` or `stdbuf -oL rv packs disable core.git` slipped past the self-protection floor, and the same wrappers hid commands from the other floors that use the resolver. A wrapper option rv does not model fails closed: every later operand is judged as a possible command.
 
 ## [0.2.2] - 2026-11-18
 
