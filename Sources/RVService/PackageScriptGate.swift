@@ -322,7 +322,8 @@ enum PackageScriptGate {
     /// A runner the launcher parser did not surface as a command of its
     /// own: behind a dynamic head (`$NPM test`, `"$(which npm)" test`) or
     /// an unmodelled launcher (`xargs`, `find -exec`, `watch`, `script`,
-    /// `caffeinate`, `arch`), which is `.hidden`. One behind a container or
+    /// `arch`, or a wrapper option the resolver does not model such as
+    /// `caffeinate -Q`), which is `.hidden`. One behind a container or
     /// remote head (`docker run node npm test`, `ssh host npm test`) is
     /// `.remote`, unless the container mounts host paths (`.hidden`).
     /// Over-claims, never under-claims a modelled spelling.
