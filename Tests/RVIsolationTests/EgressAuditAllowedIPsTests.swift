@@ -12,8 +12,8 @@ import Testing
 /// Audit mode (`sandbox.enforcement: audit`) and owner-set `allowed_ips`
 /// together. Audit lets an unlisted host past admission, but that host dials
 /// public unicast only: it never borrows a listed host's private ranges. A
-/// listed host's dial-time floors (forbidden ranges, partly covered answers)
-/// keep denying under audit. No packet leaves the host: the connect seam
+/// listed host's dial-time checks (an answer outside its ranges, a partly
+/// covered answer) keep denying under audit. No packet leaves the host: the connect seam
 /// records the vetted candidate instead of dialing it.
 @Suite struct EgressAuditAllowedIPsTests {
     static let listed = "staging.corp.lan"
