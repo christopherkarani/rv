@@ -1,6 +1,8 @@
 import Foundation
+import RVIsolation
 import RVPolicy
 import RVPresentation
+import RVService
 
 /// Which lifecycle operation an intent asks for. Selects the orchestration
 /// path and the failure-output prefix (`setup` vs `uninstall`).
@@ -26,6 +28,8 @@ struct SetupIntent {
     var ceremonyKind: SetupCeremonyKind = .setup
     /// Uninstall only: also delete the downloaded judge weights.
     var removeModels: Bool = false
+    /// Uninstall only: also delete rv's data and the secret values it stored.
+    var purge: Bool = false
     /// `rv setup --observe`: store `guard.mode: observe` before wiring.
     var observe: Bool = false
     /// Explicit `--json` / `--robot`: stdout is one `rv.setup.v1` document.
@@ -147,6 +151,7 @@ struct SetupFlow {
             return SetupRun.uninstall(
                 env,
                 removeModels: intent.removeModels,
+                purge: intent.purge,
                 appearance: intent.appearance,
                 clock: clock,
                 animate: intent.animate,
@@ -199,7 +204,15 @@ extension SetupEnvironment {
         setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
 #if os(Linux)
         setup.directRvd = ProcessDirectRvd()
+        setup.runtimeSocketDirectory = loginHome
+            ? "\(UnixSocketPath.userRuntimeRoot)/\(setup.uid())/\(UnixSocketPath.directoryName)"
+            : nil
+        setup.custodianSystemPaths = [
+            MCPCustodianSetup.keyUnit, MCPCustodianSetup.presenceUnit, MCPCustodianSetup.pamFile,
+            MCPCustodianSetup.directory, MCPCustodianSetup.state,
+        ]
 #endif
+        setup.secretKeychain = .live
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup
     }

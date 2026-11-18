@@ -3,6 +3,7 @@ import Testing
 import RVDomain
 import RVIsolation
 import RVPolicy
+import Synchronization
 @testable import RVCLI
 
 private func repoRoot() -> URL {
@@ -165,6 +166,74 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         }
     }
 
+    @Test func purgeDeletesTheValuesRvStoredAndAllOfItsData() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            try touch(layout.modelsDirectory + "/laya-ft-v2-coreml/weights.bin")
+            let logs = home.appendingPathComponent(platformLogDirectory).path
+            let cache = home.appendingPathComponent(platformMCPCacheDirectory).path
+            let runtime = home.appendingPathComponent("run/user/501/rv").path
+            try touch(logs + "/rvd.log")
+            try touch(cache + "/server/scratch")
+            try touch(runtime + "/evaluate.sock")
+            // Outside rv's paths, reached through a symlink in rv's config
+            // dir: unlinked, never followed.
+            let outside = home.appendingPathComponent("outside/keep.txt").path
+            try touch(outside)
+            try FileManager.default.createSymbolicLink(
+                atPath: layout.configDirectory + "/linked",
+                withDestinationPath: home.appendingPathComponent("outside").path)
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+            environment.runtimeSocketDirectory = runtime
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.sorted() == ["rv.secrets/GH_TOKEN", "rv.secrets/NPM_TOKEN"])
+            #expect(exists(layout.configDirectory) == false)
+            #expect(exists(logs) == false)
+            #expect(exists(cache) == false)
+            #expect(exists(runtime) == false)
+            #expect(exists(outside), "a symlink out of rv's config dir was followed")
+        }
+    }
+
+    @Test func purgeNamesASecretValueItCouldNotDeleteAndFails() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            try touch(layout.localRv)
+            try touch(layout.localRvd)
+            let state = home.appendingPathComponent(platformLogDirectory + "/rvd.log").path
+            try touch(state)
+            let store = RecordingSecretStore(failing: ["GH_TOKEN"])
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0)
+            #expect(outcome.stderr.contains("could not delete 1 secret value"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("GH_TOKEN"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("NPM_TOKEN") == false, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.sorted() == ["rv.secrets/GH_TOKEN", "rv.secrets/NPM_TOKEN"])
+            // The rest still went; secrets.json stays, it names the value.
+            #expect(exists(layout.localRv) == false)
+            #expect(exists(layout.localRvd) == false)
+            #expect(exists(state) == false)
+            #expect(exists(layout.configDirectory + "/secrets.json"))
+            #expect(exists(layout.configDirectory + "/mcp.json") == false)
+            #expect(exists(layout.configDirectory + "/audit.jsonl") == false)
+        }
+    }
+
+    @Test func purgeFlagParses() throws {
+        #expect(try Uninstall.parse(["--purge"]).purge)
+        #expect(try Uninstall.parse([]).purge == false)
+    }
+
     @Test func uninstallWithNothingKeptPrintsNoKeptNote() throws {
         try withTempHome { home, layout, launchctl in
             try touch(layout.localRv)
@@ -172,6 +241,34 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
             #expect(outcome.exitCode == 0, "\(outcome.stderr)")
             #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
         }
+    }
+}
+
+/// rvd's log directory and the MCP scratch cache, under HOME.
+#if os(macOS)
+private let platformLogDirectory = "Library/Logs/rv"
+private let platformMCPCacheDirectory = "Library/Caches/rv-mcp"
+#else
+private let platformLogDirectory = ".local/state/rv"
+private let platformMCPCacheDirectory = ".cache/rv-mcp"
+#endif
+
+/// Records every delete; fails those for the named accounts.
+private final class RecordingSecretStore: Sendable {
+    let deleted = Mutex<[String]>([])
+    let failing: Set<String>
+
+    init(failing: Set<String> = []) {
+        self.failing = failing
+    }
+
+    var writer: SecretKeychainWriter {
+        SecretKeychainWriter(
+            store: { _, _, _ in true },
+            delete: { service, account in
+                self.deleted.withLock { $0.append("\(service)/\(account)") }
+                return self.failing.contains(account) == false
+            })
     }
 }
 

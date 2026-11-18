@@ -3,6 +3,7 @@ import RVAnalytics
 import RVDomain
 import RVHistory
 import RVHooks
+import RVIsolation
 import RVPolicy
 import RVPresentation
 
@@ -10,11 +11,12 @@ extension SetupRun {
     static func uninstallPerform(
         _ env: SetupEnvironment,
         removeModels: Bool = false,
+        purge: Bool = false,
         appearance: CLIAppearance,
         clock: any SetupCeremonyClock,
         animate: Bool,
         write: ((String) -> Void)?
-    ) throws(SetupError) -> (text: String, emitted: Bool) {
+    ) throws(SetupError) -> (text: String, emitted: Bool, leftovers: UninstallLeftovers) {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
@@ -42,6 +44,25 @@ extension SetupRun {
             auditForwardAgentExisted: auditForwardAgentExisted
         )
 
+        // The definitions are how the stored values are found, so under
+        // --purge the values go before secrets.json does. A value that
+        // cannot be deleted is reported and fails the command once the rest
+        // is done; it never stops hooks, service and binaries going.
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        var storedSecrets: [String] = []
+        var secretsUnreadable: String?
+        switch SecretsConfiguration.load(configDirectory: configDir) {
+        case .success(let configuration):
+            let names = rvStoredSecretNames(configuration)
+            storedSecrets = purge ? purgeStoredSecrets(names, keychain: env.secretKeychain) : names
+        case .failure(let error):
+            secretsUnreadable = error.message
+        }
+        let dataDirectories = ownedDataDirectories(layout: layout, env: env)
+        let purgedData = purge
+            && (keptConfigEntries(layout: layout, files: files).isEmpty == false
+                || dataDirectories.contains { ownedPathPresent($0, files: files) })
+
         let bin = layout.localBinDirectory
         let binPaths = InstallManifest.ownedBinPaths(
             binDirectory: bin,
@@ -53,11 +74,10 @@ extension SetupRun {
         )
         removedPaths.append(contentsOf: binPaths)
         removedPaths.append(layout.approvalsApp)
-        if removeModels {
+        if removeModels || purge {
             removedPaths.append(layout.modelsDirectory)
         }
 
-        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
         let analytics = AnalyticsPaths(configDirectory: configDir)
         let configArtifacts =
             analytics.uninstallArtifacts
@@ -72,26 +92,45 @@ extension SetupRun {
         for path in removedPaths {
             files.removeFile(atPath: path)
         }
+        if purge {
+            // secrets.json stays while it names a value still stored.
+            let keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
+                ? [] : [SecretsConfiguration.fileName]
+            purgeConfigDirectory(layout.configDirectory, keeping: keep, files: files)
+            for path in dataDirectories {
+                removeOwnedPath(path, files: files)
+            }
+        }
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
         if removedPaths.contains(where: { files.fileExists($0) }) {
             throw SetupError.ownedPathStillExists
         }
 
+        let leftovers = UninstallLeftovers(
+            configDirectory: layout.configDirectory,
+            configEntries: keptConfigEntries(layout: layout, files: files),
+            otherPaths: dataDirectories.filter { ownedPathPresent($0, files: files) },
+            storedSecrets: storedSecrets,
+            secretsUnreadable: secretsUnreadable,
+            custodianSystemPaths: env.custodianSystemPaths.filter { ownedPathPresent($0, files: files) },
+            purged: purge
+        )
         let report = UninstallReport(
             removedHosts: removedHosts,
             occupiedHosts: occupiedHosts,
             removedLaunchAgent: launchAgentExisted,
             removedBinaries: binariesExisted,
-            removedConfigArtifacts: configExisted
+            removedConfigArtifacts: configExisted || purgedData
         )
-        return SetupFormat.uninstallStdout(
+        let formatted = SetupFormat.uninstallStdout(
             report: report,
             appearance: appearance,
             clock: clock,
             animate: animate,
             write: write
         )
+        return (formatted.text, formatted.emitted, leftovers)
     }
 
     /// Boots out every rv job this HOME's real supervisor runs. Only the

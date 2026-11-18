@@ -7,6 +7,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVHooks
+import RVIsolation
 import RVPolicy
 import RVPresentation
 import RVService
@@ -77,6 +78,17 @@ struct SetupEnvironment {
     /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.resolveRunnable`
     /// on this PATH.
     var resolveInterpreter: (String) -> String? = { "/usr/bin/" + $0 }
+    /// `rv uninstall --purge` deletes the values rv stored under
+    /// `SecretKeychain.service` through this. Default deletes nothing and
+    /// reports every delete as failed; live: `SecretKeychainWriter.live`.
+    var secretKeychain = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
+    /// Linux: rvd's runtime socket directory, `/run/user/<uid>/rv`. Nil on
+    /// macOS (the socket sits in the config dir), for a HOME that is not
+    /// the login home, and in tests.
+    var runtimeSocketDirectory: String? = nil
+    /// System files `sudo rv mcp custodian install` writes. Uninstall only
+    /// names the ones present. Default none; live Linux: the custodian's.
+    var custodianSystemPaths: [String] = []
 
     /// This run loads the real launchd/systemd service, so it can (and
     /// must) prove rvd answers before wiring hooks.
