@@ -274,6 +274,24 @@ public struct PolicyCeilingStore: Sendable {
         return try PolicyCeilingTOML.parse(text)
     }
 
+    /// Why `load()` refuses `ceiling.toml`, or nil when it loads or is absent.
+    public func problem() -> PolicyLoadStatus.Problem? {
+        do {
+            guard let text = try PolicyFileRead.text(
+                at: fileURL, maximumBytes: PolicyCeiling.maximumBytes, followSymlinks: false)
+            else { return nil }
+            _ = try PolicyCeilingTOML.parse(text)
+            return nil
+        } catch PolicyFileRead.Failure.refused(let problem) {
+            return problem
+        } catch PolicyFileRead.Failure.notDirectory {
+            // `load()` refuses this too: only ENOENT is "no ceiling".
+            return .unreadable
+        } catch {
+            return .unparseable
+        }
+    }
+
     /// A UTF-8 regular file of at most `PolicyCeiling.maximumBytes`, read
     /// without blocking on a FIFO and without reading past the cap. Nil
     /// only for ENOENT; anything else throws `invalidFile`.

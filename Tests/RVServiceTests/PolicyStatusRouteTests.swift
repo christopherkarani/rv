@@ -49,15 +49,25 @@ struct PolicyStatusRouteTests {
 
     enum Layer: String, CaseIterable, Sendable { case machine, repo, ceiling }
 
-    /// Files evaluation must refuse rather than parse, follow or wait on.
+    /// Files evaluation must refuse rather than parse or wait on.
     enum Hazard: String, CaseIterable, Sendable {
         case corrupt
         /// A FIFO with no writer: a blocking open would hang every hook.
         case fifo
         /// Valid TOML past the size cap.
         case oversized
-        /// A symlink to a valid policy file.
-        case symlink
+        /// A symlink to a FIFO: following it must not block either.
+        case symlinkToFIFO
+
+        func problem(_ layer: Layer) -> PolicyLoadStatus.Problem {
+            switch self {
+            case .corrupt: .unparseable
+            case .fifo: .notRegularFile
+            case .oversized: .tooLarge
+            // The ceiling never follows a symlink; the layers do.
+            case .symlinkToFIFO: layer == .ceiling ? .symlink : .notRegularFile
+            }
+        }
     }
 
     /// Every layer and every unloadable file: status says `failed` with the
@@ -82,6 +92,7 @@ struct PolicyStatusRouteTests {
             }
             #expect(status.state == .failed)
             #expect(status.failure == expected)
+            #expect(status.problem == hazard.problem(layer))
 
             let reply = await runtime.evaluate(
                 EvaluationRequest(command: ShellCommand(rawValue: "ls"), enabledPacks: dayOnePackIDs),
@@ -91,6 +102,29 @@ struct PolicyStatusRouteTests {
                 return
             }
             #expect(deny.ruleID == BuiltinRule.typedRulesInvalid.ruleID)
+        }
+    }
+
+    /// A layer `policy.toml` symlinked to a valid file (dotfiles, stow)
+    /// loads, and evaluation enforces it: the target is still a regular
+    /// file within the cap.
+    @Test(arguments: [Layer.machine, .repo])
+    func symlinkedLayerPolicy_loadsAndIsEnforced(layer: Layer) async throws {
+        try await withRuntime { runtime, home, workspace in
+            let url = layer == .machine
+                ? TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home)).machineFileURL
+                : TypedRuleStore.repoFileURL(workspace: workspace)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let target = workspace.appendingPathComponent("dotfiles-policy.toml")
+            try Self.validPolicy.write(to: target, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+
+            let status = try await Self.status(runtime, cwd: workspace)
+            #expect(status.state == .loaded)
+            let loaded = layer == .machine ? status.machine : status.repo
+            #expect(loaded?.ruleCount == 1)
+            #expect(status.effectiveRuleCount == 1)
         }
     }
 
@@ -184,9 +218,9 @@ struct PolicyStatusRouteTests {
         case .oversized:
             let padding = "# " + String(repeating: "x", count: TypedRuleStore.maximumDocumentBytes) + "\n"
             try (padding + validPolicy).write(to: url, atomically: true, encoding: .utf8)
-        case .symlink:
-            let target = scratch.appendingPathComponent("elsewhere-\(UUID().uuidString).toml")
-            try validPolicy.write(to: target, atomically: true, encoding: .utf8)
+        case .symlinkToFIFO:
+            let target = scratch.appendingPathComponent("fifo-\(UUID().uuidString)")
+            #expect(mkfifo(target.path, 0o600) == 0)
             try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
         }
     }

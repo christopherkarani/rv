@@ -114,6 +114,19 @@ public struct PolicyWorkspace: Sendable {
         return EffectiveLoad(machine: machine, repo: repo, ceiling: ceiling, rules: rules)
     }
 
+    /// Why the step that failed refused its file, by the same reader. Run
+    /// only after a failure, so a file changed in between can read as nil.
+    private func problem(at step: LoadStep) -> PolicyLoadStatus.Problem? {
+        switch step {
+        case .machine:
+            return machineDirectory.flatMap { TypedRuleStore(baseDirectory: $0).machineDocumentProblem() }
+        case .repo:
+            return workspace.flatMap { repoStore(workspace: $0).repoDocumentProblem(workspace: $0) }
+        case .ceiling:
+            return machineDirectory.flatMap { PolicyCeilingStore(configDirectory: $0).problem() }
+        }
+    }
+
     /// What evaluation loads here right now, from the same `loadEffective`.
     /// Reads only; takes no lock and never consults the revision log
     /// (evaluation does not either). A failed load is reported, never
@@ -131,7 +144,7 @@ public struct PolicyWorkspace: Sendable {
             case .ceiling: .ceilingInvalid
             }
             return PolicyLoadStatus(
-                state: .failed, failure: failure,
+                state: .failed, failure: failure, problem: problem(at: step),
                 configDirectory: location.configDirectory, workspace: location.workspace)
         }
         func layer(_ document: PolicyDocument) -> PolicyLoadStatus.Layer {

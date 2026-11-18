@@ -26,6 +26,23 @@ public struct PolicyLoadStatus: Sendable, Equatable, Codable {
         case ceilingInvalid = "ceiling-invalid"
     }
 
+    /// Why the failing step's file was refused. A fixed set, never file
+    /// content or a free-text error.
+    public enum Problem: String, Sendable, Equatable, Codable, Error {
+        /// A FIFO, device, directory or other non-regular file: never
+        /// read, so it cannot block evaluation.
+        case notRegularFile = "not-regular-file"
+        /// A symlink where none is followed (`ceiling.toml`).
+        case symlink
+        /// Past the size cap (1 MiB per layer, 256 KiB for the ceiling).
+        case tooLarge = "too-large"
+        case notUTF8 = "not-utf8"
+        /// Open or read failed (permissions, I/O).
+        case unreadable
+        /// Read, but not a valid document.
+        case unparseable
+    }
+
     /// One loaded layer document.
     public struct Layer: Sendable, Equatable, Codable {
         /// `PolicyRevisionIdentity.hash` of the document; a revision log
@@ -47,6 +64,8 @@ public struct PolicyLoadStatus: Sendable, Equatable, Codable {
 
     public var state: State
     public var failure: Failure?
+    /// Why the failing step's file was refused; nil when loaded.
+    public var problem: Problem?
     /// Nil without a machine config directory (no HOME), or when loading failed.
     public var machine: Layer?
     /// Nil without a workspace, or when loading failed.
@@ -63,6 +82,7 @@ public struct PolicyLoadStatus: Sendable, Equatable, Codable {
     public init(
         state: State,
         failure: Failure? = nil,
+        problem: Problem? = nil,
         machine: Layer? = nil,
         repo: Layer? = nil,
         ceilingRuleCount: Int? = nil,
@@ -72,6 +92,7 @@ public struct PolicyLoadStatus: Sendable, Equatable, Codable {
     ) {
         self.state = state
         self.failure = failure
+        self.problem = problem
         self.machine = machine
         self.repo = repo
         self.ceilingRuleCount = ceilingRuleCount

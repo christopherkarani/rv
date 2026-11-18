@@ -27,6 +27,9 @@ public enum TypedRuleStoreError: Error, Sendable, Equatable {
     /// the binding is checked before an interrupted save is reconciled, and
     /// again under the file lock (see `requireBindingBeforeReconcile`).
     case headChanged
+    /// The document would render past `TypedRuleStore.maximumDocumentBytes`,
+    /// which evaluation refuses to load. Nothing was written.
+    case documentTooLarge
 }
 
 /// One append-only policy revision. The embedded TOML is the full document at
@@ -421,6 +424,7 @@ public struct TypedRuleStore: Sendable {
                 // Caller's admission check (the owner's policy ceiling),
                 // under the same locks as the write.
                 try admit?(match.document)
+                try Self.requireLoadableSize(data)
                 let pending = try preparedRevisionLine(
                     document: match.document,
                     text: match.toml,
@@ -816,7 +820,7 @@ public struct TypedRuleStore: Sendable {
     ) throws {
         guard let display = try? readRevisions(from: machineRevisionsURL) else { return }
         if (try? MachineRevisionLog.checkDisplay(chain, matches: display)) == nil {
-            let liveText = try? String(contentsOf: machineFileURL, encoding: .utf8)
+            let liveText = liveMachineText()
             guard case .sealTail = MachineRevisionLog.reconcile(chain, display: display, liveTOML: liveText) else {
                 return
             }
@@ -982,7 +986,8 @@ public struct TypedRuleStore: Sendable {
         RVPolicyPaths.policyRevisionLogTipFile(inConfigDir: baseDirectory)
     }
 
-    /// Largest `policy.toml` (or legacy JSON) a load reads; larger fails closed.
+    /// Largest `policy.toml` (or legacy JSON) a load reads; larger fails
+    /// closed, and a save that would render larger is refused.
     public static let maximumDocumentBytes = 1024 * 1024
 
     /// F1 decision: loads are documented direct-edit — they read the current
@@ -994,52 +999,97 @@ public struct TypedRuleStore: Sendable {
     /// sealed tip on every read, and rollback restores byte-exact verified
     /// content. Unparseable bytes still fail closed with `invalidFile`.
     ///
-    /// Every hook evaluation runs this read, so it never blocks: a symlink,
-    /// FIFO, device, directory or file over `maximumDocumentBytes` at
-    /// either path throws `invalidFile` (evaluation denies) instead of
-    /// being followed, waited on or read whole.
+    /// Every hook evaluation runs this read, so it never blocks: a FIFO,
+    /// device, directory or file over `maximumDocumentBytes` at either path
+    /// (or as a symlink's target) throws `invalidFile` (evaluation denies)
+    /// instead of being waited on or read whole. `documentProblem` says why.
     private func loadDocument(
         toml: URL,
         json: URL
     ) throws -> PolicyDocument {
-        if let text = try Self.readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }) {
-            do {
-                return try PolicyDocumentTOML.parse(text)
-            } catch {
-                throw TypedRuleStoreError.invalidFile
-            }
-        }
-        return try loadLegacyJSON(from: json)
-    }
-
-    /// Nil when no file exists at `url`. A missing parent directory, or a
-    /// path component that is a file, is absent too, as before hardening.
-    private static func readPolicyFile<T>(_ url: URL, as decode: ([UInt8]) -> T?) throws -> T? {
-        let bytes: [UInt8]?
         do {
-            bytes = try PolicyFileRead.bytes(at: url, maximumBytes: maximumDocumentBytes, followSymlinks: false)
-        } catch .notDirectory {
-            return nil
+            return try Self.readDocument(toml: toml, json: json)
         } catch {
             throw TypedRuleStoreError.invalidFile
         }
+    }
+
+    /// Why `loadDocument` refuses these paths, or nil when it loads them.
+    private func documentProblem(toml: URL, json: URL) -> PolicyLoadStatus.Problem? {
+        do {
+            _ = try Self.readDocument(toml: toml, json: json)
+            return nil
+        } catch let problem as PolicyLoadStatus.Problem {
+            return problem
+        } catch {
+            return .unreadable
+        }
+    }
+
+    /// Why the machine layer does not load, or nil when it does.
+    public func machineDocumentProblem() -> PolicyLoadStatus.Problem? {
+        documentProblem(toml: machineFileURL, json: machineLegacyJSONURL)
+    }
+
+    /// Why the repo layer does not load, or nil when it does.
+    public func repoDocumentProblem(workspace: URL) -> PolicyLoadStatus.Problem? {
+        documentProblem(toml: Self.repoFileURL(workspace: workspace), json: Self.repoLegacyJSONURL(workspace: workspace))
+    }
+
+    /// Throws `PolicyLoadStatus.Problem`.
+    private static func readDocument(toml: URL, json: URL) throws -> PolicyDocument {
+        if let text = try readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }, else: .notUTF8) {
+            do {
+                return try PolicyDocumentTOML.parse(text)
+            } catch {
+                throw PolicyLoadStatus.Problem.unparseable
+            }
+        }
+        return try readLegacyJSON(from: json)
+    }
+
+    /// Nil when no file exists at `url`. A missing parent directory, or a
+    /// path component that is a file, is absent too (as `fileExists` was).
+    /// A final symlink is followed; its target must still be a regular
+    /// file within the cap. Throws `PolicyLoadStatus.Problem`.
+    private static func readPolicyFile<T>(
+        _ url: URL, as decode: ([UInt8]) -> T?, else undecodable: PolicyLoadStatus.Problem
+    ) throws -> T? {
+        let bytes: [UInt8]?
+        do {
+            bytes = try PolicyFileRead.bytes(at: url, maximumBytes: maximumDocumentBytes, followSymlinks: true)
+        } catch let failure as PolicyFileRead.Failure {
+            switch failure {
+            case .notDirectory: return nil
+            case .refused(let problem): throw problem
+            }
+        }
         guard let bytes else { return nil }
-        guard let decoded = decode(bytes) else { throw TypedRuleStoreError.invalidFile }
+        guard let decoded = decode(bytes) else { throw undecodable }
         return decoded
     }
 
-    private func loadLegacyJSON(from url: URL) throws -> PolicyDocument {
-        guard let data = try Self.readPolicyFile(url, as: { Data($0) }) else {
+    /// The live machine `policy.toml` text for the repair paths
+    /// (reconcile, rollback binding), read like a load: nil when it is
+    /// absent or refused, never a blocking read.
+    private func liveMachineText() -> String? {
+        try? Self.readPolicyFile(
+            machineFileURL, as: { String(validating: $0, as: UTF8.self) }, else: .notUTF8)
+    }
+
+    /// Throws `PolicyLoadStatus.Problem`.
+    private static func readLegacyJSON(from url: URL) throws -> PolicyDocument {
+        guard let data = try readPolicyFile(url, as: { Data($0) }, else: .unreadable) else {
             return PolicyDocument()
         }
         let document: TypedRulesDocument
         do {
             document = try JSONDecoder().decode(TypedRulesDocument.self, from: data)
         } catch {
-            throw TypedRuleStoreError.invalidFile
+            throw PolicyLoadStatus.Problem.unparseable
         }
         guard document.schemaVersion == TypedRulesDocument.currentSchemaVersion else {
-            throw TypedRuleStoreError.invalidFile
+            throw PolicyLoadStatus.Problem.unparseable
         }
         return PolicyDocument(
             rules: document.rules.map { rule in
@@ -1050,6 +1100,14 @@ public struct TypedRuleStore: Sendable {
                 )
             }
         )
+    }
+
+    /// A document evaluation could not load is never written: the save is
+    /// refused with nothing changed.
+    private static func requireLoadableSize(_ data: Data) throws {
+        guard data.count <= maximumDocumentBytes else {
+            throw TypedRuleStoreError.documentTooLarge
+        }
     }
 
     /// Caller holds the file lock for `url`. Repo rollback uses this so the
@@ -1073,6 +1131,7 @@ public struct TypedRuleStore: Sendable {
         guard let data = text.data(using: .utf8) else {
             throw TypedRuleStoreError.invalidFile
         }
+        try Self.requireLoadableSize(data)
         // Validate the log and encode the pending line BEFORE mutating
         // the document: a corrupt log must fail closed without moving
         // the file, so the log can never fall behind a save it rejected.
@@ -1344,7 +1403,7 @@ public struct TypedRuleStore: Sendable {
         verified chain: MachineRevisionLog.VerifiedChain
     ) throws -> MachineRevisionLog.VerifiedChain {
         let entries = (try? readRevisions(from: machineRevisionsURL)) ?? []
-        let liveText = try? String(contentsOf: machineFileURL, encoding: .utf8)
+        let liveText = liveMachineText()
         switch MachineRevisionLog.reconcile(chain, display: entries, liveTOML: liveText) {
         case .unchanged:
             return chain
