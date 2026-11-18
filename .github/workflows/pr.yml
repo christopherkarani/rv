@@ -380,6 +380,29 @@ jobs:
       - name: Run RVIsolationTests (A-E)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[A-Ea-e]'
 
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
   macos-isolation-f-m:
     name: macos isolation (F-M)
     runs-on: macos-26
@@ -425,6 +448,29 @@ jobs:
       - name: Run RVIsolationTests (F-M)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[F-Mf-m]'
 
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
   macos-isolation-n-z:
     name: macos isolation (N-Z)
     runs-on: macos-26
@@ -469,6 +515,29 @@ jobs:
 
       - name: Run RVIsolationTests (N-Z)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
+
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # RVMCPTests and RVMCPCustodianCoreTests on Darwin. Linux `swift test`
   # runs both, but the macOS code paths (sandbox-exec profiles, /private
@@ -528,6 +597,29 @@ jobs:
               --test-product "$product" --filter "$product\\." || status=1
           done
           exit "$status"
+
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Compiler host is macos-26. Advertised Darwin floor is macOS 15.
   # sequoia-smoke executes the staged binaries; it does not compile Swift.
@@ -651,6 +743,29 @@ jobs:
           path: .build/release-stage/
           if-no-files-found: error
 
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
   sequoia-smoke:
     name: macos 15 smoke
     runs-on: macos-15
@@ -756,6 +871,29 @@ jobs:
           Scripts/swift-6.4 test --skip-build --filter
           'WorkspaceHostTests|RuntimeTerminalTests|RuntimeResourceAdversarialTests|LocalTerminalRestoreTests|WorkspaceTUIIntegrationTests|OpenCodeCommandTests'
 
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Remove development peer trust
         if: always()
         run: |
@@ -791,3 +929,26 @@ jobs:
 
       - name: rv-microvm package tests
         run: Scripts/swift-6.4 test --package-path Packages/rv-microvm
+
+      # A test process killed by a signal (e.g. SIGBUS) leaves only
+      # "unexpected signal code N" in the log. Keep the Darwin crash
+      # reports so the faulting thread and frame are visible. ReportCrash
+      # writes them asynchronously, hence the short wait.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          sleep 15
+          dest="$RUNNER_TEMP/crash-reports"
+          mkdir -p "$dest"
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
+            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
+            -exec cp {} "$dest/" \; 2>/dev/null || true
+          ls -l "$dest"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 14
