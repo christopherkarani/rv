@@ -475,6 +475,37 @@ struct WorkspaceDownloadTests {
         #expect(fixture.read(fixture.host + "/results/b/x") == "kept")
     }
 
+    @Test func aDownloadThatFailsMidCopyRemovesOnlyWhatItCreated() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/out/a", "first")
+        try fixture.write(fixture.workspace + "/out/b", "second")
+        try fixture.write(fixture.host + "/keep", "mine")
+        let b = fixture.workspace + "/out/b"
+        // A new inode for `b` after planning: the copy writes the top and
+        // `a`, then stops at `b` as changed.
+        let result = fixture.download("out", to: fixture.host + "/results", afterPlan: {
+            _ = unlink(b)
+            try? Data("swapped".utf8).write(to: URL(fileURLWithPath: b))
+        })
+        #expect(isChanged(result))
+        #expect(fixture.exists(fixture.host + "/results") == false)
+        #expect(fixture.read(fixture.host + "/keep") == "mine")
+        #expect(fixture.read(fixture.workspace + "/out/a") == "first")
+    }
+
+    @Test func aParentReachedThroughASymlinkToRvConfigIsProtected() throws {
+        let fixture = try TransferFixture()
+        defer { fixture.remove() }
+        try fixture.write(fixture.workspace + "/f", "agent")
+        try fixture.write(fixture.configDir + "/secrets.json", "{}")
+        #expect(symlink(fixture.configDir, fixture.host + "/cfg") == 0)
+        #expect(refusal(fixture.download("f", to: fixture.host + "/cfg/x")) == .protectedDestination(fixture.host + "/cfg/x"))
+        #expect(fixture.exists(fixture.configDir + "/x") == false)
+        #expect(refusal(fixture.upload(fixture.host + "/cfg/secrets.json")) == .protectedSource(fixture.host + "/cfg/secrets.json"))
+        #expect(fixture.exists(fixture.workspace + "/secrets.json") == false)
+    }
+
     @Test func refusesSpecialFiles() throws {
         let fixture = try TransferFixture()
         defer { fixture.remove() }
