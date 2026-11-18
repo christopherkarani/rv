@@ -266,5 +266,5 @@ Process Activity and Detection Finding). A test runs one event of every
 kind through the mapper and validates it against vendored 1.3.0 schemas
 (`Tests/RVHistoryTests/Fixtures/ocsf-1.3.0`). Known gap: API Activity,
 Application Lifecycle and Device Config State Change also carry `action`
-and `disposition` (and API Activity `device`), which 1.3.0 does not define
-for those classes; they are kept because existing SIEM rules read them.
+and `disposition` (and API Activity `device`), and Detection Finding carries
+`is_alert`, which 1.3.0 does not define for those classes; they are kept because existing SIEM rules read them.

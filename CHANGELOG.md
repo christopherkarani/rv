@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
-- The OCSF audit export (`rv audit export --format ocsf`, `rv audit forward`) carries a stable reason code in `status_code` on every denial and would-be denial (for example `rv.egress.denied-policy`, `rv.secret.foreign-placeholder`, `rv.command.denied-secret-path`), and declares its OCSF profiles in `metadata.profiles`. Every audit kind is now validated in CI against vendored OCSF 1.3.0 schemas; API and Process Activity events always name an `actor`, and Process Activity a `process.uid`, as 1.3.0 requires. The codes are listed in `docs/guides/audit-log.md`.
+- The OCSF audit export (`rv audit export --format ocsf`, `rv audit forward`) carries a stable reason code in `status_code` on every denial and would-be denial (for example `rv.egress.denied-policy`, `rv.secret.foreign-placeholder`, `rv.command.denied-secret-path`), and declares its OCSF profiles in `metadata.profiles`. Every audit kind is now validated in CI against vendored OCSF 1.3.0 schemas; API and Process Activity events always name an `actor`, Process Activity a `process.uid`, and Application Lifecycle's `app` a `vendor_name`, as 1.3.0 requires. The codes are listed in `docs/guides/audit-log.md`.
 
 ### Security
 

@@ -47,7 +47,8 @@ added here; a vendored file no event uses fails the same test.
 
 OCSF 1.3.0 applies the `security_control` profile (`action`, `action_id`,
 `disposition`, `disposition_id`) only to some classes, and API Activity has
-no `device`. rv emitted those attributes on every class before this check
+no `device`; Detection Finding has no `is_alert` until a later OCSF version.
+rv emitted those attributes on every class before this check
 existed, and SIEM rules read them, so they stay. They are listed in
 `AuditOCSFSchemaTests.knownDeviations`; every other attribute must be
 defined by the schema, and the list fails the test when an entry is no

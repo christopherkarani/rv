@@ -94,7 +94,7 @@ public enum AuditOCSF {
                 "types": [event.detail["refusal"] ?? "unknown"],
             ] as [String: Any]
         default:
-            object["app"] = ["name": "rv", "version": ProductVersion.semver]
+            object["app"] = ["name": "rv", "vendor_name": "rv", "version": ProductVersion.semver]
         }
         var unmapped: [String: Any] = ["rv_kind": event.kind.rawValue, "rv_subject": event.subject]
         if let reason = event.reason { unmapped["rv_reason"] = reason }

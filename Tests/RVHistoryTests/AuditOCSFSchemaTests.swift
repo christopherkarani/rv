@@ -135,6 +135,7 @@ struct AuditOCSFSchemaTests {
         "api_activity@host": ["device", "action", "action_id", "disposition", "disposition_id"],
         "application_lifecycle@host": ["action", "action_id", "disposition", "disposition_id"],
         "device_config_state_change@host": ["action", "action_id", "disposition", "disposition_id"],
+        "detection_finding@host+security_control": ["is_alert"],
     ]
 
     static func isKnownDeviation(_ violation: OCSFSchemaValidator.Violation, stem: String) -> Bool {
