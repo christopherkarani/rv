@@ -230,10 +230,22 @@ public enum WorkspaceHosts {
             project: project, executable: executable, timeout: timeout,
             homeDirectory: homeDirectory, seams: seams, child: &child
         )
-        if case .failure = result, child > 0 {
+        if case .failure(let error) = result, child > 0, stopsSpawnedHost(error) {
             seams.terminate(child)
         }
         return result
+    }
+
+    /// Failures that leave the spawned host running with nobody able to use
+    /// it. Others (a recovery block, a refused start) end with the host
+    /// exiting on its own, and it is not interrupted mid-recovery.
+    static func stopsSpawnedHost(_ error: WorkspaceHostFailure) -> Bool {
+        switch error {
+        case .timedOut, .notAnswering, .control(.unauthorizedClient):
+            true
+        default:
+            false
+        }
     }
 
     private static func ensureLoop(

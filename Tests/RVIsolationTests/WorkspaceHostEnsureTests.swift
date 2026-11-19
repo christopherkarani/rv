@@ -117,6 +117,16 @@ import Testing
         #expect(script.terminated.isEmpty)
     }
 
+    /// A recovery block ends with the host exiting by itself; it is not
+    /// interrupted mid-recovery.
+    @Test func recoveryBlockDoesNotSignalTheSpawnedHost() {
+        let block = WorkspaceRecoveryBlock(workspace: nil, reason: .corrupt)
+        let script = Script(attachments: [.absent, .blocked(block)])
+        #expect(Self.ensure(script) == .failure(.recoveryBlocked(block)))
+        #expect(script.spawned == [4242])
+        #expect(script.terminated.isEmpty)
+    }
+
     /// A workspace that is closing stays a poll, not a readiness failure.
     @Test func closingWorkspaceIsNotCountedAsUnanswered() {
         let script = Script(attachments: [.live(Self.endpoint)], probes: [.success(false)])
