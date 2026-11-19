@@ -51,15 +51,17 @@ Out of scope:
 
 Every installer download is checked against the release's `SHA256SUMS`
 before anything is unpacked. On macOS each binary must also carry a valid
-Developer ID signature (warn-only until `signed_releases=1` in `install.sh`).
-Linux binaries carry no code signature, so the release workflow signs
-`SHA256SUMS` with an SSH key (`ssh-keygen -Y sign`, namespace `rv-release`)
-from the `RV_RELEASE_SSH_SIGNING_KEY` repository secret and publishes
-`SHA256SUMS.sig`. Once the public half is pinned in `install.sh`
-(`release_ssh_allowed_signers`), the installer refuses a release whose
-signature is missing (unless `RV_INSTALL_ALLOW_UNSIGNED=1`) or invalid. While
-the pin is empty, Linux installs warn that release signatures are not
-verified. To check a release by hand:
+Developer ID signature from rv's team (`release_team_id` in `install.sh`,
+`5V273URY46`), and every one but the Swift runtime dylib must pass
+Gatekeeper as notarized. Linux binaries carry no code signature, so the
+release workflow signs `SHA256SUMS` with an SSH key (`ssh-keygen -Y sign`,
+namespace `rv-release`) from the `RV_RELEASE_SSH_SIGNING_KEY` repository
+secret and publishes `SHA256SUMS.sig`. The installer pins the public half
+(`release_ssh_allowed_signers`) and refuses a release whose signature is
+invalid, or missing unless `RV_INSTALL_ALLOW_UNSIGNED=1`. Another team's
+signature is always refused; unsigned files only install with that
+override. v0.2.2 is the first release signed both ways. To check a release
+by hand:
 
 ```sh
 printf '%s\n' "<release_ssh_allowed_signers from install.sh>" > allowed_signers
