@@ -517,6 +517,28 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         }
     }
 
+    /// `~/.config` a link (dotfiles): --purge would refuse the config dir and
+    /// delete none of its values, so plain uninstall must not promise it.
+    @Test func plainUninstallDoesNotPromisePurgeRemovesAConfigDirUnderASymlink() throws {
+        try withTempHome { home, layout, launchctl in
+            let decoy = home.appendingPathComponent("dotfiles-config").path
+            try writeUserData(configDirectory: decoy + "/rv")
+            try FileManager.default.createSymbolicLink(
+                atPath: (layout.configDirectory as NSString).deletingLastPathComponent, withDestinationPath: decoy)
+
+            let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(exists(decoy + "/rv/secrets.json"))
+            #expect(outcome.stderr.contains("all of it") == false, "\(outcome.stderr)")
+            #expect(
+                outcome.stderr.contains("not the config directory or its secret values"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(layout.configDirectory + ": kept"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("dotfiles-config/rv"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("rm -rf " + layout.configDirectory) == false, "\(outcome.stderr)")
+        }
+    }
+
     @Test func prettyOutputDoesNotClaimCompleteWhenPurgeLeavesAValue() throws {
         try withTempHome { home, layout, launchctl in
             try writeUserData(layout)
