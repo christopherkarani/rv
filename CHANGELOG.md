@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `rv workspace upload <host-path> [<workspace-path>]` and `rv workspace download <workspace-path> <new-host-path>` move files in and out of a live workspace mid-session, for Seatbelt and both VM guests (all of them work on the workspace volume). Both ask for owner authentication first and are refused when an agent issues them. Selection honours the copied tree's `.gitignore` files (`--no-gitignore` turns that off); `.git` directories are never copied. A transfer never reads, writes or copies through a symlink, refuses FIFOs, sockets, devices, unsafe names, and trees over 20,000 entries, 2 GiB or 64 levels; uploads refuse rv's config dir, hard-linked files and rv/git control and run-later paths in the workspace; downloads only create a new destination outside the workspace and rv's config and install dirs, refuse to put a run-later or control file (`.envrc`, `.claude/settings.json`, ...) at the top of it, drop set-id bits, and remove a partial copy on failure. The host parent is pinned by descriptor and must still be the one the owner approved. Known false refusal: the agent-issued self-protection check also holds `rv workspace --workspace "$PWD" status`, because it cannot tell the value of `--workspace` from a subcommand.
+### Changed
+
+- `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host, any port, beside a pending one (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed and still needs its own decision. No row is retired or approved by another's approval.
 
 ### Security
 
