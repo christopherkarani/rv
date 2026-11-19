@@ -8,14 +8,21 @@ package let observeRobotMode = "observe"
 package let observeRobotEffective = "allow"
 
 /// What observe did with a would-be verdict, or nil when enforce would
-/// have allowed it too.
-package func observeNote(for wouldBe: Decision) -> String? {
+/// have allowed it too. `authorization` is enforce's projection of that
+/// verdict (`HookAuthorization.project`), the same one the observed
+/// denial row's `would_be` comes from: `.ask` reads "would ask", a pinned
+/// deny "would block". An indeterminate is never asked about.
+package func observeNote(for wouldBe: Decision, authorization: HookAuthorization) -> String? {
+    let tail = "It logs it and lets it run."
     switch wouldBe {
     case .allow:
         return nil
     case .deny(let deny):
-        return "rv would block this (\(deny.ruleID.rawValue)). It logs it and lets it run."
+        let rule = deny.ruleID.rawValue
+        return authorization == .ask
+            ? "rv would ask before it runs this (\(rule)). \(tail)"
+            : "rv would block this (\(rule)). \(tail)"
     case .indeterminate:
-        return "rv would ask before it runs. It logs it and lets it run."
+        return "rv would block this: it could not finish evaluating it. \(tail)"
     }
 }

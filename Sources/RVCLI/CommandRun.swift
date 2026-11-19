@@ -204,13 +204,16 @@ public enum CommandRun {
     ) throws -> CLIResult {
         let result = verdict.shown
         let observed = verdict.observeOverrode
+        // Enforce's authorization of the would-be verdict, as the observed
+        // denial row records it; nil unless observe changed the outcome.
+        let authorization = observed ? verdict.wouldBeAuthorization : nil
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
             return try robotResult(
-                kind: kind, result: result, observed: observed, command: command, exitCode: exitCode
+                kind: kind, result: result, observed: authorization, command: command, exitCode: exitCode
             )
         }
 
@@ -220,12 +223,12 @@ public enum CommandRun {
                     from: result,
                     command: command,
                     normalized: result.matchingView.rawValue,
-                    observed: observed
+                    observed: authorization
                 ),
                 palette: palette
             )
             : TestRenderer().render(
-                testViewModel(from: result, command: command, columns: probe.columns, observed: observed),
+                testViewModel(from: result, command: command, columns: probe.columns, observed: authorization),
                 palette: palette
             )
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
@@ -234,7 +237,7 @@ public enum CommandRun {
     private static func robotResult(
         kind: CLIKind,
         result: EvaluationResult,
-        observed: Bool,
+        observed: HookAuthorization?,
         command: ShellCommand,
         exitCode: Int32
     ) throws -> CLIResult {
@@ -253,7 +256,7 @@ public enum CommandRun {
             )
             text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:
-            text = try RobotDocument.test(testRobotPayload(from: result, observed: observed)).render()
+            text = try RobotDocument.test(testRobotPayload(from: result, observed: observed != nil)).render()
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }

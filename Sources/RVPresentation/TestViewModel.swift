@@ -101,16 +101,16 @@ package func remapMatchSpan(
     MatchSpan.projected(span: span, matchedText: matchedText, searchText: searchText, onto: command)
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run; adds the
-/// observe note.
+/// `observed`: observe let `result` (the would-be verdict) run, which
+/// enforce would have authorized this way; adds the observe note.
 public func testViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
     columns: Int = 80,
-    observed: Bool = false
+    observed: HookAuthorization? = nil
 ) -> TestViewModel {
     var model = baseTestViewModel(from: result, command: command, columns: columns)
-    model.observeNote = observed ? observeNote(for: result.decision) : nil
+    model.observeNote = observed.flatMap { observeNote(for: result.decision, authorization: $0) }
     return model
 }
 

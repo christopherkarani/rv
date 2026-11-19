@@ -101,13 +101,13 @@ public struct ExplainViewModel: Equatable, Sendable {
     }
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run; adds the
-/// observe note.
+/// `observed`: observe let `result` (the would-be verdict) run, which
+/// enforce would have authorized this way; adds the observe note.
 public func explainViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
     normalized: String? = nil,
-    observed: Bool = false
+    observed: HookAuthorization? = nil
 ) -> ExplainViewModel {
     let fact: String
     let next: String?
@@ -141,7 +141,7 @@ public func explainViewModel(
         regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis),
-        observeNote: observed ? observeNote(for: result.decision) : nil
+        observeNote: observed.flatMap { observeNote(for: result.decision, authorization: $0) }
     )
 }
 
