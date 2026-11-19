@@ -49,15 +49,21 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
     #expect(text.contains("rv doctor"))
 }
 
-/// The overall timeout leaves a host that is still mounting or recovering
-/// running, so the text must not claim it was stopped.
-@Test func startTimeoutSaysAHostStillStartingKeepsRunning() {
+/// At the overall timeout `ensure` stops its host unless it was still
+/// mounting or recovering; each outcome has its own, accurate text.
+@Test func startTimeoutSaysTheLaunchedHostWasStopped() {
     let text = WorkspaceCommandRun.ensureFailureText(.timedOut, hostTrustReason: nil)
     #expect(text.hasPrefix("workspace host did not become ready"))
-    #expect(text.contains("still mounting or recovering keeps running"))
-    #expect(text.contains("any host this start launched was stopped") == false)
-    #expect(text.contains("rv workspace status"))
+    #expect(text.contains("any host this start launched was stopped"))
     #expect(text.contains("rv workspace leftovers"))
+}
+
+@Test func startStillStartingSaysTheHostKeepsRunning() {
+    let text = WorkspaceCommandRun.ensureFailureText(.stillStarting, hostTrustReason: nil)
+    #expect(text.hasPrefix("the workspace host this start launched is still mounting or recovering"))
+    #expect(text.contains("keeps running in the background"))
+    #expect(text.contains("was stopped") == false)
+    #expect(text.contains("rv workspace status"))
 }
 
 @Test func startOtherFailuresKeepTheirText() {
@@ -78,7 +84,7 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
 // MARK: - status
 
 @Test func statusOfAnUnreachableEndpointExitsNonZero() {
-    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.disconnected) }
+    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.staleEndpoint) }
     #expect(report.text == WorkspaceCommandRun.staleEndpointText)
     #expect(report.exitCode == WorkspaceCommandRun.statusUnreachableExitCode)
     #expect(WorkspaceCommandRun.statusUnreachableExitCode == 1)
@@ -90,6 +96,19 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
     #expect(report.text.hasPrefix("refused (peer trust): "))
     #expect(report.text.contains("rv doctor"))
     #expect(report.exitCode == 1)
+}
+
+/// Each connect failure that is not a stale file says what it is.
+@Test func statusNamesIncompatibleDisconnectedAndBusyHosts() {
+    let incompatible = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.incompatibleProtocol) }
+    #expect(incompatible.text.hasPrefix("incompatible protocol: "))
+    #expect(incompatible.exitCode == 1)
+    let disconnected = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.disconnected) }
+    #expect(disconnected.text.hasPrefix("disconnected: "))
+    #expect(disconnected.exitCode == 1)
+    let busy = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.queueOverloaded) }
+    #expect(busy.text.hasPrefix("busy: "))
+    #expect(busy.exitCode == 1)
 }
 
 /// A host that does not answer in time is not a stale file either.

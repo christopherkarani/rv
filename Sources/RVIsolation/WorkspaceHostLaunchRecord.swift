@@ -40,9 +40,17 @@ public enum WorkspaceHostLaunchRecord {
             .appendingPathExtension("json")
     }
 
+    /// The canonical path an endpoint for `project` carries; nil if unusable.
+    static func canonicalPath(_ project: String) -> String? {
+        guard let directory = WorkingDirectory(validating: project),
+              case .success(let canonical) = existingResolvedWorkspacePath(directory) else { return nil }
+        return canonical
+    }
+
     /// Best effort: a host without a record is simply not stoppable by close.
-    /// Called once the spawned child owns the endpoint for `canonicalPath`,
-    /// so a spawn that lost the creation race never overwrites the winner.
+    /// Called once the spawned child owns the endpoint for `canonicalPath`
+    /// (so a spawn that lost the creation race never overwrites the
+    /// winner), or when `ensure` leaves its still-mounting child running.
     static func record(pid: pid_t, canonicalPath canonical: String) {
         guard let configuration = WorkspaceHostLocation.configurationDirectory(),
               case .found(let identity) = LibprocProcessTable().lookup(pid) else { return }
@@ -61,13 +69,19 @@ public enum WorkspaceHostLaunchRecord {
         return launch
     }
 
-    /// Stop the host rv launched for `canonicalPath` when it is still the
-    /// same process and runs `installedHost`. The record is dropped once
-    /// that host is gone.
-    public static func stopUnanswered(canonicalPath: String, installedHost: URL) -> WorkspaceHostStop {
+    /// Stop the host rv launched for `canonicalPath` when the unusable
+    /// endpoint names it (`endpointPID`), it is still the same process, and
+    /// it runs `installedHost`. The record is dropped once that host is gone.
+    public static func stopUnanswered(
+        canonicalPath: String,
+        endpointPID: Int32?,
+        installedHost: URL
+    ) -> WorkspaceHostStop {
         guard let configuration = WorkspaceHostLocation.configurationDirectory() else { return .noRecord }
         let url = file(in: configuration, canonicalPath: canonicalPath)
-        let outcome = stop(load(from: url), installedHost: installedHost.path, seams: StopSeams())
+        let outcome = stop(
+            load(from: url), endpointPID: endpointPID, installedHost: installedHost.path, seams: StopSeams()
+        )
         switch outcome {
         case .stopped, .notRunning:
             _ = url.path.withCString { unlink($0) }
@@ -97,9 +111,22 @@ public enum WorkspaceHostLaunchRecord {
         var grace: TimeInterval = WorkspaceHosts.terminateGraceSeconds
     }
 
-    static func stop(_ launch: WorkspaceHostLaunch?, installedHost: String, seams: StopSeams) -> WorkspaceHostStop {
+    static func stop(
+        _ launch: WorkspaceHostLaunch?,
+        endpointPID: Int32?,
+        installedHost: String,
+        seams: StopSeams
+    ) -> WorkspaceHostStop {
         guard let launch else { return .noRecord }
         let pid = pid_t(launch.pid)
+        // An older record must not stop a newer host: the endpoint close
+        // could not use has to belong to the recorded process.
+        guard let endpointPID else {
+            return .leftAlone("the endpoint does not name its host process (an older rv-workspace-host)")
+        }
+        guard endpointPID == launch.pid else {
+            return .leftAlone("the endpoint belongs to process \(endpointPID), not the host rv launched (pid \(pid))")
+        }
         func isRecorded() -> Bool? {
             switch seams.lookup(pid) {
             case .found(let identity):

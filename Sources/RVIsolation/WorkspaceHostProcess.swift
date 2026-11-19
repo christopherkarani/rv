@@ -184,24 +184,38 @@ public enum WorkspaceHosts {
 
     /// How long a host that published a live endpoint may leave it
     /// unanswered before `ensure` gives up. Mounting and recovery before the
-    /// endpoint exists are bounded by `ensure`'s overall timeout instead.
+    /// endpoint exists are bounded by `ensure`'s overall timeout instead. A
+    /// host that publishes always gets this whole window, even past a
+    /// shorter overall timeout.
     public static let readinessTimeout: TimeInterval = 15
+
+    /// Writes a line for the user; the CLI default is stderr, the TUI's
+    /// raw-mode reconnect passes a silent one.
+    public typealias Report = @Sendable (String) -> Void
+
+    public static let standardErrorReport: Report = { line in
+        FileHandle.standardError.write(Data((line + "\n").utf8))
+    }
 
     /// Starts a host when this project has none, or returns the live endpoint.
     /// A lost creation race attaches to the winner instead of mounting again.
-    /// A failure stops the host this call spawned only when nobody can use
-    /// it (see `stopsSpawnedHost`); one still mounting or recovering keeps
-    /// running in the background.
+    /// A failure stops the host this call spawned unless it was still
+    /// mounting or recovering at the deadline (`.stillStarting`): that one
+    /// keeps running in the background, recorded so `close` can stop it.
     public static func ensure(
         project: String,
         executable: URL,
-        timeout: TimeInterval = 90
+        timeout: TimeInterval = 90,
+        report: @escaping Report = standardErrorReport
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
-        ensure(
+        var seams = EnsureSeams()
+        seams.report = report
+        return ensure(
             project: project,
             executable: executable,
             timeout: timeout,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            seams: seams
         )
     }
 
@@ -213,18 +227,25 @@ public enum WorkspaceHosts {
         var spawn: (URL, String) -> Result<pid_t, WorkspaceHostFailure> = WorkspaceHostLauncher.spawn
         /// Nil while the child runs; its wait status once reaped.
         var reap: (pid_t) -> Int32? = WorkspaceHosts.reap
-        var terminate: (pid_t) -> Void = { child in
-            if WorkspaceHosts.terminateChild(child) == false {
-                FileHandle.standardError.write(Data(
-                    "rv: the workspace host this start launched (pid \(child)) did not exit after SIGKILL\n".utf8
-                ))
-            }
-        }
-        /// Remember the spawned host, once it owns the endpoint, so `close`
-        /// can stop it if it stops answering. Arguments: pid, canonical path.
+        /// False when the child outlived SIGKILL's grace.
+        var terminate: (pid_t) -> Bool = { WorkspaceHosts.terminateChild($0) }
+        var report: (String) -> Void = WorkspaceHosts.standardErrorReport
+        /// Remember the spawned host so `close` can stop it later.
+        /// Arguments: pid, canonical path.
         var recordLaunch: (pid_t, String) -> Void = WorkspaceHostLaunchRecord.record
+        /// The canonical project path an endpoint would carry; nil if unusable.
+        var canonicalize: (String) -> String? = WorkspaceHostLaunchRecord.canonicalPath
         var now: () -> Date = Date.init
         var pause: () -> Void = { usleep(50_000) }
+    }
+
+    /// What `ensureLoop` learned about the host this call spawned.
+    struct EnsureProgress {
+        /// The unreaped child, or -1.
+        var child: pid_t = -1
+        /// The last state seen was `.starting` or `.recovering`.
+        var lastSeenMounting = false
+        var launchRecorded = false
     }
 
     static func ensure(
@@ -234,33 +255,35 @@ public enum WorkspaceHosts {
         homeDirectory: String,
         seams: EnsureSeams = EnsureSeams()
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
-        var child: pid_t = -1
-        var lastSeenUnanswered = false
+        var progress = EnsureProgress()
         let result = ensureLoop(
             project: project, executable: executable, timeout: timeout,
-            homeDirectory: homeDirectory, seams: seams, child: &child,
-            lastSeenUnanswered: &lastSeenUnanswered
+            homeDirectory: homeDirectory, seams: seams, progress: &progress
         )
-        if case .failure(let error) = result, child > 0,
-           stopsSpawnedHost(error, lastSeenUnanswered: lastSeenUnanswered) {
-            seams.terminate(child)
+        guard case .failure(let error) = result, progress.child > 0 else { return result }
+        let child = progress.child
+        if error == .timedOut, progress.lastSeenMounting {
+            // Our child is unreaped, so its pid is still ours to record.
+            if progress.launchRecorded == false, let canonical = seams.canonicalize(project) {
+                seams.recordLaunch(child, canonical)
+            }
+            return .failure(.stillStarting)
+        }
+        if stopsSpawnedHost(error), seams.terminate(child) == false {
+            seams.report("rv: the workspace host this start launched (pid \(child)) did not exit after SIGKILL")
         }
         return result
     }
 
     /// Failures that leave the spawned host running with nobody able to use
-    /// it: refused by peer trust, or published and then silent. The overall
-    /// timeout counts only when the last state seen was that silent live
-    /// endpoint; a host still mounting or recovering (`.starting`,
-    /// `.recovering`) keeps going in the background, because stopping it
-    /// would interrupt recovery on every attempt. A recovery block or a
-    /// refused start ends with the host exiting on its own.
-    static func stopsSpawnedHost(_ error: WorkspaceHostFailure, lastSeenUnanswered: Bool) -> Bool {
+    /// it: refused by peer trust, silent after publishing, or not ready at
+    /// the deadline in any state but mounting or recovering (which `ensure`
+    /// turns into `.stillStarting` first). A recovery block or a refused
+    /// start ends with the host exiting on its own.
+    static func stopsSpawnedHost(_ error: WorkspaceHostFailure) -> Bool {
         switch error {
-        case .notAnswering, .control(.unauthorizedClient):
+        case .notAnswering, .control(.unauthorizedClient), .timedOut:
             true
-        case .timedOut:
-            lastSeenUnanswered
         default:
             false
         }
@@ -272,19 +295,24 @@ public enum WorkspaceHosts {
         timeout: TimeInterval,
         homeDirectory: String,
         seams: EnsureSeams,
-        child: inout pid_t,
-        lastSeenUnanswered: inout Bool
+        progress: inout EnsureProgress
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
         let deadline = seams.now().addingTimeInterval(timeout)
         var spawned = false
-        var launchRecorded = false
         // The readiness clock belongs to one endpoint seen continuously live
         // and unanswered; any other state or a new endpoint restarts it.
+        // While it runs it outlasts the overall deadline: the failed-probe
+        // branch ends the loop as `.notAnswering` once it passes.
         var answerDeadline: Date?
         var answerEndpoint: WorkspaceEndpoint?
-        while seams.now() < deadline {
+        while seams.now() < deadline || answerDeadline != nil {
             let attachment = seams.inspect(project)
-            lastSeenUnanswered = false
+            switch attachment {
+            case .starting, .recovering:
+                progress.lastSeenMounting = true
+            default:
+                progress.lastSeenMounting = false
+            }
             if case .live(let endpoint) = attachment, endpoint == answerEndpoint {
                 // Same endpoint: keep its clock.
             } else {
@@ -293,9 +321,9 @@ public enum WorkspaceHosts {
             }
             switch attachment {
             case .live(let endpoint):
-                if child > 0, launchRecorded == false, endpoint.hostPID == child {
-                    seams.recordLaunch(child, endpoint.canonicalPath)
-                    launchRecorded = true
+                if progress.child > 0, progress.launchRecorded == false, endpoint.hostPID == progress.child {
+                    seams.recordLaunch(progress.child, endpoint.canonicalPath)
+                    progress.launchRecorded = true
                 }
                 switch seams.probe(endpoint) {
                 case .success(true):
@@ -318,7 +346,6 @@ public enum WorkspaceHosts {
                     // host lacks the workspaceHost role (or refuses ours).
                     return .failure(.control(.unauthorizedClient))
                 case .failure:
-                    lastSeenUnanswered = true
                     let limit = answerDeadline ?? seams.now().addingTimeInterval(readinessTimeout)
                     answerDeadline = limit
                     answerEndpoint = endpoint
@@ -344,15 +371,15 @@ public enum WorkspaceHosts {
                     case .failure(let error):
                         return .failure(error)
                     case .success(let pid):
-                        child = pid
+                        progress.child = pid
                         spawned = true
                     }
                 }
             case .starting, .recovering, .staleEndpoint:
                 break
             }
-            if child > 0, let status = seams.reap(child) {
-                child = -1
+            if progress.child > 0, let status = seams.reap(progress.child) {
+                progress.child = -1
                 let code = exitedCode(status)
                 if code == WorkspaceHostExit.recoveryBlocked {
                     continue

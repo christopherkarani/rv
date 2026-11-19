@@ -123,6 +123,9 @@ public enum WorkspaceHostFailure: Error, Sendable, Equatable {
     /// The host published a live endpoint but did not answer on it within
     /// `WorkspaceHosts.readinessTimeout`.
     case notAnswering
+    /// The overall timeout came while the host this call spawned was still
+    /// mounting or recovering. It keeps running in the background.
+    case stillStarting
     case hostExited(Int32)
     case control(WorkspaceClientFailure)
 }

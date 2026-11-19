@@ -16,6 +16,8 @@ import Testing
         var spawned: [pid_t] = []
         var recorded: [pid_t] = []
         var terminated: [pid_t] = []
+        var terminateSucceeds = true
+        var reports: [String] = []
         var exits: [pid_t: Int32] = [:]
 
         init(attachments: [WorkspaceAttachment], probes: [Result<Bool, WorkspaceClientFailure>] = []) {
@@ -32,15 +34,20 @@ import Testing
                     return .success(4242)
                 },
                 reap: { self.exits[$0] },
-                terminate: { self.terminated.append($0) },
+                terminate: {
+                    self.terminated.append($0)
+                    return self.terminateSucceeds
+                },
+                report: { self.reports.append($0) },
                 recordLaunch: { pid, _ in self.recorded.append(pid) },
+                canonicalize: { $0 },
                 now: { self.now },
                 pause: { self.now = self.now.addingTimeInterval(0.05) }
             )
         }
     }
 
-    private static let endpoint = WorkspaceEndpoint(
+    static let endpoint = WorkspaceEndpoint(
         host: WorkspaceHostID(rawValue: UUID()),
         workspace: UUID(),
         canonicalPath: "/p",
@@ -108,20 +115,73 @@ import Testing
     /// Mount and recovery run before the endpoint is published. A host
     /// still starting or recovering at the deadline keeps going in the
     /// background; killing it would interrupt recovery on every attempt.
+    /// It is recorded then, so `rv workspace close` can stop it later.
     @Test(arguments: [WorkspaceAttachment.starting(nil), .recovering(UUID())])
     func hostStillStartingOrRecoveringOutlivesTheTimeout(_ state: WorkspaceAttachment) {
         let script = Script(attachments: [.absent, state])
-        #expect(Self.ensure(script, timeout: 2) == .failure(.timedOut))
+        #expect(Self.ensure(script, timeout: 2) == .failure(.stillStarting))
         #expect(script.spawned == [4242])
         #expect(script.terminated.isEmpty)
+        #expect(script.recorded == [4242])
     }
 
-    /// A host that published its endpoint and then stopped answering is
-    /// stopped when the overall deadline comes first.
-    @Test func publishedButUnansweredHostIsStoppedAtTheTimeout() {
-        let script = Script(attachments: [.absent, .live(Self.ownEndpoint)], probes: [.failure(.disconnected)])
+    /// Every other state at the deadline leaves a host nobody can use or
+    /// stop later (no endpoint of its own, so no launch record): stop it.
+    @Test(arguments: [
+        WorkspaceAttachment.absent, .orphaned(UUID()), .staleEndpoint, .live(WorkspaceHostEnsureTests.endpoint),
+    ])
+    func timeoutStopsOurHostInEveryOtherState(_ last: WorkspaceAttachment) {
+        // `.live` answers "closing" (describe says not active): never ready.
+        let script = Script(attachments: [.absent, .starting(nil), last], probes: [.success(false)])
         #expect(Self.ensure(script, timeout: 2) == .failure(.timedOut))
+        #expect(script.spawned == [4242])
         #expect(script.terminated == [4242])
+        #expect(script.recorded.isEmpty)
+    }
+
+    /// A host that published its endpoint always gets the full readiness
+    /// window, even past a shorter overall timeout (the TUI uses 15 s), and
+    /// is then stopped as not answering.
+    @Test func publishedHostAlwaysGetsItsFullReadinessWindow() {
+        let script = Script(attachments: [.absent, .live(Self.ownEndpoint)], probes: [.failure(.disconnected)])
+        let started = script.now
+        #expect(Self.ensure(script, timeout: 2) == .failure(.notAnswering))
+        #expect(script.now.timeIntervalSince(started) >= WorkspaceHosts.readinessTimeout)
+        #expect(script.terminated == [4242])
+        #expect(script.recorded == [4242])
+    }
+
+    /// A describe answer (the workspace is closing) restarts the clock.
+    @Test func describeAnswerRestartsTheClock() {
+        let tenSeconds = Array(repeating: Result<Bool, WorkspaceClientFailure>.failure(.disconnected), count: 200)
+        let script = Script(
+            attachments: [.live(Self.endpoint)], probes: tenSeconds + [.success(false), .failure(.disconnected)]
+        )
+        let started = script.now
+        #expect(Self.ensure(script) == .failure(.notAnswering))
+        #expect(script.now.timeIntervalSince(started) >= 10 + WorkspaceHosts.readinessTimeout - 0.1)
+    }
+
+    /// A child that outlives SIGKILL is reported through the seam (the TUI
+    /// must not get a stray stderr line in raw mode).
+    @Test func stuckChildIsReportedThroughTheSeam() {
+        let script = Script(attachments: [.absent, .live(Self.ownEndpoint)], probes: [.failure(.unauthorizedClient)])
+        script.terminateSucceeds = false
+        #expect(Self.ensure(script) == .failure(.control(.unauthorizedClient)))
+        #expect(script.reports.count == 1)
+        #expect(script.reports.first?.contains("4242") == true)
+        let quiet = Script(attachments: [.absent, .live(Self.ownEndpoint)], probes: [.failure(.unauthorizedClient)])
+        _ = Self.ensure(quiet)
+        #expect(quiet.reports.isEmpty)
+    }
+
+    /// A refused race winner: our child is stopped, and the winner's
+    /// endpoint is never recorded as ours.
+    @Test func refusedRaceWinnerStopsOurChildWithoutRecordingIt() {
+        let script = Script(attachments: [.absent, .live(Self.otherEndpoint)], probes: [.failure(.unauthorizedClient)])
+        #expect(Self.ensure(script) == .failure(.control(.unauthorizedClient)))
+        #expect(script.terminated == [4242])
+        #expect(script.recorded.isEmpty)
     }
 
     /// The readiness clock belongs to one endpoint: a new host (new socket,
@@ -277,8 +337,69 @@ import Testing
         }
     }
 
-    private static func stop(_ kernel: Kernel, _ launch: WorkspaceHostLaunch? = launch) -> WorkspaceHostStop {
-        WorkspaceHostLaunchRecord.stop(launch, installedHost: host, seams: kernel.seams())
+    private static func stop(
+        _ kernel: Kernel, _ launch: WorkspaceHostLaunch? = launch, endpointPID: Int32? = 777
+    ) -> WorkspaceHostStop {
+        WorkspaceHostLaunchRecord.stop(launch, endpointPID: endpointPID, installedHost: host, seams: kernel.seams())
+    }
+
+    /// An older launch record must not stop a newer host: the endpoint
+    /// close failed to reach has to name the recorded pid.
+    @Test func endpointOfAnotherHostIsLeftAlone() {
+        let newer = Kernel()
+        guard case .leftAlone(let why) = Self.stop(newer, endpointPID: 888) else {
+            Issue.record("a record for another pid must not stop the endpoint's host")
+            return
+        }
+        #expect(why.contains("888"))
+        #expect(newer.signals.isEmpty)
+    }
+
+    /// An older host does not name its pid in the endpoint: nothing proves
+    /// the record is its own, so close leaves it alone.
+    @Test func endpointWithoutAPidIsLeftAlone() {
+        let older = Kernel()
+        guard case .leftAlone = Self.stop(older, endpointPID: nil) else {
+            Issue.record("an endpoint without a pid must be left alone")
+            return
+        }
+        #expect(older.signals.isEmpty)
+    }
+
+    /// The real kernel checks: this test process is ours; launchd (pid 1)
+    /// is root's. A child spawned with SETSID leads its session; one
+    /// spawned without it does not.
+    @Test func liveIdentityChecksReadTheKernel() throws {
+        let seams = WorkspaceHostLaunchRecord.StopSeams()
+        #expect(seams.isOwnUser(getpid()))
+        #expect(seams.isOwnUser(1) == false)
+        let leader = try Self.spawnSleeper(setsid: true)
+        defer { Self.reap(leader) }
+        #expect(seams.isSessionLeader(leader))
+        let follower = try Self.spawnSleeper(setsid: false)
+        defer { Self.reap(follower) }
+        #expect(seams.isSessionLeader(follower) == false)
+    }
+
+    private static func spawnSleeper(setsid: Bool) throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        if setsid {
+            posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+        }
+        var pid: pid_t = 0
+        let arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
+        defer { arguments.forEach { free($0) } }
+        let spawned = posix_spawn(&pid, "/bin/sleep", nil, &attributes, arguments, environ)
+        try #require(spawned == 0 && pid > 0)
+        return pid
+    }
+
+    private static func reap(_ pid: pid_t) {
+        kill(pid, SIGKILL)
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
     }
 
     @Test func stopsTheRecordedInstalledHost() {
@@ -369,6 +490,45 @@ import Testing
         #expect(WorkspaceHostLaunchRecord.load(from: url) == Self.launch)
         try Data(#"{"v":1,"pid":1,"startSeconds":0,"startMicroseconds":0}"#.utf8).write(to: url)
         #expect(WorkspaceHostLaunchRecord.load(from: url) == nil)
+    }
+}
+
+/// The endpoint file carries the publishing host's pid; a file from an
+/// older host without it still loads, with no pid.
+@Suite struct WorkspaceEndpointPIDTests {
+    private static func record(pid: Int32?) -> WorkspaceEndpointRecord {
+        WorkspaceEndpointRecord(
+            v: WorkspaceControlLimits.version, host: UUID(), workspace: UUID(), canonicalPath: "/p",
+            socketPath: "/p.sock", socketDevice: 1, socketInode: 2, ownerToken: UUID(),
+            lockPath: "/p.lock", lockDevice: 1, lockInode: 3, uid: getuid(), pid: pid
+        )
+    }
+
+    private static func roundTrip(_ record: WorkspaceEndpointRecord) throws -> (WorkspaceEndpointRecord?, String) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-endpoint-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("endpoint.json")
+        try #require(WorkspaceEndpointStore.write(record, to: url))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return (WorkspaceEndpointStore.load(from: url), text)
+    }
+
+    @Test func pidRoundTrips() throws {
+        let written = Self.record(pid: 4242)
+        let (loaded, text) = try Self.roundTrip(written)
+        #expect(text.contains(#""pid":4242"#))
+        #expect(loaded == written)
+        #expect(loaded?.endpoint().hostPID == 4242)
+    }
+
+    @Test func olderHostWithoutPidStillLoads() throws {
+        let written = Self.record(pid: nil)
+        let (loaded, text) = try Self.roundTrip(written)
+        #expect(text.contains("pid") == false)
+        #expect(loaded == written)
+        #expect(loaded?.endpoint().hostPID == nil)
     }
 }
 #endif

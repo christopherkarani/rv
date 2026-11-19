@@ -53,7 +53,7 @@ struct WorkspaceAttach: AsyncParsableCommand {
 struct WorkspaceStatus: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "status",
-        abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale, the host is refused by peer trust, or it is not answering)."
+        abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale or the host cannot be used: refused by peer trust, not answering, disconnected, busy, or another protocol)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -193,7 +193,7 @@ struct WorkspaceCustom: AsyncParsableCommand {
 struct WorkspaceClose: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "close",
-        abstract: "Close the live workspace through its host; stops a host rv launched that is refused by peer trust or has a stale endpoint."
+        abstract: "Close the live workspace through its host; stops the host rv launched when connecting is refused by peer trust or reports a stale endpoint that still names that host."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -375,6 +375,19 @@ enum WorkspaceCommandRun {
     static let statusNotAnsweringText =
         "not answering: the workspace host did not answer in time; it may be busy, mounting or recovering — run 'rv workspace status' to re-check, or 'rv doctor' if it persists"
 
+    /// Status for a live host that speaks another workspace protocol. It may
+    /// still own runtimes, so nothing here stops it.
+    static let statusIncompatibleText =
+        "incompatible protocol: the live workspace host speaks a different workspace protocol than this rv and was left running; run 'rv doctor' to compare the installed builds"
+
+    /// Status for a host that dropped the connection before answering.
+    static let statusDisconnectedText =
+        "disconnected: the workspace host closed the connection before answering; run 'rv workspace status' to re-check, or 'rv doctor' if it persists"
+
+    /// Status for a host whose client queue is full.
+    static let statusBusyText =
+        "busy: the workspace host's client queue is full; run 'rv workspace status' again shortly"
+
     /// What status prints and exits with. `describe` connects to a live
     /// endpoint and describes it.
     static func statusReport(
@@ -390,6 +403,12 @@ enum WorkspaceCommandRun {
                 return (statusRefusedText, statusUnreachableExitCode)
             case .connectFailed(.timedOut):
                 return (statusNotAnsweringText, statusUnreachableExitCode)
+            case .connectFailed(.incompatibleProtocol):
+                return (statusIncompatibleText, statusUnreachableExitCode)
+            case .connectFailed(.disconnected):
+                return (statusDisconnectedText, statusUnreachableExitCode)
+            case .connectFailed(.queueOverloaded):
+                return (statusBusyText, statusUnreachableExitCode)
             case .connectFailed:
                 return (staleEndpointText, statusUnreachableExitCode)
             case .described(.success(let description)):
@@ -502,7 +521,7 @@ enum WorkspaceCommandRun {
                 throw ValidationError(hostNotReachablePreservedText)
             }
             let stop = WorkspaceHostLaunchRecord.stopUnanswered(
-                canonicalPath: endpoint.canonicalPath, installedHost: host
+                canonicalPath: endpoint.canonicalPath, endpointPID: endpoint.hostPID, installedHost: host
             )
             throw ValidationError(closeUnreachableText(stop))
         }
@@ -822,9 +841,9 @@ enum WorkspaceCommandRun {
         return ensureFailureText(error, hostTrustReason: reason)
     }
 
-    /// `ensure` stops the host it spawned when it was refused or published
-    /// an endpoint and went silent; one still mounting or recovering at the
-    /// overall timeout keeps running, and the texts say which.
+    /// `ensure` stops the host it spawned on a refusal, silence after
+    /// publishing, or the overall timeout; only a host still mounting or
+    /// recovering at that timeout keeps running (`.stillStarting`).
     static func ensureFailureText(_ error: WorkspaceHostFailure, hostTrustReason: String?) -> String {
         let after = "any host this start launched was stopped; run 'rv doctor', "
             + "and 'rv workspace leftovers' for anything it left"
@@ -836,9 +855,11 @@ enum WorkspaceCommandRun {
         case .notAnswering:
             return "the workspace host did not answer within \(Int(WorkspaceHosts.readinessTimeout)) s; " + after
         case .timedOut:
-            return "workspace host did not become ready; a host still mounting or recovering keeps running "
-                + "in the background, any other this start launched was stopped; run 'rv workspace status' "
-                + "to check it, and 'rv workspace leftovers' for anything it left"
+            return "workspace host did not become ready in time; " + after
+        case .stillStarting:
+            return "the workspace host this start launched is still mounting or recovering; it keeps running "
+                + "in the background — run 'rv workspace status' to see when it is ready, then "
+                + "'rv workspace start' again to attach"
         default:
             return text(error)
         }
@@ -1009,6 +1030,8 @@ enum WorkspaceCommandRun {
             "workspace host did not become ready"
         case .notAnswering:
             "the workspace host did not answer"
+        case .stillStarting:
+            "the workspace host is still mounting or recovering"
         case .hostExited:
             "workspace host failed"
         case .control(let failure):
