@@ -543,7 +543,7 @@ struct JudgePortPacksOnlyFloorTests {
         #expect(missingRow["note"] as? String == "engine-missing; context: partial")
     }
 
-    @Test("observe: unscored inline program is not floored; would-be stays the pack allow")
+    @Test("observe: the door allows an unscored inline program; the log keeps the pack allow")
     func observeDoesNotFloor() throws {
         let home = try guardHome(mode: nil)
         defer { remove(home) }

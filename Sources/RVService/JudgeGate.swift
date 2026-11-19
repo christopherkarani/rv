@@ -346,17 +346,26 @@ public enum JudgeRuntime {
         var reading = JudgeReading(
             outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
         )
-        if !safe, let bundle = selection.bundle, case .allow = result.decision {
-            reading = read(
-                judge.judge(JudgeCall(
+        // The would-be verdict takes the packs-only floor exactly where
+        // `apply` does (no bundle, or a judge that is unavailable); the log
+        // row keeps the unfloored reading, as `apply`'s does.
+        var wouldBe = result
+        if !safe, case .allow = result.decision {
+            if let bundle = selection.bundle {
+                let run = judge.judge(JudgeCall(
                     command: command.rawValue, context: context,
                     engine: selection.engine, bundle: bundle
-                )),
-                over: result,
-                provenance: provenance
-            )
+                ))
+                reading = read(run, over: result, provenance: provenance)
+                wouldBe = reading.outcome
+                if case .unavailable = run {
+                    wouldBe = packsOnlyFloor(reading.outcome, command: command)
+                }
+            } else {
+                wouldBe = packsOnlyFloor(result, command: command)
+            }
         }
-        return (result.observedAllow, reading.outcome, logRow(
+        return (result.observedAllow, wouldBe, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
