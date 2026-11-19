@@ -66,18 +66,22 @@ public enum DoctorSnapshotBuilder {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
             let on = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            let meanwhile = mode == .observe
+                ? "judged calls run and are logged as a would-be review"
+                : "judged calls go to review"
             switch circuit {
             case .closed:
                 return DoctorCheck(id: .judge, status: .ok, message: on)
             case .open(let retryIn):
                 return DoctorCheck(
                     id: .judge, status: .warning,
-                    message: "\(on); rv degraded: judge unavailable (circuit open, retrying in \(JudgeRuntime.retrySeconds(retryIn))s), judged calls go to review"
+                    message: "\(on); rv degraded: judge unavailable (circuit open, retrying in \(JudgeRuntime.retrySeconds(retryIn))s), \(meanwhile)"
                 )
-            case .halfOpen:
+            case .halfOpen(let trialInFlight):
+                let trial = trialInFlight ? "a trial call is running" : "the next judged call is a trial"
                 return DoctorCheck(
                     id: .judge, status: .warning,
-                    message: "\(on); rv degraded: judge circuit half-open, next judged call is a trial"
+                    message: "\(on); rv degraded: judge circuit half-open, \(trial); until it answers, other \(meanwhile)"
                 )
             }
             #else

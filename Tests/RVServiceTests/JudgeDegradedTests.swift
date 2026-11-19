@@ -159,8 +159,8 @@ private func lateVerdict<T: Decodable>(ms: Double) throws -> T {
 #if canImport(CoreML)
 @Suite("Doctor shows the judge circuit")
 struct JudgeCircuitDoctorTests {
-    private func homeWithBundle() throws -> HomeDirectory {
-        let home = try guardHome(mode: nil)
+    private func homeWithBundle(mode: String? = nil) throws -> HomeDirectory {
+        let home = try guardHome(mode: mode)
         let bundle = RVPolicyPaths.configDirectory(home: home)
             .appendingPathComponent("models/\(JudgeRuntime.ftBundleName)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -179,10 +179,23 @@ struct JudgeCircuitDoctorTests {
         let open = DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .open(retryIn: .milliseconds(41_200)))
         #expect(open.status == .warning)
         #expect(open.message.contains("rv degraded: judge unavailable (circuit open, retrying in 42s)"))
+        #expect(open.message.contains("judged calls go to review"))
 
-        let halfOpen = DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .halfOpen)
-        #expect(halfOpen.status == .warning)
-        #expect(halfOpen.message.contains("half-open"))
+        let next = DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .halfOpen(trialInFlight: false))
+        #expect(next.status == .warning)
+        #expect(next.message.contains("half-open, the next judged call is a trial"))
+
+        let running = DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .halfOpen(trialInFlight: true))
+        #expect(running.status == .warning)
+        #expect(running.message.contains("half-open, a trial call is running"))
+    }
+
+    @Test func observeSaysWouldBeReviewNotReview() throws {
+        let home = try homeWithBundle(mode: "observe")
+        defer { remove(home) }
+        let open = DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .open(retryIn: .seconds(10)))
+        #expect(open.message.contains("logged as a would-be review"))
+        #expect(open.message.contains("go to review") == false)
     }
 }
 #endif

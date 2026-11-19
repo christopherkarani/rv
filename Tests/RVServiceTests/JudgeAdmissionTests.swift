@@ -242,6 +242,26 @@ struct JudgeAdmissionTests {
         #expect(await JudgeOffload.run { JudgeAdmission.deadline } == nil)
     }
 
+    /// rvd's non-hook doors (SDK evaluate, explain, classify, the agent
+    /// bridge) bind a judge deadline of one hook budget, so their judge
+    /// waits are bounded too; the offload carries it. A hook deadline wins.
+    @Test func theOffloadCarriesANonHookJudgeDeadline() async {
+        let now = ContinuousClock.now
+        let bound = ServiceRuntime.judgeDeadline(now: now)
+        #expect(bound == now.advanced(by: HookDeadline.budget))
+        let seen = await JudgeAdmission.$deadline.withValue(bound) {
+            await JudgeOffload.run { JudgeAdmission.deadline }
+        }
+        #expect(seen == bound)
+        let hook = HookDeadline()
+        let preferred = await HookDeadline.$current.withValue(hook) {
+            await JudgeAdmission.$deadline.withValue(bound) {
+                await JudgeOffload.run { JudgeAdmission.deadline }
+            }
+        }
+        #expect(preferred == hook.expiresAt)
+    }
+
     @Test func aModelLoadWaitNeverOutlastsTheHookDeadline() {
         let now = ContinuousClock.now
         // No deadline: the configured wait stands (nil still means unbounded).

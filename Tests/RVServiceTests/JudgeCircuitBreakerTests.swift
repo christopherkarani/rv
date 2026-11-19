@@ -56,13 +56,50 @@ struct JudgeCircuitBreakerTests {
         #expect(breaker.state == .closed(failures: []))
     }
 
+    /// A working judge has slow tails (p99 19 s): failures separated by a
+    /// verdict do not add up.
+    @Test func aVerdictClearsTheFailureWindow() {
+        let t0 = ContinuousClock.now
+        var breaker = JudgeCircuitBreaker()
+        breaker.record(.failure, trial: false, now: t0)
+        breaker.record(.failure, trial: false, now: t0)
+        breaker.record(.success, trial: false, now: t0)
+        breaker.record(.failure, trial: false, now: t0)
+        #expect(breaker.state == .closed(failures: [t0]))
+        // A neutral outcome leaves the window as it was.
+        breaker.record(.neutral, trial: false, now: t0)
+        breaker.record(.failure, trial: false, now: t0)
+        breaker.record(.failure, trial: false, now: t0)
+        #expect(breaker.admit(now: t0) == .skip(retryIn: JudgeCircuitBreaker.cooldown))
+    }
+
+    /// A trial stuck behind a wedged prediction must not hold the breaker
+    /// half-open forever: past `trialLimit` it is a failure.
+    @Test func aTrialOutPastItsLimitCountsAsAFailure() {
+        let t0 = ContinuousClock.now
+        var breaker = JudgeCircuitBreaker()
+        trip(&breaker, at: t0)
+        let reopen = t0.advanced(by: JudgeCircuitBreaker.cooldown)
+        #expect(breaker.admit(now: reopen) == .proceed(trial: true))
+        // Inside the limit, others skip until it runs out.
+        #expect(breaker.admit(now: reopen.advanced(by: .seconds(2)))
+            == .skip(retryIn: JudgeCircuitBreaker.trialLimit - .seconds(2)))
+        // Past it, the circuit is open again from when the trial ran out.
+        let overdue = reopen.advanced(by: JudgeCircuitBreaker.trialLimit)
+        #expect(breaker.admit(now: overdue) == .skip(retryIn: JudgeCircuitBreaker.cooldown))
+        // The stuck trial's answer, when it finally lands, changes nothing.
+        let open = breaker.state
+        breaker.record(.success, trial: true, now: overdue.advanced(by: .seconds(1)))
+        #expect(breaker.state == open)
+    }
+
     @Test func afterTheCooldownOneTrialRunsAndEveryoneElseStillSkips() {
         let t0 = ContinuousClock.now
         var breaker = JudgeCircuitBreaker()
         trip(&breaker, at: t0)
         let reopen = t0.advanced(by: JudgeCircuitBreaker.cooldown)
         #expect(breaker.admit(now: reopen) == .proceed(trial: true))
-        #expect(breaker.state == .halfOpen(trialInFlight: true))
+        #expect(breaker.state == .halfOpen(trialStarted: reopen))
         guard case .skip = breaker.admit(now: reopen) else {
             Issue.record("a second call during the trial must skip the judge")
             return
@@ -141,13 +178,17 @@ struct JudgeCircuitGateTests {
 
         // Past the cooldown one trial reaches the judge; its verdict closes it.
         clock.advance(JudgeCircuitBreaker.cooldown)
-        let trial = JudgeRuntime.throughCircuit(circuit) { .busy }
+        #expect(circuit.status == .halfOpen(trialInFlight: false))
+        let trial = JudgeRuntime.throughCircuit(circuit) { () -> JudgeRuntime.JudgeRun in
+            #expect(circuit.status == .halfOpen(trialInFlight: true))
+            return .busy
+        }
         guard case .busy = trial else {
             Issue.record("the trial must reach the judge, got \(trial)")
             return
         }
         // Busy behind a healthy holder is neutral: the next call is a trial too.
-        #expect(circuit.status == .halfOpen)
+        #expect(circuit.status == .halfOpen(trialInFlight: false))
         _ = JudgeRuntime.throughCircuit(circuit) { .failed }
         #expect(circuit.status == .open(retryIn: JudgeCircuitBreaker.cooldown))
     }

@@ -755,8 +755,10 @@ public actor ServiceRuntime {
         )
         let home = configHome
         // Off the actor: the judge path blocks (load wait, inference).
-        let reply = EvaluateReply(result: await JudgeOffload.run {
-            gated.evaluateAgent(request, cwd: params.cwd, home: home)
+        let reply = EvaluateReply(result: await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+            await JudgeOffload.run {
+                gated.evaluateAgent(request, cwd: params.cwd, home: home)
+            }
         })
         log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
@@ -814,10 +816,22 @@ public actor ServiceRuntime {
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
         let scoped = ownerScoped(request)
-        let result = await readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
-            .apply(scoped, cwd: cwd, host: host)
+        let world = readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
+        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+            await world.apply(scoped, cwd: cwd, host: host)
+        }
         recordAnalytics(for: result)
         return result
+    }
+
+    /// The judge deadline for a door with no hook deadline (SDK evaluate,
+    /// explain, classify, the workspace agent bridge): one hook budget from
+    /// now. Without it such a caller waits on the model as long as a stuck
+    /// prediction runs, and can hold the judge circuit's half-open trial
+    /// that long. Only the judge (and pattern search) reads it; side-effect
+    /// checks stay unbounded on these doors.
+    static func judgeDeadline(now: ContinuousClock.Instant = .now) -> ContinuousClock.Instant {
+        now.advanced(by: HookDeadline.budget)
     }
 
     /// Frame-level major-version guard: runs even when a Hello on this
@@ -877,9 +891,10 @@ public actor ServiceRuntime {
         // Same coverage rule as evaluate: explain must not peek through
         // a door compiled before the request's packs were enabled.
         let request = ownerScoped(params.request)
-        let result = await readyWorld(
-            wanted: WalkedPackIDs(ids: request.enabledPacks)
-        ).peek(request, cwd: cwd)
+        let world = readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
+        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+            await world.peek(request, cwd: cwd)
+        }
         let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id, elapsedMs: 0)
@@ -905,9 +920,10 @@ public actor ServiceRuntime {
         let cwd = params.cwd
         // Same coverage rule as evaluate (see `explain`).
         let request = ownerScoped(params.request)
-        let result = await readyWorld(
-            wanted: WalkedPackIDs(ids: request.enabledPacks)
-        ).peek(request, cwd: cwd)
+        let world = readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
+        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+            await world.peek(request, cwd: cwd)
+        }
         let suggestions: [String]
         switch result.decision {
         case .deny:

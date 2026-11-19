@@ -14,13 +14,14 @@ import Dispatch
 ///
 /// The calling task's hook deadline is carried into `body` as
 /// `JudgeAdmission.deadline`, so the judge stops waiting for the model once
-/// the client has given up.
+/// the client has given up. Without one, a `JudgeAdmission.deadline` the
+/// calling task bound itself is carried instead (rvd's non-hook doors).
 enum JudgeOffload {
     private static let queue = DispatchQueue(
         label: "rv.judge", qos: .userInitiated, attributes: .concurrent)
 
     static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-        let deadline = HookDeadline.current?.expiresAt
+        let deadline = HookDeadline.current?.expiresAt ?? JudgeAdmission.deadline
         return await withCheckedContinuation { continuation in
             queue.async {
                 continuation.resume(returning: JudgeAdmission.$deadline.withValue(deadline) { body() })
