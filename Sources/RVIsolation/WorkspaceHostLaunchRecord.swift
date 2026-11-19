@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import RVDomain
 
 /// The host `WorkspaceHosts.ensure` spawned for a project, as the kernel
 /// saw it right after the spawn. The start time is what a reused pid

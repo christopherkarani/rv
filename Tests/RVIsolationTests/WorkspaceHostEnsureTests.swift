@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import RVDomain
 import Testing
 @testable import RVIsolation
 

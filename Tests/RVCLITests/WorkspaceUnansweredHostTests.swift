@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import RVDomain
 import Testing
 @testable import RVCLI
 @testable import RVIsolation
