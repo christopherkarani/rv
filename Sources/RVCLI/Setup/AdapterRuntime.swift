@@ -111,6 +111,43 @@ enum AdapterRuntime {
         return executable
     }
 
+    /// Where setup looks for a system interpreter before walking PATH.
+    static let systemDirectories = ["/usr/bin"]
+
+    /// The interpreter setup bakes: `<systemDirectory>/<name>` when it is
+    /// protected and runs, else the first runnable `name` on PATH. A
+    /// conda or pyenv `python3` first on PATH is one an agent could swap
+    /// to skip the guard (doctor warns about that fallback). An absolute
+    /// `name` is probed as is.
+    static func chooseRunnable(
+        _ name: String,
+        pathEntries: [String],
+        systemDirectories: [String] = systemDirectories,
+        isProtected: (String) -> Bool = isProtectedSystemInterpreter
+    ) -> String? {
+        if name.hasPrefix("/") == false {
+            for directory in systemDirectories {
+                let candidate = (directory as NSString).appendingPathComponent(name)
+                if isProtected(candidate), let runnable = resolveRunnable(candidate, pathEntries: []) {
+                    return runnable
+                }
+            }
+        }
+        return resolveRunnable(name, pathEntries: pathEntries)
+    }
+
+    /// `path` and the file it resolves to are root-owned and this user can
+    /// replace neither (an owner could `chmod` a read-only file back).
+    static func isProtectedSystemInterpreter(_ path: String) -> Bool {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        for file in [path, resolved] {
+            guard let owner = try? FileManager.default.attributesOfItem(atPath: file)[.ownerAccountID] as? NSNumber,
+                  owner.uint32Value == 0
+            else { return false }
+        }
+        return userCanReplace(path) == false
+    }
+
     /// This user may write `path`, the file it resolves to, or a directory
     /// above either, so could replace what it runs.
     static func userCanReplace(_ path: String) -> Bool {

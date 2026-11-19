@@ -245,7 +245,8 @@ enum DoctorInstallChecks {
                 + "system ones included, so no interpreter path is out of an agent's reach"
         }
         guard systemInterpreterDirectories.contains(where: { interpreter.hasPrefix($0) }) else {
-            return "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+            return "rerun rv setup: it bakes a system \(name) this user cannot replace "
+                + "(e.g. /usr/bin/\(name)) when one runs; install one first if none does"
         }
         return "make \(interpreter) and the directories above it writable only by root "
             + "(e.g. sudo chown root \(interpreter) && sudo chmod go-w \(interpreter))"

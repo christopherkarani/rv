@@ -126,6 +126,52 @@ import RVPolicy
         #expect(AdapterRuntime.resolveRunnable("python3", pathEntries: [dir.path]) == nil, "rejects -I -S")
     }
 
+    /// A miniconda/pyenv python3 first on PATH is one an agent can swap;
+    /// setup bakes the system one instead when it is protected and runs.
+    @Test func chooseRunnablePrefersAProtectedSystemInterpreterOverPathOrder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-pick-\(UUID().uuidString)")
+        let system = root.appendingPathComponent("usr/bin")
+        let user = root.appendingPathComponent("conda/bin")
+        for dir in [system, user] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let systemPython = system.appendingPathComponent("python3")
+        let userPython = user.appendingPathComponent("python3")
+        try makeExecutable(userPython, contents: "#!/bin/sh\nexit 0\n")
+        let path = [user.path, system.path]
+        func choose(protected: Bool) -> String? {
+            AdapterRuntime.chooseRunnable(
+                "python3", pathEntries: path, systemDirectories: [system.path], isProtected: { _ in protected })
+        }
+
+        #expect(choose(protected: true) == userPython.path, "no system python3: PATH order")
+        try makeExecutable(systemPython, contents: "#!/bin/sh\nexit 0\n")
+        #expect(choose(protected: true) == systemPython.path)
+        #expect(choose(protected: false) == userPython.path, "a replaceable system python3 earns nothing")
+        // The Xcode-CLT stub: present, but does not run.
+        try makeExecutable(systemPython, contents: "#!/bin/sh\nexit 1\n")
+        #expect(choose(protected: true) == userPython.path)
+        try FileManager.default.removeItem(at: userPython)
+        #expect(choose(protected: true) == nil)
+        #expect(AdapterRuntime.chooseRunnable(
+            userPython.path, pathEntries: [], systemDirectories: [system.path], isProtected: { _ in true }) == nil,
+            "an absolute name is probed as is")
+    }
+
+    @Test func systemInterpreterProtectionNeedsRootOwnershipAndNoWriteAccess() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rv-own-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mine = dir.appendingPathComponent("python3")
+        try makeExecutable(mine, contents: "#!/bin/sh\nexit 0\n")
+        #expect(AdapterRuntime.isProtectedSystemInterpreter(mine.path) == false)
+        if getuid() != 0 {
+            #expect(AdapterRuntime.isProtectedSystemInterpreter("/bin/sh"))
+        } else {
+            #expect(AdapterRuntime.isProtectedSystemInterpreter("/bin/sh") == false, "root can replace anything")
+        }
+        #expect(AdapterRuntime.isProtectedSystemInterpreter(dir.appendingPathComponent("absent").path) == false)
+    }
+
     @Test func doctorFailsEachHookedPythonHostWhenPython3DoesNotRun() throws {
         try withTempHome { home, layout, launchctl in
             try FileManager.default.createDirectory(atPath: layout.claudeDirectory, withIntermediateDirectories: true)
@@ -196,7 +242,8 @@ import RVPolicy
         let rootElsewhere = DoctorInstallChecks.replaceableFix("/home/u/py/bin/python3", name: "python3", userID: 0)
         #expect(rootElsewhere == root)
         let user = DoctorInstallChecks.replaceableFix("/home/u/py/bin/python3", name: "python3", userID: 1000)
-        #expect(user == "put a system python3 (e.g. /usr/bin/python3) first on PATH, then rv setup")
+        #expect(user == "rerun rv setup: it bakes a system python3 this user cannot replace "
+            + "(e.g. /usr/bin/python3) when one runs; install one first if none does")
         let writableSystem = DoctorInstallChecks.replaceableFix("/usr/bin/python3", name: "python3", userID: 1000)
         #expect(writableSystem.contains("first on PATH") == false)
         #expect(writableSystem.contains("writable only by root"))
