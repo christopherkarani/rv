@@ -356,7 +356,9 @@ public struct GatedEvaluate: Sendable {
         // Exemption audit and judge log are file appends: keep them off the
         // cooperative pool, as they were when they ran inside the offload.
         let effects = decided.effects
-        let overridesRecorded = await JudgeOffload.run { Self.perform(effects, home: home) }
+        let overridesRecorded = await HookTiming.measure(.effects) {
+            await JudgeOffload.run { Self.perform(effects, home: home) }
+        }
         return overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
     }
 
@@ -414,20 +416,24 @@ public struct GatedEvaluate: Sendable {
         // log) come back out of the closure, in order, with the result;
         // the denial row is appended after the Policy gate, here.
         let (screened, safety, offloaded) = await JudgeOffload.run { [self] in
-            let gathered = inputs()
+            let gathered = HookTiming.measure(.inputs) { inputs() }
             var effects: [GatedEffect] = []
-            let result = evaluateWithSemantics(
-                request, cwd: cwd, home: home, store: gathered.store, now: now, effects: &effects
-            )
-            let screened = posture(
-                result,
-                door: .shell(request, inputs: gathered, isPeek: isPeek),
-                guardMode: gathered.guardMode,
-                cwd: cwd,
-                home: home,
-                now: now,
-                effects: &effects
-            )
+            let result = HookTiming.measure(.policy) {
+                evaluateWithSemantics(
+                    request, cwd: cwd, home: home, store: gathered.store, now: now, effects: &effects
+                )
+            }
+            let screened = HookTiming.measure(.screen) {
+                posture(
+                    result,
+                    door: .shell(request, inputs: gathered, isPeek: isPeek),
+                    guardMode: gathered.guardMode,
+                    cwd: cwd,
+                    home: home,
+                    now: now,
+                    effects: &effects
+                )
+            }
             return (screened, gathered.store.safety, effects)
         }
         var effects = offloaded
@@ -455,10 +461,12 @@ public struct GatedEvaluate: Sendable {
         case .enforced(let enforced):
             candidate = enforced
         }
-        let decision = await Self.policyFinish(
-            verb, candidate: candidate, request: request, cwd: cwd, grants: grants,
-            now: now, allowlist: allowlist, safety: safety
-        )
+        let decision = await HookTiming.measure(.gate) {
+            await Self.policyFinish(
+                verb, candidate: candidate, request: request, cwd: cwd, grants: grants,
+                now: now, allowlist: allowlist, safety: safety
+            )
+        }
         let finished = decision.result
         let override = decision.override
         // On the task, after the offload (`HookDeadline.current` is

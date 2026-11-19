@@ -21,12 +21,32 @@ public struct HookDoor: Sendable {
         world: HookEvaluateWorld,
         deadline: HookDeadline = HookDeadline()
     ) async throws -> HookEvaluateReply {
+        try await run(host: host, stdin: stdin, world: world, deadline: deadline, slowLog: .shared)
+    }
+
+    /// `run`, logging per-phase timings to `slowLog` when the request ran
+    /// past its deadline (`HookTiming`). The timings change nothing else.
+    static func run(
+        host: HookHost,
+        stdin: String,
+        world: HookEvaluateWorld,
+        deadline: HookDeadline,
+        slowLog: SlowHookLog
+    ) async throws -> HookEvaluateReply {
+        let timing = HookTiming()
+        timing.add(.queue, ContinuousClock.now - deadline.receivedAt)
+        defer { logIfSlow(timing, host: host, deadline: deadline, to: slowLog) }
         guard deadline.permitsSideEffects() else {
             return timeoutReply(host: host)
         }
+        let wireStart = ContinuousClock.now
         let wire = await HookDeadline.$current.withValue(deadline) {
-            await hookWire(host: host, stdin: stdin, world: world)
+            await HookTiming.$current.withValue(timing) {
+                await hookWire(host: host, stdin: stdin, world: world)
+            }
         }
+        let afterEvaluate = (ContinuousClock.now - wireStart) - (timing.durations[.evaluate] ?? .zero)
+        timing.add(.reply, max(afterEvaluate, .zero))
         // A skipped side effect means the wire may promise a pending row or
         // unlock code that does not exist; the client gave up anyway. A
         // grant spent in time is the exception: its allow is delivered.
@@ -34,6 +54,16 @@ public struct HookDoor: Sendable {
             return timeoutReply(host: host)
         }
         return reply(wire)
+    }
+
+    private static func logIfSlow(_ timing: HookTiming, host: HookHost, deadline: HookDeadline, to log: SlowHookLog) {
+        let message = timing.slowMessage(
+            host: host.rawValue,
+            total: ContinuousClock.now - deadline.receivedAt,
+            budget: deadline.expiresAt - deadline.receivedAt,
+            tripped: deadline.hasTripped
+        )
+        if let message { log.report(message) }
     }
 
     private static func timeoutReply(host: HookHost) -> HookEvaluateReply {
@@ -97,12 +127,19 @@ extension HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
         return deadlineGuarded(HookEvaluateWorld(
             evaluate: { command, cwd in
-                let result = await world.apply(command: command, cwd: cwd, host: ledger)
+                let result = await HookTiming.measure(.evaluate) {
+                    await world.apply(command: command, cwd: cwd, host: ledger)
+                }
+                HookTiming.current?.settle(door: "shell", rule: HookTiming.ruleID(of: result))
                 recordDecision?(result)
                 return result
             },
             evaluateFile: { action, cwd in
-                world.runFile(action: action, cwd: cwd, host: ledger)
+                let result = HookTiming.measure(.evaluate) {
+                    world.runFile(action: action, cwd: cwd, host: ledger)
+                }
+                HookTiming.current?.settle(door: "file", rule: HookTiming.ruleID(of: result))
+                return result
             },
             mintOnDeny: { result, cwd in
                 await world.mintUnlockCode(for: result, cwd: cwd)
