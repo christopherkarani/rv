@@ -41,6 +41,9 @@ struct DoctorInstallProbes {
     /// above it, through symlinks, or the real interpreter and standard
     /// library it runs)? Default false (tests).
     var interpreterReplaceable: (String) -> Bool = { _ in false }
+    /// Hook commands must start through `/usr/bin/env` (macOS;
+    /// `AdapterCommand`). A test seam for the other platform's rule.
+    var launchesThroughEnv: Bool = AdapterCommand.launchesThroughEnv
     /// Linux: does a systemd user manager answer `systemctl --user`? Nil
     /// off Linux or when not evaluated (tests).
     var systemdUserManagerReachable: Bool? = nil
@@ -168,7 +171,7 @@ enum DoctorInstallChecks {
         return AdapterRuntime.hooked(hosts).compactMap { host in
             guard let name = AdapterRuntime.interpreter(for: host) else { return nil }
             let baked = AdapterRuntime.bakedInterpreters(host: host, paths: paths, fileManager: fileManager)
-            let missing = (baked.isEmpty ? [name] : baked).first { interpreter in
+            let missing = (baked.isEmpty ? [name] : baked.map(\.path)).first { interpreter in
                 if runnable[interpreter] == nil {
                     runnable[interpreter] = probes.interpreterRunnable(interpreter)
                 }
@@ -177,15 +180,28 @@ enum DoctorInstallChecks {
             guard let interpreter = missing else {
                 // The same check setup applies: the baked path, the real
                 // interpreter behind it and its standard library.
-                guard let replaceable = baked.first(where: { $0.hasPrefix("/") && probes.interpreterReplaceable($0) })
-                else { return nil }
+                if let replaceable = baked.map(\.path).first(where: {
+                    $0.hasPrefix("/") && probes.interpreterReplaceable($0)
+                }) {
+                    return DoctorProblem(
+                        id: "adapter-runtime-replaceable-\(host.rawValue)",
+                        severity: .warn,
+                        summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace "
+                            + "(it, the interpreter it launches, or that interpreter's standard library), "
+                            + "so an agent could swap the interpreter to skip the guard",
+                        fix: replaceableFix(replaceable, name: name, userID: probes.userID)
+                    )
+                }
+                guard let exposed = baked.first(where: {
+                    AdapterRuntime.dyldExposed($0, launchesThroughEnv: probes.launchesThroughEnv)
+                }) else { return nil }
                 return DoctorProblem(
-                    id: "adapter-runtime-replaceable-\(host.rawValue)",
+                    id: "adapter-runtime-dyld-\(host.rawValue)",
                     severity: .warn,
-                    summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace "
-                        + "(it, the interpreter it launches, or that interpreter's standard library), "
-                        + "so an agent could swap the interpreter to skip the guard",
-                    fix: replaceableFix(replaceable, name: name, userID: probes.userID)
+                    summary: "\(host.rawValue) hook starts \(exposed.path) without \(AdapterCommand.envLauncher); "
+                        + "it is not a SIP-protected binary, so DYLD_* variables in the agent's environment "
+                        + "could load a library into the guard",
+                    fix: "rerun rv setup"
                 )
             }
             return DoctorProblem(
@@ -248,14 +264,24 @@ enum DoctorInstallChecks {
     /// bakes the Command Line Tools' Python (a Homebrew or Xcode.app one is
     /// user-owned, and `/usr/bin/python3` only launches one of those). On
     /// Linux a writable `/usr/bin` interpreter is a permissions problem.
-    static func replaceableFix(_ interpreter: String, name: String, userID: uid_t, macOS: Bool = onMacOS) -> String {
+    static func replaceableFix(
+        _ interpreter: String,
+        name: String,
+        userID: uid_t,
+        macOS: Bool = onMacOS,
+        commandLineToolsInstalled: Bool? = nil
+    ) -> String {
         if userID == 0 {
             return "run your agents as a regular user, not root: root can replace every \(name), "
                 + "system ones included, so no interpreter path is out of an agent's reach"
         }
         if macOS {
-            return "install the Command Line Tools (xcode-select --install) and rerun rv setup: it bakes their "
-                + "\(name) (\(AdapterRuntime.commandLineToolsDirectory)/\(name)), which this user cannot replace"
+            let tools = "\(AdapterRuntime.commandLineToolsDirectory)/\(name)"
+            let installed = commandLineToolsInstalled ?? FileManager.default.isExecutableFile(atPath: tools)
+            let bakes = "it bakes the Command Line Tools' \(name) (\(tools)), which this user cannot replace"
+            return installed
+                ? "rerun rv setup: \(bakes)"
+                : "install the Command Line Tools (xcode-select --install) and rerun rv setup: \(bakes)"
         }
         guard linuxSystemInterpreterDirectories.contains(where: { interpreter.hasPrefix($0) }) else {
             return "install \(name) with your package manager (e.g. apt install python3) and rerun rv setup: "

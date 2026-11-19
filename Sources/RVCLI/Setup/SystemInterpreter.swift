@@ -96,18 +96,15 @@ extension AdapterRuntime {
         realPath(candidate) == identity.executable ? candidate : identity.executable
     }
 
-    /// The real interpreter is root-owned and this user can replace
-    /// neither it, its standard library nor a directory above either (an
-    /// owner could `chmod` a read-only file back).
+    /// The real interpreter, `sys.prefix` and the standard library file are
+    /// each `isRootProtected`: root owns every directory, link and file on
+    /// their paths and this user can write none of them.
     static func isProtectedSystemInterpreter(_ identity: InterpreterIdentity) -> Bool {
-        guard let owner = try? FileManager.default.attributesOfItem(atPath: identity.executable)[.ownerAccountID]
-            as? NSNumber, owner.uint32Value == 0
-        else { return false }
-        return canReplace(identity) == false
+        canReplace(identity) == false
     }
 
-    /// This user can replace the interpreter or the standard library it
-    /// loads.
+    /// Any of the interpreter, its prefix or the standard library it loads
+    /// is not `isRootProtected`.
     static func canReplace(_ identity: InterpreterIdentity) -> Bool {
         [identity.executable, identity.prefix, identity.stdlib].contains(where: userCanReplace)
     }
@@ -138,20 +135,61 @@ extension AdapterRuntime {
         return wait(process, output: nil)
     }
 
-    /// This user may write `path`, the file it resolves to, or a directory
-    /// above either, so could replace what it runs.
+    /// Symlink hops `isRootProtected` follows before giving up.
+    static let maxSymlinkHops = 32
+
+    /// Anything other than `isRootProtected`: this user could replace what
+    /// `path` names, or the path does not resolve.
     static func userCanReplace(_ path: String) -> Bool {
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        for start in [path, resolved] {
-            var current = start
-            while current.isEmpty == false {
-                if access(current, W_OK) == 0 { return true }
-                let parent = (current as NSString).deletingLastPathComponent
-                if parent == current { break }
-                current = parent
+        isRootProtected(path) == false
+    }
+
+    /// Every directory from `/` down, every symlink hop and the file it
+    /// ends at is owned by root (uid 0), and no directory or file on the
+    /// way is writable by this user. Owning a read-only directory is not
+    /// enough: an owner can `chmod` it back. False for a relative path,
+    /// one that does not resolve, or more than `maxSymlinkHops` links.
+    static func isRootProtected(_ path: String) -> Bool {
+        isRootProtected(path, hops: 0)
+    }
+
+    private static func isRootProtected(_ path: String, hops: Int) -> Bool {
+        guard path.hasPrefix("/"), hops <= maxSymlinkHops, rootOwnedUnwritable("/") else { return false }
+        var current = "/"
+        let names = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        for (index, name) in names.enumerated() {
+            if name == "." { continue }
+            if name == ".." {
+                current = (current as NSString).deletingLastPathComponent
+                continue
             }
+            let entry = (current as NSString).appendingPathComponent(name)
+            var info = stat()
+            guard lstat(entry, &info) == 0, info.st_uid == 0 else { return false }
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                // The link is root's and sits in a directory checked above;
+                // continue at its target, checked from `/` again.
+                guard let target = readLink(entry) else { return false }
+                let base = target.hasPrefix("/") ? target : (current as NSString).appendingPathComponent(target)
+                let rest = names[(index + 1)...].joined(separator: "/")
+                return isRootProtected(rest.isEmpty ? base : base + "/" + rest, hops: hops + 1)
+            }
+            guard access(entry, W_OK) != 0 else { return false }
+            current = entry
         }
-        return false
+        return true
+    }
+
+    private static func rootOwnedUnwritable(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0 && info.st_uid == 0 && access(path, W_OK) != 0
+    }
+
+    private static func readLink(_ path: String) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = readlink(path, &buffer, Int(PATH_MAX))
+        guard count > 0 else { return nil }
+        return String(decoding: buffer[0..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// `realpath(3)`, or nil when `path` does not resolve.
