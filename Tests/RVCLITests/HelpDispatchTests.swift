@@ -275,7 +275,11 @@ import RVTheme
         let text = HelpDispatch.text(topic, palette: colorOffPalette)
         #expect(text.contains("Observe mode"), "\(topic) help missing observe mode")
         #expect(text.contains("would ask"), "\(topic) help missing the would-be ask")
-        #expect(text.contains("block"), "\(topic) help missing the would-be block")
+        let flowed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(
+            flowed.contains("or block (a pinned deny, or an evaluation it could not finish)"),
+            "\(topic) help missing the would-be block"
+        )
     }
 }
 
