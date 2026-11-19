@@ -548,9 +548,10 @@ public struct GatedEvaluate: Sendable {
     /// untouched (a pack deny is a floor neither may lower).
     ///
     /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
-    /// result takes the enforce branch, on every door. Stopping rvd or
-    /// writing its install is also floored at "run it in Terminal" there
-    /// (an allow becomes indeterminate; a deny stays the deny).
+    /// result takes the enforce branch, on every door. Stopping rvd,
+    /// writing its install, or running what rv cannot see into is also
+    /// floored at "run it in Terminal" there (an allow becomes
+    /// indeterminate; a deny stays the deny).
     private func posture(
         _ evaluated: EvaluationResult,
         door: Door,

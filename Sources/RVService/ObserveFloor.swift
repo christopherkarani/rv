@@ -80,12 +80,18 @@ enum ObserveFloor {
         let words = Set([command.rawValue, unquoted, result.matchingView.rawValue].flatMap { text in
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
-        return words.contains { rvConfig.filePathHit($0) != nil || namesWiring($0, home: home, cwd: cwd) }
+        // rv's config is secret: any word naming it holds, read or not.
+        if words.contains(where: { rvConfig.filePathHit($0) != nil }) { return true }
+        // Wiring files hold no secret, and an observe host already allows
+        // these verbs unchecked everywhere else: only a write there holds.
+        if ObserveReadProof.proves(command, analysis: result.analysis) { return false }
+        return words.contains { namesWiring($0, home: home, cwd: cwd) }
     }
 
     /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
-    /// door enforces writes there, so an observe host must too. Reads are
-    /// allowed under enforce anyway.
+    /// door enforces writes there, so an observe host must too. The enforce
+    /// branch also runs the judge, so a command proven to only read
+    /// (`ObserveReadProof`) is not escalated for naming one.
     /// The word is normalised first (`~`/`$HOME`/`~user` expanded, joined
     /// to the cwd, `.`/`..` collapsed). Host settings files at any scope
     /// count: a project one can disable hooks for every host.
@@ -96,16 +102,46 @@ enum ObserveFloor {
         return RVWiringPaths.matches(path, home: home.rawValue)
     }
 
-    /// Observe only: nil unless the command stops rvd or writes rv's
-    /// install. Then an allow becomes "run it in Terminal"; anything else
-    /// (a deny, an indeterminate) is kept, so the floor never weakens.
+    /// Observe only: nil unless the command stops rvd, writes rv's
+    /// install, or runs something rv cannot read (`runsUnanalyzable`). Then
+    /// an allow becomes "run it in Terminal"; anything else (a deny, an
+    /// indeterminate) is kept, so the floor never weakens.
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
+        guard runsUnanalyzable(result, command: command)
+            || RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
             || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
         return floored(result)
     }
+
+    /// The stop and install floors read the command's text, so an encoded
+    /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
+    /// passes them, stops rvd, and leaves every later call unchecked. What
+    /// the pipeline could not unwrap or resolve may be exactly that, so it
+    /// holds: an unwrap-limited analysis or `builtin.action:unwrap-*` deny,
+    /// or the indeterminate the pipeline gives a command it cannot see
+    /// into (a dynamic `eval`, a variable head, or one too large or too
+    /// costly to analyze). Enforce already refuses every one of these.
+    /// The program check (`invocationIsOpaque`) is read again here because
+    /// an earlier pack deny hides it: `$(echo <b64> | base64 -d)` reports
+    /// only an out-of-repo write, which observe would let run.
+    static func runsUnanalyzable(_ result: EvaluationResult, command: ShellCommand) -> Bool {
+        if result.analysis.innermost == .unwrapLimited || invocationIsOpaque(command) { return true }
+        switch result.decision {
+        case .deny(let deny):
+            return deny.ruleID.pack == BuiltinRule.unwrapLimited.ruleID.pack
+                && deny.ruleID.pattern.hasPrefix("unwrap-")
+        case .indeterminate(let reason):
+            return unanalyzableReasons.contains(reason)
+        case .allow:
+            return false
+        }
+    }
+
+    private static let unanalyzableReasons: Set<IndeterminateReason> = [
+        .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
+    ]
 
     /// File door: a write or edit of rv's install, typed or resolved.
     static func lifecycleFloor(
