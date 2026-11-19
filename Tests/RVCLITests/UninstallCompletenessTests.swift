@@ -8,6 +8,7 @@ import Testing
 import RVDomain
 import RVIsolation
 import RVPolicy
+import RVTheme
 import Synchronization
 @testable import RVCLI
 
@@ -363,8 +364,142 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
 
             let outcome = SetupRun.uninstall(environment, purge: true)
 
-            #expect(outcome.exitCode != 0)
+            #expect(outcome.exitCode == EX_SOFTWARE, "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("owned path still exists"), "\(outcome.stderr)")
             #expect(outcome.stderr.contains("GH_TOKEN"), "\(outcome.stderr)")
+        }
+    }
+
+    /// HOME's spelling (`/home/u/`, `/home//u`) must not make purge refuse
+    /// rv's own directories.
+    @Test(arguments: [HomeSpelling.trailingSlash, .doubledSlash])
+    func purgeAcceptsAnOrdinaryHomeSpelledWithExtraSlashes(_ spelling: HomeSpelling) throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            let logs = home.appendingPathComponent(platformLogDirectory).path
+            let cache = home.appendingPathComponent(platformMCPCacheDirectory).path
+            try touch(logs + "/rvd.log")
+            try touch(cache + "/server/scratch")
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.home = testHomeDirectory(spelling.spell(home))
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.sorted() == ["rv.secrets/GH_TOKEN", "rv.secrets/NPM_TOKEN"])
+            #expect(exists(layout.configDirectory) == false)
+            #expect(exists(logs) == false)
+            #expect(exists(cache) == false)
+        }
+    }
+
+    /// A link two levels up (`~/.local` for `~/.local/state/rv`) is refused
+    /// too, and the note names where the path really is.
+    @Test func purgeDoesNotFollowASymlinkedGrandparentAndNamesWhereItResolves() throws {
+        try withTempHome { home, _, launchctl in
+            let logs = home.appendingPathComponent(platformLogDirectory).path
+            let parent = (logs as NSString).deletingLastPathComponent
+            let grandparent = (parent as NSString).deletingLastPathComponent
+            let below = (parent as NSString).lastPathComponent + "/" + (logs as NSString).lastPathComponent
+            let decoy = home.appendingPathComponent("decoy-grand").path
+            try touch(decoy + "/" + below + "/keep.txt")
+            try FileManager.default.createSymbolicLink(atPath: grandparent, withDestinationPath: decoy)
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore().writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == EX_UNAVAILABLE, "\(outcome.stderr)")
+            #expect(exists(decoy + "/" + below + "/keep.txt"))
+            #expect(outcome.stderr.contains(logs), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("decoy-grand/" + below), "\(outcome.stderr)")
+        }
+    }
+
+    /// `~/.config` itself a link: the config dir is not entered and no
+    /// value its secrets.json names is deleted.
+    @Test func purgeDoesNotEnterAConfigDirUnderASymlinkedDotConfig() throws {
+        try withTempHome { home, layout, launchctl in
+            let decoy = home.appendingPathComponent("decoy-config").path
+            try writeUserData(configDirectory: decoy + "/rv")
+            try FileManager.default.createSymbolicLink(
+                atPath: (layout.configDirectory as NSString).deletingLastPathComponent, withDestinationPath: decoy)
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == EX_UNAVAILABLE, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.isEmpty)
+            for name in ["secrets.json", "mcp.json", "audit.jsonl"] {
+                #expect(exists(decoy + "/rv/" + name), "purge deleted \(name) under a symlinked ~/.config")
+            }
+            #expect(outcome.stderr.contains(layout.configDirectory), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("decoy-config/rv"), "\(outcome.stderr)")
+        }
+    }
+
+    /// Plain uninstall never enters the cache: under a symlinked parent it
+    /// is kept, said truthfully, and no by-hand command goes through it.
+    @Test func plainUninstallDescribesADirectoryUnderASymlinkAsKept() throws {
+        try withTempHome { home, _, launchctl in
+            let cache = home.appendingPathComponent(platformMCPCacheDirectory).path
+            let parent = (cache as NSString).deletingLastPathComponent
+            let decoy = home.appendingPathComponent("decoy-cache").path
+            try touch(decoy + "/rv-mcp/server/scratch")
+            try FileManager.default.createDirectory(
+                atPath: (parent as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: parent, withDestinationPath: decoy)
+
+            let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(exists(decoy + "/rv-mcp/server/scratch"))
+            #expect(outcome.stderr.contains("not entered") == false, "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(cache + ": kept"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("decoy-cache/rv-mcp"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("rm -rf " + cache) == false, "\(outcome.stderr)")
+        }
+    }
+
+    @Test func prettyOutputDoesNotClaimCompleteWhenPurgeLeavesAValue() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            try touch(layout.localRv)
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore(failing: ["GH_TOKEN"]).writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true, appearance: .pretty(colorOffPalette))
+
+            #expect(outcome.exitCode == EX_UNAVAILABLE)
+            #expect(outcome.stdout.contains("Uninstall complete") == false, "\(outcome.stdout)")
+            #expect(outcome.stdout.contains("Uninstall incomplete"), "\(outcome.stdout)")
+        }
+    }
+
+    /// Outside HOME (the runtime socket dir) the parent must resolve to itself.
+    @Test func purgeRefusalOutsideHomeAcceptsARealPathAndRefusesALinkedOne() throws {
+        try withTempHome { home, _, _ in
+            let outside = FileManager.default.temporaryDirectory
+                .appendingPathComponent("rv-runtime-\(UUID().uuidString)").path
+            defer { try? FileManager.default.removeItem(atPath: outside) }
+            try FileManager.default.createDirectory(atPath: outside, withIntermediateDirectories: true)
+            let root = try #require(realPath(outside))
+            let files = FileOps(fileManager: .default)
+            try FileManager.default.createDirectory(atPath: root + "/user/501/rv", withIntermediateDirectories: true)
+            #expect(SetupRun.purgeRefusal(root + "/user/501/rv", home: home.path, files: files) == nil)
+
+            try FileManager.default.createSymbolicLink(atPath: root + "/linked", withDestinationPath: root + "/user")
+            let refusal = SetupRun.purgeRefusal(root + "/linked/501/rv", home: home.path, files: files)
+            #expect(refusal?.contains(root + "/user/501/rv") == true, "\(refusal ?? "accepted")")
+
+            try FileManager.default.createSymbolicLink(atPath: root + "/user/502", withDestinationPath: root + "/user/501")
+            let leaf = SetupRun.purgeRefusal(root + "/user/502", home: home.path, files: files)
+            #expect(leaf?.contains("symlink") == true, "\(leaf ?? "accepted")")
         }
     }
 
@@ -386,6 +521,35 @@ private let platformMCPCacheDirectory = "Library/Caches/rv-mcp"
 private let platformLogDirectory = ".local/state/rv"
 private let platformMCPCacheDirectory = ".cache/rv-mcp"
 #endif
+
+/// HOME as an ordinary path spelled with an extra slash.
+enum HomeSpelling: Sendable, CustomTestStringConvertible {
+    case trailingSlash
+    case doubledSlash
+
+    func spell(_ home: URL) -> String {
+        switch self {
+        case .trailingSlash:
+            return home.path + "/"
+        case .doubledSlash:
+            return home.deletingLastPathComponent().path + "//" + home.lastPathComponent
+        }
+    }
+
+    var testDescription: String {
+        switch self {
+        case .trailingSlash: "trailing slash"
+        case .doubledSlash: "doubled slash"
+        }
+    }
+}
+
+/// `realpath(3)`, for expectations on resolved paths.
+private func realPath(_ path: String) -> String? {
+    guard let resolved = realpath(path, nil) else { return nil }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
 
 /// Records every delete; fails those for the named accounts.
 private final class RecordingSecretStore: Sendable {
