@@ -515,7 +515,7 @@ enum WorkspaceCommandRun {
         case .leftAlone(let why):
             return hostNotReachablePreservedText + " (nothing was stopped: \(why))"
         case .stopped(let pid):
-            return "workspace host is not reachable, so rv stopped the workspace host rv launched for this project "
+            return "workspace host is not reachable, so close stopped the workspace host rv launched for this project "
                 + "(pid \(pid)): the volume and saved changes are preserved; " + next
         case .notRunning:
             return "workspace host is not reachable and the host rv launched for this project has already exited: "
