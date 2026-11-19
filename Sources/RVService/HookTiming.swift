@@ -8,7 +8,11 @@ import Synchronization
 /// only: nothing here changes a verdict or a deadline.
 ///
 /// The line carries the host, door, rule or reason id and the phase
-/// durations; never command text, paths or session ids.
+/// durations; never command text, paths or session ids. A request still
+/// running `HookDoor.hungGrace` past its deadline (a stuck judge or read)
+/// would never reach the completion line, so a watchdog logs its phases so
+/// far once ("still running"); its completion line, if it ever finishes,
+/// then usually falls inside `SlowHookLog.interval` and is only counted.
 final class HookTiming: Sendable {
     enum Phase: String, CaseIterable, Sendable {
         /// Frame receipt to `HookDoor.run` (transport and actor hops).
@@ -84,8 +88,16 @@ final class HookTiming: Sendable {
 
     /// The log message for a request that took `total` against `budget`;
     /// nil when it finished in time and tripped no deadline check.
-    func slowMessage(host: String, total: Duration, budget: Duration, tripped: Bool) -> String? {
-        guard tripped || total >= budget else { return nil }
+    /// `running`: the request has not finished (`HookDoor`'s watchdog), so
+    /// the phases are the ones measured so far.
+    func slowMessage(
+        host: String,
+        total: Duration,
+        budget: Duration,
+        tripped: Bool,
+        running: Bool = false
+    ) -> String? {
+        guard running || tripped || total >= budget else { return nil }
         let snapshot = state.withLock { $0 }
         var fields = [
             "host=\(host)",
@@ -99,7 +111,8 @@ final class HookTiming: Sendable {
             fields.append("\(phase.rawValue)_ms=\(Self.milliseconds(duration))")
         }
         if let rule = snapshot.rule { fields.append("rule=\(rule)") }
-        return "rvd: hook ran past its deadline: " + fields.joined(separator: " ")
+        let lead = running ? "rvd: hook still running past its deadline: " : "rvd: hook ran past its deadline: "
+        return lead + fields.joined(separator: " ")
     }
 
     /// The id a result ended on: the deny rule or indeterminate reason; nil
@@ -119,10 +132,11 @@ final class HookTiming: Sendable {
 }
 
 /// Writes `HookTiming` lines to rvd's stderr (`rvd.log`), at most one per
-/// `interval`; the next line counts the ones skipped. A burst of slow hooks
-/// must not fill a log that rotates only at start.
+/// `interval` (`AuditDropLog`'s rate); the next written line carries the
+/// count skipped since the last one. A burst of slow hooks must not fill a
+/// log that rotates only at start.
 final class SlowHookLog: Sendable {
-    static let interval: Duration = .seconds(1)
+    static let interval: Duration = .seconds(60)
     static let shared = SlowHookLog()
 
     private struct State {

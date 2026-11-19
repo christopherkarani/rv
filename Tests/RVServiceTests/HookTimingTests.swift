@@ -39,17 +39,40 @@ import Synchronization
         #expect(timing.slowMessage(host: "claude", total: .seconds(8), budget: .seconds(7), tripped: false) != nil)
     }
 
-    @Test func slowLogWritesAtMostOneLinePerIntervalAndCountsTheRest() {
+    @Test func slowLogWritesAtMostOneLinePerMinuteAndCountsTheRest() {
+        #expect(SlowHookLog.interval == .seconds(60), "rvd.log rotates only at start; AuditDropLog's rate")
         let lines = Lines()
         let log = lines.log()
         let start = ContinuousClock.now
         #expect(log.report("first", now: start))
-        #expect(log.report("second", now: start + .milliseconds(200)) == false)
-        #expect(log.report("third", now: start + .milliseconds(400)) == false)
+        #expect(log.report("second", now: start + .seconds(1)) == false)
+        #expect(log.report("third", now: start + .seconds(59)) == false)
         #expect(log.report("fourth", now: start + SlowHookLog.interval))
-        #expect(lines.all.count == 2)
+        #expect(log.report("fifth", now: start + SlowHookLog.interval + .seconds(1)) == false)
+        #expect(log.report("sixth", now: start + SlowHookLog.interval * 2))
+        #expect(lines.all.count == 3)
         #expect(lines.all[0].hasSuffix(" first\n"))
         #expect(lines.all[1].hasSuffix(" fourth skipped_since_last=2\n"))
+        #expect(lines.all[2].hasSuffix(" sixth skipped_since_last=1\n"), "the skipped count reaches the next line")
+    }
+
+    /// A request stuck past its deadline never reaches the completion
+    /// line; the watchdog logs what it measured so far, once.
+    @Test func stuckRequestIsLoggedByTheWatchdogOnce() async throws {
+        let lines = Lines()
+        let deadline = HookDeadline(receivedAt: .now, budget: .milliseconds(50))
+        let world = hookWorld(evaluate: { _, _ in
+            try? await Task.sleep(for: .milliseconds(600))
+            return EvaluationResult(outcome: .plain)
+        })
+        _ = try await HookDoor.run(
+            host: .pi, stdin: Self.stdin, world: world, deadline: deadline, slowLog: lines.log(),
+            hungGrace: .milliseconds(50))
+        let line = try #require(lines.all.first)
+        #expect(lines.all.count == 1, "the completion line falls inside the interval")
+        #expect(line.contains("rvd: hook still running past its deadline: host=pi "))
+        #expect(line.contains(" queue_ms="))
+        #expect(line.contains("reset") == false, "no command text")
     }
 
     @Test func offloadedPhasesReachTheRequestTiming() async {

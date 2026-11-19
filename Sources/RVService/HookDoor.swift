@@ -24,18 +24,36 @@ public struct HookDoor: Sendable {
         try await run(host: host, stdin: stdin, world: world, deadline: deadline, slowLog: .shared)
     }
 
+    /// How long past its deadline a request may still run before the
+    /// watchdog logs it as stuck. Past the deadline but inside this, the
+    /// completion line (with every phase) is the one written.
+    static let hungGrace: Duration = .seconds(10)
+
     /// `run`, logging per-phase timings to `slowLog` when the request ran
-    /// past its deadline (`HookTiming`). The timings change nothing else.
+    /// past its deadline (`HookTiming`), or is still running `hungGrace`
+    /// after it. The timings change nothing else.
     static func run(
         host: HookHost,
         stdin: String,
         world: HookEvaluateWorld,
         deadline: HookDeadline,
-        slowLog: SlowHookLog
+        slowLog: SlowHookLog,
+        hungGrace: Duration = hungGrace
     ) async throws -> HookEvaluateReply {
         let timing = HookTiming()
         timing.add(.queue, ContinuousClock.now - deadline.receivedAt)
-        defer { logIfSlow(timing, host: host, deadline: deadline, to: slowLog) }
+        let watchdog = Task {
+            do {
+                try await Task.sleep(until: deadline.expiresAt.advanced(by: hungGrace), clock: .continuous)
+            } catch {
+                return // the request finished
+            }
+            logIfSlow(timing, host: host, deadline: deadline, to: slowLog, running: true)
+        }
+        defer {
+            watchdog.cancel()
+            logIfSlow(timing, host: host, deadline: deadline, to: slowLog)
+        }
         guard deadline.permitsSideEffects() else {
             return timeoutReply(host: host)
         }
@@ -56,12 +74,19 @@ public struct HookDoor: Sendable {
         return reply(wire)
     }
 
-    private static func logIfSlow(_ timing: HookTiming, host: HookHost, deadline: HookDeadline, to log: SlowHookLog) {
+    private static func logIfSlow(
+        _ timing: HookTiming,
+        host: HookHost,
+        deadline: HookDeadline,
+        to log: SlowHookLog,
+        running: Bool = false
+    ) {
         let message = timing.slowMessage(
             host: host.rawValue,
             total: ContinuousClock.now - deadline.receivedAt,
             budget: deadline.expiresAt - deadline.receivedAt,
-            tripped: deadline.hasTripped
+            tripped: deadline.hasTripped,
+            running: running
         )
         if let message { log.report(message) }
     }
