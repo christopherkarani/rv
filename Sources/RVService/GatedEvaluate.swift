@@ -708,7 +708,8 @@ public struct GatedEvaluate: Sendable {
             let observed = JudgeRuntime.observe(
                 wouldBe: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
+                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+                lateLog: Self.lateJudgeLog(home: home)
             )
             effects.append(.judgeLog(observed.log))
             return .observed(observed.result, wouldBe: observed.wouldBe, floorsWouldBe: observed.floorsWouldBe)
@@ -722,13 +723,22 @@ public struct GatedEvaluate: Sendable {
             let judged = JudgeRuntime.apply(
                 to: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
+                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+                lateLog: Self.lateJudgeLog(home: home)
             )
             if let log = judged.log {
                 effects.append(.judgeLog(log))
             }
             return .enforced(judged.result)
         }
+    }
+
+    /// Where a prediction that answered after its caller gave up is logged:
+    /// straight to the judge log, since the request's effects are long
+    /// performed by then. nil without a home (nothing to log to).
+    private static func lateJudgeLog(home: HomeDirectory?) -> (@Sendable (GatedEffect.JudgeLogRow) -> Void)? {
+        guard let home else { return nil }
+        return { @Sendable row in JudgeRuntime.appendLog(row, home: home) }
     }
 
     private func lifecycleFloor(
