@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `rv policy status [--json]` reports whether rvd loads the current machine and repo policy, which revisions, and why not. rvd answers from the load hooks run. A policy rvd cannot load denies every action (`typed-rules-invalid`); rv never falls back to an earlier policy. `rv policy draft|apply|rollback --save --wait [--wait-timeout s]` blocks until rvd loads the saved policy. Exit 1 when rvd reports a failed load. Exit 3 whenever rvd did not answer (unreachable or busy): the report is then the CLI's own view, loaded or failed, and nothing confirms rvd enforces it. A policy file that is a FIFO, device or other non-regular file, or larger than 1 MiB (256 KiB for the ceiling), now fails closed with a specific reason instead of being waited on or read whole; a symlinked `policy.toml` still loads when its target is a regular file (the ceiling never follows symlinks). Saves that would exceed 1 MiB are refused.
+
 ### Changed
 
 - `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host, any port, beside a pending one (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed and still needs its own decision. No row is retired or approved by another's approval.
