@@ -173,7 +173,9 @@ The README's "MCP governance" section lists every case.
   - text the shells may split differently than rv does (an unbalanced
     group, a `}` in argument position, which zsh closes on and bash does
     not), and a command too large to walk within budget (over 4096
-    commands);
+    commands, or fed texts too large to read: every reader of a text
+    is charged for it, so thousands of readers of one big heredoc run
+    out of budget);
   - dynamic or encoded inline code (`osascript -e "$(…)"`,
     `python3 -c "…os.system(base64.b64decode(…))"`), and inline code
     that runs a command over input rv cannot read: stdin from a
@@ -193,8 +195,9 @@ The README's "MCP governance" section lists every case.
     input), and `parallel` with no verb.
 
   What the lexical floors read is the command line itself: the words of
-  each command (also re-read with heredoc bodies removed, one command at
-  a time), the inline `-c` script of a shell, the text a shell or
+  each command (which the observe stop and install floors, not enforce,
+  also re-read with heredoc bodies removed and one command at a time),
+  the inline `-c` script of a shell, the text a shell or
   interpreter is fed from a literal pipe, here-string or heredoc, and the
   string literals of inline interpreter code. They do not read files. So
   a literal verb with dynamic arguments (`xargs rm`), an inner script
@@ -204,6 +207,24 @@ The README's "MCP governance" section lists every case.
   run whatever `x.sh` holds. An agent that writes a decoded script to a
   file and then runs it (`echo … | base64 -d > /tmp/x.sh && sh
   /tmp/x.sh`), or a build step that stops `rvd`, is not modelled.
+- **Where observe's command reading differs from the shell.** These
+  observe-floor gaps let a program through that rv reads differently
+  than the shell runs it (0.2.2 allowed them all):
+  - a heredoc body is attached to the last command of its line, not to
+    the command that holds the `<<`;
+  - with several stdin redirects on one command, rv reads the first,
+    where the shell uses the last;
+  - `$$'…'` and `\$'…'` are read as ANSI-C quoting, which they are not;
+  - wrappers rv does not see through: `ionice`, `chrt`, `taskset`,
+    `flock`, `unbuffer`, `numactl`, `prlimit`, `chpst`, `busybox sh`,
+    `su -c`, `sudo --user root sh`, `bash --rcfile`;
+  - zsh's short `for x (a) …` loop;
+  - and, the other way round, `$(( … ))` arithmetic is sometimes read as
+    a command (a false positive).
+
+  The floors are lexical and will always have gaps like these. The
+  structural fix is for the hook's fallback to fail closed after a
+  deliberate `rvd` stop instead of stepping aside.
 - **Interpreter forms observe does not read.** Inline code whose
   command is built from literal pieces (`python3 -c
   "import os; os.system('launch'+'ctl …')"`, the same code piped in by a
