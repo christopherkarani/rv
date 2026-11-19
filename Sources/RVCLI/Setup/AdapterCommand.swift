@@ -33,6 +33,15 @@ enum AdapterCommand {
         var throughEnv: Bool = false
     }
 
+    /// `env` reads any operand holding `=` as an assignment, quoted or
+    /// not: an interpreter path with one would make it exec `-I`, which
+    /// exits 127 and fails open. Setup never bakes such a path for the env
+    /// form (`AdapterRuntime.resolveRunnable`).
+    static func launchable(_ interpreter: String, throughEnv: Bool = launchesThroughEnv) -> Bool {
+        throughEnv == false || interpreter.contains("=") == false
+    }
+
+    /// Callers pass an interpreter that is `launchable`.
     static func render(interpreter: String, adapterPath: String, throughEnv: Bool = launchesThroughEnv) -> String {
         let command = "\(ShellWord.quote(interpreter)) \(isolationFlags) \(ShellWord.quote(adapterPath))"
         return throughEnv ? "\(envLauncher) \(command)" : command
@@ -49,7 +58,9 @@ enum AdapterCommand {
     static func parse(_ text: Substring) -> Parsed? {
         let launcher = envLauncher + " "
         if text.hasPrefix(launcher) {
-            guard var parsed = parseIsolated(text.dropFirst(launcher.count)) else { return nil }
+            guard var parsed = parseIsolated(text.dropFirst(launcher.count)),
+                  launchable(parsed.interpreter, throughEnv: true)
+            else { return nil }
             parsed.throughEnv = true
             return parsed
         }

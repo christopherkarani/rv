@@ -129,7 +129,9 @@ enum AdapterRuntime {
         let candidates = name.hasPrefix("/")
             ? [name]
             : pathEntries.filter { $0.hasPrefix("/") }.map { ($0 as NSString).appendingPathComponent(name) }
-        guard let executable = candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }),
+        guard let executable = candidates.first(where: {
+                  AdapterCommand.launchable($0) && fileManager.isExecutableFile(atPath: $0)
+              }),
               runWithHookFlags(executable, code: "pass") != nil
         else { return nil }
         return executable

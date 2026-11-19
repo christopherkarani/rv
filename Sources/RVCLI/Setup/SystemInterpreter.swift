@@ -150,11 +150,19 @@ extension AdapterRuntime {
     /// enough: an owner can `chmod` it back. False for a relative path,
     /// one that does not resolve, or more than `maxSymlinkHops` links.
     static func isRootProtected(_ path: String) -> Bool {
-        isRootProtected(path, hops: 0)
+        isRootProtected(path, trusts: rootOwnedUnwritable)
     }
 
-    private static func isRootProtected(_ path: String, hops: Int) -> Bool {
-        guard path.hasPrefix("/"), hops <= maxSymlinkHops, rootOwnedUnwritable("/") else { return false }
+    /// The walk with its per-entry check injected: `trusts(entry, lstat)`
+    /// for `/` and every entry on the way, links included.
+    static func isRootProtected(_ path: String, trusts: (String, stat) -> Bool) -> Bool {
+        isRootProtected(path, hops: 0, trusts: trusts)
+    }
+
+    private static func isRootProtected(_ path: String, hops: Int, trusts: (String, stat) -> Bool) -> Bool {
+        var rootInfo = stat()
+        guard path.hasPrefix("/"), hops <= maxSymlinkHops, lstat("/", &rootInfo) == 0, trusts("/", rootInfo)
+        else { return false }
         var current = "/"
         let names = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         for (index, name) in names.enumerated() {
@@ -165,24 +173,24 @@ extension AdapterRuntime {
             }
             let entry = (current as NSString).appendingPathComponent(name)
             var info = stat()
-            guard lstat(entry, &info) == 0, info.st_uid == 0 else { return false }
+            guard lstat(entry, &info) == 0, trusts(entry, info) else { return false }
             if (info.st_mode & S_IFMT) == S_IFLNK {
                 // The link is root's and sits in a directory checked above;
                 // continue at its target, checked from `/` again.
                 guard let target = readLink(entry) else { return false }
                 let base = target.hasPrefix("/") ? target : (current as NSString).appendingPathComponent(target)
                 let rest = names[(index + 1)...].joined(separator: "/")
-                return isRootProtected(rest.isEmpty ? base : base + "/" + rest, hops: hops + 1)
+                return isRootProtected(rest.isEmpty ? base : base + "/" + rest, hops: hops + 1, trusts: trusts)
             }
-            guard access(entry, W_OK) != 0 else { return false }
             current = entry
         }
         return true
     }
 
-    private static func rootOwnedUnwritable(_ path: String) -> Bool {
-        var info = stat()
-        return lstat(path, &info) == 0 && info.st_uid == 0 && access(path, W_OK) != 0
+    /// Root owns it, and it is a symlink (whose mode means nothing) or
+    /// this user cannot write it.
+    private static func rootOwnedUnwritable(_ path: String, _ info: stat) -> Bool {
+        info.st_uid == 0 && ((info.st_mode & S_IFMT) == S_IFLNK || access(path, W_OK) != 0)
     }
 
     private static func readLink(_ path: String) -> String? {

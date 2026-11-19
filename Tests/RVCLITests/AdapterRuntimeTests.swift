@@ -326,6 +326,60 @@ import RVPolicy
         #expect(AdapterRuntime.isRootProtected("/etc/hosts"))
     }
 
+    /// A link loop and a chain longer than `maxSymlinkHops` end the walk
+    /// (false), even when every entry would pass the ownership check.
+    @Test func rootProtectionStopsAtLinkLoopsAndTheHopLimit() throws {
+        let dir = try realTemporaryDirectory("rv-loop")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let trustAll: (String, stat) -> Bool = { _, _ in true }
+        let loopA = dir.appendingPathComponent("a").path
+        let loopB = dir.appendingPathComponent("b").path
+        try FileManager.default.createSymbolicLink(atPath: loopA, withDestinationPath: "b")
+        try FileManager.default.createSymbolicLink(atPath: loopB, withDestinationPath: "a")
+        #expect(AdapterRuntime.isRootProtected(loopA, trusts: trustAll) == false)
+
+        let target = dir.appendingPathComponent("python3")
+        try makeExecutable(target)
+        func chain(_ length: Int) throws -> String {
+            var next = target.lastPathComponent
+            for index in 0..<length {
+                let link = "\(length)-\(index)"
+                try FileManager.default.createSymbolicLink(
+                    atPath: dir.appendingPathComponent(link).path, withDestinationPath: next)
+                next = link
+            }
+            return dir.appendingPathComponent(next).path
+        }
+        #expect(AdapterRuntime.isRootProtected(target.path, trusts: trustAll), "the seam trusts the temp dir")
+        #expect(AdapterRuntime.isRootProtected(try chain(AdapterRuntime.maxSymlinkHops), trusts: trustAll))
+        #expect(AdapterRuntime.isRootProtected(try chain(AdapterRuntime.maxSymlinkHops + 1), trusts: trustAll) == false)
+    }
+
+    /// `/usr/bin/env` reads any word with `=` as an assignment, so an
+    /// interpreter path holding one would exec `-I` and fail open. Setup
+    /// never bakes such a path for the env form, and parse rejects it.
+    @Test func envFormRefusesAnInterpreterPathWithAnEqualsSign() throws {
+        #expect(AdapterCommand.launchable("/opt/a=b/python3", throughEnv: true) == false)
+        #expect(AdapterCommand.launchable("/opt/a=b/python3", throughEnv: false))
+        #expect(AdapterCommand.launchable("/opt/py/bin/python3", throughEnv: true))
+        #expect(AdapterCommand.parse("/usr/bin/env /opt/a=b/python3 -I -S /a/rv-guard.py") == nil)
+        #expect(AdapterCommand.parse("/usr/bin/env '/opt/a=b/python3' -I -S /a/rv-guard.py") == nil)
+        #expect(AdapterCommand.parse("/opt/a=b/python3 -I -S /a/rv-guard.py")?.interpreter == "/opt/a=b/python3")
+
+        let dir = try realTemporaryDirectory("rv-eq")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bad = dir.appendingPathComponent("a=b")
+        let good = dir.appendingPathComponent("good")
+        try makeExecutable(bad.appendingPathComponent("python3"), contents: "#!/bin/sh\nexit 0\n")
+        try makeExecutable(good.appendingPathComponent("python3"), contents: "#!/bin/sh\nexit 0\n")
+        let resolved = AdapterRuntime.resolveRunnable("python3", pathEntries: [bad.path, good.path])
+        if AdapterCommand.launchesThroughEnv {
+            #expect(resolved == good.appendingPathComponent("python3").path)
+        } else {
+            #expect(resolved == bad.appendingPathComponent("python3").path)
+        }
+    }
+
     /// macOS starts the interpreter through SIP-protected /usr/bin/env, so
     /// dyld strips DYLD_* before the Command Line Tools' Python runs.
     @Test func hookCommandRendersAndParsesTheEnvLauncherForm() throws {
@@ -351,12 +405,17 @@ import RVPolicy
         #expect(SettingsMergePolicy.parseCommand(rvCommand)?.adapterPath == "/a")
     }
 
-    /// The rendered command, run as a host runs it, loads no DYLD_* request
-    /// (skipped without the Command Line Tools' Python).
-    @Test func renderedHookCommandStripsDyldVariables() throws {
+    /// The rendered command, run as a host runs it, loads no DYLD_* request.
+    @Test(
+        .enabled(
+            if: AdapterCommand.launchesThroughEnv
+                && FileManager.default.isExecutableFile(atPath: AdapterRuntime.commandLineToolsDirectory + "/python3"),
+            "needs macOS and the Command Line Tools' python3"
+        )
+    )
+    func renderedHookCommandStripsDyldVariables() throws {
         #if os(macOS)
         let python = AdapterRuntime.commandLineToolsDirectory + "/python3"
-        guard FileManager.default.isExecutableFile(atPath: python) else { return }
         let dir = try realTemporaryDirectory("rv-dyld")
         defer { try? FileManager.default.removeItem(at: dir) }
         let adapter = dir.appendingPathComponent("noop.py")
@@ -417,6 +476,38 @@ import RVPolicy
             #expect(problems.map(\.id) == ["adapter-runtime-dyld-codex"])
             #expect(problems.first?.fix == "rerun rv setup")
             #expect(problems.first?.severity == .warn)
+        }
+    }
+
+    /// v0.2.2 wrote `RV_BINARY=<rv> <py> -I -S <adapter>` without env. On
+    /// Claude and Antigravity that is rv's own outdated hook: doctor warns
+    /// about DYLD, and setup rewrites it to the env form without --force.
+    @Test(arguments: [HookHost.claude, .antigravity])
+    func releasedBareFormIsOursButOutdated(_ host: HookHost) throws {
+        try withTempHome { home, layout, launchctl in
+            let (directory, file) = host == .claude
+                ? (layout.claudeDirectory, layout.claudeSettings)
+                : (layout.antigravityDirectory, layout.antigravityHooksJSON)
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            var environment = env(home: home, launchctl: launchctl)
+            environment.resolveInterpreter = { _ in "/opt/py/bin/python3" }
+            #expect(SetupRun.setup(environment).exitCode == 0)
+            let released = try String(contentsOfFile: file, encoding: .utf8)
+                .replacingOccurrences(of: AdapterCommand.envLauncher + " ", with: "")
+            #expect(released.contains(" /opt/py/bin/python3 -I -S "))
+            try released.write(toFile: file, atomically: true, encoding: .utf8)
+
+            let hosts = try HostAdapterInstallation.inspect(paths: layout, pathEntries: [], fileManager: .default)
+            #expect(hosts.installation(for: host).wouldWire, "ours, not a foreign guard")
+            var probes = DoctorInstallProbes(userID: getuid(), launchd: nil, trustManifest: .notApplicable)
+            probes.launchesThroughEnv = true
+            let problems = DoctorInstallChecks.adapterRuntime(
+                hosts: hosts, paths: layout, fileManager: .default, probes: probes)
+            #expect(problems.map(\.id) == ["adapter-runtime-dyld-\(host.rawValue)"])
+
+            #expect(SetupRun.setup(environment).exitCode == 0, "no --force")
+            let rewritten = try String(contentsOfFile: file, encoding: .utf8)
+            #expect(rewritten.contains(" \(adapterLauncher)/opt/py/bin/python3 -I -S "))
         }
     }
 
