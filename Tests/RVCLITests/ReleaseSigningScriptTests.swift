@@ -121,6 +121,10 @@ private func lines(_ text: String, containing needle: String) -> [String] {
     #expect(run.status == 0, "\(run.output)")
     #expect(run.stdout.contains("security create-keychain"))
     #expect(run.stdout.contains("security import <MACOS_CERT_P12 file>"))
+    // CI runners lack the Developer ID G2 intermediate; without it codesign
+    // reports "no identity found" for a correctly imported .p12.
+    #expect(run.stdout.contains("security import \(signScriptURL().deletingLastPathComponent().path)/certs/DeveloperIDG2CA.cer -k <temporary keychain>"))
+    #expect(run.stdout.contains("security find-identity -v -p codesigning <temporary keychain>"))
     #expect(run.stdout.contains("security delete-keychain"))
     for line in lines(run.stdout, containing: "codesign --force") {
         #expect(line.contains("--keychain <temporary keychain>"))

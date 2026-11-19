@@ -155,10 +155,13 @@ bytes_of() {
 
 content_length() {
   # Last Content-Length after redirects. Empty when unknown / missing.
-  curl -fsSIL "$1" 2>/dev/null \
+  # curl -f still prints a 404's headers (GitHub's carry Content-Length: 9)
+  # before it exits 22, so a failed probe must print nothing.
+  headers="$(curl -fsSIL "$1" 2>/dev/null)" || return 0
+  printf '%s\n' "$headers" \
     | tr -d '\r' \
     | awk 'tolower($1) == "content-length:" { print $2 }' \
-    | tail -n 1 || true
+    | tail -n 1
 }
 
 normalize_size() {
