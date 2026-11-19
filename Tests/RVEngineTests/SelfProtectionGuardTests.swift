@@ -253,10 +253,22 @@ struct SelfProtectionGuardTests {
         "rv host mode --json claude off",
         "bash -c 'rv host mode cursor off'",
         "rv-cli host mode codex observe",
+        // Workspace file transfer crosses the cage wall in either direction.
+        "rv workspace upload ~/.ssh/id_rsa",
+        "rv workspace upload --no-gitignore ~/.aws aws",
+        "rv workspace download out /tmp/out",
+        "rv workspace --workspace /p upload ~/.netrc",
+        "rv workspace $SUB ~/.netrc",
+        "bash -c 'rv workspace upload ~/.config/gh'",
+        "rv-cli workspace download . ~/copy",
+        "ls | xargs rv workspace upload",
     ]
 
     static let harmless: [String] = [
         "rv test 'ls'",
+        "rv workspace status",
+        "rv workspace leftovers",
+        "rv workspace --workspace /p status",
         "rv doctor",
         "rv packs list",
         "rv packs enable database.postgresql",

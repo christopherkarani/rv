@@ -14,6 +14,7 @@ struct Workspace: AsyncParsableCommand {
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
             WorkspaceRun.self, WorkspaceAgent.self, WorkspaceCustom.self,
             WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self, WorkspaceVMsCommand.self,
+            WorkspaceUpload.self, WorkspaceDownload.self,
         ]
     )
 }

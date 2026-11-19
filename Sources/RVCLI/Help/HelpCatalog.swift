@@ -186,6 +186,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
                 HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
                 HelpRow(name: "rv workspace vms [--json] [--limit N]", description: "List micro-VM runtime sessions, newest first"),
+                HelpRow(name: "rv workspace upload [--workspace <absolute-path>] [--no-gitignore] <host-path> [<workspace-path>]", description: "Copy host files into the live workspace; .gitignore-aware, never follows symlinks (asks for owner authentication)"),
+                HelpRow(name: "rv workspace download [--workspace <absolute-path>] [--no-gitignore] <workspace-path> <new-host-path>", description: "Copy workspace files to a new host path; refuses symlinks, special files and rv's own dirs (asks for owner authentication)"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),

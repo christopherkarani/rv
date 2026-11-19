@@ -645,7 +645,7 @@ enum MCPRun {
         auditOrLog(
             AuditEvent(
                 time: Date(), kind: .mcpApproval, decision: decision, subject: "\(request.server)/\(request.tool)",
-                reason: reason, source: "rv mcp approve", detail: detail),
+                reason: reason, source: MCPAuditVocabulary.approveSource, detail: detail),
             configDirectory: configDirectory)
     }
 
@@ -1289,7 +1289,7 @@ enum MCPRun {
                 auditOrLog(
                     AuditEvent(
                         time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
-                        reason: "secret refused at launch", source: "rv mcp serve",
+                        reason: MCPAuditVocabulary.secretRefusedAtLaunch, source: "rv mcp serve",
                         detail: ["server": server, "secret": secret]),
                     configDirectory: environment.configDirectory)
             }
@@ -1322,7 +1322,7 @@ enum MCPRun {
                     auditOrLog(
                         AuditEvent(
                             time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
-                            reason: "secret refused at relaunch", source: "rv mcp serve",
+                            reason: MCPAuditVocabulary.secretRefusedAtRelaunch, source: "rv mcp serve",
                             detail: ["server": server, "secret": secret]),
                         configDirectory: environment.configDirectory)
                 }
