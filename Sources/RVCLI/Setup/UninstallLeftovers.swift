@@ -97,9 +97,21 @@ struct UninstallLeftovers: Equatable, Sendable {
             let commands = removalCommands
             if purged {
                 text += commands.isEmpty ? "" : "rv uninstall: remove the rest by hand:\n"
-            } else {
-                text += "rv uninstall: to remove all of it, run rv uninstall --purge instead next time"
-                    + (commands.isEmpty ? ".\n" : "; with rv gone, by hand:\n")
+            } else if commands.isEmpty == false {
+                // --purge refuses what is kept for a symlink and cannot find
+                // values while secrets.json is unreadable: do not promise it.
+                var unreached: [String] = []
+                if refusedPaths.isEmpty == false {
+                    unreached.append("the paths kept for a symlink")
+                }
+                if secretsUnreadable != nil {
+                    unreached.append("the secret values while secrets.json cannot be read")
+                }
+                let scope = unreached.isEmpty
+                    ? "all of it"
+                    : "the rest (not " + unreached.joined(separator: ", nor ") + ")"
+                text += "rv uninstall: to remove \(scope), run rv uninstall --purge instead next time; "
+                    + "with rv gone, by hand:\n"
             }
             text += commands.map { "  \($0)\n" }.joined()
         }
@@ -173,7 +185,11 @@ extension SetupRun {
     /// server scratch caches and, on Linux, rvd's runtime socket directory.
     static func ownedDataDirectories(layout: OwnedPaths, env: SetupEnvironment) -> [String] {
         let home = layout.home.rawValue
-        var paths = [(RVDLogFile.path(home: home) as NSString).deletingLastPathComponent]
+        // Cut at the last "/" by hand: NSString would collapse a `//` in
+        // HOME's spelling, and every target must start with HOME as given
+        // so `purgeRefusal` judges it under HOME.
+        let log = RVDLogFile.path(home: home)
+        var paths = [log.lastIndex(of: "/").map { String(log[..<$0]) } ?? log]
         #if os(macOS)
         paths.append(home + "/Library/Caches/rv-mcp")
         #else
@@ -227,18 +243,21 @@ extension SetupRun {
         guard info.st_uid == getuid() else { return "it is owned by another user" }
         let parent = (path as NSString).deletingLastPathComponent
         let expected: String?
-        if path.hasPrefix(home + "/") {
+        // Paths compare as bytes: Swift's `==` and `hasPrefix` treat NFC and
+        // NFD spellings of a name as equal, and on Linux they are two paths.
+        if path.utf8.starts(with: (home + "/").utf8) {
             // The part below HOME, cut from the same raw string HOME was
             // prefixed onto, so HOME's own spelling (`/home/u/`, `/home//u`)
             // cannot shift it.
-            let below = path.dropFirst(home.count).split(separator: "/").map(String.init)
+            let below = String(decoding: path.utf8.dropFirst(home.utf8.count), as: UTF8.self)
+                .split(separator: "/").map(String.init)
             expected = below.contains("..") || below.contains(".")
                 ? nil
                 : resolvedPath(home).map { $0 + below.dropLast().map { "/" + $0 }.joined() }
         } else {
             expected = parent
         }
-        guard let expected, resolvedPath(parent) == expected else {
+        guard let expected, let resolved = resolvedPath(parent), resolved.utf8.elementsEqual(expected.utf8) else {
             return "a folder above it is a symlink or resolves elsewhere: it resolves to "
                 + (resolvedPath(path) ?? "an unresolvable path")
         }
