@@ -61,7 +61,15 @@ struct UninstallLeftovers: Equatable, Sendable {
                     + configEntries.map { DisplayedText.field($0) }.joined(separator: ", "))
         }
         lines += otherPaths.map { DisplayedText.field($0) }
-        lines += refusedPaths.map { "\(DisplayedText.field($0.path)): not entered, \(DisplayedText.field($0.reason))" }
+        // A plain uninstall never enters these: it keeps them like the rest,
+        // but no by-hand command goes through a link.
+        lines += refusedPaths.map { refused in
+            let path = DisplayedText.field(refused.path)
+            let reason = DisplayedText.field(refused.reason)
+            return purged
+                ? "\(path): not entered, \(reason)"
+                : "\(path): kept; \(reason), so no command here removes it"
+        }
         if storedSecrets.isEmpty == false {
             let count = storedSecrets.count == 1 ? "1 secret value" : "\(storedSecrets.count) secret values"
             let lead = purged ? (secretDeletesAttempted ? "could not delete " : "did not delete ") + count : count
@@ -86,11 +94,14 @@ struct UninstallLeftovers: Equatable, Sendable {
                 ? "rv uninstall --purge could not remove all of rv's data; still there:\n"
                 : "rv uninstall: kept your rv data, so a reinstall picks it up:\n"
             text += kept.map { "  \($0)\n" }.joined()
-            text += purged
-                ? "rv uninstall: remove the rest by hand:\n"
-                : "rv uninstall: to remove all of it, run rv uninstall --purge instead next time; "
-                    + "with rv gone, by hand:\n"
-            text += removalCommands.map { "  \($0)\n" }.joined()
+            let commands = removalCommands
+            if purged {
+                text += commands.isEmpty ? "" : "rv uninstall: remove the rest by hand:\n"
+            } else {
+                text += "rv uninstall: to remove all of it, run rv uninstall --purge instead next time"
+                    + (commands.isEmpty ? ".\n" : "; with rv gone, by hand:\n")
+            }
+            text += commands.map { "  \($0)\n" }.joined()
         }
         if custodianSystemPaths.isEmpty == false {
             text += "rv uninstall: kept the MCP custodian's system files ("
@@ -217,12 +228,19 @@ extension SetupRun {
         let parent = (path as NSString).deletingLastPathComponent
         let expected: String?
         if path.hasPrefix(home + "/") {
-            expected = resolvedPath(home).map { $0 + String(parent.dropFirst(home.count)) }
+            // The part below HOME, cut from the same raw string HOME was
+            // prefixed onto, so HOME's own spelling (`/home/u/`, `/home//u`)
+            // cannot shift it.
+            let below = path.dropFirst(home.count).split(separator: "/").map(String.init)
+            expected = below.contains("..") || below.contains(".")
+                ? nil
+                : resolvedPath(home).map { $0 + below.dropLast().map { "/" + $0 }.joined() }
         } else {
             expected = parent
         }
         guard let expected, resolvedPath(parent) == expected else {
-            return "a folder above it is a symlink or resolves elsewhere"
+            return "a folder above it is a symlink or resolves elsewhere: it resolves to "
+                + (resolvedPath(path) ?? "an unresolvable path")
         }
         return nil
     }

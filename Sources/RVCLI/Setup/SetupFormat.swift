@@ -118,7 +118,17 @@ enum SetupFormat {
         case .robot:
             return (uninstallRobot(report), false)
         case .pretty(let palette):
-            let frames = uninstallCeremonyFrames(report.closer)
+            var frames = uninstallCeremonyFrames(report.closer)
+            if report.incomplete {
+                // The closer would say complete (or clean); stderr says what is left.
+                frames = frames.map { frame in
+                    var frame = frame
+                    if frame.closerLines.isEmpty == false {
+                        frame.closerLines = ["Uninstall incomplete; see below"]
+                    }
+                    return frame
+                }
+            }
             return playCeremony(
                 frames: frames,
                 palette: palette,
