@@ -269,10 +269,11 @@ public enum WorkspaceHosts {
             }
             return .failure(.stillStarting)
         }
-        if stopsSpawnedHost(error), seams.terminate(child) == false {
+        guard stopsSpawnedHost(error) else { return result }
+        if seams.terminate(child) == false {
             seams.report("rv: the workspace host this start launched (pid \(child)) did not exit after SIGKILL")
         }
-        return result
+        return error == .timedOut ? .failure(.timedOutAndStopped) : result
     }
 
     /// Failures that leave the spawned host running with nobody able to use
@@ -302,7 +303,10 @@ public enum WorkspaceHosts {
         // The readiness clock belongs to one endpoint seen continuously live
         // and unanswered; any other state or a new endpoint restarts it.
         // While it runs it outlasts the overall deadline: the failed-probe
-        // branch ends the loop as `.notAnswering` once it passes.
+        // branch ends the loop as `.notAnswering` once it passes. It never
+        // runs past `hardStop`, so endpoints that change on every poll
+        // cannot keep re-arming it.
+        let hardStop = deadline.addingTimeInterval(readinessTimeout)
         var answerDeadline: Date?
         var answerEndpoint: WorkspaceEndpoint?
         while seams.now() < deadline || answerDeadline != nil {
@@ -346,7 +350,7 @@ public enum WorkspaceHosts {
                     // host lacks the workspaceHost role (or refuses ours).
                     return .failure(.control(.unauthorizedClient))
                 case .failure:
-                    let limit = answerDeadline ?? seams.now().addingTimeInterval(readinessTimeout)
+                    let limit = min(answerDeadline ?? seams.now().addingTimeInterval(readinessTimeout), hardStop)
                     answerDeadline = limit
                     answerEndpoint = endpoint
                     if seams.now() >= limit {
@@ -366,7 +370,9 @@ public enum WorkspaceHosts {
                 }
                 fallthrough
             case .orphaned:
-                if spawned == false {
+                // Past the overall deadline (a readiness clock still
+                // running) a vanished host is not replaced.
+                if spawned == false, seams.now() < deadline {
                     switch seams.spawn(executable, project) {
                     case .failure(let error):
                         return .failure(error)

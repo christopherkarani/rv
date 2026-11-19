@@ -854,8 +854,12 @@ enum WorkspaceCommandRun {
             return "the workspace host was refused: \(why); " + after
         case .notAnswering:
             return "the workspace host did not answer within \(Int(WorkspaceHosts.readinessTimeout)) s; " + after
+        case .timedOutAndStopped:
+            return "workspace host did not become ready in time; the host this start launched was stopped; "
+                + "run 'rv doctor', and 'rv workspace leftovers' for anything it left"
         case .timedOut:
-            return "workspace host did not become ready in time; " + after
+            return "workspace host did not become ready in time; run 'rv workspace status' to check it, "
+                + "or 'rv doctor' if it persists"
         case .stillStarting:
             return "the workspace host this start launched is still mounting or recovering; it keeps running "
                 + "in the background — run 'rv workspace status' to see when it is ready, then "
@@ -1032,6 +1036,8 @@ enum WorkspaceCommandRun {
             "the workspace host did not answer"
         case .stillStarting:
             "the workspace host is still mounting or recovering"
+        case .timedOutAndStopped:
+            "workspace host did not become ready and was stopped"
         case .hostExited:
             "workspace host failed"
         case .control(let failure):

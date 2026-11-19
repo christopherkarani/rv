@@ -133,10 +133,44 @@ import Testing
     func timeoutStopsOurHostInEveryOtherState(_ last: WorkspaceAttachment) {
         // `.live` answers "closing" (describe says not active): never ready.
         let script = Script(attachments: [.absent, .starting(nil), last], probes: [.success(false)])
-        #expect(Self.ensure(script, timeout: 2) == .failure(.timedOut))
+        #expect(Self.ensure(script, timeout: 2) == .failure(.timedOutAndStopped))
         #expect(script.spawned == [4242])
         #expect(script.terminated == [4242])
         #expect(script.recorded.isEmpty)
+    }
+
+    /// A start that launched nothing reports a plain timeout, so its text
+    /// never claims a host was stopped.
+    @Test func timeoutWithoutASpawnIsPlainTimedOut() {
+        let script = Script(attachments: [.starting(nil), .staleEndpoint])
+        #expect(Self.ensure(script, timeout: 2) == .failure(.timedOut))
+        #expect(script.spawned.isEmpty)
+        #expect(script.terminated.isEmpty)
+    }
+
+    /// A different endpoint on every poll re-arms the readiness clock, but
+    /// never past the overall deadline plus one readiness window.
+    @Test func flappingEndpointsStillEndByTheHardStop() {
+        let flapping = (0..<1_000).map { index -> WorkspaceAttachment in
+            var next = Self.endpoint
+            next.host = WorkspaceHostID(rawValue: UUID())
+            next.socketInode = UInt64(10 + index)
+            return .live(next)
+        }
+        let script = Script(attachments: flapping, probes: [.failure(.disconnected)])
+        let started = script.now
+        #expect(Self.ensure(script, timeout: 2) == .failure(.notAnswering))
+        #expect(script.now.timeIntervalSince(started) <= 2 + WorkspaceHosts.readinessTimeout + 0.1)
+    }
+
+    /// Past the overall deadline (kept alive only by a readiness clock) a
+    /// vanished host is not replaced by a fresh spawn.
+    @Test func noSpawnAfterTheOverallDeadline() {
+        let threeSeconds = Array(repeating: WorkspaceAttachment.live(Self.endpoint), count: 60)
+        let script = Script(attachments: threeSeconds + [.absent], probes: [.failure(.disconnected)])
+        #expect(Self.ensure(script, timeout: 2) == .failure(.timedOut))
+        #expect(script.spawned.isEmpty)
+        #expect(script.terminated.isEmpty)
     }
 
     /// A host that published its endpoint always gets the full readiness

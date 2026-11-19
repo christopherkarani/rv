@@ -52,10 +52,18 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
 /// At the overall timeout `ensure` stops its host unless it was still
 /// mounting or recovering; each outcome has its own, accurate text.
 @Test func startTimeoutSaysTheLaunchedHostWasStopped() {
+    let text = WorkspaceCommandRun.ensureFailureText(.timedOutAndStopped, hostTrustReason: nil)
+    #expect(text.hasPrefix("workspace host did not become ready"))
+    #expect(text.contains("the host this start launched was stopped"))
+    #expect(text.contains("rv workspace leftovers"))
+}
+
+/// A start that launched nothing must not claim it stopped a host.
+@Test func startTimeoutWithoutALaunchClaimsNoStop() {
     let text = WorkspaceCommandRun.ensureFailureText(.timedOut, hostTrustReason: nil)
     #expect(text.hasPrefix("workspace host did not become ready"))
-    #expect(text.contains("any host this start launched was stopped"))
-    #expect(text.contains("rv workspace leftovers"))
+    #expect(text.contains("stopped") == false)
+    #expect(text.contains("rv workspace status"))
 }
 
 @Test func startStillStartingSaysTheHostKeepsRunning() {
