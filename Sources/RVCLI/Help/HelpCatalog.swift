@@ -175,10 +175,10 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv workspace start [--workspace <absolute-path>]", description: "Waits at most 15 s for a started host to answer; on failure says why and stops the host it launched"),
+                HelpRow(name: "rv workspace start [--workspace <absolute-path>]", description: "Mount or recovery can take up to 90 s; once the host publishes its endpoint it must answer within 15 s. A host refused by peer trust or silent after publishing is stopped; one still mounting or recovering keeps running"),
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace close [--workspace <absolute-path>]", description: "If the host does not answer, stops the host rv launched for this project (only when that pid still runs rv's rv-workspace-host); the volume and saved changes are kept"),
+                HelpRow(name: "rv workspace close [--workspace <absolute-path>]", description: "If the host is refused by peer trust or its endpoint is stale, stops the host rv launched for this project (only when that pid still runs rv's rv-workspace-host as your own session leader); a busy host is left running; the volume and saved changes are kept"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] [--timeout <duration>] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
@@ -204,7 +204,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Exit codes", rows: [
                 HelpRow(name: "0", description: "Done; for status, the host answered or the printed state needs no host"),
-                HelpRow(name: "1", description: "status: the saved endpoint is stale or its host did not answer"),
+                HelpRow(name: "1", description: "status: the saved endpoint is stale, the host was refused (peer trust), or it is not answering"),
                 HelpRow(name: "64", description: "The command was refused or failed; the reason is on stderr"),
             ]),
         ],
