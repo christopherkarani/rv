@@ -396,6 +396,55 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         }
     }
 
+    /// HOME reached through a symlink and spelled with an extra slash: every
+    /// target under it, rvd's log dir included, takes the under-HOME rule.
+    @Test(arguments: [HomeSpelling.trailingSlash, .doubledSlash])
+    func purgeAcceptsALinkedHomeSpelledWithExtraSlashes(_ spelling: HomeSpelling) throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            let logs = home.appendingPathComponent(platformLogDirectory).path
+            let cache = home.appendingPathComponent(platformMCPCacheDirectory).path
+            try touch(logs + "/rvd.log")
+            try touch(cache + "/server/scratch")
+            let link = FileManager.default.temporaryDirectory
+                .appendingPathComponent("rv-home-link-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: home.path)
+            defer { try? FileManager.default.removeItem(atPath: link.path) }
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.home = testHomeDirectory(spelling.spell(link))
+            environment.secretKeychain = store.writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.sorted() == ["rv.secrets/GH_TOKEN", "rv.secrets/NPM_TOKEN"])
+            #expect(exists(layout.configDirectory) == false)
+            #expect(exists(logs) == false)
+            #expect(exists(cache) == false)
+        }
+    }
+
+    #if os(Linux)
+    /// Resolved paths compare by bytes: on Linux an NFC and an NFD spelling
+    /// of a name are two directories, though Swift's `==` calls them equal.
+    @Test func purgeRefusalComparesResolvedPathsByBytes() throws {
+        try withTempHome { home, _, _ in
+            let root = try #require(realPath(home.path))
+            let nfc = root + "/caf\u{E9}"
+            let nfd = root + "/cafe\u{301}"
+            #expect(mkdir(nfd, 0o700) == 0)
+            #expect(mkdir(nfd + "/rv", 0o700) == 0)
+            #expect(symlink(nfd, nfc) == 0)
+
+            let refusal = SetupRun.purgeRefusal(nfc + "/rv", home: root, files: FileOps(fileManager: .default))
+
+            #expect(refusal != nil, "a parent resolving to a differently spelled sibling was accepted")
+        }
+    }
+    #endif
+
     /// A link two levels up (`~/.local` for `~/.local/state/rv`) is refused
     /// too, and the note names where the path really is.
     @Test func purgeDoesNotFollowASymlinkedGrandparentAndNamesWhereItResolves() throws {
@@ -463,6 +512,8 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
             #expect(outcome.stderr.contains(cache + ": kept"), "\(outcome.stderr)")
             #expect(outcome.stderr.contains("decoy-cache/rv-mcp"), "\(outcome.stderr)")
             #expect(outcome.stderr.contains("rm -rf " + cache) == false, "\(outcome.stderr)")
+            // --purge would refuse it too, so nothing may promise it removes all of it.
+            #expect(outcome.stderr.contains("all of it") == false, "\(outcome.stderr)")
         }
     }
 
