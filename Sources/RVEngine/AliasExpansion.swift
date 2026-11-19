@@ -72,7 +72,7 @@ func expandAliases(_ command: String) -> AliasExpansion {
 /// subcommand) or an `unverifiable` alias construct. `gateAliases` asks or
 /// denies on these; this is the same reading for a caller that must see
 /// it past an earlier deny. Text only: no git config is read.
-public func invocationIsOpaque(_ command: ShellCommand) -> Bool {
+package func invocationIsOpaque(_ command: ShellCommand) -> Bool {
     let analysis = expandAliases(command.rawValue)
     return analysis.unresolved || analysis.unverifiable
 }

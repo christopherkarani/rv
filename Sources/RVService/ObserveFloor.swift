@@ -30,7 +30,7 @@ enum ObserveFloor {
     /// File door: the one path's verdict says it.
     static func holds(_ result: EvaluationResult) -> Bool {
         switch result.decision {
-        case .indeterminate(.selfProtection):
+        case .indeterminate(.selfProtection), .indeterminate(.observeUnanalyzable):
             true
         case .deny(let deny):
             ruleIDs.contains(deny.ruleID) || hitsFloorTarget(result.analysis)
@@ -102,41 +102,44 @@ enum ObserveFloor {
         return RVWiringPaths.matches(path, home: home.rawValue)
     }
 
-    /// Observe only: nil unless the command stops rvd, writes rv's
-    /// install, or runs something rv cannot read (`runsUnanalyzable`). Then
-    /// an allow becomes "run it in Terminal"; anything else (a deny, an
-    /// indeterminate) is kept, so the floor never weakens.
+    /// Observe only: nil unless the command stops rvd or writes rv's
+    /// install. Then an allow becomes "run it in Terminal"; anything else
+    /// (a deny, an indeterminate) is kept, so the floor never weakens.
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard runsUnanalyzable(result, command: command)
-            || RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
+        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
             || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
         return floored(result)
     }
 
+    /// Observe only, after the other floors: a command that runs a program
+    /// rv cannot see (`runsUnanalyzable`) is sent to Terminal under its own
+    /// rule id, whatever its verdict. Observe would have let it run, so
+    /// this only ever raises an observed allow to "run it in Terminal";
+    /// it never turns one into a hard deny.
+    static func unanalyzableFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult? {
+        guard runsUnanalyzable(result, command: command) else { return nil }
+        return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
+    }
+
     /// The stop and install floors read the command's text, so an encoded
     /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
-    /// passes them, stops rvd, and leaves every later call unchecked. What
-    /// the pipeline could not unwrap or resolve may be exactly that, so it
-    /// holds: an unwrap-limited analysis or `builtin.action:unwrap-*` deny,
-    /// or the indeterminate the pipeline gives a command it cannot see
-    /// into (a dynamic `eval`, a variable head, or one too large or too
-    /// costly to analyze). Enforce already refuses every one of these.
-    /// The program check (`invocationIsOpaque`) is read again here because
-    /// an earlier pack deny hides it: `$(echo <b64> | base64 -d)` reports
-    /// only an out-of-repo write, which observe would let run.
+    /// passes them, stops rvd, and leaves every later call unchecked. So a
+    /// command holds when what rv cannot read can take a command position
+    /// (`runsOpaqueProgram`: a dynamic command word, decoded text reaching
+    /// a shell or interpreter, a runner whose verb is a shell), when its
+    /// program or git subcommand is unresolved (`invocationIsOpaque`: a
+    /// dynamic `eval`, a variable head, a git alias or extension), or when
+    /// it is too large or too costly to analyze. A literal verb with
+    /// dynamic arguments (`xargs rm`) is not floored here; the lexical
+    /// floors above still read its text. The program checks read the
+    /// command again because an earlier pack deny hides them:
+    /// `$(echo <b64> | base64 -d)` reports only an out-of-repo write.
     static func runsUnanalyzable(_ result: EvaluationResult, command: ShellCommand) -> Bool {
-        if result.analysis.innermost == .unwrapLimited || invocationIsOpaque(command) { return true }
-        switch result.decision {
-        case .deny(let deny):
-            return deny.ruleID.pack == BuiltinRule.unwrapLimited.ruleID.pack
-                && deny.ruleID.pattern.hasPrefix("unwrap-")
-        case .indeterminate(let reason):
-            return unanalyzableReasons.contains(reason)
-        case .allow:
-            return false
-        }
+        if invocationIsOpaque(command) || runsOpaqueProgram(command) { return true }
+        if case .indeterminate(let reason) = result.decision { return unanalyzableReasons.contains(reason) }
+        return false
     }
 
     private static let unanalyzableReasons: Set<IndeterminateReason> = [
