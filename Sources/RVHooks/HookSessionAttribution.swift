@@ -5,6 +5,6 @@ import RVDomain
 /// writes (blocks ledger, audit chain) can name the agent session that
 /// tripped the rule. Never carries command text; unbound (nil) outside a
 /// hook request.
-public enum HookSessionAttribution {
-    @TaskLocal public static var current: SessionID?
+package enum HookSessionAttribution {
+    @TaskLocal package static var current: SessionID?
 }

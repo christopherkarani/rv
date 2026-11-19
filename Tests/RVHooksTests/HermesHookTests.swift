@@ -127,7 +127,9 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
     #expect(request.session == nil)
 }
 
-@Test func hermesDecode_taskIdWhenSessionIdMissing() {
+/// A task id is not the session: no approval or block row may be keyed
+/// by it.
+@Test func hermesDecode_taskIdIsNotASession() {
     let stdin = """
     {"toolName":"terminal","taskId":"task_main","args":{"command":"git status"}}
     """
@@ -135,7 +137,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         Issue.record("expected .request for taskId")
         return
     }
-    #expect(request.session == SessionID(validating: "task_main"))
+    #expect(request.session == nil)
 }
 
 @Test func hermesDecode_ignoresHostAskSpend() {

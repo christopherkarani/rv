@@ -310,7 +310,9 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     #expect(request.session == nil)
 }
 
-@Test func codexDecode_turnIdWhenSessionIdMissing() {
+/// A turn id names one turn, not the session: no approval or block row
+/// may be keyed by it.
+@Test func codexDecode_turnIdIsNotASession() {
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"Bash","turn_id":"turn_main","tool_input":{"command":"git status"}}
     """
@@ -318,7 +320,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         Issue.record("expected .request for turn_id")
         return
     }
-    #expect(request.session == SessionID(validating: "turn_main"))
+    #expect(request.session == nil)
 }
 
 @Test func codexHookRequest_emptySessionStringIsNil() {
