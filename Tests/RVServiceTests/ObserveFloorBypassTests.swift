@@ -161,6 +161,8 @@ private let literalFeedRows: [String] = [
 @Suite("Observe floor bypasses")
 struct ObserveFloorBypassTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
+    /// Regressions run far past this (the uncharged walk over 674 s, the quadratic one ~250 s at 1500 lines); 60 s survives a starved CI pool.
+    private static let wallClockBound = Duration.seconds(60)
 
     // MARK: F1
 
@@ -333,7 +335,7 @@ struct ObserveFloorBypassTests {
         #expect(scan?.exhausted == true)
         #expect(scan?.opaque == true)
         #expect((scan?.commands ?? .max) <= 4097)
-        #expect(elapsed < .seconds(10), "\(elapsed)")
+        #expect(elapsed < Self.wallClockBound, "\(elapsed)")
     }
 
     /// Thousands of interpreters fed one large literal heredoc: each reader
@@ -362,8 +364,8 @@ struct ObserveFloorBypassTests {
         #expect(unanalyzable?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
         // Debug build: about 0.35 s each; loose so a starved CI runner does
         // not flake, while the uncharged walk (over ten minutes) fails.
-        #expect(lifecycleTime < .seconds(10), "\(timing)")
-        #expect(unanalyzableTime < .seconds(10), "\(timing)")
+        #expect(lifecycleTime < Self.wallClockBound, "\(timing)")
+        #expect(unanalyzableTime < Self.wallClockBound, "\(timing)")
     }
 
     /// Fed texts are deduped byte for byte. `==` on String is canonical
@@ -408,8 +410,8 @@ struct ObserveFloorBypassTests {
         #expect(scanOpaqueProgram(command).exhausted == false)
         #expect(lifecycle == nil, "\(timing)")
         #expect(unanalyzable == nil, "\(timing)")
-        #expect(lifecycleTime < .seconds(10), "\(timing)")
-        #expect(unanalyzableTime < .seconds(10), "\(timing)")
+        #expect(lifecycleTime < Self.wallClockBound, "\(timing)")
+        #expect(unanalyzableTime < Self.wallClockBound, "\(timing)")
     }
 
     /// Past `readingCap` readings the lifecycle floor reads nothing and
