@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVLaya
 import RVPacks
 import RVPolicy
 
@@ -62,9 +63,11 @@ public enum DoctorSnapshotBuilder {
         switch JudgeRuntime.bundleHealth(home: home) {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
+            let base = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            let notes = coreMLNotes(CoreMLGuard.current.status)
             return DoctorCheck(
-                id: .judge, status: .ok,
-                message: "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+                id: .judge, status: notes.isEmpty ? .ok : .warning,
+                message: ([base] + notes).joined(separator: "; ")
             )
             #else
             return DoctorCheck(
@@ -83,6 +86,20 @@ public enum DoctorSnapshotBuilder {
                 message: "no \(engine.rawValue) bundle installed at \(expected?.path ?? engine.rawValue); packs only (guard \(mode.rawValue))"
             )
         }
+    }
+
+    /// Degraded Core ML states doctor names: CPU-only after crashes, and a
+    /// disk too full for the judge to load or predict (calls go to review).
+    static func coreMLNotes(_ status: CoreMLGuard.Status) -> [String] {
+        var notes: [String] = []
+        if status.units == .cpuOnly {
+            let until = status.cpuOnlyUntil.map { " until \($0.formatted(.iso8601))" } ?? ""
+            notes.append("CPU only\(until) after repeated Core ML crashes")
+        }
+        if status.diskLow {
+            notes.append("disk nearly full; judge disabled until space is freed")
+        }
+        return notes
     }
 
     private static var dayOnePacksLoadedMessage: String {

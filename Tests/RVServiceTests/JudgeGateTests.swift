@@ -367,6 +367,29 @@ struct JudgeFailClosedReasonTests {
         #expect(note == "prediction-failed")
     }
 
+    @Test("refused (disk nearly full) fails closed with its own reason")
+    func refusedReason() throws {
+        let why = CoreMLDiskSpaceError(availableBytes: 1 << 30, requiredBytes: 2 << 30).reason
+        let (deny, note) = Self.failClosedDeny(.refused(why))
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("disk nearly full"))
+        #expect(reason.contains("judge disabled until space is freed"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-refused")
+    }
+
+    @Test("a refused run reads as review, never as an unscored allow")
+    func refusedReadsAsReview() {
+        let allow = EvaluationResult(
+            outcome: .plain, matchingView: "npm install left-pad", analysis: .unknown)
+        let reading = JudgeRuntime.read(.refused("disk"), over: allow, provenance: .unknown)
+        #expect(reading.action == .review)
+        guard case .deny = reading.outcome.decision else {
+            Issue.record("refused must raise to review, got \(reading.outcome.decision)")
+            return
+        }
+    }
+
     @Test("the three reasons are distinct")
     func reasonsDistinct() {
         let reasons = [JudgeRuntime.JudgeRun.warming, .busy, .failed].map {

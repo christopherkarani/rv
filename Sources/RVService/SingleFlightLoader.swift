@@ -20,8 +20,10 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
         case ready(Value)
         /// This caller waited on the load that failed.
         case failed(any Error)
-        /// An earlier load of this key at this stamp failed.
-        case cachedFailure
+        /// An earlier load of this key at this stamp failed, with this error
+        /// (kept so a refusal that must fail closed is not read as another
+        /// kind of failure).
+        case cachedFailure(any Error)
         /// The load is still running past the caller's wait.
         case warming
     }
@@ -54,7 +56,7 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
         case empty
         case loading(key: URL, flight: Flight)
         case loaded(key: URL, value: Value)
-        case failed(key: URL, stamp: TimeInterval, at: ContinuousClock.Instant)
+        case failed(key: URL, stamp: TimeInterval, at: ContinuousClock.Instant, error: any Error)
     }
 
     private enum Step {
@@ -117,10 +119,10 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
             switch slot {
             case .loaded(let loadedKey, let value) where loadedKey == key:
                 return .done(.ready(value))
-            case .failed(let failedKey, let failedStamp, let failedAt)
+            case .failed(let failedKey, let failedStamp, let failedAt, let error)
                 where failedKey == key && failedStamp == stamp
                     && current < failedAt.advanced(by: retryFailuresAfter):
-                return .done(.cachedFailure)
+                return .done(.cachedFailure(error))
             case .loading(let loadingKey, let flight) where loadingKey == key:
                 return .join(flight)
             default:
@@ -149,7 +151,7 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
                 guard case .loading(_, let current) = slot, current === flight else { return }
                 switch result {
                 case .success(let value): slot = .loaded(key: key, value: value)
-                case .failure: slot = .failed(key: key, stamp: stamp, at: finishedAt)
+                case .failure(let error): slot = .failed(key: key, stamp: stamp, at: finishedAt, error: error)
                 }
             }
             flight.finish(result)

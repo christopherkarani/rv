@@ -392,7 +392,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy:
+        case .failed, .warming, .busy, .refused:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -433,12 +433,16 @@ public enum JudgeRuntime {
     /// `busy` is a request `JudgeAdmission` turned away (queue full, or its
     /// hook deadline passed while waiting for the model). Review for the
     /// same reason: flooding the judge must not buy an unjudged allow.
+    ///
+    /// `refused` is a judge that would not touch Core ML (cache volume nearly
+    /// full). Review, never packs-only: filling the disk must not buy one.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
         case warming
         case busy
+        case refused(String)
     }
 
     static func runJudge(
@@ -456,17 +460,21 @@ public enum JudgeRuntime {
                 let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
                 return admitted {
                     do { return .verdict(try judge.judge(command)) }
+                    catch let refusal as CoreMLDiskSpaceError { return .refused(refusal.reason) }
                     catch { return .failed }
                 }
             case .ft:
                 let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
                 return admitted {
                     do { return .verdict(try judge.judge(command, context: context)) }
+                    catch let refusal as CoreMLDiskSpaceError { return .refused(refusal.reason) }
                     catch { return .failed }
                 }
             }
         } catch JudgeLoadError.warming {
             return .warming
+        } catch let refusal as CoreMLDiskSpaceError {
+            return .refused(refusal.reason)
         } catch let error as LayaError {
             switch error {
             case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
@@ -505,6 +513,9 @@ public enum JudgeRuntime {
         case .busy:
             note = "judge-busy"
             reason = "Laya judge queue is full; retry shortly."
+        case .refused(let why):
+            note = "judge-refused"
+            reason = why
         case .failed, .unavailable, .verdict:
             note = "prediction-failed"
             reason = unavailableReason
@@ -768,7 +779,7 @@ final class JudgeSlot: Sendable {
         switch outcome {
         case .ready(let judge): return judge
         case .failed(let error): throw error
-        case .cachedFailure: throw LayaError.modelUnavailable("cached load failure")
+        case .cachedFailure(let error): throw error
         case .warming: throw JudgeLoadError.warming
         }
     }
