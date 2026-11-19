@@ -338,7 +338,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, log: GatedEffect.JudgeLogRow) {
+    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -346,10 +346,12 @@ public enum JudgeRuntime {
         var reading = JudgeReading(
             outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
         )
-        // The would-be verdict takes the packs-only floor exactly where
-        // `apply` does (no bundle, or a judge that is unavailable); the log
-        // row keeps the unfloored reading, as `apply`'s does.
-        var wouldBe = result
+        // `floorsWouldBe` marks where `apply` would take the packs-only
+        // floor (no bundle, or a judge that is unavailable). The caller that
+        // shows the would-be applies it; `apply` and a plain peek discard
+        // the would-be, so they skip the parse. The log row keeps the
+        // unfloored reading, as `apply`'s does.
+        var floorsWouldBe = false
         if !safe, case .allow = result.decision {
             if let bundle = selection.bundle {
                 let run = judge.judge(JudgeCall(
@@ -357,15 +359,12 @@ public enum JudgeRuntime {
                     engine: selection.engine, bundle: bundle
                 ))
                 reading = read(run, over: result, provenance: provenance)
-                wouldBe = reading.outcome
-                if case .unavailable = run {
-                    wouldBe = packsOnlyFloor(reading.outcome, command: command)
-                }
+                if case .unavailable = run { floorsWouldBe = true }
             } else {
-                wouldBe = packsOnlyFloor(result, command: command)
+                floorsWouldBe = true
             }
         }
-        return (result.observedAllow, wouldBe, logRow(
+        return (result.observedAllow, reading.outcome, floorsWouldBe, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek

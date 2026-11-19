@@ -47,8 +47,8 @@ struct ObservePeekVerdictTests {
         let verdict = await Self.peek("git reset --hard", home: home)
         #expect(verdict.result.decision == .allow)
         #expect(verdict.result.outcome == .plain)
-        guard case .deny(let deny, let matched)? = verdict.observedWouldBe?.outcome else {
-            Issue.record("expected a would-be deny, got \(String(describing: verdict.observedWouldBe))")
+        guard case .deny(let deny, let matched)? = verdict.wouldBe?.result.outcome else {
+            Issue.record("expected a would-be deny, got \(String(describing: verdict.wouldBe))")
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
@@ -62,7 +62,7 @@ struct ObservePeekVerdictTests {
         defer { remove(home) }
         let verdict = await Self.peek("git status", home: home)
         #expect(verdict.result.decision == .allow)
-        #expect(verdict.observedWouldBe?.decision == .allow)
+        #expect(verdict.wouldBe?.result.decision == .allow)
         #expect(!verdict.observeOverrode)
     }
 
@@ -75,7 +75,7 @@ struct ObservePeekVerdictTests {
             Issue.record("enforce must deny, got \(verdict.result.decision)")
             return
         }
-        #expect(verdict.observedWouldBe == nil)
+        #expect(verdict.wouldBe == nil)
         #expect(!verdict.observeOverrode)
     }
 
@@ -88,7 +88,7 @@ struct ObservePeekVerdictTests {
             Issue.record("observe floor must deny, got \(verdict.result.decision)")
             return
         }
-        #expect(verdict.observedWouldBe == nil)
+        #expect(verdict.wouldBe == nil)
     }
 
     @Test("observe: peekVerdict and peek agree on what the door returns")
@@ -113,8 +113,8 @@ struct ObservePeekVerdictTests {
         #expect(enforce.decision == .indeterminate(.inlineProgramNeedsJudge))
         let verdict = await Self.peek(Self.inlineProgram, home: observeHome)
         #expect(verdict.result.decision == .allow)
-        #expect(verdict.observedWouldBe?.decision == enforce.decision)
-        #expect(verdict.wouldBeAuthorization == .denyPinned)
+        #expect(verdict.wouldBe?.result.decision == enforce.decision)
+        #expect(verdict.wouldBe?.authorization == .denyPinned)
         #expect(verdict.observeOverrode)
     }
 
@@ -139,7 +139,7 @@ struct ObservePeekVerdictTests {
         #expect(row.observed)
         #expect(row.wouldBe == expected)
         let verdict = await Self.peek(command, home: peekHome, cwd: cwd)
-        let authorization = try #require(verdict.wouldBeAuthorization)
+        let authorization = try #require(verdict.wouldBe?.authorization)
         #expect((authorization == .ask ? LedgerWouldBe.ask : .deny) == row.wouldBe)
     }
 
@@ -156,7 +156,7 @@ struct ObservePeekVerdictTests {
         )
         #expect(ledgerRows(applyHome).isEmpty)
         let verdict = await Self.peek(Self.inlineProgram, home: peekHome, cwd: cwd)
-        #expect(verdict.wouldBeAuthorization == .denyPinned)
+        #expect(verdict.wouldBe?.authorization == .denyPinned)
     }
 
     @Test("observe: peekVerdict writes no denial row and logs exactly what peek logs")
@@ -190,8 +190,8 @@ struct ObservePeekVerdictTests {
         let enforce = await Self.plainPeek("git reset --hard", home: enforceHome, cwd: cwd, allowlist: { allowlist })
         #expect(enforce.decision == .allow)
         let verdict = await Self.peek("git reset --hard", home: observeHome, cwd: cwd, allowlist: allowlist)
-        #expect(verdict.observedWouldBe?.decision == .allow)
-        #expect(verdict.wouldBeAuthorization == .allow)
+        #expect(verdict.wouldBe?.result.decision == .allow)
+        #expect(verdict.wouldBe?.authorization == .allow)
         #expect(!verdict.observeOverrode)
     }
 

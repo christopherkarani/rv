@@ -206,7 +206,7 @@ public enum CommandRun {
         let observed = verdict.observeOverrode
         // Enforce's authorization of the would-be verdict, as the observed
         // denial row records it; nil unless observe changed the outcome.
-        let authorization = observed ? verdict.wouldBeAuthorization : nil
+        let authorization = observed ? verdict.wouldBe?.authorization : nil
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1

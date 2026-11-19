@@ -29,34 +29,38 @@ private enum PolicyVerb: Sendable {
 /// A gated peek: what the door returns, and under observe the verdict
 /// enforce would have returned (`rv test` / `rv explain` show that one).
 package struct GatedVerdict: Sendable, Equatable {
+    /// The would-be verdict and how enforce would have authorized it.
+    package struct WouldBe: Sendable, Equatable {
+        /// Through a Policy-gate preview, as enforce would show it.
+        package let result: EvaluationResult
+        /// Ask, pinned deny or allow: the projection the observed denial
+        /// row's `would_be` is taken from.
+        package let authorization: HookAuthorization
+
+        package init(result: EvaluationResult, authorization: HookAuthorization) {
+            self.result = result
+            self.authorization = authorization
+        }
+    }
+
     /// What the door returns (under observe, the observed allow).
     package let result: EvaluationResult
-    /// The would-be verdict through a Policy-gate preview, as enforce would
-    /// show it. Nil when the enforce branch decided: enforce mode, or a
-    /// result the observe floor took.
-    package let observedWouldBe: EvaluationResult?
-    /// How enforce would have authorized `observedWouldBe` (ask, pinned
-    /// deny, allow): the projection the observed denial row's `would_be`
-    /// is taken from. Nil exactly when `observedWouldBe` is.
-    package let wouldBeAuthorization: HookAuthorization?
+    /// Nil when the enforce branch decided: enforce mode, or a result the
+    /// observe floor took.
+    package let wouldBe: WouldBe?
 
-    package init(
-        result: EvaluationResult,
-        observedWouldBe: EvaluationResult? = nil,
-        wouldBeAuthorization: HookAuthorization? = nil
-    ) {
+    package init(result: EvaluationResult, wouldBe: WouldBe? = nil) {
         self.result = result
-        self.observedWouldBe = observedWouldBe
-        self.wouldBeAuthorization = observedWouldBe == nil ? nil : wouldBeAuthorization
+        self.wouldBe = wouldBe
     }
 
     /// The verdict to show: the would-be one under observe, else the result.
-    package var shown: EvaluationResult { observedWouldBe ?? result }
+    package var shown: EvaluationResult { wouldBe?.result ?? result }
 
     /// Observe changed the outcome: enforce would have decided otherwise.
     package var observeOverrode: Bool {
-        guard let observedWouldBe else { return false }
-        return observedWouldBe.decision != result.decision
+        guard let wouldBe else { return false }
+        return wouldBe.result.decision != result.decision
     }
 }
 
@@ -182,7 +186,7 @@ public struct GatedEvaluate: Sendable {
             result = MCPHostConfigDoor.deny(path: action.path.rawValue)
         }
         switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
-        case .observed(let observed, let wouldBe):
+        case .observed(let observed, let wouldBe, _):
             // `would_be` stays deny: the hook's file wire never asks
             // (`hookFileWire`).
             if let row = Self.denialRow(
@@ -439,11 +443,7 @@ public struct GatedEvaluate: Sendable {
         let effects = decided.effects
         let overridesRecorded = await JudgeOffload.run { Self.perform(effects, home: home) }
         let result = overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
-        return GatedVerdict(
-            result: result,
-            observedWouldBe: decided.wouldBe?.result,
-            wouldBeAuthorization: decided.wouldBe?.authorization
-        )
+        return GatedVerdict(result: result, wouldBe: decided.wouldBe)
     }
 
     /// Why an override whose `command.override` row was not written stays a deny.
@@ -504,7 +504,7 @@ public struct GatedEvaluate: Sendable {
     ) async -> (
         result: EvaluationResult,
         effects: [GatedEffect],
-        wouldBe: (result: EvaluationResult, authorization: HookAuthorization)?
+        wouldBe: GatedVerdict.WouldBe?
     ) {
         let verb: PolicyVerb
         switch intent {
@@ -547,7 +547,7 @@ public struct GatedEvaluate: Sendable {
         var effects = offloaded
         let candidate: EvaluationResult
         switch screened {
-        case .observed(let observed, let wouldBe):
+        case .observed(let observed, let unfloored, let floorsWouldBe):
             // The would-be verdict through a Policy-gate preview (an
             // allowlist entry or live grant would have let it through;
             // nothing is spent): on apply, what enforcement would have
@@ -556,8 +556,14 @@ public struct GatedEvaluate: Sendable {
             // either way, and checking would trip the deadline into a
             // timeout deny.
             var recordsDenial = false
-            if verb.recordsDenial, case .deny = wouldBe.decision { recordsDenial = true }
+            if verb.recordsDenial, case .deny = unfloored.decision { recordsDenial = true }
             guard recordsDenial || previewsWouldBe else { return (observed, effects, nil) }
+            // The packs-only floor only turns an allow indeterminate, so it
+            // never changes whether a denial row is recorded: it runs here,
+            // where the would-be is consumed, not on every observed allow.
+            let wouldBe = floorsWouldBe
+                ? JudgeRuntime.packsOnlyFloor(unfloored, command: request.command)
+                : unfloored
             let previewed = await Self.policyFinish(
                 .peek, candidate: wouldBe, request: request, cwd: cwd, grants: grants,
                 now: now, allowlist: allowlist, safety: safety
@@ -569,7 +575,7 @@ public struct GatedEvaluate: Sendable {
             ) {
                 effects.append(row)
             }
-            return (observed, effects, (previewed.result, authorization))
+            return (observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization))
         case .enforced(let enforced):
             candidate = enforced
         }
@@ -650,10 +656,11 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// `observed` is final: the door returns it as-is; `wouldBe` is what
-    /// enforcement would have acted on (observed denial row). `enforced` is
-    /// what the door acts on (Policy gate, denial row).
+    /// enforcement would have acted on (observed denial row), before the
+    /// packs-only floor when `floorsWouldBe`. `enforced` is what the door
+    /// acts on (Policy gate, denial row).
     private enum Posture {
-        case observed(EvaluationResult, wouldBe: EvaluationResult)
+        case observed(EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool)
         case enforced(EvaluationResult)
     }
 
@@ -691,7 +698,7 @@ public struct GatedEvaluate: Sendable {
         }
         switch (mode, door) {
         case (.observe, .file):
-            return .observed(result.observedAllow, wouldBe: result)
+            return .observed(result.observedAllow, wouldBe: result, floorsWouldBe: false)
         case (.enforce, .file):
             return .enforced(result)
         case (.observe, .shell(let request, let inputs, let isPeek)):
@@ -704,7 +711,7 @@ public struct GatedEvaluate: Sendable {
                 cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
             )
             effects.append(.judgeLog(observed.log))
-            return .observed(observed.result, wouldBe: observed.wouldBe)
+            return .observed(observed.result, wouldBe: observed.wouldBe, floorsWouldBe: observed.floorsWouldBe)
         case (.enforce, .shell(let request, let inputs, let isPeek)):
             let screened = scriptScreen(
                 result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
@@ -942,7 +949,7 @@ public struct GatedEvaluate: Sendable {
             now: now,
             effects: &effects
         ) {
-        case .observed(let final, _), .enforced(let final):
+        case .observed(let final, _, _), .enforced(let final):
             return (final, effects)
         }
     }
@@ -1124,12 +1131,6 @@ public struct GatedEvaluate: Sendable {
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
             observed: observed, wouldBe: wouldBe
         ))
-    }
-
-    /// What the enforced shell hook would have surfaced for this Policy-gate
-    /// result: the same projection the hook door runs (`hookBody`).
-    private static func wouldBe(_ result: EvaluationResult, cwd: WorkingDirectory?) -> LedgerWouldBe {
-        ledgerWouldBe(HookAuthorization.project(result: result, cwd: cwd))
     }
 
     /// The ledger's `would_be` for an enforce authorization.
