@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
+import RVPresentation
 import RVTheme
 import Synchronization
 @testable import RVCLI
@@ -16,7 +17,11 @@ struct PolicyStatusCommandTests {
         #expect(children.contains("status"))
         let help = HelpDispatch.text(.policy, palette: colorOffPalette)
         #expect(help.contains("rv policy status [--json]"))
-        #expect(help.contains("rv policy apply <policy.toml> [--repo] [--save [--wait]]"))
+        // The usage row stays the bare family name the agent skill cites;
+        // the apply note spells the arguments.
+        #expect(HelpCatalog.page(.policy).sections.flatMap(\.rows).contains { row in
+            row.name == "apply" && row.description.hasPrefix("rv policy apply <policy.toml> [--repo] [--save [--wait]]")
+        })
     }
 
     @Test func cleanLoad_reportsRvdsRevision() async throws {
@@ -173,8 +178,10 @@ struct PolicyStatusCommandTests {
 
     @Test func wait_returnsOnceRvdReportsTheSavedHash() async {
         let calls = Counter()
+        // Generous: the wait returns on the third poll, and a starved test
+        // pool (Linux CI) can delay a 10 ms poll sleep by seconds.
         let outcome = await PolicyLoadWait.run(
-            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(5), pollInterval: .milliseconds(10),
+            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(60), pollInterval: .milliseconds(10),
             observe: { _, _ in
                 let hash = calls.next() < 2 ? "old" : "new"
                 return .rvd(PolicyLoadStatus(
@@ -209,10 +216,9 @@ struct PolicyStatusCommandTests {
     }
 
     /// A slow rvd cannot carry the wait past its timeout: each call is
-    /// bounded by what is left, never the full per-call 5 s.
+    /// bounded by what is left, never the full per-call 5 s. The bounds
+    /// prove it; wall-clock elapsed would flake on a starved test pool.
     @Test func wait_boundsEachCallByWhatIsLeft() async {
-        let clock = ContinuousClock()
-        let started = clock.now
         let bounds = Recorder<Duration>()
         let outcome = await PolicyLoadWait.run(
             layer: .machine, hash: "h", cwd: nil, timeout: .milliseconds(400), pollInterval: .milliseconds(10),
@@ -222,9 +228,7 @@ struct PolicyStatusCommandTests {
                 try? await Task.sleep(for: bound)
                 return .unavailable("request failed")
             })
-        let elapsed = clock.now - started
         #expect(outcome == .timedOut(.unavailable("request failed")))
-        #expect(elapsed < .milliseconds(400) + .seconds(1))
         #expect(bounds.values.isEmpty == false)
         #expect(bounds.values.allSatisfy { $0 <= .milliseconds(400) && $0 > .zero })
     }

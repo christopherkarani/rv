@@ -994,7 +994,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv policy draft --english <text> [--save [--wait]]"),
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
-                HelpRow(name: "rv policy apply <policy.toml> [--repo] [--save [--wait]]"),
+                HelpRow(name: "rv policy apply"),
                 HelpRow(name: "rv policy rollback <revision> [--repo] [--save [--wait]] [--json]"),
                 HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
                 HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
@@ -1004,6 +1004,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "draft",
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
+                ),
+                HelpRow(
+                    name: "apply",
+                    description: "rv policy apply <policy.toml> [--repo] [--save [--wait]]: previews a shared policy.toml merged into the machine (or --repo) layer; --save writes it after owner approval."
                 ),
                 HelpRow(
                     name: "rollback",
