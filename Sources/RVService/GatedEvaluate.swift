@@ -3,6 +3,7 @@ import RVDomain
 import RVEngine
 import RVFileStore
 import RVHistory
+import RVHooks
 import RVPolicy
 
 /// Peek shows a matching grant without consuming it. Apply spends it.
@@ -956,7 +957,8 @@ public struct GatedEvaluate: Sendable {
             denial = row
         } else {
             denial = GatedEffect.DenialRow(
-                at: now, host: host, tool: tool, ruleID: deny.ruleID, category: .pack(deny.ruleID.pack), path: "")
+                at: now, host: host, tool: tool, ruleID: deny.ruleID, category: .pack(deny.ruleID.pack), path: "",
+                session: attributedSession())
         }
         let name: String
         switch override {
@@ -1003,8 +1005,14 @@ public struct GatedEvaluate: Sendable {
         }
         return .denialRow(GatedEffect.DenialRow(
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
-            observed: observed, wouldBe: wouldBe
+            observed: observed, wouldBe: wouldBe, session: attributedSession()
         ))
+    }
+
+    /// The bound hook request's session id, if it is an opaque token.
+    /// Read on the task (task-local), never inside `JudgeOffload`.
+    private static func attributedSession() -> String? {
+        HookSessionAttribution.current.flatMap { DenialLedgerRecord.attributableSession($0.rawValue) }
     }
 
     /// What the enforced shell hook would have surfaced for this Policy-gate
@@ -1073,7 +1081,8 @@ public struct GatedEvaluate: Sendable {
     /// for every enforced deny (`command.observed`, decision `info`, for an
     /// observe-mode would-be deny), whatever `blocks.enabled` says: the
     /// ledger is a pruned convenience view, the chain is the record.
-    /// Carries the rule, host, tool and redacted path, never the command
+    /// Carries the rule, host, tool, redacted path and the hook session id
+    /// (when an opaque token), never the command
     /// text.
     private static func auditDenial(
         _ row: GatedEffect.DenialRow, home: HomeDirectory,
@@ -1083,6 +1092,7 @@ public struct GatedEvaluate: Sendable {
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
         if row.observed { detail["would_be"] = row.wouldBe.rawValue }
+        if let session = row.session { detail["session"] = session }
         let recorded = AuditLog.append(
             AuditEvent(
                 time: row.at,
@@ -1142,7 +1152,8 @@ public struct GatedEvaluate: Sendable {
                 category: row.category,
                 path: DenialPathRedaction.redact(row.path, home: home),
                 observed: row.observed,
-                wouldBe: row.wouldBe
+                wouldBe: row.wouldBe,
+                session: row.session
             ),
             now: row.at
         )
