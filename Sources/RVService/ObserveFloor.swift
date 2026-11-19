@@ -114,12 +114,21 @@ enum ObserveFloor {
     }
 
     /// Observe only, after the other floors: a command that runs a program
-    /// rv cannot see (`runsUnanalyzable`) is sent to Terminal under its own
-    /// rule id, whatever its verdict. Observe would have let it run, so
-    /// this only ever raises an observed allow to "run it in Terminal";
-    /// it never turns one into a hard deny.
+    /// rv cannot see (`runsUnanalyzable`) is enforced. An allow, or an
+    /// "unanalyzable" indeterminate, becomes "run it in Terminal" under
+    /// its own rule id; it never becomes a hard deny. Any other verdict (a
+    /// deny, a self-protection hold) is kept as is, with its row, rule id,
+    /// allow-once path and judge log, like `floored`.
     static func unanalyzableFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult? {
         guard runsUnanalyzable(result, command: command) else { return nil }
+        switch result.decision {
+        case .allow:
+            break
+        case .indeterminate(let reason) where unanalyzableReasons.contains(reason):
+            break
+        case .deny, .indeterminate:
+            return result
+        }
         return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
     }
 
@@ -127,13 +136,14 @@ enum ObserveFloor {
     /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
     /// passes them, stops rvd, and leaves every later call unchecked. So a
     /// command holds when what rv cannot read can take a command position
-    /// (`runsOpaqueProgram`: a dynamic command word, decoded text reaching
-    /// a shell or interpreter, a runner whose verb is a shell), when its
-    /// program or git subcommand is unresolved (`invocationIsOpaque`: a
-    /// dynamic `eval`, a variable head, a git alias or extension), or when
-    /// it is too large or too costly to analyze. A literal verb with
-    /// dynamic arguments (`xargs rm`) is not floored here; the lexical
-    /// floors above still read its text. The program checks read the
+    /// (`runsOpaqueProgram`: a dynamic command word, a shell or interpreter
+    /// reading stdin that is not from literal producers, a runner whose
+    /// verb is a shell or a lifecycle verb), when its program or git
+    /// subcommand is unresolved (`invocationIsOpaque`: a dynamic `eval`, a
+    /// variable head, a git alias or extension), or when it is too large or
+    /// too costly to analyze. A literal verb with dynamic arguments (`xargs
+    /// rm`) is not floored here; the lexical floors above read its words,
+    /// though not its operands' values. The program checks read the
     /// command again because an earlier pack deny hides them:
     /// `$(echo <b64> | base64 -d)` reports only an out-of-repo write.
     static func runsUnanalyzable(_ result: EvaluationResult, command: ShellCommand) -> Bool {

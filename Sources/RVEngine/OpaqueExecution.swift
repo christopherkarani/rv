@@ -6,12 +6,18 @@ import RVDomain
 /// Floored: a dynamic command word (`$x`, `$(…)`, backticks); `eval` of
 /// dynamic text; `source`/`.` of stdin, a descriptor or `<(…)`; a shell or
 /// interpreter running a dynamic script operand, `<(…)`, a dynamic
-/// here-string, dynamic or encoded inline code, or stdin in a line that
-/// decodes or fetches; `xargs`, `find -exec` and `parallel` whose verb is a
-/// shell, an interpreter, `eval`, `source`, `env -S` or dynamic (or no verb
-/// for `parallel`, which then runs its input). A literal verb with dynamic
-/// arguments (`xargs rm`) and an inner script whose command heads are all
-/// literal are not floored: the lexical observe floors read that text.
+/// here-string or dynamic or encoded inline code; a shell or interpreter
+/// reading its program from stdin unless every producer is a literal
+/// `echo`/`printf` or a `cat` of literal paths (`StdinFeed`); inline code
+/// that runs a command over input rv cannot read; `awk` running a command;
+/// `sed` with `e`; `ssh` with a dynamic remote command; a dynamic `trap`
+/// action; `xargs`, `find -exec` and `parallel` whose verb is a shell, an
+/// interpreter, `eval`, `source`, `env -S`, dynamic, or a process or
+/// service control verb (`kill`, `launchctl`, `rv`, …), and `parallel`
+/// with no verb, which runs its input. Line continuations are joined
+/// first. Not floored: a literal verb with dynamic arguments (`xargs rm`),
+/// and a literal script file (`bash x.sh`, `cat x.sh | sh`), whose
+/// contents rv does not read.
 package func runsOpaqueProgram(_ command: ShellCommand) -> Bool {
     OpaqueExecution.scan(command.rawValue, depth: 0)
 }
@@ -19,47 +25,80 @@ package func runsOpaqueProgram(_ command: ShellCommand) -> Bool {
 enum OpaqueExecution {
     private static let maxDepth = 4
 
-    static func scan(_ text: String, depth: Int) -> Bool {
+    /// `inheritedLiteral`: whether the stdin the text starts with (an
+    /// enclosing `sh -c`'s, say) is readable.
+    static func scan(_ text: String, depth: Int, inheritedLiteral: Bool = true) -> Bool {
         guard depth <= maxDepth else { return true }
-        let segments = splitSegments(text)
-        let lineDecodes = segments.contains { decodes(tokenizeCommand($0)) }
-        return segments.contains { segment in
-            segmentRunsOpaque(tokenizeCommand(segment), lineDecodes: lineDecodes, depth: depth)
+        let line = joiningContinuations(text)
+        let inherited = inheritedLiteral && redirectsLineStdin(line) == false
+        for element in listElements(line) {
+            let stages = splitTopLevelPipes(element).map { stage in
+                splitSegments(stage.hasPrefix("&") ? String(stage.dropFirst()) : stage).map(tokenizeCommand)
+            }
+            var upstream: [[CommandToken]] = []
+            for (stageIndex, stage) in stages.enumerated() {
+                for (index, segment) in stage.enumerated() {
+                    let siblings = stage.indices.filter { $0 != index }.map { stage[$0] }
+                    let feed = StdinFeed(
+                        producers: upstream + siblings, inheritedLiteral: stageIndex > 0 || inherited, line: line
+                    )
+                    if segmentRunsOpaque(segment, feed: feed, depth: depth) { return true }
+                }
+                upstream += stage
+            }
         }
+        return false
     }
 
     // MARK: Segments
 
-    private static func segmentRunsOpaque(_ tokens: [CommandToken], lineDecodes: Bool, depth: Int) -> Bool {
+    /// The segment a command came from, its stdin, and the scan depth.
+    struct Context {
+        let segment: [CommandToken]
+        let feed: StdinFeed
+        let depth: Int
+    }
+
+    private static func segmentRunsOpaque(_ tokens: [CommandToken], feed: StdinFeed, depth: Int) -> Bool {
         switch commandStart(tokens) {
         case .none:
             return false
         case .opaque:
             return true
         case .at(let index):
-            return commandRunsOpaque(Array(tokens[index...]), lineDecodes: lineDecodes, depth: depth)
+            return commandRunsOpaque(Array(tokens[index...]), Context(segment: tokens, feed: feed, depth: depth))
         }
     }
 
-    private static func commandRunsOpaque(_ tokens: [CommandToken], lineDecodes: Bool, depth: Int) -> Bool {
+    private static func commandRunsOpaque(_ tokens: [CommandToken], _ context: Context) -> Bool {
         guard let headToken = tokens.first else { return false }
         if isDynamic(headToken) { return true }
         let head = basename(headToken.decoded)
         let arguments = Array(tokens.dropFirst())
+        let depth = context.depth
         if head == "eval" {
             if arguments.contains(where: isDynamic) { return true }
-            return scan(arguments.map(\.decoded).joined(separator: " "), depth: depth + 1)
+            let stdinLiteral = stdinIsLiteral(arguments, feed: context.feed)
+            return scan(arguments.map(\.decoded).joined(separator: " "), depth: depth + 1, inheritedLiteral: stdinLiteral)
         }
         if head == "source" || head == "." {
             return sourcesOpaque(arguments)
         }
         if shells.contains(head) {
-            return shellRunsOpaque(arguments, lineDecodes: lineDecodes, depth: depth)
+            return shellRunsOpaque(arguments, context)
         }
         if isInterpreter(head) {
-            return interpreterRunsOpaque(head, arguments, lineDecodes: lineDecodes)
+            return interpreterRunsOpaque(head, arguments, context)
         }
         switch head {
+        case "awk", "gawk", "mawk", "nawk":
+            return awkRunsOpaque(arguments)
+        case "sed", "gsed":
+            return sedRunsOpaque(arguments)
+        case "ssh":
+            return sshRunsOpaque(arguments, depth: depth, stdinLiteral: stdinIsLiteral(arguments, feed: context.feed))
+        case "trap":
+            return trapRunsOpaque(arguments, depth: depth)
         case "xargs":
             return verbRunsOpaque(xargsVerb(arguments))
         case "parallel":
@@ -74,7 +113,7 @@ enum OpaqueExecution {
 
     // MARK: Command position
 
-    private enum Start {
+    enum Start {
         case none
         case opaque
         case at(Int)
@@ -83,7 +122,7 @@ enum OpaqueExecution {
     /// Index of the command word after assignments, reserved words and
     /// transparent wrappers. `.opaque` when a wrapper splits a string into
     /// a command (`env -S`) or a word in wrapper position is dynamic.
-    private static func commandStart(_ tokens: [CommandToken]) -> Start {
+    static func commandStart(_ tokens: [CommandToken]) -> Start {
         var index = 0
         while index < tokens.count {
             let token = tokens[index]
@@ -154,7 +193,7 @@ enum OpaqueExecution {
         return isDynamic(operand) || readsStdin(operand.decoded) || operand.decoded.hasPrefix("<(")
     }
 
-    private static func shellRunsOpaque(_ rawArguments: [CommandToken], lineDecodes: Bool, depth: Int) -> Bool {
+    private static func shellRunsOpaque(_ rawArguments: [CommandToken], _ context: Context) -> Bool {
         if feedsOpaqueInput(rawArguments) { return true }
         let arguments = droppingRedirects(rawArguments)
         var index = 0
@@ -167,6 +206,16 @@ enum OpaqueExecution {
                 break
             }
             if text == "-o" || text == "+o" || text == "-O" || text == "+O" { index += 2; continue }
+            // fish: `--command`/`-C`/`--init-command` take the script.
+            if text == "--command" || text == "--init-command" || text == "-C" {
+                command = true
+                index += 1
+                break
+            }
+            if text.hasPrefix("--command=") || text.hasPrefix("--init-command=") {
+                let payload = CommandToken(decoded: String(text.drop(while: { $0 != "=" }).dropFirst()), wasQuoted: true)
+                return payloadRunsOpaque(payload, rawArguments, context)
+            }
             if text.hasPrefix("--") == false {
                 if text.contains("c") { command = true }
                 if text.contains("s") { stdin = true }
@@ -175,25 +224,34 @@ enum OpaqueExecution {
         }
         if command {
             guard index < arguments.count else { return false }
-            let payload = arguments[index]
-            if payload.wasAnsiC { return true }
-            if payload.wasQuoted == false, isDynamic(payload) { return true }
-            if splitSegments(payload.decoded).contains(where: { decodes(tokenizeCommand($0)) }) { return true }
-            return scan(payload.decoded, depth: depth + 1)
+            return payloadRunsOpaque(arguments[index], rawArguments, context)
         }
         let operand = index < arguments.count && stdin == false ? arguments[index] : nil
         guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            return lineDecodes
+            // The program is stdin: readable only from literal producers,
+            // whose text the lexical floors read.
+            return stdinIsLiteral(rawArguments, feed: context.feed) == false
         }
         return isDynamic(operand)
     }
 
-    private static func interpreterRunsOpaque(_ head: String, _ rawArguments: [CommandToken], lineDecodes: Bool) -> Bool {
+    /// A shell's `-c` script: dynamic or escaped text is unreadable; a
+    /// literal one is scanned, inheriting the shell's stdin.
+    private static func payloadRunsOpaque(_ payload: CommandToken, _ rawArguments: [CommandToken], _ context: Context) -> Bool {
+        if payload.wasAnsiC { return true }
+        if payload.wasQuoted == false, isDynamic(payload) { return true }
+        if splitSegments(payload.decoded).contains(where: { decodes(tokenizeCommand($0)) }) { return true }
+        let stdinLiteral = stdinIsLiteral(rawArguments, feed: context.feed)
+        return scan(payload.decoded, depth: context.depth + 1, inheritedLiteral: stdinLiteral)
+    }
+
+    private static func interpreterRunsOpaque(_ head: String, _ rawArguments: [CommandToken], _ context: Context) -> Bool {
         if feedsOpaqueInput(rawArguments) { return true }
         let arguments = droppingRedirects(rawArguments)
         let inline = inlineFlags(head)
         var payloads: [CommandToken] = []
         var operand: CommandToken?
+        var loopsOverInput = false
         var index = 0
         if head == "deno", arguments.first?.decoded == "eval" {
             payloads = Array(arguments.dropFirst().prefix(1))
@@ -205,6 +263,12 @@ enum OpaqueExecution {
             if text == "--" {
                 operand = arguments.dropFirst(index + 1).first
                 break
+            }
+            if (head == "perl" || head == "ruby"), text.hasPrefix("-"), text.hasPrefix("--") == false,
+               text.contains("n") || text.contains("p")
+            {
+                // `-n`/`-p` run the code once per input line.
+                loopsOverInput = true
             }
             if inline.contains(text) || isClusteredInline(head, text) {
                 if index + 1 < arguments.count { payloads.append(arguments[index + 1]) }
@@ -225,15 +289,26 @@ enum OpaqueExecution {
         }
         if payloads.isEmpty == false {
             return payloads.contains { payload in
-                payload.wasAnsiC
-                    || carriesSubstitution(payload.decoded)
-                    || payload.decoded.hasPrefix("$")
+                if payload.wasAnsiC || carriesSubstitution(payload.decoded) || payload.decoded.hasPrefix("$")
                     || (payload.wasQuoted == false && payload.decoded.contains("$"))
-                    || (execsCode(payload.decoded) && (decodesCode(payload.decoded) || lineDecodes))
+                {
+                    return true
+                }
+                guard execsCode(payload.decoded) else { return false }
+                // Code that runs a command over text rv cannot read: its
+                // own decode or input, stdin from an unreadable producer,
+                // or a dynamic argument or environment word it is handed.
+                return readsUnseen(payload.decoded) || loopsOverInput
+                    || stdinIsLiteral(rawArguments, feed: context.feed) == false
+                    || context.segment.contains { isDynamic($0) && $0.decoded != payload.decoded }
             }
         }
         guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            return lineDecodes
+            // The program is stdin: unreadable unless the producers are
+            // literal; then it is judged like inline code.
+            guard stdinIsLiteral(rawArguments, feed: context.feed) else { return true }
+            let program = readsHeredoc(rawArguments) ? context.feed.line : context.feed.text
+            return execsCode(program) && readsUnseen(program)
         }
         return isDynamic(operand)
     }
@@ -257,7 +332,7 @@ enum OpaqueExecution {
 
     /// The arguments without redirects (`2>/dev/null`, `< in`, `> out`,
     /// `<<EOF`), so a redirect is never read as a script operand.
-    private static func droppingRedirects(_ arguments: [CommandToken]) -> [CommandToken] {
+    static func droppingRedirects(_ arguments: [CommandToken]) -> [CommandToken] {
         var kept: [CommandToken] = []
         var index = 0
         while index < arguments.count {
@@ -291,18 +366,23 @@ enum OpaqueExecution {
         "--delimiter", "--arg-file", "--max-args", "--max-procs", "--max-lines", "--replace",
     ]
 
-    /// `parallel [options] verb …`, or nil when it runs its input lines.
+    /// `parallel [options] verb … ::: args`: the verb is the words before
+    /// the first input separator. nil when there is none: parallel then
+    /// runs its input as commands.
     private static func parallelVerb(_ arguments: [CommandToken]) -> [CommandToken]? {
         var index = 0
         while index < arguments.count {
             let text = arguments[index].decoded
-            if text == ":::" || text == "::::" || text == ":::+" { return nil }
+            if parallelSeparators.contains(text) { return nil }
+            if text == "--" { index += 1; break }
             guard text.hasPrefix("-"), text.count > 1 else { break }
             index += parallelValueOptions.contains(text) ? 2 : 1
         }
-        let verb = Array(arguments.dropFirst(index))
-        return verb.isEmpty ? nil : verb
+        let verb = arguments.dropFirst(index).prefix { parallelSeparators.contains($0.decoded) == false }
+        return verb.isEmpty ? nil : Array(verb)
     }
+
+    private static let parallelSeparators: Set<String> = [":::", "::::", ":::+", "::::+"]
 
     private static let parallelValueOptions: Set<String> = [
         "-j", "-I", "-S", "-d", "-N", "-n", "-L", "-a", "-P", "-E",
@@ -319,6 +399,9 @@ enum OpaqueExecution {
 
     /// A runner's verb: a shell, an interpreter, `eval`, `source`, a
     /// dynamic word, or a placeholder (`{}`) takes its program from data.
+    /// A process or service control verb (`xargs launchctl`, `parallel
+    /// kill ::: …`) is fed its operands from input rv cannot read, so it
+    /// may stop rvd whatever the input's source.
     private static func verbRunsOpaque(_ verb: [CommandToken]) -> Bool {
         switch commandStart(verb) {
         case .none:
@@ -329,15 +412,27 @@ enum OpaqueExecution {
             let token = verb[index]
             if isDynamic(token) || token.decoded.contains("{}") || token.decoded == "%" { return true }
             let head = basename(token.decoded)
-            return shells.contains(head) || isInterpreter(head)
-                || ["eval", "source", ".", "xargs", "parallel", "find"].contains(head)
+            let arguments = Array(verb.dropFirst(index + 1))
+            switch head {
+            case "awk", "gawk", "mawk", "nawk":
+                return awkRunsOpaque(arguments)
+            case "sed", "gsed":
+                return sedRunsOpaque(arguments)
+            default:
+                // `ssh`: the input words join its remote command.
+                return shells.contains(head) || isInterpreter(head) || lifecycleVerbs.contains(head)
+                    || ["eval", "source", ".", "xargs", "parallel", "find", "ssh"].contains(head)
+            }
         }
     }
+
+    private static let lifecycleVerbs: Set<String> = ["kill", "pkill", "killall", "launchctl", "rv", "rvd", "systemctl"]
 
     // MARK: Decoders
 
     /// The segment turns unreadable bytes into text: a decoder, an escape
-    /// expansion, or a fetch. Only matters where that text may run.
+    /// expansion, or a fetch. An extra signal for `-c` scripts only; it
+    /// never decides that a command is readable.
     private static func decodes(_ tokens: [CommandToken]) -> Bool {
         if tokens.contains(where: { $0.wasAnsiC && $0.decoded.contains("\\") }) { return true }
         guard case .at(let index) = commandStart(tokens) else { return false }
@@ -348,15 +443,15 @@ enum OpaqueExecution {
             flags.contains { $0.hasPrefix("--") == false && $0.dropFirst().contains(where: letters.contains) }
         }
         switch head {
-        case "openssl", "rev", "tr", "uudecode", "gunzip", "zcat", "bzcat", "xzcat", "unxz", "bunzip2",
+        case "openssl", "rev", "tr", "uudecode", "b64decode", "gunzip", "zcat", "bzcat", "xzcat", "unxz", "bunzip2",
              "zstdcat", "unzstd", "curl", "wget":
             return true
-        case "base64", "gbase64", "basenc":
-            return hasShortFlag(["d", "D"]) || flags.contains("--decode")
+        case "base64", "gbase64", "basenc", "base32", "gbase32":
+            return hasShortFlag(["d", "D"]) || flags.contains { $0.hasPrefix("--d") }
         case "xxd":
             return hasShortFlag(["r"])
         case "gzip", "bzip2", "xz", "zstd":
-            return hasShortFlag(["d"]) || flags.contains("--decompress") || flags.contains("--decode")
+            return hasShortFlag(["d"]) || flags.contains { $0.hasPrefix("--dec") }
         case "printf":
             return arguments.contains(where: hasEscapes)
         case "echo":
@@ -381,13 +476,14 @@ enum OpaqueExecution {
         execMarkers.contains { code.contains($0) }
     }
 
-    /// Inline code that decodes bytes into text.
-    private static func decodesCode(_ code: String) -> Bool {
-        decodeMarkers.contains { code.contains($0) }
+    /// Inline code that reads text rv cannot see: it decodes bytes, or
+    /// reads stdin, arguments, the environment, a file or the network.
+    private static func readsUnseen(_ code: String) -> Bool {
+        decodeMarkers.contains { code.contains($0) } || inputMarkers.contains { code.contains($0) }
     }
 
     private static let execMarkers = [
-        "system(", "exec(", "eval(", "popen", "spawn", "subprocess", "execSync", "child_process",
+        "system(", "system ", "exec(", "exec ", "eval(", "popen", "spawn", "subprocess", "execSync", "child_process",
         "do shell script", "shell_exec", "passthru", "proc_open", "os.execute", "io.popen", "`",
         "execv", "Process(", "Kernel.", "IO.popen", "compile(", "__import__",
     ]
@@ -398,9 +494,17 @@ enum OpaqueExecution {
         "rot13", "[::-1]", "reverse", "gzinflate", "hex2bin", "\\x",
     ]
 
+    private static let inputMarkers = [
+        "stdin", "STDIN", "argv", "ARGV", "ARGF", "ENV", "environ", "getenv", "process.env", "readline",
+        "input(", "open(", "gets", "read(", "<>", "$_", "urlopen", "urllib", "requests", "fetch(", "http",
+        "socket", "Net::", "LWP",
+    ]
+
     // MARK: Words
 
-    private static let shells: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "fish", "ash", "mksh", "yash"]
+    private static let shells: Set<String> = [
+        "sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "ash", "yash", "csh", "tcsh",
+    ]
 
     private static func isInterpreter(_ head: String) -> Bool {
         head.hasPrefix("python") || head.hasPrefix("pypy")
@@ -429,22 +533,22 @@ enum OpaqueExecution {
         return text.count > 2 && (text.hasSuffix("e") || text.hasSuffix("E"))
     }
 
-    private static func isDynamic(_ token: CommandToken) -> Bool {
+    static func isDynamic(_ token: CommandToken) -> Bool {
         token.decoded.contains("$") || token.decoded.contains("`")
     }
 
-    private static func readsStdin(_ path: String) -> Bool {
+    static func readsStdin(_ path: String) -> Bool {
         path == "-" || path == "/dev/stdin" || path.hasPrefix("/dev/fd/") || path.hasPrefix("/proc/self/fd/")
     }
 
-    private static func isAssignment(_ word: String) -> Bool {
+    static func isAssignment(_ word: String) -> Bool {
         guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
         let name = word[..<equals]
         guard let first = name.first, assignmentNameStart.contains(first) else { return false }
         return name.allSatisfy { assignmentNameChars.contains($0) || $0 == "+" && name.last == "+" }
     }
 
-    private static func basename(_ word: String) -> String {
+    static func basename(_ word: String) -> String {
         word.split(separator: "/").last.map(String.init) ?? word
     }
 }

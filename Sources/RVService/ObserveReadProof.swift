@@ -75,8 +75,10 @@ enum ObserveReadProof {
         return level.isEmpty == false && level.allSatisfy(\.isASCIIDigitCharacter)
     }
 
-    /// The only scalars a proof may contain: ASCII words, paths and flags,
-    /// space and tab, and the chain separators `;`, `&`, `|` (each segment
+    /// The only scalars a proof may contain: ASCII letters and digits, space,
+    /// tab, the word and path characters `.` `_` `/` `~` `=` `:` `,` `+`
+    /// `@` `%` `-` (each one literal character, not a range), and the
+    /// chain separators `;`, `&`, `|` (each segment
     /// must then prove itself). Everything else is refused: expansion,
     /// quoting, redirects, subshells, grouping, escapes, comments, history,
     /// globs, any line break, and every non-ASCII scalar (combining marks,

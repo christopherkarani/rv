@@ -67,7 +67,9 @@ public enum RVDStopGuard {
 /// scheduler that runs it (`sh`, `bash`, `zsh`, `dash`, `at`, `batch`,
 /// `crontab`). Then the echoed string is a command: evaluate it.
 /// `echo "pkill rvd" | sh`, `… echo '* * * * * pkill rvd' … | crontab -`.
-private let shellConsumers: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "at", "batch", "crontab"]
+private let shellConsumers: Set<String> = [
+    "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash", "fish", "csh", "tcsh", "at", "batch", "crontab",
+]
 
 private func echoFedShellStops(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
     let segments = rawSegments(raw).filter { $0.isEmpty == false }
