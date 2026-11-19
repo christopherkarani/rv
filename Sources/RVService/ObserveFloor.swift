@@ -103,13 +103,20 @@ enum ObserveFloor {
     }
 
     /// Observe only: nil unless the command stops rvd or writes rv's
-    /// install. Then an allow becomes "run it in Terminal"; anything else
-    /// (a deny, an indeterminate) is kept, so the floor never weakens.
+    /// install, in its own text or in program text a shell or interpreter
+    /// is fed from a literal pipe, here-string or heredoc (`echo
+    /// 'launchctl bootout …' | sh`). Then an allow becomes "run it in
+    /// Terminal"; anything else (a deny, an indeterminate) is kept, so the
+    /// floor never weakens.
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
-            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
+        let texts = [command] + scanOpaqueProgram(command).innerTexts.map { ShellCommand(rawValue: $0) }
+        let hits = texts.contains { text in
+            RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: runningRVDaemonPIDs)
+                || RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd)
+        }
+        guard hits else { return nil }
         return floored(result)
     }
 

@@ -41,6 +41,7 @@ public enum RVDStopGuard {
     /// literal pid: fail closed.
     public static func stopsRVD(_ raw: String, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
         stopsRVD(raw, depth: 0, rvdPIDs: rvdPIDs)
+            || ShellLexer.guardReadings(raw).contains { stopsRVD($0, depth: 1, rvdPIDs: rvdPIDs) }
     }
 
     private static func stopsRVD(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {

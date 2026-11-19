@@ -176,7 +176,7 @@ extension OpaqueExecution {
     /// locally). A literal command is scanned like `sh -c`. Local-command
     /// options (`ProxyCommand`, `LocalCommand`, `KnownHostsCommand`,
     /// `RemoteCommand`) are scanned too.
-    static func sshRunsOpaque(_ rawArguments: [CommandToken], depth: Int, stdinLiteral: Bool) -> Bool {
+    static func sshRunsOpaque(_ rawArguments: [CommandToken], depth: Int, inherited: @escaping () -> Feed, state: inout ScanState) -> Bool {
         let arguments = droppingRedirects(rawArguments)
         var index = 0
         while index < arguments.count {
@@ -186,7 +186,7 @@ extension OpaqueExecution {
             guard text.hasPrefix("-"), text.count > 1, token.wasQuoted == false else { break }
             if text == "-o" || text.hasPrefix("-o") {
                 let value = text == "-o" ? arguments.dropFirst(index + 1).first : CommandToken(decoded: String(text.dropFirst(2)), wasQuoted: true)
-                if let value, sshOptionRunsOpaque(value, depth: depth) { return true }
+                if let value, sshOptionRunsOpaque(value, depth: depth, state: &state) { return true }
                 index += text == "-o" ? 2 : 1
                 continue
             }
@@ -195,7 +195,7 @@ extension OpaqueExecution {
         let remote = arguments.dropFirst(index + 1)
         guard remote.isEmpty == false else { return false }
         if remote.contains(where: { isDynamic($0) || $0.wasAnsiC }) { return true }
-        return scan(remote.map(\.decoded).joined(separator: " "), depth: depth + 1, inheritedLiteral: stdinLiteral)
+        return scan(remote.map(\.decoded).joined(separator: " "), depth: depth + 1, inherited: inherited, state: &state)
     }
 
     private static let sshValueOptions: Set<String> = [
@@ -207,20 +207,20 @@ extension OpaqueExecution {
         "proxycommand", "localcommand", "knownhostscommand", "remotecommand",
     ]
 
-    private static func sshOptionRunsOpaque(_ option: CommandToken, depth: Int) -> Bool {
+    private static func sshOptionRunsOpaque(_ option: CommandToken, depth: Int, state: inout ScanState) -> Bool {
         let text = option.decoded
         let key = text.prefix { $0 != "=" && $0 != " " && $0 != "\t" }
         guard sshCommandOptions.contains(key.lowercased()) else { return false }
         if isDynamic(option) || option.wasAnsiC { return true }
         let value = text.dropFirst(key.count).drop { $0 == "=" || $0 == " " || $0 == "\t" }
-        return scan(String(value), depth: depth + 1)
+        return scan(String(value), depth: depth + 1, inherited: { .unreadable }, state: &state)
     }
 
     // MARK: trap
 
     /// `trap <action> <signal…>`: the action runs later as a script, so it
     /// is scanned; a dynamic action (`trap "$X" EXIT`) is a dynamic head.
-    static func trapRunsOpaque(_ arguments: [CommandToken], depth: Int) -> Bool {
+    static func trapRunsOpaque(_ arguments: [CommandToken], depth: Int, state: inout ScanState) -> Bool {
         var index = 0
         while index < arguments.count {
             let text = arguments[index].decoded
@@ -231,6 +231,6 @@ extension OpaqueExecution {
         guard index < arguments.count else { return false }
         let action = arguments[index]
         if action.wasAnsiC { return true }
-        return scan(action.decoded, depth: depth + 1)
+        return scan(action.decoded, depth: depth + 1, inherited: { .unreadable }, state: &state)
     }
 }

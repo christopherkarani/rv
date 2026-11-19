@@ -1,0 +1,312 @@
+import RVDomain
+
+/// One command's observe-floor scan: whether it runs a program rv cannot
+/// read, the program texts its readers are fed (literal pipes,
+/// here-strings, heredocs), which the lexical floors read too, and whether
+/// the work budget ran out (indeterminate: the caller fails closed).
+package struct OpaqueScan {
+    package let opaque: Bool
+    package let innerTexts: [String]
+    package let exhausted: Bool
+    package let commands: Int
+}
+
+package func scanOpaqueProgram(_ command: ShellCommand) -> OpaqueScan {
+    var state = ScanState()
+    let opaque = OpaqueExecution.scan(command.rawValue, depth: 0, inherited: { .empty }, state: &state)
+    return OpaqueScan(
+        opaque: opaque || state.exhausted, innerTexts: state.innerTexts,
+        exhausted: state.exhausted, commands: state.commands
+    )
+}
+
+/// What a stdin reader reads, and whether rv can read it. `parts`: the
+/// producers' texts one by one, when their order is not known (a compound
+/// command), each read alone besides the joined `text`.
+struct Feed {
+    let literal: Bool
+    let text: String
+    var parts: [String] = []
+
+    static let unreadable = Feed(literal: false, text: "")
+    static let empty = Feed(literal: true, text: "")
+
+    /// Every text to read: the joined text, then each part alone.
+    var texts: [String] {
+        parts.count > 1 ? [text] + parts : [text]
+    }
+}
+
+/// Shared by one scan and every text it recurses into.
+struct ScanState {
+    static let commandCap = 4096
+    static let workCap = 4_000_000
+    static let nestingCap = 32
+
+    private(set) var commands = 0
+    private(set) var work = 0
+    private(set) var exhausted = false
+    var innerTexts: [String] = []
+    /// Function and alias names the command defines.
+    var definedNames: Set<String> = []
+
+    /// Spends budget; false once it is gone.
+    mutating func charge(commands: Int = 0, work: Int = 0) -> Bool {
+        self.commands += commands
+        self.work += work
+        if self.commands > Self.commandCap || self.work > Self.workCap { exhausted = true }
+        return exhausted == false
+    }
+}
+
+/// A simple command of the line, with what it reads and runs.
+struct LineCommand {
+    let tokens: [CommandToken]
+    /// The body its last `<<` reads; nil when it has none or the body was
+    /// not found.
+    let heredoc: ShellLexer.Heredoc?
+    let piece: Int
+    let stage: Int
+    let substitutions: [String]
+}
+
+/// A text's commands, flattened through groups and function bodies.
+/// `complex` (a compound command, a group, a definition) means the
+/// pipeline topology is not tracked, so every other command of the text
+/// counts as a reader's producer.
+struct Line {
+    var commands: [LineCommand] = []
+    var complex = false
+    var opaque = false
+    var stdinRedirected = false
+    var pieces = 0
+}
+
+extension OpaqueExecution {
+    static let maxDepth = 4
+
+    /// `inherited`: the stdin the text starts with, read only if needed.
+    static func scan(_ text: String, depth: Int, inherited: @escaping () -> Feed, state: inout ScanState) -> Bool {
+        guard depth <= maxDepth, state.exhausted == false else { return true }
+        var line = Line()
+        flatten(text, into: &line, nesting: 0, state: &state)
+        if state.exhausted || line.opaque { return true }
+        // Captured by every reader's feed, so its cache is shared by them.
+        var producers = Producers(line, inherited: line.stdinRedirected ? { .unreadable } : inherited)
+        for index in line.commands.indices {
+            let command = line.commands[index]
+            let feed: () -> Feed = { producers.feed(for: index) }
+            let context = Context(segment: command.tokens, heredoc: command.heredoc, feed: feed, depth: depth)
+            if segmentRunsOpaque(context, state: &state) { return true }
+            for inner in command.substitutions {
+                if scan(inner, depth: depth + 1, inherited: feed, state: &state) { return true }
+            }
+        }
+        return state.exhausted
+    }
+
+    // MARK: Flattening
+
+    static func flatten(_ text: String, into line: inout Line, nesting: Int, state: inout ScanState) {
+        guard nesting <= ScanState.nestingCap else { line.opaque = true; return }
+        guard state.charge(work: text.unicodeScalars.count) else { return }
+        let list = ShellLexer.walk(text, split: .list)
+        if list.ambiguous { line.opaque = true }
+        for piece in list.pieces {
+            let pieceID = line.pieces
+            line.pieces += 1
+            guard state.charge(work: piece.text.unicodeScalars.count) else { return }
+            let pipeline = ShellLexer.walk(piece.text, split: .pipe)
+            if pipeline.ambiguous { line.opaque = true }
+            var heredocs = piece.heredocs[...]
+            for (stageIndex, stage) in pipeline.pieces.enumerated() {
+                guard state.charge(commands: 1, work: stage.text.unicodeScalars.count) else { return }
+                let shape = ShellLexer.walk(stage.text, split: .none)
+                if shape.ambiguous { line.opaque = true }
+                let outer = shape.pieces.first ?? ShellLexer.Piece(text: "")
+                let tokens = ShellLexer.words(outer.text)
+                var heredoc: ShellLexer.Heredoc?
+                for token in tokens where token.wasQuoted == false {
+                    let op = redirectOperator(token.decoded)
+                    if op == "<<" || op == "<<-" { heredoc = heredocs.popFirst() }
+                }
+                classify(tokens, groups: outer.groups, into: &line, nesting: nesting, state: &state)
+                line.commands.append(
+                    LineCommand(
+                        tokens: tokens, heredoc: heredoc, piece: pieceID, stage: stageIndex,
+                        substitutions: outer.substitutions
+                    )
+                )
+                for body in outer.groups {
+                    line.complex = true
+                    flatten(body, into: &line, nesting: nesting + 1, state: &state)
+                }
+            }
+        }
+    }
+
+    /// Line-wide facts one command shows: a compound command, a
+    /// definition, `coproc`/`>&p`, `hash -p`, `exec < …`.
+    private static func classify(
+        _ tokens: [CommandToken], groups: [String], into line: inout Line, nesting: Int, state: inout ScanState
+    ) {
+        var index = 0
+        while index < tokens.count, tokens[index].wasQuoted == false,
+              isAssignment(tokens[index].decoded) || tokens[index].decoded == "!"
+        {
+            index += 1
+        }
+        guard index < tokens.count else { return }
+        let first = tokens[index]
+        let word = first.wasQuoted ? "" : first.decoded
+        let name = commandName(first.decoded)
+        if compoundWords.contains(word) || groups.isEmpty == false { line.complex = true }
+        if word == "coproc" { line.opaque = true }
+        for (position, token) in tokens.enumerated() where token.wasQuoted == false {
+            let op = redirectOperator(token.decoded)
+            if op == ">&" || op == "<&", tokens.dropFirst(position + 1).first?.decoded == "p" { line.opaque = true }
+        }
+        if let names = definedFunctionNames(tokens, from: index, groups: groups) {
+            for defined in names { define(defined, into: &line, state: &state) }
+        }
+        if name == "alias" {
+            for argument in tokens.dropFirst(index + 1) where argument.decoded.hasPrefix("-") == false {
+                guard let equals = argument.decoded.firstIndex(of: "=") else { continue }
+                define(String(argument.decoded[..<equals]), into: &line, state: &state)
+                flatten(String(argument.decoded[argument.decoded.index(after: equals)...]), into: &line, nesting: nesting + 1, state: &state)
+            }
+        }
+        if name == "hash", tokens.dropFirst(index + 1).contains(where: { $0.decoded == "-p" || $0.decoded.contains("=") }) {
+            // `hash -p /usr/bin/base64 echo` makes `echo` run another program.
+            line.opaque = true
+        }
+        if case .none = commandStart(tokens), tokens.contains(where: { commandName($0.decoded) == "exec" }),
+           tokens.contains(where: { ShellLexer.isRedirectOperator($0) && redirectOperator($0.decoded).hasPrefix("<") })
+        {
+            // `exec < f`, `exec 0<&3`: later readers read that.
+            line.stdinRedirected = true
+        }
+    }
+
+    /// `name() …`, `name () …`, `function name …`: the names defined.
+    /// A definition whose body is not a group is opaque (zsh `f() cmd`).
+    private static func definedFunctionNames(_ tokens: [CommandToken], from index: Int, groups: [String]) -> [String]? {
+        let words = tokens.dropFirst(index).map(\.decoded)
+        guard let first = words.first else { return nil }
+        if first == "function", tokens[index].wasQuoted == false {
+            let names = words.dropFirst().prefix { $0 != "()" }.map { $0.hasSuffix("()") ? String($0.dropLast(2)) : $0 }
+            return groups.isEmpty ? ["function"] : names
+        }
+        if first.hasSuffix("()") {
+            return groups.isEmpty ? ["function"] : [String(first.dropLast(2))].filter { $0.isEmpty == false }
+        }
+        if words.count > 1, words[1] == "()" {
+            return groups.isEmpty ? ["function"] : [first]
+        }
+        return nil
+    }
+
+    private static func define(_ raw: String, into line: inout Line, state: inout ScanState) {
+        let name = commandName(raw)
+        line.complex = true
+        state.definedNames.insert(name)
+        if raw == "function" || redefinitionHides(name) { line.opaque = true }
+    }
+
+    /// A name whose meaning the floor relies on.
+    private static func redefinitionHides(_ name: String) -> Bool {
+        wrapperValueOptions[name] != nil || shells.contains(name) || isInterpreter(name)
+            || lifecycleVerbs.contains(name) || readerNames.contains(name)
+    }
+
+    private static let readerNames: Set<String> = [
+        "echo", "printf", "print", "cat", "eval", "source", ".", "trap", "ssh", "xargs", "parallel", "find",
+        "awk", "gawk", "mawk", "nawk", "sed", "gsed", "read", "hash", "alias", "unalias", "enable",
+        // Read as silent producers.
+        "cd", "true", "false", ":", "test", "[", "export", "unset", "local", "readonly", "shift", "exit",
+        "return", "sleep", "wait", "set",
+    ]
+
+    private static let compoundWords: Set<String> = [
+        "if", "then", "elif", "else", "fi", "while", "until", "for", "select", "case", "esac", "do", "done",
+        "function", "coproc", "repeat",
+    ]
+}
+
+/// The literal producers of each reader, computed once and only when a
+/// reader asks.
+struct Producers {
+    private struct Facts {
+        let outputs: [String?]
+        let unreadableCount: Int
+        /// Producers whose text could splice with another's: not ending
+        /// in a newline, or holding a backslash.
+        let splicedCount: Int
+        /// Per command: index of its pipeline's first stage, and how many
+        /// unreadable producers come before it in that pipeline.
+        let pipelineStarts: [(start: Int, unreadableBefore: Int)]
+    }
+
+    private let line: Line
+    private let inherited: () -> Feed
+    private var inheritedFeed: Feed?
+    private var facts: Facts?
+
+    init(_ line: Line, inherited: @escaping () -> Feed) {
+        self.line = line
+        self.inherited = inherited
+    }
+
+    mutating func feed(for index: Int) -> Feed {
+        if line.complex {
+            let facts = loadFacts()
+            // Order and repetition are unknown, so each producer must emit
+            // whole lines (no `echo -n`, no continuation) that are read
+            // alone as well as joined: no two can splice into one command.
+            let others = facts.unreadableCount - (facts.outputs[index] == nil ? 1 : 0)
+            let start = loadInherited()
+            guard start.literal, others == 0, facts.splicedCount == 0 else { return .unreadable }
+            let parts = ([start.text] + facts.outputs.compactMap { $0 }).filter { $0.isEmpty == false }
+            return Feed(literal: true, text: parts.joined(), parts: parts)
+        }
+        let command = line.commands[index]
+        guard command.stage > 0 else { return loadInherited() }
+        let facts = loadFacts()
+        let pipeline = facts.pipelineStarts[index]
+        guard pipeline.unreadableBefore == 0 else { return .unreadable }
+        return Feed(literal: true, text: facts.outputs[pipeline.start..<index].compactMap { $0 }.joined())
+    }
+
+    private mutating func loadInherited() -> Feed {
+        if let inheritedFeed { return inheritedFeed }
+        let feed = inherited()
+        inheritedFeed = feed
+        return feed
+    }
+
+    private mutating func loadFacts() -> Facts {
+        if let facts { return facts }
+        let outputs = line.commands.map(OpaqueExecution.producerOutput)
+        var starts: [(start: Int, unreadableBefore: Int)] = []
+        var start = 0
+        var unreadable = 0
+        for (index, command) in line.commands.enumerated() {
+            if index == 0 || command.piece != line.commands[index - 1].piece {
+                start = index
+                unreadable = 0
+            }
+            starts.append((start, unreadable))
+            if outputs[index] == nil { unreadable += 1 }
+        }
+        let spliced = outputs.filter { output in
+            guard let output, output.isEmpty == false else { return false }
+            return output.hasSuffix("\n") == false || output.contains("\\")
+        }.count
+        let loaded = Facts(
+            outputs: outputs, unreadableCount: outputs.filter { $0 == nil }.count, splicedCount: spliced,
+            pipelineStarts: starts
+        )
+        facts = loaded
+        return loaded
+    }
+}

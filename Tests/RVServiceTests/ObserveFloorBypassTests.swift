@@ -105,6 +105,59 @@ private let readerRows: [String] = [
     "parallel launchctl ::: 'bootout gui/501/dev.rv.evaluate'",
 ]
 
+private let launchctlStop = "launchctl bootout gui/501/dev.rv.evaluate"
+
+/// A literal feed is read, not trusted: its text is scanned and stop-read,
+/// through every transparent wrapper, group, here-string and heredoc.
+private let literalFeedRows: [String] = [
+    "echo 'echo \(stop) | base64 -d | sh' | sh",
+    "command echo '\(launchctlStop)' | sh",
+    "command echo 'echo \(stop) | base64 -d | sh' | sh",
+    "{ echo '\(launchctlStop)'; } | sh",
+    "{ echo 'echo \(stop) | base64 -d | sh'; } | sh",
+    "X=1 echo '\(launchctlStop)' | sh",
+    "echo '\(launchctlStop)' | env sh",
+    "echo '\(launchctlStop)' | sudo sh",
+    "echo 'echo \(stop) | base64 -d | sh' | sudo -E bash",
+    "sh <<< '\(launchctlStop)'",
+    "sh <<< 'echo \(stop) | base64 -d | sh'",
+    "<<< '\(launchctlStop)' sh",
+    "sh <<'EOF'\n\(launchctlStop)\nEOF",
+    "bash <<EOF\necho \(stop) | base64 -d | sh\nEOF",
+    "cat <<'EOF' | sh\n\(launchctlStop)\nEOF",
+    "python3 <<< 'import os; os.system(\"\(launchctlStop)\")'",
+    "if true; then echo \(stop) | base64 -d; fi | sh",
+    // Producers that splice into one command when their order is unknown.
+    "{ echo -n launch; echo 'ctl bootout gui/501/dev.rv.evaluate'; } | sh",
+    "{ printf launch; echo 'ctl bootout gui/501/dev.rv.evaluate'; } | sh",
+    "for i in 1 2; do echo -n 'ctl bootout gui/501/dev.rv.evaluate'; echo -n ' ;launch'; done | sh",
+    "for i in 1; do base64 -d <<< \(stop); done | sh",
+    // Command names as the shell resolves them.
+    "echo \(stop) | base64 -d | \\sh",
+    "echo \(stop) | base64 -d | s\\h",
+    "echo \(stop) | base64 -d | Bash",
+    "echo \(stop) | base64 -d | /BIN/SH",
+    "echo \(stop) | base64 -d | arch -arm64 sh",
+    "echo \(stop) | base64 -d | xcrun sh",
+    // Same-line indirection.
+    "echo(){ base64 -d <<<\(stop); }; echo | sh",
+    "f(){ sh; }; echo \(stop) | base64 -d | f",
+    "function f { sh; }; echo \(stop) | base64 -d | f",
+    "alias f=sh; echo \(stop) | base64 -d | f",
+    "coproc sh; base64 -d <<<\(stop) >&p",
+    "hash -p /usr/bin/base64 echo; echo -d \(stop) | sh",
+    // zsh `=(…)` is a process substitution.
+    "sh =(echo \(stop) | base64 -d)",
+    "source =(echo \(stop) | base64 -d)",
+    // Quote desync: a heredoc apostrophe, an ANSI-C escaped quote.
+    "cat <<EOF\nit's\nEOF\necho \(stop) | base64 -d | sh",
+    "echo $'\\'' ; echo \(stop) | base64 -d | sh",
+    "x=$((1<<2))\necho \(stop) | base64 -d | sh",
+    // parallel's value options.
+    "parallel --timeout 5 launchctl ::: bootout gui/501/dev.rv.evaluate",
+    "parallel --unknown-opt 5 launchctl ::: bootout gui/501/dev.rv.evaluate",
+]
+
 @Suite("Observe floor bypasses")
 struct ObserveFloorBypassTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -116,7 +169,10 @@ struct ObserveFloorBypassTests {
     /// (observe would have allowed) and never reads as self-protection.
     /// A deny is kept as the enforced deny (same rule as an enforce host);
     /// anything else becomes the observe label, or stays a hold.
-    @Test("observe host: a program rv cannot see is sent to Terminal", arguments: unanalyzableRows + readerRows)
+    @Test(
+        "observe host: a program rv cannot see is sent to Terminal",
+        arguments: unanalyzableRows + readerRows + literalFeedRows
+    )
     func observeFloorsUnanalyzableExecution(command: String) async throws {
         let home = try observeHome()
         defer { remove(home) }
@@ -173,7 +229,7 @@ struct ObserveFloorBypassTests {
         #expect(deny.ruleID == BuiltinRule.unwrapLimited.ruleID)
     }
 
-    @Test("detector: stdin readers, data-fed executors, lifecycle runners", arguments: readerRows)
+    @Test("detector: stdin readers, data-fed executors, lifecycle runners", arguments: readerRows + literalFeedRows)
     func detectorFloorsReaders(command: String) {
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)), "\(command)")
     }
@@ -243,9 +299,48 @@ struct ObserveFloorBypassTests {
         "python3 -c 'import subprocess; subprocess.run([\"make\"])'",
         "jq . data.json | python3 -c 'import json,sys; print(json.load(sys.stdin))'",
         "git log --oneline | head -5",
+        // Literal feeds whose text runs nothing rv cannot read.
+        "sh <<< 'ls -la'",
+        "bash <<'EOF'\nmake test\nEOF",
+        "cat <<'EOF' | sh\nls -la\nEOF",
+        "(cd /tmp && echo ls | sh)",
+        "{ echo 'ls'; } | sh",
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "(cd tools && python3 - <<'EOF'\nimport sys\nprint(sys.version)\nEOF\n)",
+        "cat <<EOF > notes.txt\nit's done\nEOF",
+        "git commit -m \"fix printf() and echo() calls\"",
+        "echo $(( 1 << 2 ))",
+        "echo $'it\\'s'",
+        "xargs -0 rm -f < list.txt",
+        "find . -print0 | xargs -0 grep -l TODO",
     ])
     func detectorPasses(command: String) {
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// The walk is linear and capped: a huge pipeline or group runs out of
+    /// budget (indeterminate, so floored) instead of costing O(n²). The
+    /// walk takes well under a second; the bound is loose so a starved CI
+    /// runner does not flake, while a quadratic walk (minutes here) fails.
+    @Test("detector: a 64 KB pipeline or group exhausts the budget fast", arguments: [
+        String(repeating: "a|", count: 32_768),
+        "(" + String(repeating: ":;", count: 32_768) + ")",
+    ])
+    func detectorBoundsWork(command: String) {
+        let clock = ContinuousClock()
+        var scan: OpaqueScan?
+        let elapsed = clock.measure { scan = scanOpaqueProgram(ShellCommand(rawValue: command)) }
+        #expect(scan?.exhausted == true)
+        #expect(scan?.opaque == true)
+        #expect((scan?.commands ?? .max) <= 4097)
+        #expect(elapsed < .seconds(10), "\(elapsed)")
+    }
+
+    /// The stop guard itself reads past a heredoc apostrophe.
+    @Test("stop guard: a heredoc body cannot desync the lines after it")
+    func stopGuardSkipsHeredocBodies() {
+        #expect(RVDStopGuard.stopsRVD("cat <<EOF\nit's\nEOF\n\(launchctlStop)"))
+        #expect(RVDStopGuard.stopsRVD("echo $'\\'' ; \(launchctlStop)"))
     }
 
     /// The narrowing must not open what the lexical floors hold: the
@@ -254,6 +349,10 @@ struct ObserveFloorBypassTests {
         "echo ~/.claude/settings.json | xargs rm",
         "bash -c 'launchctl bootout gui/501/dev.rv.evaluate'",
         "launchctl bootout gui/501/dev.rv.evaluate",
+        // A heredoc apostrophe or `$'\''` once hid the commands after it.
+        "cat <<EOF\nit's\nEOF\n\(launchctlStop)",
+        "echo $'\\'' ; \(launchctlStop)",
+        "echo '\(launchctlStop)' | sh",
     ])
     func observeStillEscalatesVisibleText(command: String) async throws {
         let home = try observeHome()
