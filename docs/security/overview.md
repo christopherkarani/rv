@@ -259,7 +259,9 @@ as risky.
   command whose program rv cannot see (a dynamic command word, `eval` or
   `trap` action; a shell or interpreter reading its program from stdin
   unless every producer is a literal `echo`, plain `printf` or `cat` of
-  literal paths; dynamic or encoded inline code, or inline code, `awk`
+  literal paths, whose fed text is then scanned and stop-read too; a
+  same-line function or alias redefining a name the floor reads,
+  `coproc`; dynamic or encoded inline code, or inline code, `awk`
   or `sed e` running a command over unreadable input; `ssh` with a
   dynamic remote command; a runner whose verb is a shell, an interpreter
   or a process or service control verb; an unresolved alias; an
@@ -930,7 +932,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C50 | Sources/RVService/JudgeGate.swift:412-423; Sources/RVService/JudgeGate.swift:584-585 |
 | C51 | Sources/RVService/GitRebaseProbe.swift:6-16 |
 | C52 | Sources/RVPolicy/RebaseRecovery.swift:20-30; Sources/RVPolicy/PolicyGate.swift:49-50 |
-| C53 | Sources/RVService/ObserveFloor.swift:5-24; Sources/RVService/ObserveFloor.swift:31-39; Sources/RVService/ObserveFloor.swift:84-88; Sources/RVService/ObserveFloor.swift:105-157; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-23; Sources/RVEngine/OpaqueExecution+Input.swift:4-30; Sources/RVService/GatedEvaluate.swift:568-583 |
+| C53 | Sources/RVService/ObserveFloor.swift:5-24; Sources/RVService/ObserveFloor.swift:31-39; Sources/RVService/ObserveFloor.swift:84-88; Sources/RVService/ObserveFloor.swift:105-164; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-26; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-21; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:568-583 |
 | C54 | Sources/RVEngine/FileToolEvaluate.swift:10-33 |
 | C55 | Sources/RVDomain/SecretPathCatalog.swift:93-127 |
 | C56 | Sources/RVHooks/ClaudeSearchTarget.swift:7-10 |

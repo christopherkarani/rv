@@ -140,15 +140,40 @@ The README's "MCP governance" section lists every case.
   - a dynamic command word (`$x`, `$(…)`, backticks), a dynamic `eval`,
     or a dynamic `trap` action (`trap "$X" EXIT`);
   - a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `mksh`, `ash`, `yash`,
-    `fish`, `csh`, `tcsh`) or interpreter that reads its program from
-    stdin, unless every command feeding it is a literal `echo`, a
-    `printf` with no `%` or escape other than `\n`, or a `cat` of
-    literal paths. So `… | sed 's/^/launchctl /' | sh`,
+    `fish`, `csh`, `tcsh`, `nu`, `xonsh`) or interpreter that reads its
+    program from stdin, unless what it reads is a literal here-string, a
+    literal heredoc, or the output of commands that are all a literal
+    `echo`, a `printf` with no `%` or escape other than `\n`, a `cat` of
+    literal paths or of a literal heredoc, or a silent builtin (`cd`,
+    `test`, `export`, …). So `… | sed 's/^/launchctl /' | sh`,
     `python3 -c "print(…)" | sh`, `… | base64 -d | sh` and
-    `printf '\x6c…' | sh` go to Terminal whatever the producer is.
-    Backslash-newline continuations are joined first;
-  - a shell or interpreter running `<(…)`, a dynamic here-string,
-    `source /dev/stdin` or a dynamic script operand (`bash "$SCRIPT"`);
+    `printf '\x6c…' | sh` go to Terminal whatever the producer is. A
+    literal feed is read, not trusted: its text is scanned like the line
+    and read by the stop and install floors (`echo 'echo … | base64 -d |
+    sh' | sh` goes to Terminal). In a pipeline the producers are the
+    stages before the reader; inside a compound command (`if`, `for`,
+    `while`, `case`), a `{ …; }`/`( … )` group or a function body they
+    are every other command of the text, each of which must print whole
+    lines (no `echo -n`, no backslash). Wrappers are seen through on both
+    sides (`command`, `builtin`, `env`, `sudo`, `exec`, `nohup`, `time`,
+    `nice`, `timeout`, `stdbuf`, `caffeinate`, `arch`, `xcrun`, `X=1`),
+    and command names are matched unescaped, case-folded and by basename
+    (`\sh`, `Bash`, `/BIN/SH`). The line is split the way the shell
+    splits it: quotes (`$'\''` included), heredoc bodies (an apostrophe in
+    one does not hide the lines after it), continuations, groups and
+    `$((…))`;
+  - a shell or interpreter running `<(…)` or zsh's `=(…)`, a dynamic
+    here-string or heredoc, `source /dev/stdin` or a dynamic script
+    operand (`bash "$SCRIPT"`);
+  - a same-line definition that changes what a name runs: a function or
+    alias named like a command the floor reads (`echo(){ …; }`, `alias
+    cat=…`), a function whose body is not a group, `coproc`, `>&p`, and
+    `hash -p`; any other function or alias used as a stdin reader is
+    floored like a shell;
+  - text the shells may split differently than rv does (an unbalanced
+    group, a `}` in argument position, which zsh closes on and bash does
+    not), and a command too large to walk within budget (over 4096
+    commands);
   - dynamic or encoded inline code (`osascript -e "$(…)"`,
     `python3 -c "…os.system(base64.b64decode(…))"`), and inline code
     that runs a command over input rv cannot read: stdin from a
@@ -168,8 +193,10 @@ The README's "MCP governance" section lists every case.
     input), and `parallel` with no verb.
 
   What the lexical floors read is the command line itself: the words of
-  each command, the inline `-c` script of a shell, and the text of a
-  literal `echo`/`printf` piped into a shell. They do not read files. So
+  each command (also re-read with heredoc bodies removed, one command at
+  a time), the inline `-c` script of a shell, the text a shell or
+  interpreter is fed from a literal pipe, here-string or heredoc, and the
+  string literals of inline interpreter code. They do not read files. So
   a literal verb with dynamic arguments (`xargs rm`), an inner script
   whose commands are all literal (`bash -c 'for f in *; do echo $f;
   done'`) and a literal script file stay observed, and the file's
@@ -215,8 +242,13 @@ The README's "MCP governance" section lists every case.
   `find -exec` or `xargs` that runs a shell (`find . -exec sh -c 'echo
   {}' \;`) goes to Terminal too, as do `pgrep node | xargs kill`, `ssh
   host 'echo $HOME'` (rv cannot tell single from double quotes there),
-  `curl … | sh` installers, `cat <<EOF | sh`, and `awk` programs that
-  call `system` or pipe to a command. rv also cannot see what a git alias or
+  `curl … | sh` installers, `cat <<EOF | sh` whose body expands (`$`,
+  backticks), and `awk` programs that call `system` or pipe to a command.
+  A shell or interpreter reading stdin inside a compound command, group
+  or function body goes to Terminal when any other command there is not
+  a literal producer (`(npm ci && cat x | sh)`), as does a line that
+  defines a function named like a command rv reads (`cd() { …; }`) or
+  has a `}` argument inside a group. rv also cannot see what a git alias or
   extension runs, so observe sends an unknown git subcommand (`git st`,
   `git lg`) to Terminal even when `core.git` is off.
 - **On an observe host, reading rv's install is observed.** A command
