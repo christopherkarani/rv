@@ -16,6 +16,10 @@ public struct TestRobotPayload: Equatable, Sendable, Encodable {
     public var packID: String?
     public var ruleID: String?
     public var reason: String?
+    /// `observe` only when observe let the would-be `decision` run.
+    public var mode: String? = nil
+    /// What the hook did instead (`allow`); set with `mode`.
+    public var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -23,6 +27,8 @@ public struct TestRobotPayload: Equatable, Sendable, Encodable {
         case packID = "pack_id"
         case ruleID = "rule_id"
         case reason
+        case mode
+        case effective
     }
 }
 
@@ -35,6 +41,10 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     public var reason: String?
     public var explanation: String?
     public var nextAction: String?
+    /// `observe` only when observe let the would-be `decision` run.
+    public var mode: String? = nil
+    /// What the hook did instead (`allow`); set with `mode`.
+    public var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -44,6 +54,8 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
         case reason
         case explanation
         case nextAction = "next_action"
+        case mode
+        case effective
     }
 }
 
@@ -194,7 +206,18 @@ public struct PacksRobotPayload: Equatable, Sendable, Encodable {
     }
 }
 
-public func testRobotPayload(from result: EvaluationResult) -> TestRobotPayload {
+/// `observed`: observe let `result` (the would-be verdict) run; adds
+/// `mode` / `effective`.
+public func testRobotPayload(from result: EvaluationResult, observed: Bool = false) -> TestRobotPayload {
+    var payload = baseTestRobotPayload(from: result)
+    if observed {
+        payload.mode = observeRobotMode
+        payload.effective = observeRobotEffective
+    }
+    return payload
+}
+
+private func baseTestRobotPayload(from result: EvaluationResult) -> TestRobotPayload {
     switch result.decision {
     case .allow:
         return TestRobotPayload(
@@ -223,15 +246,20 @@ public func testRobotPayload(from result: EvaluationResult) -> TestRobotPayload 
     }
 }
 
+/// Observe fields follow `model.observeNote`: set only when observe let
+/// the would-be decision run.
 public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPayload {
-    ExplainRobotPayload(
+    let observed = model.observeNote != nil
+    return ExplainRobotPayload(
         schema: RobotSchema.explain,
         decision: robotDecision(model.decision),
         packID: model.packID?.rawValue,
         ruleID: model.ruleID?.rawValue,
         reason: model.fact,
         explanation: model.explanation,
-        nextAction: model.nextAction
+        nextAction: model.nextAction,
+        mode: observed ? observeRobotMode : nil,
+        effective: observed ? observeRobotEffective : nil
     )
 }
 

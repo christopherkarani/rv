@@ -119,9 +119,13 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async throws -> CLIResult {
-        try render(
+        let verdict = await LiveEvaluateWorld(home: home, store: store, clock: { now }).peekVerdict(
+            command: ShellCommand(rawValue: raw),
+            cwd: cwd
+        )
+        return try render(
             kind: kind,
-            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now, home: home),
+            verdict: verdict,
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested
@@ -179,12 +183,35 @@ public enum CommandRun {
         probe: ThemeProbe,
         requested: RequestedMode
     ) throws -> CLIResult {
+        try render(
+            kind: kind,
+            verdict: GatedVerdict(result: result),
+            command: command,
+            probe: probe,
+            requested: requested
+        )
+    }
+
+    /// Renders the verdict enforce would reach: under observe that is the
+    /// would-be verdict (exit code included), and when observe let it run
+    /// the output says so.
+    public static func render(
+        kind: CLIKind,
+        verdict: GatedVerdict,
+        command: ShellCommand,
+        probe: ThemeProbe,
+        requested: RequestedMode
+    ) throws -> CLIResult {
+        let result = verdict.shown
+        let observed = verdict.observeOverrode
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
-            return try robotResult(kind: kind, result: result, command: command, exitCode: exitCode)
+            return try robotResult(
+                kind: kind, result: result, observed: observed, command: command, exitCode: exitCode
+            )
         }
 
         let lines = kind.usesExplainFrame
@@ -192,14 +219,13 @@ public enum CommandRun {
                 explainViewModel(
                     from: result,
                     command: command,
-                    normalized: result.matchingView.rawValue
+                    normalized: result.matchingView.rawValue,
+                    observed: observed
                 ),
                 palette: palette
             )
-            : prettyTestLines(
-                result: result,
-                command: command,
-                columns: probe.columns,
+            : TestRenderer().render(
+                testViewModel(from: result, command: command, columns: probe.columns, observed: observed),
                 palette: palette
             )
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
@@ -208,6 +234,7 @@ public enum CommandRun {
     private static func robotResult(
         kind: CLIKind,
         result: EvaluationResult,
+        observed: Bool,
         command: ShellCommand,
         exitCode: Int32
     ) throws -> CLIResult {
@@ -220,25 +247,14 @@ public enum CommandRun {
                 from: explainViewModel(
                     from: result,
                     command: command,
-                    normalized: result.matchingView.rawValue
+                    normalized: result.matchingView.rawValue,
+                    observed: observed
                 )
             )
             text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:
-            text = try RobotDocument.test(testRobotPayload(from: result)).render()
+            text = try RobotDocument.test(testRobotPayload(from: result, observed: observed)).render()
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
-    }
-
-    private static func prettyTestLines(
-        result: EvaluationResult,
-        command: ShellCommand,
-        columns: Int,
-        palette: Palette
-    ) -> [String] {
-        TestRenderer().render(
-            testViewModel(from: result, command: command, columns: columns),
-            palette: palette
-        )
     }
 }
