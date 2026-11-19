@@ -38,13 +38,16 @@ public struct HookDoor: Sendable {
         world: HookEvaluateWorld,
         deadline: HookDeadline,
         slowLog: SlowHookLog,
-        hungGrace: Duration = hungGrace
+        hungGrace: Duration = hungGrace,
+        watchdogSleep: @escaping @Sendable (ContinuousClock.Instant) async throws -> Void = {
+            try await Task.sleep(until: $0, clock: .continuous)
+        }
     ) async throws -> HookEvaluateReply {
         let timing = HookTiming()
         timing.add(.queue, ContinuousClock.now - deadline.receivedAt)
         let watchdog = Task {
             do {
-                try await Task.sleep(until: deadline.expiresAt.advanced(by: hungGrace), clock: .continuous)
+                try await watchdogSleep(deadline.expiresAt.advanced(by: hungGrace))
             } catch {
                 return // the request finished
             }
@@ -102,9 +105,13 @@ public struct HookDoor: Sendable {
     /// and the wire must not tell the agent to wait for one.
     package struct UnkeyedAsk: Error, Equatable {}
 
+    /// No pending store to record a host ask in.
+    package struct NoPendingStore: Error, Equatable {}
+
     /// Create one awaiting row for a product Ask, keyed by the request's
-    /// `approvalSession`. No store is a no-op; no approval session throws
-    /// `UnkeyedAsk`, so the reply says the ask went unrecorded.
+    /// `approvalSession`. No store (`NoPendingStore`) or no approval
+    /// session (`UnkeyedAsk`) throws, so the reply says the ask went
+    /// unrecorded.
     /// A full store drops the row (spam protection): the consult still
     /// answers ask-denial and the TTY code path is unaffected, so the
     /// human can still approve the exact action out of band.
@@ -114,7 +121,7 @@ public struct HookDoor: Sendable {
         store: (any PendingApprovalCoordinating)?,
         now: Date
     ) async throws {
-        guard let store else { return }
+        guard let store else { throw NoPendingStore() }
         guard let session = request.approvalSession else { throw UnkeyedAsk() }
         // M6: shell asks bind the hidden payload in the dedupe key so
         // same-view different-payload asks mint separate waits. File

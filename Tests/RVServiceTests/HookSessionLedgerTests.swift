@@ -133,6 +133,16 @@ import RVPolicy
         #expect(reply.stderr.contains(approvalPendingLine) == false)
     }
 
+    /// rvd without a pending store records nothing either: the agent is
+    /// told the ask went unrecorded.
+    @Test func askWithoutAPendingStoreIsUnrecorded() async throws {
+        let env = try Env()
+        defer { env.tearDown() }
+        let reply = try await env.run(Self.codexStdin(["session_id": Self.session]), host: .codex, pending: nil)
+        #expect(reply.stderr.contains(approvalUnrecordedLine))
+        #expect(reply.stderr.contains(approvalPendingLine) == false)
+    }
+
     /// A Codex turn id keys the pending approval when there is no session
     /// id, but the block row carries no session.
     @Test func turnIDKeysTheApprovalButNotTheBlockRow() async throws {

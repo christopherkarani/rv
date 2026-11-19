@@ -11,8 +11,9 @@ import Synchronization
 /// durations; never command text, paths or session ids. A request still
 /// running `HookDoor.hungGrace` past its deadline (a stuck judge or read)
 /// would never reach the completion line, so a watchdog logs its phases so
-/// far once ("still running"); its completion line, if it ever finishes,
-/// then usually falls inside `SlowHookLog.interval` and is only counted.
+/// far once ("still running"). Watchdog lines have their own window in
+/// `SlowHookLog`, so its completion line, if it ever finishes, is written
+/// too unless another completion line was written within the interval.
 final class HookTiming: Sendable {
     enum Phase: String, CaseIterable, Sendable {
         /// Frame receipt to `HookDoor.run` (transport and actor hops).

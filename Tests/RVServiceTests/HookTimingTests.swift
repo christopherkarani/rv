@@ -89,6 +89,23 @@ import Synchronization
         #expect(lines.all.isEmpty)
     }
 
+    /// The watchdog's sleep ends just as the request finishes, so it
+    /// returns instead of throwing: the cancellation check after the sleep
+    /// keeps a finished request from logging as still running.
+    @Test func watchdogWakingAtCancellationLogsNothing() async throws {
+        let lines = Lines()
+        let deadline = HookDeadline(receivedAt: .now, budget: .seconds(60))
+        _ = try await HookDoor.run(
+            host: .pi, stdin: Self.stdin, world: hookWorld(evaluate: { _, _ in EvaluationResult(outcome: .plain) }),
+            deadline: deadline, slowLog: lines.log(), hungGrace: .zero,
+            watchdogSleep: { _ in
+                // Wakes only once cancelled, and without throwing.
+                while Task.isCancelled == false { await Task.yield() }
+            })
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(lines.all.isEmpty)
+    }
+
     /// A burst of completion lines never hides a stuck request, and stuck
     /// requests are still limited to one line per interval.
     @Test func watchdogLinesHaveTheirOwnWindow() {
