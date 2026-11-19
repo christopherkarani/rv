@@ -35,7 +35,7 @@ func proposedAction_hostFileRequest_isFileNotShell(
         Issue.record("expected .request for \(host.rawValue) \(fixture)")
         return
     }
-    guard case .file(_, let file, let cwd, let session) = request else {
+    guard case .file(_, let file, let cwd, let sessions) = request else {
         Issue.record("expected HookRequest.file for \(host.rawValue) \(fixture)")
         return
     }
@@ -50,7 +50,7 @@ func proposedAction_hostFileRequest_isFileNotShell(
     }
     let expected = ActionFingerprint.make(
         host: host,
-        session: session,
+        session: sessions.attribution,
         cwd: cwd,
         file: file
     )

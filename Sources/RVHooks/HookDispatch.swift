@@ -125,7 +125,7 @@ private func pendingAction(
 ) -> ProposedAction {
     result.pendingAction(
         host: request.host,
-        session: request.session,
+        session: request.approvalSession,
         cwd: request.cwd,
         command: command
     )

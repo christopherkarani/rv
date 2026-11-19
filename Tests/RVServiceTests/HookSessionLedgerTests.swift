@@ -24,7 +24,14 @@ import RVPolicy
             home = try #require(HomeDirectory(validating: homeURL.path))
         }
 
-        func run(_ stdin: String) async throws -> HookEvaluateReply {
+        /// A generous deadline: a starved CI runner can take longer than
+        /// `HookDeadline.budget` to evaluate, and a request past its
+        /// deadline commits no block row and replies with a timeout deny.
+        func run(
+            _ stdin: String,
+            host: HookHost = .claude,
+            pending: (any PendingApprovalCoordinating)? = nil
+        ) async throws -> HookEvaluateReply {
             let live = LiveEvaluateWorld(
                 home: home,
                 store: AllowOnceStore(baseDirectory: allowOnceDirectory),
@@ -32,8 +39,13 @@ import RVPolicy
                 allowlist: { _, _ in .empty }
             )
             let world = HookEvaluateWorld.live(
-                world: live, host: .claude, pending: nil, clock: { HookSessionLedgerTests.now })
-            return try await HookDoor.run(host: .claude, stdin: stdin, world: world)
+                world: live, host: host, pending: pending, clock: { HookSessionLedgerTests.now })
+            let reply = try await HookDoor.run(
+                host: host, stdin: stdin, world: world, deadline: HookDeadline(budget: .seconds(600)))
+            #expect(reply.stdout.contains(HookDoor.timeoutReason) == false)
+            #expect(reply.stderr.contains(HookDoor.timeoutReason) == false)
+            return reply
+
         }
 
         func blocks() -> [DenialLedgerRecord] {
@@ -98,5 +110,40 @@ import RVPolicy
         let block = try #require(env.blocks().last)
         #expect(block.session == nil)
         #expect(env.auditLines().last?.contains("\"session\"") == false)
+    }
+
+    private static func codexStdin(_ ids: [String: String]) throws -> String {
+        var object: [String: Any] = [
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/tmp/ws",
+            "tool_input": ["command": "git reset --hard"],
+        ]
+        object.merge(ids) { _, new in new }
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+
+    /// An ask with no id to key an approval by records nothing, so the
+    /// agent is told the ask went unrecorded, not to wait for a row.
+    @Test func askWithoutAnyHostIDIsUnrecorded() async throws {
+        let env = try Env()
+        defer { env.tearDown() }
+        let pending = FakePendingApprovals()
+        let reply = try await env.run(Self.codexStdin([:]), host: .codex, pending: pending)
+        #expect(await pending.createCalls.isEmpty)
+        #expect(reply.stderr.contains(approvalUnrecordedLine))
+        #expect(reply.stderr.contains(approvalPendingLine) == false)
+    }
+
+    /// A Codex turn id keys the pending approval when there is no session
+    /// id, but the block row carries no session.
+    @Test func turnIDKeysTheApprovalButNotTheBlockRow() async throws {
+        let env = try Env()
+        defer { env.tearDown() }
+        let pending = FakePendingApprovals()
+        let reply = try await env.run(Self.codexStdin(["turn_id": "turn_main"]), host: .codex, pending: pending)
+        let created = try #require(await pending.createCalls.first)
+        #expect(created.identity.session == SessionID(validating: "turn_main"))
+        #expect(reply.stderr.contains(approvalPendingLine))
+        let block = try #require(env.blocks().last)
+        #expect(block.session == nil)
     }
 }

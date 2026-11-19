@@ -48,6 +48,9 @@ public struct HookDoor: Sendable {
             } catch {
                 return // the request finished
             }
+            // The sleep can end just as the request finishes; its own
+            // completion line covers it then.
+            guard Task.isCancelled == false else { return }
             logIfSlow(timing, host: host, deadline: deadline, to: slowLog, running: true)
         }
         defer {
@@ -88,14 +91,20 @@ public struct HookDoor: Sendable {
             tripped: deadline.hasTripped,
             running: running
         )
-        if let message { log.report(message) }
+        if let message { log.report(message, running: running) }
     }
 
     private static func timeoutReply(host: HookHost) -> HookEvaluateReply {
         reply(productionHostCodec(host).encodeDeny(reason: timeoutReason, rule: nil, next: .none))
     }
 
-    /// Create one awaiting row for a product Ask. Missing session is a no-op.
+    /// A host ask with no id to key its approval by: no row is created,
+    /// and the wire must not tell the agent to wait for one.
+    package struct UnkeyedAsk: Error, Equatable {}
+
+    /// Create one awaiting row for a product Ask, keyed by the request's
+    /// `approvalSession`. No store is a no-op; no approval session throws
+    /// `UnkeyedAsk`, so the reply says the ask went unrecorded.
     /// A full store drops the row (spam protection): the consult still
     /// answers ask-denial and the TTY code path is unaffected, so the
     /// human can still approve the exact action out of band.
@@ -105,7 +114,8 @@ public struct HookDoor: Sendable {
         store: (any PendingApprovalCoordinating)?,
         now: Date
     ) async throws {
-        guard let store, let session = request.session else { return }
+        guard let store else { return }
+        guard let session = request.approvalSession else { throw UnkeyedAsk() }
         // M6: shell asks bind the hidden payload in the dedupe key so
         // same-view different-payload asks mint separate waits. File
         // asks carry no shell payload; their fingerprint already covers

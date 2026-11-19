@@ -29,14 +29,16 @@ public struct CodexHostCodec: HostCodec {
         }
         let cwdText = firstNonEmpty(envelope.toolInput?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
-        // A turn id is not a session: it names one turn, so neither a
-        // pending approval nor a block row may be keyed by it.
+        // A turn id is not a session: it may key a pending approval when
+        // Codex sent no session id, but never names one on a block row.
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
+        let turn = firstNonEmpty(envelope.turnId).flatMap { SessionID(validating: $0) }
         return HookRequest.decoded(
             host: .codex,
             command: envelope.toolInput?.command,
             cwd: cwd,
-            session: session
+            session: session,
+            approvalSession: turn
         )
     }
 
@@ -57,6 +59,7 @@ private struct CodexEnvelope: Decodable {
     var toolInput: CodexToolInput?
     var cwd: String?
     var sessionId: String?
+    var turnId: String?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
@@ -64,6 +67,7 @@ private struct CodexEnvelope: Decodable {
         case toolInput = "tool_input"
         case cwd
         case sessionId = "session_id"
+        case turnId = "turn_id"
     }
 }
 
