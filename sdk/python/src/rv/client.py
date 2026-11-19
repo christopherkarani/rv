@@ -31,7 +31,9 @@ from .errors import (
 from .raw import RawClient
 from .transports import DEFAULT_CALL_TIMEOUT, Transport, UnixSocketTransport
 
-#: Curated methods. ``hookEvaluate`` is raw-only (host adapters stay Swift/C).
+#: Curated methods. ``hookEvaluate`` is raw-only (host adapters stay Swift/C);
+#: ``policyStatus`` is raw-only until a typed model lands (the rv CLI is its
+#: consumer).
 CURATED_METHODS = frozenset(
     {
         "evaluate",
@@ -47,7 +49,7 @@ CURATED_METHODS = frozenset(
         "ruleSave",
     }
 )
-RAW_ONLY_METHODS = frozenset({"hookEvaluate"})
+RAW_ONLY_METHODS = frozenset({"hookEvaluate", "policyStatus"})
 
 
 class Client:

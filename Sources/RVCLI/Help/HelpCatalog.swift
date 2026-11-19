@@ -991,13 +991,14 @@ enum HelpCatalog {
                 HelpRow(name: "rv policy show [--base] [--effective]"),
                 HelpRow(name: "rv policy show --revision <n> [--repo]"),
                 HelpRow(name: "rv policy list [--repo]"),
-                HelpRow(name: "rv policy draft --english <text> [--save]"),
+                HelpRow(name: "rv policy draft --english <text> [--save [--wait]]"),
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
-                HelpRow(name: "rv policy rollback <revision> [--repo] [--save] [--json]"),
+                HelpRow(name: "rv policy rollback <revision> [--repo] [--save [--wait]] [--json]"),
                 HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
                 HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
+                HelpRow(name: "rv policy status [--json]"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -1005,8 +1006,16 @@ enum HelpCatalog {
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
                 ),
                 HelpRow(
+                    name: "apply",
+                    description: "rv policy apply <policy.toml> [--repo] [--save [--wait]]: previews a shared policy.toml merged into the machine (or --repo) layer; --save writes it after owner approval."
+                ),
+                HelpRow(
                     name: "rollback",
                     description: "Previews the restore (effective-rule diff and risk); --save re-submits it as a new head after owner approval. A restore that drops or relaxes a deny or ask is refused (exit 2)."
+                ),
+                HelpRow(
+                    name: "status",
+                    description: "Asks rvd whether it loads the current machine and repo policy, and which revisions. rvd re-reads policy on every evaluation; a policy it cannot load denies every action (typed-rules-invalid), never an earlier one. Exit 1 when the load fails; exit 3 whenever rvd did not answer, unreachable or busy (the report is then this CLI's own view, loaded or failed, unconfirmed by rvd). --wait on a save blocks until rvd loads it (--wait-timeout, default 10s)."
                 ),
                 HelpRow(
                     name: "ceiling",
