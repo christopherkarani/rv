@@ -302,7 +302,7 @@ struct ClaudeAdapterHookTests {
         let hook = try #require(json["hookSpecificOutput"] as? [String: Any])
         #expect(hook["permissionDecision"] as? String == "ask")
         let expected =
-            "rv could not check this call, so Claude Code is asking you. Approve only if you expected it. "
+            "rv could not check this call, and might have blocked it, so Claude Code is asking you. Approve only if you expected it. "
             + reason
         #expect(hook["permissionDecisionReason"] as? String == expected)
         #expect(json["systemMessage"] as? String == expected)

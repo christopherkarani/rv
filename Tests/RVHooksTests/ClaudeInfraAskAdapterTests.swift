@@ -18,7 +18,7 @@ struct ClaudeInfraAskAdapterTests {
     static let nonPromptingModes: [String?] = [nil, "bypassPermissions", "dontAsk", "", "Default", "manual", "yolo"]
 
     static let prefix =
-        "rv could not check this call, so Claude Code is asking you. Approve only if you expected it. "
+        "rv could not check this call, and might have blocked it, so Claude Code is asking you. Approve only if you expected it. "
 
     @Test(arguments: promptingModes)
     func daemonDown_asksTheHumanWithLayerPrefix(_ mode: String) async throws {
@@ -50,6 +50,39 @@ struct ClaudeInfraAskAdapterTests {
         let run = try await runPythonAdapter(host: .claude, stub: daemonDownWire(.claude), eventFields: fields)
         let reason = try expectFailClosed(host: .claude, run: run)
         #expect(reason == daemonUnreachableMessage, "\(mode ?? "nil"): \(reason)")
+    }
+
+    /// Only Claude Code's top-level field counts: a mode inside agent-chosen
+    /// tool input, or a near-spelling of the key, is no proof.
+    @Test(arguments: SpoofedMode.allCases)
+    func daemonDown_modeOutsideTheTopLevelFieldBlocks(_ spoof: SpoofedMode) async throws {
+        let run = try await runPythonAdapter(host: .claude, stub: daemonDownWire(.claude), eventFields: spoof.fields)
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason == daemonUnreachableMessage, "\(spoof): \(reason)")
+    }
+
+    /// A repeated top-level permission_mode is refused as a request, never
+    /// read as either value.
+    @Test func daemonDown_duplicateModeKeyBlocks() async throws {
+        let raw = #"{"hook_event_name":"PreToolUse","tool_name":"Bash","permission_mode":"bypassPermissions","permission_mode":"default","tool_input":{"command":"git status"}}"#
+        let run = try await runPythonAdapter(host: .claude, stub: daemonDownWire(.claude), rawEvent: raw)
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason.contains("could not read the hook request"), "\(reason)")
+    }
+
+    @Test(arguments: ["bypassPermissions", "dontAsk"])
+    func daemonDown_fileToolBlocksWhenNoHumanWouldBeAsked(_ mode: String) async throws {
+        let run = try await runPythonAdapter(
+            host: .claude,
+            stub: daemonDownWire(.claude),
+            eventFields: [
+                "permission_mode": mode,
+                "tool_name": "Write",
+                "tool_input": ["file_path": "/tmp/ws/a.txt", "content": "x"],
+            ]
+        )
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason == daemonUnreachableMessage, "\(mode): \(reason)")
     }
 
     @Test func daemonDown_nonStringModeBlocks() async throws {
@@ -127,6 +160,33 @@ struct ClaudeInfraAskAdapterTests {
         let run = try await runPythonAdapter(host: .cursor, stub: daemonDownWire(.cursor))
         let reason = try expectFailClosed(host: .cursor, run: run)
         #expect(reason == daemonUnreachableMessage)
+    }
+
+    enum SpoofedMode: CaseIterable, CustomStringConvertible {
+        case insideToolInputUnderBypass, insideToolInputOnly, camelCaseKey, spacedKey
+
+        var fields: [String: Any] {
+            let toolInput: [String: Any] = ["command": "git status", "permission_mode": "default"]
+            switch self {
+            case .insideToolInputUnderBypass:
+                return ["permission_mode": "bypassPermissions", "tool_input": toolInput]
+            case .insideToolInputOnly:
+                return ["tool_input": toolInput]
+            case .camelCaseKey:
+                return ["permissionMode": "default"]
+            case .spacedKey:
+                return ["permission_mode ": "default"]
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .insideToolInputUnderBypass: "insideToolInputUnderBypass"
+            case .insideToolInputOnly: "insideToolInputOnly"
+            case .camelCaseKey: "camelCaseKey"
+            case .spacedKey: "spacedKey"
+            }
+        }
     }
 
     enum StillBlocks: CaseIterable, CustomStringConvertible {

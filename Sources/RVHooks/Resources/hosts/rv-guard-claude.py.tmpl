@@ -33,14 +33,19 @@ _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
 _BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
 _ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
 _INFRA_ASK_PREFIX = (
-    "rv could not check this call, so Claude Code is asking you. "
+    "rv could not check this call, and might have blocked it, so Claude Code is asking you. "
     "Approve only if you expected it. "
 )
 
 # Claude Code permission modes that put a hook `ask` to a person: Manual
-# (sent as "default"), plan, acceptEdits, and auto (its classifier does
-# not decide a hook ask). bypassPermissions skips prompts and dontAsk
-# auto-denies them; any other or missing value is treated like those.
+# (sent as "default"), plan, acceptEdits, and auto. Hooks reference: "In
+# auto mode, a PreToolUse hook's "ask" normally sends the tool call to the
+# permission prompt, and the classifier doesn't decide it." Probed on
+# Claude Code 2.1.328 (claude -p, nobody to answer): acceptEdits did not
+# auto-accept a hook ask on Write, and a `Bash` allow rule did not
+# override it; both were denied. bypassPermissions skips prompts and
+# dontAsk auto-denies them; any other or missing value is treated like
+# those.
 _HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")
 
 
