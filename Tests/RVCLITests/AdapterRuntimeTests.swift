@@ -411,6 +411,10 @@ import RVPolicy
             if: AdapterCommand.launchesThroughEnv
                 && FileManager.default.isExecutableFile(atPath: AdapterRuntime.commandLineToolsDirectory + "/python3"),
             "needs macOS and the Command Line Tools' python3"
+        ),
+        .enabled(
+            if: systemIntegrityProtectionEnabled,
+            "needs System Integrity Protection: without it dyld honours DYLD_* in /usr/bin/env too"
         )
     )
     func renderedHookCommandStripsDyldVariables() throws {
@@ -622,6 +626,26 @@ import RVPolicy
 
 /// A fresh directory under the temporary directory, by its real path
 /// (`/var` is a symlink on macOS), so `realpath` comparisons hold.
+/// `csrutil status` reports SIP enabled. The env launcher's guarantee is
+/// SIP's: with SIP off (as on GitHub's macOS runners) dyld honours DYLD_*
+/// in platform binaries too, so `/usr/bin/env` itself would load them.
+private let systemIntegrityProtectionEnabled: Bool = {
+    #if os(macOS)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/csrutil")
+    process.arguments = ["status"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return false }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return String(decoding: data, as: UTF8.self).contains("status: enabled")
+    #else
+    return false
+    #endif
+}()
+
 private func realTemporaryDirectory(_ prefix: String) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
