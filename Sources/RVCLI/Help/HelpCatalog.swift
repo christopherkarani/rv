@@ -229,6 +229,9 @@ enum HelpCatalog {
                 HelpRow(name: "0", description: "Allow"),
                 HelpRow(name: "1", description: "Deny (or incomplete evaluation)"),
             ]),
+            HelpSection(heading: "Observe mode", rows: [
+                HelpRow(name: "guard.mode observe", description: "Shows the verdict enforce would reach, exit code included, and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
+            ]),
         ],
         examples: [
             "rv test 'git reset --hard'",
@@ -248,6 +251,9 @@ enum HelpCatalog {
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
+            ]),
+            HelpSection(heading: "Observe mode", rows: [
+                HelpRow(name: "guard.mode observe", description: "Explains the verdict enforce would reach and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
             ]),
         ],
         examples: [
