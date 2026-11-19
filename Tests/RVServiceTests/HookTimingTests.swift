@@ -56,8 +56,9 @@ import Synchronization
         #expect(lines.all[2].hasSuffix(" sixth skipped_since_last=1\n"), "the skipped count reaches the next line")
     }
 
-    /// A request stuck past its deadline never reaches the completion
-    /// line; the watchdog logs what it measured so far, once.
+    /// A request stuck past its deadline may never reach the completion
+    /// line; the watchdog logs what it measured so far, once, and the
+    /// completion line still follows when it does finish.
     @Test func stuckRequestIsLoggedByTheWatchdogOnce() async throws {
         let lines = Lines()
         let deadline = HookDeadline(receivedAt: .now, budget: .milliseconds(50))
@@ -69,10 +70,38 @@ import Synchronization
             host: .pi, stdin: Self.stdin, world: world, deadline: deadline, slowLog: lines.log(),
             hungGrace: .milliseconds(50))
         let line = try #require(lines.all.first)
-        #expect(lines.all.count == 1, "the completion line falls inside the interval")
+        #expect(lines.all.count == 2, "watchdog lines have their own window")
+        #expect(lines.all.last?.contains("rvd: hook ran past its deadline: host=pi ") == true)
         #expect(line.contains("rvd: hook still running past its deadline: host=pi "))
         #expect(line.contains(" queue_ms="))
         #expect(line.contains("reset") == false, "no command text")
+    }
+
+    /// A request that finishes in time cancels its watchdog: no stale
+    /// "still running" line once the grace has passed.
+    @Test func fastRequestLeavesNoWatchdogLine() async throws {
+        let lines = Lines()
+        let deadline = HookDeadline(receivedAt: .now, budget: .milliseconds(20))
+        _ = try await HookDoor.run(
+            host: .pi, stdin: Self.stdin, world: hookWorld(evaluate: { _, _ in EvaluationResult(outcome: .plain) }),
+            deadline: deadline, slowLog: lines.log(), hungGrace: .milliseconds(30))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(lines.all.isEmpty)
+    }
+
+    /// A burst of completion lines never hides a stuck request, and stuck
+    /// requests are still limited to one line per interval.
+    @Test func watchdogLinesHaveTheirOwnWindow() {
+        let lines = Lines()
+        let log = lines.log()
+        let start = ContinuousClock.now
+        #expect(log.report("done", now: start))
+        #expect(log.report("stuck", running: true, now: start + .seconds(1)))
+        #expect(log.report("stuck again", running: true, now: start + .seconds(2)) == false)
+        #expect(log.report("done again", now: start + .seconds(3)) == false)
+        #expect(log.report("stuck late", running: true, now: start + .seconds(1) + SlowHookLog.interval))
+        #expect(lines.all.count == 3)
+        #expect(lines.all[2].hasSuffix(" stuck late skipped_since_last=1\n"))
     }
 
     @Test func offloadedPhasesReachTheRequestTiming() async {

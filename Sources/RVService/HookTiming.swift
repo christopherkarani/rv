@@ -135,13 +135,24 @@ final class HookTiming: Sendable {
 /// `interval` (`AuditDropLog`'s rate); the next written line carries the
 /// count skipped since the last one. A burst of slow hooks must not fill a
 /// log that rotates only at start.
+///
+/// Watchdog lines (`running`) have their own window, so a stream of
+/// completion lines never hides a stuck request. They are rate limited
+/// too rather than written once per request: a stuck judge queue hangs
+/// every queued hook at once, and one line per hook is the flood the
+/// limit exists to stop; the skipped count still says how many hung.
 final class SlowHookLog: Sendable {
     static let interval: Duration = .seconds(60)
     static let shared = SlowHookLog()
 
-    private struct State {
+    private struct Window {
         var last: ContinuousClock.Instant?
         var skipped = 0
+    }
+
+    private struct State {
+        var completed = Window()
+        var running = Window()
     }
 
     private let state = Mutex(State())
@@ -152,20 +163,27 @@ final class SlowHookLog: Sendable {
         self.write = write
     }
 
-    /// Returns whether it wrote.
+    /// Returns whether it wrote. `running`: a watchdog line, counted in
+    /// its own window.
     @discardableResult
-    func report(_ message: String, now: ContinuousClock.Instant = .now) -> Bool {
+    func report(_ message: String, running: Bool = false, now: ContinuousClock.Instant = .now) -> Bool {
         let skipped: Int? = state.withLock { state in
-            if let last = state.last, now - last < Self.interval {
-                state.skipped += 1
-                return nil
-            }
-            state.last = now
-            defer { state.skipped = 0 }
-            return state.skipped
+            running ? Self.admit(&state.running, now: now) : Self.admit(&state.completed, now: now)
         }
         guard let skipped else { return false }
         write(RVDLogFile.line(skipped > 0 ? message + " skipped_since_last=\(skipped)" : message))
         return true
+    }
+
+    /// The count skipped since the window's last line when a line may be
+    /// written now; nil (and one more skipped) when not.
+    private static func admit(_ window: inout Window, now: ContinuousClock.Instant) -> Int? {
+        if let last = window.last, now - last < interval {
+            window.skipped += 1
+            return nil
+        }
+        window.last = now
+        defer { window.skipped = 0 }
+        return window.skipped
     }
 }
