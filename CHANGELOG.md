@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- rvd is always on. The macOS LaunchAgent is now `RunAtLoad` and `KeepAlive` (relaunch throttled to once every 5 s), so launchd starts rvd at login and restarts it right after a crash, instead of waiting for the next hook call to cold-start it (model reload, `judge-warming`, then review or ask). rvd no longer idle-exits after 30 minutes on macOS or Linux; `--idle-exit-seconds N` still opts in. It still exits once its binary is replaced, and launchd or systemd then run the upgraded one. KeepAlive used to be on only when the companion app was installed; that probe is gone. `rv uninstall` still boots the job out before removing it, so nothing respawns. `rv doctor` reports `KeepAlive true idle-exit off`. `rv service restart` and `rv service start` on macOS now wait for rvd to answer, as `rv setup` and Linux already did, and fail (exit 69) when it does not, instead of reporting success once launchctl accepted the job.
 - `rv egress pending`, `rv egress show` and the `rv tui` review pane name an approved proposal of the same workspace for the same host, any port, beside a pending one (`related approved api.example.com:443 (<id>)`; `related` in `--json`). The pending row stays listed and still needs its own decision. No row is retired or approved by another's approval.
 
 ### Security
