@@ -139,8 +139,9 @@ private final class ListenerSlot: Sendable {
 
 /// Process-lifetime wiring shared by both platform entry points.
 enum RVDLifecycle {
-    /// Idle exit that keeps the process (and its allow-once table) while
-    /// grants are live, and exits once its own binary was replaced on disk.
+    /// Exits once its own binary was replaced on disk (the supervisor then
+    /// runs the new one). With `--idle-exit-seconds` it also idle-exits,
+    /// keeping the process (and its allow-once table) while grants are live.
     static func watchdog(
         configuration: RVDConfiguration,
         runtime: ServiceRuntime,

@@ -390,8 +390,8 @@ def runtime_status(socket_path: str | None = None) -> RvRuntimeStatus:
 def ensure_runtime(socket_path: str | None = None, idle_exit_seconds: int | None = None) -> str:
     """Return a connectable socket path, explicitly spawning a supervised
     ``rvd`` when none answers. Never implicit: callers opt in (useful in
-    containers without user units). Spawned daemons idle-exit on their own
-    (default 300s; ``idle_exit_seconds`` overrides).
+    containers without user units). Spawned daemons stay up until stopped
+    unless ``idle_exit_seconds`` asks them to idle-exit.
 
     Spawning targets the production path only: with an explicit override that
     does not answer, this raises instead of starting a daemon that would bind

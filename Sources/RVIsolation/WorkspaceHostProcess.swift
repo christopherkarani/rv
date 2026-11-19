@@ -5,7 +5,7 @@ import RVDomain
 import RVIPC
 import RVPolicy
 
-/// `rvd` is the user-wide hook and policy service. It idle-exits and does not
+/// `rvd` is the user-wide hook and policy service. It does not
 /// own a workspace volume, owner lock, or runtime process group. A workspace
 /// host is a separate process whose lifetime is one `WorkspaceSession`.
 public enum WorkspaceHostProcess {

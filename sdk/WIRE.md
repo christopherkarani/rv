@@ -384,9 +384,10 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
   `Sources/RVCLI/Service/XPCClient.swift`). Hello uses the 200 ms connect budget.
 - Unix-socket SDKs mirror this: 200 ms connect, 700 ms default per-call budget,
   both configurable. Timeouts are transport errors, never verdicts.
-- Idle exit: `rvd` exits after 300 s without a ping (`IdleWatchdog.defaultSeconds`,
-  `Sources/RVService/IdleExit.swift`); launchd/systemd supervise on demand.
-  Short RPCs compose with this; clients hold no persistent connections.
+- Idle exit: off by default (`IdleWatchdog.defaultSeconds` is 0,
+  `Sources/RVService/IdleExit.swift`); launchd (KeepAlive) and systemd
+  (Restart=always) keep `rvd` resident and relaunch it after any exit.
+  `--idle-exit-seconds N` opts in. Clients hold no persistent connections.
 - `rvd --version` prints the product semver line (`Sources/rvd/main.swift`,
   `RVDLaunch.versionLine`) and is the product-version probe.
 
