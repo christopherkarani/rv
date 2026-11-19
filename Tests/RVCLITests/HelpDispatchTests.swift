@@ -274,7 +274,8 @@ import RVTheme
     for topic in [HelpTopic.test, .explain] {
         let text = HelpDispatch.text(topic, palette: colorOffPalette)
         #expect(text.contains("Observe mode"), "\(topic) help missing observe mode")
-        #expect(text.contains("would block"), "\(topic) help missing the would-be verdict")
+        #expect(text.contains("would ask"), "\(topic) help missing the would-be ask")
+        #expect(text.contains("block"), "\(topic) help missing the would-be block")
     }
 }
 
