@@ -88,6 +88,17 @@ private struct StopContext {
     let launched: [LaunchedCommand]
     let depth: Int
     let rvdPIDs: () -> Set<Int32>?
+    /// Computed once: every `kill`/`pkill` operand asks, and each answer
+    /// is O(n) in the text, so a lazy getter made long lines quadratic.
+    let looksUpRVD: Bool
+
+    init(raw: String, launched: [LaunchedCommand], depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) {
+        self.raw = raw
+        self.launched = launched
+        self.depth = depth
+        self.rvdPIDs = rvdPIDs
+        looksUpRVD = Self.looksUpRVD(raw: raw, launched: launched)
+    }
 
     /// A literal pid that is rvd's now; an unreadable process table fails
     /// closed on any positive pid.
@@ -102,7 +113,7 @@ private struct StopContext {
     /// is folded (`[r]vd` → `rvd`, quotes stripped so `'r''vd'` → `rvd`)
     /// before the mention check, and grep/awk regexes are tested against
     /// rvd's names, so a pipeline that hides the name still counts.
-    var looksUpRVD: Bool {
+    private static func looksUpRVD(raw: String, launched: [LaunchedCommand]) -> Bool {
         let folded = foldHiddenMentions(raw)
         if rvdMentions.contains(where: { folded.contains($0) }) { return true }
         if pipelinePatterns(raw).contains(where: patternMatchesRVDName) { return true }

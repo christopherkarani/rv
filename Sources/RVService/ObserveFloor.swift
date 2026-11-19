@@ -113,7 +113,7 @@ enum ObserveFloor {
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
         let scan = scanOpaqueProgram(command)
-        let inner = scan.innerTexts.filter { $0 != command.rawValue }
+        let inner = scan.innerTexts.filter { sameBytes($0, command.rawValue) == false }
         guard scan.exhausted == false,
               lifecycleReadingCount([command.rawValue] + inner, cap: readingCap) <= readingCap
         else {
@@ -140,10 +140,12 @@ enum ObserveFloor {
     }
 
     /// Readings the lifecycle floor makes of a command and its fed texts
-    /// (each text, then each of its list commands): a 1000-line script fed
-    /// to a shell takes about 1000. Past this nothing is read: it fails
-    /// closed.
-    static let readingCap = 2048
+    /// (each text, then each of its list commands; an interpreter's string
+    /// literals are texts too): a 1500-line python script with two strings
+    /// a line takes about 6000. The texts' total size is already bounded
+    /// by the scan's work budget; this bounds the per-reading overhead.
+    /// Past it nothing is read: it fails closed.
+    static let readingCap = 8192
 
     private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
         switch result.decision {

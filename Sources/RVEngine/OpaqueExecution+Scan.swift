@@ -32,6 +32,17 @@ package func lifecycleReadingCount(_ texts: [String], cap: Int) -> Int {
     return count
 }
 
+/// Byte-for-byte equality (`==` on String is canonical equivalence). The
+/// readers of one feed share one string, so shared storage answers in O(1).
+package func sameBytes(_ lhs: String, _ rhs: String) -> Bool {
+    guard lhs.utf8.count == rhs.utf8.count else { return false }
+    let shared = lhs.utf8.withContiguousStorageIfAvailable { left in
+        rhs.utf8.withContiguousStorageIfAvailable { right in left.baseAddress == right.baseAddress }
+    }
+    if shared == true { return true }
+    return lhs.utf8.elementsEqual(rhs.utf8)
+}
+
 /// What a stdin reader reads, and whether rv can read it. `parts`: the
 /// producers' texts one by one, when their order is not known (a compound
 /// command), each read alone besides the joined `text`.
@@ -60,8 +71,11 @@ struct ScanState {
     private(set) var exhausted = false
     /// Fed program texts, each once, in first-seen order.
     private(set) var innerTexts: [String] = []
-    private var recorded: Set<String> = []
-    private var codeRead: Set<String> = []
+    // Keyed on bytes: String equality is canonical equivalence, and two
+    // equivalent texts can read differently (`rv[\u{1E0D}]` vs
+    // `rv[d\u{0323}]` as a pattern), so one must not stand for the other.
+    private var recorded: Set<[UInt8]> = []
+    private var codeRead: Set<[UInt8]> = []
     private var lastRecorded: String?
     private var lastCodeRead: String?
     /// Function and alias names the command defines.
@@ -70,10 +84,9 @@ struct ScanState {
     /// Records a fed text; false when it was recorded before (so already
     /// read by the stop floor, and clean, or the scan would have ended).
     mutating func record(_ text: String) -> Bool {
-        // The readers of one feed share one string, which compares in O(1).
-        if text == lastRecorded { return false }
+        if let last = lastRecorded, sameBytes(text, last) { return false }
         lastRecorded = text
-        guard recorded.insert(text).inserted else { return false }
+        guard recorded.insert(Array(text.utf8)).inserted else { return false }
         innerTexts.append(text)
         return true
     }
@@ -81,9 +94,9 @@ struct ScanState {
     /// True the first time `text` is read as interpreter code (its string
     /// literals stop-read), false after.
     mutating func firstCodeRead(_ text: String) -> Bool {
-        if text == lastCodeRead { return false }
+        if let last = lastCodeRead, sameBytes(text, last) { return false }
         lastCodeRead = text
-        return codeRead.insert(text).inserted
+        return codeRead.insert(Array(text.utf8)).inserted
     }
 
     /// Spends budget; false once it is gone.

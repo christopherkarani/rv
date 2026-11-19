@@ -362,17 +362,64 @@ struct ObserveFloorBypassTests {
         #expect(unanalyzable?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
         // Debug build: about 0.35 s each; loose so a starved CI runner does
         // not flake, while the uncharged walk (over ten minutes) fails.
-        #expect(lifecycleTime < .seconds(1), "\(timing)")
-        #expect(unanalyzableTime < .seconds(1), "\(timing)")
+        #expect(lifecycleTime < .seconds(10), "\(timing)")
+        #expect(unanalyzableTime < .seconds(10), "\(timing)")
+    }
+
+    /// Fed texts are deduped byte for byte. `==` on String is canonical
+    /// equivalence: the two classes below are equal Strings, but only the
+    /// decomposed one reads as a `pkill` that may match `rvd`, so reading
+    /// one for both would let the second through (a heredoc apostrophe
+    /// sits between them, so only the fed texts carry them apart).
+    @Test("lifecycle floor: canonically equal fed texts are both read")
+    func lifecycleFloorReadsEquivalentFeedsApart() {
+        let precomposed = "pkill rv[\u{1E0D}]"
+        let decomposed = "pkill rv[d\u{0323}]"
+        #expect(precomposed == decomposed)
+        #expect(RVDStopGuard.stopsRVD(decomposed))
+        let command = ShellCommand(
+            rawValue: "sh <<'E1'\n\(precomposed)\nE1\ncat <<'X' >/dev/null\nit's\nX\nsh <<'E2'\n\(decomposed)\nE2"
+        )
+        #expect(scanOpaqueProgram(command).innerTexts.count == 2)
+        let result = ObserveFloor.lifecycleFloor(EvaluationResult(outcome: .plain), command: command, home: nil, cwd: nil)
+        #expect(result != nil)
+        #expect(result?.decision != .allow)
+    }
+
+    /// A long fed script of dynamic-head lines (`d['k'] = 'v'`) is read in
+    /// linear time: the stop guard's rvd lookup is computed once per text,
+    /// not once per `kill`-shaped command. The verdict must come from
+    /// reading it, not from running out of budget.
+    @Test("floors: a long fed script of dynamic-head lines reads fast")
+    func floorsReadDynamicHeadScriptsLinearly() {
+        let body = (0..<1500).map { "d['key\($0)'] = 'value\($0)'" }.joined(separator: "\n")
+        let command = ShellCommand(rawValue: "python3 - <<'EOF'\n" + body + "\nEOF")
+        let allow = EvaluationResult(outcome: .plain)
+        let clock = ContinuousClock()
+        var lifecycle: EvaluationResult?
+        var unanalyzable: EvaluationResult?
+        let lifecycleTime = clock.measure {
+            lifecycle = ObserveFloor.lifecycleFloor(allow, command: command, home: nil, cwd: nil)
+        }
+        let unanalyzableTime = clock.measure {
+            unanalyzable = ObserveFloor.unanalyzableFloor(allow, command: command)
+        }
+        let timing = "lifecycle \(lifecycleTime), unanalyzable \(unanalyzableTime)"
+        #expect(scanOpaqueProgram(command).exhausted == false)
+        #expect(lifecycle == nil, "\(timing)")
+        #expect(unanalyzable == nil, "\(timing)")
+        #expect(lifecycleTime < .seconds(10), "\(timing)")
+        #expect(unanalyzableTime < .seconds(10), "\(timing)")
     }
 
     /// Past `readingCap` readings the lifecycle floor reads nothing and
-    /// fails closed: a fed script of more list commands than that.
+    /// fails closed: a fed script whose lines and string literals (each a
+    /// reading) outnumber it.
     @Test("lifecycle floor: too many readings fail closed, never allow")
     func lifecycleFloorCapsReadings() {
-        let command = ShellCommand(
-            rawValue: "sh <<'EOF'\n" + String(repeating: ":\n", count: ObserveFloor.readingCap + 1) + "EOF"
-        )
+        // About two readings a line (the line, its string literal).
+        let lines = (0..<(ObserveFloor.readingCap / 2 + 64)).map { "print('s\($0)')" }.joined(separator: "\n")
+        let command = ShellCommand(rawValue: "python3 - <<'EOF'\n" + lines + "\nEOF")
         #expect(scanOpaqueProgram(command).exhausted == false)
         let result = ObserveFloor.lifecycleFloor(EvaluationResult(outcome: .plain), command: command, home: nil, cwd: nil)
         #expect(result?.decision == .indeterminate(.observeUnanalyzable))
