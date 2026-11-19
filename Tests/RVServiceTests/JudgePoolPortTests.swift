@@ -87,14 +87,23 @@ struct JudgePoolPortTests {
         #expect(JudgeRuntime.failClosed(.busy, over: allow).note == "judge-busy")
     }
 
-    @Test("an authenticated load failure is the broken-install case: packs-only")
-    func loadFailureIsUnavailable() {
-        guard case .unavailable(let note) = JudgeRuntime.read(
-            .loadFailed(LoadFailure(kind: .badBundle, message: "tokenizer missing"))) else {
-            Issue.record("load failure must map to unavailable")
+    @Test("a worker load failure fails closed to review, never the packs-only floor", arguments: [
+        LoadFailure(kind: .badBundle, message: "tokenizer missing"),
+        LoadFailure(kind: .modelUnavailable, message: "No space left on device"),
+    ])
+    func loadFailureFailsClosed(failure: LoadFailure) {
+        // rvd only calls the pool once it found the bundle; a load that then
+        // fails (a full disk, a corrupt cache) can be induced, and the
+        // packs-only floor would turn it into an unjudged allow.
+        let run = JudgeRuntime.read(.loadFailed(failure))
+        if case .unavailable = run { Issue.record("load failure must not reach the packs-only floor") }
+        let allow = EvaluationResult(outcome: .plain, matchingView: "x", analysis: .unknown)
+        let reading = JudgeRuntime.read(run, over: allow, provenance: .userTyped)
+        guard case .deny = reading.outcome.decision else {
+            Issue.record("load failure must not allow")
             return
         }
-        #expect(note == "tokenizer missing")
+        #expect(reading.action == .review)
     }
 
     @Test("a well-formed verdict is read")

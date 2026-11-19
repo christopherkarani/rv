@@ -10,9 +10,11 @@ import RVPolicy
 /// (`rv test`, bench), which has no pool and no hook deadline.
 ///
 /// Every answer that is not an authenticated, well-formed verdict fails
-/// closed to review. Only a worker that authenticated through the
-/// supervisor and reported the bundle unloadable maps to `.unavailable`
-/// (packs-only), the same as the in-process loader's broken-install case.
+/// closed to review, a worker's load failure included: rvd only calls the
+/// pool once it found the bundle on disk (absent is `engine-missing`,
+/// decided before), and a load that then fails can be induced (a full disk,
+/// a corrupt compile cache). The packs-only floor would make that an
+/// unjudged allow. Doctor's `judgePool` check names the load failure.
 extension JudgeRuntime {
     private static let clientBox = UnfairLock<(any JudgeClient)?>(nil)
 
@@ -67,7 +69,7 @@ extension JudgeRuntime {
         case .busy: return .busy
         case .late: return .late
         case .warming: return .warming
-        case .loadFailed(let failure): return .unavailable(failure.message)
+        case .loadFailed: return .failed
         case .failed: return .failed
         }
     }
