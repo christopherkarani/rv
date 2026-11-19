@@ -32,6 +32,16 @@ struct EgressProposalView: Sendable, Equatable, Codable {
     var reason: String
     var createdAt: Date
     var expiresAt: Date
+    /// Approved proposals of the same workspace for the same host
+    /// (`EgressReview.related`). This row still needs its own decision.
+    var related: [EgressRelatedView] = []
+}
+
+/// An approved same-host proposal shown beside a pending one.
+struct EgressRelatedView: Sendable, Equatable, Codable {
+    var id: String
+    var host: String
+    var port: Int
 }
 
 /// One proxy denial-log line as the reviewer sees it.
@@ -78,11 +88,15 @@ enum EgressReviewRun {
     ) async throws -> [EgressProposalView] {
         let records: [PendingApproval]
         do {
-            records = try await store.list(now: now)
+            records = try await store.records(now: now)
         } catch {
             throw EgressReviewError.storeUnavailable
         }
-        return records.compactMap(view(for:)).sorted(by: { $0.createdAt < $1.createdAt })
+        return records.compactMap { record -> EgressProposalView? in
+            guard case .awaitingHuman = record.state else { return nil }
+            return view(for: record, in: records)
+        }
+        .sorted(by: { $0.createdAt < $1.createdAt })
     }
 
     /// Awaiting network proposals, oldest first, each with the review
@@ -99,7 +113,7 @@ enum EgressReviewRun {
             throw EgressReviewError.storeUnavailable
         }
         return records.compactMap { record -> (view: EgressProposalView, token: EgressReviewToken)? in
-            guard let view = view(for: record),
+            guard let view = view(for: record, in: records),
                 let token = EgressReview.token(for: record.id, in: records)
             else { return nil }
             return (view, token)
@@ -128,6 +142,37 @@ enum EgressReviewRun {
             createdAt: record.createdAt,
             expiresAt: record.expiresAt
         )
+    }
+
+    /// `view(for:)` plus the approvals it relates to, from the same
+    /// `records` snapshot that any review token for it is drawn from.
+    static func view(for record: PendingApproval, in records: [PendingApproval]) -> EgressProposalView? {
+        guard var view = view(for: record) else { return nil }
+        view.related = EgressReview.related(to: record.id, in: records).map {
+            EgressRelatedView(id: $0.id.rawValue, host: $0.rule.host, port: $0.rule.port)
+        }
+        return view
+    }
+
+    /// One proposal for `rv egress show`, any state.
+    static func showView(id: ApprovalID, store: PendingApprovalStore, now: Date) async throws -> EgressProposalView {
+        let records: [PendingApproval]
+        do {
+            records = try await store.records(now: now)
+        } catch {
+            throw EgressReviewError.storeUnavailable
+        }
+        guard let record = records.first(where: { $0.id == id }) else {
+            throw EgressReviewError.unknownProposal
+        }
+        guard let view = view(for: record, in: records) else {
+            throw EgressReviewError.notNetworkProposal
+        }
+        return view
+    }
+
+    static func relatedText(_ related: EgressRelatedView) -> String {
+        "related approved \(DisplayedText.field(related.host)):\(related.port) (\(DisplayedText.field(related.id)))"
     }
 
     static func stateText(_ state: PendingApprovalState) -> String {
@@ -168,6 +213,7 @@ enum EgressReviewRun {
                 lines.append(
                     "\(DisplayedText.field(view.id))  \(DisplayedText.field(view.host)):\(view.port)  \(view.state)  \(view.expiresAt)"
                 )
+                lines += view.related.map { "  \(relatedText($0))" }
             }
         }
         lines.append(loadedFooter(loaded))
@@ -225,6 +271,9 @@ enum EgressReviewRun {
             + "  reason \(DisplayedText.field(view.reason))\n  created \(view.createdAt)\n  expires \(view.expiresAt)\n"
         if let rejectionReason {
             text += "  rejection-reason \(DisplayedText.field(rejectionReason))\n"
+        }
+        for related in view.related {
+            text += "  \(relatedText(related))\n"
         }
         text += "  \(loadedLine(for: view, loaded: loaded))\n"
         return text
@@ -639,18 +688,17 @@ struct EgressShow: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "egress show", format: format)
         let home = try ctx.requireHome()
         let store = EgressReviewRun.store(home: home)
-        let record: PendingApproval
+        let view: EgressProposalView
         do {
-            record = try await store.load(id: ApprovalID(rawValue: id), now: Date())
-        } catch PendingApprovalError.notFound {
+            view = try await EgressReviewRun.showView(id: ApprovalID(rawValue: id), store: store, now: Date())
+        } catch EgressReviewError.unknownProposal {
             try ctx.fail("rv egress show: unknown proposal\n", exitCode: 2)
+        } catch EgressReviewError.notNetworkProposal {
+            try ctx.fail("rv egress show: not a network proposal\n", exitCode: 2)
         } catch {
             try ctx.fail("rv egress show: store unavailable\n", exitCode: 2)
         }
-        guard let view = EgressReviewRun.view(for: record) else {
-            try ctx.fail("rv egress show: not a network proposal\n", exitCode: 2)
-        }
-        let rejection = await store.rejectionReason(for: record.id)
+        let rejection = await store.rejectionReason(for: ApprovalID(rawValue: view.id))
         let loaded = EgressReviewRun.loadedSnapshot(
             configDirectory: RVPolicyPaths.configDirectory(home: home))
         if ctx.explicitRobot {
