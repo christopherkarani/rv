@@ -336,6 +336,48 @@ struct ObserveFloorBypassTests {
         #expect(elapsed < .seconds(10), "\(elapsed)")
     }
 
+    /// Thousands of interpreters fed one large literal heredoc: each reader
+    /// is charged for the text it reads, the text is read once, and the
+    /// lifecycle floor's readings are capped, so the floors fail closed
+    /// fast instead of reading the body thousands of times (and stalling
+    /// rvd past the hook's timeout).
+    @Test("floors: thousands of readers fed one big heredoc fail closed fast")
+    func floorsBoundRepeatedLiteralFeeds() {
+        let body = (0..<1000).map { "print('fed line \($0)')" }.joined(separator: "\n")
+        let command = ShellCommand(
+            rawValue: "sh -c '" + String(repeating: "python3;", count: 4000) + "' <<'EOF'\n" + body + "\nEOF"
+        )
+        let allow = EvaluationResult(outcome: .plain)
+        let clock = ContinuousClock()
+        var lifecycle: EvaluationResult?
+        var unanalyzable: EvaluationResult?
+        let lifecycleTime = clock.measure {
+            lifecycle = ObserveFloor.lifecycleFloor(allow, command: command, home: nil, cwd: nil)
+        }
+        let unanalyzableTime = clock.measure {
+            unanalyzable = ObserveFloor.unanalyzableFloor(allow, command: command)
+        }
+        let timing = "lifecycle \(lifecycleTime), unanalyzable \(unanalyzableTime)"
+        #expect(lifecycle?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
+        #expect(unanalyzable?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
+        // Debug build: about 0.35 s each; loose so a starved CI runner does
+        // not flake, while the uncharged walk (over ten minutes) fails.
+        #expect(lifecycleTime < .seconds(1), "\(timing)")
+        #expect(unanalyzableTime < .seconds(1), "\(timing)")
+    }
+
+    /// Past `readingCap` readings the lifecycle floor reads nothing and
+    /// fails closed: a fed script of more list commands than that.
+    @Test("lifecycle floor: too many readings fail closed, never allow")
+    func lifecycleFloorCapsReadings() {
+        let command = ShellCommand(
+            rawValue: "sh <<'EOF'\n" + String(repeating: ":\n", count: ObserveFloor.readingCap + 1) + "EOF"
+        )
+        #expect(scanOpaqueProgram(command).exhausted == false)
+        let result = ObserveFloor.lifecycleFloor(EvaluationResult(outcome: .plain), command: command, home: nil, cwd: nil)
+        #expect(result?.decision == .indeterminate(.observeUnanalyzable))
+    }
+
     /// The stop guard itself reads past a heredoc apostrophe.
     @Test("stop guard: a heredoc body cannot desync the lines after it")
     func stopGuardSkipsHeredocBodies() {

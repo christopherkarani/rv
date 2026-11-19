@@ -107,11 +107,19 @@ enum ObserveFloor {
     /// is fed from a literal pipe, here-string or heredoc (`echo
     /// 'launchctl bootout …' | sh`). Then an allow becomes "run it in
     /// Terminal"; anything else (a deny, an indeterminate) is kept, so the
-    /// floor never weakens.
+    /// floor never weakens. A scan out of budget, or texts needing more than
+    /// `readingCap` readings, fail closed the way `unanalyzableFloor` does.
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        let texts = [command] + scanOpaqueProgram(command).innerTexts.map { ShellCommand(rawValue: $0) }
+        let scan = scanOpaqueProgram(command)
+        let inner = scan.innerTexts.filter { $0 != command.rawValue }
+        guard scan.exhausted == false,
+              lifecycleReadingCount([command.rawValue] + inner, cap: readingCap) <= readingCap
+        else {
+            return unanalyzable(result)
+        }
+        let texts = [command] + inner.map { ShellCommand(rawValue: $0) }
         let hits = texts.contains { text in
             RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: runningRVDaemonPIDs)
                 || RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd)
@@ -128,6 +136,16 @@ enum ObserveFloor {
     /// allow-once path and judge log, like `floored`.
     static func unanalyzableFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult? {
         guard runsUnanalyzable(result, command: command) else { return nil }
+        return unanalyzable(result)
+    }
+
+    /// Readings the lifecycle floor makes of a command and its fed texts
+    /// (each text, then each of its list commands): a 1000-line script fed
+    /// to a shell takes about 1000. Past this nothing is read: it fails
+    /// closed.
+    static let readingCap = 2048
+
+    private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
         switch result.decision {
         case .allow:
             break

@@ -20,6 +20,18 @@ package func scanOpaqueProgram(_ command: ShellCommand) -> OpaqueScan {
     )
 }
 
+/// How many readings the lifecycle guards make of `texts`: each text, plus
+/// its guard readings (`ShellLexer.guardReadings`). Stops counting once
+/// past `cap`.
+package func lifecycleReadingCount(_ texts: [String], cap: Int) -> Int {
+    var count = 0
+    for text in texts {
+        count += 1 + ShellLexer.guardReadings(text).count
+        if count > cap { return count }
+    }
+    return count
+}
+
 /// What a stdin reader reads, and whether rv can read it. `parts`: the
 /// producers' texts one by one, when their order is not known (a compound
 /// command), each read alone besides the joined `text`.
@@ -46,9 +58,33 @@ struct ScanState {
     private(set) var commands = 0
     private(set) var work = 0
     private(set) var exhausted = false
-    var innerTexts: [String] = []
+    /// Fed program texts, each once, in first-seen order.
+    private(set) var innerTexts: [String] = []
+    private var recorded: Set<String> = []
+    private var codeRead: Set<String> = []
+    private var lastRecorded: String?
+    private var lastCodeRead: String?
     /// Function and alias names the command defines.
     var definedNames: Set<String> = []
+
+    /// Records a fed text; false when it was recorded before (so already
+    /// read by the stop floor, and clean, or the scan would have ended).
+    mutating func record(_ text: String) -> Bool {
+        // The readers of one feed share one string, which compares in O(1).
+        if text == lastRecorded { return false }
+        lastRecorded = text
+        guard recorded.insert(text).inserted else { return false }
+        innerTexts.append(text)
+        return true
+    }
+
+    /// True the first time `text` is read as interpreter code (its string
+    /// literals stop-read), false after.
+    mutating func firstCodeRead(_ text: String) -> Bool {
+        if text == lastCodeRead { return false }
+        lastCodeRead = text
+        return codeRead.insert(text).inserted
+    }
 
     /// Spends budget; false once it is gone.
     mutating func charge(commands: Int = 0, work: Int = 0) -> Bool {

@@ -256,8 +256,8 @@ enum OpaqueExecution {
     /// text as its stdin (a nested `sh` reads the rest of it).
     private static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
         guard text.isEmpty == false else { return false }
-        state.innerTexts.append(text)
-        if RVDStopGuard.stopsRVD(text) { return true }
+        guard state.charge(work: text.utf8.count) else { return true }
+        if state.record(text), RVDStopGuard.stopsRVD(text) { return true }
         return scan(text, depth: context.depth + 1, inherited: { Feed(literal: true, text: text) }, state: &state)
     }
 
@@ -338,9 +338,13 @@ enum OpaqueExecution {
             guard fed.literal else { return true }
             return fed.texts.contains { program in
                 guard program.isEmpty == false else { return false }
-                state.innerTexts.append(program)
-                return RVDStopGuard.stopsRVD(program) || codeStopsRVD(program, state: &state)
-                    || execsCode(program) && readsUnseen(program)
+                // Every reader of the text is charged for it, so thousands
+                // of readers of one big feed run out of budget.
+                guard state.charge(work: program.utf8.count) else { return true }
+                if state.record(program), RVDStopGuard.stopsRVD(program) { return true }
+                // Code read before was clean then, and is the same text now.
+                guard state.firstCodeRead(program) else { return false }
+                return codeStopsRVD(program, state: &state) || execsCode(program) && readsUnseen(program)
             }
         }
         return isDynamic(operand)
@@ -349,9 +353,8 @@ enum OpaqueExecution {
     /// The string literals of inline code (`os.system("launchctl …")`):
     /// each may be a command it runs, so the stop floor reads each.
     private static func codeStopsRVD(_ code: String, state: inout ScanState) -> Bool {
-        let strings = quotedStrings(code)
-        state.innerTexts.append(contentsOf: strings)
-        return strings.contains { RVDStopGuard.stopsRVD($0) }
+        let fresh = quotedStrings(code).filter { state.record($0) }
+        return fresh.contains { RVDStopGuard.stopsRVD($0) }
     }
 
     private static func quotedStrings(_ code: String) -> [String] {
