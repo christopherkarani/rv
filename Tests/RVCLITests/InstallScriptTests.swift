@@ -224,6 +224,50 @@ private func runInstallScript(
     return (process.terminationStatus, err)
 }
 
+/// `curl -fsSIL` prints a 404's headers (GitHub sends `Content-Length: 9`)
+/// before it exits 22. A missing optional asset must probe as size 0, or the
+/// installer tries to download it and the install fails.
+@Test func installSh_contentLengthIsEmptyForAMissingAsset() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeExecutable(
+        shim.appendingPathComponent("curl"),
+        contents: """
+        #!/bin/sh
+        for arg in "$@"; do url="$arg"; done
+        case "$url" in
+          */present) printf 'HTTP/1.1 302 Found\\r\\nContent-Length: 0\\r\\n\\r\\nHTTP/1.1 200 OK\\r\\nContent-Length: 2001\\r\\n\\r\\n' ;;
+          *) printf 'HTTP/1.1 404 Not Found\\r\\nContent-Length: 9\\r\\n\\r\\n'; exit 22 ;;
+        esac
+        """
+    )
+    let script = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let lines = script.components(separatedBy: "\n")
+    let start = try #require(lines.firstIndex(of: "content_length() {"))
+    let end = try #require(lines[start...].firstIndex(of: "}"))
+    let function = lines[start...end].joined(separator: "\n")
+
+    func probe(_ url: String) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", function + "\ncontent_length \"$1\"", "sh", url]
+        process.environment = ["PATH": "\(shim.path):/usr/bin:/bin"]
+        let out = Pipe()
+        process.standardOutput = out
+        try process.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    #expect(try probe("https://example.invalid/download/v1/present") == "2001")
+    #expect(try probe("https://example.invalid/download/v1/missing") == "")
+}
+
 @Test func installSh_doesNotMentionBrew() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
@@ -1094,6 +1138,8 @@ private func writeCurlShim(
         name="${url##*/}"
         src="\(assets.path)/$name"
         if [ ! -f "$src" ]; then
+          # Like curl -fI against GitHub: the 404's headers, then exit 22.
+          [ "$head" = "1" ] && printf 'HTTP/1.1 404 Not Found\\r\\nContent-Length: 9\\r\\n\\r\\n'
           echo "curl: (22) The requested URL returned error: 404" >&2
           exit 22
         fi
