@@ -128,20 +128,45 @@ struct JudgeAdmissionTests {
         #expect(elapsed < JudgeAdmission.waitBudget + .seconds(1))
     }
 
-    @Test func theLoadWaitAndTheAdmissionWaitShareOneBudget() {
+    @Test func theBudgetBoundsTheSlotWaitNotTheColdLoad() {
         let since = ContinuousClock.now
-        // A far deadline: the budget ends the wait.
-        let budgeted = JudgeAdmission.slotCutoff(until: since.advanced(by: HookDeadline.budget), since: since)
-        #expect(budgeted == since.advanced(by: JudgeAdmission.waitBudget))
+        let deadline = since.advanced(by: HookDeadline.budget)
+        // A far deadline: the budget ends the wait for the model slot.
+        #expect(JudgeAdmission.slotCutoff(until: deadline, since: since)
+            == since.advanced(by: JudgeAdmission.waitBudget))
         // A near deadline: its headroom ends the wait first.
         let near = since.advanced(by: .seconds(2))
         #expect(JudgeAdmission.slotCutoff(until: near, since: since) == near - JudgeAdmission.inferenceHeadroom)
         // No deadline: no bound (the CLI's in-process path).
         #expect(JudgeAdmission.slotCutoff(until: nil, since: since) == nil)
-        // A load that took 1 s of the budget leaves 0.5 s for the admission.
-        #expect(JudgeAdmission.loadWait(.seconds(5), until: budgeted, now: since.advanced(by: .seconds(1)))
-            == JudgeAdmission.waitBudget - .seconds(1))
         #expect(JudgeAdmission.waitBudget == .milliseconds(1500))
+        // A cold load keeps the daemon's 5 s, cut only by deadline - headroom,
+        // so a fresh rvd still loads its judge on the first calls.
+        #expect(JudgeAdmission.loadWait(
+            JudgeRuntime.daemonLoadWait, until: deadline - JudgeAdmission.inferenceHeadroom, now: since)
+            == JudgeRuntime.daemonLoadWait)
+    }
+
+    /// A deadline-less holder (one no late-cutoff abandons) that has run past
+    /// `stallAge` stalls the judge: a request turned away behind it is late.
+    @Test func aTurnAwayBehindAnOldPredictionIsStalled() {
+        let admission = JudgeAdmission(limit: 4, stallAge: .milliseconds(50))
+        let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
+        occupy(admission, release: release, started: started)
+        defer { release.signal() }
+        Thread.sleep(forTimeInterval: 0.1)
+        let ran = Flag()
+        // Slot cutoff 0.1 s from now (deadline less headroom).
+        let behind = JudgeRuntime.admitted(
+            through: admission,
+            until: ContinuousClock.now.advanced(by: JudgeAdmission.inferenceHeadroom + .milliseconds(100))
+        ) { ran.set(); return .failed }
+        guard case .late = behind else {
+            Issue.record("a turn-away behind a stalled prediction must answer late, got \(behind)")
+            return
+        }
+        #expect(ran.isSet == false)
     }
 
     @Test func aDeadlineInsideTheHeadroomNeverRunsTheModel() {
@@ -192,9 +217,12 @@ struct JudgeAdmissionTests {
     @Test func aPredictionPastItsCutoffIsLateAndReportsItselfWhenDone() {
         let admission = JudgeAdmission(limit: 4)
         let reported = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
         let ranFor = RunTime()
         let begin = ContinuousClock.now
-        // Slot cutoff begin+0.4 s; the caller stops waiting at begin+1.15 s.
+        // Slot cutoff begin+0.4 s; the caller stops waiting at
+        // deadline - replyMargin. The prediction only returns once released,
+        // so the ordering holds however starved the machine is.
         let deadline = begin.advanced(by: .milliseconds(1400))
         let first = JudgeRuntime.admitted(
             through: admission, until: deadline, since: begin,
@@ -203,16 +231,17 @@ struct JudgeAdmissionTests {
                 reported.signal()
             }
         ) {
-            Thread.sleep(forTimeInterval: 1.8)
+            release.wait()
             return .failed
         }
+        defer { release.signal() }
         let waited = ContinuousClock.now - begin
         guard case .late = first else {
             Issue.record("a prediction past its cutoff must answer late, got \(first)")
             return
         }
-        #expect(waited >= .milliseconds(1100))
-        #expect(waited < .milliseconds(1700))
+        #expect(waited >= deadline - JudgeAdmission.replyMargin - begin)
+        #expect(ranFor.recorded == nil, "the caller returns before the prediction reports")
 
         // The abandoned prediction still holds the model: the next caller is
         // turned away behind a stalled judge, which counts as late.
@@ -226,8 +255,10 @@ struct JudgeAdmissionTests {
         }
         #expect(ran.isSet == false)
 
-        #expect(reported.wait(timeout: .now() + 5) == .success)
-        #expect((ranFor.recorded ?? .zero) >= .milliseconds(1750))
+        release.signal()
+        #expect(reported.wait(timeout: .now() + 10) == .success)
+        // It reports its own run time, which outlasted its caller's wait.
+        #expect((ranFor.recorded ?? .zero) > .zero)
         // The model is free again.
         #expect(admission.run(until: ContinuousClock.now.advanced(by: HookDeadline.budget)) { 1 }.answer == 1)
     }

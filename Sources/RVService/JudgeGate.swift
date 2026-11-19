@@ -504,22 +504,23 @@ public enum JudgeRuntime {
     ) -> JudgeRun {
         #if canImport(CoreML)
         return throughCircuit {
-            // One budget for the load wait and the admission wait together.
-            let since = ContinuousClock.now
+            // A cold load keeps its own bound (`loadWait`), cut to the hook
+            // deadline less headroom; only the wait for the model slot after
+            // it is held to `JudgeAdmission.waitBudget`.
             let deadline = JudgeAdmission.deadline
             let wait = JudgeAdmission.loadWait(
-                wait, until: JudgeAdmission.slotCutoff(until: deadline, since: since), now: since)
+                wait, until: deadline.map { $0 - JudgeAdmission.inferenceHeadroom })
             do {
                 switch engine {
                 case .laya:
                     let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
-                    return admitted(until: deadline, since: since, onLate: onLate) {
+                    return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command)) }
                         catch { return .failed }
                     }
                 case .ft:
                     let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
-                    return admitted(until: deadline, since: since, onLate: onLate) {
+                    return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command, context: context)) }
                         catch { return .failed }
                     }
@@ -625,8 +626,11 @@ public enum JudgeRuntime {
         return (raised.result, raised.note)
     }
 
-    /// The daemon's bound on waiting for an in-progress judge load. Past it
-    /// the request goes to review (`judge-warming`); the load keeps going.
+    /// The daemon's bound on waiting for an in-progress judge load, cut to
+    /// the hook deadline less `JudgeAdmission.inferenceHeadroom` when one is
+    /// bound. Past it the request goes to review (`judge-warming`); the load
+    /// keeps going. Not part of `JudgeAdmission.waitBudget`, which bounds
+    /// only the wait for the model slot after the load.
     public static let daemonLoadWait: Duration = .seconds(5)
 
     private static let loadWaitBox = UnfairLock<Duration?>(nil)

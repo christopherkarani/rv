@@ -11,8 +11,9 @@ import Synchronization
 /// judged command failed as if rvd were down.
 ///
 /// A request is refused at once when `limit` requests are already admitted,
-/// and its wait for a verdict slot (model load plus admission) ends at
-/// `waitBudget`, or earlier at its hook deadline less `inferenceHeadroom`.
+/// and its wait for the model slot ends at `waitBudget`, or earlier at its
+/// hook deadline less `inferenceHeadroom`. (A cold model load before it has
+/// its own bound, `JudgeRuntime.daemonLoadWait`.)
 /// A refused request never runs the model; the caller fails it closed
 /// (`JudgeRun.busy`, or `JudgeRun.late` when the model is stalled).
 ///
@@ -26,10 +27,12 @@ final class JudgeAdmission: Sendable {
     /// only caps the Dispatch threads blocked on the model.
     static let liveLimit = 12
 
-    /// The most a judged hook call waits for a verdict slot: the model
-    /// load wait and the admission wait together. Judge latency is p50
-    /// 0.3 s, p90 1.8 s; waiting longer behind another prediction mostly
-    /// bought a review anyway, after holding the agent for seconds.
+    /// The most a judged call with a deadline waits for the model slot
+    /// (its turn behind other predictions). Judge latency is p50 0.3 s,
+    /// p90 1.8 s; waiting longer behind another prediction mostly bought a
+    /// review anyway, after holding the agent for seconds. A cold model
+    /// load is not part of it: that wait is `JudgeRuntime.daemonLoadWait`,
+    /// so a fresh rvd still gets its judge loaded on the first calls.
     /// Bounds waiting only: a prediction already running is not stopped
     /// (Phase 1 moves the judge out of process, where it can be killed).
     static let waitBudget: Duration = .milliseconds(1500)
@@ -42,7 +45,10 @@ final class JudgeAdmission: Sendable {
     /// Time kept back after inference for the rest of the reply: a caller
     /// stops waiting for its prediction at `deadline - replyMargin` and
     /// answers `late` (review) rather than running into the timeout deny.
-    static let replyMargin: Duration = .milliseconds(250)
+    /// It must cover the Policy gate, the pending-approval row and the
+    /// unlock-code mint on a loaded machine; any of them past the deadline
+    /// swaps the review for the timeout deny (`requiresTimeoutReply`).
+    static let replyMargin: Duration = .milliseconds(750)
 
     /// A prediction running this long can no longer answer any hook, so a
     /// request turned away behind it was turned away by a stalled judge.
@@ -83,14 +89,17 @@ final class JudgeAdmission: Sendable {
     }
 
     private let limit: Int
+    private let stallAge: Duration
     private let state = Mutex(State())
     private let model = DispatchSemaphore(value: 1)
     private static let inference = DispatchQueue(
         label: "rv.judge.inference", qos: .userInitiated, attributes: .concurrent)
 
-    init(limit: Int) {
+    /// `stallAge` is a test seam; production uses `JudgeAdmission.stallAge`.
+    init(limit: Int, stallAge: Duration = JudgeAdmission.stallAge) {
         precondition(limit > 0, "JudgeAdmission needs room for at least one request")
         self.limit = limit
+        self.stallAge = stallAge
     }
 
     /// Requests currently admitted (running or waiting). Test seam.
@@ -167,12 +176,12 @@ final class JudgeAdmission: Sendable {
     private func stalled(now: ContinuousClock.Instant = .now) -> Bool {
         state.withLock { state in
             guard let holder = state.holder else { return false }
-            return holder.abandoned || now - holder.since >= Self.stallAge
+            return holder.abandoned || now - holder.since >= stallAge
         }
     }
 
     /// The wait for an in-progress model load, shortened to what is left
-    /// before `cutoff` (the slot cutoff: budget and hook deadline): a cold
+    /// before `cutoff` (the hook deadline less `inferenceHeadroom`): a cold
     /// load must not hold a request past the point its client gives up.
     /// nil `wait` (no bound) with no cutoff stays nil.
     static func loadWait(
