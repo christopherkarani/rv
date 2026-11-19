@@ -106,85 +106,9 @@ enum AdapterRuntime {
             ? [name]
             : pathEntries.filter { $0.hasPrefix("/") }.map { ($0 as NSString).appendingPathComponent(name) }
         guard let executable = candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }),
-              probe(executable)
+              runWithHookFlags(executable, code: "pass") != nil
         else { return nil }
         return executable
-    }
-
-    /// Where setup looks for a system interpreter before walking PATH.
-    static let systemDirectories = ["/usr/bin"]
-
-    /// The interpreter setup bakes: `<systemDirectory>/<name>` when it is
-    /// protected and runs, else the first runnable `name` on PATH. A
-    /// conda or pyenv `python3` first on PATH is one an agent could swap
-    /// to skip the guard (doctor warns about that fallback). An absolute
-    /// `name` is probed as is.
-    static func chooseRunnable(
-        _ name: String,
-        pathEntries: [String],
-        systemDirectories: [String] = systemDirectories,
-        isProtected: (String) -> Bool = isProtectedSystemInterpreter
-    ) -> String? {
-        if name.hasPrefix("/") == false {
-            for directory in systemDirectories {
-                let candidate = (directory as NSString).appendingPathComponent(name)
-                if isProtected(candidate), let runnable = resolveRunnable(candidate, pathEntries: []) {
-                    return runnable
-                }
-            }
-        }
-        return resolveRunnable(name, pathEntries: pathEntries)
-    }
-
-    /// `path` and the file it resolves to are root-owned and this user can
-    /// replace neither (an owner could `chmod` a read-only file back).
-    static func isProtectedSystemInterpreter(_ path: String) -> Bool {
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        for file in [path, resolved] {
-            guard let owner = try? FileManager.default.attributesOfItem(atPath: file)[.ownerAccountID] as? NSNumber,
-                  owner.uint32Value == 0
-            else { return false }
-        }
-        return userCanReplace(path) == false
-    }
-
-    /// This user may write `path`, the file it resolves to, or a directory
-    /// above either, so could replace what it runs.
-    static func userCanReplace(_ path: String) -> Bool {
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        for start in [path, resolved] {
-            var current = start
-            while current.isEmpty == false {
-                if access(current, W_OK) == 0 { return true }
-                let parent = (current as NSString).deletingLastPathComponent
-                if parent == current { break }
-                current = parent
-            }
-        }
-        return false
-    }
-
-    private static func probe(_ executable: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        // The hook command's own flags: an interpreter that rejects them
-        // (Python 2 has no `-I`) would fail every hook.
-        process.arguments = AdapterCommand.isolationFlags.split(separator: " ").map(String.init) + ["-c", "pass"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
-        guard exited.wait(timeout: .now() + probeTimeout) == .success else {
-            process.terminate()
-            return false
-        }
-        return process.terminationStatus == 0
     }
 }
 

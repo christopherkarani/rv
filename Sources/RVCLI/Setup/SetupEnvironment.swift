@@ -75,7 +75,7 @@ struct SetupEnvironment {
     /// the hook command; nil when none runs. Setup will not wire a host
     /// whose hook command needs one that does not. Default
     /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.chooseRunnable`
-    /// (a protected system interpreter, else this PATH).
+    /// (a protected system interpreter's real path, else this PATH).
     var resolveInterpreter: (String) -> String? = { "/usr/bin/" + $0 }
 
     /// This run loads the real launchd/systemd service, so it can (and
