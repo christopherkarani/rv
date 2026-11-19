@@ -80,7 +80,7 @@ public final class FineTunedJudge: @unchecked Sendable {
     let lengths: [Int]
     let lock = NSLock()
 
-    public init(bundleDir: URL) throws {
+    public init(bundleDir: URL, computeUnits: JudgeComputeUnits = .accelerated) throws {
         let fm = FileManager.default
         let directTok = bundleDir.appendingPathComponent("tokenizer.json")
         let nestedTok = bundleDir.appendingPathComponent("tokenizer/tokenizer.json")
@@ -140,7 +140,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         // mistokenization — String-keyed vocab tables resolving
         // homoglyph twins — fixed in LayaTokenizer by byte-exact keys,
         // verified 0/348 id mismatches vs HF.)
-        model = try CompiledModelCache.load(package: package)
+        model = try CompiledModelCache.load(package: package, computeUnits: computeUnits)
     }
 
     /// Judge one command with pre-rendered context lines (JudgeContext.lines()
@@ -224,7 +224,7 @@ public final class FineTunedJudge: @unchecked Sendable {
 /// Linux seam: CoreML is unavailable, so the fine-tuned judge cannot run.
 /// The gate treats this as unavailable; it never invents an allow.
 public struct FineTunedJudge: Sendable {
-    public init(bundleDir: URL) throws {
+    public init(bundleDir: URL, computeUnits: JudgeComputeUnits = .accelerated) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 
