@@ -12,10 +12,9 @@ extension SetupRun {
     static func writeLaunchAgent(
         env: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps,
-        keepAlive: Bool
+        files: FileOps
     ) throws(SetupError) -> String? {
-        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath, keepAlive: keepAlive)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.launchAgent)
         } catch {
@@ -29,8 +28,8 @@ extension SetupRun {
         return domain
     }
 
-    // Wired by setup alone, never by `writeLaunchAgent`: restart and the
-    // KeepAlive repair reload rvd only, and booting out the custodian would
+    // Wired by setup alone, never by `writeLaunchAgent`: restart reloads
+    // rvd only, and booting out the custodian would
     // kill an approval waiting on Touch ID.
     // The approvals custodian ships separately (RVApprovals.app). Register it
     // only when the bundle executable is installed; without it MCP approvals

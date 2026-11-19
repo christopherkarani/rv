@@ -170,14 +170,10 @@ extension SetupEnvironment {
         let supervisor = EvaluateSupervisor.systemdUser
         let touchLaunchd = false
         let touchSystemd = loginHome
-        let companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 #else
         let supervisor = EvaluateSupervisor.launchd
         let touchLaunchd = loginHome
         let touchSystemd = false
-        let companionPresence: any CompanionPresenceDetecting = FilesystemCompanionPresence(
-            home: home.rawValue
-        )
 #endif
         var setup = SetupEnvironment(
             home: home,
@@ -191,7 +187,6 @@ extension SetupEnvironment {
             touchSystemd: touchSystemd,
             supervisor: supervisor,
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment),
-            companionPresence: companionPresence,
             runningExecutable: executable?.path
         )
         setup.daemonTrust = DaemonTrustProbe.live

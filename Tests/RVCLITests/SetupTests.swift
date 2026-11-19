@@ -46,8 +46,7 @@ func env(
     systemctl: any SystemctlApplying = SilentSystemctl(),
     touchSystemd: Bool = false,
     supervisor: EvaluateSupervisor = .launchd,
-    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics(),
-    companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
+    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     var environment = SetupEnvironment(
         home: testHomeDirectory(home.path),
@@ -60,8 +59,7 @@ func env(
         touchLaunchd: touchLaunchd,
         touchSystemd: touchSystemd,
         supervisor: supervisor,
-        installAnalytics: installAnalytics,
-        companionPresence: companionPresence
+        installAnalytics: installAnalytics
     )
     environment.sleep = { _ in }
     return environment
@@ -105,7 +103,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
         #expect(plist.contains(home.appendingPathComponent("rvd").path))
-        try expectLaunchAgentKeepAlive(layout.launchAgent, false)
+        try expectAlwaysOnLaunchAgent(layout.launchAgent)
         #expect(launchctl.bootstraps.count == 1)
         let analytics = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -838,8 +836,8 @@ private func fixtureLoginHome() throws -> URL {
 }
 
 @Test func setup_writeLaunchAgentLeavesTheCustodianAlone() throws {
-    // `rv service restart` and the companion-uninstall KeepAlive repair call
-    // writeLaunchAgent; they must reload rvd only, never boot out the
+    // `rv service restart` calls writeLaunchAgent; it must reload rvd
+    // only, never boot out the
     // custodian (that would kill an approval waiting on Touch ID).
     try withTempHome { home, layout, launchctl in
         let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
@@ -850,7 +848,7 @@ private func fixtureLoginHome() throws -> URL {
 
         _ = try SetupRun.writeLaunchAgent(
             env: env(home: home, launchctl: launchctl), layout: layout,
-            files: FileOps(fileManager: .default), keepAlive: false)
+            files: FileOps(fileManager: .default))
 
         #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
         #expect(launchctl.bootouts.contains(SetupRun.custodianLaunchAgentLabel) == false)
@@ -864,8 +862,8 @@ private func fixtureLoginHome() throws -> URL {
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
     let keys = try launchdPlist(plist)
-    #expect(keys["KeepAlive"] as? Bool == false)
-    #expect(keys["RunAtLoad"] as? Bool == false)
+    #expect(keys["KeepAlive"] as? Bool == true)
+    #expect(keys["RunAtLoad"] as? Bool == true)
     #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
     #expect(plist.contains("<string>Aqua</string>"))
     #expect(plist.contains("<string>Background</string>"))

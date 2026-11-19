@@ -252,8 +252,7 @@ private func scriptedEnv(
         )
         #expect(outcome.exitCode == 0)
         #expect(launchctl.bootstrapDomains == ["gui/501"])
-        let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
-        #expect(plist.contains("<string>\(layout.localRvd)</string>"))
+        try expectAlwaysOnLaunchAgent(layout.launchAgent, rvdPath: layout.localRvd)
     }
 }
 
@@ -295,6 +294,63 @@ private func scriptedEnv(
         #expect(outcome.exitCode == EX_UNAVAILABLE)
         #expect(outcome.stderr.hasPrefix("rv service restart failed: unable to load LaunchAgent\n"))
         #expect(outcome.stderr.contains("fix: "))
+    }
+}
+
+/// Kickstart or bootstrap succeeding is not rvd answering: a crash-looping
+/// or untrusted rvd must fail the command, never report success.
+@Test(arguments: [false, true])
+func restartOrStart_rvdDoesNotAnswer_failsAndSaysSo(onlyIfStopped: Bool) throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.loaded = ["gui/501"]
+        var environment = scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())
+        environment.serviceAnswers = { false }
+        let outcome = ServiceRestart.run(environment, onlyIfStopped: onlyIfStopped)
+        let verb = onlyIfStopped ? "start" : "restart"
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr.hasPrefix("rv service \(verb) failed: rvd did not answer within"))
+        #expect(launchctl.events.contains("kickstart gui/501/dev.rv.evaluate"))
+    }
+}
+
+@Test func restart_waitsForRvdToAnswerBeforeReportingSuccess() throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.loaded = ["gui/501"]
+        let probes = SleepLog()
+        var environment = scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())
+        environment.serviceAnswers = {
+            probes.record(0)
+            return launchctl.events.contains("kickstart gui/501/dev.rv.evaluate")
+        }
+        let outcome = ServiceRestart.run(environment)
+        #expect(outcome.exitCode == 0)
+        #expect(probes.naps.count == 1)
+    }
+}
+
+/// Uninstall must not leave a KeepAlive job respawning a deleted rvd: the
+/// job is booted out of both domains before its plist and binaries go.
+@Test func uninstall_bootsOutTheAlwaysOnJobBeforeRemovingIt() throws {
+    try withTempHome { home, layout, _ in
+        try makeExecutable(URL(fileURLWithPath: layout.localRvd))
+        let launchctl = ScriptedLaunchctl()
+        let environment = scriptedEnv(
+            home: home, launchctl: launchctl, sleeps: SleepLog(), rvdPath: layout.localRvd)
+        #expect(SetupRun.setup(environment).exitCode == 0)
+        try expectAlwaysOnLaunchAgent(layout.launchAgent, rvdPath: layout.localRvd)
+        #expect(launchctl.loaded == ["gui/501"])
+        let before = launchctl.events.count
+
+        #expect(SetupRun.uninstall(environment).exitCode == 0)
+        let uninstallEvents = Array(launchctl.events.dropFirst(before))
+        #expect(uninstallEvents.contains("bootout gui/501"))
+        #expect(uninstallEvents.contains("bootout user/501"))
+        #expect(launchctl.loaded.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.localRvd) == false)
     }
 }
 

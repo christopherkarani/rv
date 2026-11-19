@@ -39,7 +39,7 @@ enum ServiceRestart {
                 exitCode: EX_USAGE
             )
         }
-        do {
+        do throws(SetupError) {
             let line: String
             switch try perform(env) {
             case .kickstarted(let domain):
@@ -47,6 +47,9 @@ enum ServiceRestart {
             case .reloaded(let domain):
                 line = "rv service \(verb): reloaded \(SetupRun.launchAgentLabel) into \(domain)"
             }
+            // launchctl accepting the job is not rvd answering: a crash on
+            // start or an untrusted binary must fail here, as setup does.
+            guard env.serviceAnswers() else { throw SetupError.serviceNotAnswering(.launchd) }
             return SetupOutcome(stdout: line + "\n", exitCode: 0)
         } catch {
             let output = setupFailureOutput(error, command: onlyIfStopped ? .serviceStart : .serviceRestart)
@@ -85,8 +88,7 @@ enum ServiceRestart {
         let domain = try SetupRun.writeLaunchAgent(
             env: env,
             layout: OwnedPaths(home: env.home),
-            files: FileOps(fileManager: env.fileManager),
-            keepAlive: env.companionPresence.presence().keepAlive
+            files: FileOps(fileManager: env.fileManager)
         )
         guard let domain else {
             throw SetupError.launchctlApplyFailed(.bootstrap)

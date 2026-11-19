@@ -48,7 +48,6 @@ struct SetupEnvironment {
     var installAnalytics: any InstallAnalyticsCapturing
     /// Injected so launchd domains are provable without the real uid.
     var uid: () -> uid_t = { getuid() }
-    var companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
     /// Injected so launchctl polling and retry backoff run instantly in tests.
     var sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     /// The `rv-cli` binary running this setup (nil when unknown). Setup that

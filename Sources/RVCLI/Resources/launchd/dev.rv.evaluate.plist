@@ -13,10 +13,16 @@
 	<array>
 		<string>@RVD_PATH@</string>
 	</array>
+	<!-- Always on: started at load and relaunched after any exit, a crash or
+	     the clean exit once its binary was replaced (the relaunch runs the
+	     upgraded rvd). ThrottleInterval 5 keeps a relaunch inside the hook's
+	     8 s budget while bounding a crash loop to one spawn every 5 s. -->
 	<key>RunAtLoad</key>
-	<false/>
+	<true/>
 	<key>KeepAlive</key>
-	<false/>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
 	<key>EnableTransactions</key>
 	<true/>
 	<key>LimitLoadToSessionType</key>
