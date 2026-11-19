@@ -148,6 +148,10 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation", "RVPolicy"]),
+    // The Laya judge worker pool (docs/architecture/judge-pool.md): wire,
+    // supervisor state machine, worker spawner, XPC listener and client.
+    // Model-agnostic: it must never depend on RVLaya / Core ML.
+    .target(name: "RVJudgePool", dependencies: ["RVIPC", "RVIsolation"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVDomain", "RVTheme", "RVPresentation"]),
     .target(
@@ -181,6 +185,7 @@ let coreProducts: [Product] = [
     .library(name: "RVHistory", targets: ["RVHistory"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
     .library(name: "RVMCP", targets: ["RVMCP"]),
+    .library(name: "RVJudgePool", targets: ["RVJudgePool"]),
 ]
 
 let coreTestTargets: [Target] = [
@@ -206,6 +211,7 @@ let coreTestTargets: [Target] = [
         exclude: ["Fixtures"]
     ),
     .testTarget(name: "RVLayaTests", dependencies: ["RVLaya"]),
+    .testTarget(name: "RVJudgePoolTests", dependencies: ["RVJudgePool"]),
     .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
     .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
     .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
@@ -287,7 +293,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC",
+            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC", "RVJudgePool",
         ]
     ),
     .executableTarget(
@@ -332,7 +338,7 @@ let cliTargets: [Target] = [
     ),
     .executableTarget(
         name: "rv-judge",
-        dependencies: ["RVLaya"]
+        dependencies: ["RVLaya", "RVJudgePool"]
     ),
 ]
 let cliProducts: [Product] = [

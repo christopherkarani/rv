@@ -415,7 +415,8 @@ static int requirement_parses(const char *text) {
 static int role_is_known(const char *role) {
     return strcmp(role, "cli") == 0 || strcmp(role, "service") == 0
         || strcmp(role, "workspaceHost") == 0
-        || strcmp(role, "operatorUI") == 0;
+        || strcmp(role, "operatorUI") == 0
+        || strcmp(role, "judge") == 0;
 }
 
 /* Validates one known-role entry exactly like the Swift loader. */

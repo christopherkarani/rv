@@ -137,6 +137,10 @@ check_value_types() {
   #            an AnyObject protocol, as SecretPlaceholderGroup is.
   #   rv-mcp-probe GatewaySink — the secrets gateway's `SecretResponseSink`
   #            is an `AnyObject` protocol, so the probe's sink is a class.
+  #   RVJudgePool — the judge pool's process edge (supervisor queue and
+  #            timer, worker processes and their pipes, the libxpc listener
+  #            and client), mirroring RVService. Its routing logic, PoolCore,
+  #            stays a value type.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/package/internal/…/final) must not hide a declaration, so
   # we match the keyword on a line that may start with any run of those tokens.
@@ -145,7 +149,7 @@ check_value_types() {
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVXPC/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
     | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' | grep -v 'Sources/RVLaya/' \
-    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCPCustodianCore/' \
+    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCPCustodianCore/' | grep -v 'Sources/RVJudgePool/' \
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
