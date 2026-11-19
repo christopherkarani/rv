@@ -53,7 +53,7 @@ struct WorkspaceAttach: AsyncParsableCommand {
 struct WorkspaceStatus: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "status",
-        abstract: "Show the live workspace host, if one exists."
+        abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale or the host does not answer)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -193,7 +193,7 @@ struct WorkspaceCustom: AsyncParsableCommand {
 struct WorkspaceClose: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "close",
-        abstract: "Close the live workspace through its host."
+        abstract: "Close the live workspace through its host; stops a host rv launched that no longer answers."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -336,25 +336,48 @@ enum WorkspaceCommandRun {
         throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
-        let attachment = WorkspaceHosts.inspect(project: project)
-        guard case .live(let endpoint) = attachment else {
-            emit(text(attachment))
-            return
+        let report = statusReport(WorkspaceHosts.inspect(project: project)) { endpoint in
+            guard let client = connected(endpoint) else { return nil }
+            let described = client.describe()
+            _ = client.detach()
+            return described
         }
-        guard let client = connected(endpoint) else {
-            emit(staleEndpointText)
-            return
-        }
-        let described = client.describe()
-        _ = client.detach()
-        switch described {
-        case .success(let description):
-            emit(lines(description))
-        case .failure:
-            emit(text(attachment))
+        emit(report.text)
+        if report.exitCode != 0 {
+            throw ExitCode(report.exitCode)
         }
         #endif
     }
+
+    /// `rv workspace status` exit code when the saved endpoint is stale or
+    /// its host does not answer. Like `rv doctor`, a check that found a
+    /// problem exits 1; every state that needs no host answer exits 0.
+    static let statusUnreachableExitCode: Int32 = 1
+
+    #if os(macOS)
+    /// What status prints and exits with. `describe` connects to a live
+    /// endpoint: nil when the connect failed.
+    static func statusReport(
+        _ attachment: WorkspaceAttachment,
+        describe: (WorkspaceEndpoint) -> Result<WorkspaceDescription, WorkspaceClientFailure>?
+    ) -> (text: String, exitCode: Int32) {
+        switch attachment {
+        case .staleEndpoint:
+            return (staleEndpointText, statusUnreachableExitCode)
+        case .live(let endpoint):
+            switch describe(endpoint) {
+            case .none:
+                return (staleEndpointText, statusUnreachableExitCode)
+            case .success(let description):
+                return (lines(description), 0)
+            case .failure:
+                return (text(attachment), 0)
+            }
+        default:
+            return (text(attachment), 0)
+        }
+    }
+    #endif
 
     static func leftovers() throws {
         #if !os(macOS)
@@ -446,8 +469,18 @@ enum WorkspaceCommandRun {
         guard case .live(let endpoint) = WorkspaceHosts.inspect(project: project) else {
             throw ValidationError(text(WorkspaceHosts.inspect(project: project)))
         }
-        guard let client = connected(endpoint) else {
-            throw ValidationError(hostNotReachablePreservedText)
+        let client: WorkspaceClient
+        switch WorkspaceClient.connect(endpoint) {
+        case .success(let connected):
+            client = connected
+        case .failure(let failure):
+            guard closeMayStopHost(after: failure), let host = WorkspaceHostExecutable.currentSibling() else {
+                throw ValidationError(hostNotReachablePreservedText)
+            }
+            let stop = WorkspaceHostLaunchRecord.stopUnanswered(
+                canonicalPath: endpoint.canonicalPath, installedHost: host
+            )
+            throw ValidationError(closeUnreachableText(stop))
         }
         switch client.closeWorkspace() {
         case .success(let description):
@@ -458,6 +491,41 @@ enum WorkspaceCommandRun {
         }
         #endif
     }
+
+    #if os(macOS)
+    /// Connect failures that prove the host cannot be used, so close may
+    /// stop it. A timed-out or overloaded host is busy, not broken: its
+    /// runtimes are left running.
+    static func closeMayStopHost(after failure: WorkspaceClientFailure) -> Bool {
+        switch failure {
+        case .timedOut, .queueOverloaded:
+            false
+        default:
+            true
+        }
+    }
+
+    /// Close could not reach the host; what it did about the process.
+    static func closeUnreachableText(_ stop: WorkspaceHostStop) -> String {
+        let next = "run 'rv workspace leftovers' to see what it left, 'rv workspace start' to recover the workspace, "
+            + "or 'rv doctor' if the host keeps failing"
+        switch stop {
+        case .noRecord:
+            return hostNotReachablePreservedText
+        case .leftAlone(let why):
+            return hostNotReachablePreservedText + " (nothing was stopped: \(why))"
+        case .stopped(let pid):
+            return "workspace host is not reachable, so rv stopped the workspace host rv launched for this project "
+                + "(pid \(pid)): the volume and saved changes are preserved; " + next
+        case .notRunning:
+            return "workspace host is not reachable and the host rv launched for this project has already exited: "
+                + "the volume and saved changes are preserved; " + next
+        case .stillRunning(let pid):
+            return "workspace host is not reachable; rv signalled the host it launched for this project (pid \(pid)) "
+                + "but it is still running: the volume and saved changes are preserved; run 'rv doctor'"
+        }
+    }
+    #endif
 
     static func abandon(_ raw: String?) async throws {
         try await OwnerConfirmation.require(
@@ -714,7 +782,58 @@ enum WorkspaceCommandRun {
         case .success(let endpoint):
             return endpoint
         case .failure(let error):
-            throw ValidationError(text(error))
+            throw ValidationError(ensureFailureText(error))
+        }
+    }
+
+    /// `WorkspaceHosts.ensure` failure text, with the live trust reason for
+    /// a refused host.
+    static func ensureFailureText(_ error: WorkspaceHostFailure) -> String {
+        let reason = error == .control(.unauthorizedClient)
+            ? WorkspaceHostExecutable.currentSibling().flatMap { host in
+                hostTrustReason(source: ProtectedPeerTrustConfiguration.hookTrustSource(), hostPath: host.path)
+            }
+            : nil
+        return ensureFailureText(error, hostTrustReason: reason)
+    }
+
+    /// `ensure` stops the host it spawned on every failure, so the texts
+    /// for a host that started but never served say so.
+    static func ensureFailureText(_ error: WorkspaceHostFailure, hostTrustReason: String?) -> String {
+        let after = "any host this start launched was stopped; run 'rv doctor', "
+            + "and 'rv workspace leftovers' for anything it left"
+        switch error {
+        case .control(.unauthorizedClient):
+            let why = hostTrustReason
+                ?? "the host and this rv do not hold the peer-trust roles each other requires"
+            return "the workspace host was refused: \(why); " + after
+        case .notAnswering:
+            return "the workspace host did not answer within \(Int(WorkspaceHosts.readinessTimeout)) s; " + after
+        case .timedOut:
+            return "workspace host did not become ready; " + after
+        default:
+            return text(error)
+        }
+    }
+
+    /// Why a workspace host would be refused, judged statically on the
+    /// installed host binary. Nil when it holds the role (then the host
+    /// refused this rv instead).
+    static func hostTrustReason(
+        source: ProtectedPeerTrustConfiguration.HookTrustSource,
+        hostPath: String
+    ) -> String? {
+        let manifest = DoctorInstallChecks.trustManifestPath
+        switch source {
+        case .siblingPin:
+            return "no peer-trust manifest is installed at \(manifest), and only it can grant the workspace host role"
+        case .invalid:
+            return "the peer-trust manifest at \(manifest) is present but rejected"
+        case .manifest:
+            guard let verdict = source.evaluateRole(.workspaceHost, atPath: hostPath) else {
+                return "the peer-trust manifest at \(manifest) grants no workspaceHost role"
+            }
+            return verdict.satisfied ? nil : verdict.reason
         }
     }
 
@@ -860,6 +979,8 @@ enum WorkspaceCommandRun {
             "workspace host endpoint is unavailable"
         case .timedOut:
             "workspace host did not become ready"
+        case .notAnswering:
+            "the workspace host did not answer"
         case .hostExited:
             "workspace host failed"
         case .control(let failure):

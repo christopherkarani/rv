@@ -182,8 +182,14 @@ public enum WorkspaceHosts {
         )
     }
 
+    /// How long a host that published a live endpoint may leave it
+    /// unanswered before `ensure` gives up. Mounting and recovery before the
+    /// endpoint exists are bounded by `ensure`'s overall timeout instead.
+    public static let readinessTimeout: TimeInterval = 15
+
     /// Starts a host when this project has none, or returns the live endpoint.
     /// A lost creation race attaches to the winner instead of mounting again.
+    /// Every failure stops the host this call spawned, so none is orphaned.
     public static func ensure(
         project: String,
         executable: URL,
@@ -197,43 +203,77 @@ public enum WorkspaceHosts {
         )
     }
 
+    /// The process and connection effects `ensure` drives; tests replace them.
+    struct EnsureSeams {
+        var inspect: (String) -> WorkspaceAttachment = WorkspaceHosts.inspect
+        /// Connect, describe, detach: whether the workspace is usable now.
+        var probe: (WorkspaceEndpoint) -> Result<Bool, WorkspaceClientFailure> = WorkspaceHosts.probe
+        var spawn: (URL, String) -> Result<pid_t, WorkspaceHostFailure> = WorkspaceHostLauncher.spawn
+        /// Nil while the child runs; its wait status once reaped.
+        var reap: (pid_t) -> Int32? = WorkspaceHosts.reap
+        var terminate: (pid_t) -> Void = WorkspaceHosts.terminateChild
+        /// Remember the spawned host so `close` can stop it if it never answers.
+        var recordLaunch: (pid_t, String) -> Void = WorkspaceHostLaunchRecord.record
+        var now: () -> Date = Date.init
+        var pause: () -> Void = { usleep(50_000) }
+    }
+
     static func ensure(
         project: String,
         executable: URL,
         timeout: TimeInterval = 90,
         homeDirectory: String,
-        inspect: (String) -> WorkspaceAttachment = WorkspaceHosts.inspect
+        seams: EnsureSeams = EnsureSeams()
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
-        let deadline = Date().addingTimeInterval(timeout)
         var child: pid_t = -1
+        let result = ensureLoop(
+            project: project, executable: executable, timeout: timeout,
+            homeDirectory: homeDirectory, seams: seams, child: &child
+        )
+        if case .failure = result, child > 0 {
+            seams.terminate(child)
+        }
+        return result
+    }
+
+    private static func ensureLoop(
+        project: String,
+        executable: URL,
+        timeout: TimeInterval,
+        homeDirectory: String,
+        seams: EnsureSeams,
+        child: inout pid_t
+    ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
+        let deadline = seams.now().addingTimeInterval(timeout)
         var spawned = false
-        while Date() < deadline {
-            switch inspect(project) {
+        var answerDeadline: Date?
+        while seams.now() < deadline {
+            switch seams.inspect(project) {
             case .live(let endpoint):
-                switch WorkspaceClient.connect(endpoint) {
-                case .success(let client):
+                switch seams.probe(endpoint) {
+                case .success(true):
+                    return .success(endpoint)
+                case .success(false):
                     // A live endpoint with a closing workspace is not
                     // usable. Keep polling: the close retires the endpoint
                     // and this loop then starts (or attaches to) the next
                     // host. No new sleep; this is the existing poll loop.
-                    let usable: Bool
-                    switch client.describe() {
-                    case .success(let description):
-                        usable = description.phase == .active
-                    case .failure:
-                        usable = false
-                    }
-                    _ = client.detach()
-                    if usable {
-                        return .success(endpoint)
-                    }
+                    break
                 case .failure(.incompatibleProtocol):
                     // A live owner may still have active PTYs. Replacing it
                     // would destroy those runtimes, so require a deliberate
                     // compatible-host restart instead of retrying until timeout.
                     return .failure(.control(.incompatibleProtocol))
+                case .failure(.unauthorizedClient):
+                    // Code identity does not change between attempts: the
+                    // host lacks the workspaceHost role (or refuses ours).
+                    return .failure(.control(.unauthorizedClient))
                 case .failure:
-                    break
+                    let limit = answerDeadline ?? seams.now().addingTimeInterval(readinessTimeout)
+                    answerDeadline = limit
+                    if seams.now() >= limit {
+                        return .failure(.notAnswering)
+                    }
                 }
             case .blocked(let block):
                 return .failure(.recoveryBlocked(block))
@@ -249,37 +289,75 @@ public enum WorkspaceHosts {
                 fallthrough
             case .orphaned:
                 if spawned == false {
-                    switch WorkspaceHostLauncher.spawn(executable: executable, workspace: project) {
+                    switch seams.spawn(executable, project) {
                     case .failure(let error):
                         return .failure(error)
                     case .success(let pid):
                         child = pid
                         spawned = true
+                        seams.recordLaunch(pid, project)
                     }
                 }
             case .starting, .recovering, .staleEndpoint:
                 break
             }
-            if child > 0 {
-                var status: Int32 = 0
-                let waited = waitpid(child, &status, WNOHANG)
-                if waited == child {
-                    child = -1
-                    let code = exitedCode(status)
-                    if code == WorkspaceHostExit.recoveryBlocked {
-                        continue
-                    }
-                    if code == WorkspaceHostExit.liveOwner {
-                        continue
-                    }
-                    if code != nil {
-                        return .failure(.hostExited(code ?? 1))
-                    }
+            if child > 0, let status = seams.reap(child) {
+                child = -1
+                let code = exitedCode(status)
+                if code == WorkspaceHostExit.recoveryBlocked {
+                    continue
+                }
+                if code == WorkspaceHostExit.liveOwner {
+                    continue
+                }
+                if code != nil {
+                    return .failure(.hostExited(code ?? 1))
                 }
             }
-            usleep(50_000)
+            seams.pause()
         }
         return .failure(.timedOut)
+    }
+
+    static func probe(_ endpoint: WorkspaceEndpoint) -> Result<Bool, WorkspaceClientFailure> {
+        switch WorkspaceClient.connect(endpoint) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let client):
+            let usable: Bool
+            switch client.describe() {
+            case .success(let description):
+                usable = description.phase == .active
+            case .failure:
+                usable = false
+            }
+            _ = client.detach()
+            return .success(usable)
+        }
+    }
+
+    static func reap(_ child: pid_t) -> Int32? {
+        var status: Int32 = 0
+        return waitpid(child, &status, WNOHANG) == child ? status : nil
+    }
+
+    /// Grace before SIGKILL for a host this process spawned and stops.
+    static let terminateGraceSeconds: TimeInterval = 2
+
+    /// Stop and reap a host this process spawned. Unreaped, the pid cannot
+    /// belong to anyone else, so signalling it is safe. The host keeps
+    /// SIGTERM's default action; the next start recovers what it left.
+    static func terminateChild(_ child: pid_t) {
+        guard child > 0 else { return }
+        _ = kill(child, SIGTERM)
+        let deadline = Date().addingTimeInterval(terminateGraceSeconds)
+        while Date() < deadline {
+            if reap(child) != nil { return }
+            usleep(50_000)
+        }
+        _ = kill(child, SIGKILL)
+        var status: Int32 = 0
+        _ = waitpid(child, &status, 0)
     }
 
     private static func exitedCode(_ status: Int32) -> Int32? {

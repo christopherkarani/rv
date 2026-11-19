@@ -120,6 +120,9 @@ public enum WorkspaceHostFailure: Error, Sendable, Equatable {
     case recoveryBlocked(WorkspaceRecoveryBlock)
     case endpointUnavailable
     case timedOut
+    /// The host published a live endpoint but did not answer on it within
+    /// `WorkspaceHosts.readinessTimeout`.
+    case notAnswering
     case hostExited(Int32)
     case control(WorkspaceClientFailure)
 }

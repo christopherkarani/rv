@@ -205,7 +205,7 @@ enum WorkspaceEndpointStore {
         return path
     }
 
-    private static func writeOwnerFile(_ data: Data, to url: URL) -> Bool {
+    static func writeOwnerFile(_ data: Data, to url: URL) -> Bool {
         let directory = url.deletingLastPathComponent()
         guard WorkspaceControlSocket.prepareDirectory(directory.path) else { return false }
         let temporary = url.appendingPathExtension("tmp")
