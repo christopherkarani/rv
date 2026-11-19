@@ -418,7 +418,7 @@ public struct GatedEvaluate: Sendable {
         tool: LedgerTool,
         inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> GatedVerdict {
-        let decided = await decide(
+        let decided = await decideVerdict(
             intent, request, cwd: cwd, home: home, grants: grants, now: now,
             allowlist: allowlist, host: host, tool: tool, inputs: inputs()
         )
@@ -451,6 +451,27 @@ public struct GatedEvaluate: Sendable {
     /// order. Grant spend / preview stays inline here (SEC-003). `inputs`
     /// is gathered once, inside the offload.
     func decide(
+        _ intent: EvaluationIntent,
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?,
+        grants: EphemeralAllowOnceTable,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost,
+        tool: LedgerTool,
+        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
+    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+        let decided = await decideVerdict(
+            intent, request, cwd: cwd, home: home, grants: grants, now: now,
+            allowlist: allowlist, host: host, tool: tool, inputs: inputs()
+        )
+        return (decided.result, decided.effects)
+    }
+
+    /// `decide` plus, under observe, the would-be verdict through a
+    /// Policy-gate preview (nil when the enforce branch decided).
+    func decideVerdict(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
