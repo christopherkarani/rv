@@ -135,21 +135,59 @@ The README's "MCP governance" section lists every case.
   stopping or replacing `rvd` but does not catch `kill` by a numeric pid,
   interpreter or script forms, or a renamed `launchctl`. A command whose
   program rv cannot see is sent to Terminal on an observe host
-  (`observe.floor:unanalyzable`), never hard-denied: a dynamic command
-  word (`$x`, `$(…)`, backticks), a dynamic `eval`, decoded or escaped
-  text reaching a shell or interpreter (`… | base64 -d | sh`,
-  `printf '\x6c…' | sh`, `sh <<< "$(…)"`), a shell or interpreter running
-  `<(…)`, stdin (`source /dev/stdin`) or a dynamic script operand
-  (`bash "$SCRIPT"`), dynamic or encoded inline code (`osascript -e
-  "$(…)"`, `python3 -c "…os.system(base64.b64decode(…))"`), and `xargs`,
-  `find -exec` or `parallel` running a shell, an interpreter or a dynamic
-  verb. A literal verb with dynamic arguments (`xargs rm`) and an inner
-  script whose commands are all literal (`bash -c 'for f in *; do echo
-  $f; done'`) stay observed; the lexical floors still read their text.
-  That still leaves any program the agent can already run as you: an
-  agent that writes a decoded script to a file and then runs it
-  (`echo … | base64 -d > /tmp/x.sh && sh /tmp/x.sh`, which is
-  `bash script.sh`), or a build step that stops `rvd`, is not modelled.
+  (`observe.floor:unanalyzable`), never hard-denied (a command the
+  engine already denies keeps that deny):
+  - a dynamic command word (`$x`, `$(…)`, backticks), a dynamic `eval`,
+    or a dynamic `trap` action (`trap "$X" EXIT`);
+  - a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `mksh`, `ash`, `yash`,
+    `fish`, `csh`, `tcsh`) or interpreter that reads its program from
+    stdin, unless every command feeding it is a literal `echo`, a
+    `printf` with no `%` or escape other than `\n`, or a `cat` of
+    literal paths. So `… | sed 's/^/launchctl /' | sh`,
+    `python3 -c "print(…)" | sh`, `… | base64 -d | sh` and
+    `printf '\x6c…' | sh` go to Terminal whatever the producer is.
+    Backslash-newline continuations are joined first;
+  - a shell or interpreter running `<(…)`, a dynamic here-string,
+    `source /dev/stdin` or a dynamic script operand (`bash "$SCRIPT"`);
+  - dynamic or encoded inline code (`osascript -e "$(…)"`,
+    `python3 -c "…os.system(base64.b64decode(…))"`), and inline code
+    that runs a command over input rv cannot read: stdin from a
+    producer rv cannot read, `perl -n`/`-p`, a dynamic argument or
+    assignment (`perl -e 'system @ARGV' "$X"`), or code that reads
+    stdin, arguments, the environment, a file or the network;
+  - `awk` whose program runs a command (`system`, a `|` to or from a
+    command), and GNU `sed` with the `e` command or `s///e` flag,
+    whatever feeds them;
+  - `ssh` whose remote command has a dynamic word (`ssh localhost
+    "$X"`; the remote shell re-parses it), or a dynamic or unreadable
+    `ProxyCommand`, `LocalCommand`, `KnownHostsCommand` or
+    `RemoteCommand`;
+  - `xargs`, `find -exec` or `parallel` running a shell, an interpreter,
+    `awk`, `sed`, `ssh`, a dynamic verb, or `kill`, `pkill`, `killall`,
+    `launchctl`, `systemctl`, `rv` or `rvd` (their operands come from
+    input), and `parallel` with no verb.
+
+  What the lexical floors read is the command line itself: the words of
+  each command, the inline `-c` script of a shell, and the text of a
+  literal `echo`/`printf` piped into a shell. They do not read files. So
+  a literal verb with dynamic arguments (`xargs rm`), an inner script
+  whose commands are all literal (`bash -c 'for f in *; do echo $f;
+  done'`) and a literal script file stay observed, and the file's
+  contents are not checked: `bash x.sh`, `sh < x.sh` and `cat x.sh | sh`
+  run whatever `x.sh` holds. An agent that writes a decoded script to a
+  file and then runs it (`echo … | base64 -d > /tmp/x.sh && sh
+  /tmp/x.sh`), or a build step that stops `rvd`, is not modelled.
+- **Interpreter forms observe does not read.** Inline code whose
+  command is built from literal pieces (`python3 -c
+  "import os; os.system('launch'+'ctl …')"`, the same code piped in by a
+  literal `echo`, or in a heredoc) passes when it reads no input rv
+  cannot see; the floor reads code for a few markers, not its meaning.
+  Also not read: a script file an interpreter runs (`python3 x.py`,
+  `awk -f x.awk`, `sed -f x.sed`), an `ssh -F` config file's
+  `ProxyCommand`, an environment variable set by an earlier call, and
+  an interpreter not on the list (`python*`, `pypy*`, `node`, `bun`,
+  `deno`, `ruby`, `perl`, `php`, `lua`, `luajit`, `osascript`,
+  `Rscript`, `tclsh`, `pwsh`).
   Once `rvd` is absent, an observe host lets calls run unchecked, rv's
   config and wiring included. Running `rvd` in the system domain, where a
   process running as you cannot stop it, is future work; use enforce
@@ -175,7 +213,10 @@ The README's "MCP governance" section lists every case.
 
   Run those in Terminal or put them in your shell's startup file. A
   `find -exec` or `xargs` that runs a shell (`find . -exec sh -c 'echo
-  {}' \;`) goes to Terminal too. rv also cannot see what a git alias or
+  {}' \;`) goes to Terminal too, as do `pgrep node | xargs kill`, `ssh
+  host 'echo $HOME'` (rv cannot tell single from double quotes there),
+  `curl … | sh` installers, `cat <<EOF | sh`, and `awk` programs that
+  call `system` or pipe to a command. rv also cannot see what a git alias or
   extension runs, so observe sends an unknown git subcommand (`git st`,
   `git lg`) to Terminal even when `core.git` is off.
 - **On an observe host, reading rv's install is observed.** A command
