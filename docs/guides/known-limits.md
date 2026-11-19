@@ -133,18 +133,51 @@ The README's "MCP governance" section lists every case.
   non-ignored secret files there; rv does not read file contents.
 - **Observe mode's protection of `rvd` is lexical.** It raises the bar on
   stopping or replacing `rvd` but does not catch `kill` by a numeric pid,
-  interpreter or script forms, or a renamed `launchctl`. A command rv
-  cannot see into is held at "run it in Terminal" on an observe host, as
-  under enforce: a dynamic `eval` (`eval "$(echo … | base64 -d)"`, also
-  `eval "$(brew shellenv)"`), a decoded program piped to a shell, an
-  inline program rv cannot unwrap, a variable as the command. That still
-  leaves any program the agent can already run as you: an agent that
-  writes and runs a script, a shell reading its program from a file or a
-  process substitution (`bash <(echo … | base64 -d)`), or a build step
-  that stops `rvd` is not modelled. Once `rvd` is absent, an observe host lets calls run
-  unchecked, rv's config and wiring included. Running `rvd` in the system
-  domain, where a process running as you cannot stop it, is future work;
-  use enforce where that matters.
+  interpreter or script forms, or a renamed `launchctl`. A command whose
+  program rv cannot see is sent to Terminal on an observe host
+  (`observe.floor:unanalyzable`), never hard-denied: a dynamic command
+  word (`$x`, `$(…)`, backticks), a dynamic `eval`, decoded or escaped
+  text reaching a shell or interpreter (`… | base64 -d | sh`,
+  `printf '\x6c…' | sh`, `sh <<< "$(…)"`), a shell or interpreter running
+  `<(…)`, stdin (`source /dev/stdin`) or a dynamic script operand
+  (`bash "$SCRIPT"`), dynamic or encoded inline code (`osascript -e
+  "$(…)"`, `python3 -c "…os.system(base64.b64decode(…))"`), and `xargs`,
+  `find -exec` or `parallel` running a shell, an interpreter or a dynamic
+  verb. A literal verb with dynamic arguments (`xargs rm`) and an inner
+  script whose commands are all literal (`bash -c 'for f in *; do echo
+  $f; done'`) stay observed; the lexical floors still read their text.
+  That still leaves any program the agent can already run as you: an
+  agent that writes a decoded script to a file and then runs it
+  (`echo … | base64 -d > /tmp/x.sh && sh /tmp/x.sh`, which is
+  `bash script.sh`), or a build step that stops `rvd`, is not modelled.
+  Once `rvd` is absent, an observe host lets calls run unchecked, rv's
+  config and wiring included. Running `rvd` in the system domain, where a
+  process running as you cannot stop it, is future work; use enforce
+  where that matters.
+- **Observe sends some everyday commands to Terminal.** The floor above
+  cannot tell a tool's generated setup code from an attacker's, so
+  `eval "$(tool …)"` always goes to Terminal, and so does any other
+  `eval` of a command's output:
+  - shell setup: `eval "$(brew shellenv)"`,
+    `eval "$(/opt/homebrew/bin/brew shellenv)"`;
+  - version managers and environment loaders: `eval "$(pyenv init -)"`,
+    `eval "$(rbenv init -)"`, `eval "$(fnm env)"`,
+    `eval "$(mise activate bash)"`, `eval "$(direnv hook zsh)"`,
+    `eval "$(direnv export bash)"`;
+  - prompts and shell integrations: `eval "$(starship init zsh)"`,
+    `eval "$(zoxide init zsh)"`, `eval "$(fzf --zsh)"`;
+  - completions: `eval "$(gh completion -s zsh)"`,
+    `eval "$(kubectl completion zsh)"`, `eval "$(cargo completions zsh)"`,
+    `eval "$(pip completion --zsh)"`;
+  - agents and credentials: `eval "$(ssh-agent -s)"`, `eval $(ssh-agent)`,
+    `eval "$(op signin)"`,
+    `eval "$(aws configure export-credentials --format env)"`.
+
+  Run those in Terminal or put them in your shell's startup file. A
+  `find -exec` or `xargs` that runs a shell (`find . -exec sh -c 'echo
+  {}' \;`) goes to Terminal too. rv also cannot see what a git alias or
+  extension runs, so observe sends an unknown git subcommand (`git st`,
+  `git lg`) to Terminal even when `core.git` is off.
 - **On an observe host, reading rv's install is observed.** A command
   that names one of rv's hook, service or binary files and is proven to
   only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display
