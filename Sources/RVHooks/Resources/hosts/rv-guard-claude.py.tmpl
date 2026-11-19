@@ -1,12 +1,22 @@
 """RV destructive-command guard for Claude Bash.
 
-Claude PreToolUse command hook. Step 8B: host dialogs never authorize.
-Approval happens in RVOperatorUI (or `rv allow-once`); the agent retries
-afterwards. Never emit permissionDecision ask (leftover-ask-as-permit:
-host Allow would run the tool with no RV approval). Extra
-hookSpecificOutput keys can fail-open a deny — wrapper-owned deny JSON
-uses documented fields only. Allow is empty stdout exit 0. Deny is always
-a documented Claude permissionDecision deny JSON exit 0 (never passthrough
+Claude PreToolUse command hook. Step 8B: host dialogs never authorize an
+rv review. Approval happens in RVOperatorUI (or `rv allow-once`); the
+agent retries afterwards, so rv's policy `ask` blocks (leftover-ask-as-
+permit: host Allow would run the tool with no RV approval).
+
+The one host ask is rv's infrastructure ask: rv could not check the call
+at all (rvd unreachable, slow or dropped — rv's own native ask — or the
+whole rv process past RV_HOOK_TIMEOUT_S). There is no rv verdict to
+bypass, so Claude Code's permission prompt lets the human decide, and the
+agent cannot answer it. Only in the permission modes listed in
+_HUMAN_PROMPT_MODES; bypassPermissions, dontAsk and a missing or unknown
+permission_mode block instead. Install problems and unusable rv output
+still block.
+
+Extra hookSpecificOutput keys can fail-open a deny — wrapper-owned JSON
+uses documented fields only. Allow is empty stdout exit 0. Deny and ask
+are documented Claude permissionDecision JSON exit 0 (never passthrough
 rv stdout).
 """
 
@@ -22,6 +32,16 @@ RV_HOOK_TIMEOUT_S = 15
 _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
 _BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
 _ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
+_INFRA_ASK_PREFIX = (
+    "rv could not check this call, so Claude Code is asking you. "
+    "Approve only if you expected it. "
+)
+
+# Claude Code permission modes that put a hook `ask` to a person: Manual
+# (sent as "default"), plan, acceptEdits, and auto (its classifier does
+# not decide a hook ask). bypassPermissions skips prompts and dontAsk
+# auto-denies them; any other or missing value is treated like those.
+_HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")
 
 
 def _missing_reason():
@@ -98,6 +118,9 @@ def main():
         mapped = _guard(raw)
         if mapped["action"] == "allow":
             return
+        if mapped["action"] == "host_ask":
+            _emit_host_ask(mapped)
+            return
         _emit_deny(mapped)
         return
     except Exception:
@@ -125,21 +148,23 @@ def _guard(raw):
     if not _is_pre_tool_event(envelope.get("hook_event_name"), "PreToolUse"):
         return {"action": "allow"}
     tool = _canonical(envelope.get("tool_name"), ("Bash",) + _FILE_TOOLS)
-    if tool in _FILE_TOOLS or not isinstance(tool, str):
-        mapped = _spawn_rv_hook("claude", raw)
-        if mapped["action"] == "allow":
-            return mapped
-        if mapped["action"] == "ask":
-            return {
-                "action": "block",
-                "reason": _blocking_reason(mapped.get("reason")),
-            }
-        return mapped
-    if tool != "Bash":
+    if tool != "Bash" and tool not in _FILE_TOOLS and isinstance(tool, str):
         return {"action": "allow"}
-    mapped = _spawn_rv_hook("claude", raw)
+    return _resolve(_spawn_rv_hook("claude", raw), envelope)
+
+
+def _resolve(mapped, envelope):
     if mapped["action"] == "allow":
         return mapped
+    if mapped["action"] == "unchecked":
+        # rv could not check the call: the human decides in Claude Code's
+        # prompt when this mode shows one; otherwise it blocks.
+        if _host_prompts_human(envelope.get("permission_mode")):
+            return {
+                "action": "host_ask",
+                "reason": _INFRA_ASK_PREFIX + _blocking_reason(mapped.get("reason")),
+            }
+        return {"action": "block", "reason": _blocking_reason(mapped.get("reason"))}
     # A legacy `ask` decision blocks like a deny: host dialogs never
     # authorize. The human approves in RVOperatorUI and the agent retries.
     if mapped["action"] == "ask":
@@ -148,6 +173,12 @@ def _guard(raw):
             "reason": _blocking_reason(mapped.get("reason")),
         }
     return mapped
+
+
+def _host_prompts_human(mode):
+    # Exact spellings only: the host writes this field, and anything it
+    # does not say plainly is no proof a person will see the prompt.
+    return isinstance(mode, str) and mode in _HUMAN_PROMPT_MODES
 
 
 def _parse(raw):
@@ -172,7 +203,7 @@ def _spawn_rv_hook(host, stdin):
     except FileNotFoundError:
         return {"action": "block", "reason": _missing_reason()}
     except subprocess.TimeoutExpired:
-        return {"action": "block", "reason": _timeout_reason()}
+        return {"action": "unchecked", "reason": _timeout_reason()}
     except OSError as error:
         return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
@@ -193,11 +224,12 @@ def _map_rv_hook_result(stdout, exit_code):
                 "reason": parsed.get("reason") if isinstance(parsed.get("reason"), str) else "",
             }
         hook = parsed.get("hookSpecificOutput")
-        # rv's own native ask (daemon down or slow) blocks like a deny, but
-        # carries rv's message: it says what broke and how to repair it.
+        # rv's own native ask: rvd was unreachable, slow or dropped, so rv
+        # could not check the call. rv's message says what broke and how
+        # to repair it. rvd itself never answers a native ask (Step 8B).
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
             return {
-                "action": "block",
+                "action": "unchecked",
                 "reason": _blocking_reason(
                     hook.get("permissionDecisionReason") or parsed.get("systemMessage")
                 ),
@@ -229,12 +261,20 @@ def _blocking_reason(reason):
 
 
 def _emit_deny(mapped):
+    _emit_decision("deny", mapped)
+
+
+def _emit_host_ask(mapped):
+    _emit_decision("ask", mapped)
+
+
+def _emit_decision(decision, mapped):
     text = _blocking_reason(mapped.get("reason") if isinstance(mapped, dict) else None)
     payload = {
         "systemMessage": text,
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": decision,
             "permissionDecisionReason": text,
         },
     }

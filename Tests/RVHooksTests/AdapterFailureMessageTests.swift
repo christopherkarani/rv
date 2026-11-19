@@ -67,7 +67,8 @@ struct AdapterFailureMessageTests {
         #expect(reason == daemonUnreachableMessage, "\(host): \(reason)")
     }
 
-    @Test func claudeNativeAsk_withoutReasonStillFailsClosedWithGuidance() async throws {
+    /// No permission_mode in the request: no proof a human will be asked.
+    @Test func claudeNativeAsk_withoutReasonOrModeFailsClosedWithGuidance() async throws {
         let wire = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n"
         let run = try await runPythonAdapter(host: .claude, stub: .stdout(wire, exit: 0))
         let reason = try expectFailClosed(host: .claude, run: run)
@@ -126,11 +127,11 @@ struct AdapterFailureMessageTests {
 }
 
 /// `kUnreachableMessage` in Sources/rv-c/hook_fallback.c.
-private let daemonUnreachableMessage =
+let daemonUnreachableMessage =
     "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
 
 /// Mirrors `rv_hook_fallback_render` for `.unreachable` in the default ask mode.
-private func daemonDownWire(_ host: HookHost) -> AdapterStub {
+func daemonDownWire(_ host: HookHost) -> AdapterStub {
     let msg = daemonUnreachableMessage
     switch host {
     case .claude:
@@ -149,27 +150,27 @@ private func daemonDownWire(_ host: HookHost) -> AdapterStub {
     }
 }
 
-private enum AdapterStub {
+enum AdapterStub {
     case missing
     case notExecutable
     case stdout(String, exit: Int32)
     case sleep(seconds: Int)
 }
 
-private struct PythonAdapterRun {
+struct PythonAdapterRun {
     var stdout: String
     var stderr: String
     var exitCode: Int32
     var rvPath: String
 }
 
-private func wireObject(_ stdout: String) throws -> [String: Any] {
+func wireObject(_ stdout: String) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
 }
 
 /// Asserts the host's documented fail-closed wire and returns the text the
 /// human sees.
-private func expectFailClosed(host: HookHost, run: PythonAdapterRun) throws -> String {
+func expectFailClosed(host: HookHost, run: PythonAdapterRun) throws -> String {
     let json = try wireObject(run.stdout)
     switch host {
     case .claude:
@@ -270,11 +271,12 @@ private func renderedAdapter(host: HookHost, rvPath: String, timeoutSeconds: Str
     return source
 }
 
-private func runPythonAdapter(
+func runPythonAdapter(
     host: HookHost,
     stub: AdapterStub,
     timeoutSeconds: String? = nil,
-    rawEvent: String? = nil
+    rawEvent: String? = nil,
+    eventFields: [String: Any] = [:]
 ) async throws -> PythonAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-failmsg-\(UUID().uuidString)", isDirectory: true)
@@ -290,7 +292,8 @@ private func runPythonAdapter(
     if let rawEvent {
         eventText = rawEvent
     } else {
-        let data = try JSONSerialization.data(withJSONObject: stdinEvent(for: host))
+        let event = stdinEvent(for: host).merging(eventFields) { _, field in field }
+        let data = try JSONSerialization.data(withJSONObject: event)
         eventText = try #require(String(data: data, encoding: .utf8))
     }
 

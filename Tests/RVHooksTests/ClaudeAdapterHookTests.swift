@@ -3,9 +3,11 @@ import RVDomain
 import RVHooks
 import Testing
 
-/// Claude PreToolUse wrapper: confirm then spend. Never leftover `permissionDecision:ask`.
+/// Claude PreToolUse wrapper: rv's policy ask never becomes
+/// `permissionDecision:ask`; only rv's infrastructure ask does, in prompting
+/// modes (ClaudeInfraAskAdapterTests).
 struct ClaudeAdapterHookTests {
-    @Test func template_bakesRvAndNeverEmitsPermissionDecisionAsk() throws {
+    @Test func template_bakesRvAndAsksOnlyInHumanPromptModes() throws {
         let source = try adapterSource(rvPath: "/opt/rv")
         #expect(source.contains("PreToolUse"))
         #expect(source.contains("\"Bash\""))
@@ -20,9 +22,11 @@ struct ClaudeAdapterHookTests {
         #expect(source.contains("osascript") == false)
         #expect(source.contains("display dialog") == false)
         #expect(source.contains("__RV_BINARY__") == false)
-        #expect(source.contains("permissionDecision\":\"ask\"") == false)
-        #expect(source.contains("permissionDecision': 'ask'") == false)
+        // The one ask emitter is the infrastructure path, gated on modes
+        // where Claude Code shows the prompt to a person.
         #expect(source.contains("\"permissionDecision\": \"ask\"") == false)
+        #expect(source.contains("_emit_decision(\"ask\", mapped)"))
+        #expect(source.contains(#"_HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")"#))
         #expect(source.contains("RV_BYPASS") == false)
     }
 
@@ -269,7 +273,8 @@ struct ClaudeAdapterHookTests {
 
     // MARK: failure classes not covered by AdapterFailureMessageTests — each blocks.
 
-    /// Every down class the C hook can render as Claude `ask` reaches the human verbatim.
+    /// Every down class the C hook can render as Claude `ask` reaches the
+    /// human verbatim; with no permission_mode it blocks.
     @Test(arguments: [cUnreachableReason, cTimeoutReason, cConnectionReason])
     func daemonDownAsk_deniesWithTheCHookReason(_ reason: String) async throws {
         let result = try await runClaudeWrapper(
@@ -278,6 +283,30 @@ struct ClaudeAdapterHookTests {
             confirm: "yes"
         )
         try expectClaudeDeny(result, reason: reason)
+        #expect(result.spawnCount == 1)
+    }
+
+    /// In Manual mode each down class becomes Claude Code's own prompt,
+    /// prefixed with the layer that could not check the call.
+    @Test(arguments: [cUnreachableReason, cTimeoutReason, cConnectionReason])
+    func daemonDownAsk_inManualModeAsksTheHuman(_ reason: String) async throws {
+        var event = resetHardEvent()
+        event["permission_mode"] = "default"
+        let result = try await runClaudeWrapper(
+            event: event,
+            first: (cDownAskJSON(reason: reason), 0),
+            confirm: "yes"
+        )
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any])
+        let hook = try #require(json["hookSpecificOutput"] as? [String: Any])
+        #expect(hook["permissionDecision"] as? String == "ask")
+        let expected =
+            "rv could not check this call, so Claude Code is asking you. Approve only if you expected it. "
+            + reason
+        #expect(hook["permissionDecisionReason"] as? String == expected)
+        #expect(json["systemMessage"] as? String == expected)
+        #expect(result.exitCode == 0)
         #expect(result.spawnCount == 1)
     }
 
