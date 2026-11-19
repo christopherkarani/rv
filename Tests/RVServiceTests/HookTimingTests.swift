@@ -59,16 +59,27 @@ import Synchronization
     /// A request stuck past its deadline may never reach the completion
     /// line; the watchdog logs what it measured so far, once, and the
     /// completion line still follows when it does finish.
+    /// No wall clock: the watchdog wakes at once, and the request stays
+    /// stuck until the watchdog has written its line.
     @Test func stuckRequestIsLoggedByTheWatchdogOnce() async throws {
         let lines = Lines()
-        let deadline = HookDeadline(receivedAt: .now, budget: .milliseconds(50))
+        let (written, signal) = AsyncStream<Void>.makeStream()
+        let log = SlowHookLog(write: { line in
+            lines.written.withLock { $0.append(line) }
+            signal.yield()
+        })
+        // Received a second ago, due half a second ago: past its budget,
+        // yet its own clock still permits side effects, so it runs.
+        let start = ContinuousClock.now
+        let deadline = HookDeadline(
+            expiresAt: start - .milliseconds(500), receivedAt: start - .seconds(1), now: { start - .seconds(1) })
         let world = hookWorld(evaluate: { _, _ in
-            try? await Task.sleep(for: .milliseconds(600))
+            for await _ in written { break }
             return EvaluationResult(outcome: .plain)
         })
         _ = try await HookDoor.run(
-            host: .pi, stdin: Self.stdin, world: world, deadline: deadline, slowLog: lines.log(),
-            hungGrace: .milliseconds(50))
+            host: .pi, stdin: Self.stdin, world: world, deadline: deadline, slowLog: log,
+            hungGrace: .zero, watchdogSleep: { _ in })
         let line = try #require(lines.all.first)
         #expect(lines.all.count == 2, "watchdog lines have their own window")
         #expect(lines.all.last?.contains("rvd: hook ran past its deadline: host=pi ") == true)
