@@ -690,7 +690,14 @@ PY
 # Anything but a valid final reply to this request falls through to rvd's
 # path (here no reachable or trusted daemon, so the RV_HOOK_WHEN_DOWN=deny
 # wire naming the daemon) and never delivers what the evaluator printed.
-for name in escalate hang crash garbage wrong-id untrusted; do
+# As for the daemon-down cases, a registered dev.rv.evaluate must never be
+# sent a test call: skip there (local_eval_test still covers each cause).
+FALL_THROUGH=(escalate hang crash garbage wrong-id untrusted)
+if [[ "$OS" == "Darwin" && "$down_ready" -ne 1 ]]; then
+  FALL_THROUGH=()
+  printf 'rv-c tests: dev.rv.evaluate is registered; skipping hook-local fall-through cases\n'
+fi
+for name in ${FALL_THROUGH[@]+"${FALL_THROUGH[@]}"}; do
   if [[ "$name" == "untrusted" ]]; then
     run_local untrusted script
   else
