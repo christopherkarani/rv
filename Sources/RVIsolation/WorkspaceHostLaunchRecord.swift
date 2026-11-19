@@ -41,10 +41,10 @@ public enum WorkspaceHostLaunchRecord {
     }
 
     /// Best effort: a host without a record is simply not stoppable by close.
-    static func record(pid: pid_t, project: String) {
+    /// Called once the spawned child owns the endpoint for `canonicalPath`,
+    /// so a spawn that lost the creation race never overwrites the winner.
+    static func record(pid: pid_t, canonicalPath canonical: String) {
         guard let configuration = WorkspaceHostLocation.configurationDirectory(),
-              let directory = WorkingDirectory(validating: project),
-              case .success(let canonical) = existingResolvedWorkspacePath(directory),
               case .found(let identity) = LibprocProcessTable().lookup(pid) else { return }
         let launch = WorkspaceHostLaunch(
             v: WorkspaceHostLaunch.version, pid: pid,
@@ -83,6 +83,13 @@ public enum WorkspaceHostLaunchRecord {
             if case .path(let path) = LibprocProcessTable().executable(pid) { return path }
             return nil
         }
+        /// The launcher spawns the host with POSIX_SPAWN_SETSID.
+        var isSessionLeader: (pid_t) -> Bool = { getsid($0) == $0 }
+        var isOwnUser: (pid_t) -> Bool = { pid in
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+            return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size && info.pbi_uid == getuid()
+        }
         var resolve: (String) -> String? = posixRealpath
         var signal: (pid_t, Int32) -> Void = { _ = kill($0, $1) }
         var now: () -> Date = Date.init
@@ -118,6 +125,12 @@ public enum WorkspaceHostLaunchRecord {
         }
         guard running == expected else {
             return .leftAlone("process \(pid) runs \(running), not \(expected)")
+        }
+        guard seams.isSessionLeader(pid) else {
+            return .leftAlone("process \(pid) is not a session leader, so rv did not launch it")
+        }
+        guard seams.isOwnUser(pid) else {
+            return .leftAlone("process \(pid) belongs to another user")
         }
         func waitGone() -> Bool {
             let deadline = seams.now().addingTimeInterval(seams.grace)

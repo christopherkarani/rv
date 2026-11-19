@@ -15,6 +15,8 @@ public struct WorkspaceEndpoint: Sendable, Equatable {
     /// Same-account binding secret. It is not a capability and not an org credential.
     public var ownerToken: UUID
     public var uid: UInt32
+    /// The host process that published the endpoint; nil from an older host.
+    public var hostPID: Int32? = nil
 }
 
 public struct WorkspaceDescription: Sendable, Equatable {
@@ -83,6 +85,9 @@ struct WorkspaceEndpointRecord: Codable, Equatable {
     var lockDevice: UInt64
     var lockInode: UInt64
     var uid: UInt32
+    /// The publishing host's pid, so `ensure` can tell its own child's
+    /// endpoint from a race winner's. Optional: older hosts omit it.
+    var pid: Int32? = nil
 
     func endpoint() -> WorkspaceEndpoint {
         WorkspaceEndpoint(
@@ -93,7 +98,8 @@ struct WorkspaceEndpointRecord: Codable, Equatable {
             socketDevice: socketDevice,
             socketInode: socketInode,
             ownerToken: ownerToken,
-            uid: uid
+            uid: uid,
+            hostPID: pid
         )
     }
 }
