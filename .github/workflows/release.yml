@@ -170,7 +170,7 @@ jobs:
         if: needs.gate.outputs.signed == '1'
         run: |
           set -euo pipefail
-          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host stage/rv-pty-claim; do
+          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host stage/rv-pty-claim stage/rv-judge; do
             codesign --verify --strict --verbose=2 "$bin"
             details="$(codesign -dvv "$bin" 2>&1)"
             case "$details" in

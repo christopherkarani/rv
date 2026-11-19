@@ -1157,6 +1157,7 @@ else
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks-$target.tar.gz")")"
   size_span=0
   size_claim=0
+  size_judge=0
   size_microvm=0
   size_relay=0
   size_macvm=0
@@ -1165,6 +1166,8 @@ else
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
     size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim-$target")")"
+    # Judge worker pool (dev.rv.judge; `rv setup` registers it). Older releases omit it.
+    size_judge="$(normalize_size "$(content_length "$release_base/rv-judge-$target")")"
     # Micro-VM backend (`rv workspace run --microvm`). Older releases omit it.
     size_microvm="$(normalize_size "$(content_length "$release_base/rv-microvm-$target")")"
     size_relay="$(normalize_size "$(content_length "$release_base/rv-guest-relay-$target")")"
@@ -1174,7 +1177,7 @@ else
     size_approvals="$(normalize_size "$(content_length "$release_base/rv-approvals-darwin-arm64.zip")")"
   fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_microvm + size_relay + size_macvm + size_macvm_agent + size_approvals))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_judge + size_microvm + size_relay + size_macvm + size_macvm_agent + size_approvals))
   size_isolation=0
   size_swiftlibs=0
   size_custodian=0
@@ -1201,6 +1204,10 @@ else
   if [ "$os" = "Darwin" ] && [ "$size_claim" -gt 0 ]; then
     download_release_asset "$tmp_fetch" "rv-pty-claim-$target" "$size_claim" "rv-pty-claim"
     chmod 755 "$tmp_fetch/rv-pty-claim"
+  fi
+  if [ "$os" = "Darwin" ] && [ "$size_judge" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-judge-$target" "$size_judge" "rv-judge"
+    chmod 755 "$tmp_fetch/rv-judge"
   fi
   if [ "$os" = "Darwin" ] && [ "$size_microvm" -gt 0 ] && [ "$size_relay" -gt 0 ]; then
     download_release_asset "$tmp_fetch" "rv-microvm-$target" "$size_microvm" "rv-microvm"
@@ -1242,7 +1249,7 @@ else
   }
   if [ "$os" = "Darwin" ]; then
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
-      rv rv-cli rvd rv-workspace-host rv-pty-claim rv-microvm rv-macvm rv-macvm-agent RVApprovals.app
+      rv rv-cli rvd rv-workspace-host rv-pty-claim rv-judge rv-microvm rv-macvm rv-macvm-agent RVApprovals.app
   fi
 fi
 
@@ -1269,6 +1276,7 @@ tmp_cli="$bin/.rv-cli.installing"
 tmp_rvd="$bin/.rvd.installing"
 tmp_host="$bin/.rv-workspace-host.installing"
 tmp_claim=""
+tmp_judge=""
 tmp_span=""
 rm -f "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
 cp "$src/rv" "$tmp_rv"
@@ -1303,6 +1311,14 @@ if [ "$os" = "Darwin" ] && [ -x "$src/rv-pty-claim" ]; then
   cp "$src/rv-pty-claim" "$tmp_claim"
   chmod 755 "$tmp_claim"
 fi
+# Optional: older stages omit it. rvd routes the judge through the
+# dev.rv.judge pool and pins its supervisor to the rv-judge beside it.
+if [ "$os" = "Darwin" ] && [ -x "$src/rv-judge" ]; then
+  tmp_judge="$bin/.rv-judge.installing"
+  rm -f "$tmp_judge"
+  cp "$src/rv-judge" "$tmp_judge"
+  chmod 755 "$tmp_judge"
+fi
 
 # Unlink dest first: BSD cp writes through an existing dest symlink. Same
 # directory rename after a successful staging is metadata-only.
@@ -1330,6 +1346,11 @@ if [ -n "$tmp_claim" ]; then
   rm -f "$bin/rv-pty-claim"
   mv -f "$tmp_claim" "$bin/rv-pty-claim"
   tmp_claim=""
+fi
+if [ -n "$tmp_judge" ]; then
+  rm -f "$bin/rv-judge"
+  mv -f "$tmp_judge" "$bin/rv-judge"
+  tmp_judge=""
 fi
 # Optional pair: rv-microvm installs rv-guest-relay into each guest from
 # beside itself. rv-guest-relay is a Linux binary and carries no signature.
