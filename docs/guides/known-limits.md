@@ -133,8 +133,25 @@ The README's "MCP governance" section lists every case.
   non-ignored secret files there; rv does not read file contents.
 - **Observe mode's protection of `rvd` is lexical.** It raises the bar on
   stopping or replacing `rvd` but does not catch `kill` by a numeric pid,
-  interpreter or script forms, or a renamed `launchctl`. When `rvd` is
-  absent, an observe host lets calls run unchecked.
+  interpreter or script forms, or a renamed `launchctl`. A command rv
+  cannot see into is held at "run it in Terminal" on an observe host, as
+  under enforce: a dynamic `eval` (`eval "$(echo … | base64 -d)"`, also
+  `eval "$(brew shellenv)"`), a decoded program piped to a shell, an
+  inline program rv cannot unwrap, a variable as the command. That still
+  leaves any program the agent can already run as you: an agent that
+  writes and runs a script, a shell reading its program from a file or a
+  process substitution (`bash <(echo … | base64 -d)`), or a build step
+  that stops `rvd` is not modelled. Once `rvd` is absent, an observe host lets calls run
+  unchecked, rv's config and wiring included. Running `rvd` in the system
+  domain, where a process running as you cannot stop it, is future work;
+  use enforce where that matters.
+- **On an observe host, reading rv's install is observed.** A command
+  that names one of rv's hook, service or binary files and is proven to
+  only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display
+  or verify, `log show`, written plainly) runs and is recorded like any
+  other observed command. Anything else that names one, including a read
+  through another program, quoting or a redirect, is enforced. rv's
+  config directory is enforced on every command that names it.
 - **Plain allows are not logged** in the audit log, only denies,
   overrides and changes.
 
