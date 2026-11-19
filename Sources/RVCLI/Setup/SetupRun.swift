@@ -24,6 +24,7 @@ enum SetupGuardRequest: Equatable {
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
     static let custodianLaunchAgentLabel = "dev.rv.mcp-custodian"
+    static let judgeLaunchAgentLabel = "dev.rv.judge"
     /// One-line repair when installed binaries (rvd, pack bundle) are missing.
     static let reinstallHint = "reinstall rv (curl -fsSL https://rykanv.com/install | sh)"
 
