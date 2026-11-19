@@ -12,102 +12,110 @@ struct Packs: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "packs",
         abstract: "List and enable or disable packs.",
-        subcommands: [Enable.self, Disable.self, Info.self],
-        defaultSubcommand: nil
+        subcommands: [List.self, Enable.self, Disable.self, Info.self],
+        defaultSubcommand: List.self
     )
 
-    @Flag(name: .customLong("enabled"), help: "Only enabled packs.")
-    var enabledOnly = false
-
-    @Flag(name: .customLong("all"), help: "List all packs grouped by category. (Default: all)")
-    var all = false
-
-    @Flag(name: .customLong("verbose"), help: "Show descriptions and pattern counts.")
-    var verbose = false
-
-    @Flag(name: .customLong("expand"), help: "Show all patterns when --verbose. By default truncates to --max-patterns.")
-    var expand = false
-
-    @Option(name: .customLong("max-patterns"), help: "Maximum patterns per section when --verbose (default 10).")
-    var maxPatterns: Int = 10
-
-    @Option(name: .customLong("category"), help: "Filter to a single category.")
-    var category: String?
-
-    @Option(name: .customLong("search"), help: "Filter by id, name, or description.")
-    var search: String?
-
-    @OptionGroup
-    var format: FormatFlags
-
-    func run() async throws {
-        let ctx = CommandContext.current(command: "packs", format: format)
-        let home = try ctx.requireHome()
-        // Always load the full snapshot; filtering is local so JSON and pretty share the same view.
-        let full = try PacksFacade.list(home: home, enabledOnly: false)
-        if (try? PacksConfigStore.load(home: home)) == nil {
-            ctx.writeStderr(
-                "warning: \(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
-        }
-        let filtered = PacksListFilter.apply(
-            full,
-            category: category,
-            search: search,
-            enabledOnly: enabledOnly && !all
+    /// `rv packs` and `rv packs list`: the grouped catalog.
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List packs (the default)."
         )
-        let rows = filtered.packs
 
-        if ctx.explicitRobot {
-            let payload = packsRobotPayload(
-                rows: rows.map(packsRobotRow),
+        @Flag(name: .customLong("enabled"), help: "Only enabled packs.")
+        var enabledOnly = false
+
+        @Flag(name: .customLong("all"), help: "List all packs grouped by category. (Default: all)")
+        var all = false
+
+        @Flag(name: .customLong("verbose"), help: "Show descriptions and pattern counts.")
+        var verbose = false
+
+        @Flag(name: .customLong("expand"), help: "Show all patterns when --verbose. By default truncates to --max-patterns.")
+        var expand = false
+
+        @Option(name: .customLong("max-patterns"), help: "Maximum patterns per section when --verbose (default 10).")
+        var maxPatterns: Int = 10
+
+        @Option(name: .customLong("category"), help: "Filter to a single category.")
+        var category: String?
+
+        @Option(name: .customLong("search"), help: "Filter by id, name, or description.")
+        var search: String?
+
+        @OptionGroup
+        var format: FormatFlags
+
+        func run() async throws {
+            let ctx = CommandContext.current(command: "packs", format: format)
+            let home = try ctx.requireHome()
+            // Always load the full snapshot; filtering is local so JSON and pretty share the same view.
+            let full = try PacksFacade.list(home: home, enabledOnly: false)
+            if (try? PacksConfigStore.load(home: home)) == nil {
+                ctx.writeStderr(
+                    "warning: \(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+            }
+            let filtered = PacksListFilter.apply(
+                full,
+                category: category,
+                search: search,
+                enabledOnly: enabledOnly && !all
+            )
+            let rows = filtered.packs
+
+            if ctx.explicitRobot {
+                let payload = packsRobotPayload(
+                    rows: rows.map(packsRobotRow),
+                    enabledCount: filtered.enabledCount,
+                    totalCount: filtered.totalCount
+                )
+                let text = try RobotDocument.packsList(payload).render()
+                ctx.writeStdout(text + "\n")
+                return
+            }
+
+            if rows.isEmpty {
+                let hint: String
+                if category != nil || search != nil {
+                    hint = "No packs match. Try `rv packs` or `rv packs --search <term>`.\n"
+                } else if enabledOnly {
+                    hint = "No packs enabled. Try `rv packs` to see available packs.\n"
+                } else {
+                    hint = "No packs found.\n"
+                }
+                ctx.writeStdout(hint)
+                return
+            }
+
+            // `rv packs` defaults to the complete grouped catalog; filters narrow that view.
+            // Collapsed quiet path removed; use --enabled/--category/--search to narrow.
+            let verboseFlag = verbose
+            let expandFlag = expand
+            let maxPat = max(1, maxPatterns)
+
+            let groupedRows = rows.map { row in
+                GroupedPackRow(
+                    id: row.id,
+                    name: row.name,
+                    category: row.category,
+                    description: row.description,
+                    isEnabled: row.enabled,
+                    safePatternCount: row.safePatternCount,
+                    destructivePatternCount: row.destructivePatternCount,
+                    safePatterns: verboseFlag ? row.safePatterns : [],
+                    destructivePatterns: verboseFlag ? row.destructivePatterns : []
+                )
+            }
+            let model = groupedPacksViewModel(
+                rows: groupedRows,
                 enabledCount: filtered.enabledCount,
                 totalCount: filtered.totalCount
             )
-            let text = try RobotDocument.packsList(payload).render()
-            ctx.writeStdout(text + "\n")
-            return
+
+            let text = PacksListFormat.prettyGrouped(model, appearance: ctx.appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
+            ctx.writeStdout(text)
         }
-
-        if rows.isEmpty {
-            let hint: String
-            if category != nil || search != nil {
-                hint = "No packs match. Try `rv packs` or `rv packs --search <term>`.\n"
-            } else if enabledOnly {
-                hint = "No packs enabled. Try `rv packs` to see available packs.\n"
-            } else {
-                hint = "No packs found.\n"
-            }
-            ctx.writeStdout(hint)
-            return
-        }
-
-        // `rv packs` defaults to the complete grouped catalog; filters narrow that view.
-        // Collapsed quiet path removed; use --enabled/--category/--search to narrow.
-        let verboseFlag = verbose
-        let expandFlag = expand
-        let maxPat = max(1, maxPatterns)
-
-        let groupedRows = rows.map { row in
-            GroupedPackRow(
-                id: row.id,
-                name: row.name,
-                category: row.category,
-                description: row.description,
-                isEnabled: row.enabled,
-                safePatternCount: row.safePatternCount,
-                destructivePatternCount: row.destructivePatternCount,
-                safePatterns: verboseFlag ? row.safePatterns : [],
-                destructivePatterns: verboseFlag ? row.destructivePatterns : []
-            )
-        }
-        let model = groupedPacksViewModel(
-            rows: groupedRows,
-            enabledCount: filtered.enabledCount,
-            totalCount: filtered.totalCount
-        )
-
-        let text = PacksListFormat.prettyGrouped(model, appearance: ctx.appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
-        ctx.writeStdout(text)
     }
 
     struct Enable: AsyncParsableCommand {
