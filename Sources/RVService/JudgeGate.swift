@@ -392,7 +392,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy:
+        case .failed, .warming, .busy, .late, .unreachable:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -433,12 +433,20 @@ public enum JudgeRuntime {
     /// `busy` is a request `JudgeAdmission` turned away (queue full, or its
     /// hook deadline passed while waiting for the model). Review for the
     /// same reason: flooding the judge must not buy an unjudged allow.
+    ///
+    /// `late` is a pool request that ran out of budget (or hook deadline)
+    /// before a worker answered; `unreachable` is a pool that gave no
+    /// authenticated answer at all (not running, not verifiable, refused).
+    /// Both go to review: killing or impersonating the judge must not buy
+    /// an unjudged allow.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
         case warming
         case busy
+        case late
+        case unreachable
     }
 
     static func runJudge(
@@ -505,6 +513,12 @@ public enum JudgeRuntime {
         case .busy:
             note = "judge-busy"
             reason = "Laya judge queue is full; retry shortly."
+        case .late:
+            note = "judge-late"
+            reason = "Laya judge did not answer in time; retry shortly."
+        case .unreachable:
+            note = "judge-unreachable"
+            reason = "Laya judge service (dev.rv.judge) is not reachable; failing closed. Run `rv doctor`."
         case .failed, .unavailable, .verdict:
             note = "prediction-failed"
             reason = unavailableReason
@@ -541,6 +555,10 @@ public enum JudgeRuntime {
     /// bundle is installed or the platform has no CoreML. Cheap: resolves
     /// config and bundle paths, then hands the load to a utility queue.
     public static func prewarm(home: HomeDirectory?) {
+        if let client = boundClient {
+            warmPool(client, home: home)
+            return
+        }
         #if canImport(CoreML)
         guard let resolved = resolvedJudge(home: home, config: GuardConfig.read(home: home)) else { return }
         slot.prewarm(engine: resolved.engine, bundleDir: resolved.bundle)
@@ -698,11 +716,16 @@ protocol JudgePort: Sendable {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun
 }
 
-/// Slot-cached CoreML judge (packs-only on platforms without CoreML). Waits
-/// on an in-progress load for the live `loadWait` (rvd binds its bound).
+/// The judge pool when rvd bound one (`JudgeRuntime.bindClient`), with no
+/// in-process fallback; otherwise the slot-cached CoreML judge (packs-only
+/// on platforms without CoreML), which waits on an in-progress load for the
+/// live `loadWait`.
 struct LiveJudgePort: JudgePort {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
-        JudgeRuntime.runJudge(
+        if let client = JudgeRuntime.boundClient {
+            return JudgeRuntime.runPool(call, client: client)
+        }
+        return JudgeRuntime.runJudge(
             command: call.command, context: call.context,
             engine: call.engine, bundle: call.bundle, wait: JudgeRuntime.loadWait
         )
