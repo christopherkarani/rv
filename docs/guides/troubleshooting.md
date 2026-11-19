@@ -13,7 +13,16 @@ produced by a run on Linux.
 When rv cannot decide, the hook blocks the call. It never quietly allows
 it (unless the host is in observe mode, see below).
 
-**`rv failed`**
+In Claude Code, when rv could not check a call at all (rvd not reachable,
+slow, or dropped the connection, or the rv process ran past 15 s), you
+get Claude Code's own permission prompt instead of a block. The prompt
+starts with
+**`rv could not check this call, so Claude Code is asking you. Approve only if you expected it.`**
+followed by one of the daemon messages below. The agent cannot answer
+this prompt; you decide. In `bypassPermissions` and `dontAsk` modes, and
+in other hosts, the call is blocked instead.
+
+**`rv blocked this action without giving a reason. Run `rv doctor`.`**
 The host got a block with no reason; rv puts this text in when a reason
 is empty. Run `rv doctor` and look at the Problems section.
 

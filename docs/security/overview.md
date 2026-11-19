@@ -604,7 +604,15 @@ check is a stub that always passes **[C150]**.
 ## 4. Fail-closed behaviour
 
 "Ask" means the host's native confirmation prompt where the host has one
-(Claude Code and Cursor), and the host's deny otherwise **[C151]**.
+(Claude Code and Cursor), and the host's deny otherwise **[C151]**. The
+installed adapters narrow that: Claude Code's adapter forwards the ask
+(prefixed "rv could not check this call, …") only when the hook request
+says the session is in the `default`, `plan`, `acceptEdits` or `auto`
+permission mode, and blocks under `bypassPermissions`, `dontAsk` or a
+missing or unknown mode; it also asks when the whole rv process runs
+past its 15 s budget. Cursor's adapter always blocks, because Cursor
+gives the hook no signal for auto-run, background agents or
+`cursor-agent --force` **[C151a]**.
 
 | Situation | Enforce mode | Observe mode |
 | --- | --- | --- |
@@ -1016,6 +1024,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C149 | Sources/RVPolicy/ManagedSerialRecord.swift:3-5; Sources/RVPolicy/ManagedSerialRecord.swift:49-71 |
 | C150 | Sources/RVPolicy/ManagedPolicy.swift:523-524 |
 | C151 | Sources/rv-c/hook_fallback.c:104-119; Sources/rv-c/hook_fallback.c:171-177 |
+| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl (`_HUMAN_PROMPT_MODES`, `_resolve`); Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl (`_map_rv_hook_result`) |
 | C152 | Sources/rv-c/rv.c:594-596; Sources/rv-c/rv.c:985-987 |
 | C153 | Sources/rv-c/hook_fallback.c:30-38; Sources/rv-c/hook_fallback.c:155-178 |
 | C154 | Sources/rv-c/rv.c:330-342; Sources/rv-c/observe_gate.c:48-57 |
