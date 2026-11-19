@@ -405,11 +405,8 @@ extension IPCMethod {
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: true))
             ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
-            NamedMethod(
-                key: "policyStatus",
-                id: id,
-                method: .policyStatus(PolicyStatusParams(cwd: WorkingDirectory(validating: "/tmp/repo")))
-            ),
+            // One sample per wire key (SDKVectorTests goldens are keyed by
+            // it); the cwd variant is pinned in SDKVectorTests.
             NamedMethod(key: "policyStatus", id: id, method: .policyStatus(PolicyStatusParams(cwd: nil))),
             NamedMethod(key: "pendingList", id: id, method: .pendingList),
             NamedMethod(
@@ -514,6 +511,8 @@ extension IPCResult {
                     )
                 )
             ),
+            // One sample per wire key; the failed and busy variants are
+            // pinned in SDKVectorTests.
             NamedResult(
                 key: "policyStatus",
                 id: id,
@@ -522,22 +521,13 @@ extension IPCResult {
                         PolicyLoadStatus(
                             state: .loaded,
                             machine: .init(hash: "abc", ruleCount: 2, exceedsCeiling: true),
+                            repo: .init(hash: "def", ruleCount: 0, exceedsCeiling: false),
                             ceilingRuleCount: 1,
-                            effectiveRuleCount: 3,
-                            configDirectory: "/home/u/.config/rv",
-                            workspace: "/tmp/repo"
+                            effectiveRuleCount: 3
                         )
                     )
                 )
             ),
-            NamedResult(
-                key: "policyStatus",
-                id: id,
-                result: .policyStatus(
-                    PolicyStatusReply.status(PolicyLoadStatus(state: .failed, failure: .ceilingInvalid))
-                )
-            ),
-            NamedResult(key: "policyStatus", id: id, result: .policyStatus(.busy)),
             NamedResult(
                 key: "error",
                 id: id,

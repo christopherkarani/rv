@@ -73,6 +73,8 @@ struct SDKVectorTests {
                 #"{"id":"\#(id)","method":{"rulePreview":{"id":"ask-1","polarity":"allow"}},"protocol":"rv.ipc.v1"}"#,
             "ruleSave":
                 #"{"id":"\#(id)","method":{"ruleSave":{"draft":"opaque-draft","id":"ask-1","polarity":"block"}},"protocol":"rv.ipc.v1"}"#,
+            "policyStatus":
+                #"{"id":"\#(id)","method":{"policyStatus":{}},"protocol":"rv.ipc.v1"}"#,
         ]
         #expect(IPCMethod.allSamples.count == goldens.count)
         for sample in IPCMethod.allSamples {
@@ -113,6 +115,8 @@ struct SDKVectorTests {
                 #"{"id":"\#(id)","protocol":"rv.ipc.v1","result":{"rulePreview":{"allowedToSave":true,"draft":"opaque-draft","sentence":"Always allow git push in this folder."}}}"#,
             "ruleSave":
                 #"{"id":"\#(id)","protocol":"rv.ipc.v1","result":{"ruleSave":{"ruleID":"core.git:reset-hard","waitResolved":true}}}"#,
+            "policyStatus":
+                #"{"id":"\#(id)","protocol":"rv.ipc.v1","result":{"policyStatus":{"status":{"ceilingRuleCount":1,"effectiveRuleCount":3,"machine":{"exceedsCeiling":true,"hash":"abc","ruleCount":2},"repo":{"exceedsCeiling":false,"hash":"def","ruleCount":0},"state":"loaded"}}}}"#,
         ]
         #expect(IPCResult.allSamples.count == goldens.count)
         for sample in IPCResult.allSamples {
@@ -121,6 +125,42 @@ struct SDKVectorTests {
                 String(data: data, encoding: .utf8) == goldens[sample.key],
                 "wire change: resp-\(sample.key)"
             )
+        }
+    }
+
+    /// `policyStatus` shapes beyond the one-per-key samples: a request with
+    /// `cwd`, a failed load with its typed problem, and the `busy` refusal.
+    @Test func policyStatusVariants_bytesMatchGoldenAndRoundTrip() throws {
+        let uuid = try #require(UUID(uuidString: Self.id))
+        let requests: [(IPCMethod, String)] = [
+            (
+                .policyStatus(PolicyStatusParams(cwd: WorkingDirectory(validating: "/tmp/repo"))),
+                #"{"id":"\#(Self.id)","method":{"policyStatus":{"cwd":"\/tmp\/repo"}},"protocol":"rv.ipc.v1"}"#
+            ),
+        ]
+        for (method, golden) in requests {
+            let request = IPCRequest(id: uuid, method: method)
+            let data = try IPCJSON.encode(request)
+            #expect(String(data: data, encoding: .utf8) == golden, "wire change: req-policyStatus-cwd")
+            #expect(try IPCJSON.decode(IPCRequest.self, from: data) == request)
+        }
+        let results: [(PolicyStatusReply, String)] = [
+            (
+                .status(PolicyLoadStatus(
+                    state: .failed, failure: .repoInvalid, problem: .notRegularFile,
+                    configDirectory: "/home/u/.config/rv", workspace: "/tmp/repo")),
+                #"{"id":"\#(Self.id)","protocol":"rv.ipc.v1","result":{"policyStatus":{"status":{"configDirectory":"\/home\/u\/.config\/rv","failure":"repo-invalid","problem":"not-regular-file","state":"failed","workspace":"\/tmp\/repo"}}}}"#
+            ),
+            (
+                .busy,
+                #"{"id":"\#(Self.id)","protocol":"rv.ipc.v1","result":{"policyStatus":{"busy":true}}}"#
+            ),
+        ]
+        for (reply, golden) in results {
+            let response = IPCResponse(id: uuid, result: .policyStatus(reply))
+            let data = try IPCJSON.encode(response)
+            #expect(String(data: data, encoding: .utf8) == golden, "wire change: resp-policyStatus \(reply)")
+            #expect(try IPCJSON.decode(IPCResponse.self, from: data) == response)
         }
     }
 }
