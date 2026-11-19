@@ -223,6 +223,7 @@ public enum HelpDispatch {
             if token == "start" || token == "attach" || token == "status" || token == "close"
                 || token == "run" || token == "agent" || token == "custom"
                 || token == "tui" || token == "abandon" || token == "leftovers" || token == "vms"
+                || token == "upload" || token == "download"
             {
                 index = tokens.index(after: index)
                 continue
