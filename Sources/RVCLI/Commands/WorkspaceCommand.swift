@@ -53,7 +53,7 @@ struct WorkspaceAttach: AsyncParsableCommand {
 struct WorkspaceStatus: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "status",
-        abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale or the host does not answer)."
+        abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale, the host is refused by peer trust, or it is not answering)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -193,7 +193,7 @@ struct WorkspaceCustom: AsyncParsableCommand {
 struct WorkspaceClose: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "close",
-        abstract: "Close the live workspace through its host; stops a host rv launched that no longer answers."
+        abstract: "Close the live workspace through its host; stops a host rv launched that is refused by peer trust or has a stale endpoint."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -337,10 +337,14 @@ enum WorkspaceCommandRun {
         #else
         let project = try requireProject(raw)
         let report = statusReport(WorkspaceHosts.inspect(project: project)) { endpoint in
-            guard let client = connected(endpoint) else { return nil }
-            let described = client.describe()
-            _ = client.detach()
-            return described
+            switch WorkspaceClient.connect(endpoint) {
+            case .failure(let failure):
+                return .connectFailed(failure)
+            case .success(let client):
+                let described = client.describe()
+                _ = client.detach()
+                return .described(described)
+            }
         }
         emit(report.text)
         if report.exitCode != 0 {
@@ -355,22 +359,42 @@ enum WorkspaceCommandRun {
     static let statusUnreachableExitCode: Int32 = 1
 
     #if os(macOS)
+    /// What status learned from a live endpoint.
+    enum StatusProbe {
+        /// The connect itself failed.
+        case connectFailed(WorkspaceClientFailure)
+        /// Connected; the describe result.
+        case described(Result<WorkspaceDescription, WorkspaceClientFailure>)
+    }
+
+    /// Status for a host that refuses this rv (or is refused by it).
+    static let statusRefusedText =
+        "refused (peer trust): the workspace host and this rv do not hold the peer-trust roles each other requires; run 'rv doctor' to see which role the manifest does not grant"
+
+    /// Status for a host that accepted the socket but did not answer.
+    static let statusNotAnsweringText =
+        "not answering: the workspace host did not answer in time; it may be busy, mounting or recovering — run 'rv workspace status' to re-check, or 'rv doctor' if it persists"
+
     /// What status prints and exits with. `describe` connects to a live
-    /// endpoint: nil when the connect failed.
+    /// endpoint and describes it.
     static func statusReport(
         _ attachment: WorkspaceAttachment,
-        describe: (WorkspaceEndpoint) -> Result<WorkspaceDescription, WorkspaceClientFailure>?
+        describe: (WorkspaceEndpoint) -> StatusProbe
     ) -> (text: String, exitCode: Int32) {
         switch attachment {
         case .staleEndpoint:
             return (staleEndpointText, statusUnreachableExitCode)
         case .live(let endpoint):
             switch describe(endpoint) {
-            case .none:
+            case .connectFailed(.unauthorizedClient):
+                return (statusRefusedText, statusUnreachableExitCode)
+            case .connectFailed(.timedOut):
+                return (statusNotAnsweringText, statusUnreachableExitCode)
+            case .connectFailed:
                 return (staleEndpointText, statusUnreachableExitCode)
-            case .success(let description):
+            case .described(.success(let description)):
                 return (lines(description), 0)
-            case .failure:
+            case .described(.failure):
                 return (text(attachment), 0)
             }
         default:
@@ -493,15 +517,16 @@ enum WorkspaceCommandRun {
     }
 
     #if os(macOS)
-    /// Connect failures that prove the host cannot be used, so close may
-    /// stop it. A timed-out or overloaded host is busy, not broken: its
-    /// runtimes are left running.
+    /// Connect failures that prove nobody can use the host, so close may
+    /// stop it: refused by peer trust, or a stale endpoint. Everything else
+    /// (busy, disconnected, an older protocol) may be a host with live
+    /// runtimes, so it is left running.
     static func closeMayStopHost(after failure: WorkspaceClientFailure) -> Bool {
         switch failure {
-        case .timedOut, .queueOverloaded:
-            false
-        default:
+        case .unauthorizedClient, .staleEndpoint:
             true
+        default:
+            false
         }
     }
 
@@ -797,8 +822,9 @@ enum WorkspaceCommandRun {
         return ensureFailureText(error, hostTrustReason: reason)
     }
 
-    /// `ensure` stops the host it spawned on every failure, so the texts
-    /// for a host that started but never served say so.
+    /// `ensure` stops the host it spawned when it was refused or published
+    /// an endpoint and went silent; one still mounting or recovering at the
+    /// overall timeout keeps running, and the texts say which.
     static func ensureFailureText(_ error: WorkspaceHostFailure, hostTrustReason: String?) -> String {
         let after = "any host this start launched was stopped; run 'rv doctor', "
             + "and 'rv workspace leftovers' for anything it left"
@@ -810,7 +836,9 @@ enum WorkspaceCommandRun {
         case .notAnswering:
             return "the workspace host did not answer within \(Int(WorkspaceHosts.readinessTimeout)) s; " + after
         case .timedOut:
-            return "workspace host did not become ready; " + after
+            return "workspace host did not become ready; a host still mounting or recovering keeps running "
+                + "in the background, any other this start launched was stopped; run 'rv workspace status' "
+                + "to check it, and 'rv workspace leftovers' for anything it left"
         default:
             return text(error)
         }

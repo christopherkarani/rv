@@ -49,6 +49,17 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
     #expect(text.contains("rv doctor"))
 }
 
+/// The overall timeout leaves a host that is still mounting or recovering
+/// running, so the text must not claim it was stopped.
+@Test func startTimeoutSaysAHostStillStartingKeepsRunning() {
+    let text = WorkspaceCommandRun.ensureFailureText(.timedOut, hostTrustReason: nil)
+    #expect(text.hasPrefix("workspace host did not become ready"))
+    #expect(text.contains("still mounting or recovering keeps running"))
+    #expect(text.contains("any host this start launched was stopped") == false)
+    #expect(text.contains("rv workspace status"))
+    #expect(text.contains("rv workspace leftovers"))
+}
+
 @Test func startOtherFailuresKeepTheirText() {
     #expect(WorkspaceCommandRun.ensureFailureText(.homeDirectory, hostTrustReason: pinned)
         == WorkspaceCommandRun.text(WorkspaceHostFailure.homeDirectory))
@@ -66,17 +77,33 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
 
 // MARK: - status
 
-@Test func statusOfAnUnansweredEndpointExitsNonZero() {
-    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in nil }
+@Test func statusOfAnUnreachableEndpointExitsNonZero() {
+    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.disconnected) }
     #expect(report.text == WorkspaceCommandRun.staleEndpointText)
     #expect(report.exitCode == WorkspaceCommandRun.statusUnreachableExitCode)
     #expect(WorkspaceCommandRun.statusUnreachableExitCode == 1)
 }
 
+/// A refused host is not a stale file: status names peer trust.
+@Test func statusOfARefusedHostSaysPeerTrust() {
+    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.unauthorizedClient) }
+    #expect(report.text.hasPrefix("refused (peer trust): "))
+    #expect(report.text.contains("rv doctor"))
+    #expect(report.exitCode == 1)
+}
+
+/// A host that does not answer in time is not a stale file either.
+@Test func statusOfASilentHostSaysNotAnswering() {
+    let report = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .connectFailed(.timedOut) }
+    #expect(report.text.hasPrefix("not answering: "))
+    #expect(report.text.contains("rv workspace status"))
+    #expect(report.exitCode == 1)
+}
+
 @Test func statusOfAStaleEndpointFileExitsNonZero() {
     let report = WorkspaceCommandRun.statusReport(.staleEndpoint) { _ in
         Issue.record("a stale endpoint is never connected")
-        return nil
+        return .connectFailed(.disconnected)
     }
     #expect(report.text == WorkspaceCommandRun.staleEndpointText)
     #expect(report.exitCode == 1)
@@ -86,10 +113,10 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
     let description = WorkspaceDescription(
         host: endpoint.host, workspace: endpoint.workspace, project: "/p", phase: .active, attached: 0
     )
-    let live = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .success(description) }
+    let live = WorkspaceCommandRun.statusReport(.live(endpoint)) { _ in .described(.success(description)) }
     #expect(live.exitCode == 0)
     #expect(live.text == WorkspaceCommandRun.lines(description))
-    let absent = WorkspaceCommandRun.statusReport(.absent) { _ in nil }
+    let absent = WorkspaceCommandRun.statusReport(.absent) { _ in .connectFailed(.disconnected) }
     #expect(absent.exitCode == 0)
     #expect(absent.text == WorkspaceCommandRun.text(WorkspaceAttachment.absent))
 }
@@ -117,12 +144,19 @@ private let pinned = "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7
     #expect(stuck.contains("still running"))
 }
 
-/// A busy host is slow, not broken: close must not kill it.
+/// Close stops only a host that is refused or whose endpoint is stale. A
+/// busy, disconnected or older-protocol host may still own live runtimes.
 @Test func closeStopsOnlyForFailuresThatProveTheHostUnusable() {
     #expect(WorkspaceCommandRun.closeMayStopHost(after: .unauthorizedClient))
-    #expect(WorkspaceCommandRun.closeMayStopHost(after: .disconnected))
     #expect(WorkspaceCommandRun.closeMayStopHost(after: .staleEndpoint))
+    #expect(WorkspaceCommandRun.closeMayStopHost(after: .disconnected) == false)
     #expect(WorkspaceCommandRun.closeMayStopHost(after: .timedOut) == false)
     #expect(WorkspaceCommandRun.closeMayStopHost(after: .queueOverloaded) == false)
+}
+
+/// An incompatible protocol is a live older host, possibly with active
+/// PTYs: close must not signal it.
+@Test func closeLeavesAnIncompatibleHostRunning() {
+    #expect(WorkspaceCommandRun.closeMayStopHost(after: .incompatibleProtocol) == false)
 }
 #endif
