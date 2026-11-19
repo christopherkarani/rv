@@ -135,7 +135,11 @@ struct JudgeDegradedTests {
         let onLate = try #require(judge.onLate, "the door must hand the judge a late-result logger")
         onLate(.verdict(try lateVerdict(ms: 145_000)), .seconds(145))
         let rows = try judgeLog(home)
+        #expect(rows.count == 2)
+        // The request's own row is not marked; the late answer is.
+        #expect(rows.first?["lateOf"] == nil)
         let late = try #require(rows.last)
+        #expect(late["lateOf"] as? Bool == true)
         #expect(late["note"] as? String == "late-result; context: partial")
         #expect(late["ms"] as? Double == 145_000)
         #expect(late["live"] as? String == "deny")
@@ -143,6 +147,7 @@ struct JudgeDegradedTests {
         onLate(.failed, .milliseconds(9_500))
         let failed = try #require(try judgeLog(home).last)
         #expect(failed["note"] as? String == "late-result: prediction-failed after 9500 ms; context: partial")
+        #expect(failed["lateOf"] as? Bool == true)
     }
 }
 

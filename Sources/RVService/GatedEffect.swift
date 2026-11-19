@@ -66,6 +66,10 @@ enum GatedEffect: Sendable, Equatable {
         let note: String?
         let isPeek: Bool
         let score: Score?
+        /// A second row for a request already logged: the late answer of a
+        /// prediction its caller gave up on (`"lateOf": true`). Counts of
+        /// requests or deny rates skip these rows.
+        var isLateResult = false
     }
 
     /// Denial-ledger row before home-relative path redaction.

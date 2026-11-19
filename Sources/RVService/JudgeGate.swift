@@ -446,11 +446,13 @@ public enum JudgeRuntime {
                 let ms = Int64((Double(ran.components.seconds) + Double(ran.components.attoseconds) / 1e18) * 1000)
                 note = "late-result: \(reading.note ?? "no verdict") after \(ms) ms"
             }
-            log(logRow(
+            var row = logRow(
                 guardMode: guardMode, subject: observing ? .wouldBe(returned) : .live(returned),
                 verdict: reading.verdict, action: reading.action, engine: engine,
                 note: noteFor(note, contextPartial: contextPartial), now: Date(), isPeek: isPeek
-            ))
+            )
+            row.isLateResult = true
+            log(row)
         }
     }
 
@@ -763,6 +765,7 @@ public enum JudgeRuntime {
         }
         if let note = row.note { object["note"] = note }
         if row.isPeek { object["peek"] = true }
+        if row.isLateResult { object["lateOf"] = true }
         if let score = row.score {
             object["choice"] = score.choice
             object["action"] = score.action
