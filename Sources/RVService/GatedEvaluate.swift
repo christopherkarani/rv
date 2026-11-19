@@ -26,6 +26,31 @@ private enum PolicyVerb: Sendable {
     }
 }
 
+/// A gated peek: what the door returns, and under observe the verdict
+/// enforce would have returned (`rv test` / `rv explain` show that one).
+public struct GatedVerdict: Sendable, Equatable {
+    /// What the door returns (under observe, the observed allow).
+    public let result: EvaluationResult
+    /// The would-be verdict through a Policy-gate preview, as enforce would
+    /// show it. Nil unless the observe posture decided (enforce, or an
+    /// observe-floored result).
+    public let observedWouldBe: EvaluationResult?
+
+    public init(result: EvaluationResult, observedWouldBe: EvaluationResult? = nil) {
+        self.result = result
+        self.observedWouldBe = observedWouldBe
+    }
+
+    /// The verdict to show: the would-be one under observe, else the result.
+    public var shown: EvaluationResult { observedWouldBe ?? result }
+
+    /// Observe changed the outcome: enforce would have decided otherwise.
+    public var observeOverrode: Bool {
+        guard let observedWouldBe else { return false }
+        return observedWouldBe.decision != result.decision
+    }
+}
+
 /// Evaluates a command through the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
     public var corePacksReady: Bool { resolvedSession().corePacksReady }
@@ -235,6 +260,32 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
+    /// `peek(command:)` plus, under observe, the verdict enforce would show.
+    /// TTY `test` / `explain`.
+    public func peekVerdict(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
+        grants: EphemeralAllowOnceTable,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
+    ) async -> GatedVerdict {
+        await gatedVerdict(
+            .peek,
+            Self.makeRequest(command: command, home: home),
+            cwd: cwd,
+            home: home,
+            grants: grants,
+            now: now,
+            allowlist: allowlist,
+            host: host,
+            tool: tool,
+            inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
+        )
+    }
+
     /// Spends a matching grant. Hook / `rvd` / in-process fallback.
     public func apply(
         command: ShellCommand,
@@ -348,6 +399,25 @@ public struct GatedEvaluate: Sendable {
         tool: LedgerTool,
         inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> EvaluationResult {
+        await gatedVerdict(
+            intent, request, cwd: cwd, home: home, grants: grants, now: now,
+            allowlist: allowlist, host: host, tool: tool, inputs: inputs()
+        ).result
+    }
+
+    /// `gated` plus, under observe, the would-be verdict.
+    func gatedVerdict(
+        _ intent: EvaluationIntent,
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?,
+        grants: EphemeralAllowOnceTable,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost,
+        tool: LedgerTool,
+        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
+    ) async -> GatedVerdict {
         let decided = await decide(
             intent, request, cwd: cwd, home: home, grants: grants, now: now,
             allowlist: allowlist, host: host, tool: tool, inputs: inputs()
@@ -356,7 +426,8 @@ public struct GatedEvaluate: Sendable {
         // cooperative pool, as they were when they ran inside the offload.
         let effects = decided.effects
         let overridesRecorded = await JudgeOffload.run { Self.perform(effects, home: home) }
-        return overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
+        let result = overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
+        return GatedVerdict(result: result, observedWouldBe: decided.wouldBe)
     }
 
     /// Why an override whose `command.override` row was not written stays a deny.
@@ -390,7 +461,7 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool,
         inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
-    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+    ) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: EvaluationResult?) {
         let verb: PolicyVerb
         switch intent {
         case .peek:
@@ -433,24 +504,23 @@ public struct GatedEvaluate: Sendable {
         let candidate: EvaluationResult
         switch screened {
         case .observed(let observed, let wouldBe):
-            // Observe apply records what enforcement would have denied: the
-            // would-be verdict through a Policy-gate preview (an allowlist
-            // entry or live grant would have let it through; nothing is
-            // spent). Not deadline-gated: the reply is an allow either way,
-            // and checking would trip the deadline into a timeout deny.
-            if verb.recordsDenial, case .deny = wouldBe.decision {
-                let previewed = await Self.policyFinish(
-                    .peek, candidate: wouldBe, request: request, cwd: cwd, grants: grants,
-                    now: now, allowlist: allowlist, safety: safety
-                )
-                if let row = Self.denialRow(
-                    for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true,
-                    wouldBe: Self.wouldBe(previewed.result, cwd: cwd)
-                ) {
-                    effects.append(row)
-                }
+            // The would-be verdict through a Policy-gate preview (an
+            // allowlist entry or live grant would have let it through;
+            // nothing is spent): what enforce would show, and, on apply,
+            // what enforcement would have denied. Not deadline-gated: the
+            // reply is an allow either way, and checking would trip the
+            // deadline into a timeout deny.
+            let previewed = await Self.policyFinish(
+                .peek, candidate: wouldBe, request: request, cwd: cwd, grants: grants,
+                now: now, allowlist: allowlist, safety: safety
+            )
+            if verb.recordsDenial, case .deny = wouldBe.decision, let row = Self.denialRow(
+                for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true,
+                wouldBe: Self.wouldBe(previewed.result, cwd: cwd)
+            ) {
+                effects.append(row)
             }
-            return (observed, effects)
+            return (observed, effects, previewed.result)
         case .enforced(let enforced):
             candidate = enforced
         }
@@ -478,7 +548,7 @@ public struct GatedEvaluate: Sendable {
                                         withDenial: denialInTime || override == .allowOnce) {
             effects.append(row)
         }
-        return (finished, effects)
+        return (finished, effects, nil)
     }
 
     /// The Policy gate over a candidate verdict. Fast path: allow and
