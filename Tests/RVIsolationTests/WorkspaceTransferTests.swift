@@ -482,10 +482,13 @@ struct WorkspaceDownloadTests {
         try fixture.write(fixture.workspace + "/out/b", "second")
         try fixture.write(fixture.host + "/keep", "mine")
         let b = fixture.workspace + "/out/b"
+        let oldB = fixture.workspace + "/old-b"
         // A new inode for `b` after planning: the copy writes the top and
-        // `a`, then stops at `b` as changed.
+        // `a`, then stops at `b` as changed. The old file is renamed outside
+        // the planned tree, not unlinked, so it keeps its inode: ext4 and
+        // overlayfs reuse a freed inode number for the very next file.
         let result = fixture.download("out", to: fixture.host + "/results", afterPlan: {
-            _ = unlink(b)
+            _ = rename(b, oldB)
             try? Data("swapped".utf8).write(to: URL(fileURLWithPath: b))
         })
         #expect(isChanged(result))
