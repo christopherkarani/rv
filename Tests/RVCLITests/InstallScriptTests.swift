@@ -17,6 +17,42 @@ private func installScriptURL() -> URL {
     repoRootURL().appendingPathComponent("install.sh")
 }
 
+/// The release trust install.sh ships with: the team that signs rv's macOS
+/// binaries and the key that signs every release's SHA256SUMS.
+private let shippedTeamID = "5V273URY46"
+private let shippedReleaseSigners =
+    "rv-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMFYUW10a2NhO/jbObXtkUBeEVIEtZr41KYMiXExr8D"
+private let shippedPinLines = [
+    "\nsigned_releases=1\n",
+    "\nrelease_team_id=\"\(shippedTeamID)\"\n",
+    "\nrelease_ssh_allowed_signers=\"\(shippedReleaseSigners)\"\n",
+]
+private let unpinnedLines = [
+    "\nsigned_releases=0\n",
+    "\nrelease_team_id=\"\"\n",
+    "\nrelease_ssh_allowed_signers=\"\"\n",
+]
+
+/// A copy of install.sh with all three release pins off. Download tests use
+/// it so fixture releases (no real signatures) exercise one thing at a time;
+/// each test that needs a pin patches its own value back in. Tests of the
+/// shipped pins run installScriptURL() itself.
+private let unpinnedInstallScriptURL: URL = {
+    var text = (try? String(contentsOf: installScriptURL(), encoding: .utf8)) ?? ""
+    for (pinned, unpinned) in zip(shippedPinLines, unpinnedLines) {
+        precondition(text.contains(pinned), "install.sh no longer ships \(pinned.trimmingCharacters(in: .newlines))")
+        text = text.replacingOccurrences(of: pinned, with: unpinned)
+    }
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-unpinned-\(UUID().uuidString).sh")
+    do {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+        preconditionFailure("cannot write \(url.path): \(error)")
+    }
+    return url
+}()
+
 /// Every run points install.sh's trust-manifest probe at a path that cannot
 /// exist, so a manifest on the host (`/Library/...`) never changes a test.
 private let absentTrustManifest = "/var/empty/rv-install-tests/no-peer-trust.json"
@@ -514,7 +550,7 @@ func installSh_refusesOlderMacOS(_ productVersion: String) throws {
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [installScriptURL().path]
+    process.arguments = [unpinnedInstallScriptURL.path]
     process.environment = [
         "HOME": home.path,
         "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
@@ -1202,7 +1238,7 @@ private func writeCurlShim(
     try writeSignatureShims(in: shim)
 
     let (status, stderr) = try runInstallScript(
-        script: installScriptURL(),
+        script: unpinnedInstallScriptURL,
         environment: [
             "HOME": home.path,
             "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
@@ -1272,7 +1308,7 @@ private func writeCurlShim(
     try writeSignatureShims(in: shim)
 
     let (status, stderr) = try runInstallScript(
-        script: installScriptURL(),
+        script: unpinnedInstallScriptURL,
         environment: [
             "HOME": home.path,
             "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
@@ -1597,7 +1633,7 @@ private func runSignedDownloadInstall(
     // so a regression that re-read it from the environment cannot pass.
     // `RV_TEST_CHILD_TEAM_ID` deliberately plants a *different* env value.
     processEnvironment["RV_INSTALL_TEAM_ID"] = environment["RV_TEST_CHILD_TEAM_ID"]
-    var scriptURL = script ?? installScriptURL()
+    var scriptURL = script ?? unpinnedInstallScriptURL
     if let team = environment["RV_INSTALL_TEAM_ID"] {
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         let patched = source.replacingOccurrences(
@@ -2136,7 +2172,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
 }
 
 @Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_signedReleasesSwitchRefusesUnsignedUnlessAllowed() throws {
-    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let text = try String(contentsOf: unpinnedInstallScriptURL, encoding: .utf8)
     #expect(text.contains("\nsigned_releases=0\n"))
     let flippedText = text.replacingOccurrences(of: "\nsigned_releases=0\n", with: "\nsigned_releases=1\n")
     try #require(flippedText != text)
@@ -2162,7 +2198,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
 }
 
 private func flippedSignedReleasesScript() throws -> URL {
-    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let text = try String(contentsOf: unpinnedInstallScriptURL, encoding: .utf8)
     try #require(text.contains("\nsigned_releases=0\n"))
     let flippedText = text.replacingOccurrences(of: "\nsigned_releases=0\n", with: "\nsigned_releases=1\n")
     try #require(flippedText != text)
@@ -2313,7 +2349,7 @@ private func runChecksumInstall(
         "RV_INSTALL_NO_MODELS": "1",
     ]
     env.merge(environment) { $1 }
-    let (status, err) = try runInstallScript(script: script ?? installScriptURL(), environment: env)
+    let (status, err) = try runInstallScript(script: script ?? unpinnedInstallScriptURL, environment: env)
     return ChecksumRun(
         status: status, stderr: err, destBin: destBin,
         curlLog: (try? String(contentsOf: shim.appendingPathComponent("curl.log"), encoding: .utf8)) ?? "",
@@ -2599,11 +2635,11 @@ private func signSums(in assets: URL, with key: ReleaseKey, namespace: String = 
     try #require(status == 0, "\(output)")
 }
 
-/// install.sh with `signers` pinned as release_ssh_allowed_signers.
+/// The unpinned install.sh with `signers` pinned as release_ssh_allowed_signers.
 private func pinnedReleaseKeyScript(_ signers: String) throws -> URL {
-    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let text = try String(contentsOf: unpinnedInstallScriptURL, encoding: .utf8)
     let empty = "\nrelease_ssh_allowed_signers=\"\"\n"
-    try #require(text.contains(empty), "install.sh must ship with an empty release key pin")
+    try #require(text.contains(empty), "the unpinned install.sh must have an empty release key pin")
     let pinned = text.replacingOccurrences(of: empty, with: "\nrelease_ssh_allowed_signers=\"\(signers)\"\n")
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-pinned-\(UUID().uuidString).sh")
@@ -2744,6 +2780,53 @@ func installSh_pinnedReleaseKeyRefusesSumsRewrittenAfterSigning() throws {
     try expectOldInstallIntact(run)
 }
 
+// MARK: - Shipped release pins
+
+@Test func installSh_shipsPinnedReleaseTrust() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    for line in shippedPinLines {
+        #expect(text.contains(line), "install.sh must ship \(line.trimmingCharacters(in: .newlines))")
+    }
+    for line in unpinnedLines {
+        #expect(text.contains(line) == false, "install.sh ships \(line.trimmingCharacters(in: .newlines))")
+    }
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_shippedPinRefusesAReleaseWithoutRVsSignature() throws {
+    let missing = try runChecksumInstall(script: installScriptURL())
+    defer { try? FileManager.default.removeItem(at: missing.root) }
+    #expect(missing.status != 0)
+    #expect(missing.stderr.contains("failed to download"), "\(missing.stderr)")
+    #expect(missing.stderr.contains("SHA256SUMS.sig"), "\(missing.stderr)")
+    try expectOldInstallIntact(missing)
+
+    // Any other key is refused even with RV_INSTALL_ALLOW_UNSIGNED=1.
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let attacker = try makeReleaseKey(in: keys)
+    let forged = try runChecksumInstall(
+        environment: ["RV_INSTALL_ALLOW_UNSIGNED": "1"], script: installScriptURL()
+    ) { assets in try signSums(in: assets, with: attacker) }
+    defer { try? FileManager.default.removeItem(at: forged.root) }
+    #expect(forged.status != 0)
+    #expect(forged.stderr.contains("not a valid signature by rv's release key"), "\(forged.stderr)")
+    try expectOldInstallIntact(forged)
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare"))
+func installSh_shippedPinRefusesAnotherTeamEvenWhenAllowed() throws {
+    // RV_INSTALL_ALLOW_UNSIGNED=1 gets past the missing SHA256SUMS.sig; the
+    // fixtures are Developer ID signed by TEAMRV1234, not rv's team.
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_INSTALL_ALLOW_UNSIGNED": "1"], script: installScriptURL(), previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not signed by team \(shippedTeamID)"), "\(run.stderr)")
+    try expectPreviousInstallKept(run)
+}
+
 private func runSignSums(
     assets: URL, installScript: URL, key: ReleaseKey?, require: Bool = false
 ) throws -> (Int32, String) {
@@ -2780,14 +2863,14 @@ func releaseSignSums_signsWhatThePinnedInstallerAccepts() throws {
     let sig = assets.appendingPathComponent("SHA256SUMS.sig")
 
     // No key, no pin: skipped, nothing published; unless signing is required.
-    var (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: nil)
+    var (status, output) = try runSignSums(assets: assets, installScript: unpinnedInstallScriptURL, key: nil)
     #expect(status == 0, "\(output)")
     #expect(FileManager.default.fileExists(atPath: sig.path) == false)
-    (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: nil, require: true)
+    (status, output) = try runSignSums(assets: assets, installScript: unpinnedInstallScriptURL, key: nil, require: true)
     #expect(status != 0, "\(output)")
 
     // A key with no pin signs, and prints the line to pin.
-    (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: key)
+    (status, output) = try runSignSums(assets: assets, installScript: unpinnedInstallScriptURL, key: key)
     #expect(status == 0, "\(output)")
     #expect(FileManager.default.fileExists(atPath: sig.path))
     #expect(output.contains("release_ssh_allowed_signers=\"\(key.signersLine)\""), "\(output)")
@@ -2811,6 +2894,11 @@ func releaseSignSums_signsWhatThePinnedInstallerAccepts() throws {
     #expect(status != 0, "\(output)")
     #expect(output.contains("does not match"), "\(output)")
     #expect(FileManager.default.fileExists(atPath: sig.path) == false)
+
+    // The shipped pin: publishing without the release key fails.
+    (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: nil)
+    #expect(status != 0, "\(output)")
+    #expect(output.contains("installers would refuse"), "\(output)")
 }
 
 @Test func releaseSigning_principalAndNamespaceMatchTheInstaller() throws {
