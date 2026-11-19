@@ -405,7 +405,59 @@ private let pinnedHostElsewhere = DoctorRoleTrust(
     }
 }
 
+/// Without a manifest nothing grants the workspace host or cli role, so
+/// rv workspace cannot start: doctor says so instead of staying silent.
+@Test func doctorInstall_noManifestWithWorkspaceHostInstalled_warns() throws {
+    try withInstallHome(trustManifest: .absent) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.workspaceRoles = .noManifest
+        let problem = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("no peer-trust manifest"))
+        #expect(problem.summary.contains("rv workspace and rv opencode will not start"))
+        #expect(problem.fix.contains("'/Library/Application Support/RV/peer-trust.json'"))
+        #expect(problem.fix.contains("workspaceHost"))
+        #expect(problem.fix.contains("cli"))
+        #expect(problem.fix.contains("administrator"))
+        #expect(doctorPretty(fixture).exitCode == 0)
+    }
+}
+
+/// A manifest without a workspaceHost or cli entry names only what it lacks.
+@Test func doctorInstall_manifestMissingWorkspaceRoles_namesEachMissingRole() throws {
+    try withInstallHome(trustManifest: .valid) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.workspaceRoles = .manifest(["service", "cli"])
+        let problem = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("no workspaceHost entry"))
+        #expect(problem.summary.contains("cli") == false)
+        #expect(problem.fix.contains("administrator"))
+
+        fixture.environment.install?.workspaceRoles = .manifest(["service"])
+        let both = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(both.summary.contains("no workspaceHost or cli entry"))
+
+        fixture.environment.install?.workspaceRoles = .manifest(["service", "cli", "workspaceHost"])
+        #expect(problems(fixture).contains { $0.id == "peer-trust-workspace-roles-missing" } == false)
+    }
+}
+
 #if os(macOS)
+/// Live wiring: only an installed workspace host is judged, and an invalid
+/// manifest is left to its own row.
+@Test func roleTrustProbe_workspaceRolesFollowTheTrustSource() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-role-probe-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = try #require(HomeDirectory(validating: root.path))
+    let paths = OwnedPaths(home: home)
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .siblingPin) == .notEvaluated)
+    try makeExecutable(URL(fileURLWithPath: paths.localWorkspaceHost))
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .siblingPin) == .noManifest)
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .invalid) == .notEvaluated)
+}
+
 /// Live probe wiring: each manifest role is judged on its installed binary;
 /// a binary that is not installed, or a role with no verdict, is skipped.
 @Test func roleTrustProbe_judgesInstalledBinariesOnly() throws {

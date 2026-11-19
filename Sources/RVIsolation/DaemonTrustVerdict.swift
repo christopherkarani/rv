@@ -57,6 +57,12 @@ extension ProtectedPeerTrustConfiguration.HookTrustSource {
         guard case .manifest(let trust) = self, trust.configuredRoles.contains(role) else { return nil }
         return trust.evaluate(role: role, atPath: path)
     }
+
+    /// The roles an installed manifest names; nil without a valid manifest.
+    public var manifestRoles: Set<TrustedRVComponentRole>? {
+        guard case .manifest(let trust) = self else { return nil }
+        return Set(trust.configuredRoles)
+    }
 }
 
 extension TrustedRVComponentRole {
