@@ -24,12 +24,15 @@ enum ObserveReadProof {
         case .filesystem, .git, .wrapper, .unwrapLimited:
             return false
         }
+        // Every scalar, not every Character: `"\r\n"` and `">\u{301}"` are
+        // one Character each, yet the shell reads the `\r` or `>` byte.
+        guard command.rawValue.unicodeScalars.allSatisfy(plain.contains) else { return false }
         let segments = shellChainSegments(command.rawValue)
         return segments.isEmpty == false && segments.allSatisfy(readsOnly)
     }
 
-    static func readsOnly(_ segment: String) -> Bool {
-        if segment.contains(where: { notPlain.contains($0) }) { return false }
+    /// Precondition: the segment holds only `plain` scalars.
+    private static func readsOnly(_ segment: String) -> Bool {
         let words = segment.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         guard let verb = words.first else { return false }
         let arguments = Array(words.dropFirst())
@@ -72,13 +75,22 @@ enum ObserveReadProof {
         return level.isEmpty == false && level.allSatisfy(\.isASCIIDigitCharacter)
     }
 
-    /// Shell syntax that changes what runs or what is written: expansion,
-    /// quoting, redirects, subshells, grouping, escapes, comments, history
-    /// and globs (zsh's `^`/`#` included).
-    private static let notPlain: Set<Character> = [
-        "$", "`", "'", "\"", "\\", "<", ">", "(", ")", "{", "}", ";", "&", "|",
-        "*", "?", "[", "]", "^", "#", "!", "\n", "\r",
-    ]
+    /// The only scalars a proof may contain: ASCII words, paths and flags,
+    /// space and tab, and the chain separators `;`, `&`, `|` (each segment
+    /// must then prove itself). Everything else is refused: expansion,
+    /// quoting, redirects, subshells, grouping, escapes, comments, history,
+    /// globs, any line break, and every non-ASCII scalar (combining marks,
+    /// joiners, look-alike spaces).
+    private static let plain: Set<Unicode.Scalar> = {
+        var scalars = Set<Unicode.Scalar>()
+        for range in [("a", "z"), ("A", "Z"), ("0", "9")] as [(Unicode.Scalar, Unicode.Scalar)] {
+            for value in range.0.value...range.1.value {
+                if let scalar = Unicode.Scalar(value) { scalars.insert(scalar) }
+            }
+        }
+        scalars.formUnion(" \t._/~=:,+@%-;&|".unicodeScalars)
+        return scalars
+    }()
 }
 
 private extension Character {

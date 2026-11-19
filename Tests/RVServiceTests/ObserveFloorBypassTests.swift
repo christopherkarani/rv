@@ -160,6 +160,14 @@ struct ObserveFloorBypassTests {
         "LS_COLORS=x ls ~/.local/bin/rvd",
         "file -C -m ~/.local/bin/rvd",
         "sed -n 1p ~/.claude/settings.json",
+        // Grapheme clusters hide a separator or redirect from a
+        // Character scan: `"\r\n"` and `">\u{301}"` are one Character.
+        "ls ~/.local/bin/rvd \r\nrm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \rrm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd >\u{301} ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \u{200D};rm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \u{600};rm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd\u{00A0}x",
     ])
     func observeEnforcesUnprovenWiringCommands(command: String) async throws {
         let home = try observeHome()
@@ -167,6 +175,27 @@ struct ObserveFloorBypassTests {
         let observed = await blockingJudgeApply(command, home: home, mode: .observe)
         let enforced = await blockingJudgeApply(command, home: home, mode: .enforce)
         #expect(observed.decision == enforced.decision, "\(command)")
+    }
+
+    /// The proof itself, whatever the analysis says: a scalar outside its
+    /// ASCII allowlist is no proof, even when every Character looks plain.
+    @Test("read proof: grapheme clusters and line breaks are no proof", arguments: [
+        "ls ~/.local/bin/rvd \r\nrm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \rrm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd\nrm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd >\u{301} ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \u{200D}>~/.claude/settings.json",
+        "ls ~/.local/bin/rvd \u{600};rm ~/.claude/settings.json",
+        "ls ~/.local/bin/rvd\u{00A0}x",
+    ])
+    func readProofRefusesNonPlainScalars(command: String) {
+        #expect(ObserveReadProof.proves(ShellCommand(rawValue: command), analysis: .unknown) == false,
+                "\(command.debugDescription)")
+    }
+
+    @Test("read proof: plain reads prove")
+    func readProofAcceptsPlainReads() {
+        #expect(ObserveReadProof.proves(ShellCommand(rawValue: "ls -la ~/.local/bin/rvd | wc -l"), analysis: .unknown))
     }
 
     private func blockingJudgeApply(
