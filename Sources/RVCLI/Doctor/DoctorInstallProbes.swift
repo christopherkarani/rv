@@ -33,6 +33,9 @@ struct DoctorInstallProbes {
     var trustManifest: TrustManifestState
     /// Would hooks trust the installed `rvd`? Nil when not evaluated.
     var daemonTrust: DoctorServiceTrust? = nil
+    /// Verdicts for the other manifest roles whose binaries are installed
+    /// (`RoleTrustProbe`). Empty with no manifest or when not evaluated.
+    var roleTrust: [DoctorRoleTrust] = []
     /// Does a hook interpreter run: the absolute path a hook command bakes,
     /// or `python3` on PATH for an earlier rv's command? Asked only for an
     /// interpreter some hooked host needs. Default true (tests).
@@ -59,7 +62,8 @@ struct DoctorInstallProbes {
                 launchctl: launchctl
             ),
             trustManifest: liveTrustManifest(),
-            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
+            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd),
+            roleTrust: RoleTrustProbe.live(OwnedPaths(home: home))
         )
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
@@ -124,6 +128,54 @@ enum DaemonTrustProbe {
     }
 }
 
+/// One manifest role's verdict on its installed binary.
+struct DoctorRoleTrust: Equatable, Sendable {
+    /// The manifest role name (`workspaceHost`, `cli`, `mcpCustodian`).
+    var role: String
+    var path: String
+    var trust: DoctorServiceTrust
+}
+
+/// Static trust check of the other installed rv components against their
+/// manifest entries, with the rule their peers apply live. `service` is
+/// `DaemonTrustProbe`; the operator UI has no install location to check.
+enum RoleTrustProbe {
+    static func live(_ paths: OwnedPaths) -> [DoctorRoleTrust] {
+#if os(macOS)
+        let source = ProtectedPeerTrustConfiguration.hookTrustSource()
+        return evaluate(binaries: binaries(paths)) { role, path in source.evaluateRole(role, atPath: path) }
+#else
+        []
+#endif
+    }
+
+#if os(macOS)
+    /// Each role and the binary rv installs for it.
+    static func binaries(_ paths: OwnedPaths) -> [(role: TrustedRVComponentRole, path: String)] {
+        [
+            (.cli, paths.localRvCli),
+            (.workspaceHost, paths.localWorkspaceHost),
+            (.mcpCustodian, paths.custodianAppExecutable),
+        ]
+    }
+
+    /// Installed binaries only; a role the manifest does not name gives no verdict.
+    static func evaluate(
+        binaries: [(role: TrustedRVComponentRole, path: String)],
+        verdict: (TrustedRVComponentRole, String) -> DaemonTrustVerdict?
+    ) -> [DoctorRoleTrust] {
+        binaries.compactMap { role, path in
+            guard FileManager.default.fileExists(atPath: path), let found = verdict(role, path) else { return nil }
+            return DoctorRoleTrust(
+                role: role.rawValue,
+                path: path,
+                trust: DoctorServiceTrust(source: found.source.rawValue, satisfied: found.satisfied, reason: found.reason)
+            )
+        }
+    }
+#endif
+}
+
 /// Install/runtime problems that make hooks deny even though rv "looks"
 /// installed. Each carries the exact repair command.
 enum DoctorInstallChecks {
@@ -150,7 +202,7 @@ enum DoctorInstallChecks {
             launchAgentProgram(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
-        ].compactMap { $0 }
+        ].compactMap { $0 } + roleTrust(probes.roleTrust)
     }
 
     /// One failing row per hooked host whose hook interpreter does not run:
@@ -277,6 +329,39 @@ enum DoctorInstallChecks {
             summary: "hooks reject the installed rvd (\(trust.reason ?? "untrusted")); hooks deny every tool call",
             fix: DaemonTrustProbe.fix(trust)
         )
+    }
+
+    /// A manifest role whose installed binary fails its entry: that
+    /// component's peers refuse it. Hooks keep working, so a warning.
+    static func roleTrust(_ verdicts: [DoctorRoleTrust]) -> [DoctorProblem] {
+        verdicts.compactMap { verdict in
+            guard verdict.trust.satisfied == false else { return nil }
+            let reason = verdict.trust.reason.map { " (\($0))" } ?? ""
+            return DoctorProblem(
+                id: "peer-trust-role-unsatisfied-\(verdict.role)",
+                severity: .warn,
+                summary: roleImpact(verdict.role) + reason,
+                fix: "update the \(verdict.role) entry in '\(trustManifestPath)' to pin the installed build "
+                    + "(for a release build, a Developer ID entry with its identifier and team); "
+                    + "the file is root-owned, so updating it needs an administrator (sudo)"
+            )
+        }
+    }
+
+    private static func roleImpact(_ role: String) -> String {
+        switch role {
+        case "workspaceHost":
+            "the peer-trust manifest pins the workspace host to a different build; "
+                + "rv workspace and rv opencode will not start"
+        case "cli":
+            "the peer-trust manifest pins rv-cli to a different build; "
+                + "the workspace host and the approvals custodian refuse this rv"
+        case "mcpCustodian":
+            "the peer-trust manifest pins the approvals custodian to a different build; "
+                + "MCP approvals will fail"
+        default:
+            "the peer-trust manifest pins \(role) to a different build"
+        }
     }
 
     /// `rvd` beside the hook `rv`, and the pack bundle `rvd` loads beside it.
