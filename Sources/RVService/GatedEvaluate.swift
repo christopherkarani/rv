@@ -28,24 +28,24 @@ private enum PolicyVerb: Sendable {
 
 /// A gated peek: what the door returns, and under observe the verdict
 /// enforce would have returned (`rv test` / `rv explain` show that one).
-public struct GatedVerdict: Sendable, Equatable {
+package struct GatedVerdict: Sendable, Equatable {
     /// What the door returns (under observe, the observed allow).
-    public let result: EvaluationResult
+    package let result: EvaluationResult
     /// The would-be verdict through a Policy-gate preview, as enforce would
     /// show it. Nil unless the observe posture decided (enforce, or an
     /// observe-floored result).
-    public let observedWouldBe: EvaluationResult?
+    package let observedWouldBe: EvaluationResult?
 
-    public init(result: EvaluationResult, observedWouldBe: EvaluationResult? = nil) {
+    package init(result: EvaluationResult, observedWouldBe: EvaluationResult? = nil) {
         self.result = result
         self.observedWouldBe = observedWouldBe
     }
 
     /// The verdict to show: the would-be one under observe, else the result.
-    public var shown: EvaluationResult { observedWouldBe ?? result }
+    package var shown: EvaluationResult { observedWouldBe ?? result }
 
     /// Observe changed the outcome: enforce would have decided otherwise.
-    public var observeOverrode: Bool {
+    package var observeOverrode: Bool {
         guard let observedWouldBe else { return false }
         return observedWouldBe.decision != result.decision
     }
@@ -262,7 +262,7 @@ public struct GatedEvaluate: Sendable {
 
     /// `peek(command:)` plus, under observe, the verdict enforce would show.
     /// TTY `test` / `explain`.
-    public func peekVerdict(
+    package func peekVerdict(
         command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,

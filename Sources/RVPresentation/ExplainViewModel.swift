@@ -56,7 +56,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var suggestions: [ExplainSuggestion]
     public var semantic: ExplainSemanticView?
     /// Observe-mode note, when observe let a would-be block or ask run.
-    public var observeNote: String?
+    package var observeNote: String?
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }

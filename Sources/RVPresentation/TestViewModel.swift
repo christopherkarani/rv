@@ -17,7 +17,7 @@ public struct TestViewModel: Equatable, Sendable {
     public var deny: DenyViewModel?
     /// Observe-mode note under the result, when observe let a would-be
     /// block or ask run.
-    public var observeNote: String?
+    package var observeNote: String?
 
     public init(
         command: ShellCommand,

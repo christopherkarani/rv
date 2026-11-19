@@ -195,7 +195,7 @@ public enum CommandRun {
     /// Renders the verdict enforce would reach: under observe that is the
     /// would-be verdict (exit code included), and when observe let it run
     /// the output says so.
-    public static func render(
+    package static func render(
         kind: CLIKind,
         verdict: GatedVerdict,
         command: ShellCommand,

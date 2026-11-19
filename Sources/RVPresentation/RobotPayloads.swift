@@ -17,9 +17,9 @@ public struct TestRobotPayload: Equatable, Sendable, Encodable {
     public var ruleID: String?
     public var reason: String?
     /// `observe` only when observe let the would-be `decision` run.
-    public var mode: String? = nil
+    package var mode: String? = nil
     /// What the hook did instead (`allow`); set with `mode`.
-    public var effective: String? = nil
+    package var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -42,9 +42,9 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     public var explanation: String?
     public var nextAction: String?
     /// `observe` only when observe let the would-be `decision` run.
-    public var mode: String? = nil
+    package var mode: String? = nil
     /// What the hook did instead (`allow`); set with `mode`.
-    public var effective: String? = nil
+    package var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
