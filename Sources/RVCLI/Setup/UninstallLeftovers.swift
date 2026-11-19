@@ -53,9 +53,15 @@ struct UninstallLeftovers: Equatable, Sendable {
         "\(SecretKeychain.storeName) (service \(SecretKeychain.service))"
     }
 
+    /// The config dir is a symlink or sits under one: `--purge` would not
+    /// enter it, nor delete the values its secrets.json names.
+    private var configRefused: Bool {
+        refusedPaths.contains { $0.path == configDirectory }
+    }
+
     private var keptLines: [String] {
         var lines: [String] = []
-        if configEntries.isEmpty == false {
+        if configEntries.isEmpty == false, configRefused == false {
             lines.append(
                 DisplayedText.field(configDirectory) + ": "
                     + configEntries.map { DisplayedText.field($0) }.joined(separator: ", "))
@@ -66,9 +72,12 @@ struct UninstallLeftovers: Equatable, Sendable {
         lines += refusedPaths.map { refused in
             let path = DisplayedText.field(refused.path)
             let reason = DisplayedText.field(refused.reason)
+            let held = refused.path == configDirectory && configEntries.isEmpty == false
+                ? " (" + configEntries.map { DisplayedText.field($0) }.joined(separator: ", ") + ")"
+                : ""
             return purged
                 ? "\(path): not entered, \(reason)"
-                : "\(path): kept; \(reason), so no command here removes it"
+                : "\(path): kept\(held); \(reason), so no command here removes it"
         }
         if storedSecrets.isEmpty == false {
             let count = storedSecrets.count == 1 ? "1 secret value" : "\(storedSecrets.count) secret values"
@@ -101,11 +110,14 @@ struct UninstallLeftovers: Equatable, Sendable {
                 // --purge refuses what is kept for a symlink and cannot find
                 // values while secrets.json is unreadable: do not promise it.
                 var unreached: [String] = []
-                if refusedPaths.isEmpty == false {
+                if configRefused {
+                    unreached.append("the config directory or its secret values")
+                }
+                if refusedPaths.contains(where: { $0.path != configDirectory }) {
                     unreached.append("the paths kept for a symlink")
                 }
                 if secretsUnreadable != nil {
-                    unreached.append("the secret values while secrets.json cannot be read")
+                    unreached.append("the secret values or secrets.json while it cannot be read")
                 }
                 let scope = unreached.isEmpty
                     ? "all of it"
@@ -128,7 +140,8 @@ struct UninstallLeftovers: Equatable, Sendable {
         if storedSecrets.isEmpty == false || secretsUnreadable != nil {
             commands += secretRemovalCommands
         }
-        let paths = (configEntries.isEmpty ? [] : [configDirectory]) + otherPaths
+        // No `rm -rf` through a link: a refused config dir is named, not removed.
+        let paths = (configEntries.isEmpty || configRefused ? [] : [configDirectory]) + otherPaths
         if paths.isEmpty == false {
             commands.append("rm -rf " + paths.map(Self.shellQuoted).joined(separator: " "))
         }

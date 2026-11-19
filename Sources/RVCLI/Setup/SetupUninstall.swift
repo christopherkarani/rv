@@ -122,8 +122,11 @@ extension SetupRun {
             files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
         }
 
+        // Plain uninstall still removes its listed config files through a
+        // link (as before --purge existed); the note only says --purge
+        // would not.
         var refusedPaths: [UninstallLeftovers.RefusedPath] = []
-        if purge, let configRefusal {
+        if let configRefusal {
             refusedPaths.append(.init(path: layout.configDirectory, reason: configRefusal))
         }
         for directory in dataDirectories {
