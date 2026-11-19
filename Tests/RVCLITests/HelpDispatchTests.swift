@@ -270,6 +270,14 @@ import RVTheme
     #expect(text.contains("1"))
 }
 
+@Test func helpText_testAndExplain_documentObserveMode() {
+    for topic in [HelpTopic.test, .explain] {
+        let text = HelpDispatch.text(topic, palette: colorOffPalette)
+        #expect(text.contains("Observe mode"), "\(topic) help missing observe mode")
+        #expect(text.contains("would block"), "\(topic) help missing the would-be verdict")
+    }
+}
+
 @Test func helpTopic_operator() {
     #expect(HelpDispatch.topic(arguments: ["operator", "--help"]) == .`operator`)
     #expect(HelpDispatch.topic(arguments: ["help", "operator"]) == .`operator`)
