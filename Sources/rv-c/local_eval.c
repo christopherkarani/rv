@@ -100,6 +100,16 @@ static void kill_and_reap(pid_t pid) {
     }
 }
 
+/* Gives up on a child: SIGKILL first, then close its pipes, then reap. On
+ * Linux the child is already running, so closing its stdin first would
+ * wake it with EOF and let it act on an empty call before the kill. */
+static void abandon(pid_t pid, int *to_child, int *from_child) {
+    (void)kill(pid, SIGKILL);
+    close_fd(to_child);
+    close_fd(from_child);
+    kill_and_reap(pid);
+}
+
 /* Reaps `pid` by `deadline`; 1 when it exited normally with status 0. A
  * child still running at the deadline is killed. */
 static int reap_ok(pid_t pid, long long deadline) {
@@ -274,26 +284,20 @@ enum RvLocalVerdict rv_local_evaluate(
     /* Identity before input: the child has not read a byte yet (and on
      * Darwin has not run an instruction). */
     if (!verify(pid, path)) {
-        close_fd(&to_child);
-        close_fd(&from_child);
-        kill_and_reap(pid);
+        abandon(pid, &to_child, &from_child);
         set_reason(reason, reason_cap, "untrusted");
         return RV_LOCAL_ESCALATE;
     }
     /* A slow verify spends the budget too: past the deadline the child
      * never runs (Darwin) and never gets the call. */
     if (now_ms() >= deadline) {
-        close_fd(&to_child);
-        close_fd(&from_child);
-        kill_and_reap(pid);
+        abandon(pid, &to_child, &from_child);
         set_reason(reason, reason_cap, "timeout");
         return RV_LOCAL_ESCALATE;
     }
 #ifdef __APPLE__
     if (kill(pid, SIGCONT) != 0) {
-        close_fd(&to_child);
-        close_fd(&from_child);
-        kill_and_reap(pid);
+        abandon(pid, &to_child, &from_child);
         set_reason(reason, reason_cap, "spawn");
         return RV_LOCAL_ESCALATE;
     }
@@ -401,10 +405,11 @@ enum RvLocalVerdict rv_local_evaluate(
 fail_kill:
     set_reason(reason, reason_cap, "io");
 fail_kill_quiet:
-    close_fd(&to_child);
-    close_fd(&from_child);
     if (pid > 0) {
-        kill_and_reap(pid);
+        abandon(pid, &to_child, &from_child);
+    } else {
+        close_fd(&to_child);
+        close_fd(&from_child);
     }
     free(out);
     return RV_LOCAL_ESCALATE;
