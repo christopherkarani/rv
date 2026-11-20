@@ -114,6 +114,14 @@ public enum JudgeRuntime {
         return (selected.engine, bundle)
     }
 
+    /// True when rvd judges with a bundle: the one it selects is on disk,
+    /// valid or not. A selected bundle that cannot load is a failed judge
+    /// run (review), never packs-only, so doctor and setup count it as
+    /// installed: the judge agent must be there to answer for it.
+    public static func selectsBundle(home: HomeDirectory?) -> Bool {
+        resolvedJudge(home: home, config: GuardConfig.read(home: home)) != nil
+    }
+
     /// Bundle state for doctor: distinguishes absent (packs-only is a
     /// choice) from present-but-invalid (a broken install that would
     /// silently run packs-only).

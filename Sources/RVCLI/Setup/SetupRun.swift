@@ -104,6 +104,12 @@ enum SetupRun {
             wrote: slots.wrote.map(\.rawValue).sorted(),
             service: service,
             unwiredMissingInterpreter: missing.isEmpty ? nil : missing,
+            judgeAgent: judgeAgentProblem(report, env: env).map {
+                switch $0 {
+                case .missing: "rv_judge_missing"
+                case .notLoaded: "not_loaded"
+                }
+            },
             error: nil
         )
         return robotJSON(payload)
@@ -145,11 +151,17 @@ enum SetupRun {
         }.joined()
     }
 
+    /// The judge agent's problem, only when a bundle makes it matter.
+    static func judgeAgentProblem(_ report: SetupReport, env: SetupEnvironment) -> JudgeAgentProblem? {
+        guard let problem = report.judgeAgent, env.judgeBundleInstalled(env.home) else { return nil }
+        return problem
+    }
+
     /// With a judge bundle installed, a judge pool that is not running sends
     /// every judged call to review; say so. Silent without a bundle: then
     /// nothing is judged.
     static func judgeWarning(_ report: SetupReport, env: SetupEnvironment) -> String {
-        guard let problem = report.judgeAgent, env.judgeBundleInstalled(env.home) else { return "" }
+        guard let problem = judgeAgentProblem(report, env: env) else { return "" }
         switch problem {
         case .missing(let path):
             return """

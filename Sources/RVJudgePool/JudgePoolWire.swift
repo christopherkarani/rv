@@ -76,8 +76,9 @@ public struct JudgeInput: Sendable, Codable, Equatable {
 }
 
 /// Why no worker could load the bundle. Mirrors `LayaError.badBundle` /
-/// `.modelUnavailable`: a broken install, which the gate treats as
-/// packs-only exactly as it did in-process.
+/// `.modelUnavailable` (a broken install or an invalid private cache).
+/// rvd maps it to a failed judge run, so judged calls go to review; doctor
+/// shows the cause.
 public struct LoadFailure: Sendable, Codable, Equatable {
     public enum Kind: String, Sendable, Codable {
         case badBundle
@@ -95,8 +96,8 @@ public struct LoadFailure: Sendable, Codable, Equatable {
 
 /// The pool's answer to one judge request. Only `verdict` carries a score;
 /// every other case is a judge that could not score this request, which the
-/// client maps to the gate's fail-closed outcomes (review), except
-/// `loadFailed` (broken install: packs-only, doctor-visible).
+/// client maps to the gate's fail-closed outcomes (review), `loadFailed`
+/// (broken install, doctor-visible) included.
 public enum PoolOutcome: Sendable, Codable, Equatable {
     /// JSON of the worker's `LayaVerdict`, and which worker produced it.
     case verdict(Data, slot: WorkerSlot)

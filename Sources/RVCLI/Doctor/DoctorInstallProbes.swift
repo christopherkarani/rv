@@ -82,7 +82,7 @@ struct DoctorInstallProbes {
         let judge = LaunchAgentProbe.observe(
             label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
         probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
-        if case .ok = JudgeRuntime.bundleHealth(home: home) { probes.judgeBundleInstalled = true }
+        probes.judgeBundleInstalled = JudgeRuntime.selectsBundle(home: home)
         probes.manifestRoles = ProtectedPeerTrustConfiguration.hookTrustSource().manifestRoles.map {
             Set($0.map(\.rawValue))
         }

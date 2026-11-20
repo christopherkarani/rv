@@ -202,9 +202,7 @@ extension SetupEnvironment {
         setup.directRvd = ProcessDirectRvd()
 #endif
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
-        setup.judgeBundleInstalled = { home in
-            if case .ok = JudgeRuntime.bundleHealth(home: home) { true } else { false }
-        }
+        setup.judgeBundleInstalled = { JudgeRuntime.selectsBundle(home: $0) }
         return setup
     }
 }

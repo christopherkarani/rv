@@ -60,7 +60,7 @@ public enum DoctorSnapshotBuilder {
     /// Names the resolved engine plus the bundle dir actually in use, a
     /// present-but-invalid bundle as a warning, or where the production
     /// bundle should be installed.
-    private static func judgeCheck(home: HomeDirectory?) -> DoctorCheck {
+    static func judgeCheck(home: HomeDirectory?) -> DoctorCheck {
         let mode = GuardModeResolution.resolve(
             GuardConfig.read(home: home), host: nil, environment: ProcessInfo.processInfo.environment)
         switch JudgeRuntime.bundleHealth(home: home) {
@@ -77,9 +77,17 @@ public enum DoctorSnapshotBuilder {
             )
             #endif
         case .invalid(let engine, let dir, let problems):
+            // rvd still selects a bundle that is on disk but fails a check
+            // (config labels): the pool cannot load it, and judged calls go
+            // to review. One it does not select leaves it packs-only.
+            #if canImport(CoreML)
+            let effect = JudgeRuntime.selectsBundle(home: home) ? "judged calls go to review" : "packs only"
+            #else
+            let effect = "packs only"
+            #endif
             return DoctorCheck(
                 id: .judge, status: .warning,
-                message: "laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); packs only (guard \(mode.rawValue))"
+                message: "laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); \(effect) (guard \(mode.rawValue))"
             )
         case .missing(let engine, let expected):
             return DoctorCheck(
