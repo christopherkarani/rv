@@ -23,6 +23,10 @@ enum AuditOCSFSamples {
               detail: ["host": "claude", "tool": "Bash", "category": "core.git"]),
         event(.commandDenied, .denied, "core.git:reset-hard", source: "blocks.jsonl",
               detail: ["tool": "Bash", "category": "core.git"]),
+        event(.commandDenied, .denied, "core.git:reset-hard", agent: "claude",
+              detail: ["host": "claude", "tool": "Bash", "category": "core.git", "session": "0b7f3c2e-claude"]),
+        event(.commandObserved, .info, "core.git:reset-hard", source: "blocks.jsonl",
+              detail: ["tool": "Bash", "category": "core.git", "would_be": "deny", "session": "0b7f3c2e-claude"]),
         event(.commandDenied, .denied, "core.secrets:read", agent: "codex",
               detail: ["host": "codex", "tool": "Bash", "category": "ssh", "path": "~/.ssh/id_ed25519"]),
         event(.commandDenied, .denied, "core.judge:laya-block", agent: "claude",
@@ -150,6 +154,24 @@ struct AuditOCSFSchemaTests {
         guard violation.path.hasPrefix("/"), attribute.contains("/") == false else { return false }
         return violation.message.hasPrefix("is not defined by the schema")
             && knownDeviations[stem]?.contains(String(attribute)) == true
+    }
+
+    /// A hook deny's session id is OCSF's `actor.session.uid`, and stays in
+    /// `rv_detail`.
+    @Test func hookSessionMapsToTheActorSession() throws {
+        let withAgent = AuditOCSF.object(
+            AuditOCSFSamples.event(.commandDenied, .denied, "core.git:reset-hard", agent: "claude",
+                                   detail: ["host": "claude", "session": "sess-1"]),
+            hostName: "h")
+        let actor = try #require(withAgent["actor"] as? [String: Any])
+        #expect(actor["app_name"] as? String == "claude")
+        #expect((actor["session"] as? [String: Any])?["uid"] as? String == "sess-1")
+        let unmapped = try #require(withAgent["unmapped"] as? [String: Any])
+        #expect((unmapped["rv_detail"] as? [String: String])?["session"] == "sess-1")
+
+        let noSession = AuditOCSF.object(
+            AuditOCSFSamples.event(.commandDenied, .denied, "core.git:reset-hard", agent: "claude"), hostName: "h")
+        #expect((noSession["actor"] as? [String: Any])?["session"] == nil)
     }
 
     @Test func everySampleValidatesAgainstTheVendoredSchema() throws {

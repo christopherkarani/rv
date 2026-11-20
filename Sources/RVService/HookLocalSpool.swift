@@ -373,8 +373,10 @@ package enum HookLocalSpool {
         }
         var written = 0
         let complete = rest.withUnsafeBytes { buffer -> Bool in
+            // Only an empty buffer has no base address, and then there is nothing to write.
+            guard let base = buffer.baseAddress else { return true }
             while written < buffer.count {
-                let count = posixWrite(fd, buffer.baseAddress! + written, buffer.count - written)
+                let count = posixWrite(fd, base + written, buffer.count - written)
                 if count < 0, errno == EINTR { continue }
                 guard count > 0 else { return false }
                 written += count
@@ -436,8 +438,10 @@ package enum HookLocalSpool {
         var data = Data(count: min(size, limit))
         var read = 0
         data.withUnsafeMutableBytes { buffer in
+            // Only an empty buffer has no base address, and then there is nothing to read.
+            guard let base = buffer.baseAddress else { return }
             while read < buffer.count {
-                let count = pread(fd, buffer.baseAddress! + read, buffer.count - read, off_t(read))
+                let count = pread(fd, base + read, buffer.count - read, off_t(read))
                 if count < 0, errno == EINTR { continue }
                 guard count > 0 else { return }
                 read += count
