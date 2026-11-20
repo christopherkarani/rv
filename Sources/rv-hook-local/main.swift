@@ -34,7 +34,8 @@ while input.count <= LocalHookCommand.inputLimit {
     input.append(chunk)
 }
 
-let answer = await LocalHookCommand.respond(to: arguments, input: input, home: home, started: started)
+let answer = await LocalHookCommand.respond(
+    to: arguments, input: input, home: home, started: started, judge: LocalHookCommand.liveJudge())
 do {
     try FileHandle.standardOutput.write(contentsOf: answer)
 } catch {
