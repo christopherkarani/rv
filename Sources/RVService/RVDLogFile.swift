@@ -19,11 +19,15 @@ public enum RVDLogFileError: Error, Sendable, Equatable {
 /// it at an owner-only file instead; a caller that reads stderr (terminal,
 /// test, systemd's journal) keeps it.
 ///
-/// Only rvd's own lifecycle lines go here (launch failures, transport
-/// warnings). Request handling never writes to stderr, so no command text
-/// or secret reaches this file. Growth is bounded by rotating at startup and
-/// then every `rotationCheckInterval` while rvd runs (it stays up for days):
-/// at most about `maxBytes` per generation, one previous generation.
+/// rvd's lifecycle lines go here (launch failures, transport warnings),
+/// plus two request-time diagnostics, each at most one line a minute:
+/// dropped audit writes (`AuditDropLog`, naming rv's own audit file) and
+/// hooks that ran past their deadline (`SlowHookLog`: host, door, rule id
+/// and phase timings). Neither carries command text, the paths an agent
+/// touched, session ids or secrets. Growth is bounded by rotating at
+/// startup and then every `rotationCheckInterval` while rvd runs (it stays
+/// up for days): at most about `maxBytes` per generation, one previous
+/// generation.
 public enum RVDLogFile {
     public static let maxBytes = 1 << 20
     static let maxLineBytes = 512

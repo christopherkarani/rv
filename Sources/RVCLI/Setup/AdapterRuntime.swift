@@ -49,10 +49,17 @@ enum AdapterRuntime {
         }
     }
 
+    /// One interpreter a hook command starts, and whether the command goes
+    /// through `/usr/bin/env` (`AdapterCommand`).
+    struct BakedInterpreter: Equatable {
+        var path: String
+        var throughEnv: Bool
+    }
+
     /// The interpreters this host's rv hook commands start, read from its
     /// hook file: each baked path, or `python3` for an earlier rv's PATH
     /// command. Empty when the file or a command does not parse.
-    static func bakedInterpreters(host: HookHost, paths: OwnedPaths, fileManager: FileManager) -> [String] {
+    static func bakedInterpreters(host: HookHost, paths: OwnedPaths, fileManager: FileManager) -> [BakedInterpreter] {
         let source: (file: String, descriptor: HostWiringDescriptor)
         switch host {
         case .claude: source = (paths.claudeSettings, ClaudeSettingsMerge.wiringDescriptor)
@@ -64,7 +71,7 @@ enum AdapterRuntime {
         guard let data = fileManager.contents(atPath: source.file),
               let root = try? HostHooksMergeEngine.parseRoot(data)
         else { return [] }
-        var interpreters: [String] = []
+        var interpreters: [BakedInterpreter] = []
         for located in HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: source.descriptor) {
             guard let interpreter = located.hook["command"]?.string.flatMap(interpreter(inHookCommand:)) else {
                 return []
@@ -74,9 +81,9 @@ enum AdapterRuntime {
         return interpreters
     }
 
-    /// `[RV_BINARY=<rv> ]<interpreter> …`: the interpreter word, absolute
-    /// (current) or `python3` (earlier rv); nil otherwise.
-    private static func interpreter(inHookCommand command: String) -> String? {
+    /// `[RV_BINARY=<rv> ][/usr/bin/env ]<interpreter> …`: the interpreter
+    /// word, absolute (current) or `python3` (earlier rv); nil otherwise.
+    private static func interpreter(inHookCommand command: String) -> BakedInterpreter? {
         var tail = Substring(command)
         let envPrefix = "RV_BINARY="
         if tail.hasPrefix(envPrefix) {
@@ -85,8 +92,25 @@ enum AdapterRuntime {
             }
             tail = rv.rest.dropFirst()
         }
-        guard let parsed = AdapterCommand.parse(tail) else { return nil }
-        return parsed.isolated ? (parsed.interpreter.hasPrefix("/") ? parsed.interpreter : nil) : parsed.interpreter
+        guard let parsed = AdapterCommand.parse(tail),
+              parsed.isolated == false || parsed.interpreter.hasPrefix("/")
+        else { return nil }
+        return BakedInterpreter(path: parsed.interpreter, throughEnv: parsed.throughEnv)
+    }
+
+    /// Directories SIP protects: a binary there is a platform binary, so
+    /// dyld ignores `DYLD_*` when it starts without help from
+    /// `/usr/bin/env`. `/usr/local` is not one.
+    static let sipProtectedDirectories = ["/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/usr/libexec/", "/System/"]
+
+    /// macOS: a baked interpreter started without `/usr/bin/env` that is
+    /// not a SIP-protected platform binary; `DYLD_*` reaches it.
+    static func dyldExposed(_ baked: BakedInterpreter, launchesThroughEnv: Bool = AdapterCommand.launchesThroughEnv)
+        -> Bool
+    {
+        guard launchesThroughEnv, baked.throughEnv == false, baked.path.hasPrefix("/") else { return false }
+        let real = realPath(baked.path) ?? baked.path
+        return sipProtectedDirectories.contains { real.hasPrefix($0) } == false
     }
 
     /// Live check: the first `name` on `pathEntries` runs `-c pass` and
@@ -105,49 +129,12 @@ enum AdapterRuntime {
         let candidates = name.hasPrefix("/")
             ? [name]
             : pathEntries.filter { $0.hasPrefix("/") }.map { ($0 as NSString).appendingPathComponent(name) }
-        guard let executable = candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }),
-              probe(executable)
+        guard let executable = candidates.first(where: {
+                  AdapterCommand.launchable($0) && fileManager.isExecutableFile(atPath: $0)
+              }),
+              runWithHookFlags(executable, code: "pass") != nil
         else { return nil }
         return executable
-    }
-
-    /// This user may write `path`, the file it resolves to, or a directory
-    /// above either, so could replace what it runs.
-    static func userCanReplace(_ path: String) -> Bool {
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        for start in [path, resolved] {
-            var current = start
-            while current.isEmpty == false {
-                if access(current, W_OK) == 0 { return true }
-                let parent = (current as NSString).deletingLastPathComponent
-                if parent == current { break }
-                current = parent
-            }
-        }
-        return false
-    }
-
-    private static func probe(_ executable: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        // The hook command's own flags: an interpreter that rejects them
-        // (Python 2 has no `-I`) would fail every hook.
-        process.arguments = AdapterCommand.isolationFlags.split(separator: " ").map(String.init) + ["-c", "pass"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
-        guard exited.wait(timeout: .now() + probeTimeout) == .success else {
-            process.terminate()
-            return false
-        }
-        return process.terminationStatus == 0
     }
 }
 
