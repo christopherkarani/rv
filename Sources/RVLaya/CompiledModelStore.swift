@@ -298,13 +298,16 @@ struct CompiledModelStore<Model> {
 
     /// Whether the bundle's model package is there. Only ENOENT is absence
     /// (the packs-only floor); any other error refuses (review), so an error
-    /// an agent can provoke never reads as "no model".
-    static func packageExists(_ url: URL) throws(CoreMLLoadRefusal) -> Bool {
+    /// an agent can provoke never reads as "no model". The refusal is
+    /// recorded on `coreML` so doctor shows it.
+    static func packageExists(_ url: URL, recordingOn coreML: CoreMLGuard? = nil) throws(CoreMLLoadRefusal) -> Bool {
         var info = stat()
         if lstat(url.path, &info) == 0 { return true }
         let code = errno
         if code == ENOENT { return false }
-        throw CoreMLLoadRefusal(detail: "cannot check \(url.lastPathComponent): \(String(cString: strerror(code)))")
+        let refusal = CoreMLLoadRefusal(detail: "cannot check \(url.lastPathComponent): \(String(cString: strerror(code)))")
+        coreML?.noteRefusal(refusal.reason)
+        throw refusal
     }
 
     static func isOwnedDirectory(_ url: URL) -> Bool {

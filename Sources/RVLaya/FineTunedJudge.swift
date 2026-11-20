@@ -139,7 +139,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         let package = bundleDir.appendingPathComponent("model.mlpackage")
         // ENOENT only is a missing model (packs-only); any other lstat error
         // refuses (review).
-        guard try CompiledModelStore<Never>.packageExists(package) else {
+        guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
             throw LayaError.badBundle("model.mlpackage missing in \(bundleDir.path)")
         }
         // Via CompiledModelCache (cpuAndGPU unless `coreML` saw repeated

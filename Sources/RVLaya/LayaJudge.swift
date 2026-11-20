@@ -115,7 +115,7 @@ enum CompiledModelCache {
         // No model in the bundle (ENOENT only) is absence: packs-only, doctor
         // names it. Any other lstat error, or Core ML failing on a model that
         // is there, refuses (review).
-        guard try CompiledModelStore<Never>.packageExists(package) else {
+        guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
             throw LayaError.modelUnavailable("no model at \(package.path)")
         }
         let configuration = MLModelConfiguration()

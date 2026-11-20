@@ -454,8 +454,23 @@ struct CompiledModelStoreTests {
         defer { f.remove() }
         #expect(try CompiledModelStore<String>.packageExists(f.package) == true)
         #expect(try CompiledModelStore<String>.packageExists(f.base.appendingPathComponent("absent")) == false)
-        let tooLong = URL(fileURLWithPath: "/" + String(repeating: "a/", count: 700) + "model.mlpackage")
+        // One component over NAME_MAX (255 on Darwin and Linux) is
+        // ENAMETOOLONG on both; a long path alone is not (Linux PATH_MAX is 4096).
+        let tooLong = URL(fileURLWithPath: "/" + String(repeating: "a", count: 300) + "/model.mlpackage")
         #expect(throws: CoreMLLoadRefusal.self) { try CompiledModelStore<String>.packageExists(tooLong) }
+    }
+
+    @Test("a refused presence check is recorded on the guard for doctor")
+    func presenceRefusalIsRecorded() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.store().coreML
+        let tooLong = URL(fileURLWithPath: "/" + String(repeating: "a", count: 300) + "/model.mlpackage")
+        #expect(throws: CoreMLLoadRefusal.self) {
+            try CompiledModelStore<String>.packageExists(tooLong, recordingOn: coreML)
+        }
+        let reason = try #require(coreML.status.lastRefusal)
+        #expect(reason.contains("cannot check model.mlpackage"))
     }
 
     @Test("a refusal is recorded on the guard for doctor, and cleared by the next good load")
