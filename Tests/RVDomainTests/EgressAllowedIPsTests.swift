@@ -1,8 +1,9 @@
 import Testing
 @testable import RVDomain
 
-/// Owner-set `allowed_ips`: strict CIDR parsing, coverage, the ranges no
-/// list may open, and IPv4-mapped IPv6 folding.
+/// Owner-set `allowed_ips`: strict CIDR parsing, coverage, refusing an
+/// entry that touches a `never` range, and IPv4-mapped IPv6 folding. The
+/// ranges themselves are `DialAddressTests`'.
 @Suite struct EgressAllowedIPsTests {
     // MARK: Parse
 
@@ -85,16 +86,7 @@ import Testing
         #expect(list.entries == ["10.0.5.0/24", "10.0.6.0/24", "fd12::/48"])
     }
 
-    // MARK: Forbidden ranges
-
-    /// The forbidden table is built by parsing; a typo must not drop a row.
-    @Test func everyForbiddenRangeParses() {
-        #expect(EgressAllowedIPs.forbiddenRanges.count == 28)
-        for metadata in ["fd00:ec2::254/128", "fd00:ec2::253/128", "fd00:ec2::123/128", "fd20:ce::254/128", "192.0.0.0/24"] {
-            #expect(EgressAllowedIPs.forbiddenRanges.contains { $0.network.description == metadata }, "\(metadata)")
-        }
-        #expect(EgressAllowedIPs.forbiddenRanges.allSatisfy { $0.network.prefixLength > 0 })
-    }
+    // MARK: Never ranges
 
     /// Loopback, link-local, cloud metadata, unspecified, multicast, and the
     /// IPv6 forms that embed an IPv4 peer are refused at parse time even
@@ -119,28 +111,6 @@ import Testing
         #expect(named == entry)
         #expect(range.isEmpty == false)
         #expect(error.message.contains(entry))
-    }
-
-    /// Neighbours of the forbidden blocks stay listable, so a typo in the
-    /// forbidden table (a prefix one bit too short) cannot hide here.
-    @Test(arguments: [
-        "2001:200::/23", "2001:4860::/32", "198.20.0.0/16", "192.0.1.0/24", "192.88.98.0/24",
-        "fd00:ec2::252/128", "fd00:ec2::1:254/128",
-    ])
-    func neighboursOfForbiddenRangesParse(_ entry: String) throws {
-        #expect(try EgressAllowedIPs(parsing: [entry]).entries == [entry])
-    }
-
-    @Test(arguments: [
-        "127.0.0.1", "127.255.255.254", "169.254.169.254", "169.254.0.1", "100.100.100.200", "168.63.129.16",
-        "0.0.0.0", "224.0.0.251", "255.255.255.255", "::1", "::", "fe80::1", "ff02::fb", "fd00:ec2::254",
-        "::ffff:127.0.0.1", "::ffff:169.254.169.254", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1",
-        "2001:0:a9fe:a9fe::1", "::a9fe:a9fe", "::ffff:0:a9fe:a9fe", "fd20:ce::254", "192.0.0.192",
-        "::ffff:192.0.0.192", "192.0.2.1", "198.18.0.1", "2001:db8::1",
-    ])
-    func runtimeCheckForbidsTheSameAddresses(_ text: String) throws {
-        let address = try #require(EgressIPAddress(parsing: text))
-        #expect(EgressAllowedIPs.isForbidden(address))
     }
 
     // MARK: Coverage
