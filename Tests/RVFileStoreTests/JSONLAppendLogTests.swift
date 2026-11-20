@@ -26,6 +26,34 @@ struct JSONLAppendLogTests {
         try String(contentsOf: url, encoding: .utf8)
     }
 
+    /// Holds `url`'s in-process writer lock on another thread, as a
+    /// contending writer would, until `release` (or 2 s).
+    private final class ProcessLockHolder: Sendable {
+        private let release_ = DispatchSemaphore(value: 0)
+        private let finished = DispatchSemaphore(value: 0)
+
+        init(url: URL) {
+            let held = DispatchSemaphore(value: 0)
+            Thread { [release_, finished] in
+                JSONLAppendLog.holdingProcessLock(at: url) {
+                    held.signal()
+                    _ = release_.wait(timeout: .now() + 2)
+                }
+                finished.signal()
+            }.start()
+            held.wait()
+        }
+
+        func release() {
+            release_.signal()
+            finished.wait()
+        }
+    }
+
+    private func holdProcessLock(at url: URL) -> ProcessLockHolder {
+        ProcessLockHolder(url: url)
+    }
+
     @Test func appendsLineWithNewline() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -191,18 +219,8 @@ struct JSONLAppendLogTests {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("held.jsonl")
-        let held = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        let finished = DispatchSemaphore(value: 0)
-        Thread {
-            JSONLAppendLog.processLock.withLock { _ in
-                held.signal()
-                _ = release.wait(timeout: .now() + 2)
-            }
-            finished.signal()
-        }.start()
-        held.wait()
-        defer { release.signal(); finished.wait() }
+        let holder = holdProcessLock(at: url)
+        defer { holder.release() }
 
         let started = ContinuousClock.now
         #expect(throws: JSONLAppendLog.AppendError.lock(errno: EWOULDBLOCK)) {
@@ -210,6 +228,37 @@ struct JSONLAppendLogTests {
         }
         #expect(ContinuousClock.now - started < .seconds(1))
         #expect(FileManager.default.fileExists(atPath: url.path) == false)
+    }
+
+    /// A zero timeout is one non-blocking attempt at each lock, for callers
+    /// that would rather skip a row than wait at all.
+    @Test func zeroTimeoutNeverWaits() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("held.jsonl")
+        let holder = holdProcessLock(at: url)
+        let started = ContinuousClock.now
+        #expect(throws: JSONLAppendLog.AppendError.lock(errno: EWOULDBLOCK)) {
+            try JSONLAppendLog.append(Data("{}".utf8), to: url, sync: false, lockTimeout: .zero)
+        }
+        #expect(ContinuousClock.now - started < .milliseconds(500))
+        holder.release()
+        // Uncontended, a zero timeout still appends.
+        try JSONLAppendLog.append(Data("{}".utf8), to: url, sync: false, lockTimeout: .zero)
+        #expect(try text(url) == "{}\n")
+    }
+
+    /// Writers of one log exclude each other; writers of another log do
+    /// not wait for them.
+    @Test func anotherLogsWriterDoesNotBlockThisOne() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let busy = dir.appendingPathComponent("busy.jsonl")
+        let free = dir.appendingPathComponent("free.jsonl")
+        let holder = holdProcessLock(at: busy)
+        defer { holder.release() }
+        try JSONLAppendLog.append(Data("{}".utf8), to: free, sync: false, lockTimeout: .milliseconds(100))
+        #expect(try text(free) == "{}\n")
     }
 
     /// Another process holding the sidecar lock costs a bounded append at

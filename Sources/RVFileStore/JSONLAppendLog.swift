@@ -8,8 +8,9 @@ import Synchronization
 
 /// One hardened append primitive for the append-only JSONL ledgers.
 ///
-/// Guarantees: a `<name>.lock` sidecar taken under a process-wide mutex
-/// (macOS `flock` does not exclude threads of one process) with an EINTR
+/// Guarantees: a `<name>.lock` sidecar taken under an in-process mutex for
+/// that sidecar (macOS `flock` does not exclude threads of one process; one
+/// log's writers never wait for another's) with an EINTR
 /// retry; the target opens only after exclusion is held, with
 /// `O_APPEND | O_CLOEXEC | O_NOFOLLOW`, so a symlink at the ledger path is
 /// refused and a compaction rename cannot strand an append on a replaced
@@ -35,8 +36,38 @@ public enum JSONLAppendLog {
         case sync(errno: Int32)
     }
 
-    /// Internal so tests can hold it as a contending writer would.
-    static let processLock = Mutex<Void>(())
+    /// One in-process mutex per lock sidecar path, shared by its current
+    /// users and dropped when the last one leaves.
+    private final class PathLock: Sendable {
+        let mutex = Mutex<Void>(())
+    }
+
+    private static let pathLocks = Mutex<[String: (lock: PathLock, users: Int)]>([:])
+
+    private static func withPathLock<T>(_ path: String, _ body: (PathLock) -> T) -> T {
+        let lock = pathLocks.withLock { locks -> PathLock in
+            let entry = locks[path] ?? (PathLock(), 0)
+            locks[path] = (entry.lock, entry.users + 1)
+            return entry.lock
+        }
+        defer {
+            pathLocks.withLock { locks in
+                guard let entry = locks[path] else { return }
+                locks[path] = entry.users > 1 ? (entry.lock, entry.users - 1) : nil
+            }
+        }
+        return body(lock)
+    }
+
+    private static func lockPath(_ url: URL) -> String {
+        url.appendingPathExtension("lock").standardizedFileURL.path
+    }
+
+    /// Runs `body` holding `url`'s in-process writer lock, as a contending
+    /// writer would (tests).
+    static func holdingProcessLock(at url: URL, _ body: () -> Void) {
+        withPathLock(lockPath(url)) { lock in lock.mutex.withLock { _ in body() } }
+    }
 
     /// Appends `line` (a newline is added when absent) as one whole record.
     /// `lockTimeout` bounds the whole wait, for this process's writers and
@@ -102,20 +133,23 @@ public enum JSONLAppendLog {
             defer { _ = flock(fd, LOCK_UN) }
             return body(url)
         }
-        guard let lockTimeout else {
-            return processLock.withLock { _ in locked(until: nil) }
-        }
-        // One deadline for both locks, so contention in this process does
-        // not stack a fresh timeout per waiting writer.
-        let deadline = ContinuousClock.now.advanced(by: lockTimeout)
-        while true {
-            if let result = processLock.withLockIfAvailable({ _ in locked(until: deadline) }) {
-                return result
+        return withPathLock(lockPath(url)) { lock in
+            guard let lockTimeout else {
+                return lock.mutex.withLock { _ in locked(until: nil) }
             }
-            guard ContinuousClock.now < deadline else {
-                return .failure(.lock(errno: EWOULDBLOCK))
+            // One deadline for both locks, so contention in this process
+            // does not stack a fresh timeout per waiting writer. A zero
+            // timeout is one non-blocking attempt at each.
+            let deadline = ContinuousClock.now.advanced(by: lockTimeout)
+            while true {
+                if let result = lock.mutex.withLockIfAvailable({ _ in locked(until: deadline) }) {
+                    return result
+                }
+                guard ContinuousClock.now < deadline else {
+                    return .failure(.lock(errno: EWOULDBLOCK))
+                }
+                usleep(1_000)
             }
-            usleep(1_000)
         }
     }
 
@@ -145,7 +179,7 @@ public enum JSONLAppendLog {
         return .success(())
     }
 
-    /// Excludes other processes. Callers already hold `processLock`. Returns
+    /// Excludes other processes. Callers already hold the path's mutex. Returns
     /// nil once the lock is held, else the failure with `errno` captured
     /// immediately at the failing `flock`.
     private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> AppendError? {
