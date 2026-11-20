@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVPolicy
 import RVPresentation
+import RVService
 #if os(macOS)
 import RVIsolation
 #endif
@@ -43,6 +44,11 @@ struct DoctorInstallProbes {
     /// Linux: does a systemd user manager answer `systemctl --user`? Nil
     /// off Linux or when not evaluated (tests).
     var systemdUserManagerReachable: Bool? = nil
+    /// macOS: is `dev.rv.judge` loaded in either domain? Nil when launchd
+    /// was not observed (Linux, tests).
+    var judgeLoaded: Bool? = nil
+    /// Does a valid judge bundle sit where rvd looks? Default false (tests).
+    var judgeBundleInstalled: Bool = false
 
     static func live(
         home: HomeDirectory,
@@ -61,6 +67,10 @@ struct DoctorInstallProbes {
             trustManifest: liveTrustManifest(),
             daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
         )
+        let judge = LaunchAgentProbe.observe(
+            label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
+        probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
+        if case .ok = JudgeRuntime.bundleHealth(home: home) { probes.judgeBundleInstalled = true }
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
         probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
