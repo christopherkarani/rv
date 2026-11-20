@@ -171,6 +171,11 @@ struct JudgePoolPortTests {
         #expect(check.message.contains("judge"))
     }
 
+    @Test("doctor: no bundle installed, nothing is judged, so an unreachable pool is not reported")
+    func doctorNoBundleNoWarning() {
+        #expect(DoctorSnapshotBuilder.judgePoolCheck(JudgePoolProbe(bound: true, status: nil), bundleInstalled: false) == nil)
+    }
+
     @Test("doctor: workers, compute units, restarts and routing; degraded is a warning")
     func doctorStatus() throws {
         func status(degradedPrimary: Bool) -> PoolStatus {

@@ -41,7 +41,8 @@ public enum DoctorSnapshotBuilder {
             DoctorCheck(id: .opencode, status: .skipped, message: "T7"),
         ]
         checks.append(judgeCheck(home: home))
-        if let pool = judgePoolCheck(judgePool) { checks.append(pool) }
+        let bundleInstalled = if case .ok = JudgeRuntime.bundleHealth(home: home) { true } else { false }
+        if let pool = judgePoolCheck(judgePool, bundleInstalled: bundleInstalled) { checks.append(pool) }
         if lastError != nil {
             checks.append(DoctorCheck(id: .lastError, status: .warning, message: "see lastError"))
         }
@@ -92,9 +93,13 @@ public enum DoctorSnapshotBuilder {
     /// since every judged call then goes to review; a degraded or
     /// unloadable worker is a warning too. Nil when rvd runs the judge
     /// in-process (no pool to report).
-    static func judgePoolCheck(_ probe: JudgePoolProbe) -> DoctorCheck? {
+    /// Nil when there is no pool to report: none bound (Linux, the CLI), or
+    /// an unreachable pool while no bundle is installed (nothing is judged,
+    /// so the pool is never asked).
+    static func judgePoolCheck(_ probe: JudgePoolProbe, bundleInstalled: Bool = true) -> DoctorCheck? {
         guard probe.bound else { return nil }
         guard let status = probe.status else {
+            guard bundleInstalled else { return nil }
             return DoctorCheck(
                 id: .judgePool, status: .warning,
                 message: "judge pool unreachable or unverified (\(JudgePoolWire.machServiceName)): judged calls go to review; run `rv setup` (a peer-trust manifest needs a `judge` entry)"
