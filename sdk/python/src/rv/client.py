@@ -389,6 +389,10 @@ def runtime_status(socket_path: str | None = None) -> RvRuntimeStatus:
 
 ENSURE_RUNTIME_IDLE_EXIT_SECONDS = 1800
 
+# Set by launchd (XPC_SERVICE_NAME) and systemd (INVOCATION_ID) for the
+# processes they start; rvd reads them to decide whether it is supervised.
+_SUPERVISOR_VARIABLES = frozenset({"INVOCATION_ID", "XPC_SERVICE_NAME"})
+
 
 def ensure_runtime(
     socket_path: str | None = None, idle_exit_seconds: int | None = ENSURE_RUNTIME_IDLE_EXIT_SECONDS
@@ -428,6 +432,9 @@ def ensure_runtime(
         if idle_exit_seconds <= 0:
             raise ValueError("idle_exit_seconds must be positive")
         argv += ["--idle-exit-seconds", str(idle_exit_seconds)]
+    # Nothing supervises this rvd: drop the markers launchd and systemd set,
+    # or it would take itself for supervised and wait out a startup backoff.
+    env = {k: v for k, v in os.environ.items() if k not in _SUPERVISOR_VARIABLES}
     try:
         # Fixed argv, no shell.
         proc = subprocess.Popen(
@@ -436,6 +443,7 @@ def ensure_runtime(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
     except OSError as exc:
         raise RuntimeNotFound(f"cannot start rvd: {exc}") from exc
