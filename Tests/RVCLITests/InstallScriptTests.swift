@@ -1495,7 +1495,7 @@ private func writeSignatureShims(in shim: URL) throws {
               esac
               want="certificate leaf[subject.OU] = \"$team\""
               case "$requirement" in
-                "=anchor apple generic and "*"$want") exit 0 ;;
+                "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and $want") exit 0 ;;
               esac
               echo "$file: test-requirement: code failed to satisfy specified code requirement(s)" >&2
               exit 3
@@ -1706,10 +1706,13 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
             toolLines.contains { $0.hasPrefix("codesign --verify --strict ") && $0.hasSuffix("/\(name)") },
             "\(name) not verified"
         )
+        // The whole requirement, then the path: no clause may follow the team.
+        let requirementCall =
+            "codesign --verify --strict -R =\(developerIDRequirementPrefix)certificate leaf[subject.OU] = \"TEAMRV1234\" "
         #expect(
             toolLines.contains {
-                $0.hasPrefix("codesign --verify --strict -R =\(developerIDRequirementPrefix)")
-                    && $0.contains("certificate leaf[subject.OU] = \"TEAMRV1234\" ")
+                $0.hasPrefix(requirementCall)
+                    && $0.dropFirst(requirementCall.count).hasPrefix("/")
                     && $0.hasSuffix("/\(name)")
             },
             "\(name) not checked against the pinned team's Developer ID requirement"
