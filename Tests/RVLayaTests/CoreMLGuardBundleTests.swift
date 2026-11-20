@@ -1,4 +1,5 @@
 #if canImport(CoreML)
+import CoreML
 import Foundation
 import Testing
 @testable import RVLaya
@@ -12,6 +13,27 @@ private func guardBundleURL() -> URL? {
 /// Set RV_FT_BUNDLE to run; skipped otherwise.
 @Suite("Core ML guard (CoreML, bundle-gated)", .enabled(if: guardBundleURL() != nil))
 struct CoreMLGuardBundleTests {
+    /// Pins why rvd does not set TMPDIR: Core ML compiles into the per-user
+    /// temp dir from `confstr`, whatever TMPDIR says. If this ever fails,
+    /// Core ML honours TMPDIR and rvd can point it at a protected dir.
+    @Test("Core ML compiles into the per-user temp dir, ignoring TMPDIR")
+    func compileIgnoresTMPDIR() throws {
+        let bundle = try #require(guardBundleURL())
+        let state = try Self.tempState()
+        defer { try? FileManager.default.removeItem(at: state) }
+        let previous = ProcessInfo.processInfo.environment["TMPDIR"]
+        setenv("TMPDIR", state.path + "/", 1)
+        defer { if let previous { setenv("TMPDIR", previous, 1) } else { unsetenv("TMPDIR") } }
+        let compiled = try MLModel.compileModel(at: bundle.appendingPathComponent("model.mlpackage"))
+        defer { try? FileManager.default.removeItem(at: compiled) }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        try #require(confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count) > 0)
+        let userTemp = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+        let parent = compiled.deletingLastPathComponent().resolvingSymlinksInPath().path
+        #expect(parent == userTemp)
+        #expect(parent != state.path)
+    }
+
     @Test("a tripped guard loads CPU only and the judge still blocks")
     func cpuOnlyJudgeStillScores() throws {
         let bundle = try #require(guardBundleURL())
