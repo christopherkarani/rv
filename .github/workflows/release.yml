@@ -157,7 +157,7 @@ jobs:
       - name: Load commands are macOS 15
         run: |
           set -euo pipefail
-          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host; do
+          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host stage/rv-judge; do
             chmod 755 "$bin"
             show="$(vtool -show-build "$bin")"
             printf '%s\n' "$show" | grep -q 'minos 15.0' || {
