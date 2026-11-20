@@ -637,8 +637,14 @@ public enum JudgeRuntime {
     /// How long a judge-log append waits for another writer's lock.
     static let logLockTimeout: Duration = .milliseconds(200)
 
-    /// Appends one row to `<config>/judge-log.jsonl`. Best effort.
-    static func appendLog(_ row: GatedEffect.JudgeLogRow, home: HomeDirectory) {
+    /// Appends one row to `<config>/judge-log.jsonl`. Best effort: a row
+    /// that does not land is reported through `dropLog`, and the verdict
+    /// stands.
+    static func appendLog(
+        _ row: GatedEffect.JudgeLogRow,
+        home: HomeDirectory,
+        dropLog: AuditDropLog = .shared
+    ) {
         let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
         var object: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: row.at),
@@ -670,7 +676,11 @@ public enum JudgeRuntime {
         // O_APPEND write keeps every row whole across processes, and never
         // replaces a file another writer just created. Best effort, so a
         // lock another process holds costs at most `logLockTimeout`.
-        try? JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+        do {
+            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+        } catch {
+            dropLog.report(.judgeLog, file: file, consequence: "the verdict stood without its judge-log record")
+        }
     }
 }
 
