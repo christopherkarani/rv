@@ -104,6 +104,15 @@ What it does, in order:
    install intact.
 5. Runs `rv setup` (or `rv setup --observe`).
 
+On macOS the installer also checks that every downloaded file carries
+rv's Developer ID signature and asks Gatekeeper (`spctl`) whether Apple
+notarized each binary. A bare binary cannot carry a stapled notarization
+ticket, so Gatekeeper looks the ticket up online: a Mac that cannot reach
+Apple (offline, or behind a proxy that blocks Apple's notarization
+service) is refused with `Gatekeeper does not accept <file> as notarized`.
+`RV_INSTALL_ALLOW_UNSIGNED=1` does not skip this check; install while the
+Mac can reach Apple.
+
 Make sure `~/.local/bin` is on your `PATH`.
 
 ## What `rv setup` does and asks

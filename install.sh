@@ -916,7 +916,12 @@ verify_release_signatures() {
         exit 1
       fi
     fi
-    if [ "$team_line" != "TeamIdentifier=$team" ]; then
+    # The team is the signing certificate's, checked by the Security
+    # framework against a code requirement: an Apple anchor, the Developer ID
+    # intermediate, a Developer ID Application leaf, and the pinned team as
+    # the leaf's OU. Parsed -dvv text is never the team.
+    # shellcheck disable=SC2086 # verify_flags is a fixed flag set
+    if ! "$codesign" $verify_flags -R "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$team\"" "$file" >/dev/null 2>&1; then
       echo "rv: refusing to install: $name is not signed by team $team" >&2
       exit 1
     fi
