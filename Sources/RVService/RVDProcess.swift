@@ -46,14 +46,19 @@ public enum RVDProcess {
         // XPC is the macOS production transport; the Unix socket is
         // secondary. A socket that cannot start (e.g. a refused
         // `~/.config`) is reported and skipped, never a launch failure that
-        // would block every hook on each launchd activation.
+        // would block every hook on each launchd activation. It is bound
+        // before the backoff wait and accepts after it; XPC needs no such
+        // step, since launchd holds the Mach service and queues messages
+        // until the listener exists (hooks time out, they never see INVALID).
         do {
-            try listeners.unix.start()
+            try listeners.unix.bind()
         } catch {
             try? FileHandle.standardError.write(contentsOf:
                 Data(RVDLogFile.line("rvd: unix socket unavailable (\(error)); continuing with XPC only").utf8)
             )
         }
+        RVDLifecycle.waitOutBackoff(backoff)
+        listeners.unix.startAccepting()
         listeners.xpc.start()
         watchdog.start()
         RVDLifecycle.serving(backoff)
@@ -122,7 +127,11 @@ public enum RVDProcess {
         )
         slot.listener = listener
         // The socket is Linux's only transport: a start failure is fatal.
-        try listener.start()
+        // Bound before the backoff wait, accepting after it, so hooks see a
+        // slow rvd meanwhile, never a missing socket.
+        try listener.bind()
+        RVDLifecycle.waitOutBackoff(backoff)
+        listener.startAccepting()
         watchdog.start()
         RVDLifecycle.serving(backoff)
         RunLoop.main.run()
@@ -158,26 +167,33 @@ enum RVDLifecycle {
         )
     }
 
-    /// Applies `StartupBackoff` before rvd listens: records this start and
-    /// waits out the delay the previous early exits earned.
+    /// Records this start (`StartupBackoff`) and returns the plan. Only a
+    /// supervised rvd: one run by hand, by the SDK or by `rv` itself
+    /// (DirectRvd) neither keeps a record nor waits.
     static func beginStartup(
         environment: [String: String],
-        store: StartupBackoffStore? = nil,
-        sleep: (Duration) -> Void = { Thread.sleep(forTimeInterval: Double($0.components.seconds)) }
+        store: StartupBackoffStore? = nil
     ) -> StartupBackoff.Plan {
-        guard let home = RVDLaunch.validatedHome(environment: environment) else {
-            return StartupBackoff.plan(previous: nil)
-        }
+        guard StartupBackoff.isSupervised(environment: environment),
+            let home = RVDLaunch.validatedHome(environment: environment)
+        else { return StartupBackoff.untracked }
         let store = store ?? .live(home: home)
         let plan = StartupBackoff.plan(previous: store.load())
         // Saved before the wait: a run that dies while waiting still counts.
         store.save(plan.record)
-        if plan.delay > .zero {
-            log("rvd: \(plan.record.earlyExits) early exits in a row; waiting "
-                + "\(plan.delay.components.seconds)s before starting (rv service restart skips the wait)")
-            sleep(plan.delay)
-        }
         return plan
+    }
+
+    /// Waits out the delay earlier early exits earned. Called with the
+    /// listeners bound but not yet accepting.
+    static func waitOutBackoff(
+        _ plan: StartupBackoff.Plan,
+        sleep: (Duration) -> Void = { Thread.sleep(forTimeInterval: Double($0.components.seconds)) }
+    ) {
+        guard plan.delay > .zero else { return }
+        log("rvd: \(plan.record.earlyExits) early exits in a row; waiting "
+            + "\(plan.delay.components.seconds)s before serving (rv service restart skips the wait)")
+        sleep(plan.delay)
     }
 
     /// Once listening: prewarm the judge unless early exits say it may be
@@ -190,10 +206,12 @@ enum RVDLifecycle {
                 + "the judge loads on the first judged request")
         }
         guard let home = RVDLaunch.validatedHome(environment: ProcessInfo.processInfo.environment) else { return }
-        let store = StartupBackoffStore.live(home: home)
-        let window = Int(StartupBackoff.survivalWindow.components.seconds)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(window)) {
-            store.save(.survived)
+        if plan.tracked {
+            let store = StartupBackoffStore.live(home: home)
+            let window = Int(StartupBackoff.survivalWindow.components.seconds)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(window)) {
+                store.save(.survived)
+            }
         }
         scheduleLogRotation(path: RVDLogFile.path(home: home))
     }

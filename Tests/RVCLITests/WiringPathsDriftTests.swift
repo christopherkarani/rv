@@ -1,6 +1,7 @@
 import Testing
 import RVDomain
 import RVPolicy
+import RVService
 @testable import RVCLI
 
 /// Every file `rv setup` writes to wire rv in must be one the guard
@@ -25,6 +26,14 @@ struct WiringPathsDriftTests {
             layout.claudeAgentSkill, layout.codexAgentSkill, layout.openCodeAgentSkill,
         ]
         paths += HookHost.setupSlotOrder.compactMap(layout.agentSkill(for:))
+        // rvd's startup backoff record and its mkstemp temp files, on both
+        // platforms' log directories.
+        let backoff = StartupBackoffStore.live(home: home.rawValue).path
+        paths += [backoff, backoff + ".a1B2c3.tmp"]
+        for logs in ["/Library/Logs/rv", "/.local/state/rv"] {
+            paths += [home.rawValue + logs + "/rvd-backoff/rvd-starts.json",
+                      home.rawValue + logs + "/rvd-backoff/rvd-starts.json.a1B2c3.tmp"]
+        }
         for path in paths {
             #expect(RVWiringPaths.matches(path, home: home.rawValue), "\(path)")
         }

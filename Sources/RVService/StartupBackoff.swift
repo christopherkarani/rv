@@ -15,8 +15,11 @@ import Foundation
 ///
 /// A run is early when it never reached `survivalWindow`: each start writes
 /// `running`, and a run that stays up that long writes `survived`. A start
-/// that finds `running` knows the previous run died early. The delay happens
-/// before rvd listens; once it serves, nothing here refuses a request.
+/// that finds `running` knows the previous run died early. rvd binds its
+/// listeners before the delay and accepts after it, so a hook meanwhile sees
+/// a slow rvd (ask/deny), never an absent one; once it serves, nothing here
+/// refuses a request. Only a supervised rvd (`isSupervised`) keeps a record
+/// or waits: one started by hand, by the SDK or by `rv` itself never does.
 public enum StartupBackoff {
     /// A run that stays up this long resets the count.
     public static let survivalWindow: Duration = .seconds(30)
@@ -48,7 +51,12 @@ public enum StartupBackoff {
         public var prewarmJudge: Bool
         /// What to persist before serving.
         public var record: Record
+        /// False for an unsupervised rvd: no record is read or written.
+        public var tracked: Bool = true
     }
+
+    /// An unsupervised rvd: no wait, prewarm, no record.
+    public static let untracked = Plan(delay: .zero, prewarmJudge: true, record: .survived, tracked: false)
 
     /// Pure: what this start does, given the record the last start left.
     /// No record (first start, unreadable file) means no backoff.
@@ -79,8 +87,8 @@ public enum StartupBackoff {
 
     /// True when a service manager started this rvd (launchd sets
     /// `XPC_SERVICE_NAME` to the job label; systemd sets `INVOCATION_ID`).
-    /// Only decides whether a doomed start pauses before exiting; it never
-    /// changes what rvd allows.
+    /// Decides whether rvd keeps a backoff record and waits, and whether a
+    /// doomed start pauses before exiting; it never changes what rvd allows.
     public static func isSupervised(environment: [String: String]) -> Bool {
         if let label = environment["XPC_SERVICE_NAME"], label == RVService.machServiceName {
             return true
@@ -89,29 +97,39 @@ public enum StartupBackoff {
     }
 }
 
-/// The record beside rvd's log, in rv's owner-only log directory.
+/// The record in its own owner-only directory beside rvd's log
+/// (`directoryName`). The directory is an `RVWiringPaths` entry: a planted
+/// record would hold rvd in its wait, so agents may not write there.
 public struct StartupBackoffStore: Sendable {
     public let path: String
     static let maxBytes = 4096
+    public static let directoryName = "rvd-backoff"
+    public static let fileName = "rvd-starts.json"
 
     public init(path: String) {
         self.path = path
     }
 
     public static func live(home: String) -> StartupBackoffStore {
-        let directory = (RVDLogFile.path(home: home) as NSString).deletingLastPathComponent
-        return StartupBackoffStore(path: directory + "/rvd-starts.json")
+        let logs = (RVDLogFile.path(home: home) as NSString).deletingLastPathComponent
+        return StartupBackoffStore(path: logs + "/" + directoryName + "/" + fileName)
     }
 
     /// Nil when absent, not a small regular file of this user, or not a
-    /// record: rvd then starts without backoff.
+    /// record: rvd then starts without backoff. Opened without following a
+    /// symlink and without blocking, so a FIFO swapped in cannot hang rvd.
     public func load() -> StartupBackoff.Record? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
         var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
-            Int(info.st_size) <= Self.maxBytes,
-            let data = FileManager.default.contents(atPath: path)
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
+            Int(info.st_size) <= Self.maxBytes
         else { return nil }
-        return try? JSONDecoder().decode(StartupBackoff.Record.self, from: data)
+        var buffer = [UInt8](repeating: 0, count: Self.maxBytes + 1)
+        let count = read(fd, &buffer, buffer.count)
+        guard count >= 0, count <= Self.maxBytes else { return nil }
+        return try? JSONDecoder().decode(StartupBackoff.Record.self, from: Data(buffer[0..<count]))
     }
 
     /// Forgets the early exits: setup and the service restart/start
@@ -121,17 +139,20 @@ public struct StartupBackoffStore: Sendable {
     }
 
     /// Best effort: a record that cannot be written only loses the backoff.
-    /// Written to a temp file and renamed, so a crash never leaves half a
-    /// record; the directory is created owner-only like the log's.
+    /// Written to a fresh `mkstemp` file (never an existing one, so a FIFO
+    /// or symlink planted at a guessable name cannot hang or redirect it)
+    /// and renamed, so a crash never leaves half a record. The directory is
+    /// created owner-only like the log's.
     public func save(_ record: StartupBackoff.Record) {
         let directory = (path as NSString).deletingLastPathComponent
         guard (try? FileManager.default.createDirectory(
             atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil,
             let data = try? JSONEncoder().encode(record)
         else { return }
-        let temp = path + ".\(getpid()).tmp"
-        let fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        var template = Array((path + ".XXXXXX.tmp").utf8CString)
+        let fd = template.withUnsafeMutableBufferPointer { mkstemps($0.baseAddress!, 4) }
         guard fd >= 0 else { return }
+        let temp = String(cString: template)
         let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
         close(fd)
         guard written == data.count, rename(temp, path) == 0 else {

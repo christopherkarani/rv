@@ -1,4 +1,10 @@
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 import Foundation
+import RVDomain
 import Synchronization
 import Testing
 @testable import RVService
@@ -79,36 +85,75 @@ struct StartupBackoffTests {
         }
     }
 
-    /// The record is written before the wait, so a run killed while it
-    /// waits still counts; the wait itself uses the injected sleep.
-    @Test func beginStartupRecordsThenWaits() throws {
+    /// A supervised start records itself before any wait, so a run killed
+    /// while it waits still counts; the wait uses the injected sleep.
+    @Test(arguments: [["XPC_SERVICE_NAME": "dev.rv.evaluate"], ["INVOCATION_ID": "abc"]])
+    func supervisedStartRecordsThenWaits(supervisor: [String: String]) throws {
         try withStore { store in
             store.save(StartupBackoff.Record(earlyExits: 1, running: true))
-            let slept = Mutex<[Duration]>([])
-            let plan = RVDLifecycle.beginStartup(
-                environment: ["HOME": NSTemporaryDirectory()],
-                store: store,
-                sleep: { duration in
-                    #expect(store.load() == StartupBackoff.Record(earlyExits: 2, running: true))
-                    slept.withLock { $0.append(duration) }
-                }
-            )
+            let environment = supervisor.merging(["HOME": NSTemporaryDirectory()]) { $1 }
+            let plan = RVDLifecycle.beginStartup(environment: environment, store: store)
+            #expect(store.load() == StartupBackoff.Record(earlyExits: 2, running: true))
             #expect(plan.delay == .seconds(5))
             #expect(plan.prewarmJudge == false)
+            #expect(plan.tracked)
+            let slept = Mutex<[Duration]>([])
+            RVDLifecycle.waitOutBackoff(plan, sleep: { duration in slept.withLock { $0.append(duration) } })
             #expect(slept.withLock { $0 } == [.seconds(5)])
         }
     }
 
-    @Test func beginStartupWithoutHomeNeverWaits() {
-        let plan = RVDLifecycle.beginStartup(environment: [:], sleep: { _ in Issue.record("slept") })
-        #expect(plan.delay == .zero)
+    /// rvd run by hand, by the SDK's ensure_runtime or by rv itself
+    /// (DirectRvd) has no supervisor: it never waits, always prewarms, and
+    /// neither reads nor writes the record, whatever the record says.
+    @Test(arguments: [[:], ["XPC_SERVICE_NAME": "0"], ["INVOCATION_ID": ""]])
+    func unsupervisedStartNeverWaitsOrRecords(environment: [String: String]) throws {
+        try withStore { store in
+            let looping = StartupBackoff.Record(earlyExits: 9, running: true)
+            store.save(looping)
+            let plan = RVDLifecycle.beginStartup(
+                environment: environment.merging(["HOME": NSTemporaryDirectory()]) { $1 }, store: store)
+            #expect(plan == StartupBackoff.untracked)
+            #expect(store.load() == looping)
+            RVDLifecycle.waitOutBackoff(plan, sleep: { _ in Issue.record("slept") })
+        }
     }
 
-    @Test func liveStoreSitsBesideTheLog() {
+    @Test func beginStartupWithoutHomeNeverWaits() {
+        let plan = RVDLifecycle.beginStartup(environment: ["INVOCATION_ID": "abc"])
+        #expect(plan == StartupBackoff.untracked)
+    }
+
+    /// A FIFO planted where the record or an old fixed temp name would be
+    /// must not hang rvd: load opens non-blocking and refuses it, save
+    /// writes a fresh mkstemp file and renames over it.
+    @Test func plantedFIFOsNeverHangLoadOrSave() throws {
+        try withStore { store in
+            #expect(mkfifo(store.path, 0o600) == 0)
+            #expect(mkfifo(store.path + ".\(getpid()).tmp", 0o600) == 0)
+            let done = DispatchSemaphore(value: 0)
+            let loaded = Mutex<StartupBackoff.Record??>(nil)
+            // A dedicated thread: under a full parallel run the dispatch pool can
+            // be busy for longer than the bound.
+            Thread {
+                loaded.withLock { $0 = .some(store.load()) }
+                store.save(StartupBackoff.Record(earlyExits: 4, running: true))
+                done.signal()
+            }.start()
+            #expect(done.wait(timeout: .now() + 10) == .success, "load or save blocked on a FIFO")
+            #expect(loaded.withLock { $0 } == .some(nil))
+            #expect(store.load() == StartupBackoff.Record(earlyExits: 4, running: true))
+        }
+    }
+
+    /// Its own directory beside the log, which RVWiringPaths protects.
+    @Test func liveStoreSitsInItsOwnDirectoryBesideTheLog() {
         let store = StartupBackoffStore.live(home: "/h")
-        #expect((store.path as NSString).deletingLastPathComponent
-            == (RVDLogFile.path(home: "/h") as NSString).deletingLastPathComponent)
-        #expect(store.path.hasSuffix("/rvd-starts.json"))
+        let logs = (RVDLogFile.path(home: "/h") as NSString).deletingLastPathComponent
+        #expect(store.path == logs + "/rvd-backoff/rvd-starts.json")
+        #expect(RVWiringPaths.matches(store.path, home: "/h"))
+        #expect(RVWiringPaths.matches(logs + "/rvd.log", home: "/h") == false)
+        #expect(RVWiringPaths.matches(logs + "/rvd-backoff/rvd-starts.json.a1B2c3.tmp", home: "/h"))
     }
 }
 
