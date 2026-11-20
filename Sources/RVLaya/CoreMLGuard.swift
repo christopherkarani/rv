@@ -52,8 +52,9 @@ extension CoreMLDiskSpaceError: CoreMLRefusal {}
 /// The compiled model could not be copied into, or verified inside, rv's
 /// protected cache, so it is not loaded. Core ML compiles into the per-user
 /// temp dir, which any process of this user can write; the store loads only
-/// its own hashed copy, never the output where it lands. Residual: a process
-/// that replaces the whole output before the copy is not detected.
+/// its own hashed copy, never the output where it lands. Residual: while
+/// Core ML is compiling, a same-user process can rewrite the output before
+/// rv copies it, and that is not detected.
 public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
     public let detail: String
 

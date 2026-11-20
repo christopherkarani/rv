@@ -30,9 +30,10 @@ struct CompiledFileRecord: Codable, Equatable, Sendable {
 ///   sibling under the root, hashed there, then renamed into place; the
 ///   manifest is written last and is the commit record. A descriptor held
 ///   open, or a hard link made, inside the temp output cannot reach the
-///   copy. Residual: a same-user process that replaces the whole temp
-///   output between the compile returning and the copy gets its model
-///   hashed and installed.
+///   copy. Residual: the output sits in the per-user temp dir for the whole
+///   compile, so a same-user process that rewrites or replaces it before
+///   the copy gets its model hashed and installed; an uncaged same-user
+///   process can always reach it.
 /// - Verified: the manifest records every file's size and SHA-256 and is
 ///   checked before every load. A missing or mismatched manifest (a crash
 ///   or full disk mid-install, or a planted or edited model) discards the
