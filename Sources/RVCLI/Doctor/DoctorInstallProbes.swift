@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVPolicy
+import RVService
 import RVPresentation
 #if os(macOS)
 import RVIsolation
@@ -238,7 +239,26 @@ enum DoctorInstallChecks {
             launchdDuplicate(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
             workspaceRoles(probes.workspaceRoles),
+            startupBackoff(paths: paths),
         ].compactMap { $0 } + roleTrust(probes.roleTrust)
+    }
+
+    /// rvd's own crash-loop record says it is (or was just) holding off: a
+    /// down rvd may be waiting out its backoff, not gone.
+    static func startupBackoff(paths: OwnedPaths) -> DoctorProblem? {
+        let store = StartupBackoffStore.live(home: paths.home.rawValue)
+        guard let record = store.load(), record.running else { return nil }
+        let plan = StartupBackoff.plan(previous: StartupBackoff.Record(earlyExits: record.earlyExits - 1, running: true))
+        guard plan.delay > .zero else { return nil }
+        return DoctorProblem(
+            id: "rvd-startup-backoff",
+            severity: .warn,
+            summary: "rvd stopped within \(StartupBackoff.survivalWindow.components.seconds) s of starting "
+                + "\(record.earlyExits) times in a row, so it waits up to "
+                + "\(plan.delay.components.seconds) s before it serves; "
+                + "\(RVDLogFile.path(home: paths.home.rawValue)) says why",
+            fix: "fix the cause, then \(DoctorRun.restartCommand) (it skips the wait)"
+        )
     }
 
     /// One failing row per hooked host whose hook interpreter does not run:

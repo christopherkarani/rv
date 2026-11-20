@@ -167,6 +167,28 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
     }
 }
 
+/// rvd's crash-loop record: a down rvd that is waiting out its backoff is
+/// named as such, with the log to read and the restart that skips it.
+@Test func doctorInstall_rvdInStartupBackoff_warnsWithTheLogAndRestart() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let store = StartupBackoffStore.live(home: fixture.paths.home.rawValue)
+        store.save(StartupBackoff.Record(earlyExits: 1, running: true))
+        #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false)
+
+        store.save(StartupBackoff.Record(earlyExits: 3, running: true))
+        let problem = try #require(problems(fixture).first { $0.id == "rvd-startup-backoff" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("3 times in a row"))
+        #expect(problem.summary.contains("up to 10 s"))
+        #expect(problem.summary.contains(RVDLogFile.path(home: fixture.paths.home.rawValue)))
+        #expect(problem.fix.contains("rv service restart"))
+
+        store.save(.survived)
+        #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false)
+    }
+}
+
 @Test func doctorInstall_alwaysOnShapes_areRecognised() throws {
     let rvd = "/h/.local/bin/rvd"
     func plist(_ keepAlive: Any, runAtLoad: Bool = true) throws -> String {
