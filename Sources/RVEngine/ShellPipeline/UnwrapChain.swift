@@ -80,7 +80,24 @@ func chainSegmentView(of command: ShellCommand) -> String {
 /// `rm -r ~`), re-split because the inner text may itself chain. Segments
 /// that do not peel cleanly come back unchanged.
 func peeledSegments(_ segment: String) -> [String] {
-    let outcome = ShellPipeline.unwrap(
+    peeledSegments(segment, outcome: segmentUnwrap(segment))
+}
+
+/// `peeledSegments`, plus the commands an `xargs` runs where the unwrap
+/// stops at it (an inner verb that writes, nesting past `maxNestedXargs`).
+/// xargs still runs them, so a reader that must see every program
+/// (`git -c core.fsmonitor=…`, an alias) reads them lexically: the words
+/// after each `xargs` and its options, also inside a quoted `-c` script.
+func peeledSegmentsReadingXargs(_ segment: String) -> [String] {
+    let outcome = segmentUnwrap(segment)
+    guard case .limited(let layers) = outcome, layers.contains(.xargs) else {
+        return peeledSegments(segment, outcome: outcome)
+    }
+    return [segment] + xargsInnerCommands(segment, nesting: 0)
+}
+
+private func segmentUnwrap(_ segment: String) -> UnwrapOutcome {
+    ShellPipeline.unwrap(
         segment,
         workingDirectory: nil,
         budget: .default,
@@ -88,10 +105,39 @@ func peeledSegments(_ segment: String) -> [String] {
         layers: [],
         splitChains: false
     )
+}
+
+private func peeledSegments(_ segment: String, outcome: UnwrapOutcome) -> [String] {
     guard case .complete(let unwrapped) = outcome, unwrapped.layers.isEmpty == false,
         unwrapped.workingDirectory == nil
     else {
         return [segment]
     }
     return splitSegments(unwrapped.command.rawValue)
+}
+
+/// Quoted words read as scripts (`bash -c "… xargs …"`), at most this deep.
+private let maxXargsScriptNesting = 2
+
+private func xargsInnerCommands(_ text: String, nesting: Int) -> [String] {
+    var inner: [String] = []
+    for segment in splitSegments(text) {
+        let tokens = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }
+        let words = tokens.map(\.lexeme)
+        // Past the cap the unwrap is limited anyway; reading the first
+        // xargs words keeps this linear in the segment.
+        let launchers = words.indices.lazy.filter { isXargsName(words[$0]) }.prefix(maxNestedXargs + 1)
+        for index in launchers {
+            // Options it cannot walk leave no program to read; the unwrap
+            // already limited the segment, which enforce denies.
+            guard let start = parseXargsOptions(Array(words[(index + 1)...]))?.programStart else { continue }
+            inner.append(contentsOf: peeledSegments(renderCommand(Array(tokens[(index + 1 + start)...]))))
+        }
+        if nesting < maxXargsScriptNesting {
+            for word in words where word.contains(where: \.isWhitespace) {
+                inner.append(contentsOf: xargsInnerCommands(word, nesting: nesting + 1))
+            }
+        }
+    }
+    return inner
 }

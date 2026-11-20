@@ -238,7 +238,7 @@ private func clusterSetsCount(_ word: String) -> Bool {
     return false
 }
 
-private struct ParsedXargs {
+struct ParsedXargs {
     /// Index of the program word; nil when xargs runs its default (echo).
     var programStart: Int?
     var replaceStrings: Set<String> = []
@@ -251,7 +251,7 @@ private struct ParsedXargs {
 /// step is not exact: an unknown or abbreviated option, an unknown cluster
 /// letter, a missing value, a value that looks like an option, or `-` in
 /// program position. Callers fail closed on nil.
-private func parseXargsOptions(_ words: [String]) -> ParsedXargs? {
+func parseXargsOptions(_ words: [String]) -> ParsedXargs? {
     var parsed = ParsedXargs()
     var setsCount = false
     var index = 0

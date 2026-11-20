@@ -35,6 +35,62 @@ struct ObserveFloorBoundsTests {
         #expect(result.decision != .allow)
     }
 
+    /// The unwrap stops at an `xargs` whose inner verb writes or whose
+    /// nesting passes the cap, but xargs still runs that inner command:
+    /// its git config must be read as it is for `xargs git … status`.
+    @Test("observe host: git config behind an xargs the unwrap stops at is held", arguments: [
+        "echo . | xargs git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
+        "echo . | xargs git -c core.fsmonitor='./x.sh' commit",
+        "echo . | xargs -n1 sudo git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
+        "bash -c \"xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs\"",
+        "echo . | xargs xargs xargs git -c alias.s='!pkill rvd' s",
+    ])
+    func gitConfigBehindLimitedXargsHeld(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision != .allow, "\(command)")
+    }
+
+    /// The read-through takes the first few launchers and two script
+    /// levels, so a long line stays linear.
+    @Test("observe host: a long xargs line the unwrap stops at is read in bounded time")
+    func longLimitedXargsLineBounded() async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let words = Array(repeating: "xargs 'a b' \"xargs 'c d'\"", count: 3000).joined(separator: " ")
+        let command = "echo . | xargs rm " + words
+        let clock = ContinuousClock()
+        let start = clock.now
+        _ = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        let elapsed = clock.now - start
+        #expect(elapsed < Self.wallClockBound, "\(elapsed)")
+    }
+
+    @Test("observe host: an everyday xargs write is still recorded, not held", arguments: [
+        "find . -name '*.o' | xargs rm",
+        "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
+        "echo a b | xargs git add",
+    ])
+    func everydayLimitedXargsAllowed(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .allow, "\(command)")
+    }
+
     @Test("lifecycle floor: a deep xargs chain fails closed")
     func deepXargsChainFailsClosed() {
         let command = ShellCommand(rawValue: String(repeating: "xargs ", count: 600) + "true")

@@ -22,6 +22,23 @@ struct RVDStopGuardBoundsTests {
         #expect(stops == true)
     }
 
+    /// A wrapper between each `xargs` once restarted every nesting count.
+    @Test("stop guard and unwrap: an xargs chain through wrappers is bounded on a 512 KB stack", arguments: [
+        "xargs sudo ", "xargs nice ", "xargs env ", "xargs timeout 5 ", "xargs -n1 ",
+    ])
+    func wrappedXargsChainBounded(link: String) {
+        let raw = String(repeating: link, count: 600) + "pkill rvd"
+        let stops = onSmallStack { RVDStopGuard.stopsRVD(raw, rvdPIDs: { [] }) }
+        #expect(stops, "\(link)")
+        let limited = onSmallStack {
+            if case .limited = ShellPipeline.unwrap(raw, workingDirectory: nil, budget: .default, depth: 0, layers: []) {
+                return true
+            }
+            return false
+        }
+        #expect(limited, "\(link)")
+    }
+
     @Test("stop guard: a short xargs chain is still read through", arguments: [
         ("xargs xargs pkill rvd", true),
         ("xargs -n1 xargs -I{} kill -1", true),
