@@ -37,10 +37,9 @@ struct GatedEvaluateExemptionAuditTests {
         let workspace = try auditRepoWorkspace(home: home, allowPaths: [".env"])
         let configDir = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveBlessPaths(
-            [".env"],
-            to: configDir.appendingPathComponent("config.json")
-        )
+        // rv has no writer for `secret.bless_paths`; the owner edits it.
+        try Data(#"{"secret":{"bless_paths":[".env"]}}"#.utf8)
+            .write(to: configDir.appendingPathComponent("config.json"))
         let result = GatedEvaluate().runFile(
             FileToolAction(
                 kind: .read,

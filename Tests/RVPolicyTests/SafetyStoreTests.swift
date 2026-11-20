@@ -41,6 +41,27 @@ struct SafetyStoreTests {
         #expect(analytics?["enabled"] as? Bool == false)
     }
 
+    /// A prior `config.json` (or `safety` value) of the wrong shape is
+    /// refused, never replaced by `{}`: replacing it would drop whatever
+    /// the owner keeps there.
+    @Test(arguments: [
+        "{not json",
+        #"[1, 2]"#,
+        #""strict""#,
+        #"{"safety":"strict","guard":{"mode":"enforce"}}"#,
+        #"{"safety":["strict"]}"#,
+        #"{"safety":null}"#,
+    ])
+    func saveMachine_refusesAWrongShapedPrior(json: String) throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let store = SafetyStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: store.configFile)
+        #expect(throws: OwnerConfigWriteError.unreadable) { try store.saveMachine(.strict) }
+        #expect(try String(contentsOf: store.configFile, encoding: .utf8) == json)
+    }
+
     @Test func machinePolicyDocument_raisesEffectiveLevel() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }

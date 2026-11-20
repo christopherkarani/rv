@@ -206,8 +206,8 @@ struct PolicyWorkspaceTests {
         }
         let config = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveMachineConfig(
-            ["/tmp/from-config.env"],
+        try SecretConfigFixture.write(
+            allowPaths: ["/tmp/from-config.env"],
             to: config.appendingPathComponent("config.json")
         )
         try SafetyStore(configDirectory: config).saveMachine(.strict)
