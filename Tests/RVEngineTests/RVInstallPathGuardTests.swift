@@ -152,6 +152,46 @@ struct RVInstallPathGuardTests {
         "code ~/.local/bin",
     ]
 
+    // rvd's Core ML caches: a planted e5rt bundle would be what Core ML runs
+    // as the judge. Expected false positives (held for review, never
+    // allowed): clearing all of `~/Library/Caches` (`rm -rf
+    // ~/Library/Caches`, `~/Library/Caches/*`, `rv*` globs there) and
+    // `mv`/`cp` of the whole Caches dir, and copying out of rvd's cache
+    // (any operand of a destructive program counts, as for `~/.local/bin`).
+    static let touchingCoreMLCaches: [String] = [
+        "rm -rf ~/Library/Caches/rvd",
+        "rm -rf ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache",
+        "cp -R /tmp/evil.bundle ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/x",
+        "mv /tmp/x $HOME/Library/Caches/rvd/",
+        "ln -s /tmp/evil ~/Library/Caches/rvd",
+        "echo x > ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/manifest",
+        "rm -rf ~/Library/Caches/rv-laya",
+        "cp -R evil.mlmodelc ~/Library/Caches/rv-laya/a-b.mlmodelc",
+        "cd ~/Library/Caches && rm -rf rvd",
+        // the expected false positives
+        "rm -rf ~/Library/Caches",
+        "rm -rf ~/Library/Caches/*",
+        "rm -rf ~/Library/Caches/rv*",
+        "cp -R ~/Library/Caches/rvd /tmp/rvd-cache-copy",
+    ]
+
+    static let notTouchingCoreMLCaches: [String] = [
+        "ls ~/Library/Caches/rvd",
+        "du -sh ~/Library/Caches/rvd",
+        "rm -rf ~/Library/Caches/rvdx",
+        "rm -rf ~/Library/Caches/com.apple.Safari",
+    ]
+
+    @Test("rvd's Core ML caches are guarded", arguments: touchingCoreMLCaches)
+    func coreMLCachesFlagged(command: String) {
+        #expect(Self.touches(command), "\(command)")
+    }
+
+    @Test("reads and neighbours of rvd's Core ML caches are not", arguments: notTouchingCoreMLCaches)
+    func coreMLCacheNeighboursPass(command: String) {
+        #expect(Self.touches(command) == false, "\(command)")
+    }
+
     @Test("writes, moves and removes of rv's install are flagged", arguments: touching + touchingR2)
     func touchingFlagged(command: String) {
         #expect(Self.touches(command), "\(command)")
