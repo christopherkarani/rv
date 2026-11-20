@@ -14,7 +14,12 @@ struct PendingApprovalStoreScalingTests {
     private static let now = Date(timeIntervalSince1970: 1_700_000_000)
     private static let identity = ApprovalIdentity(session: SessionID(validating: "sess-1")!, agent: .pi)
 
-    private static func request(_ index: Int, id: String? = nil) -> PendingApprovalRequest {
+    private static func request(
+        _ index: Int,
+        id: String? = nil,
+        timeoutPolicy: ApprovalTimeoutPolicy = .keepWaiting,
+        ttl: TimeInterval = 15 * 60
+    ) -> PendingApprovalRequest {
         PendingApprovalRequest(
             id: ApprovalID(rawValue: id ?? "ask-\(index)"),
             identity: identity,
@@ -30,8 +35,8 @@ struct PendingApprovalStoreScalingTests {
             ),
             reason: .hostAsk,
             continuation: .hostNative,
-            timeoutPolicy: .keepWaiting,
-            ttl: 15 * 60
+            timeoutPolicy: timeoutPolicy,
+            ttl: ttl
         )
     }
 
@@ -40,6 +45,10 @@ struct PendingApprovalStoreScalingTests {
             .appendingPathComponent("rv-pending-scale-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
+    }
+
+    private static func remove(_ root: URL) {
+        try? FileManager.default.removeItem(at: root)
     }
 
     private static func file(_ root: URL) -> URL {
@@ -80,6 +89,7 @@ struct PendingApprovalStoreScalingTests {
 
     @Test func aRepeatedAskWritesNothing() async throws {
         let root = try Self.directory()
+        defer { Self.remove(root) }
         let store = PendingApprovalStore(baseDirectory: root)
         let first = try await store.create(Self.request(1), now: Self.now)
         _ = try await store.create(Self.request(2), now: Self.now)
@@ -94,6 +104,7 @@ struct PendingApprovalStoreScalingTests {
     /// restarted rvd), and resolving one rewrites them all faithfully.
     @Test func appendedRowsReadBackAndRewriteFaithfully() async throws {
         let root = try Self.directory()
+        defer { Self.remove(root) }
         let store = PendingApprovalStore(baseDirectory: root)
         var created: [PendingApproval] = []
         for index in 0..<5 {
@@ -123,6 +134,7 @@ struct PendingApprovalStoreScalingTests {
     /// in one process never matches the one checked in another.
     @Test func theWriterSeesTheSameRowsAsAFreshReader() async throws {
         let root = try Self.directory()
+        defer { Self.remove(root) }
         let store = PendingApprovalStore(baseDirectory: root)
         let fractional = Date(timeIntervalSince1970: 1_700_000_000.123_456)
         _ = try await store.create(Self.request(1), now: fractional)
@@ -139,10 +151,99 @@ struct PendingApprovalStoreScalingTests {
         #expect(try await store.records(now: fractional) == afterResolve)
     }
 
+    /// The call that writes returns the rows as saved, not as built: a
+    /// create, a resolve and a timeout sweep at sub-second times each hand
+    /// back what a fresh reader then loads (and what the same instance
+    /// returns on its next call), so a review token built from the writing
+    /// call's result matches one built anywhere else.
+    @Test func theWritingCallReturnsTheRowsAsSaved() async throws {
+        let root = try Self.directory()
+        defer { Self.remove(root) }
+        let store = PendingApprovalStore(baseDirectory: root)
+        let fractional = Date(timeIntervalSince1970: 1_700_000_000.123_456)
+        let created = try await store.create(Self.request(1), now: fractional)
+        #expect(try await PendingApprovalStore(baseDirectory: root).load(id: created.id, now: fractional) == created)
+        #expect(try await store.load(id: created.id, now: fractional) == created)
+
+        let resolved = try await store.resolve(
+            id: created.id, decision: .deny,
+            fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:branch-1"),
+            identity: Self.identity, now: fractional.addingTimeInterval(0.25)
+        )
+        #expect(try await PendingApprovalStore(baseDirectory: root).load(id: created.id, now: fractional) == resolved)
+
+        // A short auto-deny row times out on the next sweep, at a
+        // sub-second `now` that the saved line keeps only to the second.
+        _ = try await store.create(Self.request(2, timeoutPolicy: .autoDeny, ttl: 1), now: fractional)
+        let sweptAt = fractional.addingTimeInterval(5.5)
+        let events = await store.events()
+        let swept = try await store.records(now: sweptAt)
+        let fresh = try await PendingApprovalStore(baseDirectory: root).records(now: sweptAt)
+        #expect(swept == fresh)
+        #expect(try await store.records(now: sweptAt) == swept)
+        let timedOut = try #require(swept.first(where: { $0.id.rawValue == "ask-2" }))
+        guard case .timedOut = timedOut.state else {
+            Issue.record("the auto-deny row must time out")
+            return
+        }
+        // The published event carries the saved row too.
+        var iterator = events.makeAsyncIterator()
+        #expect(await iterator.next() == .timedOut(timedOut))
+    }
+
+    /// A rows file that exists but cannot be read is a store failure, never
+    /// an empty ledger: reads and writes throw, nothing is written over it,
+    /// and once it reads again every earlier row is still there. (A symlink
+    /// to a directory: `stat` succeeds, the read fails, even as root.)
+    @Test func aFailedReadThrowsAndNeverWipesTheLedger() async throws {
+        let root = try Self.directory()
+        defer { Self.remove(root) }
+        let file = Self.file(root)
+        let store = PendingApprovalStore(baseDirectory: root)
+        let first = try await store.create(Self.request(1), now: Self.now)
+        _ = try await store.create(Self.request(2), now: Self.now)
+        _ = try await store.resolve(
+            id: first.id, decision: .deny,
+            fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:branch-1"),
+            identity: Self.identity, now: Self.now
+        )
+        #expect(try await store.records(now: Self.now).count == 2)
+
+        let aside = root.appendingPathComponent("rows-aside")
+        let target = root.appendingPathComponent("not-a-file", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: file, to: aside)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.list(now: Self.now)
+        }
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.records(now: Self.now)
+        }
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(3), now: Self.now)
+        }
+        // Nothing was written in its place: the link is still the link.
+        let kind = try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+        #expect(kind == .typeSymbolicLink)
+
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.moveItem(at: aside, to: file)
+        _ = try await store.create(Self.request(3), now: Self.now)
+        let rows = try await PendingApprovalStore(baseDirectory: root).records(now: Self.now)
+        #expect(rows.map(\.id.rawValue) == ["ask-1", "ask-2", "ask-3"])
+        guard case .resolved = try #require(rows.first).state else {
+            Issue.record("the resolved row must survive the failed read")
+            return
+        }
+    }
+
     /// After a plain load the file may hold rows `load` skipped. The next
     /// write is a full rewrite, which drops them, never an append after them.
     @Test func aCorruptLineIsRewrittenAwayNotAppendedAfter() async throws {
         let root = try Self.directory()
+        defer { Self.remove(root) }
         try "{not-json}\n".write(to: Self.file(root), atomically: true, encoding: .utf8)
         let store = PendingApprovalStore(baseDirectory: root)
         _ = try await store.create(Self.request(1), now: Self.now)
@@ -156,6 +257,7 @@ struct PendingApprovalStoreScalingTests {
     /// CLI's approve, a different process) is read on the next call.
     @Test func otherWritersAreSeen() async throws {
         let root = try Self.directory()
+        defer { Self.remove(root) }
         let first = PendingApprovalStore(baseDirectory: root)
         let second = PendingApprovalStore(baseDirectory: root)
         let a = try await first.create(Self.request(1), now: Self.now)

@@ -82,7 +82,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (PendingApproval, [PendingApprovalEvent])?
         do {
             outcome = try withFileLock {
-                let loaded = try store.loadChecked().filter { $0.schemaVersion == 1 }.map(\.approval)
+                let loaded = try loadRecords()
                 let (record, next) = try PendingApprovalLedger.resolve(
                     records: loaded,
                     id: id,
@@ -92,8 +92,9 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                     now: now
                 )
                 guard stillHolds(PendingApprovalLedger.sweep(loaded, now: now)) else { return nil }
-                try writeRecords(next)
-                return (record, timeoutEvents(before: loaded, after: next) + [.resolved(record)])
+                let saved = try writeRecords(next)
+                let stored = Self.row(record, in: saved)
+                return (stored, timeoutEvents(before: loaded, after: saved) + [.resolved(stored)])
             }
         } catch let error as PendingApprovalError {
             throw error
@@ -228,7 +229,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (ApprovalConsumption, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
+                let loaded = try loadRecords()
                 let (consumption, next) = try PendingApprovalLedger.consume(
                     records: loaded,
                     id: id,
@@ -236,10 +237,14 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                     identity: identity,
                     now: now
                 )
-                let events = timeoutEvents(before: loaded, after: next)
-                    + [.consumed(consumption.approval)]
-                try writeRecords(next)
-                return (consumption, events)
+                let saved = try writeRecords(next)
+                let stored = ApprovalConsumption(
+                    approval: Self.row(consumption.approval, in: saved),
+                    decision: consumption.decision
+                )
+                let events = timeoutEvents(before: loaded, after: saved)
+                    + [.consumed(stored.approval)]
+                return (stored, events)
             }
         } catch let error as PendingApprovalError {
             throw error
@@ -273,12 +278,16 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (PendingApproval, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
+                let loaded = try loadRecords()
                 let mutation = try body(loaded)
-                let events = timeoutEvents(before: loaded, after: mutation.records)
-                    + [mutation.event].compactMap { $0 }
-                try writeRecords(mutation.records)
-                return (mutation.record, events)
+                // Hand back the rows as saved (read back from their lines),
+                // not as built: every later call, and every other process,
+                // sees the saved values, so the call that wrote must too.
+                let saved = try writeRecords(mutation.records)
+                let record = Self.row(mutation.record, in: saved)
+                let events = timeoutEvents(before: loaded, after: saved)
+                    + [mutation.event.map { Self.event($0, carrying: record) }].compactMap { $0 }
+                return (record, events)
             }
         } catch let error as PendingApprovalError {
             throw error
@@ -293,13 +302,11 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: ([PendingApproval], [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
+                let loaded = try loadRecords()
                 let swept = PendingApprovalLedger.sweep(loaded, now: now)
-                let events = timeoutEvents(before: loaded, after: swept)
-                if swept != loaded {
-                    try writeRecords(swept)
-                }
-                return (swept, events)
+                guard swept != loaded else { return (loaded, []) }
+                let saved = try writeRecords(swept)
+                return (saved, timeoutEvents(before: loaded, after: saved))
             }
         } catch let error as PendingApprovalError {
             throw error
@@ -308,6 +315,26 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
         publish(outcome.1)
         return outcome.0
+    }
+
+    /// `record` as saved: its row in `saved` (the same id), so a returned
+    /// row carries the read-back dates every other reader sees.
+    private static func row(_ record: PendingApproval, in saved: [PendingApproval]) -> PendingApproval {
+        saved.first(where: { $0.id == record.id }) ?? record
+    }
+
+    private static func event(
+        _ event: PendingApprovalEvent,
+        carrying record: PendingApproval
+    ) -> PendingApprovalEvent {
+        switch event {
+        case .created: .created(record)
+        case .resolved: .resolved(record)
+        case .expired: .expired(record)
+        case .canceled: .canceled(record)
+        case .timedOut: .timedOut(record)
+        case .consumed: .consumed(record)
+        }
     }
 
     private func timeoutEvents(
@@ -359,19 +386,33 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
 
     private var ledgerCache: LedgerCache?
 
-    private func loadRecords() -> [PendingApproval] {
+    /// The rows file's rows, from the cache while the stamp matches. A file
+    /// that exists but cannot be read (EMFILE, EACCES, EIO, a directory)
+    /// throws `encodeFailed`, never reads as an empty ledger, and leaves
+    /// nothing cached: an empty view must not stick, and a write built on it
+    /// would replace every row with the new ones. A missing file is empty.
+    private func loadRecords() throws(PendingApprovalError) -> [PendingApproval] {
         let stamp = store.stamp()
         if let stamp, let cache = ledgerCache, cache.stamp == stamp {
             return cache.records
         }
-        let records = store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
+        ledgerCache = nil
+        let records: [PendingApproval]
+        do {
+            records = try store.loadChecked().filter { $0.schemaVersion == 1 }.map(\.approval)
+        } catch {
+            throw PendingApprovalError.encodeFailed
+        }
         // Stamp taken before the read: a write racing the read changes the
         // stamp, so the next load reads again rather than trusting this one.
         ledgerCache = stamp.map { LedgerCache(stamp: $0, records: records, lines: nil) }
         return records
     }
 
-    private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) {
+    /// Saves `records` and returns them as saved: read back from their
+    /// lines, exactly what `load` (any process) returns for the file.
+    @discardableResult
+    private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) -> [PendingApproval] {
         do {
             if let current = store.stamp(), let cache = ledgerCache, cache.stamp == current,
                var lines = cache.lines, lines.count == cache.records.count
@@ -379,7 +420,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                 // The file is exactly what this instance last wrote.
                 if cache.records == records {
                     // A repeated ask reuses its waiting row: nothing to write.
-                    return
+                    return cache.records
                 }
                 if records.count == cache.records.count + 1,
                    records.dropLast().elementsEqual(cache.records),
@@ -394,13 +435,14 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                     lines.append(line)
                     let saved = cache.records + [readBack]
                     ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: saved, lines: lines) }
-                    return
+                    return saved
                 }
             }
             let (lines, saved) = try encodedLines(for: records, reusing: ledgerCache)
             ledgerCache = nil
             try store.save(lines: lines)
             ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: saved, lines: lines) }
+            return saved
         } catch {
             ledgerCache = nil
             // RVFileStore boundary: every save failure (encode or IO) becomes
