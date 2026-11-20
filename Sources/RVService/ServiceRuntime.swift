@@ -722,7 +722,13 @@ public actor ServiceRuntime {
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
-        EvaluateReply(result: await runEvaluate(request, cwd: cwd))
+        let verdict = await runEvaluate(request, cwd: cwd)
+        // Under observe, what enforce would have returned, only when it
+        // differs from the observed allow (as `rv test` shows it).
+        return EvaluateReply(
+            result: verdict.result,
+            wouldBe: verdict.observeOverrode ? verdict.wouldBe?.result : nil
+        )
     }
 
     /// `request` evaluated under the owner's configured packs. Every door
@@ -812,12 +818,12 @@ public actor ServiceRuntime {
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         host: LedgerHost = .tty
-    ) async -> EvaluationResult {
+    ) async -> GatedVerdict {
         let scoped = ownerScoped(request)
-        let result = await readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
-            .apply(scoped, cwd: cwd, host: host)
-        recordAnalytics(for: result)
-        return result
+        let verdict = await readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
+            .applyVerdict(scoped, cwd: cwd, host: host)
+        recordAnalytics(for: verdict.result)
+        return verdict
     }
 
     /// Frame-level major-version guard: runs even when a Hello on this

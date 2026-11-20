@@ -204,7 +204,10 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 - `EvaluateReply`: `result` (required), `via` (required, must be exactly `"xpc"` —
   frozen wire string on every transport; `"inProcess"` or anything else is a
   decode error), `serviceSemver` (optional; absent proves nothing — clients
-  without an engine must reject, see `sdk/VERSIONING.md`).
+  without an engine must reject, see `sdk/VERSIONING.md`), `wouldBe` (optional,
+  additive `EvaluationResult`, §5.2): under `guard.mode` observe, the verdict
+  enforce would have returned, present only when its decision differs from the
+  observed `result`. Absent in enforce mode and when observe changed nothing.
 - `ExplainParams` / `ClassifyParams`: `request` + optional `cwd`, same rules.
 - `ExplainReply`: `result`, `normalized`, `ruleID?`, `packID?`, `suggestion?`,
   `stages[]`. Decoders **derive** `ruleID`/`packID` from `result.outcome` and
