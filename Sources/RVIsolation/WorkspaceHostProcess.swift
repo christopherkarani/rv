@@ -182,19 +182,70 @@ public enum WorkspaceHosts {
         )
     }
 
+    /// How long a host that published a live endpoint may leave it
+    /// unanswered before `ensure` gives up. Mounting and recovery before the
+    /// endpoint exists are bounded by `ensure`'s overall timeout instead. A
+    /// host that publishes always gets this whole window, even past a
+    /// shorter overall timeout.
+    public static let readinessTimeout: TimeInterval = 15
+
+    /// Writes a line for the user; the CLI default is stderr, the TUI's
+    /// raw-mode reconnect passes a silent one.
+    public typealias Report = @Sendable (String) -> Void
+
+    public static let standardErrorReport: Report = { line in
+        FileHandle.standardError.write(Data((line + "\n").utf8))
+    }
+
     /// Starts a host when this project has none, or returns the live endpoint.
     /// A lost creation race attaches to the winner instead of mounting again.
+    /// A failure stops the host this call spawned unless it was still
+    /// mounting or recovering at the deadline (`.stillStarting`): that one
+    /// keeps running in the background, recorded so `close` can stop it.
     public static func ensure(
         project: String,
         executable: URL,
-        timeout: TimeInterval = 90
+        timeout: TimeInterval = 90,
+        report: @escaping Report = standardErrorReport
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
-        ensure(
+        var seams = EnsureSeams()
+        seams.report = report
+        return ensure(
             project: project,
             executable: executable,
             timeout: timeout,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            seams: seams
         )
+    }
+
+    /// The process and connection effects `ensure` drives; tests replace them.
+    struct EnsureSeams {
+        var inspect: (String) -> WorkspaceAttachment = WorkspaceHosts.inspect
+        /// Connect, describe, detach: whether the workspace is usable now.
+        var probe: (WorkspaceEndpoint) -> Result<Bool, WorkspaceClientFailure> = WorkspaceHosts.probe
+        var spawn: (URL, String) -> Result<pid_t, WorkspaceHostFailure> = WorkspaceHostLauncher.spawn
+        /// Nil while the child runs; its wait status once reaped.
+        var reap: (pid_t) -> Int32? = WorkspaceHosts.reap
+        /// False when the child outlived SIGKILL's grace.
+        var terminate: (pid_t) -> Bool = { WorkspaceHosts.terminateChild($0) }
+        var report: (String) -> Void = WorkspaceHosts.standardErrorReport
+        /// Remember the spawned host so `close` can stop it later.
+        /// Arguments: pid, canonical path.
+        var recordLaunch: (pid_t, String) -> Void = WorkspaceHostLaunchRecord.record
+        /// The canonical project path an endpoint would carry; nil if unusable.
+        var canonicalize: (String) -> String? = WorkspaceHostLaunchRecord.canonicalPath
+        var now: () -> Date = Date.init
+        var pause: () -> Void = { usleep(50_000) }
+    }
+
+    /// What `ensureLoop` learned about the host this call spawned.
+    struct EnsureProgress {
+        /// The unreaped child, or -1.
+        var child: pid_t = -1
+        /// The last state seen was `.starting` or `.recovering`.
+        var lastSeenMounting = false
+        var launchRecorded = false
     }
 
     static func ensure(
@@ -202,38 +253,109 @@ public enum WorkspaceHosts {
         executable: URL,
         timeout: TimeInterval = 90,
         homeDirectory: String,
-        inspect: (String) -> WorkspaceAttachment = WorkspaceHosts.inspect
+        seams: EnsureSeams = EnsureSeams()
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
-        let deadline = Date().addingTimeInterval(timeout)
-        var child: pid_t = -1
+        var progress = EnsureProgress()
+        let result = ensureLoop(
+            project: project, executable: executable, timeout: timeout,
+            homeDirectory: homeDirectory, seams: seams, progress: &progress
+        )
+        guard case .failure(let error) = result, progress.child > 0 else { return result }
+        let child = progress.child
+        if error == .timedOut, progress.lastSeenMounting {
+            // Our child is unreaped, so its pid is still ours to record.
+            if progress.launchRecorded == false, let canonical = seams.canonicalize(project) {
+                seams.recordLaunch(child, canonical)
+            }
+            return .failure(.stillStarting)
+        }
+        guard stopsSpawnedHost(error) else { return result }
+        if seams.terminate(child) == false {
+            seams.report("rv: the workspace host this start launched (pid \(child)) did not exit after SIGKILL")
+        }
+        return error == .timedOut ? .failure(.timedOutAndStopped) : result
+    }
+
+    /// Failures that leave the spawned host running with nobody able to use
+    /// it: refused by peer trust, silent after publishing, or not ready at
+    /// the deadline in any state but mounting or recovering (which `ensure`
+    /// turns into `.stillStarting` first). A recovery block or a refused
+    /// start ends with the host exiting on its own.
+    static func stopsSpawnedHost(_ error: WorkspaceHostFailure) -> Bool {
+        switch error {
+        case .notAnswering, .control(.unauthorizedClient), .timedOut:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func ensureLoop(
+        project: String,
+        executable: URL,
+        timeout: TimeInterval,
+        homeDirectory: String,
+        seams: EnsureSeams,
+        progress: inout EnsureProgress
+    ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
+        let deadline = seams.now().addingTimeInterval(timeout)
         var spawned = false
-        while Date() < deadline {
-            switch inspect(project) {
+        // The readiness clock belongs to one endpoint seen continuously live
+        // and unanswered; any other state or a new endpoint restarts it.
+        // While it runs it outlasts the overall deadline: the failed-probe
+        // branch ends the loop as `.notAnswering` once it passes. It never
+        // runs past `hardStop`, so endpoints that change on every poll
+        // cannot keep re-arming it.
+        let hardStop = deadline.addingTimeInterval(readinessTimeout)
+        var answerDeadline: Date?
+        var answerEndpoint: WorkspaceEndpoint?
+        while seams.now() < deadline || answerDeadline != nil {
+            let attachment = seams.inspect(project)
+            switch attachment {
+            case .starting, .recovering:
+                progress.lastSeenMounting = true
+            default:
+                progress.lastSeenMounting = false
+            }
+            if case .live(let endpoint) = attachment, endpoint == answerEndpoint {
+                // Same endpoint: keep its clock.
+            } else {
+                answerDeadline = nil
+                answerEndpoint = nil
+            }
+            switch attachment {
             case .live(let endpoint):
-                switch WorkspaceClient.connect(endpoint) {
-                case .success(let client):
+                if progress.child > 0, progress.launchRecorded == false, endpoint.hostPID == progress.child {
+                    seams.recordLaunch(progress.child, endpoint.canonicalPath)
+                    progress.launchRecorded = true
+                }
+                switch seams.probe(endpoint) {
+                case .success(true):
+                    return .success(endpoint)
+                case .success(false):
                     // A live endpoint with a closing workspace is not
                     // usable. Keep polling: the close retires the endpoint
                     // and this loop then starts (or attaches to) the next
                     // host. No new sleep; this is the existing poll loop.
-                    let usable: Bool
-                    switch client.describe() {
-                    case .success(let description):
-                        usable = description.phase == .active
-                    case .failure:
-                        usable = false
-                    }
-                    _ = client.detach()
-                    if usable {
-                        return .success(endpoint)
-                    }
+                    // It answered, so its readiness clock starts over.
+                    answerDeadline = nil
+                    answerEndpoint = nil
                 case .failure(.incompatibleProtocol):
                     // A live owner may still have active PTYs. Replacing it
                     // would destroy those runtimes, so require a deliberate
                     // compatible-host restart instead of retrying until timeout.
                     return .failure(.control(.incompatibleProtocol))
+                case .failure(.unauthorizedClient):
+                    // Code identity does not change between attempts: the
+                    // host lacks the workspaceHost role (or refuses ours).
+                    return .failure(.control(.unauthorizedClient))
                 case .failure:
-                    break
+                    let limit = min(answerDeadline ?? seams.now().addingTimeInterval(readinessTimeout), hardStop)
+                    answerDeadline = limit
+                    answerEndpoint = endpoint
+                    if seams.now() >= limit {
+                        return .failure(.notAnswering)
+                    }
                 }
             case .blocked(let block):
                 return .failure(.recoveryBlocked(block))
@@ -248,38 +370,90 @@ public enum WorkspaceHosts {
                 }
                 fallthrough
             case .orphaned:
-                if spawned == false {
-                    switch WorkspaceHostLauncher.spawn(executable: executable, workspace: project) {
+                // Past the overall deadline (a readiness clock still
+                // running) a vanished host is not replaced.
+                if spawned == false, seams.now() < deadline {
+                    switch seams.spawn(executable, project) {
                     case .failure(let error):
                         return .failure(error)
                     case .success(let pid):
-                        child = pid
+                        progress.child = pid
                         spawned = true
                     }
                 }
             case .starting, .recovering, .staleEndpoint:
                 break
             }
-            if child > 0 {
-                var status: Int32 = 0
-                let waited = waitpid(child, &status, WNOHANG)
-                if waited == child {
-                    child = -1
-                    let code = exitedCode(status)
-                    if code == WorkspaceHostExit.recoveryBlocked {
-                        continue
-                    }
-                    if code == WorkspaceHostExit.liveOwner {
-                        continue
-                    }
-                    if code != nil {
-                        return .failure(.hostExited(code ?? 1))
-                    }
+            if progress.child > 0, let status = seams.reap(progress.child) {
+                progress.child = -1
+                let code = exitedCode(status)
+                if code == WorkspaceHostExit.recoveryBlocked {
+                    continue
+                }
+                if code == WorkspaceHostExit.liveOwner {
+                    continue
+                }
+                if code != nil {
+                    return .failure(.hostExited(code ?? 1))
                 }
             }
-            usleep(50_000)
+            seams.pause()
         }
         return .failure(.timedOut)
+    }
+
+    static func probe(_ endpoint: WorkspaceEndpoint) -> Result<Bool, WorkspaceClientFailure> {
+        switch WorkspaceClient.connect(endpoint) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let client):
+            let usable: Bool
+            switch client.describe() {
+            case .success(let description):
+                usable = description.phase == .active
+            case .failure:
+                usable = false
+            }
+            _ = client.detach()
+            return .success(usable)
+        }
+    }
+
+    static func reap(_ child: pid_t) -> Int32? {
+        var status: Int32 = 0
+        return waitpid(child, &status, WNOHANG) == child ? status : nil
+    }
+
+    /// Grace before SIGKILL for a host this process spawned and stops.
+    static let terminateGraceSeconds: TimeInterval = 2
+
+    /// The kernel effects `terminateChild` drives; tests replace them.
+    struct TerminateSeams {
+        var signal: (pid_t, Int32) -> Void = { _ = kill($0, $1) }
+        var reap: (pid_t) -> Int32? = WorkspaceHosts.reap
+        var now: () -> Date = Date.init
+        var pause: () -> Void = { usleep(50_000) }
+        var grace: TimeInterval = WorkspaceHosts.terminateGraceSeconds
+    }
+
+    /// Stop and reap a host this process spawned. Unreaped, the pid cannot
+    /// belong to anyone else, so signalling it is safe. The host keeps
+    /// SIGTERM's default action; the next start recovers what it left.
+    /// Both waits are bounded: false means the child outlived SIGKILL's
+    /// grace (stuck in the kernel) and was left for the caller to report.
+    @discardableResult
+    static func terminateChild(_ child: pid_t, seams: TerminateSeams = TerminateSeams()) -> Bool {
+        guard child > 0 else { return true }
+        for signal in [SIGTERM, SIGKILL] {
+            seams.signal(child, signal)
+            let deadline = seams.now().addingTimeInterval(seams.grace)
+            while true {
+                if seams.reap(child) != nil { return true }
+                if seams.now() >= deadline { break }
+                seams.pause()
+            }
+        }
+        return false
     }
 
     private static func exitedCode(_ status: Int32) -> Int32? {

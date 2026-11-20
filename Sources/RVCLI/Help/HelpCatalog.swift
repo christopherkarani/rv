@@ -175,10 +175,10 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv workspace start [--workspace <absolute-path>]"),
+                HelpRow(name: "rv workspace start [--workspace <absolute-path>]", description: "Mount or recovery can take up to 90 s (15 s when rv workspace tui reconnects); a host that publishes its endpoint always gets a further 15 s to answer. On failure says why and stops the host it launched, unless that host is still mounting or recovering: it keeps running"),
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
+                HelpRow(name: "rv workspace close [--workspace <absolute-path>]", description: "If connecting is refused by peer trust or reports a stale endpoint, and the endpoint names the host rv launched for this project, stops that host (only while its pid still runs rv's rv-workspace-host as your own session leader); a busy, disconnected or older-protocol host is left running; the volume and saved changes are kept"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] [--timeout <duration>] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
@@ -201,6 +201,11 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Done; for status, the host answered or the printed state needs no host"),
+                HelpRow(name: "1", description: "status: the saved endpoint is stale, or the host was refused (peer trust), is not answering, disconnected, busy, or speaks another protocol"),
+                HelpRow(name: "64", description: "The command was refused or failed; the reason is on stderr"),
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
