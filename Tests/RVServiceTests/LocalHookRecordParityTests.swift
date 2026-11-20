@@ -68,13 +68,17 @@ struct LocalHookRecordParityTests {
 
         // rvd ingests the spool the local evaluator wrote.
         let localAnalytics = Self.coordinator(home: local.home)
-        await ServiceRuntime.ingestHookLocalSpool(home: local.home, analytics: localAnalytics, enabledPackIDs: [])
+        let drainer = HookLocalSpoolDrainer(home: local.home, deliver: { drained in
+            await localAnalytics.recordDecisions(drained.decisions)
+            await localAnalytics.flushDailyIfNeeded()
+        })
+        await drainer.drainNow()
         let ingested = try Self.counts(local.home)
         #expect(ingested.total == shellFinals)
         let recorded = try await Self.awaitCounts(rvd.home, total: shellFinals)
         #expect(ingested == recorded)
-        // Drained: a second ingest adds nothing.
-        await ServiceRuntime.ingestHookLocalSpool(home: local.home, analytics: localAnalytics, enabledPackIDs: [])
+        // Drained: a second drain adds nothing.
+        await drainer.drainNow()
         #expect(try Self.counts(local.home) == ingested)
     }
 
@@ -140,30 +144,11 @@ struct LocalHookRecordParityTests {
     }
 }
 
-/// The local evaluator's writes are bounded: a log another process holds
-/// costs the verdict at most the record budget, and the row it could not
-/// write is dropped and counted in the spool rvd drains.
+/// The spool's own bounds: a held lock or a full or symlinked spool costs
+/// a count, never a wait. A held audit log and the shared write deadline
+/// are in `LocalHookRecordFailureTests`.
 @Suite("Hook-local record budget", .serialized)
 struct LocalHookRecordBudgetTests {
-    @Test func heldAuditLogDropsTheRowCountsItAndKeepsTheVerdict() async throws {
-        let fixture = try LocalHookFixture()
-        let config = RVPolicyPaths.configDirectory(home: fixture.home)
-        let holder = try FileLockHolder(path: config.appendingPathComponent("audit.jsonl").path)
-        defer { holder.release() }
-        let stdin = claudeFile("Read", path: fixture.workspace + "/.env", cwd: fixture.workspace)
-
-        let started = ContinuousClock.now
-        let outcome = await fixture.decider.decide(host: .claude, stdin: stdin)
-        let elapsed = ContinuousClock.now - started
-        holder.release()
-
-        let rvd = try await fixture.rvdReply(host: .claude, stdin: stdin)
-        #expect(outcome == .final(rvd))
-        #expect(elapsed < LocalHookDecider.recordBudget + .milliseconds(700))
-        let drained = HookLocalSpool.drain(home: fixture.home)
-        #expect(drained.drops[.audit] == 1)
-    }
-
     @Test func heldSpoolCountsTheLostRowsWithoutALock() throws {
         let fixture = try LocalHookFixture()
         let spool = HookLocalSpool.fileURL(home: fixture.home)
@@ -191,7 +176,9 @@ struct LocalHookRecordBudgetTests {
         try handle.close()
         let drained = HookLocalSpool.drain(home: fixture.home)
         #expect(drained.decisions == [.allow: 1, .deny: 1])
-        #expect(drained.drops == [.audit: 1, .denialLedger: 1])
+        #expect(drained.drops == [.denialLedger: 1])
+        // An audit drop without its fields is a lost audit row.
+        #expect(drained.lostAudits == 1)
         #expect(drained.lost == 2)
         #expect(HookLocalSpool.drain(home: fixture.home) == HookLocalSpool.Drained())
     }
