@@ -42,6 +42,47 @@ import Testing
         }
     }
 
+    @Test func setupRegistersTheJudgeBeforeRvd() throws {
+        try withTempHome { home, layout, launchctl in
+            _ = try installJudge(beside: home.appendingPathComponent("rvd"))
+            #expect(SetupRun.setup(env(home: home, launchctl: launchctl)).exitCode == 0)
+            let judge = try #require(launchctl.bootstraps.firstIndex { $0.path == layout.judgeLaunchAgent })
+            let rvd = try #require(launchctl.bootstraps.firstIndex { $0.path == layout.launchAgent })
+            #expect(judge < rvd, "rvd's first judged call should find the pool already registered")
+        }
+    }
+
+    @Test func setupWarnsWhenABundleIsInstalledButRvJudgeIsMissing() throws {
+        try withTempHome { home, _, launchctl in
+            var environment = env(home: home, launchctl: launchctl)
+            environment.judgeBundleInstalled = { _ in true }
+            let outcome = SetupRun.setup(environment)
+            #expect(outcome.exitCode == 0, "rvd and the hooks are still installed")
+            #expect(outcome.stderr.contains("rv-judge"))
+            #expect(outcome.stderr.contains("review"))
+        }
+    }
+
+    @Test func setupWarnsWhenTheJudgeAgentDoesNotLoad() throws {
+        try withTempHome { home, layout, _ in
+            _ = try installJudge(beside: home.appendingPathComponent("rvd"))
+            let refusing = RefusingLaunchctl(refusedPlist: layout.judgeLaunchAgent)
+            var environment = env(home: home, launchctl: refusing)
+            environment.judgeBundleInstalled = { _ in true }
+            let outcome = SetupRun.setup(environment)
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("dev.rv.judge"))
+            #expect(refusing.bootstraps.contains { $0.path == layout.launchAgent }, "rvd is still installed")
+        }
+    }
+
+    @Test func noJudgeWarningWithoutABundle() throws {
+        try withTempHome { home, _, launchctl in
+            let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+            #expect(outcome.stderr.contains("rv-judge") == false)
+        }
+    }
+
     @Test func restartingRvdLeavesTheJudgeAlone() throws {
         try withTempHome { home, layout, launchctl in
             _ = try installJudge(beside: home.appendingPathComponent("rvd"))
@@ -67,5 +108,20 @@ import Testing
             #expect(uninstalling.bootouts.filter { $0 == SetupRun.judgeLaunchAgentLabel }.count == 2)
         }
     }
+}
+
+/// Records bootstraps and refuses the one plist it names.
+private final class RefusingLaunchctl: LaunchctlApplying {
+    let refusedPlist: String
+    private(set) var bootstraps: [URL] = []
+
+    init(refusedPlist: String) { self.refusedPlist = refusedPlist }
+
+    func bootstrap(domain _: String, plist: URL) throws {
+        guard plist.path != refusedPlist else { throw LaunchctlError.nonZeroExit(5) }
+        bootstraps.append(plist)
+    }
+
+    func bootout(domain _: String, label _: String) throws {}
 }
 #endif

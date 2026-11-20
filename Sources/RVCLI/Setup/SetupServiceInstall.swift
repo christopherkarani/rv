@@ -61,28 +61,31 @@ extension SetupRun {
         (rvdPath as NSString).deletingLastPathComponent + "/rv-judge"
     }
 
-    /// Registers `dev.rv.judge` when `rv-judge` is installed beside rvd.
-    /// Without it rvd's judge is unreachable and judged calls go to review
-    /// (doctor says so); every other setup step is unaffected.
+    /// Registers `dev.rv.judge` when `rv-judge` is installed beside rvd,
+    /// before rvd, so rvd's first judged call finds the pool. Never fatal:
+    /// without the pool rvd's judged calls go to review, so a problem is
+    /// returned for setup to warn about (and doctor reports), and every
+    /// other setup step goes ahead.
     static func writeJudgeLaunchAgent(
         env: SetupEnvironment,
         layout: OwnedPaths,
         files: FileOps
-    ) throws(SetupError) {
+    ) -> JudgeAgentProblem? {
         let judge = judgeExecutable(rvdPath: env.rvdPath)
-        guard env.fileManager.isExecutableFile(atPath: judge) else { return }
-        let body = try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+        guard env.fileManager.isExecutableFile(atPath: judge) else { return .missing(judge) }
         do {
+            let body = try LaunchAgentTemplate.renderedJudge(judgePath: judge)
             try files.write(body, to: layout.judgeLaunchAgent)
+            if env.touchLaunchd {
+                try loadLaunchAgent(
+                    env: env,
+                    plist: URL(fileURLWithPath: layout.judgeLaunchAgent),
+                    label: judgeLaunchAgentLabel)
+            }
         } catch {
-            throw SetupError.launchAgentWriteFailed
+            return .notLoaded
         }
-        if env.touchLaunchd {
-            try loadLaunchAgent(
-                env: env,
-                plist: URL(fileURLWithPath: layout.judgeLaunchAgent),
-                label: judgeLaunchAgentLabel)
-        }
+        return nil
     }
 
     /// Polling cadence and ceiling for the job to leave launchd after bootout.
