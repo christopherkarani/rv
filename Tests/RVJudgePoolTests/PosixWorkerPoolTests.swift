@@ -87,9 +87,9 @@ struct PosixWorkerPoolTests {
         return (object["from"], slot)
     }
 
-    @Test("kill -9 of the busy worker: the request is still answered, by the other worker")
+    @Test("kill -9 of the busy worker: the request is still answered, by the other worker", .enabled(if: python != nil, "python3 not installed"))
     func killNineMidRequest() async throws {
-        let python = try #require(Self.python, "python3 not installed")
+        let python = try #require(Self.python)
         // Hedging and the budget kill are pushed out of the way: only the
         // crash can move this request to the hedge.
         let policy = PoolPolicy(hedgeAfter: .seconds(20), budget: .seconds(30), backoffBase: .milliseconds(50))
@@ -113,9 +113,9 @@ struct PosixWorkerPoolTests {
         #expect(await eventually { pool.supervisor.status().workers.first { $0.slot == .primary }?.restarts ?? 0 >= 1 })
     }
 
-    @Test("a hung primary: hedged, then SIGKILLed at the budget and respawned")
+    @Test("a hung primary: hedged, then SIGKILLed at the budget and respawned", .enabled(if: python != nil, "python3 not installed"))
     func hangHedgesThenKills() async throws {
-        let python = try #require(Self.python, "python3 not installed")
+        let python = try #require(Self.python)
         let policy = PoolPolicy(hedgeAfter: .milliseconds(150), budget: .milliseconds(600), backoffBase: .milliseconds(50))
         let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang", .hedge: "ok"])
         defer {
@@ -125,15 +125,16 @@ struct PosixWorkerPoolTests {
         pool.supervisor.warm(key: key)
         #expect(await eventually { bothReady(pool.supervisor) })
 
-        let started = ContinuousClock.now
         let (source, slot) = from(await pool.supervisor.submit(key: key, input: input, budget: .seconds(5)))
         #expect(source == "ok")
         #expect(slot == .hedge)
-        #expect(ContinuousClock.now - started < .milliseconds(600))
+        // Ordering, not wall clock: a request still unanswered at the budget
+        // kill answers late, so a hedge verdict and a hedge win mean the hedge
+        // answered before the kill.
         #expect(pool.supervisor.status().hedgeWins == 1)
+        let hung = try #require(pool.pids(.primary).first)
 
         // The hung process is killed at the budget, never left running.
-        let hung = try #require(pool.pids(.primary).first)
         #expect(await eventually { kill(hung, 0) != 0 && errno == ESRCH })
         let status = pool.supervisor.status()
         #expect(status.killed == 1)
