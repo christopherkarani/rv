@@ -4,8 +4,8 @@ import Testing
 
 struct LaunchdPlistTests {
     /// rvd is always on: launchd starts it at load and relaunches it after
-    /// any exit (a crash, or the clean exit once its binary was replaced),
-    /// throttled so a crash loop cannot spin.
+    /// any exit (a crash, or the clean exit once its binary was replaced)
+    /// while the rvd binary exists, throttled so a crash loop cannot spin.
     @Test func templateIsAlwaysOn() throws {
         let url = packageRoot()
             .appendingPathComponent("Sources/RVCLI/Resources/launchd")
@@ -16,7 +16,9 @@ struct LaunchdPlistTests {
         #expect(plist["Label"] as? String == "dev.rv.evaluate")
         let mach = try #require(plist["MachServices"] as? [String: Any])
         #expect(mach["dev.rv.evaluate"] as? Bool == true)
-        #expect(plist["KeepAlive"] as? Bool == true)
+        let keepAlive = try #require(plist["KeepAlive"] as? [String: Any])
+        #expect(keepAlive.count == 1)
+        #expect(keepAlive["PathState"] as? [String: Bool] == ["@RVD_PATH@": true])
         #expect(plist["RunAtLoad"] as? Bool == true)
         #expect(plist["ThrottleInterval"] as? Int == 5)
     }

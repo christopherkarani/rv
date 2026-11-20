@@ -15,12 +15,20 @@
 	</array>
 	<!-- Always on: started at load and relaunched after any exit, a crash or
 	     the clean exit once its binary was replaced (the relaunch runs the
-	     upgraded rvd). ThrottleInterval 5 keeps a relaunch inside the hook's
-	     8 s budget while bounding a crash loop to one spawn every 5 s. -->
+	     upgraded rvd), but only while the rvd binary exists: a deleted rvd
+	     is never respawned. ThrottleInterval 5 keeps a relaunch inside the
+	     hook's 8 s budget while bounding a crash loop to one spawn every
+	     5 s; rvd backs off further on its own (StartupBackoff). -->
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>PathState</key>
+		<dict>
+			<key>@RVD_PATH@</key>
+			<true/>
+		</dict>
+	</dict>
 	<key>ThrottleInterval</key>
 	<integer>5</integer>
 	<key>EnableTransactions</key>
