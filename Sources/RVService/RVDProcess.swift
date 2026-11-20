@@ -166,6 +166,7 @@ enum RVDLifecycle {
         CoreMLGuard.bind(.daemon(stateRoot: JudgeRuntime.coreMLStateRoot()) { message in
             try? FileHandle.standardError.write(contentsOf: Data(RVDLogFile.line(message).utf8))
         })
+        DispatchQueue.global(qos: .background).async { CoreMLGuard.sweepLegacyCompiledModels() }
         #endif
     }
 

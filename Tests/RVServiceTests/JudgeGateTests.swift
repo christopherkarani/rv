@@ -541,6 +541,41 @@ struct JudgeInvalidLabelsTests {
         guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
     }
 
+    /// A compiled model that cannot be placed in or verified from rv's
+    /// protected cache refuses to review. It must never become
+    /// `.unavailable` (the packs-only floor, which allows).
+    @Test func unverifiableModelCacheIsRefusedNotUnavailable() throws {
+        struct Roomy: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 100 << 30 }
+        }
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-unverified-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let state = base.appendingPathComponent("state", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: state.appendingPathComponent("models"), withDestinationURL: elsewhere)
+        let bundle = base.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent("tokenizer.json"))
+        let guardian = CoreMLGuard(
+            store: nil, disk: Roomy(), cacheVolume: nil, stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
+        let slot = JudgeSlot(coreML: { guardian })
+        for attempt in ["load", "cached failure"] {
+            let run = JudgeRuntime.runJudge(
+                command: "ls", context: JudgeContext(), engine: .ft, bundle: bundle, wait: nil, slot: slot)
+            guard case .refused(let why) = run else {
+                Issue.record("\(attempt): expected .refused, got \(run)")
+                continue
+            }
+            #expect(why.contains("compiled model not verified"), "\(attempt)")
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+    }
+
     /// End to end through the real slot: a nearly full disk refuses the
     /// load (review, never the packs-only allow), and the slot's cached
     /// failure keeps refusing on the next request.

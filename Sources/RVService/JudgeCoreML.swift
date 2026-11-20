@@ -7,11 +7,9 @@ extension JudgeRuntime {
     /// Core ML crash marker. Under rv's config dir, which
     /// `core.secrets:home-rv-config` keeps agents from reading or writing,
     /// so no agent can plant a model or forge the crash history. nil when
-    /// HOME is unusable (judges then compile without a cache).
+    /// HOME is unusable (judge loads then refuse, to review).
     public static func coreMLStateRoot() -> URL? {
-        HomeDirectory.processConfigDirectory()?
-            .appendingPathComponent("cache", isDirectory: true)
-            .appendingPathComponent("laya", isDirectory: true)
+        HomeDirectory.processConfigDirectory().map(CoreMLGuard.stateRoot(configDirectory:))
     }
 
     /// The guard judges load through: rvd's bound daemon guard, else an

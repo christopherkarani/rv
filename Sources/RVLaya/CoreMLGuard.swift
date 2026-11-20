@@ -41,6 +41,29 @@ public struct CoreMLDiskSpaceError: Error, Sendable, Equatable {
     }
 }
 
+/// A judge load refused for a reason that must fail closed to review,
+/// never to the packs-only floor (which allows).
+public protocol CoreMLRefusal: Error, Sendable {
+    var reason: String { get }
+}
+
+extension CoreMLDiskSpaceError: CoreMLRefusal {}
+
+/// The compiled model could not be moved into, or verified inside, rv's
+/// protected cache, so it is not loaded: Core ML's compile output sits in
+/// the agent-writable temp dir and is never trusted where it lands.
+public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
+    public let detail: String
+
+    public init(detail: String) {
+        self.detail = detail
+    }
+
+    public var reason: String {
+        "Laya judge: compiled model not verified (\(detail)); judge disabled until it can be."
+    }
+}
+
 /// Guards every Core ML model load and prediction in a process.
 ///
 /// - Crash awareness: around each call it sets an "in flight" marker and
@@ -59,7 +82,8 @@ public struct CoreMLDiskSpaceError: Error, Sendable, Equatable {
 /// State (marker, crash history, compiled models) lives under `stateRoot`,
 /// rv's guarded config dir, never in agent-writable caches.
 ///
-/// An untracked guard (no store) only does the disk precheck: short-lived
+/// An untracked guard (no store) keeps the disk precheck and the verified
+/// model cache but writes no crash marker: short-lived
 /// CLI processes share no marker with rvd, so they cannot miscount its runs.
 public final class CoreMLGuard: Sendable {
     /// Below this much free space on the cache volume the judge refuses to
@@ -130,8 +154,7 @@ public final class CoreMLGuard: Sendable {
         self.now = now
     }
 
-    /// Where verified compiled models live; nil keeps none (loads compile
-    /// output directly).
+    /// Where verified compiled models live; nil refuses every load.
     var modelRoot: URL? {
         stateRoot?.appendingPathComponent("models", isDirectory: true)
     }
@@ -231,9 +254,29 @@ extension CoreMLGuard {
     private static let bound = Mutex<CoreMLGuard?>(nil)
 
     /// The guard judges use when none is injected: the bound one, else an
-    /// untracked guard with no compiled-model cache.
+    /// untracked guard over the protected cache of this process's HOME.
     public static var current: CoreMLGuard {
-        current(orBind: untracked(stateRoot: nil))
+        current(orBind: untracked(stateRoot: processStateRoot()))
+    }
+
+    /// `<config dir>/cache/laya`, below rv's config dir
+    /// (`core.secrets:home-rv-config` denies agents there).
+    public static func stateRoot(configDirectory: URL) -> URL {
+        configDirectory
+            .appendingPathComponent("cache", isDirectory: true)
+            .appendingPathComponent("laya", isDirectory: true)
+    }
+
+    /// `$HOME/.config/rv/cache/laya` for an absolute, NUL-free HOME (the
+    /// same rule as `HomeDirectory.processConfigDirectory()`); nil
+    /// otherwise, and then every judge load refuses.
+    static func processStateRoot() -> URL? {
+        guard let home = ProcessInfo.processInfo.environment["HOME"], home.hasPrefix("/"), !home.contains("\0")
+        else { return nil }
+        let config = URL(fileURLWithPath: home, isDirectory: true)
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("rv", isDirectory: true)
+        return stateRoot(configDirectory: config)
     }
 
     /// The bound guard, binding `make()` first when none is.
@@ -286,6 +329,13 @@ extension CoreMLGuard {
                 }
             },
             log: log)
+    }
+
+    /// rvd only (never tests or CLI runs): removes older builds' compiled
+    /// copies from `~/Library/Caches/rv-laya` once they are a week old.
+    public static func sweepLegacyCompiledModels(now: Date = Date()) {
+        guard let caches = cachesRoot() else { return }
+        LegacyCompiledModels.sweep(root: caches.appendingPathComponent("rv-laya", isDirectory: true), now: now)
     }
 
     /// `~/Library/Caches` (Linux: `~/.cache`).

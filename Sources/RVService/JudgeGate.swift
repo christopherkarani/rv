@@ -461,20 +461,20 @@ public enum JudgeRuntime {
                 let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
                 return admitted {
                     do { return .verdict(try judge.judge(command)) }
-                    catch let refusal as CoreMLDiskSpaceError { return .refused(refusal.reason) }
+                    catch let refusal as any CoreMLRefusal { return .refused(refusal.reason) }
                     catch { return .failed }
                 }
             case .ft:
                 let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
                 return admitted {
                     do { return .verdict(try judge.judge(command, context: context)) }
-                    catch let refusal as CoreMLDiskSpaceError { return .refused(refusal.reason) }
+                    catch let refusal as any CoreMLRefusal { return .refused(refusal.reason) }
                     catch { return .failed }
                 }
             }
         } catch JudgeLoadError.warming {
             return .warming
-        } catch let refusal as CoreMLDiskSpaceError {
+        } catch let refusal as any CoreMLRefusal {
             return .refused(refusal.reason)
         } catch let error as LayaError {
             switch error {

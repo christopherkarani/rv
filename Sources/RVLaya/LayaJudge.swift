@@ -117,9 +117,6 @@ enum CompiledModelCache {
         case .cpuAndGPU: configuration.computeUnits = .cpuAndGPU
         case .cpuOnly: configuration.computeUnits = .cpuOnly
         }
-        if let caches = CoreMLGuard.cachesRoot() {
-            LegacyCompiledModels.sweep(root: caches.appendingPathComponent("rv-laya", isDirectory: true), now: Date())
-        }
         let store = CompiledModelStore<MLModel>(
             root: coreML.modelRoot,
             coreML: coreML,

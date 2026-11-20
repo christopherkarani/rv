@@ -15,22 +15,28 @@ struct CompiledFileRecord: Codable, Equatable, Sendable {
 /// (`~/.config/rv/cache/laya/models`, which `core.secrets:home-rv-config`
 /// keeps agents from writing).
 ///
-/// `MLModel.compileModel` returns a temp directory macOS may purge under a
-/// long-lived daemon, so the compiled `.mlmodelc` is copied into an
-/// rv-owned entry and reused:
+/// `MLModel.compileModel` writes into the temp dir, which agents can write
+/// and macOS may purge, so the compiled `.mlmodelc` is moved into an
+/// rv-owned entry and only ever loaded from there:
 ///
 /// - Versioned: `<path key>-<version key>.mlmodelc`, where the version key
 ///   covers the package's modification time and the OS build, so an
 ///   updated bundle or OS compiles fresh. Superseded entries of the same
 ///   package are swept.
-/// - Atomic: the copy lands in a `.partial-` sibling and is renamed into
-///   place; a manifest is written beside it last and is the commit record.
-/// - Verified: the manifest records every file's size and SHA-256, taken
-///   from the installed copy, and is checked before every load. A missing
-///   or mismatched manifest (a crash or full disk mid-copy, or a planted
-///   or edited model) discards the entry and recompiles from the bundle; a
-///   mismatched entry is never loaded. (Hashing the ~600 MB model costs
-///   well under a second against a multi-second load.)
+/// - Moved before it is read: the compile output must be this user's real
+///   directory and is renamed into a `.partial-` sibling under the root
+///   first, hashed there, then renamed into place; the manifest is written
+///   last and is the commit record.
+/// - Verified: the manifest records every file's size and SHA-256 and is
+///   checked before every load. A missing or mismatched manifest (a crash
+///   or full disk mid-install, or a planted or edited model) discards the
+///   entry and recompiles from the bundle; a mismatched entry is never
+///   loaded. A hard-linked file is refused (it could be rewritten through
+///   the other link). (Hashing the ~600 MB model costs well under a second
+///   against a multi-second load.)
+/// - Fail closed: with no usable root, or when the output cannot be moved,
+///   hashed or committed, the load throws `CompiledModelRefusal` (review);
+///   the temp output is never loaded.
 /// - Self-healing: a failed load discards the entry, purges Core ML's own
 ///   e5rt cache, and retries exactly once.
 ///
@@ -48,11 +54,11 @@ struct CompiledModelStore<Model> {
     func model(package: URL) throws -> Model {
         do {
             return try attempt(package)
-        } catch let refusal as CoreMLDiskSpaceError {
+        } catch let refusal as any CoreMLRefusal {
             throw refusal
         } catch {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
-            if let entry = entry(for: package) { discard(entry) }
+            if let entry = try? entry(for: package) { discard(entry) }
             coreML.purgeCache()
             return try attempt(package)
         }
@@ -65,30 +71,27 @@ struct CompiledModelStore<Model> {
     }
 
     private func attempt(_ package: URL) throws -> Model {
-        let entry = entry(for: package)
-        if let entry {
-            if isVerified(entry) {
-                return try coreML.run(checkingDisk: true) { try load(entry.dir) }
-            }
-            if exists(entry) {
-                coreML.log("rvd: compiled judge model failed verification; recompiling from the bundle")
-                discard(entry)
-            }
+        let entry = try entry(for: package)
+        if isVerified(entry) {
+            return try coreML.run(checkingDisk: true) { try load(entry.dir) }
+        }
+        if exists(entry) {
+            coreML.log("rvd: compiled judge model failed verification; recompiling from the bundle")
+            discard(entry)
         }
         let compiled = try coreML.run(checkingDisk: true) { try compile(package) }
-        var loadURL = compiled
-        if let entry, install(compiled, as: entry) {
-            loadURL = entry.dir
-            try? FileManager.default.removeItem(at: compiled)
-            sweep(keeping: entry)
-        }
-        return try coreML.run(checkingDisk: true) { try load(loadURL) }
+        try install(compiled, as: entry)
+        sweep(keeping: entry)
+        return try coreML.run(checkingDisk: true) { try load(entry.dir) }
     }
 
-    /// nil when the cache root is unusable (then the compile output is loaded
-    /// directly, as before the cache existed).
-    private func entry(for package: URL) -> Entry? {
-        guard let root, Self.usableRoot(root) else { return nil }
+    /// Refuses when there is no usable protected root: the compile output
+    /// is never loaded from the temp dir it lands in.
+    private func entry(for package: URL) throws(CompiledModelRefusal) -> Entry {
+        guard let root else { throw CompiledModelRefusal(detail: "no protected model cache directory") }
+        guard Self.usableRoot(root) else {
+            throw CompiledModelRefusal(detail: "\(root.path) is not this user's real directory")
+        }
         let stamp = (try? FileManager.default.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
         let pathKey = Self.fnv1a(package.path)
         let versionKey = Self.fnv1a("\(stamp?.timeIntervalSince1970 ?? 0)|\(version)")
@@ -105,33 +108,49 @@ struct CompiledModelStore<Model> {
     }
 
     private func isVerified(_ entry: Entry) -> Bool {
-        var info = stat()
-        guard lstat(entry.dir.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR,
-              info.st_uid == geteuid(),
-              let recorded = Self.readManifest(entry.manifest),
+        guard let recorded = Self.readManifest(entry.manifest),
               let actual = Self.manifest(of: entry.dir, digest: digest)
         else { return false }
         return recorded == actual
     }
 
-    private func install(_ compiled: URL, as entry: Entry) -> Bool {
+    /// Core ML compiles into the temp dir, which agents can write. The output
+    /// is checked (this user's real directory), moved into the protected
+    /// root first (a same-volume rename; a copy across volumes), hashed
+    /// there, then committed under its entry name with the manifest. Any
+    /// failure refuses. The temp output and the partial copy are removed on
+    /// every path.
+    private func install(_ compiled: URL, as entry: Entry) throws(CompiledModelRefusal) {
         let fm = FileManager.default
         let partial = entry.dir.deletingLastPathComponent()
             .appendingPathComponent(".\(entry.dir.lastPathComponent)\(Self.partialMarker)\(UUID().uuidString)")
-        guard (try? fm.copyItem(at: compiled, to: partial)) != nil,
-              let manifest = Self.manifest(of: partial, digest: digest),
+        defer {
+            // Gone after a move or commit; a refused symlink is removed itself.
+            try? fm.removeItem(at: compiled)
+            try? fm.removeItem(at: partial)
+        }
+        guard Self.isOwnedDirectory(compiled) else {
+            throw CompiledModelRefusal(detail: "compile output is not this user's real directory")
+        }
+        if rename(compiled.path, partial.path) != 0 {
+            guard errno == EXDEV, (try? fm.copyItem(at: compiled, to: partial)) != nil else {
+                throw CompiledModelRefusal(detail: "could not move the compile output into the cache")
+            }
+        }
+        guard let manifest = Self.manifest(of: partial, digest: digest),
               let data = try? JSONEncoder().encode(manifest)
-        else {
-            try? fm.removeItem(at: partial)
-            return false
-        }
-        discard(entry)
+        else { throw CompiledModelRefusal(detail: "could not hash the compiled model") }
         guard rename(partial.path, entry.dir.path) == 0 else {
-            try? fm.removeItem(at: partial)
-            return false
+            // Another process committed this entry first: use it only verified.
+            if isVerified(entry) { return }
+            throw CompiledModelRefusal(detail: "could not commit the compiled model")
         }
-        try? data.write(to: entry.manifest, options: .atomic)
-        return true
+        do {
+            try data.write(to: entry.manifest, options: .atomic)
+        } catch {
+            discard(entry)
+            throw CompiledModelRefusal(detail: "could not write the manifest")
+        }
     }
 
     /// Manifest first, so a half-removed entry is never trusted.
@@ -173,24 +192,26 @@ struct CompiledModelStore<Model> {
         return try? JSONDecoder().decode([String: CompiledFileRecord].self, from: data)
     }
 
-    /// Relative path → size and SHA-256 of every regular file. nil on a
-    /// symlink, an unreadable file, or an empty tree: such an entry is never
-    /// trusted.
+    /// Relative path → size and SHA-256 of every regular file. nil when the
+    /// root is not this user's real directory, or on a symlink, a special
+    /// file, a foreign file, a file with another hard link (it could be
+    /// rewritten through that link after the hash), an unreadable file, or
+    /// an empty tree: such an entry is never trusted.
     static func manifest(of dir: URL, digest: (URL) -> String?) -> [String: CompiledFileRecord]? {
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
-        guard let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys) else {
-            return nil
-        }
+        guard isOwnedDirectory(dir),
+              let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)
+        else { return nil }
         let base = dir.resolvingSymlinksInPath().path + "/"
         var records: [String: CompiledFileRecord] = [:]
         for case let url as URL in walker {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
-            if values.isSymbolicLink == true { return nil }
-            if values.isDirectory == true { continue }
-            guard values.isRegularFile == true, let size = values.fileSize, let sha = digest(url) else { return nil }
+            var info = stat()
+            guard lstat(url.path, &info) == 0, info.st_uid == geteuid() else { return nil }
+            let kind = info.st_mode & S_IFMT
+            if kind == S_IFDIR { continue }
+            guard kind == S_IFREG, info.st_nlink == 1, let sha = digest(url) else { return nil }
             let path = url.resolvingSymlinksInPath().path
             guard path.hasPrefix(base) else { return nil }
-            records[String(path.dropFirst(base.count))] = CompiledFileRecord(size: Int64(size), sha256: sha)
+            records[String(path.dropFirst(base.count))] = CompiledFileRecord(size: Int64(info.st_size), sha256: sha)
         }
         return records.isEmpty ? nil : records
     }

@@ -69,16 +69,19 @@ private struct Fixture {
         coreML = FakeCoreML(temp: temp)
     }
 
-    func store(free: Int64? = 100 << 30, version: String = "26A428") -> CompiledModelStore<String> {
+    func store(
+        free: Int64? = 100 << 30, version: String = "26A428", noRoot: Bool = false,
+        compile: ((URL) throws -> URL)? = nil, digest: @escaping (URL) -> String? = contentDigest
+    ) -> CompiledModelStore<String> {
         let recorder = self.recorder
         let guardian = CoreMLGuard(
             store: nil, disk: FakeDisk(free: free), cacheVolume: base,
             purgeCoreMLCache: { recorder.purge() }, log: { recorder.log($0) })
         let coreML = self.coreML
         return CompiledModelStore(
-            root: root, coreML: guardian, version: version,
-            compile: { try coreML.compile($0) }, load: { try coreML.load($0) },
-            digest: contentDigest)
+            root: noRoot ? nil : root, coreML: guardian, version: version,
+            compile: compile ?? { try coreML.compile($0) }, load: { try coreML.load($0) },
+            digest: digest)
     }
 
     func rootEntries() throws -> [String] {
@@ -241,15 +244,81 @@ struct CompiledModelStoreTests {
         #expect(Set(try FileManager.default.contentsOfDirectory(atPath: legacy.path)) == Set(foreign))
     }
 
-    @Test("a symlinked cache root is not used; the model still loads from the compile output")
-    func symlinkedRootNotUsed() throws {
+    @Test("a symlinked cache root refuses (review); nothing compiles or loads from temp")
+    func symlinkedRootRefuses() throws {
         let f = try Fixture()
         defer { f.remove() }
         let elsewhere = f.base.appendingPathComponent("elsewhere", isDirectory: true)
         try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: f.root.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: f.root, withDestinationURL: elsewhere)
-        #expect(try f.store().model(package: f.package) == "model")
+        #expect(throws: CompiledModelRefusal.self) { try f.store().model(package: f.package) }
+        #expect(f.coreML.compiles == 0)
+        #expect(f.coreML.loads == 0)
         #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+    }
+
+    @Test("no cache root refuses: the compile output is never loaded unverified")
+    func noRootRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        #expect(throws: CompiledModelRefusal.self) { try f.store(noRoot: true).model(package: f.package) }
+        #expect(f.coreML.compiles == 0)
+        #expect(f.coreML.loads == 0)
+    }
+
+    @Test("a compile output swapped for a symlink refuses; the link is removed, its target untouched")
+    func symlinkedCompileOutputRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let planted = f.base.appendingPathComponent("planted.mlmodelc", isDirectory: true)
+        try FileManager.default.createDirectory(at: planted, withIntermediateDirectories: true)
+        try Data("evil!".utf8).write(to: planted.appendingPathComponent("model.mil"))
+        let link = f.coreML.temp.appendingPathComponent("model_link.mlmodelc")
+        let store = f.store(compile: { _ in
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: planted)
+            return link
+        })
+        #expect(throws: CompiledModelRefusal.self) { try store.model(package: f.package) }
+        #expect(f.coreML.loads == 0)
+        #expect(try f.tempEntries().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: planted.appendingPathComponent("model.mil").path))
+        #expect(try f.rootEntries().filter { $0.hasSuffix(".mlmodelc") }.isEmpty)
+    }
+
+    @Test("a hard-linked file in the compile output refuses (it could be rewritten after the hash)")
+    func hardLinkedCompileOutputRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.coreML
+        let outside = f.base.appendingPathComponent("held-link")
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            try FileManager.default.linkItem(at: out.appendingPathComponent("model.mil"), to: outside)
+            return out
+        })
+        #expect(throws: CompiledModelRefusal.self) { try store.model(package: f.package) }
+        #expect(f.coreML.loads == 0)
+        #expect(try f.tempEntries().isEmpty)
+        #expect(try f.rootEntries().filter { !$0.hasPrefix(".") || $0.contains(".partial-") }.isEmpty)
+    }
+
+    @Test("a compile output that cannot be hashed refuses and leaves nothing behind")
+    func unhashableOutputRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        #expect(throws: CompiledModelRefusal.self) { try f.store(digest: { _ in nil }).model(package: f.package) }
+        #expect(f.coreML.compiles == 1)
+        #expect(f.coreML.loads == 0)
+        #expect(f.recorder.purgeCount == 0)
+        #expect(try f.tempEntries().isEmpty)
+        #expect(try f.rootEntries().isEmpty)
+    }
+
+    @Test("the refusal reason says the judge is off and why")
+    func refusalReason() {
+        let refusal = CompiledModelRefusal(detail: "could not hash the compiled model")
+        #expect(refusal.reason.contains("Laya judge"))
+        #expect(refusal.reason.contains("could not hash the compiled model"))
     }
 }
