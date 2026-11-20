@@ -257,27 +257,14 @@ public enum WorkspaceTransfer {
     /// case-insensitive volume.
     static func isProtectedWorkspacePath(_ components: [String]) -> Bool {
         guard components.isEmpty == false else { return false }
-        let path = components.map(caseFolded).joined(separator: "/")
+        let path = components.map(ProtectedWorkspacePaths.folded).joined(separator: "/")
         return protectedWorkspacePrefixes.contains { protected in
             path == protected || path.hasPrefix(protected + "/")
         }
     }
 
     private static let protectedWorkspacePrefixes: [String] =
-        ([".git"] + MicroVMControlLayout.controlTrees + MicroVMControlLayout.controlFiles
-            + WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees).map(caseFolded)
-
-    private static func caseFolded(_ text: String) -> String {
-        var folded = ""
-        for character in text.lowercased() {
-            switch character {
-            case "\u{017F}": folded.append("s")
-            case "\u{212A}": folded.append("k")
-            default: folded.append(character)
-            }
-        }
-        return folded
-    }
+        ([ProtectedWorkspacePaths.gitDirectory] + ProtectedWorkspacePaths.paths).map(ProtectedWorkspacePaths.folded)
 
     /// `.git` in any case: the walk skips it below the top, and a transfer
     /// path through one is refused.
