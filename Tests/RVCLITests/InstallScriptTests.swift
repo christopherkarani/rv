@@ -316,6 +316,34 @@ private func runInstallScript(
     #expect(text.contains("Applications"))
 }
 
+/// rvd is replaced last. An always-on rvd exits once its binary changes and
+/// launchd/systemd start the new one at once; swapped before the packs,
+/// runtime libraries or helpers, the new rvd would load the old or missing
+/// ones (core packs readiness is computed once at startup).
+@Test func installSh_replacesRvdLast() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let swap = try #require(text.range(of: "mv -f \"$tmp_rvd\" \"$bin/rvd\""))
+    let setup = try #require(text.range(of: "RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))
+    #expect(swap.upperBound < setup.lowerBound)
+    for earlier in [
+        "mv -f \"$tmp_rv\" \"$bin/rv\"",
+        "mv -f \"$tmp_cli\" \"$bin/rv-cli\"",
+        "mv -f \"$tmp_host\" \"$bin/rv-workspace-host\"",
+        "mv -f \"$tmp_span\" \"$bin/libswiftCompatibilitySpan.dylib\"",
+        "mv -f \"$tmp_isolation\" \"$bin/rv-isolation-exec\"",
+        "mv -f \"$tmp_claim\" \"$bin/rv-pty-claim\"",
+        "cp -R \"$bundle\" \"$bin/$name\"",
+        "cp \"$lib\" \"$bin/$name\"",
+        "mv -f \"$bin/.rv-swiftlibs.installing\" \"$bin/.rv-swiftlibs\"",
+        "mv -f \"$tmp_app\" \"$apps_dir/RVApprovals.app\"",
+    ] {
+        let range = try #require(text.range(of: earlier, options: .backwards), "\(earlier)")
+        #expect(range.upperBound < swap.lowerBound, "\(earlier) must come before the rvd swap")
+    }
+    let between = text[swap.upperBound..<setup.lowerBound]
+    #expect(between.contains("\"$bin/") == false)
+}
+
 @Test func installSh_setsRVFromInstallBeforeSetup() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))

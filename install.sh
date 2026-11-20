@@ -1306,10 +1306,9 @@ fi
 
 # Unlink dest first: BSD cp writes through an existing dest symlink. Same
 # directory rename after a successful staging is metadata-only.
-rm -f "$bin/rv" "$bin/rv-cli" "$bin/rvd" "$bin/rv-workspace-host"
+rm -f "$bin/rv" "$bin/rv-cli" "$bin/rv-workspace-host"
 mv -f "$tmp_rv" "$bin/rv"
 mv -f "$tmp_cli" "$bin/rv-cli"
-mv -f "$tmp_rvd" "$bin/rvd"
 mv -f "$tmp_host" "$bin/rv-workspace-host"
 if [ -n "$tmp_span" ]; then
   rm -f "$bin/libswiftCompatibilitySpan.dylib"
@@ -1354,7 +1353,6 @@ if [ "$os" = "Darwin" ] && [ -x "$src/rv-macvm" ] && [ -x "$src/rv-macvm-agent" 
 fi
 tmp_rv=""
 tmp_cli=""
-tmp_rvd=""
 tmp_host=""
 
 # Pack JSON lives next to the binaries (Scripts/release.sh). Swift Build (the
@@ -1397,6 +1395,13 @@ if [ "$os" = "Darwin" ] && [ -d "$src/RVApprovals.app" ]; then
   rm -rf "$apps_dir/RVApprovals.app"
   mv -f "$tmp_app" "$apps_dir/RVApprovals.app"
 fi
+
+# rvd goes last. The running rvd exits once its binary changes, and launchd
+# (KeepAlive) or systemd (Restart=always) start the new one right away; it
+# must find the new packs, runtime libraries and helpers already in place.
+rm -f "$bin/rvd"
+mv -f "$tmp_rvd" "$bin/rvd"
+tmp_rvd=""
 
 if [ "${RV_INSTALL_MODE:-}" = "observe" ]; then
   RV_FROM_INSTALL=1 exec "$bin/rv" setup --observe
