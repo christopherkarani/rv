@@ -24,7 +24,7 @@ private final class DeadlineClock: Sendable {
 /// its own start (so a starved runner cannot spend its wait before it runs).
 /// When it goes late it moves the deadline clock to `handBack`.
 private final class StuckJudge: JudgePort, Sendable {
-    static let window: Duration = JudgeAdmission.replyMargin + .milliseconds(500)
+    static let window: Duration = JudgeAdmission.inferenceHeadroom + .seconds(1)
     private let admission = JudgeAdmission(limit: 4)
     private let release = DispatchSemaphore(value: 0)
     private let delivered = DispatchSemaphore(value: 0)

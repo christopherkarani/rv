@@ -223,7 +223,7 @@ struct JudgeAdmissionTests {
         // Slot cutoff begin+0.4 s; the caller stops waiting at
         // deadline - replyMargin. The prediction only returns once released,
         // so the ordering holds however starved the machine is.
-        let deadline = begin.advanced(by: .milliseconds(1400))
+        let deadline = begin.advanced(by: JudgeAdmission.inferenceHeadroom + .milliseconds(400))
         let first = JudgeRuntime.admitted(
             through: admission, until: deadline, since: begin,
             onLate: { _, ran in
@@ -325,10 +325,22 @@ struct JudgeAdmissionTests {
         #expect(JudgeAdmission.loadWait(.seconds(5), until: spent, now: now) == .zero)
     }
 
+    /// A call that gets the model at its slot cutoff still has a real
+    /// inference window (p50 0.3 s) before it stops waiting at
+    /// `deadline - replyMargin`; otherwise a healthy judge would answer
+    /// `late` there and count as a circuit failure.
+    @Test func aSlotTakenAtItsCutoffLeavesASecondToInfer() {
+        #expect(JudgeAdmission.inferenceHeadroom - JudgeAdmission.replyMargin >= .seconds(1))
+        // A near deadline, where the headroom (not the wait budget) ends the slot wait.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let cutoff = JudgeAdmission.slotCutoff(until: deadline, since: .now)
+        #expect(cutoff.map { (deadline - JudgeAdmission.replyMargin) - $0 >= .seconds(1) } == true)
+    }
+
     @Test func aFullLiveQueueClearsInsideOneHookBudget() {
-        // Nominal inference per request; the last admitted one must still
-        // finish before the daemon's budget runs out.
-        let nominalInference: Duration = .milliseconds(500)
+        // Nominal inference per request (p50 0.3 s); the last admitted one
+        // must still finish before the daemon's budget runs out.
+        let nominalInference: Duration = .milliseconds(400)
         #expect(
             nominalInference * JudgeAdmission.liveLimit + JudgeAdmission.inferenceHeadroom
                 <= HookDeadline.budget)

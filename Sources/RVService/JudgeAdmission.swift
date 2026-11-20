@@ -39,8 +39,11 @@ final class JudgeAdmission: Sendable {
 
     /// Time kept back for the inference itself: a request waits for a slot
     /// only until `deadline - inferenceHeadroom`, so work it admits can
-    /// finish before the client gives up.
-    static let inferenceHeadroom: Duration = .seconds(1)
+    /// finish before the client gives up. It covers `replyMargin` plus a
+    /// second of inference (p50 0.3 s): with less, a call taking the slot
+    /// at its cutoff would almost always answer `late`, a circuit failure
+    /// for a healthy judge.
+    static let inferenceHeadroom: Duration = replyMargin + .seconds(1)
 
     /// Time kept back after inference for the rest of the reply: a caller
     /// stops waiting for its prediction at `deadline - replyMargin` and

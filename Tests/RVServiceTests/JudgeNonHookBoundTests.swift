@@ -95,6 +95,11 @@ private func expectLateReview(_ result: EvaluationResult, home: HomeDirectory, j
 /// stuck prediction answers review within the bound.
 @Suite("Judge bound on non-hook doors")
 struct JudgeNonHookBoundTests {
+    /// Shorter than the production `nonHookBudget`, with seconds of slack
+    /// for the evaluation that runs before the judge on a starved runner:
+    /// the slot wait ends at `budget - inferenceHeadroom` from the offload.
+    static let budget: Duration = .seconds(5)
+
     /// The judge budget already spent when the evaluation starts: pattern
     /// search keeps its own ceiling, so the rule's deny stands.
     @Test func aSpentJudgeBudgetLeavesTheRuleDeny() async throws {
@@ -127,7 +132,7 @@ struct JudgeNonHookBoundTests {
             remove(home)
         }
         let door = GatedEvaluate(EvaluateSession(), judge: judge)
-        let result = await JudgeOffload.$judgeBudget.withValue(.seconds(2)) {
+        let result = await JudgeOffload.$judgeBudget.withValue(Self.budget) {
             await door.apply(
                 command: judged, cwd: wd("/tmp/ws"), home: home,
                 grants: EphemeralAllowOnceTable(), now: now, allowlist: { .empty })
@@ -148,7 +153,7 @@ struct JudgeNonHookBoundTests {
             snapshots: nil, catalog: nil, home: home,
             uptimeNanoseconds: { DispatchTime.now().uptimeNanoseconds }, judge: judge)
         let peek = compileSet.livePeek(
-            store: nil, grants: EphemeralAllowOnceTable(), judgeBudget: .seconds(2))
+            store: nil, grants: EphemeralAllowOnceTable(), judgeBudget: Self.budget)
         let result = await peek(judged, wd("/tmp/ws"), now)
         try expectLateReview(result, home: home, judge: judge)
     }
