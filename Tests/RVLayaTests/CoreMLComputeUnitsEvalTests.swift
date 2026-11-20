@@ -53,20 +53,24 @@ struct CoreMLComputeUnitsEvalTests {
         ]
     }()
 
-    static func guardian(_ units: JudgeComputeUnits) -> CoreMLGuard {
+    static func guardian(_ units: JudgeComputeUnits, state: URL) -> CoreMLGuard {
         let store = FakeCrashStore()
         if units == .cpuOnly {
             store.saveState(CoreMLCrashState(crashes: [], cpuOnlyUntil: Date().addingTimeInterval(3600)))
         }
-        return CoreMLGuard(store: store, disk: StatfsDiskSpace(), cacheVolume: nil, purgeCoreMLCache: {}, log: { _ in })
+        return CoreMLGuard(
+            store: store, disk: StatfsDiskSpace(), cacheVolume: nil,
+            stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
     }
 
     @Test func cpuOnlyMatchesDefaultUnits() throws {
         let bundle = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["RV_FT_BUNDLE"]))
         let rows = try Self.rows() + Self.long
+        let state = try CoreMLGuardBundleTests.tempState()
+        defer { try? FileManager.default.removeItem(at: state) }
         var results: [JudgeComputeUnits: [(action: LayaVerdict.Action, risk: Double, ms: Double)]] = [:]
         for units in [JudgeComputeUnits.cpuAndGPU, .cpuOnly] {
-            let guardian = Self.guardian(units)
+            let guardian = Self.guardian(units, state: state)
             #expect(guardian.computeUnits == units)
             let loadStart = Date()
             let judge = try FineTunedJudge(bundleDir: bundle, coreML: guardian)
