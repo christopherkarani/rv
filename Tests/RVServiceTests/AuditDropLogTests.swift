@@ -63,6 +63,9 @@ struct AuditDropLogTests {
         let line = try #require(lines.written.withLock { $0.first })
         #expect(line.contains(file.path))
         #expect(line.contains("judge-log"))
+        // judge-log.jsonl is not hash-chained: `rv audit verify` has nothing
+        // to say about it.
+        #expect(line.contains("rv audit verify") == false)
     }
 
     /// G3: with no home there is nowhere to record an approval, so rvd

@@ -42,9 +42,13 @@ final class AuditDropLog: Sendable {
         }
         guard due else { return false }
         let target = file.map { "could not append to \($0.path)" } ?? "has no home directory to keep audit.jsonl in"
+        // judge-log.jsonl is not hash-chained, so there is nothing to verify.
+        let check = kind == .judgeLog
+            ? "Check the file and its directory. "
+            : "Check the file and its directory, then run `rv audit verify`. "
         write(RVDLogFile.line(
             "rvd: \(target); dropped a \(kind.rawValue) row, so \(consequence). "
-                + "Check the file and its directory, then run `rv audit verify`. "
+                + check
                 + "Further drops of this kind are not logged for a minute",
             now: now))
         return true
