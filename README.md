@@ -504,6 +504,17 @@ rv is one binary, 25 commands. The rest of the surface:
   isolation boundary — see the
   [acceptance audit](docs/security/runtime-acceptance.md).
 
+## Fleet console
+
+[`dashboard/`](dashboard/README.md) is rv Console, a self-hosted web
+dashboard for teams. Machines push to it with `rv audit forward`, either
+configured per machine or fleet-wide through `audit.forward` in the
+organization policy, and post their posture with `rv report --json`. It
+shows blocks, observe-mode would-be blocks, overrides, MCP and secret
+activity, and compliance across the fleet. It also verifies each machine's
+audit hash chain off the machine. To try it:
+`cd dashboard && npm ci && RV_CONSOLE_DEMO=1 npm run dev`.
+
 ## Platform support
 
 | | macOS 15+ (Apple Silicon) | Linux (x86_64, aarch64; glibc 2.35+) |
