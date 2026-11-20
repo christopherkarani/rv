@@ -1,6 +1,7 @@
 #if os(Linux)
 import Foundation
 import Glibc
+import RVService
 import Testing
 @testable import RVCLI
 
@@ -158,6 +159,32 @@ import Testing
             #expect(down.exitCode == 0)
             #expect(down.stdout == "rv service start: rvd is running\n")
             #expect(stopped.events.count == 2)
+        }
+    }
+
+    /// The backoff record is cleared only when a start or restart happens:
+    /// `rv service start` against an rvd that already answers leaves it.
+    @Test(arguments: [true, false])
+    func startClearsTheBackoffRecordOnlyWhenItStartsRvd(userManager: Bool) throws {
+        try withTempHome { home, _, launchctl in
+            let store = StartupBackoffStore.live(home: home.path)
+            let looping = StartupBackoff.Record(earlyExits: 7, running: true)
+            store.save(looping)
+            let up = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: true),
+                onlyIfStopped: true)
+            #expect(up.stdout == "rv service start: rvd is already running\n")
+            #expect(store.load() == looping)
+
+            let down = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: false),
+                onlyIfStopped: true)
+            #expect(down.exitCode == 0)
+            #expect(store.load() == nil)
         }
     }
 

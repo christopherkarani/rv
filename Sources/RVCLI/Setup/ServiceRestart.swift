@@ -52,16 +52,10 @@ enum ServiceRestart {
                 line = "rv service \(verb): reloaded \(SetupRun.launchAgentLabel) into \(domain)"
             }
             // An SSH session cannot look up a gui/ job's Mach service, so a
-            // probe from here would fail against a healthy rvd. Say what
-            // was and was not checked instead of reporting a failure.
+            // probe from here would fail against a healthy rvd. launchd can
+            // still say whether rvd's process is up and stays up.
             if domain.hasPrefix("gui/"), env.launchctl.sessionIsAqua() == false {
-                return SetupOutcome(
-                    stdout: line + "\n",
-                    stderr: "rv service \(verb): this session (SSH or another non-desktop login) cannot reach "
-                        + "rvd in \(domain), so rv did not check that it answers; "
-                        + "run rv doctor from the desktop session, or read \(RVDLogFile.path(home: "~"))\n",
-                    exitCode: 0
-                )
+                return try outsideTheDesktopSession(env, verb: verb, domain: domain, line: line)
             }
             // launchctl accepting the job is not rvd answering: a crash on
             // start or an untrusted binary must fail here, as setup does.
@@ -71,6 +65,63 @@ enum ServiceRestart {
             let output = setupFailureOutput(error, command: onlyIfStopped ? .serviceStart : .serviceRestart)
             return SetupOutcome(stdout: "", stderr: output.stderr, exitCode: output.exitCode)
         }
+    }
+
+    /// From SSH: success only once launchd reports rvd running with the
+    /// same pid across `stableFor` (it did not crash on start). When
+    /// `launchctl print` cannot tell, the restart is reported as requested,
+    /// not verified.
+    private static func outsideTheDesktopSession(
+        _ env: SetupEnvironment,
+        verb: String,
+        domain: String,
+        line: String
+    ) throws(SetupError) -> SetupOutcome {
+        let unreachable = "rv service \(verb): this session (SSH or another non-desktop login) cannot reach "
+            + "rvd in \(domain); run rv doctor from the desktop session to check that it answers, "
+            + "or read \(RVDLogFile.path(home: "~"))\n"
+        switch launchdKeepsRvdRunning(env, domain: domain) {
+        case .running(let pid):
+            return SetupOutcome(
+                stdout: line + "\n",
+                stderr: "rv service \(verb): launchd reports rvd running (pid \(pid)); " + unreachable,
+                exitCode: 0
+            )
+        case .unknown:
+            return SetupOutcome(
+                stdout: "rv service \(verb): restart requested for \(SetupRun.launchAgentLabel) "
+                    + "in \(domain) (not verified)\n",
+                stderr: "rv service \(verb): launchctl print did not report rvd's state; " + unreachable,
+                exitCode: 0
+            )
+        case .notRunning:
+            throw SetupError.serviceNotAnswering(.launchd)
+        }
+    }
+
+    static let stableFor: TimeInterval = 2
+
+    /// Polls `launchctl print` until rvd runs with one pid for `stableFor`,
+    /// up to `ServiceReadiness.deadline`. `.unknown` as soon as print
+    /// cannot tell; `.notRunning` when the deadline passes.
+    private static func launchdKeepsRvdRunning(_ env: SetupEnvironment, domain: String) -> LaunchdJobProcess {
+        var waited: TimeInterval = 0
+        while waited < ServiceReadiness.deadline {
+            switch env.launchctl.jobProcess(domain: domain, label: SetupRun.launchAgentLabel) {
+            case .unknown:
+                return .unknown
+            case .running(let pid):
+                env.sleep(stableFor)
+                waited += stableFor
+                if env.launchctl.jobProcess(domain: domain, label: SetupRun.launchAgentLabel) == .running(pid: pid) {
+                    return .running(pid: pid)
+                }
+            case .notRunning:
+                env.sleep(ServiceReadiness.pollInterval)
+                waited += ServiceReadiness.pollInterval
+            }
+        }
+        return .notRunning
     }
 
     /// Kickstarts the loaded job. A job loaded only in `user/` while an Aqua
@@ -124,6 +175,11 @@ enum ServiceRestart {
                 exitCode: EX_USAGE
             )
         }
+        if onlyIfStopped, env.serviceAnswersNow() {
+            return SetupOutcome(stdout: "rv service start: rvd is already running\n", exitCode: 0)
+        }
+        // Only now does a start or restart happen: an operator's own start
+        // must not wait out rvd's crash-loop backoff.
         SetupRun.clearStartupBackoff(env)
         do throws(SetupError) {
             if env.systemctl.userManagerReachable() {
@@ -138,9 +194,6 @@ enum ServiceRestart {
                     stdout: "rv \(command.rawValue): \(did) \(SystemdUserTemplate.unitName) (systemctl --user)\n",
                     exitCode: 0
                 )
-            }
-            if onlyIfStopped, env.serviceAnswersNow() {
-                return SetupOutcome(stdout: "rv service start: rvd is already running\n", exitCode: 0)
             }
             try SetupRun.startDirectRvd(env: env, onlyIfStopped: false)
             guard env.serviceAnswers() else {

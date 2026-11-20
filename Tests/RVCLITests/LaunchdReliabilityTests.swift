@@ -16,6 +16,8 @@ final class ScriptedLaunchctl: LaunchctlApplying {
     var kickstartError: Int32?
     /// False models an SSH (Background) session.
     var aqua = true
+    /// Successive `jobProcess` answers; the last one repeats.
+    var jobProcesses: [LaunchdJobProcess] = [.unknown]
     /// Runs inside each `bootout`, so a test can see what was on disk then.
     var onBootout: ((String) -> Void)?
 
@@ -66,6 +68,10 @@ final class ScriptedLaunchctl: LaunchctlApplying {
     }
 
     func sessionIsAqua() -> Bool { aqua }
+
+    func jobProcess(domain _: String, label _: String) -> LaunchdJobProcess {
+        jobProcesses.count > 1 ? jobProcesses.removeFirst() : jobProcesses[0]
+    }
 }
 
 private final class SleepLog {
@@ -340,14 +346,15 @@ func restartOrStart_rvdDoesNotAnswer_failsAndSaysSo(onlyIfStopped: Bool) throws 
 }
 
 /// From SSH the gui/ job's Mach service is out of reach, so the readiness
-/// probe would fail against a healthy rvd. Restart says it did not check
-/// instead of exiting 69.
+/// probe would fail against a healthy rvd. Restart asks launchd instead:
+/// rvd running with one pid across the stability wait is a restart.
 @Test(arguments: [false, true])
-func restartOrStart_fromSSHIntoGui_saysItCouldNotCheck(onlyIfStopped: Bool) throws {
+func restartOrStart_fromSSHIntoGui_checksLaunchdInstead(onlyIfStopped: Bool) throws {
     try withTempHome { home, _, _ in
         let launchctl = ScriptedLaunchctl()
         launchctl.aqua = false
         launchctl.loaded = ["gui/501"]
+        launchctl.jobProcesses = [.notRunning, .running(pid: 42), .running(pid: 42)]
         let probes = SleepLog()
         var environment = scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())
         environment.serviceAnswers = {
@@ -359,10 +366,55 @@ func restartOrStart_fromSSHIntoGui_saysItCouldNotCheck(onlyIfStopped: Bool) thro
         #expect(outcome.exitCode == 0)
         #expect(probes.naps.isEmpty)
         #expect(outcome.stdout == "rv service \(verb): restarted dev.rv.evaluate in gui/501\n")
-        #expect(outcome.stderr.contains("cannot reach rvd in gui/501, so rv did not check that it answers"))
+        #expect(outcome.stderr.contains("launchd reports rvd running (pid 42)"))
+        #expect(outcome.stderr.contains("cannot reach rvd in gui/501"))
         #expect(outcome.stderr.contains("~/Library/Logs/rv/rvd.log"))
         #expect(launchctl.events.contains("kickstart gui/501/dev.rv.evaluate"))
     }
+}
+
+/// A pid that changes is rvd crashing on start; never running by the
+/// deadline fails the command, as an rvd that does not answer would.
+@Test(arguments: [
+    [LaunchdJobProcess.running(pid: 1), .running(pid: 2), .running(pid: 3), .running(pid: 4),
+     .running(pid: 5), .running(pid: 6), .running(pid: 7)],
+    [LaunchdJobProcess.notRunning],
+])
+func restart_fromSSH_rvdNotStayingUp_fails(processes: [LaunchdJobProcess]) throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.aqua = false
+        launchctl.loaded = ["gui/501"]
+        launchctl.jobProcesses = processes + [.notRunning]
+        let outcome = ServiceRestart.run(scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog()))
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stdout.isEmpty)
+    }
+}
+
+/// When launchctl print cannot tell, the restart is reported as requested
+/// and not verified, never as restarted.
+@Test func restart_fromSSH_launchdCannotTell_saysNotVerified() throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.aqua = false
+        launchctl.loaded = ["gui/501"]
+        launchctl.jobProcesses = [.unknown]
+        let outcome = ServiceRestart.run(scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog()))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout == "rv service restart: restart requested for dev.rv.evaluate in gui/501 (not verified)\n")
+        #expect(outcome.stderr.contains("launchctl print did not report rvd's state"))
+    }
+}
+
+@Test func launchdJobProcess_parsesTheJobsOwnStateAndPid() {
+    let running = "gui/501/dev.rv.evaluate = {\n\tactive count = 1\n\tstate = running\n\tpid = 913\n"
+        + "\tendpoints = {\n\t\t\"dev.rv.evaluate\" = {\n\t\t\tstate = active\n\t\t}\n\t}\n}\n"
+    #expect(LaunchdJobProcess.parse(running) == .running(pid: 913))
+    let stopped = "x = {\n\tstate = not running\n\tsemaphores = {\n\t\tstate = running\n\t}\n}\n"
+    #expect(LaunchdJobProcess.parse(stopped) == .notRunning)
+    #expect(LaunchdJobProcess.parse("x = {\n\tstate = running\n}\n") == .unknown)
+    #expect(LaunchdJobProcess.parse("garbage") == .unknown)
 }
 
 /// The SSH exemption covers only gui/: a user/ job is reachable, so a dead

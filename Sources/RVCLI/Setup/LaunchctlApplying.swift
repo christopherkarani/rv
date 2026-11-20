@@ -34,6 +34,41 @@ protocol LaunchctlApplying {
     /// Whether this process runs in the Aqua (desktop) session, whose Mach
     /// namespace reaches jobs in `gui/<uid>`. An SSH login is Background.
     func sessionIsAqua() -> Bool
+    /// What `launchctl print <domain>/<label>` says about the job's process.
+    /// Works from SSH, where rvd's Mach service is out of reach.
+    func jobProcess(domain: String, label: String) -> LaunchdJobProcess
+}
+
+enum LaunchdJobProcess: Equatable {
+    case running(pid: Int32)
+    case notRunning
+    /// `launchctl print` failed or said neither.
+    case unknown
+
+    /// Parses `launchctl print` output: the job's own `state` and `pid`
+    /// lines are indented by one tab; nested sections use more.
+    static func parse(_ output: String) -> LaunchdJobProcess {
+        var state: String?
+        var pid: Int32?
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard line.hasPrefix("\t"), line.dropFirst().hasPrefix("\t") == false else { continue }
+            let field = line.dropFirst()
+            if field.hasPrefix("state = ") {
+                state = String(field.dropFirst("state = ".count))
+            } else if field.hasPrefix("pid = ") {
+                pid = Int32(field.dropFirst("pid = ".count))
+            }
+        }
+        switch state {
+        case "running":
+            guard let pid, pid > 0 else { return .unknown }
+            return .running(pid: pid)
+        case .some:
+            return .notRunning
+        case nil:
+            return .unknown
+        }
+    }
 }
 
 extension LaunchctlApplying {
@@ -41,6 +76,7 @@ extension LaunchctlApplying {
     func domainExists(_: String) -> Bool { true }
     func kickstart(domain _: String, label _: String) throws {}
     func sessionIsAqua() -> Bool { true }
+    func jobProcess(domain _: String, label _: String) -> LaunchdJobProcess { .unknown }
 }
 
 enum LaunchctlError: Error, Equatable {
@@ -127,6 +163,20 @@ struct ProcessLaunchctl: LaunchctlApplying {
         process.waitUntilExit()
         let name = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return name != "Background"
+    }
+
+    func jobProcess(domain: String, label: String) -> LaunchdJobProcess {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["print", "\(domain)/\(label)"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? runExecutable(process)) != nil else { return .unknown }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return .unknown }
+        return LaunchdJobProcess.parse(String(decoding: data, as: UTF8.self))
     }
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {
