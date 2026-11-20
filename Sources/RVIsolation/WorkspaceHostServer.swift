@@ -232,7 +232,8 @@ final class WorkspaceHostServer: Sendable {
             lockPath: credential.lockPath,
             lockDevice: credential.lockDevice,
             lockInode: credential.lockInode,
-            uid: UInt32(getuid())
+            uid: UInt32(getuid()),
+            pid: getpid()
         )
         let wrote = WorkspaceEndpointStore.write(record, to: endpointFile)
         let recorded = wrote && supervisor.recordHostStarted(hostID.rawValue)

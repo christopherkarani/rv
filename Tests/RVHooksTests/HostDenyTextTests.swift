@@ -82,6 +82,24 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     }
 }
 
+/// The observe floor's indeterminate says why: rv could not see what the
+/// command runs. It is not the generic "could not finish" sentence, and
+/// never names self-protection.
+@Test func hostDenyText_observeUnanalyzableSaysWhy() {
+    let result = EvaluationResult(outcome: .indeterminate(.observeUnanalyzable))
+    let command = ShellCommand(rawValue: "git st")
+    for text in [
+        hostDenyText(from: result, command: command),
+        denyPresentation(from: result, command: command, unlockCode: nil).reason,
+    ] {
+        #expect(text == observeUnanalyzableSentence)
+        #expect(text?.contains("could not see what this command runs") == true)
+        #expect(text?.contains("Terminal") == true)
+        #expect(text?.contains("\n") == false)
+    }
+    #expect(IndeterminateReason.observeUnanalyzable.rawValue == "observe.floor:unanalyzable")
+}
+
 @Test func hostDenyText_denyIsOneLineNoPanelNoCode() {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let result = EvaluationResult(

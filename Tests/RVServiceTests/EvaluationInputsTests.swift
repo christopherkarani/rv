@@ -543,7 +543,7 @@ struct JudgePortPacksOnlyFloorTests {
         #expect(missingRow["note"] as? String == "engine-missing; context: partial")
     }
 
-    @Test("observe: unscored inline program is not floored; would-be stays the pack allow")
+    @Test("observe: the door allows an unscored inline program; the log keeps the pack allow")
     func observeDoesNotFloor() throws {
         let home = try guardHome(mode: nil)
         defer { remove(home) }
@@ -554,5 +554,43 @@ struct JudgePortPacksOnlyFloorTests {
         #expect(row["guard"] as? String == "observe")
         #expect(row["wouldBe"] as? String == "allow")
         #expect(row["note"] as? String == "judge-unavailable: x; context: partial")
+    }
+
+    /// `apply` and plain `peek` throw the would-be away, so the runtime only
+    /// flags the floor; the caller that shows the would-be applies it.
+    @Test(
+        "observe: the runtime flags the packs-only floor and leaves the would-be unfloored",
+        arguments: [
+            (JudgeRuntime.JudgeRun.unavailable("x"), fakeBundle),
+            (JudgeRuntime.JudgeRun.failed, JudgeSelection(engine: .ft, bundle: nil)),
+        ]
+    )
+    func observeDefersFloor(run: JudgeRuntime.JudgeRun, selection: JudgeSelection) throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let observed = JudgeRuntime.observe(
+            wouldBe: EvaluationResult(outcome: .plain), command: Self.inline,
+            inputs: inputs(.observe, home: home, judge: selection), judge: FixedJudge(run: run),
+            provenance: .unknown, now: now, cwd: nil, allowSafeLane: true, isPeek: false
+        )
+        #expect(observed.wouldBe.decision == .allow)
+        #expect(observed.floorsWouldBe)
+    }
+
+    @Test("observe, judge unavailable: the shown would-be is enforce's indeterminate")
+    func observeUnavailableFloorsShownWouldBe() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let verdict = await GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .unavailable("x"))).gatedVerdict(
+            .peek, request(Self.inline), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) },
+            host: .tty, tool: .bash, previewsWouldBe: true, inputs: inputs(.observe, home: home)
+        )
+        #expect(verdict.result.decision == .allow)
+        #expect(verdict.wouldBe?.result.decision == .indeterminate(.inlineProgramNeedsJudge))
+        #expect(verdict.wouldBe?.authorization == .denyPinned)
+        let row = try #require(try judgeLog(home).last)
+        #expect(row["wouldBe"] as? String == "allow")
     }
 }

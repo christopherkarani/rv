@@ -10,7 +10,7 @@ Protocol identity: `Sources/RVIPC/ProtocolVersion.swift`
 
 ## 0. Authority and scope
 
-- This contract covers the `rvd` service boundary only: handshake, the 12 methods in
+- This contract covers the `rvd` service boundary only: handshake, the 13 methods in
   `Sources/RVIPC/IPCMethods.swift`, framing, versioning, errors, transports.
 - It does NOT cover `rv.workspace.v1` (`Sources/RVIsolation/WorkspaceControlProtocol.swift`),
   a separate macOS-only terminal-attach plane with its own versioning and auth.
@@ -175,7 +175,7 @@ core-packs readiness. First failure wins.
 
 ## 4. Methods
 
-`Sources/RVIPC/IPCMethods.swift`. All 12 operations are unary request/response.
+`Sources/RVIPC/IPCMethods.swift`. All 13 operations are unary request/response.
 `cwd`/`host`/`session` inputs are untrusted metadata: they route and label, they
 never confer authority (§7 of `sdk/README.md`, identity model).
 
@@ -193,6 +193,7 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 10 | `pendingResolve` | `PendingResolveParams` | `PendingResolveReply` | **Human-attended only.** Fingerprint+identity echo enforced. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 11 | `rulePreview` | `RulePreviewParams` | `RulePreviewReply` | Never writes. |
 | 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
+| 13 | `policyStatus` | `PolicyStatusParams` | `PolicyStatusReply` | Read-only diagnostic (additive, `sdk/VERSIONING.md` §3). Python SDK: raw-only. See §4.6. |
 
 ### 4.1 Evaluate family
 
@@ -259,6 +260,28 @@ degrade gracefully), because new checks are additive.
 `HookHost`), stdin (default `""`), clientSemver?}` →
 `HookEvaluateReply{stdout, exitCode: int32, stderr (omitted when empty), via:
 "xpc", serviceSemver?}`. Non-UTF-8 stdin-overlay bytes are `decodeFailed`.
+
+### 4.6 Policy status
+
+`Sources/RVIPC/IPCPolicyStatus.swift`, `Sources/RVDomain/PolicyLoadStatus.swift`.
+Whether rvd's evaluation loads typed policy for `cwd` right now (rvd re-reads
+policy on every evaluation and keeps no last-good copy).
+
+- `PolicyStatusParams{cwd?}` (optional string; the workspace whose
+  `.rv/policy.toml` is read). `{}` is valid.
+- `PolicyStatusReply` is exactly one of `{"status": PolicyLoadStatus}` or
+  `{"busy": true}`. `busy` means rvd is already running its maximum concurrent
+  status loads; it says nothing about the policy. A reply with neither key is a
+  decode error.
+- `PolicyLoadStatus{state, failure?, problem?, machine?, repo?, ceilingRuleCount?,
+  effectiveRuleCount?, configDirectory?, workspace?}`. `state` ∈ `loaded|failed`;
+  `failure` ∈ `machine-invalid|repo-invalid|ceiling-invalid`; `problem` ∈
+  `not-regular-file|symlink|too-large|not-utf8|unreadable|unparseable` (all
+  closed). Layers are `{hash, ruleCount, exceedsCeiling}`. No rule content or
+  free-text error is carried.
+- Goldens: the per-method request/response vectors, plus
+  `policyStatusVariants_bytesMatchGoldenAndRoundTrip` (request with `cwd`, a
+  failed load with its `problem`, and `busy`).
 
 ## 5. Domain value shapes
 
@@ -419,7 +442,7 @@ handshake/skew → decode → method semantics.
   `swift test --filter <name>`, verify every line against the Codable sources
   cited above, then paste. Never paste unverified output.
 - New-SDK conformance checklist: connect + Hello + skew matrix; id/protocol echo
-  on every call; per-reply `serviceSemver` major gate; all 12 methods against a
+  on every call; per-reply `serviceSemver` major gate; all 13 methods against a
   live `rvd`; all `IPCError` cases mapped 1:1; unknown `DoctorCheckID` tolerated;
   impossible `EvaluationResult` combos rejected; 1 MiB + frame-error order;
   socket mode checks; no permission repair; `pendingResolve`/`ruleSave` gated

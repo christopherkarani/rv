@@ -23,8 +23,37 @@ extension HookHost {
 /// not satisfy "real human authorization or fail closed". Hosts that still
 /// send it decode as ordinary shell requests; the attestation is ignored.
 public enum HookRequest: Equatable, Sendable {
-    case shell(host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, session: SessionID?)
-    case file(host: HookHost, file: FileToolAction, cwd: WorkingDirectory?, session: SessionID?)
+    case shell(host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, sessions: HookSessionIDs)
+    case file(host: HookHost, file: FileToolAction, cwd: WorkingDirectory?, sessions: HookSessionIDs)
+
+    /// A request whose one session id serves both roles.
+    public static func shell(
+        host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, session: SessionID?
+    ) -> HookRequest {
+        .shell(host: host, command: command, cwd: cwd, sessions: HookSessionIDs(attribution: session))
+    }
+
+    /// A request whose one session id serves both roles.
+    public static func file(
+        host: HookHost, file: FileToolAction, cwd: WorkingDirectory?, session: SessionID?
+    ) -> HookRequest {
+        .file(host: host, file: file, cwd: cwd, sessions: HookSessionIDs(attribution: session))
+    }
+
+    public var sessions: HookSessionIDs {
+        switch self {
+        case .shell(_, _, _, let sessions),
+             .file(_, _, _, let sessions):
+            return sessions
+        }
+    }
+
+    /// The host session id: block rows, audit detail. Nil when the host
+    /// sent none.
+    public var session: SessionID? { sessions.attribution }
+
+    /// What a pending approval is keyed by (`HookSessionIDs.approval`).
+    public var approvalSession: SessionID? { sessions.approval }
 
     public var host: HookHost {
         switch self {
@@ -42,23 +71,20 @@ public enum HookRequest: Equatable, Sendable {
         }
     }
 
-    public var session: SessionID? {
-        switch self {
-        case .shell(_, _, _, let session),
-             .file(_, _, _, let session):
-            return session
-        }
-    }
-
+    /// `approvalSession`: a narrower host id (a Codex or Muse turn, a
+    /// Hermes task) that may key a pending approval when the host sent no
+    /// session id; never an attribution. Defaults to `session`.
     static func decoded(
         host: HookHost,
         command: String?,
         cwd: WorkingDirectory?,
         session: SessionID?,
+        approvalSession: SessionID? = nil,
         file: FileToolAction? = nil
     ) -> HookDecodeOutcome {
+        let sessions = HookSessionIDs(attribution: session, approval: approvalSession)
         if let file {
-            return .request(.file(host: host, file: file, cwd: cwd, session: session))
+            return .request(.file(host: host, file: file, cwd: cwd, sessions: sessions))
         }
         guard let command, command.isEmpty == false else {
             return .malformed(.missingCommand)
@@ -67,8 +93,23 @@ public enum HookRequest: Equatable, Sendable {
             host: host,
             command: ShellCommand(rawValue: command),
             cwd: cwd,
-            session: session
+            sessions: sessions
         ))
+    }
+}
+
+/// The two jobs a host's ids do. `attribution` is the host's session id
+/// only: it names the agent session on block and audit rows. `approval`
+/// keys a pending approval and its action fingerprint, and falls back to a
+/// narrower id (turn, task) when there is no session id, so an ask can
+/// still wait for a human; it is `attribution` whenever that is set.
+public struct HookSessionIDs: Equatable, Sendable {
+    public var attribution: SessionID?
+    public var approval: SessionID?
+
+    public init(attribution: SessionID?, approval: SessionID? = nil) {
+        self.attribution = attribution
+        self.approval = attribution ?? approval
     }
 }
 
@@ -156,13 +197,13 @@ extension HostCodec {
     /// becomes `ShellCommand` / `supportingCommand`.
     public func proposedAction(from request: HookRequest) -> ProposedAction {
         switch request {
-        case .shell(_, let command, let cwd, let session):
+        case .shell(_, let command, let cwd, let sessions):
             return .shell(
                 ShellAction.effectOnly(
                     EffectShell(
                         fingerprint: ActionFingerprint.make(
                             host: host,
-                            session: session,
+                            session: sessions.attribution,
                             cwd: cwd,
                             command: command
                         ),
@@ -171,12 +212,12 @@ extension HostCodec {
                     )
                 )
             )
-        case .file(_, let file, let cwd, let session):
+        case .file(_, let file, let cwd, let sessions):
             return .file(
                 FileAction(
                     fingerprint: ActionFingerprint.make(
                         host: host,
-                        session: session,
+                        session: sessions.attribution,
                         cwd: cwd,
                         file: file
                     ),

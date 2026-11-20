@@ -338,7 +338,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, log: GatedEffect.JudgeLogRow) {
+    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -346,17 +346,25 @@ public enum JudgeRuntime {
         var reading = JudgeReading(
             outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
         )
-        if !safe, let bundle = selection.bundle, case .allow = result.decision {
-            reading = read(
-                judge.judge(JudgeCall(
+        // `floorsWouldBe` marks where `apply` would take the packs-only
+        // floor (no bundle, or a judge that is unavailable). The caller that
+        // shows the would-be applies it; `apply` and a plain peek discard
+        // the would-be, so they skip the parse. The log row keeps the
+        // unfloored reading, as `apply`'s does.
+        var floorsWouldBe = false
+        if !safe, case .allow = result.decision {
+            if let bundle = selection.bundle {
+                let run = judge.judge(JudgeCall(
                     command: command.rawValue, context: context,
                     engine: selection.engine, bundle: bundle
-                )),
-                over: result,
-                provenance: provenance
-            )
+                ))
+                reading = read(run, over: result, provenance: provenance)
+                if case .unavailable = run { floorsWouldBe = true }
+            } else {
+                floorsWouldBe = true
+            }
         }
-        return (result.observedAllow, reading.outcome, logRow(
+        return (result.observedAllow, reading.outcome, floorsWouldBe, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
@@ -445,13 +453,13 @@ public enum JudgeRuntime {
         do {
             switch engine {
             case .laya:
-                let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
+                let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
                 return admitted {
                     do { return .verdict(try judge.judge(command)) }
                     catch { return .failed }
                 }
             case .ft:
-                let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
+                let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
                 return admitted {
                     do { return .verdict(try judge.judge(command, context: context)) }
                     catch { return .failed }
@@ -480,7 +488,15 @@ public enum JudgeRuntime {
         until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
         _ inference: () -> JudgeRun
     ) -> JudgeRun {
-        admission.run(until: deadline, inference) ?? .busy
+        // Admission wait and inference are timed apart for `HookTiming`.
+        let entered = ContinuousClock.now
+        var predicting: ContinuousClock.Instant?
+        let run = admission.run(until: deadline) {
+            predicting = ContinuousClock.now
+            return HookTiming.measure(.judgePredict, inference)
+        }
+        HookTiming.current?.add(.judgeAdmission, (predicting ?? ContinuousClock.now) - entered)
+        return run ?? .busy
     }
 
     /// A judge that cannot answer this request (prediction failed, still

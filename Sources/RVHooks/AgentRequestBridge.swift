@@ -8,12 +8,12 @@ public func agentRequest(
     from request: HookRequest
 ) -> Result<AgentRequest, AgentRequestValidationError> {
     switch request {
-    case .shell(let host, let command, let cwd, let session):
+    case .shell(let host, let command, let cwd, let sessions):
         return AgentRequest.validate(
             host: host,
             command: command,
             workingDirectory: cwd,
-            session: session
+            session: sessions.attribution
         )
     case .file:
         return .failure(.unsupportedKind)

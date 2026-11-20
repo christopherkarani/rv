@@ -218,7 +218,7 @@ let coreTestTargets: [Target] = [
         name: "RVWorkspaceTUITests",
         dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
-    .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
+    .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"], exclude: ["Fixtures"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
     .testTarget(name: "RVMCPTests", dependencies: mcpTestDependencies),
     .testTarget(

@@ -8,15 +8,16 @@
 # redirect) and every asset, SHA256SUMS included, comes from that tag. Every
 # downloaded asset is checked against SHA256SUMS on all OSes before anything
 # is unpacked or staged; RV_INSTALL_SKIP_CHECKSUMS=1 skips that (loudly).
-# Once release_ssh_allowed_signers is pinned below, SHA256SUMS itself must
-# carry a valid SHA256SUMS.sig from rv's release key; until then Linux
-# downloads (which have no code signature) warn that nothing is signed.
+# SHA256SUMS itself must carry a valid SHA256SUMS.sig from rv's release key
+# (release_ssh_allowed_signers below); with that pin empty, Linux downloads
+# (which have no code signature) only warn that nothing is signed.
 # Linux downloads also need glibc 2.35+ (no musl), libcurl and libsqlite3.
 # Downloaded macOS files are signature-checked before anything is staged. A
 # file counts as signed only with a valid, notarized Developer ID signature
 # from the pinned team. Ad-hoc and missing signatures, and Developer ID
-# signatures while no team is pinned, only warn until signed_releases=1
-# below. A mix of signed and unsigned never installs.
+# signatures while no team is pinned, are refused (signed_releases=1 below)
+# unless RV_INSTALL_ALLOW_UNSIGNED=1. A mix of signed and unsigned never
+# installs.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
 # RV_INSTALL_MODE picks the guard mode setup starts in: unset or `enforce`
@@ -96,19 +97,20 @@ case "$os/$arch" in
   Linux/x86_64) target="linux-x86_64" ;;
   *) refuse ;;
 esac
-# Flip to 1 and pin the Team ID once releases are Developer ID signed: from
-# then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
-signed_releases=0
-release_team_id=""
+# Releases are Developer ID signed by this team (first: v0.2.2): an unsigned
+# download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1, and a file signed
+# by any other team is always refused.
+signed_releases=1
+release_team_id="5V273URY46"
 # Release key for SHA256SUMS: one `rv-release <key-type> <base64-key>` line
 # per key (ssh allowed_signers format, no quotes), the public half of the
-# RV_RELEASE_SSH_SIGNING_KEY secret release.yml signs with. While it is
-# empty nothing is verified and Linux installs warn (macOS still has
-# codesign). Once pinned, every download needs a SHA256SUMS.sig that
+# RV_RELEASE_SSH_SIGNING_KEY secret release.yml signs with. If it were
+# empty nothing would be verified and Linux installs would warn (macOS still
+# has codesign). Pinned, every download needs a SHA256SUMS.sig that
 # `ssh-keygen -Y verify` accepts (namespace rv-release) before any asset is
 # trusted: a bad signature always refuses, a missing one refuses unless
 # RV_INSTALL_ALLOW_UNSIGNED=1. Like the team pin, only this script sets it.
-release_ssh_allowed_signers=""
+release_ssh_allowed_signers="rv-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMFYUW10a2NhO/jbObXtkUBeEVIEtZr41KYMiXExr8D"
 release_sig_principal="rv-release"
 release_sig_namespace="rv-release"
 tmp_fetch=""
@@ -155,10 +157,13 @@ bytes_of() {
 
 content_length() {
   # Last Content-Length after redirects. Empty when unknown / missing.
-  curl -fsSIL "$1" 2>/dev/null \
+  # curl -f still prints a 404's headers (GitHub's carry Content-Length: 9)
+  # before it exits 22, so a failed probe must print nothing.
+  headers="$(curl -fsSIL "$1" 2>/dev/null)" || return 0
+  printf '%s\n' "$headers" \
     | tr -d '\r' \
     | awk 'tolower($1) == "content-length:" { print $2 }' \
-    | tail -n 1 || true
+    | tail -n 1
 }
 
 normalize_size() {
