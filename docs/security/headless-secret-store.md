@@ -42,7 +42,13 @@ desktops get today. Only a store outside the agent's uid meets it.
    `rv mcp serve`), can a process of the same uid read it? Today, yes:
    those processes run as the user, and same-uid processes can read each
    other's memory (`/proc/<pid>/mem`, `ptrace`) unless Yama restricts it.
-   Containers often have no Yama at all.
+   Yama is a security module of the host kernel, not of the container:
+   every container on the host inherits the host's
+   `kernel.yama.ptrace_scope`, and an unprivileged container cannot
+   change it. So a container is as restricted as its host chose, often
+   1, which still lets a process attach to its own descendants (an agent
+   to an rv it started), sometimes 0, and none at all only where the
+   host kernel was built without Yama.
 3. **Unlock:** what opens the store without a person.
 4. **Guard:** can the hook guard name the access, as it names
    `secret-tool` today?
