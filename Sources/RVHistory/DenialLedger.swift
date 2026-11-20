@@ -36,7 +36,7 @@ public struct DenialLedger: Sendable {
             do {
                 try Self.appendLocked(record, now: now, store: store, key: key)
             } catch {
-                Self.writeCache.set(nil, for: key)
+                WriteCache.set(nil, for: key)
                 throw error
             }
         }
@@ -94,20 +94,21 @@ public struct DenialLedger: Sendable {
         var oldest: Date
     }
 
-    /// Process-wide, since rvd builds a `DenialLedger` per deny.
-    final class WriteCache: Sendable {
-        private let files = Mutex<[String: WrittenFile]>([:])
+    /// Process-wide, since rvd builds a `DenialLedger` per deny. A namespace
+    /// over one static `Mutex`: RVHistory declares no classes or actors.
+    enum WriteCache {
+        private static let files = Mutex<[String: WrittenFile]>([:])
 
-        func get(_ key: String) -> WrittenFile? {
-            files.withLock { $0[key] }
+        /// Removes and returns the entry, so the caller owns its arrays
+        /// alone and appending to them does not copy them.
+        static func take(_ key: String) -> WrittenFile? {
+            files.withLock { $0.removeValue(forKey: key) }
         }
 
-        func set(_ file: WrittenFile?, for key: String) {
+        static func set(_ file: WrittenFile?, for key: String) {
             files.withLock { $0[key] = file }
         }
     }
-
-    static let writeCache = WriteCache()
 
     /// Caller holds the ledger lock.
     private static func appendLocked(
@@ -119,7 +120,10 @@ public struct DenialLedger: Sendable {
         let line = try FileLockedJSONLStore<DenialLedgerRecord>.encodeLine(record)
         let readBack = try FileLockedJSONLStore<DenialLedgerRecord>.decodeLine(line)
         let cutoff = now.addingTimeInterval(-RVHistory.maxAge)
-        let cached = writeCache.get(key)
+        // Taken out of the cache, not copied: the cache stays empty until
+        // this write succeeds, so a failed or interrupted write leaves no
+        // entry that claims to describe the file.
+        var cached = WriteCache.take(key)
         let current = store.stamp()
         let fileIsOurs = current != nil && cached?.stamp == current
         if fileIsOurs, var file = cached,
@@ -127,15 +131,16 @@ public struct DenialLedger: Sendable {
            file.oldest >= cutoff, readBack.timestamp >= cutoff
         {
             // The file is exactly what this process last wrote, within the
-            // cap's slack and the age window: append one line.
-            writeCache.set(nil, for: key)
+            // cap's slack and the age window: append one line. Dropping
+            // `cached` leaves `file` the only owner of its arrays.
+            cached = nil
             try store.append(line: line)
             file.records.append(readBack)
             file.lines.append(line)
             file.oldest = min(file.oldest, readBack.timestamp)
             guard let stamp = store.stamp() else { return }
             file.stamp = stamp
-            writeCache.set(file, for: key)
+            WriteCache.set(file, for: key)
             return
         }
         // Rewrite: pruned to the cap and the age window. Lines this process
@@ -143,6 +148,7 @@ public struct DenialLedger: Sendable {
         var records: [DenialLedgerRecord]
         var lines: [String?]
         if fileIsOurs, let file = cached {
+            cached = nil
             records = file.records
             lines = file.lines
         } else {
@@ -163,10 +169,9 @@ public struct DenialLedger: Sendable {
             savedRecords.append(records[index])
             savedLines.append(line)
         }
-        writeCache.set(nil, for: key)
         try store.save(lines: savedLines)
         guard let stamp = store.stamp() else { return }
-        writeCache.set(
+        WriteCache.set(
             WrittenFile(
                 stamp: stamp,
                 records: savedRecords,
