@@ -60,7 +60,8 @@ final class XPCRig: Sendable {
         let requests = Mutex<[JudgePoolRequest]>([])
     }
 
-    init(authorize: @escaping @Sendable (xpc_object_t) -> Bool = { _ in true }) {
+    /// `authorize` admits a message as `client` (true) or refuses it.
+    init(client: JudgePoolClient = .service, authorize: @escaping @Sendable (xpc_object_t) -> Bool = { _ in true }) {
         let supervisor = JudgePoolSupervisor(spawner: FakeWorkerSpawner())
         let discovery = xpc_connection_create(nil, nil)
         let recorder = recorder
@@ -71,7 +72,7 @@ final class XPCRig: Sendable {
                    let request = JudgePoolJSON.decode(JudgePoolRequest.self, from: body) {
                     recorder.requests.withLock { $0.append(request) }
                 }
-                return authorize(message)
+                return authorize(message) ? client : nil
             },
             discoveryListener: { discovery })
         listener.start()
@@ -251,8 +252,9 @@ struct JudgePoolTrustWiringTests {
         let source = ProtectedPeerTrustConfiguration.HookTrustSource.manifest(.denyAll)
         for role in TrustedRVComponentRole.allCases {
             let facts: JudgePoolTrust.FactFinder = { _, _ in Facts(role: role, sameUser: true, matchesSibling: true) }
-            #expect(JudgePoolTrust.authorizeClient(source: source, siblingClientPath: "/x/rvd", facts: facts)
-                == (role == .service))
+            #expect(JudgePoolTrust.authorizeClient(
+                source: source, siblingClientPath: "/x/rvd", siblingEvaluatorPath: "/x/rv-hook-local", facts: facts)
+                == (role == .service ? .service : nil))
             #expect(JudgePoolTrust.verifySupervisor(source: source, siblingSupervisorPath: "/x/rv-judge", facts: facts)
                 == (role == .judge))
         }
@@ -268,11 +270,105 @@ struct JudgePoolTrustWiringTests {
         #expect(JudgePoolTrust.verifySupervisor(source: .siblingPin, siblingSupervisorPath: "/x/rv-judge", facts: facts))
         #expect(seenPath.withLock { $0 } == "/x/rv-judge")
         #expect(!JudgePoolTrust.verifySupervisor(source: .siblingPin, siblingSupervisorPath: nil, facts: facts))
-        #expect(!JudgePoolTrust.authorizeClient(source: .siblingPin, siblingClientPath: "/x/rvd") { _, _ in
+        #expect(JudgePoolTrust.authorizeClient(
+            source: .siblingPin, siblingClientPath: "/x/rvd", siblingEvaluatorPath: nil) { _, _ in
             Facts(role: nil, sameUser: false, matchesSibling: true)
+        } == nil)
+        #expect(JudgePoolTrust.authorizeClient(
+            source: .siblingPin, siblingClientPath: "/x/rvd", siblingEvaluatorPath: nil) { _, _ in nil } == nil)
+        #expect(JudgePoolTrust.authorizeClient(
+            source: .invalid, siblingClientPath: "/x/rvd", siblingEvaluatorPath: "/x/rv-hook-local", facts: facts)
+            == nil)
+    }
+
+    @Test("manifest: the hook-local evaluator is a judge-only client; the service role still wins")
+    func manifestEvaluator() {
+        let source = ProtectedPeerTrustConfiguration.HookTrustSource.manifest(.denyAll)
+        let decide = { (facts: Facts?) in
+            JudgePoolTrust.authorizeClient(
+                source: source, siblingClientPath: "/x/rvd", siblingEvaluatorPath: "/x/rv-hook-local"
+            ) { _, _ in facts }
+        }
+        #expect(decide(Facts(role: nil, sameUser: true, matchesSibling: false, isHookEvaluator: true)) == .evaluator)
+        #expect(decide(Facts(role: .service, sameUser: true, matchesSibling: false, isHookEvaluator: true)) == .service)
+        #expect(decide(Facts(role: .cli, sameUser: true, matchesSibling: true, isHookEvaluator: false)) == nil)
+        #expect(decide(nil) == nil)
+        // rvd's side: an evaluator is never a supervisor.
+        #expect(!JudgePoolTrust.verifySupervisor(source: source, siblingSupervisorPath: "/x/rv-judge") { _, _ in
+            Facts(role: nil, sameUser: true, matchesSibling: true, isHookEvaluator: true)
         })
-        #expect(!JudgePoolTrust.authorizeClient(source: .siblingPin, siblingClientPath: "/x/rvd") { _, _ in nil })
-        #expect(!JudgePoolTrust.authorizeClient(source: .invalid, siblingClientPath: "/x/rvd", facts: facts))
+    }
+
+    @Test("sibling pin: rvd's bytes are the service, rv-hook-local's bytes the evaluator, same user only")
+    func siblingEvaluator() {
+        let decide = { (sameUser: Bool, match: String, evaluatorPath: String?) in
+            JudgePoolTrust.authorizeClient(
+                source: .siblingPin, siblingClientPath: "/x/rvd", siblingEvaluatorPath: evaluatorPath
+            ) { _, path in
+                Facts(role: nil, sameUser: sameUser, matchesSibling: path == match)
+            }
+        }
+        #expect(decide(true, "/x/rvd", "/x/rv-hook-local") == .service)
+        #expect(decide(true, "/x/rv-hook-local", "/x/rv-hook-local") == .evaluator)
+        #expect(decide(false, "/x/rv-hook-local", "/x/rv-hook-local") == nil)
+        #expect(decide(true, "/x/other", "/x/rv-hook-local") == nil)
+        #expect(decide(true, "/x/rv-hook-local", nil) == nil, "no evaluator path, no evaluator")
+    }
+}
+
+@Suite("Judge pool XPC: the hook-local evaluator is a judge-only client", .serialized)
+struct JudgePoolEvaluatorClientTests {
+    let key = ModelKey(engine: "ft", bundle: "/models/fake")
+    let input = JudgeInput(command: "echo hi", contextLines: [])
+    let hello = JudgePoolRequest.hello(protocolVersion: JudgePoolWire.protocolVersion)
+
+    @Test("an evaluator may say hello and ask for a verdict; warm and status are refused")
+    func evaluatorRequests() throws {
+        let rig = XPCRig(client: .evaluator)
+        defer { rig.stop() }
+        rig.supervisor.warm(key: key)
+        let discovery = rawConnection(rig.discoveryEndpoint.object)
+        defer { xpc_connection_cancel(discovery) }
+        let (ack, ackMessage) = rawSend(hello, on: discovery)
+        #expect(ack == .helloAck(protocolVersion: JudgePoolWire.protocolVersion))
+        let endpoint = try #require(ackMessage.flatMap { xpc_dictionary_get_value($0, JudgePoolWire.xpcEndpointKey) })
+        let requests = rawConnection(endpoint)
+        defer { xpc_connection_cancel(requests) }
+        #expect(rawSend(hello, on: requests).0 == .helloAck(protocolVersion: JudgePoolWire.protocolVersion))
+        #expect(rawSend(.warm(key: key), on: requests).0 == .refused)
+        #expect(rawSend(.status, on: requests).0 == .refused)
+        guard case .outcome? = rawSend(.judge(key: key, input: input, budgetMilliseconds: 1000), on: requests).0 else {
+            Issue.record("an evaluator's judge request is served")
+            return
+        }
+    }
+
+    @Test("a client that does not warm sends only hellos and judge requests, even across a restart")
+    func nonWarmingClient() async {
+        let first = XPCRig(client: .evaluator)
+        let current = Mutex(first.discoveryEndpoint)
+        let client = XPCJudgeClient(
+            discover: { xpc_connection_create_from_endpoint(current.withLock { $0 }.object) },
+            verify: { _ in true },
+            rewarmDelays: [.milliseconds(20), .milliseconds(40)],
+            warms: false)
+        first.supervisor.warm(key: key)
+        _ = client.judge(key: key, input: input, budget: .milliseconds(500))
+        let second = XPCRig(client: .evaluator)
+        defer { second.stop() }
+        current.withLock { $0 = second.discoveryEndpoint }
+        first.stop()
+        try? await Task.sleep(for: .milliseconds(300))
+        _ = client.judge(key: key, input: input, budget: .milliseconds(500))
+        for rig in [first, second] {
+            #expect(rig.seen.allSatisfy { request in
+                switch request {
+                case .hello, .judge: true
+                case .warm, .status: false
+                }
+            })
+        }
+        #expect(second.seen.contains { if case .judge = $0 { true } else { false } }, "reconnects on demand")
     }
 }
 #endif
