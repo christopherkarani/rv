@@ -347,10 +347,11 @@ public enum JudgeRuntime {
             outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
         )
         // `floorsWouldBe` marks where `apply` would take the packs-only
-        // floor (no bundle, or a judge that is unavailable). The caller that
-        // shows the would-be applies it; `apply` and a plain peek discard
-        // the would-be, so they skip the parse. The log row keeps the
-        // unfloored reading, as `apply`'s does.
+        // floor (no bundle, or a judge that is unavailable). The callers
+        // that consume the would-be (`peekVerdict` for `rv test` /
+        // `rv explain`, `applyVerdict` for the SDK evaluate RPC) apply it;
+        // a plain `apply` or peek discards the would-be, so it skips the
+        // parse. The log row keeps the unfloored reading, as `apply`'s does.
         var floorsWouldBe = false
         if !safe, case .allow = result.decision {
             if let bundle = selection.bundle {
