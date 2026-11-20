@@ -61,26 +61,69 @@ running only when:
 
 A third subcommand, `rv-mcp-custodian supervise`, run as root by the
 container's entry point, does what the two units do, and refuses to start
-if any step fails:
+if any step fails. "What the units do" means every directive in them, not
+a selection: the units are `keyUnitText` and `presenceUnitText` in
+`Sources/RVCLI/Commands/MCPCustodianCommand.swift`, and each directive
+listed below is required, with `supervise` refusing to start when it cannot
+apply one. A directive added to a unit later must be added here too.
 
 1. Check its own binary and libraries the way `install` does (root-owned
    path, `$ORIGIN` search path), so the entry point cannot be made to run
    the owner's code as root.
 2. Create `/run/rv-mcp-custodian` (owned by the custodian account, 0755),
    `/run/rv-mcp-presence` (root, 0755) and `/var/lib/rv-mcp-custodian`
-   (custodian account, 0700), each only if absent or already exactly so.
-3. Start the key daemon in a child that: unshares mount and network
-   namespaces; mounts empty tmpfs over `/home`, `/root` and `/run/user`;
-   remounts `/` read-only except its state directory; sets
-   `PR_SET_NO_NEW_PRIVS`; drops to the custodian account with no
-   capabilities; installs a seccomp filter equivalent to
-   `@system-service ~@privileged ~@resources` with `AF_UNIX` only; then
-   execs `rv-mcp-custodian serve`.
-4. Start the presence helper in a child that unshares a mount namespace;
-   hides `/home`, `/root`, `/run/user` and `/var/lib/rv-mcp-custodian`;
-   makes `/usr`, `/boot` and `/etc` read-only; bounds capabilities to the
-   unit's list; sets `PR_SET_NO_NEW_PRIVS`; installs its filter; then
-   execs `rv-mcp-custodian presence`.
+   (custodian account, 0700), each only if absent or already exactly so
+   (`RuntimeDirectory`, `RuntimeDirectoryMode`, `StateDirectory`,
+   `StateDirectoryMode`).
+3. Start the key daemon (`rv-mcp-custodian.service`) in a child that
+   applies all of:
+   - `User=` and `Group=` the custodian account; `UMask=0077`;
+   - `NoNewPrivileges=yes` (`PR_SET_NO_NEW_PRIVS`); an empty
+     `CapabilityBoundingSet=` and `AmbientCapabilities=`;
+   - `PrivateNetwork=yes` (a new network namespace with only loopback);
+   - `PrivateDevices=yes` (a minimal `/dev`, and no `CAP_MKNOD` or raw
+     I/O); `PrivateTmp=yes` (its own `/tmp` and `/var/tmp`);
+   - `ProtectSystem=strict` (`/` read-only except its state and runtime
+     directories); `ProtectHome=yes` (empty `/home`, `/root`,
+     `/run/user`);
+   - `ProtectProc=invisible` and `ProcSubset=pid` (a `/proc` mounted with
+     `hidepid=invisible,subset=pid`: no other process visible, no kernel
+     files);
+   - `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`,
+     `ProtectKernelLogs=yes`, `ProtectControlGroups=yes`,
+     `ProtectClock=yes`, `ProtectHostname=yes`;
+   - `RestrictAddressFamilies=AF_UNIX`; `RestrictNamespaces=yes` (no new
+     namespaces of any kind); `RestrictRealtime=yes`;
+     `RestrictSUIDSGID=yes`; `LockPersonality=yes`;
+     `MemoryDenyWriteExecute=yes`;
+   - `SystemCallArchitectures=native`; `SystemCallFilter=@system-service`
+     then `~@privileged @resources`; `SystemCallErrorNumber=EPERM`;
+   - `Restart=on-failure`, `RestartSec=1` (step 5);
+
+   then execs `rv-mcp-custodian serve`.
+4. Start the presence helper (`rv-mcp-presence.service`) in a child that
+   stays root and applies all of:
+   - `UMask=0077`; `NoNewPrivileges=yes`;
+     `CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+     CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_CHOWN CAP_FOWNER`;
+   - `PrivateDevices=yes`; `PrivateTmp=yes`;
+   - `ProtectSystem=full` (`/usr`, `/boot`, `/efi` and `/etc`
+     read-only); `ProtectHome=yes`;
+     `InaccessiblePaths=-/var/lib/rv-mcp-custodian`;
+   - `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`,
+     `ProtectKernelLogs=yes`, `ProtectControlGroups=yes`,
+     `ProtectClock=yes`, `ProtectHostname=yes`;
+   - `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`;
+     `RestrictNamespaces=yes`; `RestrictRealtime=yes`;
+     `RestrictSUIDSGID=yes`; `LockPersonality=yes`;
+     `MemoryDenyWriteExecute=yes`;
+   - `SystemCallArchitectures=native`;
+     `SystemCallFilter=@system-service @setuid`;
+     `SystemCallErrorNumber=EPERM`;
+   - `Restart=on-failure`, `RestartSec=1` (step 5); it starts after the
+     key daemon (`After=rv-mcp-custodian.service`);
+
+   then execs `rv-mcp-custodian presence`.
 5. Restart a child that exits with failure, at most once a second, and
    exit when asked (SIGTERM), taking both children with it.
 
