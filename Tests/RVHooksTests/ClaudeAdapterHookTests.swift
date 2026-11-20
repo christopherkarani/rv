@@ -7,23 +7,46 @@ import Testing
 /// `permissionDecision:ask`; only rv's infrastructure ask does, in prompting
 /// modes (ClaudeInfraAskAdapterTests).
 struct ClaudeAdapterHookTests {
-    @Test func template_bakesRvAndDropsLegacyAskPaths() throws {
-        let source = try adapterSource(rvPath: "/opt/rv")
-        #expect(source.contains("PreToolUse"))
-        #expect(source.contains("\"Bash\""))
-        #expect(source.contains("\"Read\""))
-        #expect(source.contains("\"Edit\""))
-        #expect(source.contains("\"Write\""))
-        #expect(source.contains("\"claude\""))
-        #expect(source.contains("RV_BINARY = \"/opt/rv\""))
-        #expect(source.contains("hostAsk") == false)
-        #expect(source.contains("spend") == false)
-        #expect(source.contains("RV_ASK_CONFIRM") == false)
-        #expect(source.contains("osascript") == false)
-        #expect(source.contains("display dialog") == false)
-        #expect(source.contains("__RV_BINARY__") == false)
-        #expect(source.contains("RV_BYPASS") == false)
-        // Which calls may ask is pinned by behaviour in ClaudeInfraAskAdapterTests.
+    /// The baked rv path runs as `rv hook --host claude` for every guarded
+    /// tool on PreToolUse, with the host's request passed through unchanged.
+    @Test(arguments: ["Bash", "Read", "Edit", "Write"])
+    func guardedTool_runsTheBakedRvAsClaudeHook(_ tool: String) async throws {
+        let event = tool == "Bash" ? resetHardEvent() : fileToolEvent(tool)
+        let result = try await runClaudeWrapper(
+            event: event, first: (claudeDenyJSON(reason: resetHardReason), 0), confirm: nil)
+        try expectClaudeDeny(result, reason: resetHardReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastArgv == ["hook", "--host", "claude"])
+        let forwarded = try #require(result.lastStdin.flatMap { $0.data(using: .utf8) })
+        let sent = try #require(JSONSerialization.jsonObject(with: forwarded) as? [String: Any])
+        #expect(sent["tool_name"] as? String == tool)
+        #expect(sent["hook_event_name"] as? String == "PreToolUse")
+    }
+
+    /// A legacy ask never opens a dialog of the adapter's own and is never
+    /// confirmed or bypassed through the environment: no `osascript` runs,
+    /// rv is asked once (no spend call), and the call blocks.
+    @Test func legacyAsk_opensNoDialogAndIgnoresConfirmAndBypassEnvironment() async throws {
+        let bin = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-claude-bin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bin) }
+        let marker = bin.appendingPathComponent("osascript-ran")
+        let osascript = bin.appendingPathComponent("osascript")
+        try "#!/bin/sh\ntouch '\(marker.path)'\necho 'button returned:Allow'\n"
+            .write(to: osascript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: osascript.path)
+        let path = bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+
+        let result = try await runClaudeWrapper(
+            event: resetHardEvent(),
+            stub: .calls(first: ("{\"decision\":\"ask\",\"reason\":\"review\"}\n", 0), spend: ("", 0)),
+            confirm: "yes",
+            environment: ["PATH": path, "RV_BYPASS": "1", "CLAUDE_CODE_SESSION_ATTENDED": "1"]
+        )
+        try expectClaudeDeny(result, reason: "review")
+        #expect(result.spawnCount == 1)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
     }
 
     @Test func confirmYesIgnored_legacyAskBlocks() async throws {
@@ -467,6 +490,7 @@ private struct ClaudeWrapperRun {
     var exitCode: Int32
     var spawnCount: Int
     var lastStdin: String?
+    var lastArgv: [String]?
 }
 
 private enum ClaudeStubRV {
@@ -521,6 +545,7 @@ private func runClaudeWrapper(
         n += 1
         (root / "count").write_text(str(n))
         (root / "last-stdin").write_text(stdin)
+        (root / "last-argv").write_text(json.dumps(sys.argv[1:]))
         if os.environ.get("RV_STUB_SIGNAL"):
             os.kill(os.getpid(), int(os.environ["RV_STUB_SIGNAL"]))
         is_spend = False
@@ -596,12 +621,15 @@ private func runClaudeWrapper(
         contentsOf: stubDir.appendingPathComponent("last-stdin"),
         encoding: .utf8
     )
+    let lastArgv = (try? Data(contentsOf: stubDir.appendingPathComponent("last-argv")))
+        .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String] }
 
     return ClaudeWrapperRun(
         stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
         stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
         exitCode: process.terminationStatus,
         spawnCount: spawnCount,
-        lastStdin: lastStdin
+        lastStdin: lastStdin,
+        lastArgv: lastArgv
     )
 }
