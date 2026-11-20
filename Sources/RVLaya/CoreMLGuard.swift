@@ -505,10 +505,12 @@ public enum CoreMLCachePurge {
     static let cacheName = "com.apple.e5rt.e5bundlecache"
 
     /// True when the cache is gone (or was never there). Refuses (false)
-    /// any other process name and any path component that is a symlink or
-    /// not this user's directory. The cache is renamed aside first, so a
-    /// swap after the check renames the swapped-in entry itself (rename
-    /// never follows a final symlink), and the removal does not follow links.
+    /// any other process name and a directory that is not this user's. A
+    /// symlink or file planted at `<caches>/rvd` or at the cache itself is
+    /// unlinked (never followed: its target is untouched). The cache is
+    /// renamed aside first, so a swap after the check renames the
+    /// swapped-in entry itself (rename never follows a final symlink), and
+    /// the removal does not follow links.
     @discardableResult
     public static func purge(cachesRoot: URL, processName: String) -> Bool {
         guard owners.contains(processName) else { return false }
@@ -516,8 +518,10 @@ public enum CoreMLCachePurge {
         let cache = owner.appendingPathComponent(cacheName, isDirectory: true)
         var info = stat()
         guard lstat(owner.path, &info) == 0 else { return errno == ENOENT }
+        if !isDirectory(info) { return unlinkPlanted(owner.path) }
         guard isOwnedDirectory(info) else { return false }
         guard lstat(cache.path, &info) == 0 else { return errno == ENOENT }
+        if !isDirectory(info) { return unlinkPlanted(cache.path) }
         guard isOwnedDirectory(info) else { return false }
         let aside = owner.appendingPathComponent(".\(cacheName).purge-\(UUID().uuidString)")
         guard rename(cache.path, aside.path) == 0 else { return false }
@@ -525,7 +529,17 @@ public enum CoreMLCachePurge {
         return (try? FileManager.default.removeItem(at: aside)) != nil
     }
 
+    private static func isDirectory(_ info: stat) -> Bool {
+        (info.st_mode & S_IFMT) == S_IFDIR
+    }
+
     private static func isOwnedDirectory(_ info: stat) -> Bool {
-        (info.st_mode & S_IFMT) == S_IFDIR && info.st_uid == geteuid()
+        isDirectory(info) && info.st_uid == geteuid()
+    }
+
+    /// unlink(2) removes a symlink itself, never its target, and fails on a
+    /// directory swapped in after the lstat, so a race only refuses.
+    private static func unlinkPlanted(_ path: String) -> Bool {
+        unlink(path) == 0 || errno == ENOENT
     }
 }

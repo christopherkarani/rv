@@ -364,8 +364,8 @@ struct CoreMLCachePurgeTests {
         #expect(leftovers.isEmpty)
     }
 
-    @Test("never follows a symlinked cache directory")
-    func refusesSymlink() throws {
+    @Test("a symlinked cache directory is unlinked; its target is untouched")
+    func unlinksSymlink() throws {
         let caches = try scratch()
         defer { try? FileManager.default.removeItem(at: caches) }
         let precious = caches.appendingPathComponent("precious", isDirectory: true)
@@ -375,12 +375,13 @@ struct CoreMLCachePurgeTests {
         try FileManager.default.createDirectory(at: rvd, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(
             at: rvd.appendingPathComponent("com.apple.e5rt.e5bundlecache"), withDestinationURL: precious)
-        #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == false)
+        #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rvd.path).isEmpty)
         #expect(FileManager.default.fileExists(atPath: precious.appendingPathComponent("file").path))
     }
 
-    @Test("never follows a symlinked process cache directory")
-    func refusesSymlinkedParent() throws {
+    @Test("a symlinked ~/Library/Caches/rvd is unlinked; its target is untouched")
+    func unlinksSymlinkedParent() throws {
         let caches = try scratch()
         defer { try? FileManager.default.removeItem(at: caches) }
         let precious = caches.appendingPathComponent("precious/com.apple.e5rt.e5bundlecache", isDirectory: true)
@@ -389,8 +390,21 @@ struct CoreMLCachePurgeTests {
         try FileManager.default.createSymbolicLink(
             at: caches.appendingPathComponent("rvd"),
             withDestinationURL: caches.appendingPathComponent("precious"))
-        #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == false)
+        #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == true)
+        var info = stat()
+        #expect(lstat(caches.appendingPathComponent("rvd").path, &info) == -1 && errno == ENOENT)
         #expect(FileManager.default.fileExists(atPath: precious.appendingPathComponent("file").path))
+    }
+
+    @Test("a file planted where the cache directory goes is removed")
+    func removesPlantedFile() throws {
+        let caches = try scratch()
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let rvd = caches.appendingPathComponent("rvd", isDirectory: true)
+        try FileManager.default.createDirectory(at: rvd, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: rvd.appendingPathComponent("com.apple.e5rt.e5bundlecache"))
+        #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rvd.path).isEmpty)
     }
 
     @Test("only rvd's own cache is ever purged")
