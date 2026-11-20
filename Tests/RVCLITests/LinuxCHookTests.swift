@@ -121,6 +121,7 @@ private func compileCHook() throws -> URL {
         src.appendingPathComponent("daemon_trust.c").path,
         src.appendingPathComponent("hook_fallback.c").path,
         src.appendingPathComponent("observe_gate.c").path,
+        src.appendingPathComponent("rvd_state.c").path,
         src.appendingPathComponent("rv.c").path,
     ]
     process.standardOutput = Pipe()

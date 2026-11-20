@@ -30,6 +30,8 @@
  *   self-protection, rvd drops in-flight requests while draining, an
  *   agent can cause either, and an agent can point XDG_RUNTIME_DIR at an
  *   empty directory through project-scoped host config.
+ *   Even then rv.c steps aside only when the rvd state marker allows it
+ *   (rvd_state.h); otherwise it reports STOPPED, which renders as ask/deny.
  * Every case carries a distinct, actionable message. Mirrored by
  * `RVCLI/Service/HookDaemonFallback.swift`.
  */
@@ -42,7 +44,12 @@ enum RvHookFailure {
     RV_HOOK_FAIL_TIMEOUT = 3,
     RV_HOOK_FAIL_UNTRUSTED = 4,
     RV_HOOK_FAIL_PROTOCOL = 5,
-    RV_HOOK_FAIL_CONNECTION = 6
+    RV_HOOK_FAIL_CONNECTION = 6,
+    /* UNREACHABLE under observe mode, but the rvd state marker
+     * (rvd_state.h) says rvd ran and was stopped or crashed without an
+     * announced restart: rendered like UNREACHABLE outside observe
+     * (RV_HOOK_WHEN_DOWN ask/deny), never the observe allow. */
+    RV_HOOK_FAIL_STOPPED = 7
 };
 
 enum RvWhenDown {

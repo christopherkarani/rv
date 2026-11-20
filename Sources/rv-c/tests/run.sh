@@ -68,6 +68,13 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/observe_gate.c"
 "$OUT/observe_gate_test"
 
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
+  -o "$OUT/rvd_state_test" \
+  "$SRC/tests/rvd_state_test.c" \
+  "$SRC/rvd_state.c"
+"$OUT/rvd_state_test"
+
 if [[ "$OS" == "Darwin" ]]; then
   # Trust manifest parsing is Darwin-only (Linux pins the sibling rvd).
   clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
@@ -105,6 +112,7 @@ fi
 OBSERVE_CONFIG_DIR="$OUT/observe-config"
 OBSERVE_CONFIG="$OBSERVE_CONFIG_DIR/config.json"
 OBSERVE_MANAGED="$OUT/observe-managed"
+RVD_STATE="$OBSERVE_CONFIG_DIR/rvd-state"
 rm -rf "$OBSERVE_CONFIG_DIR" "$OBSERVE_MANAGED"
 mkdir -p "$OBSERVE_CONFIG_DIR"
 # Linux: the uid-derived runtime root (/run/user in release builds) is
@@ -117,6 +125,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -DRV_HOOK_OBSERVE_CONFIG_PATH="\"$OBSERVE_CONFIG\"" \
   -DRV_HOOK_MANAGED_POLICY_DIR="\"$OBSERVE_MANAGED\"" \
+  -DRV_HOOK_RVD_STATE_PATH="\"$RVD_STATE\"" \
   -DRV_HOOK_USER_RUNTIME_ROOT="\"$RUNTIME_ROOT\"" \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
@@ -124,6 +133,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/daemon_trust.c" \
   "$SRC/hook_fallback.c" \
   "$SRC/observe_gate.c" \
+  "$SRC/rvd_state.c" \
   "$SRC/rv.c"
 
 # Pipe hosts must match the Swift HookHost enum exactly. Invalid hosts exec
@@ -294,6 +304,7 @@ REASON_OVERSIZE="RV could not read this hook request"
 REASON_UNREACHABLE='RV daemon is not reachable'
 REASON_CONNECTION='RV daemon connection failed'
 REASON_REJECTED='RV daemon identity check failed'
+REASON_STOPPED='rvd was stopped or crashed after it last ran'
 
 # Every host denies malformed input directly; an executable CLI sibling must
 # never receive authority-bearing fallback input.
@@ -518,6 +529,53 @@ if [[ "$down_ready" -eq 1 ]]; then
     exit 1
   fi
   printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"
+
+  # rvd state marker (rvd_state.h): observe steps aside only when rvd never
+  # ran here (no marker) or a restart was announced and is still due. An
+  # rvd that ran and then stopped or crashed keeps the ask/deny fallback.
+  write_rvd_state() {
+    rm -f "$RVD_STATE"
+    printf '%s' "$1" > "$RVD_STATE"
+    chmod "${2:-600}" "$RVD_STATE"
+  }
+  now="$(date +%s)"
+  write_rvd_state $'armed\n'
+  expect_down state-armed claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  expect_down state-armed-cursor cursor "" 0 '"permission":"ask"' "$REASON_STOPPED"
+  expect_down state-armed-codex codex "" 2 '"decision":"block"' "$REASON_STOPPED"
+  expect_down state-armed-opencode opencode "" 1 '"decision":"deny"' "$REASON_STOPPED"
+  expect_down state-armed-deny claude deny 0 '"permissionDecision":"deny"'
+  if grep -q 'allowed without being checked' "$OUT/down-state-armed.err"; then
+    printf 'rv-c tests: an armed marker must not take the observe path\n' >&2
+    exit 1
+  fi
+  write_rvd_state "restarting $((now + 60))"$'\n'
+  expect_observe state-restarting claude ''
+  expect_observe state-restarting-cursor cursor '{"permission":"allow"}'
+  write_rvd_state "restarting $((now - 5))"$'\n'
+  expect_down state-expired claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  write_rvd_state "restarting $((now + 86400))"$'\n'
+  expect_down state-far-future claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  write_rvd_state $'allow\n'
+  expect_down state-garbage claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  write_rvd_state "restarting $((now + 60))"$'\n' 666
+  expect_down state-world-writable claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  rm -f "$RVD_STATE"
+  printf 'restarting %s\n' "$((now + 60))" > "$OBSERVE_CONFIG_DIR/elsewhere"
+  ln -s "$OBSERVE_CONFIG_DIR/elsewhere" "$RVD_STATE"
+  expect_down state-symlink claude "" 0 '"permissionDecision":"ask"' "$REASON_STOPPED"
+  rm -f "$RVD_STATE" "$OBSERVE_CONFIG_DIR/elsewhere"
+  # Outside observe mode the marker changes nothing: enforce keeps the
+  # unreachable message, not the stopped one.
+  printf '{"guard":{"mode":"enforce"}}' > "$OBSERVE_CONFIG"
+  write_rvd_state $'armed\n'
+  expect_down state-enforce claude "" 0 '"permissionDecision":"ask"' "$REASON_UNREACHABLE"
+  write_rvd_state "restarting $((now + 60))"$'\n'
+  expect_down state-enforce-restarting claude "" 0 '"permissionDecision":"ask"' "$REASON_UNREACHABLE"
+  rm -f "$RVD_STATE"
+  printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"
+  expect_observe state-absent claude ''
+  printf 'rv-c daemon-down fallback: rvd state marker passed\n'
   if [[ "$OS" == "Linux" ]]; then
     # Only a miss on the uid-derived socket may step aside. An agent can set
     # XDG_RUNTIME_DIR through project-scoped host config, so a miss anywhere

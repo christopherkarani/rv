@@ -8,6 +8,7 @@
 #include "daemon_trust.h"
 #include "hook_fallback.h"
 #include "observe_gate.h"
+#include "rvd_state.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -43,6 +44,12 @@ extern char **environ;
 #else
 #define RV_HOOK_MANAGED_POLICY_DIR "/etc/rv/managed"
 #endif
+#endif
+
+/* A test build that pins the observe config must pin the rvd state marker
+ * too, so the operator's own marker never leaks into fixture runs. */
+#if defined(RV_HOOK_OBSERVE_CONFIG_PATH) && !defined(RV_HOOK_RVD_STATE_PATH)
+#error "RV_HOOK_OBSERVE_CONFIG_PATH requires RV_HOOK_RVD_STATE_PATH"
 #endif
 
 /* systemd's per-user runtime root: rvd's unit gets
@@ -322,12 +329,34 @@ static int owner_chose_observe(const char *host) {
 #endif
 }
 
+/* Whether the rvd state marker (rvd_state.h) lets observe mode step aside:
+ * rvd never ran here, or a restart was announced and is still due. Same
+ * passwd-home derivation as owner_chose_observe. */
+static int rvd_state_allows_observe(void) {
+    long long now = (long long)time(NULL);
+#ifdef RV_HOOK_RVD_STATE_PATH
+    return rv_rvd_state_allows_observe(rv_rvd_state_read(RV_HOOK_RVD_STATE_PATH, now));
+#else
+    char path[PATH_MAX];
+    struct passwd *pw = getpwuid(getuid());
+    int n;
+    if (pw == NULL || pw->pw_dir == NULL || pw->pw_dir[0] != '/') {
+        return 0;
+    }
+    n = snprintf(path, sizeof path, "%s/.config/rv/rvd-state", pw->pw_dir);
+    if (n <= 0 || (size_t)n >= sizeof path) {
+        return 0;
+    }
+    return rv_rvd_state_allows_observe(rv_rvd_state_read(path, now));
+#endif
+}
+
 /* No CLI replay: neither a transport failure nor malformed input grants
  * authority. Renders the classified fallback (hook_fallback.h): input
  * failures always deny; daemon-unavailable classes follow
  * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
- * steps aside when the owner chose observe mode and RV_HOOK_WHEN_DOWN is
- * not deny. */
+ * steps aside when the owner chose observe mode, RV_HOOK_WHEN_DOWN is not
+ * deny, and the rvd state marker allows it. */
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
     enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
@@ -335,7 +364,14 @@ static void fail_hook(const char *host, enum RvHookFailure failure) {
      * self-protection); an explicit RV_HOOK_WHEN_DOWN=deny is stricter and wins. */
     if (mode == RV_WHEN_DOWN_ASK && failure == RV_HOOK_FAIL_UNREACHABLE
         && owner_chose_observe(host)) {
-        mode = RV_WHEN_DOWN_OBSERVE;
+        /* ... and only when rvd never ran here or announced its restart:
+         * an rvd that was stopped or crashed keeps the ask/deny fallback,
+         * so stopping rvd is not a way around rv. */
+        if (rvd_state_allows_observe()) {
+            mode = RV_WHEN_DOWN_OBSERVE;
+        } else {
+            failure = RV_HOOK_FAIL_STOPPED;
+        }
     }
     if (rv_hook_fallback_render(host, failure, mode, &fallback) != 0) {
         /* Unreachable for valid hosts; exit 2 blocks on Claude and Codex. */
