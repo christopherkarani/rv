@@ -52,6 +52,14 @@ static long long now_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+/* Accepts, but only after the 100 ms deadline the slow-verify case sets. */
+static int accept_slowly(pid_t pid, const char *path) {
+    (void)pid;
+    (void)path;
+    usleep(150 * 1000);
+    return 1;
+}
+
 static const char *ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 static const unsigned char INPUT[] = "{\"tool_name\":\"Bash\"}";
 
@@ -87,6 +95,15 @@ int main(int argc, char **argv) {
     }
     if (access(argv[6], F_OK) == 0) {
         fail("untrusted", "a rejected evaluator must not receive the call");
+    }
+    free(json);
+
+    unlink(argv[6]);
+    if (run(argv[1], 100, accept_slowly, reason, &json) != RV_LOCAL_ESCALATE || strcmp(reason, "timeout") != 0) {
+        fail("slow-verify", reason);
+    }
+    if (access(argv[6], F_OK) == 0) {
+        fail("slow-verify", "an evaluator verified past the deadline must not receive the call");
     }
     free(json);
 

@@ -280,6 +280,15 @@ enum RvLocalVerdict rv_local_evaluate(
         set_reason(reason, reason_cap, "untrusted");
         return RV_LOCAL_ESCALATE;
     }
+    /* A slow verify spends the budget too: past the deadline the child
+     * never runs (Darwin) and never gets the call. */
+    if (now_ms() >= deadline) {
+        close_fd(&to_child);
+        close_fd(&from_child);
+        kill_and_reap(pid);
+        set_reason(reason, reason_cap, "timeout");
+        return RV_LOCAL_ESCALATE;
+    }
 #ifdef __APPLE__
     if (kill(pid, SIGCONT) != 0) {
         close_fd(&to_child);
