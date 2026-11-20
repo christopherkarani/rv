@@ -35,6 +35,15 @@ enum LaunchAgentTemplate {
         guard raw.contains(placeholder) else {
             throw SetupError.launchAgentTemplateMissing
         }
-        return raw.replacingOccurrences(of: placeholder, with: value)
+        return raw.replacingOccurrences(of: placeholder, with: xmlEscaped(value))
+    }
+
+    /// The value is XML character data (a `<string>` and a `<key>`): a
+    /// home path with `&`, `<` or `>` would otherwise break the plist.
+    static func xmlEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }

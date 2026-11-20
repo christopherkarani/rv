@@ -29,7 +29,9 @@ func expectAlwaysOnLaunchAgent(
     #expect(plist["ProgramArguments"] as? [String] == [rvdPath], sourceLocation: sourceLocation)
 }
 
-@Test(arguments: ["/opt/rvd", "/Users/a b/.local/bin/rvd"])
+/// The path lands in the XML twice (ProgramArguments, PathState): &, < and >
+/// in a home path must be escaped or the plist does not parse.
+@Test(arguments: ["/opt/rvd", "/Users/a b/.local/bin/rvd", "/Users/R&D <x>/.local/bin/rvd"])
 func launchAgentTemplate_rendersAlwaysOnJob(rvdPath: String) throws {
     let plist = try launchdPlist(try LaunchAgentTemplate.rendered(rvdPath: rvdPath))
     #expect(keepAlivePathState(plist) == [rvdPath: true])
