@@ -115,6 +115,8 @@ struct RVWiringPathsTests {
         "/Users/me/.codex", "/Users/me/.gemini/config", "/Users/me/Applications",
         "/Users/me/.claude/skills", "/Users/me/.agents", "/Users/me/.agents/skills",
         "/Users/me/.config/opencode/skills",
+        // Hold rvd-backoff/: moving them would move the backoff record.
+        "/Users/me/Library/Logs", "/Users/me/Library/Logs/rv", "/Users/me/.local/state", "/Users/me/.local/state/rv",
     ])
     func ancestors(path: String) {
         #expect(RVWiringPaths.matchesAncestor(path, home: Self.home), "\(path)")
