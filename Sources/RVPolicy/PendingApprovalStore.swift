@@ -336,20 +336,117 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         subscribers[id] = nil
     }
 
+    /// What this instance last read or wrote, keyed by the rows file's
+    /// stamp. Every hook ask records a row under the exclusive file lock, so
+    /// decoding and re-encoding the whole file each time made asks queue
+    /// behind each other and grow slower with the file (14 ms per ask at 120
+    /// rows on a 4-vCPU Linux host, ~100 ms at 8 agents at once). Any other
+    /// writer (the CLI's approve, another process) changes the stamp, so its
+    /// rows are read on the next call. Same scheme as `AllowOnceStore`.
+    private struct LedgerCache {
+        var stamp: FileStamp
+        var records: [PendingApproval]
+        /// `lines[i]` is `records[i]` as saved, when this instance wrote the
+        /// file. Nil after a plain load: the file may then hold rows `load`
+        /// skipped (corrupt, torn or another schema), which only a rewrite
+        /// drops, and an append must not follow a torn last line.
+        var lines: [String]?
+    }
+
+    private var ledgerCache: LedgerCache?
+
     private func loadRecords() -> [PendingApproval] {
-        store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
+        let stamp = store.stamp()
+        if let stamp, let cache = ledgerCache, cache.stamp == stamp {
+            return cache.records
+        }
+        let records = store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
+        // Stamp taken before the read: a write racing the read changes the
+        // stamp, so the next load reads again rather than trusting this one.
+        ledgerCache = stamp.map { LedgerCache(stamp: $0, records: records, lines: nil) }
+        return records
     }
 
     private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) {
         do {
-            try store.save(records.map { PendingApprovalRecord(schemaVersion: 1, approval: $0) })
+            if let current = store.stamp(), let cache = ledgerCache, cache.stamp == current,
+               var lines = cache.lines, lines.count == cache.records.count
+            {
+                // The file is exactly what this instance last wrote.
+                if cache.records == records {
+                    // A repeated ask reuses its waiting row: nothing to write.
+                    return
+                }
+                if records.count == cache.records.count + 1,
+                   records.dropLast().elementsEqual(cache.records),
+                   let added = records.last
+                {
+                    // A fresh ask appends one row: append its line instead of
+                    // rewriting them all.
+                    let line = try Self.encodeLine(added)
+                    ledgerCache = nil
+                    try store.append(line: line)
+                    lines.append(line)
+                    ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: records, lines: lines) }
+                    return
+                }
+            }
+            let lines = try encodedLines(for: records, reusing: ledgerCache)
+            ledgerCache = nil
+            try store.save(lines: lines)
+            ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: records, lines: lines) }
         } catch {
+            ledgerCache = nil
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
             // lock-acquisition or lock-setup failures (FileLockedJSONLStoreError),
             // never untranslated save failures.
             throw PendingApprovalError.encodeFailed
         }
+    }
+
+    private static func encodeLine(
+        _ approval: PendingApproval,
+        encoder: JSONEncoder = FileLockedJSONLStore<PendingApprovalRecord>.lineEncoder()
+    ) throws(FileLockedJSONLStoreError) -> String {
+        try FileLockedJSONLStore<PendingApprovalRecord>.encodeLine(
+            PendingApprovalRecord(schemaVersion: 1, approval: approval), encoder: encoder)
+    }
+
+    /// Saved lines for `records`, re-encoding only rows the cache does not
+    /// hold verbatim (matched by full equality). Ledger transitions keep row
+    /// order (sweep flips states in place, create appends), so a forward
+    /// merge against the cached rows finds each reusable line; a row it does
+    /// not find nearby is encoded again.
+    private func encodedLines(
+        for records: [PendingApproval],
+        reusing cache: LedgerCache?
+    ) throws(FileLockedJSONLStoreError) -> [String] {
+        let cachedRecords = cache?.records ?? []
+        let cachedLines = cache?.lines ?? []
+        let reusable = cachedLines.count == cachedRecords.count ? cachedRecords.count : 0
+        let encoder = FileLockedJSONLStore<PendingApprovalRecord>.lineEncoder()
+        var lines: [String] = []
+        lines.reserveCapacity(records.count)
+        var cursor = 0
+        for record in records {
+            var hit: Int?
+            var probe = cursor
+            while probe < min(reusable, cursor + 64) {
+                if cachedRecords[probe] == record {
+                    hit = probe
+                    break
+                }
+                probe += 1
+            }
+            if let hit {
+                lines.append(cachedLines[hit])
+                cursor = hit + 1
+            } else {
+                lines.append(try Self.encodeLine(record, encoder: encoder))
+            }
+        }
+        return lines
     }
 
     /// Maximum retained rejection reasons. Past the cap the oldest
