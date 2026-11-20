@@ -18,12 +18,12 @@ const config = {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 const label = (iso: string) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8))}`
 
-export function ActivityChart({ data }: { data: { date: string; denied: number; observed: number }[] }) {
+export function ActivityChart({ data }: { data: { day: string; denied: number; observed: number }[] }) {
   return (
     <ChartContainer config={config} className="aspect-auto h-64 w-full">
       <BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
         <CartesianGrid vertical={false} strokeDasharray="3 3" />
-        <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={label} />
+        <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={label} />
         <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
         <ChartTooltip cursor={{ fill: "var(--muted)", opacity: 0.5 }} content={<ChartTooltipContent labelFormatter={(v) => label(String(v))} />} />
         <ChartLegend content={<ChartLegendContent />} />

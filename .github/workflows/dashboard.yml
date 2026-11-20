@@ -1,0 +1,90 @@
+name: dashboard
+
+on:
+  pull_request:
+    paths: ["dashboard/**", ".github/workflows/dashboard.yml"]
+  push:
+    branches: [main]
+    paths: ["dashboard/**", ".github/workflows/dashboard.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dashboard-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: dashboard
+
+jobs:
+  # Lint, types, unit tests and a production build with no secrets.
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx next typegen && npx tsc --noEmit
+      - run: npx vitest run tests/unit
+      - run: npm run build
+      - name: Pack catalog matches rv's shipped packs
+        run: node scripts/sync-packs.mjs && git diff --exit-code -- src/lib/packs.generated.json src/lib/rules.generated.json
+
+  # Schema, row-level security, ingest API and the full browser flow against
+  # Postgres + GoTrue + PostgREST (scripts/dev-stack.sh).
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["54322:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      DB_URL: postgres://postgres@127.0.0.1:54322/postgres
+      DATABASE_URL: postgres://postgres@127.0.0.1:54322/postgres
+      APP_URL: http://localhost:3000
+      CRON_SECRET: ci-cron-secret-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - name: Start the dev stack
+        run: scripts/dev-stack.sh up
+      - name: Export stack keys
+        run: grep -v '^DATABASE_URL=' .dev-stack/keys.env >> "$GITHUB_ENV"
+      - name: Database and API tests
+        run: npx vitest run
+      - name: Build and start the app
+        run: |
+          npm run build
+          nohup npm start -- -p 3000 > .dev-stack/next.log 2>&1 &
+          curl -s --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null http://localhost:3000/login
+      - name: Browser smoke test
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node e2e/smoke.mjs
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-e2e
+          path: |
+            dashboard/.dev-stack/e2e
+            dashboard/.dev-stack/next.log
+            dashboard/.dev-stack/gateway.log

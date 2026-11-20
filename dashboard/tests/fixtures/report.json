@@ -1,0 +1,33 @@
+{
+  "audit": {
+    "byKind": { "command.denied": { "denied": 3 }, "command.observed": { "info": 1 } },
+    "chainHead": "2e1d6b2f0c4e5f8b9d3c7a1e0f2b4d6c8e0a2f4b6d8c0e2a4f6b8d0c2e4a6f8b",
+    "chainIntact": true,
+    "lastEventAt": "2026-11-20T10:05:12Z",
+    "since": "2026-11-19T10:10:00Z",
+    "total": 4
+  },
+  "config": [
+    { "file": "mcp.json", "present": true, "sha256": "aa11bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900" },
+    { "file": "secrets.json", "present": false },
+    { "file": "policy.toml", "present": true, "sha256": "bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11" }
+  ],
+  "generatedAt": "2026-11-20T10:10:00Z",
+  "host": { "name": "mbp-ana", "uid": 501, "user": "ana" },
+  "managed": {
+    "directory": "/Library/Application Support/rv/managed",
+    "highestSerial": 14,
+    "organization": "Acme Engineering",
+    "restrictions": ["gate: require packs core.git, core.filesystem, system.disk"],
+    "serial": 14,
+    "sha256": "cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11bb22",
+    "signed": true,
+    "signingKey": 1,
+    "state": "active"
+  },
+  "mcp": { "counts": { "claude": 2 }, "failing": [], "ok": true, "plaintextCredentials": 0, "servers": 2 },
+  "rv": { "platform": "macos", "version": "0.2.2" },
+  "sandbox": { "mcpSandbox": true, "peerTrustInstalled": false, "platform": "macos" },
+  "schema": "rv.report.v1",
+  "secrets": { "items": [{ "delivery": "placeholder", "name": "STRIPE_SECRET_KEY", "source": "keychain" }] }
+}

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
-import { HOST_LABEL, type AgentHost, type HostMode } from "@/lib/data"
+import { hostLabel, type HostMode } from "@/lib/vocab"
 
 export function PageHeader({
   title,
@@ -28,7 +28,7 @@ export function PageBody({ children, className }: { children: React.ReactNode; c
   return <div className={cn("mx-auto max-w-6xl px-4 py-8 sm:px-6", className)}>{children}</div>
 }
 
-type Tone = "success" | "warning" | "error" | "neutral" | "info"
+export type Tone = "success" | "warning" | "error" | "neutral" | "info"
 const DOT: Record<Tone, string> = {
   success: "bg-success",
   warning: "bg-warning",
@@ -61,16 +61,16 @@ const MODE_STYLE: Record<HostMode, string> = {
   off: "border-destructive/30 bg-destructive/10 text-destructive",
 }
 
-export function HostModeBadge({ host, mode, compact }: { host: AgentHost; mode: HostMode; compact?: boolean }) {
+export function HostModeBadge({ host, mode, compact }: { host: string; mode: HostMode; compact?: boolean }) {
   return (
     <Badge variant="outline" className={cn("gap-1 font-normal", MODE_STYLE[mode])}>
-      {compact ? host : HOST_LABEL[host]}
+      {compact ? host : hostLabel(host)}
       <span className="opacity-70">· {mode}</span>
     </Badge>
   )
 }
 
-export function SeverityBadge({ severity }: { severity: "critical" | "high" }) {
+export function SeverityBadge({ severity }: { severity: string }) {
   return (
     <Badge
       variant="outline"
@@ -144,4 +144,36 @@ export function Section({
       {children}
     </section>
   )
+}
+
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded-md bg-muted", className)} />
+}
+
+export function TableSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="space-y-px overflow-hidden rounded-xl border">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-4 bg-card p-4">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-4 flex-1" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function EmptyState({ title, children, action }: { title: string; children?: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-6 py-14 text-center">
+      <div className="font-medium">{title}</div>
+      {children && <div className="max-w-md text-sm text-muted-foreground">{children}</div>}
+      {action && <div className="mt-2">{action}</div>}
+    </div>
+  )
+}
+
+export function ErrorNote({ children }: { children: React.ReactNode }) {
+  return <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{children}</p>
 }

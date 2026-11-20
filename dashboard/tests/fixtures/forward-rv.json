@@ -1,0 +1,36 @@
+[
+  {
+    "agent": "claude",
+    "chainHead": "1f0c5a1e9b3d4e7a8c2b6f0d9e1a3c5b7d9f1e3a5c7b9d1f3e5a7c9b1d3f5e7a",
+    "decision": "denied",
+    "detail": { "category": "git", "host": "claude", "session": "sess_8d2f", "tool": "Bash" },
+    "kind": "command.denied",
+    "prev": "0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b",
+    "schema": "rv.audit.v1",
+    "source": "audit.jsonl",
+    "subject": "core.git:reset-hard",
+    "time": "2026-11-20T10:00:00Z"
+  },
+  {
+    "agent": "cursor",
+    "chainHead": "2e1d6b2f0c4e5f8b9d3c7a1e0f2b4d6c8e0a2f4b6d8c0e2a4f6b8d0c2e4a6f8b",
+    "decision": "info",
+    "detail": { "category": "filesystem", "host": "cursor", "tool": "Bash", "would_be": "deny" },
+    "kind": "command.observed",
+    "prev": "1f0c5a1e9b3d4e7a8c2b6f0d9e1a3c5b7d9f1e3a5c7b9d1f3e5a7c9b1d3f5e7a",
+    "schema": "rv.audit.v1",
+    "source": "audit.jsonl",
+    "subject": "core.filesystem:rm-rf-general",
+    "time": "2026-11-20T10:05:12Z"
+  },
+  {
+    "decision": "denied",
+    "detail": { "server": "github", "tool": "delete_repository", "policy": "deny" },
+    "kind": "mcp.call",
+    "reason": "denied by organization policy",
+    "schema": "rv.audit.v1",
+    "source": "mcp-gateway.jsonl",
+    "subject": "github/delete_repository",
+    "time": "2026-11-20T10:06:00Z"
+  }
+]
