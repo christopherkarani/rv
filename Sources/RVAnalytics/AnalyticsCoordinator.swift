@@ -35,8 +35,11 @@ public actor AnalyticsCoordinator {
     private var state: AnalyticsCounterState
     private var installSent: Bool
     private let persistDelay: Duration
-    /// A deferred counters write is scheduled and has not run yet.
-    private var persistScheduled = false
+    /// The deferred counters write, while it is scheduled and has not run.
+    private var pendingPersist: Task<Void, Never>?
+    /// Tells a deferred write that woke late (after `persistPendingNow`
+    /// took its place) that it is no longer the pending one.
+    private var pendingPersistGeneration: UInt64 = 0
 
     /// How long decision counts may sit in memory before the counters file
     /// is rewritten. rvd records every decision, and writing the file (an
@@ -161,26 +164,55 @@ public actor AnalyticsCoordinator {
         )
     }
 
+    /// Writes decision counts still waiting for the deferred write now, and
+    /// cancels that write. rvd calls this before an orderly exit (idle, or
+    /// its binary replaced on disk). No-op when nothing is pending.
+    public func persistPendingNow() {
+        guard let pending = pendingPersist else { return }
+        pending.cancel()
+        pendingPersist = nil
+        pendingPersistGeneration &+= 1
+        persistPendingState()
+    }
+
     /// Coalesces decision-count writes: at most one per `persistDelay`. A
-    /// crash or kill loses at most that long's counts, the same kind of loss
-    /// the best-effort writes (`try?`) and rvd's detached per-decision task
-    /// already accept. The daily flush and every other change write at once.
+    /// crash or kill (including SIGTERM, which rvd does not handle) loses at
+    /// most that long's counts, the same kind of loss the best-effort writes
+    /// (`try?`) and rvd's detached per-decision task already accept. The
+    /// daily flush and every other change write at once.
     private func schedulePersist() {
         guard persistDelay > .zero else {
             persistState()
             return
         }
-        guard persistScheduled == false else { return }
-        persistScheduled = true
+        guard pendingPersist == nil else { return }
+        pendingPersistGeneration &+= 1
+        let generation = pendingPersistGeneration
         let delay = persistDelay
-        Task {
-            try? await Task.sleep(for: delay)
-            self.runScheduledPersist()
+        pendingPersist = Task {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            self.runScheduledPersist(generation: generation)
         }
     }
 
-    private func runScheduledPersist() {
-        persistScheduled = false
+    private func runScheduledPersist(generation: UInt64) {
+        guard pendingPersist != nil, generation == pendingPersistGeneration else { return }
+        pendingPersist = nil
+        persistPendingState()
+    }
+
+    /// A deferred write never creates the config directory: if it is gone
+    /// (removed while rvd ran, or a test's temporary root), the counts stay
+    /// in memory for the next write that does.
+    private func persistPendingState() {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: paths.configDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return }
         persistState()
     }
 

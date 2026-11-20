@@ -48,7 +48,7 @@ struct AnalyticsCounterPersistenceTests {
         #expect(Self.savedBytes(root) == before)
     }
 
-    @Test func countsReachTheFileAfterTheDelayAndSurviveARestart() async throws {
+    @Test func countsReachTheFileAfterTheDelay() async throws {
         let root = try temporaryConfigRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let analytics = Self.coordinator(root, persistDelay: .milliseconds(50))
@@ -56,19 +56,37 @@ struct AnalyticsCounterPersistenceTests {
             await analytics.recordDecision(index % 3 == 0 ? .deny : .allow)
         }
         await analytics.recordDecision(.indeterminate)
-        let deadline = ContinuousClock.now + .seconds(10)
+        // Generous: only checks the deferred write happens, not how soon.
+        let deadline = ContinuousClock.now + .seconds(30)
         var state = try? Self.saved(root)
-        while state?.allowCount != 20 || state?.denyCount != 10, ContinuousClock.now < deadline {
+        while state?.indeterminateCount != 1, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
             state = try? Self.saved(root)
         }
         #expect(state?.allowCount == 20)
         #expect(state?.denyCount == 10)
         #expect(state?.indeterminateCount == 1)
+    }
+
+    /// rvd's idle and replaced-binary exits write pending counts first.
+    @Test func pendingCountsAreWrittenOnRequestAndSurviveARestart() async throws {
+        let root = try temporaryConfigRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let analytics = Self.coordinator(root, persistDelay: .seconds(600))
+        for index in 0..<30 {
+            await analytics.recordDecision(index % 3 == 0 ? .deny : .allow)
+        }
+        await analytics.recordDecision(.indeterminate)
+        #expect(Self.savedBytes(root) == nil)
+        await analytics.persistPendingNow()
+        let state = try Self.saved(root)
+        #expect(state.allowCount == 20)
+        #expect(state.denyCount == 10)
+        #expect(state.indeterminateCount == 1)
 
         // A restarted rvd reports the saved counts on its next daily flush.
         let sink = RecordingAnalyticsSink()
-        let restarted = Self.coordinator(root, sink: sink, persistDelay: .milliseconds(50))
+        let restarted = Self.coordinator(root, sink: sink, persistDelay: .seconds(600))
         await restarted.flushDailyIfNeeded(now: day(2099, 1, 2))
         let daily = try #require(await sink.events.last)
         #expect(daily.properties["allow_count"] == .int(20))
@@ -90,6 +108,26 @@ struct AnalyticsCounterPersistenceTests {
         let flushed = try Self.saved(root)
         #expect(flushed.lastFlushDay == "2099-01-03")
         #expect(flushed.allowCount == 0, "the accepted flush reset the counts on disk")
+    }
+
+    @Test func nothingPendingWritesNothing() async throws {
+        let root = try temporaryConfigRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let analytics = Self.coordinator(root, persistDelay: .seconds(600))
+        await analytics.persistPendingNow()
+        #expect(Self.savedBytes(root) == nil)
+    }
+
+    /// A deferred write that outlives its directory (a test's temporary
+    /// root, or `~/.config/rv` removed while rvd ran) does not create it.
+    @Test func aDeferredWriteDoesNotRecreateARemovedDirectory() async throws {
+        let root = try temporaryConfigRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let analytics = Self.coordinator(root, persistDelay: .seconds(600))
+        await analytics.recordDecision(.deny)
+        try FileManager.default.removeItem(at: root)
+        await analytics.persistPendingNow()
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
     @Test func aZeroDelayWritesEveryDecision() async throws {
