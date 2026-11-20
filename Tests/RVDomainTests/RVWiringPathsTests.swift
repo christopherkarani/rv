@@ -54,6 +54,9 @@ struct RVWiringPathsTests {
         "/Users/me/.config/systemd/user/dev.rv.evaluate.service",
         "/Users/me/.config/systemd/user/dev.rv.evaluate.service.d/override.conf",
         "/Users/me/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian",
+        // The rvd state marker: forging it re-opens the observe step-aside.
+        "/Users/me/.config/rv/rvd-state",
+        "~/.config/rv/rvd-state",
     ])
     func wiring(path: String) {
         #expect(RVWiringPaths.matches(path, home: Self.home), "\(path)")
@@ -76,6 +79,9 @@ struct RVWiringPathsTests {
         "/Users/me/.agents/skills/other/SKILL.md",
         "/Users/me/.cursor/mcp.json",
         "/Users/me/.local/bin/node",
+        // Only the marker in rv's config directory is wiring.
+        "/Users/me/.config/rv/rvd-state.bak",
+        "/Users/me/.config/rv/workspaces/p/home/.config/rv/x",
         "/Users/me/.local/bin/rvm",
         "/Users/me/Library/LaunchAgents/com.example.agent.plist",
         "/Users/me/.config/systemd/user/syncthing.service",
@@ -106,6 +112,7 @@ struct RVWiringPathsTests {
         "/Users/me/.codex", "/Users/me/.gemini/config", "/Users/me/Applications",
         "/Users/me/.claude/skills", "/Users/me/.agents", "/Users/me/.agents/skills",
         "/Users/me/.config/opencode/skills",
+        "/Users/me/.config/rv",
     ])
     func ancestors(path: String) {
         #expect(RVWiringPaths.matchesAncestor(path, home: Self.home), "\(path)")

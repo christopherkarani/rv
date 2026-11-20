@@ -23,6 +23,7 @@ struct WiringPathsDriftTests {
             layout.localRv, layout.localRvCli, layout.localRvd,
             ClaudeSettingsMerge.adapterPath(settingsPath: layout.claudeSettings),
             layout.claudeAgentSkill, layout.codexAgentSkill, layout.openCodeAgentSkill,
+            layout.rvdStateMarker,
         ]
         paths += HookHost.setupSlotOrder.compactMap(layout.agentSkill(for:))
         for path in paths {

@@ -61,7 +61,12 @@ extern char **environ;
 #define RV_HOOK_USER_RUNTIME_ROOT "/run/user"
 #endif
 
+/* Release builds never override this; Scripts/observe-stop-proof-macos.sh
+ * pins a throwaway label so it can boot out a real launchd job without
+ * touching the installed rvd. */
+#ifndef RV_MACH_SERVICE
 #define RV_MACH_SERVICE "dev.rv.evaluate"
+#endif
 #define RV_IPC_KEY "rv.ipc"
 #define RV_STDIN_KEY "rv.stdin"
 #define RV_CLIENT_SEMVER "1.0.0"

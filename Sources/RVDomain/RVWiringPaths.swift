@@ -59,6 +59,10 @@ public enum RVWiringPaths {
         [".config", "systemd", "user.conf"],
         [".config", "systemd", "user.conf.d"],
         [".config", "systemd", "user", "service.d"],
+        // The rvd state marker: rewriting or deleting it turns a stopped
+        // rvd back into "never ran" or "restarting", which re-opens the
+        // observe-mode step-aside (`RVDStateMarker`).
+        [".config", "rv", "rvd-state"],
     ]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.

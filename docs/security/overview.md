@@ -623,7 +623,7 @@ check is a stub that always passes **[C150]**.
 
 | Situation | Enforce mode | Observe mode |
 | --- | --- | --- |
-| `rvd` absent. macOS: the XPC connection is invalid (service not registered; an idle on-demand `rvd` is not absent). Linux: `ENOENT`/`ECONNREFUSED` on the uid-derived socket path **[C152]** | Ask; `RV_HOOK_WHEN_DOWN=deny` makes it deny. No value allows **[C153]** | The call runs unchecked and unlogged, only if the owner's config selects observe for that host, the config file passes ownership checks, no organization policy directory exists, and `RV_HOOK_WHEN_DOWN` is not `deny` **[C154]** |
+| `rvd` absent. macOS: the XPC connection is invalid (service not registered; an idle on-demand `rvd` is not absent). Linux: `ENOENT`/`ECONNREFUSED` on the uid-derived socket path **[C152]** | Ask; `RV_HOOK_WHEN_DOWN=deny` makes it deny. No value allows **[C153]** | The call runs unchecked and unlogged, only if the owner's config selects observe for that host, the config file passes ownership checks, no organization policy directory exists, `RV_HOOK_WHEN_DOWN` is not `deny`, and the rvd state marker (`~/.config/rv/rvd-state`) is absent (rvd never ran) or announces a restart due within 120 s. Once `rvd` has run, a stop or crash leaves the marker `armed` and the hook asks or denies as in enforce **[C154]** |
 | `rvd` slow or the connection drops (hook timeouts: 3 s per hello, 8 s for the evaluation, request never sent after 5 s, one retry before sending) **[C155]** | Ask, or deny with `RV_HOOK_WHEN_DOWN=deny` | Same as enforce (observe never steps aside for a slow or dropped `rvd`) **[C153]** |
 | `rvd` fails its identity check, sends a malformed reply, or skews in major version; hook input invalid | Deny **[C153]** | Deny |
 | `rvd` exceeds its own 7 s budget | Side effects attempted after 7 s are skipped and the reply becomes a timeout deny, unless an allow-once grant was already spent (its allow is sent); a slow reply that attempted no side effect is returned as computed **[C156]** | Same |
@@ -816,7 +816,10 @@ commit.
 7. Rebase recovery is enabled by the presence of a rebase directory and
    lifts the working-tree-discard rule **[C51] [C52]**.
 8. Observe mode allows denied calls (except rv's own floor), and allows
-   calls unchecked while `rvd` is absent **[C53] [C154]**.
+   calls unchecked while `rvd` is absent before it first ran or during an
+   announced restart. The agent runs as the same user, so one opaque
+   command that stops `rvd` and rewrites the marker still gets through
+   **[C53] [C154]**.
 9. A missing or broken judge bundle degrades to packs-only **[C50]**.
 10. Searches without a path can match inside secret files **[C56]**.
 11. On Linux the owner-check lockout is in `rvd`'s memory **[C68]**.
@@ -1033,7 +1036,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C151 | Sources/rv-c/hook_fallback.c:104-119; Sources/rv-c/hook_fallback.c:171-177 |
 | C152 | Sources/rv-c/rv.c:594-596; Sources/rv-c/rv.c:985-987 |
 | C153 | Sources/rv-c/hook_fallback.c:30-38; Sources/rv-c/hook_fallback.c:155-178 |
-| C154 | Sources/rv-c/rv.c:330-342; Sources/rv-c/observe_gate.c:48-57 |
+| C154 | Sources/rv-c/rv.c:337-388; Sources/rv-c/observe_gate.c:48-57; Sources/rv-c/rvd_state.c:20-92 |
 | C155 | Sources/rv-c/rv.c:64-74; Sources/rv-c/rv.c:1050-1089 |
 | C156 | Sources/RVService/HookDeadline.swift:26; Sources/RVService/HookDeadline.swift:55-90; Sources/RVService/HookDoor.swift:24-35 |
 | C157 | Sources/RVService/GatedEvaluate.swift:1097-1104; Sources/RVService/AuditDropLog.swift:33-41 |
