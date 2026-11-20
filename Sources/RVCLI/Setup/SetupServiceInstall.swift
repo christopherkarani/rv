@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVService
 
 extension SetupRun {
     /// Renders the plist and, when this HOME owns the real launchd session,
@@ -53,6 +54,13 @@ extension SetupRun {
                 plist: URL(fileURLWithPath: layout.custodianLaunchAgent),
                 label: custodianLaunchAgentLabel)
         }
+    }
+
+    /// An operator start (setup, `rv service restart|start`) is not a crash
+    /// loop: forget rvd's early exits so the new rvd starts without waiting
+    /// out `StartupBackoff`.
+    static func clearStartupBackoff(_ env: SetupEnvironment) {
+        StartupBackoffStore.live(home: env.home.rawValue).reset()
     }
 
     /// Polling cadence and ceiling for the job to leave launchd after bootout.

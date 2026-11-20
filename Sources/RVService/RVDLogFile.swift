@@ -21,11 +21,13 @@ public enum RVDLogFileError: Error, Sendable, Equatable {
 ///
 /// Only rvd's own lifecycle lines go here (launch failures, transport
 /// warnings). Request handling never writes to stderr, so no command text
-/// or secret reaches this file. Growth is bounded by rotating once at
-/// startup: at most `maxBytes` per generation, one previous generation.
+/// or secret reaches this file. Growth is bounded by rotating at startup and
+/// then every `rotationCheckInterval` while rvd runs (it stays up for days):
+/// at most about `maxBytes` per generation, one previous generation.
 public enum RVDLogFile {
     public static let maxBytes = 1 << 20
     static let maxLineBytes = 512
+    public static let rotationCheckInterval: Duration = .seconds(60)
 
     /// macOS: `~/Library/Logs/rv/rvd.log`. Elsewhere: the XDG state default.
     public static func path(home: String) -> String {
@@ -76,6 +78,24 @@ public enum RVDLogFile {
     /// errors). Launch errors carry no request data.
     public static func describe(_ error: any Error) -> String {
         String(describing: error)
+    }
+
+    /// Rotates the log `fd` writes to once it reaches `maxBytes`: renames it
+    /// to `path.1`, opens a fresh `path` and points `fd` at it. Only when
+    /// `fd` is that very file (stderr kept by a terminal or the journal is
+    /// left alone). True when it rotated.
+    @discardableResult
+    public static func rotateIfFull(fd: Int32 = STDERR_FILENO, path: String, maxBytes: Int = maxBytes) -> Bool {
+        var current = stat()
+        guard fstat(fd, &current) == 0, isRegularFile(current), Int(current.st_size) >= maxBytes else {
+            return false
+        }
+        var onDisk = stat()
+        guard lstat(path, &onDisk) == 0, onDisk.st_dev == current.st_dev, onDisk.st_ino == current.st_ino,
+            let fresh = try? open(path: path, maxBytes: maxBytes)
+        else { return false }
+        defer { close(fresh) }
+        return dup2(fresh, fd) == fd
     }
 
     /// True when `fd` is closed or is /dev/null.
