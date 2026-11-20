@@ -612,23 +612,27 @@ past its 15 s budget, and all of these hold: `RV_HOOK_WHEN_DOWN` is not
 `deny`; the hook request's top-level `permission_mode` is `default`,
 `plan`, `acceptEdits` or `auto`; Claude Code reports the session as
 attended (`CLAUDE_CODE_SESSION_ATTENDED=1`; a missing value blocks); and
-the owner has not set `"hookAskWhenDown": false` at the top level of
-`~/.config/rv/config.json`, read from the passwd home (never `$HOME`)
-without following a symlink. The ask is kept only when that file does
-not exist, or parses as a JSON object whose `hookAskWhenDown` is absent
-or anything other than JSON `false`. A file that exists but cannot be
-used pins the block: a symlink, unreadable, not a regular file, over
-1 MiB, not UTF-8, corrupt JSON, a byte-order mark, a duplicate key or a
-root that is not an object. Ownership and mode are not checked for this
-switch, since it can only tighten. Otherwise it blocks:
+the owner has not pinned the block in `~/.config/rv/config.json`, read
+from the passwd home (never `$HOME`) without following a symlink. The
+ask is kept only when that file does not exist, or parses as a JSON
+object whose top-level `hookAskWhenDown` is absent or exactly JSON
+`true`. Any other value (`false`, `"false"`, `0`, `null`, ...) pins the
+block, and so does a file that exists but cannot be used: a symlink,
+unreadable (the file or its directory), not a regular file, over 1 MiB,
+not UTF-8, corrupt JSON, `NaN` or `Infinity`, a byte-order mark, a
+duplicate key or a root that is not an object. A failed passwd lookup
+or a home that is not an absolute path pins it too. Ownership and mode
+are not checked for this switch, since it can only tighten. Otherwise it
+blocks:
 `bypassPermissions`, `dontAsk`, a missing or unknown mode, an ordinary
 `claude -p` run (which sets `CLAUDE_CODE_SESSION_ATTENDED=0`), and any
 other native ask, including one with a non-zero exit or a top-level
 `decision`. The prompt shows the command or path first, on one line with
 line breaks, backslashes, controls, format, separator and non-ASCII space
-characters escaped. Past 300 escaped characters it keeps the first 220
-and the last 80 and says how many characters it leaves out, so padding
-cannot hide the end of a command. Then comes "rv could not
+characters escaped. The ask is forwarded only when the whole escaped
+command or path fits in 300 characters; a longer one is never cut, since
+any cut could hide part of it, and rv blocks with its reason and a note
+that the call was too long to show for approval. Then comes "rv could not
 check this call (<layer>). An agent can cause this by stopping or
 overloading rvd. Approve only if you expected it." Residuals:
 
@@ -1066,7 +1070,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C149 | Sources/RVPolicy/ManagedSerialRecord.swift:3-5; Sources/RVPolicy/ManagedSerialRecord.swift:49-71 |
 | C150 | Sources/RVPolicy/ManagedPolicy.swift:523-524 |
 | C151 | Sources/rv-c/hook_fallback.c:104-119; Sources/rv-c/hook_fallback.c:171-177 |
-| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:38-78; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:190-363; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:387; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:414-426; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:478-491; Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl:170-175 |
+| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:38-80; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:114-117; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:198-359; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:383; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:410-422; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:474-487; Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl:170-175 |
 | C152 | Sources/rv-c/rv.c:594-596; Sources/rv-c/rv.c:985-987 |
 | C153 | Sources/rv-c/hook_fallback.c:30-38; Sources/rv-c/hook_fallback.c:155-178 |
 | C154 | Sources/rv-c/rv.c:330-342; Sources/rv-c/observe_gate.c:48-57 |

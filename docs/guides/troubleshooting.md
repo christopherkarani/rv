@@ -19,9 +19,10 @@ slow, or dropped the connection, or the rv process ran past 15 s), you
 may get Claude Code's own permission prompt instead of a block. It shows
 the command (or the file path) first, on one line, with line breaks and
 invisible or direction-changing characters shown escaped (`\n`, or `\u`
-and four hex digits) and a typed backslash shown doubled. A command
-longer than 300 characters keeps its first 220 and last 80, with a count
-of what is left out between them, so you always see how it ends. Then comes
+and four hex digits) and a typed backslash shown doubled. You are asked
+only when the whole command (or path), escaped, fits in 300 characters.
+A longer one is blocked instead, with the daemon message and **`The command or path is too long to show in full for approval, so rv blocked it instead of asking.`**
+After the command, the prompt shows
 **`rv could not check this call (<layer>). An agent can cause this by stopping or overloading rvd. Approve only if you expected it.`**
 followed by one of the daemon messages below. Claude Code answers this
 prompt the way it answers any permission prompt. That is you, or whatever
@@ -34,19 +35,22 @@ answers again.
 
 To never get this prompt, add `"hookAskWhenDown": false` at the top level
 of `~/.config/rv/config.json`, or set `RV_HOOK_WHEN_DOWN=deny`. rv reads
-that file from your passwd home. If the file exists but rv cannot use it
-(a symlink, unreadable, not a regular file, over 1 MiB, or not one
-valid JSON object without duplicate keys), the call is blocked too. A
-missing file, or one without the key, keeps the prompt.
-`"hookAskWhenDown": false` affects only this Claude Code prompt. In
+that file from your passwd home. Only a missing file, or a JSON object
+without the key or with `"hookAskWhenDown": true`, keeps the prompt.
+Any other value (`"false"`, `0`, `null` and so on) blocks, and so does a
+file rv cannot use (a symlink, unreadable, not a regular file, over
+1 MiB, `NaN` or `Infinity`, or not one valid JSON object without
+duplicate keys). `"hookAskWhenDown"` affects only this Claude Code prompt. In
 observe mode it does not stop an unreachable `rvd` from letting calls
 run unchecked; only `RV_HOOK_WHEN_DOWN=deny` does that.
 
 The call is blocked instead, with the daemon message, when any of these
 holds:
 
-- `RV_HOOK_WHEN_DOWN=deny` is set, or `config.json` has
-  `"hookAskWhenDown": false` or exists but cannot be used;
+- `RV_HOOK_WHEN_DOWN=deny` is set, or `config.json` sets
+  `"hookAskWhenDown"` to anything but `true`, or exists but cannot be
+  used;
+- the command or path, escaped, is longer than 300 characters;
 - the permission mode is `bypassPermissions` or `dontAsk`, or the hook
   request names no mode or one rv does not know;
 - Claude Code does not report the session as attended
