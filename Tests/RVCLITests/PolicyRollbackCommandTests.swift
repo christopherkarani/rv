@@ -16,7 +16,7 @@ struct PolicyRollbackCommandTests {
         #expect(children.contains("rollback"))
         #expect(Policy.helpMessage().contains("rollback"))
         let help = HelpDispatch.text(.policy, palette: colorOffPalette)
-        #expect(help.contains("rv policy rollback <revision> [--repo] [--save [--wait]]"))
+        #expect(help.contains("rv policy rollback <revision> [--repo] [--save [--wait [--wait-timeout <seconds>]]]"))
         #expect(help.contains("rv policy show --revision <n> [--repo]"))
     }
 

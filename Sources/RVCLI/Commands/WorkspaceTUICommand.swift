@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVPresentation
 #if os(macOS)
 import Darwin
 import RVIsolation
@@ -8,11 +9,15 @@ import RVPolicy
 import RVWorkspaceTUI
 #endif
 
-public struct WorkspaceTUI: AsyncParsableCommand {
+public struct WorkspaceTUI: AsyncParsableCommand, CommandUsage {
     public static let configuration = CommandConfiguration(
         commandName: "tui",
         abstract: "Open the workspace shell. Runtimes stay alive after detach."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 

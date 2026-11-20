@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVIsolation
+import RVPresentation
 import RVPolicy
 
 /// `rv workspace vms`: VM-backed runtime sessions from
@@ -70,11 +71,15 @@ enum WorkspaceVMsRun {
     }
 }
 
-struct WorkspaceVMsCommand: AsyncParsableCommand {
+struct WorkspaceVMsCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "vms",
         abstract: "List micro-VM runtime sessions, newest first."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace vms [--json] [--limit N]", description: "List micro-VM runtime sessions, newest first"),
+    ]
 
     @Option(name: .long, help: "Most rows to show (1-1000, default 100).")
     var limit: Int = WorkspaceVMsRun.defaultLimit
