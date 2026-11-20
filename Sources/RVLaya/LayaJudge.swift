@@ -139,16 +139,12 @@ enum CompiledModelCache {
         return try store.model(package: package)
     }
 
-    /// Streaming SHA-256 of one file (1 MiB reads); nil when unreadable.
+    /// Streaming SHA-256 of one of this user's regular files, read to EOF
+    /// with plain `read(2)`; nil for a symlink, FIFO, foreign file or read
+    /// error (`OwnedRegularFile`).
     static func sha256Hex(of url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
         var hasher = SHA256()
-        while true {
-            guard let chunk = try? handle.read(upToCount: 1 << 20) else { return nil }
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
+        guard OwnedRegularFile.read(url.path, body: { hasher.update(bufferPointer: $0) }) else { return nil }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

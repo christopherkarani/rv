@@ -162,11 +162,14 @@ struct CompiledModelStore<Model> {
     /// The recorded manifest, read only from this user's regular file under
     /// the size cap (a FIFO or symlink there is not read, so cannot hang).
     static func readManifest(_ url: URL) -> [String: CompiledFileRecord]? {
-        var info = stat()
-        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
-              info.st_uid == geteuid(), Int(info.st_size) <= maximumManifestBytes,
-              let data = try? Data(contentsOf: url)
-        else { return nil }
+        var data = Data()
+        var oversized = false
+        let read = OwnedRegularFile.read(url.path) { chunk in
+            guard !oversized else { return }
+            data.append(contentsOf: chunk)
+            oversized = data.count > maximumManifestBytes
+        }
+        guard read, !oversized else { return nil }
         return try? JSONDecoder().decode([String: CompiledFileRecord].self, from: data)
     }
 
@@ -250,6 +253,46 @@ enum LegacyCompiledModels {
             !part.isEmpty && part.count <= 16 && part.allSatisfy { $0.isHexDigit && !$0.isUppercase }
         }
     }
+}
+
+/// Reads this user's regular files without following a final symlink or
+/// blocking on a FIFO: `open(O_NOFOLLOW|O_NONBLOCK)`, then `fstat` on the
+/// descriptor actually read (so a swap after a path check cannot redirect
+/// it), then `read(2)` to EOF.
+enum OwnedRegularFile {
+    static let chunkSize = 1 << 20
+
+    /// Calls `body` with each chunk in order; false when the path is not
+    /// this user's regular file or a read fails.
+    static func read(_ path: String, body: (UnsafeRawBufferPointer) -> Void) -> Bool {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else {
+            return false
+        }
+        let buffer = UnsafeMutableRawBufferPointer.allocate(byteCount: chunkSize, alignment: 16)
+        defer { buffer.deallocate() }
+        while true {
+            let count = systemRead(fd, buffer.baseAddress, chunkSize)
+            if count == 0 { return true }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return false
+            }
+            body(UnsafeRawBufferPointer(rebasing: buffer[..<count]))
+        }
+    }
+}
+
+/// `read(2)`, named apart from `OwnedRegularFile.read`.
+private func systemRead(_ fd: Int32, _ buffer: UnsafeMutableRawPointer?, _ count: Int) -> Int {
+    #if canImport(Darwin)
+    Darwin.read(fd, buffer, count)
+    #else
+    Glibc.read(fd, buffer, count)
+    #endif
 }
 
 extension stat {
