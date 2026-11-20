@@ -120,7 +120,15 @@ the same rows again.
   `.tmp` of a rewrite, the spool and its uncounted file, and
   `config.json` for the guard mode, `blocks.enabled` and
   `analytics.enabled`), so a FIFO planted at any of them fails that one
-  read or write at once.
+  read or write at once. The config the evaluation reads goes through the
+  same reader (`readRegularFile`: `O_NONBLOCK`, regular files only, 16 MiB
+  cap): `config.json` as the machine config, `config.toml`'s packs, and the
+  allow and deny stores. Reads that still use a blocking open on the
+  evaluation path, as they do in rvd: the typed-rule policy files
+  (`TypedRuleStore`), `package.json` for the package-script gate, the
+  repo's `.git/HEAD`, the judge bundle manifest and the allow-once store.
+  A FIFO planted at one of those hangs the evaluator until the C hook
+  kills it at 1 s and asks rvd, which then hangs on the same file.
 
 #### The spool rvd drains
 
@@ -149,23 +157,49 @@ a counted row. Both files must be this user's regular files.
 rvd drains both (`HookLocalSpoolDrainer`) on a private serial queue, never
 on the cooperative pool: each evaluation requests a drain and a 60 s timer
 requests one too, and a request while one is queued is folded into it, so
-exactly one drain runs at a time. The drain takes the spool lock with one
-non-blocking attempt; an evaluator holding it costs nothing but a later
-drain. Per drain:
+exactly one drain runs at a time. Spooled rows reach the chain only when
+rvd next runs: with rvd stopped they wait in the spool (up to its cap),
+and a verifier reading the chain before then sees neither them nor a gap.
+
+The drain never truncates a file it has not finished with. It renames the
+spool aside to `hook-local-spool.jsonl.draining`, under the spool lock
+taken with one non-blocking attempt (an evaluator holding it costs nothing
+but a later drain), and removes the aside only once every row in it is
+appended or counted. A `.draining` left by an earlier drain is drained
+first. The uncounted file is renamed aside the same way
+(`.uncounted.draining`) and counted by the next drain, so a byte an
+evaluator appends between the drain's read and its unlink is never lost;
+gap counts therefore lag one drain. Per drain:
 
 - each spooled audit row is validated (every field must be one the
-  evaluator writes; the spool is a file, so it is read as untrusted) and
-  appended to `audit.jsonl` with `detail.recorded_by: "hook-local"`;
+  evaluator writes, its rule at most 256 bytes and its time within 24 h of
+  rvd's clock; the spool is a file, so it is read as untrusted) and
+  appended to `audit.jsonl` with `detail.recorded_by: "hook-local"`. All
+  the appends of one drain share one lock deadline (the audit chain's
+  2 s), and the first that fails ends them: that row and the rest stay in
+  `.draining` for the next drain, so a held `audit.jsonl` lock delays rows
+  and never drops them. One drain takes at most 2000 rows; the rest wait
+  the same way;
 - audit rows lost without their fields (the `a` bytes, or spooled fields
   that do not validate) get one `audit.gap` event with their count, so a
-  verifier sees that the chain is missing rows;
+  verifier sees that the chain is missing rows. When the count is a lower
+  bound (the uncounted file reached its cap, the spool was cut at its cap
+  or held a line that did not parse, or a file was planted at a spool
+  path) the gap says so with `detail.at_least: "true"` and is recorded even
+  when no `a` byte was seen. A gap that cannot be appended is written back
+  to the uncounted file as that many `a` bytes, so a later drain records
+  it;
+- a symlink, FIFO, hard-linked or other non-regular file (by `lstat`) at
+  the spool or uncounted path is unlinked, never followed, so the spool
+  works again, and recorded as an `at_least` gap;
 - one `rvd.log` line names the recovered rules and counts the rest, at
   most once a minute;
 - the decisions join rvd's counts and the daily analytics flush runs, so
   it no longer waits for rvd to evaluate something. An rvd without
   analytics discards spooled decisions.
 
-Malformed lines count as lost, and spool bytes past the cap are counted
+Malformed lines count as lost, and spool bytes past the cap (read with
+64 KiB of slack, so the batch that crossed it is still read) are counted
 and dropped. The spool can add analytics counts and audit rows marked
 `recorded_by: hook-local`, never change a verdict. Anything running as the
 user could write those rows; it could already append to `audit.jsonl`
@@ -175,7 +209,11 @@ Double counting: the C hook kills an evaluator that is still running at
 its deadline and asks rvd. An evaluator killed after its spool write (in
 the 250 ms margin) has counted its decision, and rvd counts the call
 again. The margin makes this rare, and it costs one analytics count, never
-a row in the chain or a verdict.
+a verdict. The enforce escalation can duplicate a chain row: a call with
+two denial rows whose first audit row lands and whose second does not
+escalates, and an evaluator killed after its audit row landed is asked of
+rvd too; either way rvd writes the call's audit rows again. The chain then
+holds a row twice, both intact; it never misses one.
 
 `LocalHookRecordParityTests` proves the parity: two identical homes on
 one fixed clock, the evaluator deciding every call over one and rvd
