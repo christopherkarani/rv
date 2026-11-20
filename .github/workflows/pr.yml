@@ -196,6 +196,21 @@ jobs:
       - name: No test owner presence in the debug products
         run: Scripts/check-no-test-owner-presence.sh .build/debug/rv .build/debug/rvd .build/debug/rv-workspace-host
 
+      # And the guard must catch what it guards against: a debug rvd built
+      # with RV_TEST_OWNER_PRESENCE=1, in a scratch path of its own so it
+      # never replaces the binaries above. Only rvd: the markers are in
+      # RVService, which rvd links, and a second debug build of the whole
+      # package would double the job.
+      - name: Guard refuses a test-owner-presence rvd
+        run: |
+          set -euo pipefail
+          RV_TEST_OWNER_PRESENCE=1 swift build --scratch-path .build/top --product rvd
+          .build/top/debug/rvd --version | grep -q '(rv-test-owner-presence build)$'
+          if Scripts/check-no-test-owner-presence.sh .build/top/debug/rvd; then
+            echo "::error::check-no-test-owner-presence.sh passed an rvd built with RV_TEST_OWNER_PRESENCE=1"
+            exit 1
+          fi
+
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
