@@ -107,6 +107,7 @@ public struct PoolCore: Sendable {
     private var queue: [String] = []
     private var pending: [String: Pending] = [:]
     private var nextGeneration: UInt64 = 1
+    private var keyChangedAt: Instant?
     private(set) var counters = Counters()
     private var effects: [PoolEffect] = []
 
@@ -121,7 +122,7 @@ public struct PoolCore: Sendable {
         case .submit(let id, let key, let input, let budget):
             submit(id: id, key: key, input: input, budget: budget, now: now)
         case .warm(let key):
-            if key.isWellFormed { adopt(key) }
+            if key.isWellFormed, mayAdopt(key, now: now) { adopt(key, now: now) }
         case .worker(let slot, let generation, let event):
             workerEvent(slot, generation: generation, event, now: now)
         case .exited(let slot, let generation):
@@ -189,7 +190,11 @@ public struct PoolCore: Sendable {
             reply(id, .failed("malformed judge request"))
             return
         }
-        adopt(key)
+        guard mayAdopt(key, now: now) else {
+            reply(id, .failed("judge model changed too recently"))
+            return
+        }
+        adopt(key, now: now)
         let window = min(policy.budget, budget)
         guard window > .zero else {
             counters.late += 1
@@ -209,24 +214,33 @@ public struct PoolCore: Sendable {
         queue.append(id)
     }
 
+    /// A change of model is allowed once per `keyChangeInterval`; the first
+    /// key is always taken.
+    private func mayAdopt(_ key: ModelKey, now: Instant) -> Bool {
+        guard let current = self.key, current != key, let changedAt = keyChangedAt else { return true }
+        return now >= changedAt + policy.keyChangeInterval
+    }
+
     /// Binds the workers to `key`, restarting them when it changes. Requests
     /// for the previous key cannot be served by the new model: they get
-    /// `warming`, which the client treats as review.
-    private mutating func adopt(_ key: ModelKey) {
+    /// `warming`, which the client treats as review. Fault history,
+    /// degradation and backoff stay with each slot: a key change must not
+    /// launder a crash-looping worker back into rotation.
+    private mutating func adopt(_ key: ModelKey, now: Instant) {
         guard self.key != key else { return }
+        if self.key != nil { keyChangedAt = now }
         self.key = key
         for id in Array(pending.keys) { reply(id, .warming) }
         pending.removeAll()
         queue.removeAll()
         for slot in WorkerSlot.allCases {
             var worker = workers[slot] ?? Worker()
+            // A load failure was about the old bundle; a fault backoff stays.
+            let hadLoadFailure = worker.loadFailure != nil
             worker.loadFailure = nil
-            worker.faults = []
-            worker.degradedUntil = nil
-            worker.backoffStep = 0
             switch worker.phase {
-            case .down:
-                worker.phase = .down(retryAt: nil)
+            case .down(let retryAt):
+                worker.phase = .down(retryAt: hadLoadFailure ? nil : retryAt)
             case .loading(let g, _), .idle(let g), .busy(let g, _, _):
                 effects.append(.kill(slot, generation: g))
                 worker.phase = .stopping(generation: g, fault: false)

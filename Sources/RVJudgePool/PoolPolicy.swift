@@ -33,6 +33,9 @@ public struct PoolPolicy: Sendable, Equatable {
     /// After a worker reports the bundle unloadable, retry no sooner than
     /// this (the in-process loader cached a failure for a minute too).
     public var loadFailureRetry: Duration
+    /// After the model key changes, another change is refused for this
+    /// long: a client alternating keys cannot keep both workers reloading.
+    public var keyChangeInterval: Duration
 
     public init(
         primaryCompute: WorkerCompute = .cpu,
@@ -47,7 +50,8 @@ public struct PoolPolicy: Sendable, Equatable {
         faultsToDegrade: Int = 3,
         degradeCooldown: Duration = .seconds(600),
         loadTimeout: Duration = .seconds(180),
-        loadFailureRetry: Duration = .seconds(60)
+        loadFailureRetry: Duration = .seconds(60),
+        keyChangeInterval: Duration = .seconds(10)
     ) {
         precondition(queueLimit > 0 && faultsToDegrade > 0)
         self.primaryCompute = primaryCompute
@@ -63,6 +67,7 @@ public struct PoolPolicy: Sendable, Equatable {
         self.degradeCooldown = degradeCooldown
         self.loadTimeout = loadTimeout
         self.loadFailureRetry = loadFailureRetry
+        self.keyChangeInterval = keyChangeInterval
     }
 
     public static let live = PoolPolicy()

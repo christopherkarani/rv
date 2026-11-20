@@ -354,6 +354,49 @@ struct PoolCoreTests {
         #expect(pool.core.key == other)
     }
 
+    @Test("a key change does not launder a degraded worker back into rotation")
+    func keyChangeKeepsDegradation() {
+        var pool = PoolHarness(policy: PoolPolicy(faultsToDegrade: 1))
+        pool.warmBoth()
+        pool.exited(.primary)
+        #expect(pool.core.status().workers[0].degraded)
+        let other = ModelKey(engine: "laya", bundle: "/models/laya-multilingual-coreml")
+        let effects = pool.handle(.warm(other))
+        #expect(effects.kills == [.hedge])
+        #expect(pool.exited(.hedge).spawns == [.hedge], "only the healthy worker reloads")
+        let status = pool.core.status()
+        #expect(status.workers[0].degraded)
+        #expect(status.routing == "hedge only (primary degraded)")
+    }
+
+    @Test("a second key change inside keyChangeInterval is refused; warm ignores it")
+    func keyChangeRateLimited() {
+        var pool = PoolHarness()
+        pool.warmBoth()
+        let second = ModelKey(engine: "laya", bundle: "/models/laya-multilingual-coreml")
+        pool.at(1_000)
+        pool.handle(.warm(second))
+        #expect(pool.core.key == second)
+        pool.at(5_000)
+        let refused = pool.submit("r1")
+        #expect(refused.reply("r1") == .failed("judge model changed too recently"))
+        #expect(refused.kills.isEmpty)
+        #expect(pool.handle(.warm(PoolHarness.key)).kills.isEmpty)
+        #expect(pool.core.key == second)
+        pool.at(11_000)
+        pool.handle(.warm(PoolHarness.key))
+        #expect(pool.core.key == PoolHarness.key, "allowed once the interval has passed")
+    }
+
+    @Test("the first key is adopted at once, with no interval")
+    func firstKeyNotRateLimited() {
+        var pool = PoolHarness()
+        pool.handle(.warm(ModelKey(engine: "laya", bundle: "/models/laya-multilingual-coreml")))
+        pool.at(100)
+        pool.handle(.warm(PoolHarness.key))
+        #expect(pool.core.key == PoolHarness.key, "warm before any change is not a change")
+    }
+
     @Test("a worker that answers what it was not asked is killed as a fault")
     func outOfProtocol() {
         var pool = PoolHarness()
