@@ -244,12 +244,14 @@ def _owner_pinned_block():
     # corrupt, a BOM, a repeated key, NaN or Infinity, or a non-object
     # root. Who owns the file or may write it does not matter for a
     # tightening switch.
+    # A failed passwd lookup, or a home that is not an absolute path,
+    # leaves no config rv can trust to be the owner's: that pins too.
     try:
         path = _OWNER_CONFIG_PATH or _passwd_config_path()
     except Exception:
-        return False
+        return True
     if path is None:
-        return False
+        return True
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
     try:
         fd = os.open(path, flags)

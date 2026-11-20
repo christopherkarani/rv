@@ -253,6 +253,39 @@ struct ClaudeInfraAskAdapterTests {
         }
     }
 
+    /// The owner config is read from the passwd home, never `$HOME`: with
+    /// `$HOME` holding a config that would keep the ask, the real lookup
+    /// opens the passwd home's config.json and nothing under `$HOME`.
+    @Test func ownerConfig_isReadFromThePasswdHomeNotHOME() async throws {
+        let entry = try #require(getpwuid(getuid()))
+        let passwdConfig = String(cString: entry.pointee.pw_dir) + "/.config/rv/config.json"
+        let run = try await runPythonAdapter(
+            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
+            environment: Self.attended,
+            ownerConfig: { path in
+                // The harness sets HOME to the directory holding `path`.
+                let rvDir = path.deletingLastPathComponent().appendingPathComponent(".config/rv")
+                try FileManager.default.createDirectory(at: rvDir, withIntermediateDirectories: true)
+                try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: rvDir.appendingPathComponent("config.json"))
+                return path
+            },
+            ownerConfigLookup: .passwdHome())
+        let configsOpened = run.openedPaths.filter { $0.hasSuffix("/.config/rv/config.json") }
+        #expect(configsOpened == [passwdConfig], "\(run.openedPaths)")
+    }
+
+    /// A passwd lookup that fails, or a home that is not an absolute path,
+    /// leaves rv no config to trust: it pins "block" without opening one.
+    @Test(arguments: PasswdLookup.allCases)
+    func ownerConfig_unusablePasswdHomePins(_ lookup: PasswdLookup) async throws {
+        let run = try await runPythonAdapter(
+            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
+            environment: Self.attended, ownerConfigLookup: .passwdHome(pwDir: lookup.pwDir))
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason == daemonUnreachableMessage, "\(lookup): \(reason)")
+        #expect(run.openedPaths.allSatisfy { !$0.hasSuffix("config.json") }, "\(lookup): \(run.openedPaths)")
+    }
+
     /// Each C hook down reason maps to its own layer.
     @Test(arguments: [
         (cTimeoutMessage, "rvd did not answer in time"),
@@ -379,6 +412,22 @@ struct ClaudeInfraAskAdapterTests {
             case .spacedKey: "spacedKey"
             }
         }
+    }
+
+    /// Python expressions put in place of the adapter's `pw_dir` lookup.
+    enum PasswdLookup: String, CaseIterable, CustomStringConvertible {
+        case noSuchUser, relativeHome, emptyHome, notAString
+
+        var pwDir: String {
+            switch self {
+            case .noSuchUser: #"pwd.getpwnam("rv-test-no-such-user").pw_dir"#
+            case .relativeHome: #""relative/home""#
+            case .emptyHome: #""""#
+            case .notAString: "None"
+            }
+        }
+
+        var description: String { rawValue }
     }
 
     enum SubjectLength: String, CaseIterable, CustomStringConvertible {
