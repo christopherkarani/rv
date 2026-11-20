@@ -111,6 +111,12 @@ def _reject_duplicate_keys(pairs):
     return seen
 
 
+def _reject_json_constant(name):
+    # NaN, Infinity and -Infinity are not JSON; Python accepts them, other
+    # parsers do not.
+    raise ValueError("non-standard JSON constant %s" % name)
+
+
 def _wire_key(name):
     # Same key as rv's HookWireName: case-folded, without whitespace,
     # control or format characters, "_" or "-".
@@ -235,8 +241,9 @@ def _owner_pinned_block():
     # A file that exists but cannot be used pins "block", as GuardConfig
     # fails closed on a bad config: a symlink (O_NOFOLLOW), unreadable, not
     # a regular file (no blocking open on a FIFO), over 1 MiB, not UTF-8,
-    # corrupt, a BOM, a repeated key or a non-object root. Who owns the
-    # file or may write it does not matter for a tightening switch.
+    # corrupt, a BOM, a repeated key, NaN or Infinity, or a non-object
+    # root. Who owns the file or may write it does not matter for a
+    # tightening switch.
     try:
         path = _OWNER_CONFIG_PATH or _passwd_config_path()
     except Exception:
@@ -251,7 +258,11 @@ def _owner_pinned_block():
     except Exception:
         return True
     try:
-        parsed = json.loads(_read_regular_file(fd), object_pairs_hook=_reject_duplicate_keys)
+        parsed = json.loads(
+            _read_regular_file(fd),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
     except Exception:
         return True
     finally:

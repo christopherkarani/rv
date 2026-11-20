@@ -483,6 +483,9 @@ struct ClaudeInfraAskAdapterTests {
         // Pin block: the file exists but cannot be used.
         case unreadable, symlinkToFalse, symlinkToTrue, danglingSymlink, directory, fifo
         case oversizeSparse, emptyFile, corrupt, byteOrderMark, duplicateKey, arrayRoot, notUTF8
+        case numberRoot, nullRoot, stringRoot, parentUnsearchable
+        // Pin block: non-standard JSON constants, even beside an absent key.
+        case nanValue, infinityValue, negativeInfinityValue
 
         var pins: Bool {
             switch self {
@@ -542,6 +545,20 @@ struct ClaudeInfraAskAdapterTests {
             case .duplicateKey:
                 try writeOwnerConfig(#"{"hookAskWhenDown": true, "hookAskWhenDown": true}"#, at: path)
             case .arrayRoot: try writeOwnerConfig("[]", at: path)
+            case .numberRoot: try writeOwnerConfig("5", at: path)
+            case .nullRoot: try writeOwnerConfig("null", at: path)
+            case .stringRoot: try writeOwnerConfig(#""hookAskWhenDown""#, at: path)
+            case .parentUnsearchable:
+                // EACCES on the directory, not the file.
+                let locked = dir.appendingPathComponent("locked")
+                try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+                let file = locked.appendingPathComponent("config.json")
+                try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: file)
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+                return file
+            case .nanValue: try writeOwnerConfig(#"{"other": NaN}"#, at: path)
+            case .infinityValue: try writeOwnerConfig(#"{"other": Infinity}"#, at: path)
+            case .negativeInfinityValue: try writeOwnerConfig(#"{"other": -Infinity}"#, at: path)
             case .notUTF8:
                 try Data([0x7B, 0x22, 0xFF, 0x22, 0x3A, 0x31, 0x7D]).write(to: path)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)

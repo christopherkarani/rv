@@ -315,7 +315,11 @@ func runPythonAdapter(
     let defaultOwnerConfig = root.appendingPathComponent("owner-config.json")
     let ownerConfig = try prepareOwnerConfig?(defaultOwnerConfig) ?? defaultOwnerConfig
     // Restore permissions so the cleanup can remove what a test locked.
-    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ownerConfig.path) }
+    defer {
+        for locked in [ownerConfig.deletingLastPathComponent(), ownerConfig] {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        }
+    }
     let adapter = root.appendingPathComponent("rv-guard.py")
     try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds, ownerConfig: ownerConfig)
         .write(to: adapter, atomically: true, encoding: .utf8)
