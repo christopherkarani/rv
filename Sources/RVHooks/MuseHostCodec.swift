@@ -37,13 +37,16 @@ public struct MuseHostCodec: HostCodec {
         }
         let cwd = firstNonEmpty(envelope.cwd, envelope.toolInput?.workdir)
             .flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId, envelope.turnId)
-            .flatMap { SessionID(validating: $0) }
+        // A turn id is not a session: it may key a pending approval when
+        // Muse sent no session id, but never names one on a block row.
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
+        let turn = firstNonEmpty(envelope.turnId).flatMap { SessionID(validating: $0) }
         return HookRequest.decoded(
             host: .muse,
             command: envelope.toolInput?.command,
             cwd: cwd,
-            session: session
+            session: session,
+            approvalSession: turn
         )
     }
 
