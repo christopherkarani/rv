@@ -66,7 +66,7 @@ struct JudgePoolLogTests {
         var before = sigaction()
         var after = sigaction()
         sigaction(SIGPIPE, nil, &before)
-        _ = PosixWorkerSpawner(executable: "/bin/true", environment: [:]) { _, _ in [] }
+        _ = PosixWorkerSpawner(executable: "/bin/true", environment: [:]) { _, _, _ in [] }
         sigaction(SIGPIPE, nil, &after)
         #expect(Self.handler(before) == Self.handler(after))
     }

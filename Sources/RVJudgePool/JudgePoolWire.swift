@@ -10,7 +10,7 @@ public enum JudgePoolWire {
     public static let machServiceName = "dev.rv.judge"
     /// Bumped on any incompatible change to the client or worker messages.
     /// A client and supervisor that disagree never exchange a judge request.
-    public static let protocolVersion = 1
+    public static let protocolVersion = 2
     /// XPC dictionary key holding one JSON message body.
     public static let xpcDataKey = "body"
     /// XPC dictionary key holding the anonymous request endpoint.
@@ -19,27 +19,28 @@ public enum JudgePoolWire {
     public static let transportSlack: Duration = .milliseconds(250)
 }
 
-/// The two workers. `primary` runs the production compute units (GPU);
-/// `fallback` runs CPU only, which never enters the MPSGraph path that has
-/// aborted the judge process.
+/// The two workers, named by role. `primary` gets every request first;
+/// `hedge` gets a request the primary has not answered by `hedgeAfter`, or
+/// one the primary is too busy, down or degraded to take. Which compute
+/// units each runs is `PoolPolicy.primaryCompute` / `hedgeCompute`.
 public enum WorkerSlot: String, Sendable, Codable, CaseIterable, Hashable {
-    case primary = "A"
-    case fallback = "B"
-
-    /// The `--compute` argument the worker is spawned with.
-    public var computeArgument: String {
-        switch self {
-        case .primary: "accelerated"
-        case .fallback: "cpu"
-        }
-    }
+    case primary
+    case hedge
 
     var other: WorkerSlot {
         switch self {
-        case .primary: .fallback
-        case .fallback: .primary
+        case .primary: .hedge
+        case .hedge: .primary
         }
     }
+}
+
+/// The Core ML compute units a worker loads with: `--compute` on its argv.
+/// `cpu` is `.cpuOnly` and never enters the MPSGraph path that has aborted
+/// the judge; `accelerated` is `.cpuAndGPU`.
+public enum WorkerCompute: String, Sendable, Codable, CaseIterable, Hashable {
+    case cpu
+    case accelerated
 }
 
 /// Which model the workers load: the engine (`ft` | `laya`) and its bundle
@@ -211,13 +212,13 @@ public struct PoolStatus: Sendable, Codable, Equatable {
         self.refusedBusy = refusedBusy
     }
 
-    /// Everything routes to `fallback` while `primary` is degraded.
+    /// Everything routes to `hedge` while `primary` is degraded.
     public var routing: String {
         let degraded = Set(workers.filter(\.degraded).map(\.slot))
-        switch (degraded.contains(.primary), degraded.contains(.fallback)) {
+        switch (degraded.contains(.primary), degraded.contains(.hedge)) {
         case (false, false): return "hedged"
-        case (true, false): return "cpu-only (worker A degraded)"
-        case (false, true): return "unhedged (worker B degraded)"
+        case (true, false): return "hedge only (primary degraded)"
+        case (false, true): return "unhedged (hedge degraded)"
         case (true, true): return "none (both workers degraded)"
         }
     }

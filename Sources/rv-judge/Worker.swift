@@ -78,6 +78,9 @@ enum JudgeWorker {
             emit(.loadFailed(LoadFailure(kind: .modelUnavailable, message: "load failed")))
             exit(0)
         }
+        // The first prediction after a load runs 0.3-0.5 s longer than the
+        // rest (measured); pay it here so no real request waits on it.
+        _ = try? judge(JudgeInput(command: "true", contextLines: []))
         emit(.ready(checkpoint: checkpoint))
         while let body = readFrame() {
             guard let request = JudgePoolJSON.decode(WorkerRequest.self, from: body) else { exit(3) }

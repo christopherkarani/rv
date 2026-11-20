@@ -53,7 +53,7 @@ struct FrameStreamTests {
     @Test("client replies round-trip, including verdict bytes and the answering worker")
     func replyRoundTrip() throws {
         let replies: [JudgePoolReply] = [
-            .outcome(.verdict(Data(#"{"risk":0.1}"#.utf8), slot: .fallback)),
+            .outcome(.verdict(Data(#"{"risk":0.1}"#.utf8), slot: .hedge)),
             .outcome(.loadFailed(LoadFailure(kind: .badBundle, message: "m"))),
             .outcome(.late), .outcome(.busy), .outcome(.warming), .outcome(.failed("x")),
             .helloAck(protocolVersion: JudgePoolWire.protocolVersion), .ack, .refused,

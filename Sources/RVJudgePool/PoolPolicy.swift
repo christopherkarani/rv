@@ -1,9 +1,17 @@
 /// The pool's timing and sizing constants (docs/architecture/judge-pool.md
 /// has the evidence behind each).
 public struct PoolPolicy: Sendable, Equatable {
+    /// Compute units of the worker that gets every request first.
+    public var primaryCompute: WorkerCompute
+    /// Compute units of the worker that covers the primary.
+    public var hedgeCompute: WorkerCompute
     /// Send the request to the other worker too when the first has not
-    /// answered by then. About the primary worker's p95 on a warm model.
+    /// answered by then. Above the primary's p99 on a loaded machine.
     public var hedgeAfter: Duration
+    /// A request that finds the primary busy (but healthy) waits this long
+    /// for it before going to the hedge: about one primary p95, so a burst
+    /// does not land on the slower hedge at once.
+    public var primaryBusyWait: Duration
     /// The most a request waits for an answer, and the most a worker may
     /// spend on one prediction before it is SIGKILLed (the only way to
     /// cancel a Core ML prediction).
@@ -27,7 +35,10 @@ public struct PoolPolicy: Sendable, Equatable {
     public var loadFailureRetry: Duration
 
     public init(
-        hedgeAfter: Duration = .milliseconds(450),
+        primaryCompute: WorkerCompute = .cpu,
+        hedgeCompute: WorkerCompute = .accelerated,
+        hedgeAfter: Duration = .milliseconds(150),
+        primaryBusyWait: Duration = .milliseconds(40),
         budget: Duration = .milliseconds(1500),
         queueLimit: Int = 8,
         backoffBase: Duration = .milliseconds(250),
@@ -39,7 +50,10 @@ public struct PoolPolicy: Sendable, Equatable {
         loadFailureRetry: Duration = .seconds(60)
     ) {
         precondition(queueLimit > 0 && faultsToDegrade > 0)
+        self.primaryCompute = primaryCompute
+        self.hedgeCompute = hedgeCompute
         self.hedgeAfter = hedgeAfter
+        self.primaryBusyWait = primaryBusyWait
         self.budget = budget
         self.queueLimit = queueLimit
         self.backoffBase = backoffBase
@@ -52,6 +66,13 @@ public struct PoolPolicy: Sendable, Equatable {
     }
 
     public static let live = PoolPolicy()
+
+    public func compute(for slot: WorkerSlot) -> WorkerCompute {
+        switch slot {
+        case .primary: primaryCompute
+        case .hedge: hedgeCompute
+        }
+    }
 
     func backoff(step: Int) -> Duration {
         var delay = backoffBase

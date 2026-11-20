@@ -18,13 +18,13 @@ public enum WorkerSpawnError: Error, Sendable, Equatable {
 /// from a client request or the environment.
 public struct PosixWorkerSpawner: WorkerSpawning {
     public let executable: String
-    public let arguments: @Sendable (WorkerSlot, ModelKey) -> [String]
+    public let arguments: @Sendable (WorkerSlot, WorkerCompute, ModelKey) -> [String]
     public let environment: [String: String]
 
     public init(
         executable: String,
         environment: [String: String],
-        arguments: @escaping @Sendable (WorkerSlot, ModelKey) -> [String]
+        arguments: @escaping @Sendable (WorkerSlot, WorkerCompute, ModelKey) -> [String]
     ) {
         self.executable = executable
         self.environment = environment
@@ -32,12 +32,12 @@ public struct PosixWorkerSpawner: WorkerSpawning {
     }
 
     /// The worker arguments for `rv-judge --worker`.
-    public static func judgeWorkerArguments(slot: WorkerSlot, key: ModelKey) -> [String] {
-        ["--worker", "--compute", slot.computeArgument, "--engine", key.engine, "--bundle", key.bundle]
+    public static func judgeWorkerArguments(slot: WorkerSlot, compute: WorkerCompute, key: ModelKey) -> [String] {
+        ["--worker", "--compute", compute.rawValue, "--engine", key.engine, "--bundle", key.bundle]
     }
 
     public func spawn(
-        slot: WorkerSlot, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
+        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess {
         var toChild: [Int32] = [-1, -1]
         var fromChild: [Int32] = [-1, -1]
@@ -58,7 +58,7 @@ public struct PosixWorkerSpawner: WorkerSpawning {
 
         let pid: pid_t
         do {
-            pid = try launch(stdin: toChild[0], stdout: fromChild[1], arguments: arguments(slot, key))
+            pid = try launch(stdin: toChild[0], stdout: fromChild[1], arguments: arguments(slot, compute, key))
         } catch {
             for fd in toChild + fromChild { close(fd) }
             throw error

@@ -57,13 +57,13 @@ struct PoolHarness {
         handle(.submit(id: id, key: Self.key, input: Self.input, budget: budget))
     }
 
-    /// Both workers spawned and loaded, A first.
+    /// Both workers spawned and loaded, the primary first.
     mutating func warmBoth() {
         let first = handle(.warm(Self.key))
         precondition(first.spawns == [.primary])
         let second = ready(.primary)
-        precondition(second.spawns == [.fallback])
-        ready(.fallback)
+        precondition(second.spawns == [.hedge])
+        ready(.hedge)
     }
 }
 
@@ -90,16 +90,61 @@ extension [PoolEffect] {
 
 @Suite("PoolCore — routing, hedge, kill, respawn")
 struct PoolCoreTests {
-    @Test("warm spawns the primary first, the fallback only after it loads")
+    @Test("warm spawns the primary first, the hedge only after it loads")
     func loadsOneAtATime() {
         var pool = PoolHarness()
         #expect(pool.handle(.warm(PoolHarness.key)).spawns == [.primary])
         #expect(pool.tick().spawns.isEmpty, "never two loads at once")
-        #expect(pool.ready(.primary).spawns == [.fallback])
-        pool.ready(.fallback)
+        #expect(pool.ready(.primary).spawns == [.hedge])
+        pool.ready(.hedge)
         let status = pool.core.status()
         #expect(status.workers.map(\.phase) == ["ready", "ready"])
         #expect(status.routing == "hedged")
+    }
+
+    @Test("the default pool runs CPU as the primary and the GPU only as the hedge")
+    func defaultComputeRoles() {
+        #expect(PoolPolicy.live.primaryCompute == .cpu)
+        #expect(PoolPolicy.live.hedgeCompute == .accelerated)
+        var pool = PoolHarness()
+        pool.warmBoth()
+        let workers = pool.core.status().workers
+        #expect(workers.map(\.slot) == [.primary, .hedge])
+        #expect(workers.map(\.compute) == ["cpu", "accelerated"])
+        let swapped = PoolCore(policy: PoolPolicy(primaryCompute: .accelerated, hedgeCompute: .cpu)).status()
+        #expect(swapped.workers.map(\.compute) == ["accelerated", "cpu"])
+    }
+
+    @Test("a busy primary: the next request waits primaryBusyWait for it, then goes to the hedge")
+    func busyPrimaryWaitsThenHedge() {
+        var pool = PoolHarness()
+        pool.warmBoth()
+        #expect(pool.submit("a").sends == [.primary: "a"])
+        #expect(pool.submit("b").sends.isEmpty, "the primary is only busy: wait for it")
+        #expect(pool.core.nextWake(after: pool.now) == pool.start + .milliseconds(40))
+        pool.at(39)
+        #expect(pool.tick().sends.isEmpty)
+        pool.at(40)
+        #expect(pool.tick().sends == [.hedge: "b"])
+    }
+
+    @Test("a busy primary that frees up within the wait takes the next request itself")
+    func busyPrimaryFreesInTime() {
+        var pool = PoolHarness()
+        pool.warmBoth()
+        pool.submit("a")
+        pool.submit("b")
+        pool.at(20)
+        #expect(pool.verdict(.primary, "a").sends == [.primary: "b"])
+        #expect(pool.core.status().hedged == 0)
+    }
+
+    @Test("a primary that is down or degraded sends requests to the hedge at once")
+    func downPrimaryNoWait() {
+        var pool = PoolHarness()
+        pool.warmBoth()
+        pool.exited(.primary)
+        #expect(pool.submit("a").sends == [.hedge: "a"])
     }
 
     @Test("a request goes to the primary and its verdict is the answer")
@@ -113,17 +158,17 @@ struct PoolCoreTests {
         #expect(pool.core.status().served == 1)
     }
 
-    @Test("no answer after hedgeAfter: the fallback gets it too and the first verdict wins")
+    @Test("no answer after hedgeAfter: the hedge gets it too and the first verdict wins")
     func hedges() {
         var pool = PoolHarness()
         pool.warmBoth()
         pool.submit("r1")
-        pool.at(449)
+        pool.at(149)
         #expect(pool.tick().sends.isEmpty)
-        pool.at(450)
-        #expect(pool.tick().sends == [.fallback: "r1"])
+        pool.at(150)
+        #expect(pool.tick().sends == [.hedge: "r1"])
         pool.at(900)
-        #expect(pool.verdict(.fallback, "r1").reply("r1") == .verdict(Data("{}".utf8), slot: .fallback))
+        #expect(pool.verdict(.hedge, "r1").reply("r1") == .verdict(Data("{}".utf8), slot: .hedge))
         // The primary's late answer is dropped; it is free again.
         pool.at(1000)
         #expect(pool.verdict(.primary, "r1").reply("r1") == nil)
@@ -139,17 +184,17 @@ struct PoolCoreTests {
         pool.warmBoth()
         pool.submit("r1")
         pool.at(450)
-        pool.tick() // hedged to B
+        pool.tick() // hedged
         pool.at(1500)
         let effects = pool.tick()
         #expect(effects.reply("r1") == .late)
-        #expect(effects.kills == [.primary], "B got it at 450 ms, so its own budget runs to 1950 ms")
+        #expect(effects.kills == [.primary], "the hedge got it at 450 ms, so its own budget runs to 1950 ms")
         // Backoff before the respawn: a kill is a fault.
         #expect(pool.exited(.primary).spawns.isEmpty)
         pool.at(1750)
         #expect(pool.tick().spawns == [.primary])
         pool.at(1950)
-        #expect(pool.tick().kills == [.fallback])
+        #expect(pool.tick().kills == [.hedge])
         #expect(pool.core.status().killed == 2)
     }
 
@@ -174,16 +219,16 @@ struct PoolCoreTests {
         pool.submit("r1")
         pool.at(100)
         let effects = pool.exited(.primary)
-        #expect(effects.sends == [.fallback: "r1"])
+        #expect(effects.sends == [.hedge: "r1"])
         pool.at(349)
         #expect(pool.tick().spawns.isEmpty)
         pool.at(350)
         #expect(pool.tick().spawns == [.primary], "respawned after the first backoff step")
         pool.at(400)
-        #expect(pool.verdict(.fallback, "r1").reply("r1") == .verdict(Data("{}".utf8), slot: .fallback))
+        #expect(pool.verdict(.hedge, "r1").reply("r1") == .verdict(Data("{}".utf8), slot: .hedge))
     }
 
-    @Test("repeated primary faults degrade it: everything routes to the fallback")
+    @Test("repeated primary faults degrade it: everything routes to the hedge")
     func degradesPrimary() {
         var pool = PoolHarness()
         pool.warmBoth()
@@ -202,8 +247,8 @@ struct PoolCoreTests {
         }
         let status = pool.core.status()
         #expect(status.workers[0].degraded)
-        #expect(status.routing == "cpu-only (worker A degraded)")
-        #expect(pool.submit("r1").sends == [.fallback: "r1"])
+        #expect(status.routing == "hedge only (primary degraded)")
+        #expect(pool.submit("r1").sends == [.hedge: "r1"])
         // Cooldown over: the primary comes back.
         pool.at(clock + 600_000)
         #expect(pool.tick().spawns == [.primary])
@@ -230,22 +275,22 @@ struct PoolCoreTests {
         var pool = PoolHarness(policy: PoolPolicy(faultsToDegrade: 1))
         pool.warmBoth()
         pool.exited(.primary)
-        pool.exited(.fallback)
+        pool.exited(.hedge)
         #expect(pool.submit("r1").reply("r1") == .failed("judge workers are crash-looping"))
         #expect(pool.core.status().routing == "none (both workers degraded)")
     }
 
     @Test("the queue is bounded: one past the limit is busy at once")
     func boundedQueue() {
-        var pool = PoolHarness(policy: PoolPolicy(queueLimit: 2))
+        var pool = PoolHarness(policy: PoolPolicy(primaryBusyWait: .zero, queueLimit: 2))
         pool.warmBoth()
-        pool.submit("a") // A
-        pool.submit("b") // B
+        pool.submit("a") // primary
+        pool.submit("b") // hedge
         #expect(pool.submit("c").reply("c") == nil)
         #expect(pool.submit("d").reply("d") == nil)
         #expect(pool.submit("e").reply("e") == .busy)
         #expect(pool.core.status().refusedBusy == 1)
-        // A frees up: the head of the queue runs next, in order.
+        // The primary frees up: the head of the queue runs next, in order.
         pool.at(200)
         #expect(pool.verdict(.primary, "a").sends == [.primary: "c"])
     }
@@ -255,8 +300,8 @@ struct PoolCoreTests {
         var pool = PoolHarness()
         pool.warmBoth()
         pool.submit("r1")
-        #expect(pool.failed(.primary, "r1").sends == [.fallback: "r1"])
-        #expect(pool.failed(.fallback, "r1").reply("r1") == .failed("judge prediction failed"))
+        #expect(pool.failed(.primary, "r1").sends == [.hedge: "r1"])
+        #expect(pool.failed(.hedge, "r1").reply("r1") == .failed("judge prediction failed"))
     }
 
     @Test("no worker loaded within the budget answers warming")
@@ -274,25 +319,25 @@ struct PoolCoreTests {
         pool.submit("r1")
         let afterA = pool.handle(.worker(.primary, generation: pool.generation[.primary]!, .loadFailed(failure)))
             + pool.exited(.primary)
-        #expect(afterA.spawns == [.fallback], "the CPU worker still gets its own try")
+        #expect(afterA.spawns == [.hedge], "the hedge still gets its own try")
         #expect(afterA.reply("r1") == nil)
-        let afterB = pool.handle(.worker(.fallback, generation: pool.generation[.fallback]!, .loadFailed(failure)))
-            + pool.exited(.fallback)
+        let afterB = pool.handle(.worker(.hedge, generation: pool.generation[.hedge]!, .loadFailed(failure)))
+            + pool.exited(.hedge)
         #expect(afterB.reply("r1") == .loadFailed(failure))
         #expect(pool.submit("r2").reply("r2") == .loadFailed(failure))
         pool.at(60_000)
         #expect(pool.tick().spawns == [.primary], "retried after loadFailureRetry")
     }
 
-    @Test("a primary that cannot load leaves the fallback serving")
+    @Test("a primary that cannot load leaves the hedge serving")
     func primaryLoadFailureOnly() {
         var pool = PoolHarness()
         pool.handle(.warm(PoolHarness.key))
         pool.handle(.worker(.primary, generation: pool.generation[.primary]!,
-                            .loadFailed(LoadFailure(kind: .modelUnavailable, message: "gpu"))))
+                            .loadFailed(LoadFailure(kind: .modelUnavailable, message: "load failed"))))
         pool.exited(.primary)
-        pool.ready(.fallback)
-        #expect(pool.submit("r1").sends == [.fallback: "r1"])
+        pool.ready(.hedge)
+        #expect(pool.submit("r1").sends == [.hedge: "r1"])
     }
 
     @Test("a new model key restarts both workers and answers older requests warming")
@@ -303,9 +348,9 @@ struct PoolCoreTests {
         let other = ModelKey(engine: "laya", bundle: "/models/laya-multilingual-coreml")
         let effects = pool.handle(.submit(id: "r2", key: other, input: PoolHarness.input, budget: .seconds(8)))
         #expect(effects.reply("r1") == .warming)
-        #expect(Set(effects.kills) == [.primary, .fallback])
+        #expect(Set(effects.kills) == [.primary, .hedge])
         #expect(pool.exited(.primary).spawns == [.primary], "a restart for a new key is not a fault")
-        #expect(pool.exited(.fallback).spawns.isEmpty, "one load at a time")
+        #expect(pool.exited(.hedge).spawns.isEmpty, "one load at a time")
         #expect(pool.core.key == other)
     }
 
@@ -316,7 +361,7 @@ struct PoolCoreTests {
         pool.submit("r1")
         let effects = pool.verdict(.primary, "other")
         #expect(effects.kills == [.primary])
-        #expect(effects.sends == [.fallback: "r1"], "its request moves on")
+        #expect(effects.sends == [.hedge: "r1"], "its request moves on")
     }
 
     @Test("malformed keys and spent budgets are refused without a worker")

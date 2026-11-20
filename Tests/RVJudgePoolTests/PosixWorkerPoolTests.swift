@@ -61,7 +61,7 @@ struct PosixWorkerPoolTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let scriptURL = directory.appendingPathComponent("worker.py")
         try Self.script.write(to: scriptURL, atomically: true, encoding: .utf8)
-        let spawner = PosixWorkerSpawner(executable: python, environment: ["PATH": "/usr/bin:/bin"]) { slot, _ in
+        let spawner = PosixWorkerSpawner(executable: python, environment: ["PATH": "/usr/bin:/bin"]) { slot, _, _ in
             ["-I", "-S", scriptURL.path, modes[slot] ?? "ok", directory.appendingPathComponent("\(slot.rawValue).log").path]
         }
         return Fixture(directory: directory, supervisor: JudgePoolSupervisor(policy: policy, spawner: spawner))
@@ -91,9 +91,9 @@ struct PosixWorkerPoolTests {
     func killNineMidRequest() async throws {
         let python = try #require(Self.python, "python3 not installed")
         // Hedging and the budget kill are pushed out of the way: only the
-        // crash can move this request to B.
+        // crash can move this request to the hedge.
         let policy = PoolPolicy(hedgeAfter: .seconds(20), budget: .seconds(30), backoffBase: .milliseconds(50))
-        let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang", .fallback: "ok"])
+        let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang", .hedge: "ok"])
         defer {
             pool.supervisor.stop()
             try? FileManager.default.removeItem(at: pool.directory)
@@ -108,16 +108,16 @@ struct PosixWorkerPoolTests {
 
         let (source, slot) = from(await answer)
         #expect(source == "ok")
-        #expect(slot == .fallback)
+        #expect(slot == .hedge)
         // A is respawned (backoff 50 ms) and loads again.
         #expect(await eventually { pool.supervisor.status().workers.first { $0.slot == .primary }?.restarts ?? 0 >= 1 })
     }
 
-    @Test("a hung primary: hedged to the fallback, then SIGKILLed at the budget and respawned")
+    @Test("a hung primary: hedged, then SIGKILLed at the budget and respawned")
     func hangHedgesThenKills() async throws {
         let python = try #require(Self.python, "python3 not installed")
         let policy = PoolPolicy(hedgeAfter: .milliseconds(150), budget: .milliseconds(600), backoffBase: .milliseconds(50))
-        let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang", .fallback: "ok"])
+        let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang", .hedge: "ok"])
         defer {
             pool.supervisor.stop()
             try? FileManager.default.removeItem(at: pool.directory)
@@ -128,7 +128,7 @@ struct PosixWorkerPoolTests {
         let started = ContinuousClock.now
         let (source, slot) = from(await pool.supervisor.submit(key: key, input: input, budget: .seconds(5)))
         #expect(source == "ok")
-        #expect(slot == .fallback)
+        #expect(slot == .hedge)
         #expect(ContinuousClock.now - started < .milliseconds(600))
         #expect(pool.supervisor.status().hedgeWins == 1)
 
@@ -142,7 +142,7 @@ struct PosixWorkerPoolTests {
 
     @Test("a worker that is not an executable is a spawn failure, retried with backoff, never an answer")
     func spawnFailure() async throws {
-        let spawner = PosixWorkerSpawner(executable: "/nonexistent/rv-judge", environment: [:]) { _, _ in [] }
+        let spawner = PosixWorkerSpawner(executable: "/nonexistent/rv-judge", environment: [:]) { _, _, _ in [] }
         let policy = PoolPolicy(budget: .milliseconds(300), backoffBase: .milliseconds(50))
         let supervisor = JudgePoolSupervisor(policy: policy, spawner: spawner)
         defer { supervisor.stop() }

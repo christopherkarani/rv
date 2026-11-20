@@ -23,7 +23,7 @@ public protocol WorkerSpawning: Sendable {
     /// `output` may be called on any thread, any number of times, ending
     /// with exactly one `.exited`.
     func spawn(
-        slot: WorkerSlot, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
+        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess
 }
 
@@ -109,12 +109,13 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         switch effect {
         case .spawn(let slot, let generation, let key):
             do {
-                let process = try spawner.spawn(slot: slot, key: key) { [weak self] output in
+                let compute = core.policy.compute(for: slot)
+                let process = try spawner.spawn(slot: slot, compute: compute, key: key) { [weak self] output in
                     guard let self else { return }
                     self.queue.async { self.received(output, from: slot, generation: generation) }
                 }
                 running[slot] = Running(generation: generation, process: process)
-                log("worker \(slot.rawValue) (\(slot.computeArgument)) spawned for \(key.engine)")
+                log("worker \(slot.rawValue) (\(compute.rawValue)) spawned for \(key.engine)")
             } catch {
                 log("worker \(slot.rawValue) spawn failed: \(error)")
                 queue.async { self.apply(.exited(slot, generation: generation)) }

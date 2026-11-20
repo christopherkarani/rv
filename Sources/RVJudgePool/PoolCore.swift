@@ -23,8 +23,10 @@ public enum PoolEffect: Sendable, Equatable {
 /// The pool's decisions as a pure state machine: events in, effects out, no
 /// processes, threads or clocks. `JudgePoolSupervisor` drives it.
 ///
-/// Routing: a request goes to the primary worker when it is idle, else to
-/// the fallback. If the first worker has not answered after `hedgeAfter`,
+/// Routing: a request goes to the primary worker when it is idle. When the
+/// primary is busy it waits up to `primaryBusyWait` for it, then goes to the
+/// hedge; when the primary is down, loading or degraded it goes to the hedge
+/// at once. If the first worker has not answered after `hedgeAfter`,
 /// the other worker gets it too; the first verdict wins. A worker still
 /// busy `budget` after it was handed a request is killed and respawned
 /// (backoff), and its request moves to the other worker if that one has not
@@ -82,6 +84,7 @@ public struct PoolCore: Sendable {
     struct Pending: Sendable {
         let input: JudgeInput
         let answerBy: Instant
+        let queuedAt: Instant
         /// Workers computing it now, and when each got it.
         var active: [WorkerSlot: Instant] = [:]
         /// Workers that have been handed it (computing, answered, or died).
@@ -100,7 +103,7 @@ public struct PoolCore: Sendable {
 
     public let policy: PoolPolicy
     public private(set) var key: ModelKey?
-    private(set) var workers: [WorkerSlot: Worker] = [.primary: Worker(), .fallback: Worker()]
+    private(set) var workers: [WorkerSlot: Worker] = [.primary: Worker(), .hedge: Worker()]
     private var queue: [String] = []
     private var pending: [String: Pending] = [:]
     private var nextGeneration: UInt64 = 1
@@ -142,6 +145,9 @@ public struct PoolCore: Sendable {
                !request.tried.contains(slot.other) {
                 times.append(sentAt + policy.hedgeAfter)
             }
+            if request.active.isEmpty, waitsForPrimary(request) {
+                times.append(request.queuedAt + policy.primaryBusyWait)
+            }
         }
         for worker in workers.values {
             switch worker.phase {
@@ -162,7 +168,7 @@ public struct PoolCore: Sendable {
             workers: WorkerSlot.allCases.map { slot in
                 let worker = workers[slot] ?? Worker()
                 return PoolStatus.Worker(
-                    slot: slot, compute: slot.computeArgument, phase: worker.phase.name,
+                    slot: slot, compute: policy.compute(for: slot).rawValue, phase: worker.phase.name,
                     restarts: worker.restarts, recentFaults: worker.faults.count,
                     degraded: worker.isDegraded, loadFailure: worker.loadFailure)
             },
@@ -199,7 +205,7 @@ public struct PoolCore: Sendable {
             reply(id, .busy)
             return
         }
-        pending[id] = Pending(input: input, answerBy: now + window)
+        pending[id] = Pending(input: input, answerBy: now + window, queuedAt: now)
         queue.append(id)
     }
 
@@ -431,16 +437,32 @@ public struct PoolCore: Sendable {
 
     private mutating func dispatch(now: Instant) {
         for id in queue {
-            guard let request = pending[id] else { continue }
-            let slot = WorkerSlot.allCases.first { slot in
-                guard !request.tried.contains(slot), let worker = workers[slot], !worker.isDegraded,
-                      case .idle = worker.phase else { return false }
-                return true
-            }
-            guard let slot else { continue }
+            guard let request = pending[id], let slot = target(for: request, now: now) else { continue }
             send(id, to: slot, now: now)
         }
         queue.removeAll { id in pending[id].map { !$0.active.isEmpty } ?? true }
+    }
+
+    /// The worker a queued request goes to now, if any.
+    private func target(for request: Pending, now: Instant) -> WorkerSlot? {
+        if canTake(.primary, request) { return .primary }
+        guard canTake(.hedge, request) else { return nil }
+        if waitsForPrimary(request), now < request.queuedAt + policy.primaryBusyWait { return nil }
+        return .hedge
+    }
+
+    private func canTake(_ slot: WorkerSlot, _ request: Pending) -> Bool {
+        guard !request.tried.contains(slot), let worker = workers[slot], !worker.isDegraded,
+              case .idle = worker.phase else { return false }
+        return true
+    }
+
+    /// The primary is healthy and only busy: worth a short wait before the
+    /// request goes to the slower hedge.
+    private func waitsForPrimary(_ request: Pending) -> Bool {
+        guard !request.tried.contains(.primary), let primary = workers[.primary], !primary.isDegraded,
+              case .busy = primary.phase else { return false }
+        return true
     }
 
     private mutating func hedge(now: Instant) {

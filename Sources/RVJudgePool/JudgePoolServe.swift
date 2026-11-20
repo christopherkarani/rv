@@ -129,10 +129,10 @@ struct UpgradeGuardedSpawner: WorkerSpawning {
     let onUpgrade: @Sendable () -> Void
 
     func spawn(
-        slot: WorkerSlot, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
+        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess {
         if ExecutableIdentity(path: executable) != identity { onUpgrade() }
-        return try base.spawn(slot: slot, key: key, output: output)
+        return try base.spawn(slot: slot, compute: compute, key: key, output: output)
     }
 }
 

@@ -126,7 +126,7 @@ struct JudgePoolPortTests {
         verdictJSON(choice: "maybe"),
     ])
     func malformedVerdictFails(data: Data) {
-        guard case .failed = JudgeRuntime.read(.verdict(data, slot: .fallback)) else {
+        guard case .failed = JudgeRuntime.read(.verdict(data, slot: .hedge)) else {
             Issue.record("malformed verdict must map to failed")
             return
         }
@@ -173,24 +173,24 @@ struct JudgePoolPortTests {
 
     @Test("doctor: workers, compute units, restarts and routing; degraded is a warning")
     func doctorStatus() throws {
-        func status(degradedA: Bool) -> PoolStatus {
+        func status(degradedPrimary: Bool) -> PoolStatus {
             PoolStatus(
-                protocolVersion: 1, engine: "ft",
+                protocolVersion: 2, engine: "ft",
                 workers: [
-                    .init(slot: .primary, compute: "accelerated", phase: degradedA ? "down" : "idle",
-                          restarts: 3, recentFaults: degradedA ? 3 : 0, degraded: degradedA, loadFailure: nil),
-                    .init(slot: .fallback, compute: "cpu", phase: "idle",
+                    .init(slot: .primary, compute: "cpu", phase: degradedPrimary ? "down" : "idle",
+                          restarts: 3, recentFaults: degradedPrimary ? 3 : 0, degraded: degradedPrimary, loadFailure: nil),
+                    .init(slot: .hedge, compute: "accelerated", phase: "idle",
                           restarts: 0, recentFaults: 0, degraded: false, loadFailure: nil),
                 ],
                 queued: 0, served: 10, hedged: 2, hedgeWins: 1, killed: 1, late: 0, refusedBusy: 0)
         }
-        let healthy = try #require(DoctorSnapshotBuilder.judgePoolCheck(JudgePoolProbe(bound: true, status: status(degradedA: false))))
+        let healthy = try #require(DoctorSnapshotBuilder.judgePoolCheck(JudgePoolProbe(bound: true, status: status(degradedPrimary: false))))
         #expect(healthy.status == .ok)
-        #expect(healthy.message.contains("A accelerated idle, restarts 3"))
-        #expect(healthy.message.contains("B cpu idle, restarts 0"))
+        #expect(healthy.message.contains("primary cpu idle, restarts 3"))
+        #expect(healthy.message.contains("hedge accelerated idle, restarts 0"))
         #expect(healthy.message.contains("routing hedged"))
-        let degraded = try #require(DoctorSnapshotBuilder.judgePoolCheck(JudgePoolProbe(bound: true, status: status(degradedA: true))))
+        let degraded = try #require(DoctorSnapshotBuilder.judgePoolCheck(JudgePoolProbe(bound: true, status: status(degradedPrimary: true))))
         #expect(degraded.status == .warning)
-        #expect(degraded.message.contains("cpu-only"))
+        #expect(degraded.message.contains("hedge only (primary degraded)"))
     }
 }
