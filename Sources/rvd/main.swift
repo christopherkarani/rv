@@ -58,10 +58,12 @@ enum RVD {
             Foundation.exit(1)
         } catch UnixSocketPathError.userRuntimeDirectoryUnavailable(let directory) {
             // No login manager made the runtime directory (containers, WSL,
-            // logins without logind) and rvd could not make it either.
-            let message = "rvd: XDG_RUNTIME_DIR is unset and \(directory) is missing, could not be created, "
-                + "or is not a directory only you can access (yours, mode 0700)\n"
-                + "rvd: fix: as root, mkdir -p -m 0700 \(directory) && chown \(getuid()) \(directory); "
+            // logins without logind) and rvd could not make it either, or
+            // it is not one only this account can write. Say which.
+            let problem = UnixSocketPath.userRuntimeDirectoryProblem(directory)
+            let message = "rvd: XDG_RUNTIME_DIR is unset, so rvd listens in \(directory) "
+                + "(yours, mode 0700), and cannot: \(problem.reason)\n"
+                + "rvd: fix: \(problem.fix); "
                 + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"
             try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
             Foundation.exit(1)

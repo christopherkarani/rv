@@ -139,6 +139,39 @@ struct UnixSocketPathTests {
         #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
+    /// rvd's refusal names the actual problem, and a fix that works for it
+    /// (`mkdir -p` would leave an existing directory's owner and mode alone).
+    @Test func userRuntimeDirectoryProblemNamesWhatIsWrongAndAFixForIt() throws {
+        let root = shortRuntimeDir("p")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = getuid()
+        let owner = root.appendingPathComponent("\(me)").path
+        let make = "as root, install -d -m 0700 -o \(me) \(owner)"
+
+        let noRoot = UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+        #expect(noRoot.reason.hasPrefix("\(root.path) does not exist (no login manager made it"))
+        #expect(noRoot.fix == make)
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) does not exist and this account cannot create it in \(root.path)", fix: make))
+
+        try FileManager.default.createDirectory(atPath: owner, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: owner)
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) has mode 0770, which group or others can write", fix: make))
+
+        let other: UInt32 = me == 4242 ? 4243 : 4242
+        let foreign = UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: other)
+        #expect(foreign.reason == "\(owner) belongs to uid \(me), not to this account (uid \(other))")
+        #expect(foreign.fix == "as root, install -d -m 0700 -o \(other) \(owner)")
+
+        try FileManager.default.removeItem(atPath: owner)
+        try FileManager.default.createSymbolicLink(atPath: owner, withDestinationPath: "/")
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) is a symbolic link", fix: "as root, remove \(owner), then install -d -m 0700 -o \(me) \(owner)"))
+    }
+
     @Test func productionEmptyXDGThrows() throws {
         let previous = liveXDG()
         setenv("XDG_RUNTIME_DIR", "", 1)

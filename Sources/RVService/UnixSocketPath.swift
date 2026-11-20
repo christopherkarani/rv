@@ -181,6 +181,45 @@ public enum UnixSocketPath {
         try prepareBaseDirectory(url)
     }
 
+    /// Why rvd cannot use the uid-derived runtime directory
+    /// (`userRuntimeDirectoryUnavailable`), and the one root command that
+    /// fixes it. Read from the file system after the failure; it decides
+    /// nothing.
+    public struct UserRuntimeDirectoryProblem: Sendable, Equatable {
+        public let reason: String
+        public let fix: String
+    }
+
+    public static func userRuntimeDirectoryProblem(
+        _ directory: String, userRuntimeRoot root: String = userRuntimeRoot, uid: UInt32 = getuid()
+    ) -> UserRuntimeDirectoryProblem {
+        let make = "install -d -m 0700 -o \(uid) \(directory)"
+        var status = stat()
+        guard lstat(directory, &status) == 0 else {
+            let reason = lstatKind(root) == nil
+                ? "\(root) does not exist (no login manager made it\(uid == 0 ? ", and rvd could not" : ""))"
+                : "\(directory) does not exist and this account cannot create it in \(root)"
+            return UserRuntimeDirectoryProblem(reason: reason, fix: "as root, \(make)")
+        }
+        let kind = UInt32(status.st_mode) & UInt32(S_IFMT)
+        guard kind == UInt32(S_IFDIR) else {
+            let what = kind == UInt32(S_IFLNK) ? "a symbolic link" : "not a directory"
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) is \(what)", fix: "as root, remove \(directory), then \(make)")
+        }
+        let fix = "as root, \(make)"
+        guard UInt32(status.st_uid) == uid else {
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) belongs to uid \(status.st_uid), not to this account (uid \(uid))", fix: fix)
+        }
+        let mode = UInt32(status.st_mode) & 0o7777
+        guard mode & 0o022 == 0 else {
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) has mode 0\(String(mode, radix: 8)), which group or others can write", fix: fix)
+        }
+        return UserRuntimeDirectoryProblem(reason: "\(directory) could not be prepared", fix: fix)
+    }
+
     private static func lstatKind(_ path: String) -> UInt32? {
         var status = stat()
         guard lstat(path, &status) == 0 else { return nil }
