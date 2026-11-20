@@ -676,7 +676,10 @@ public struct GatedEvaluate: Sendable {
     /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
     /// result takes the enforce branch, on every door. Stopping rvd or
     /// writing its install is also floored at "run it in Terminal" there
-    /// (an allow becomes indeterminate; a deny stays the deny).
+    /// (an allow becomes indeterminate; a deny stays the deny). Otherwise a
+    /// shell command running a program rv cannot see is sent to Terminal
+    /// (`observe.floor:unanalyzable`) whatever its verdict, since observe
+    /// would have let it run.
     private func posture(
         _ evaluated: EvaluationResult,
         door: Door,
@@ -693,6 +696,11 @@ public struct GatedEvaluate: Sendable {
                 result = floored
                 mode = .enforce
             } else if observeFloorHolds(evaluated, door: door, cwd: cwd, home: home) {
+                mode = .enforce
+            } else if case .shell(let request, _, _) = door,
+                      let floored = ObserveFloor.unanalyzableFloor(evaluated, command: request.command)
+            {
+                result = floored
                 mode = .enforce
             }
         }
