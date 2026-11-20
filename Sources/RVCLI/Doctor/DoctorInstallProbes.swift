@@ -248,7 +248,7 @@ enum DoctorInstallChecks {
     static func startupBackoff(paths: OwnedPaths) -> DoctorProblem? {
         let store = StartupBackoffStore.live(home: paths.home.rawValue)
         guard let record = store.load(), record.running else { return nil }
-        let plan = StartupBackoff.plan(previous: StartupBackoff.Record(earlyExits: record.earlyExits - 1, running: true))
+        let plan = StartupBackoff.plan(previous: StartupBackoff.Record(earlyExits: max(record.earlyExits, 1) - 1, running: true))
         guard plan.delay > .zero else { return nil }
         return DoctorProblem(
             id: "rvd-startup-backoff",

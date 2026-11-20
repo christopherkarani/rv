@@ -189,6 +189,19 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
     }
 }
 
+/// A forged record (negative or `Int.min` count) neither traps doctor nor
+/// shows a row.
+@Test func doctorInstall_forgedStartupBackoffRecord_isIgnored() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let store = StartupBackoffStore.live(home: fixture.paths.home.rawValue)
+        for forged in [Int.min, -5, 0] {
+            store.save(StartupBackoff.Record(earlyExits: forged, running: true))
+            #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false, "\(forged)")
+        }
+    }
+}
+
 @Test func doctorInstall_alwaysOnShapes_areRecognised() throws {
     let rvd = "/h/.local/bin/rvd"
     func plist(_ keepAlive: Any, runAtLoad: Bool = true) throws -> String {
