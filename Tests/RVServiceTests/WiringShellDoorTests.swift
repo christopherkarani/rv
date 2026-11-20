@@ -79,4 +79,25 @@ struct WiringShellDoorTests {
             #expect(Self.decide("ls ~/Library/Caches/rvd", home: home, cwd: cwd, mode: .enforce).decision == .allow)
         }
     }
+
+    /// `~/Library/Caches` is now a proper ancestor of a wiring entry, so a
+    /// mutation of the directory itself is a protected-path mutation even in
+    /// observe mode; a sibling entry is not. (In enforce, out-of-repo writes
+    /// already deny on other rules; `mv` and `rm -rf` of home paths are
+    /// core.filesystem's either way.)
+    @Test("~/Library/Caches itself is a protected ancestor; its other entries are not")
+    func cachesAncestorIsProtected() throws {
+        let mutation = RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "protected-path-mutation")
+        try Self.withRepo { _, home, cwd in
+            let ancestor = Self.decide("chmod 777 ~/Library/Caches", home: home, cwd: cwd, mode: .observe).decision
+            guard case .deny(let deny) = ancestor else {
+                Issue.record("chmod of ~/Library/Caches: \(ancestor)")
+                return
+            }
+            #expect(deny.ruleID == mutation)
+            #expect(Self.isDeny(Self.decide("mv ~/Library/Caches /tmp/c", home: home, cwd: cwd, mode: .observe)))
+            let sibling = Self.decide("chmod 700 ~/Library/Caches/rvdx", home: home, cwd: cwd, mode: .observe).decision
+            if case .deny(let deny) = sibling { #expect(deny.ruleID != mutation, "\(deny.ruleID)") }
+        }
+    }
 }
