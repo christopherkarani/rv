@@ -89,9 +89,52 @@ and never replace one another's file. The wait for another writer's
 lock is bounded (200 ms, non-blocking attempts); on timeout the row is
 dropped, as on any other judge-log failure, and the verdict is not held.
 
-Known gap: analytics events rvd records for a hook call are not recorded
-for a locally decided one. Phase 3 (an analytics spool rvd drains) closes
-it.
+Every one of those writes shares one 200 ms budget
+(`LocalHookDecider.recordBudget`, `GatedEvaluate.performBounded`): a log
+another process holds is retried with non-blocking locks until the budget
+passes, and the row is then dropped. rvd's own writes keep their waits
+(the audit chain's 2 s bound, the ledgers' blocking locks); the evaluator
+cannot, since a write that held it past the C hook's 1 s deadline would
+kill it after it wrote, and rvd would then write the same rows again.
+
+#### The spool rvd drains
+
+What rvd records in memory for a hook call cannot be written by another
+process: the analytics counters live in rvd's `AnalyticsCoordinator`
+actor, which overwrites `analytics-counters.json` whole. So the evaluator
+hands rvd a spool instead, `<config>/hook-local-spool.jsonl`
+(`HookLocalSpool`), one batch per final answer:
+
+- `{"v":1,"decision":"allow|deny|indeterminate"}`: the decision rvd's
+  analytics recorder counts for the shell door (none for the file door, as
+  in rvd), only when `analytics.enabled` is not off;
+- `{"v":1,"dropped":"audit|denial-ledger|judge-log|exemption"}`: a row
+  the record budget dropped.
+
+A batch is one flocked `O_APPEND` write (`JSONLAppendLog`, 50 ms lock
+bound, no `fsync`, a 4 MiB cap). A batch that cannot land is counted, one
+byte per row, in `<config>/hook-local-spool.uncounted`, appended with no
+lock at all (64 KiB cap), so a lost row is still a counted row. Rows
+carry a kind and nothing else: no command text, path or session.
+
+rvd drains both off the reply path, on the task that records its own
+analytics for each evaluation (`ServiceRuntime.ingestHookLocalSpool`):
+the spool is read and truncated under the writers' lock (1 s bound), the
+decisions join rvd's counts, and dropped or lost rows produce one
+`rvd.log` line (`rvd: the hook-local evaluator dropped records ...`). An
+rvd without analytics discards spooled decisions. Malformed lines count as
+lost; the spool can only add analytics counts, never change a verdict.
+
+`LocalHookRecordParityTests` proves the parity: two identical homes on
+one fixed clock, the evaluator deciding every call over one and rvd
+answering each call the evaluator finalized over the other; the audit
+chain, denial ledger, judge log and exemption audit must be the same
+bytes, and the counts rvd ingests from the spool must equal the counts it
+records itself.
+
+Not mirrored: the `HookTiming` past-deadline `rvd.log` line (PR #621, not
+on this branch) fires only for an evaluation past rvd's 7 s hook budget,
+which a local answer cannot reach inside its 1 s.
 
 ## Trust boundary
 

@@ -1,4 +1,5 @@
 import Foundation
+import RVAnalytics
 import RVDomain
 import RVHistory
 import RVHooks
@@ -113,8 +114,29 @@ package struct LocalHookDecider: Sendable {
                 environment: ["RV_GUARD_MODE": GuardMode.enforce.rawValue])
             guard enforced.outcome == live.outcome else { return .escalate(.observe) }
         }
-        GatedEvaluate.perform(live.effects, home: home)
+        record(live)
         return live.outcome
+    }
+
+    /// The whole budget for a final answer's writes. Logs another process
+    /// holds cost the verdict at most this, well inside the C hook's 1 s
+    /// deadline; a row that cannot land in it is dropped and counted.
+    package static let recordBudget: Duration = .milliseconds(200)
+
+    /// A final answer's writes (docs/architecture/hook-local-decide.md,
+    /// "Effects"): rvd's rows under one bounded wait, then the spool rvd
+    /// drains, holding the analytics decision rvd would have counted (when
+    /// analytics is on) and the rows dropped here. Nothing it does changes
+    /// the answer.
+    private func record(_ live: Run) {
+        let drops = GatedEvaluate.performBounded(
+            live.effects, home: home, wait: AuditLog.LockWait(timeout: Self.recordBudget))
+        let decision = live.analytics.flatMap { kind in
+            AnalyticsPreferences.load(
+                from: AnalyticsPaths(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            ).isEnabled ? kind : nil
+        }
+        HookLocalSpool.write(HookLocalSpool.Batch(decision: decision, drops: drops), home: home)
     }
 
     private struct Run {
@@ -122,6 +144,9 @@ package struct LocalHookDecider: Sendable {
         let effects: [GatedEffect]
         /// The guard mode the evaluation read; nil when none ran.
         let guardMode: GuardMode?
+        /// What rvd's analytics recorder counts for this pass: the shell
+        /// door's decision (rvd records none for the file door).
+        let analytics: AnalyticsDecisionKind?
     }
 
     /// One pass of rvd's hook door with probe ports. `environment` stands
@@ -187,7 +212,9 @@ package struct LocalHookDecider: Sendable {
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)
         let classified = probe.classify(Self.reply(wire))
-        return Run(outcome: classified.outcome, effects: classified.effects, guardMode: probe.guardMode)
+        return Run(
+            outcome: classified.outcome, effects: classified.effects, guardMode: probe.guardMode,
+            analytics: probe.analyticsDecision)
     }
 
     /// The reply rvd builds from a wire (`HookDoor`).
@@ -227,6 +254,17 @@ private final class LocalHookProbe: JudgePort, Sendable {
 
     var guardMode: GuardMode? {
         state.withLock { $0.guardMode }
+    }
+
+    /// The decision rvd's analytics recorder counts: the shell door's
+    /// result (`HookEvaluateWorld.live`), none for the file door.
+    var analyticsDecision: AnalyticsDecisionKind? {
+        guard case .shell(let result, _) = state.withLock({ $0.door }) else { return nil }
+        switch result.decision {
+        case .allow: return .allow
+        case .deny: return .deny
+        case .indeterminate: return .indeterminate
+        }
     }
 
     func record(_ door: Door, effects: [GatedEffect]) {

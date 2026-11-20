@@ -57,12 +57,14 @@ public enum JSONLAppendLog {
     /// exclusion is held, so no append is lost to a rename, and lock-free
     /// readers always see the old or the new file whole, never a partial
     /// rewrite. Returns nil when the lock cannot be taken. Not reentrant:
-    /// `body` must not call `append` or `withExclusiveLock`.
+    /// `body` must not call `append` or `withExclusiveLock`. `lockTimeout`
+    /// bounds the wait for another process's lock, as for `append`.
     public static func withExclusiveLock<T: Sendable>(
         at url: URL,
+        lockTimeout: Duration? = nil,
         body: (URL) -> T
     ) -> T? {
-        try? exclusively(at: url) { locked in .success(body(locked)) }.get()
+        try? exclusively(at: url, lockTimeout: lockTimeout) { locked in .success(body(locked)) }.get()
     }
 
     private static func exclusively<T: Sendable>(

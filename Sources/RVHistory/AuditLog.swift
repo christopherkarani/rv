@@ -77,6 +77,24 @@ public enum AuditLog {
             guard let deadline else { return false }
             return now() >= deadline
         }
+
+        /// What is left before the deadline (zero once it has passed); nil
+        /// when there is no deadline.
+        package var remaining: Duration? {
+            deadline.map { max(.zero, $0 - now()) }
+        }
+
+        /// Runs `attempt` until it returns a value or the deadline passes,
+        /// pausing between tries; at least one try. For non-blocking lock
+        /// attempts, so a lock another process holds costs at most what is
+        /// left of this wait. Without a deadline it tries until a value comes.
+        package func retrying<T>(_ attempt: () -> T?) -> T? {
+            while true {
+                if let value = attempt() { return value }
+                if expired { return nil }
+                pause()
+            }
+        }
     }
 
     @discardableResult

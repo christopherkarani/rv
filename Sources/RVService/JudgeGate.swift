@@ -637,8 +637,12 @@ public enum JudgeRuntime {
     /// How long a judge-log append waits for another writer's lock.
     static let logLockTimeout: Duration = .milliseconds(200)
 
-    /// Appends one row to `<config>/judge-log.jsonl`. Best effort.
-    static func appendLog(_ row: GatedEffect.JudgeLogRow, home: HomeDirectory) {
+    /// Appends one row to `<config>/judge-log.jsonl`. Best effort: returns
+    /// whether the row landed.
+    @discardableResult
+    static func appendLog(
+        _ row: GatedEffect.JudgeLogRow, home: HomeDirectory, lockTimeout: Duration = logLockTimeout
+    ) -> Bool {
         let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
         var object: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: row.at),
@@ -665,12 +669,12 @@ public enum JudgeRuntime {
             object["ms"] = score.milliseconds
             if score.truncated { object["truncated"] = true }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return false }
         // rvd and the hook-local evaluator both append here: a flocked
         // O_APPEND write keeps every row whole across processes, and never
         // replaces a file another writer just created. Best effort, so a
         // lock another process holds costs at most `logLockTimeout`.
-        try? JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+        return (try? JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: lockTimeout)) != nil
     }
 }
 

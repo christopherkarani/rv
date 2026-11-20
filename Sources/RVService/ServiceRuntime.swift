@@ -837,8 +837,9 @@ public actor ServiceRuntime {
     private func analyticsRecorder() -> @Sendable (EvaluationResult) -> Void {
         let analytics = self.analytics
         let packs = compileSet.analyticsEnabledPackIDs
+        let home = configHome
         return { result in
-            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs)
+            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs, home: home)
         }
     }
 
@@ -846,15 +847,39 @@ public actor ServiceRuntime {
         Self.recordAnalytics(
             result,
             analytics: analytics,
-            enabledPackIDs: compileSet.analyticsEnabledPackIDs
+            enabledPackIDs: compileSet.analyticsEnabledPackIDs,
+            home: configHome
         )
+    }
+
+    /// Drains the hook-local evaluator's spool (`HookLocalSpool`): its
+    /// decisions join rvd's analytics counts, and the rows it had to drop
+    /// are reported in `rvd.log`. Spooled decisions are discarded when rvd
+    /// has no analytics. Runs off the reply path.
+    static func ingestHookLocalSpool(
+        home: HomeDirectory?,
+        analytics: AnalyticsCoordinator?,
+        enabledPackIDs: [String]
+    ) async {
+        guard let home else { return }
+        let drained = HookLocalSpool.drain(home: home)
+        guard drained.isEmpty == false else { return }
+        HookLocalSpool.report(drained)
+        guard let analytics, drained.decisions.isEmpty == false else { return }
+        await analytics.recordDecisions(drained.decisions)
+        await analytics.noteEnabledPacks(enabledPackIDs)
+        await analytics.flushDailyIfNeeded()
     }
 
     private static func recordAnalytics(
         _ result: EvaluationResult,
         analytics: AnalyticsCoordinator?,
-        enabledPackIDs: [String]
+        enabledPackIDs: [String],
+        home: HomeDirectory?
     ) {
+        Task {
+            await ingestHookLocalSpool(home: home, analytics: analytics, enabledPackIDs: enabledPackIDs)
+        }
         guard let analytics else { return }
         let kind: AnalyticsDecisionKind
         switch result.decision {

@@ -1194,16 +1194,53 @@ public struct GatedEvaluate: Sendable {
         return overridesRecorded
     }
 
+    /// The hook-local evaluator's form of `perform`
+    /// (docs/architecture/hook-local-decide.md, "Effects"): the same rows,
+    /// in the same order, but every write shares `wait`'s one deadline, so
+    /// logs another process holds cost the verdict at most that long in all.
+    /// A row that cannot land in time is dropped, never retried past the
+    /// deadline, and named in the result for the evaluator to count. The
+    /// verdict was decided before this runs and nothing here changes it.
+    /// An override row never reaches it (the evaluator escalates any pass
+    /// that emits one); one that did would be dropped, not written, since
+    /// only rvd spends what an override needs.
+    static func performBounded(
+        _ effects: [GatedEffect], home: HomeDirectory, wait: AuditLog.LockWait
+    ) -> [HookLocalDrop] {
+        var drops: [HookLocalDrop] = []
+        for effect in effects {
+            switch effect {
+            case .exemptionAudit(let audit):
+                if auditDroppedRepoLiterals(
+                    audit.dropped, home: home, workspace: audit.workspace, now: audit.at, wait: wait) == false {
+                    drops.append(.exemption)
+                }
+            case .judgeLog(let row):
+                let timeout = min(JudgeRuntime.logLockTimeout, wait.remaining ?? JudgeRuntime.logLockTimeout)
+                if JudgeRuntime.appendLog(row, home: home, lockTimeout: timeout) == false {
+                    drops.append(.judgeLog)
+                }
+            case .denialRow(let row):
+                if auditDenial(row, home: home, wait: wait) == false { drops.append(.audit) }
+                if recordDenial(row, home: home, wait: wait) == false { drops.append(.denialLedger) }
+            case .overrideAudit:
+                drops.append(.audit)
+            }
+        }
+        return drops
+    }
+
     /// Appends a `command.denied` event to the hash-chained `audit.jsonl`
     /// for every enforced deny (`command.observed`, decision `info`, for an
     /// observe-mode would-be deny), whatever `blocks.enabled` says: the
     /// ledger is a pruned convenience view, the chain is the record.
     /// Carries the rule, host, tool and redacted path, never the command
     /// text.
+    @discardableResult
     private static func auditDenial(
         _ row: GatedEffect.DenialRow, home: HomeDirectory,
         wait: AuditLog.LockWait = AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout)
-    ) {
+    ) -> Bool {
         var detail = ["host": row.host.rawValue, "tool": row.tool.rawValue, "category": row.category.rawValue]
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
@@ -1227,6 +1264,7 @@ public struct GatedEvaluate: Sendable {
                     ? "the observed allow under \(row.ruleID.rawValue) stands unrecorded"
                     : "the deny by \(row.ruleID.rawValue) stands unrecorded")
         }
+        return recorded
     }
 
     private static func auditFile(_ home: HomeDirectory) -> URL {
@@ -1254,23 +1292,32 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Appends a denial row when the ledger is enabled (`blocks.enabled`,
-    /// read here, deny-only). The path is redacted against home.
-    private static func recordDenial(_ row: GatedEffect.DenialRow, home: HomeDirectory) {
+    /// read here, deny-only). The path is redacted against home. With a
+    /// `wait`, a held ledger lock is retried only until it passes; returns
+    /// false when the row was dropped for that (true when it landed, the
+    /// ledger is off, or no `wait` bounds it).
+    @discardableResult
+    private static func recordDenial(
+        _ row: GatedEffect.DenialRow, home: HomeDirectory, wait: AuditLog.LockWait? = nil
+    ) -> Bool {
         let configDir = RVPolicyPaths.configDirectory(home: home)
-        guard DenialLedgerPreferences.isEnabled(inConfigDirectory: configDir) else { return }
-        DenialLedger(configDirectory: configDir).append(
-            DenialLedgerRecord(
-                timestamp: row.at,
-                host: row.host,
-                tool: row.tool,
-                ruleID: row.ruleID,
-                category: row.category,
-                path: DenialPathRedaction.redact(row.path, home: home),
-                observed: row.observed,
-                wouldBe: row.wouldBe
-            ),
-            now: row.at
+        guard DenialLedgerPreferences.isEnabled(inConfigDirectory: configDir) else { return true }
+        let record = DenialLedgerRecord(
+            timestamp: row.at,
+            host: row.host,
+            tool: row.tool,
+            ruleID: row.ruleID,
+            category: row.category,
+            path: DenialPathRedaction.redact(row.path, home: home),
+            observed: row.observed,
+            wouldBe: row.wouldBe
         )
+        let ledger = DenialLedger(configDirectory: configDir)
+        guard let wait else {
+            ledger.append(record, now: row.at)
+            return true
+        }
+        return ledger.append(record, now: row.at, wait: wait)
     }
 }
 
@@ -1309,33 +1356,53 @@ extension GatedEvaluate {
     /// and workspace to the newest row is suppressed, so repeated hook
     /// checks against one unblessed repo cannot churn the cap and evict
     /// other workspaces' history.
+    ///
+    /// With a `wait`, a held lock is retried (non-blocking) only until it
+    /// passes. Returns false when the row was dropped for a lock or I/O
+    /// failure, true when it landed or there was nothing to write.
+    @discardableResult
     static func auditDroppedRepoLiterals(
         _ dropped: [String],
         home: HomeDirectory?,
         workspace: URL?,
-        now: Date
-    ) {
-        guard dropped.isEmpty == false, let home else { return }
+        now: Date,
+        wait: AuditLog.LockWait? = nil
+    ) -> Bool {
+        guard dropped.isEmpty == false, let home else { return true }
         let store = FileLockedJSONLStore<ExemptionDropRecord>(
             baseDirectory: RVPolicyPaths.configDirectory(home: home),
             fileName: exemptionDropsFileName
         )
-        _ = try? store.withLock {
-            var rows = store.load()
-            if let last = rows.last,
-                last.dropped == dropped,
-                last.workspace == workspace?.path
-            {
-                return
-            }
-            rows.append(
-                ExemptionDropRecord(
-                    dropped: dropped,
-                    workspace: workspace?.path,
-                    recordedAt: now.timeIntervalSince1970
+        let write = { (nonBlocking: Bool) throws in
+            try store.withLock(nonBlocking: nonBlocking) {
+                var rows = store.load()
+                if let last = rows.last,
+                    last.dropped == dropped,
+                    last.workspace == workspace?.path
+                {
+                    return
+                }
+                rows.append(
+                    ExemptionDropRecord(
+                        dropped: dropped,
+                        workspace: workspace?.path,
+                        recordedAt: now.timeIntervalSince1970
+                    )
                 )
-            )
-            try store.save(Array(rows.suffix(RVHistory.maxRows)))
+                try store.save(Array(rows.suffix(RVHistory.maxRows)))
+            }
         }
+        guard let wait else { return (try? write(false)) != nil }
+        let landed = wait.retrying { () -> Bool? in
+            do {
+                try write(true)
+                return true
+            } catch FileLockedJSONLStoreError.lockFailed {
+                return nil
+            } catch {
+                return false
+            }
+        }
+        return landed ?? false
     }
 }
