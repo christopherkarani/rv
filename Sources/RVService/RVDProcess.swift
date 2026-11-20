@@ -58,6 +58,7 @@ public enum RVDProcess {
             )
         }
         RVDLifecycle.waitOutBackoff(backoff)
+        if backoff.delay > .zero { listeners.unix.dropQueued() }
         listeners.unix.startAccepting()
         listeners.xpc.start()
         watchdog.start()
@@ -131,6 +132,7 @@ public enum RVDProcess {
         // slow rvd meanwhile, never a missing socket.
         try listener.bind()
         RVDLifecycle.waitOutBackoff(backoff)
+        if backoff.delay > .zero { listener.dropQueued() }
         listener.startAccepting()
         watchdog.start()
         RVDLifecycle.serving(backoff)

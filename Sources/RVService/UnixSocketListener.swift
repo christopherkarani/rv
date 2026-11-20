@@ -234,6 +234,30 @@ public final class UnixSocketListener: Sendable {
         source?.source.resume()
     }
 
+    /// Accepts and closes every connection that queued while bound but not
+    /// accepting (rvd's backoff wait). Those hooks have likely given up;
+    /// one still waiting reads EOF or a reset, which hooks treat as a
+    /// connection failure (ask/deny), never as an absent rvd. A request
+    /// nobody waits for is never evaluated. No-op once accepting. Bounded,
+    /// so a stream of new clients cannot hold rvd here.
+    public func dropQueued() {
+        let fd = state.withLock { $0.accepting ? -1 : $0.listenFD }
+        guard fd >= 0 else { return }
+        let flags = Darwin.fcntl(fd, F_GETFL)
+        guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return }
+        defer { _ = Darwin.fcntl(fd, F_SETFL, flags) }
+        var dropped = 0
+        while dropped < 64 {
+            let client = Darwin.accept(fd, nil, nil)
+            if client >= 0 {
+                Darwin.close(client)
+                dropped += 1
+            } else if errno != EINTR {
+                return
+            }
+        }
+    }
+
     public func stop() {
         let held = state.withLock { state -> (ReadSource?, Bool, Bool) in
             let current = state.source

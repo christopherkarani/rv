@@ -519,6 +519,41 @@ struct UnixSocketListenerTests {
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
+    /// After a backoff wait, connections that queued during it are hung up,
+    /// not served late; a client connecting once rvd accepts is served.
+    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() throws {
+        let home = try makeIsolatedHome("drop")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.bind()
+        defer { listener.stop() }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let box = OutcomeBox()
+        let done = DispatchSemaphore(value: 0)
+        let held = UncheckedClient(client)
+        let hello = try IPCJSON.encode(Hello())
+        DispatchQueue.global().async {
+            box.set((try? held.client.send(body: hello)).map(SendOutcome.reply) ?? .hungUp)
+            done.signal()
+        }
+        #expect(done.wait(timeout: .now() + 0.5) == .timedOut, "nothing answers before accepting")
+        listener.dropQueued()
+        listener.startAccepting()
+        #expect(done.wait(timeout: .now() + 5) == .success)
+        #expect(box.get() == .hungUp)
+
+        let later = try retryDarwinConnect(path: socketURL.path)
+        defer { later.close() }
+        #expect(try IPCJSON.decode(HelloAck.self, from: try later.send(body: hello)).status == .ok)
+    }
+
     /// A listener stopped while still bound but not accepting (rvd exiting
     /// during its backoff wait) cancels cleanly and removes its socket.
     @Test func stopWhileNotAcceptingRemovesTheSocket() throws {

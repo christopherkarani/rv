@@ -134,6 +134,41 @@ struct LinuxUnixSocketTests {
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
+    /// After a backoff wait, connections that queued during it are hung up,
+    /// not served late; a client connecting once rvd accepts is served.
+    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() throws {
+        let xdg = try makeInjectedXDG("drop")
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        let listener = UnixEvaluateListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.bind()
+        defer { listener.stop() }
+
+        let client = try retryUnixConnect(path: socketURL.path)
+        defer { client.close() }
+        let box = LinuxReplyBox()
+        let done = DispatchSemaphore(value: 0)
+        let held = LinuxUncheckedClient(client)
+        let hello = try IPCJSON.encode(Hello())
+        DispatchQueue.global().async {
+            box.set(try? held.client.send(body: hello))
+            done.signal()
+        }
+        #expect(done.wait(timeout: .now() + 0.5) == .timedOut, "nothing answers before accepting")
+        listener.dropQueued()
+        listener.startAccepting()
+        #expect(done.wait(timeout: .now() + 5) == .success)
+        #expect(box.get() == nil, "a queued client is hung up, not served")
+
+        let later = try retryUnixConnect(path: socketURL.path)
+        defer { later.close() }
+        #expect(try IPCJSON.decode(HelloAck.self, from: try later.send(body: hello)).status == .ok)
+    }
+
     @Test func stopWhileNotAcceptingRemovesTheSocket() throws {
         let xdg = try makeInjectedXDG("holdstop")
         defer { try? FileManager.default.removeItem(at: xdg) }
