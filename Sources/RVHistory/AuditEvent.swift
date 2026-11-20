@@ -46,6 +46,8 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// One gate setting: safety, a host mode, guard mode, packs, the
     /// allowlist, secret definitions, an egress review.
     public static let configChanged = AuditEventKind(rawValue: "config.changed")
+    /// An owner-authentication attempt (`OwnerPresence`), passed or not.
+    public static let ownerAction = AuditEventKind(rawValue: "owner.action")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")
@@ -67,6 +69,18 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
     }
+}
+
+extension AuditEventKind: CaseIterable {
+    /// Every fixed kind. The `workspace.*` and `agent.*` families are open
+    /// (one per lifecycle phase) and not listed. `AuditOCSFSchemaTests`
+    /// checks this list against the declarations above, so a new kind must
+    /// be added here and get an OCSF fixture.
+    public static let allCases: [AuditEventKind] = [
+        .commandDenied, .commandObserved, .commandOverride, .egressDenied, .egressObserved, .admission,
+        .runtimeSession, .runtimeStarted, .runtimeEnded, .secretUse, .secretMisuse, .mcpCall, .mcpApproval,
+        .mcpToolChanged, .mcpHostsUngoverned, .policyChanged, .policyManaged, .configChanged, .ownerAction,
+    ]
 }
 
 public enum AuditDecision: String, Sendable, Hashable, Codable {

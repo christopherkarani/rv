@@ -161,6 +161,10 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     /// Observed rows only: encoded with `observed`; a row without it
     /// (written before it existed) was a would-be deny.
     public var wouldBe: LedgerWouldBe
+    /// The host's session id for the hook request that tripped the rule
+    /// (`attributableSession`), so a row names the agent session. Nil for
+    /// the TTY and rows written before it existed; encoded only when set.
+    public var session: String?
 
     public init(
         timestamp: Date,
@@ -170,7 +174,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         category: LedgerCategory,
         path: String,
         observed: Bool = false,
-        wouldBe: LedgerWouldBe = .deny
+        wouldBe: LedgerWouldBe = .deny,
+        session: String? = nil
     ) {
         self.timestamp = timestamp
         self.host = host
@@ -180,6 +185,32 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.path = path
         self.observed = observed
         self.wouldBe = wouldBe
+        self.session = session
+    }
+
+    /// Longest session id a row keeps.
+    public static let maxSessionLength = 128
+
+    /// `raw` when it is an opaque id (`[A-Za-z0-9._:-]`, at most
+    /// `maxSessionLength` bytes), else nil. Host session ids are UUIDs or
+    /// similar tokens; anything else (spaces, paths, command text) is not
+    /// written.
+    public static func attributableSession(_ raw: String) -> String? {
+        guard raw.isEmpty == false, raw.utf8.count <= maxSessionLength,
+              raw.utf8.allSatisfy(isSessionByte)
+        else { return nil }
+        return raw
+    }
+
+    private static func isSessionByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "."), UInt8(ascii: "_"),
+             UInt8(ascii: ":"), UInt8(ascii: "-"):
+            true
+        default:
+            false
+        }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -191,6 +222,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case path
         case observed
         case wouldBe = "would_be"
+        case session
     }
 
     public init(from decoder: Decoder) throws {
@@ -211,6 +243,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         path = try container.decode(String.self, forKey: .path)
         observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
         wouldBe = try container.decodeIfPresent(LedgerWouldBe.self, forKey: .wouldBe) ?? .deny
+        session = try container.decodeIfPresent(String.self, forKey: .session)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -225,5 +258,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
             try container.encode(true, forKey: .observed)
             try container.encode(wouldBe, forKey: .wouldBe)
         }
+        try container.encodeIfPresent(session, forKey: .session)
     }
 }

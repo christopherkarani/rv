@@ -543,6 +543,8 @@ struct OperatorRedemptionTests {
             .setPackEnabled, .doctorSnapshot, .pendingList, .pendingWatch,
             .pendingResolve, .rulePreview, .ruleSave,
             .proposeWorkspaceLaunch, .launchProposalStatus,
+            // Reads the typed-policy load evaluation runs; writes nothing.
+            .policyStatus,
             // Step 8B.1: plants a memory grant (genuine-CLI attestation),
             // never consumes a permit.
             .attestTTYRedemption,

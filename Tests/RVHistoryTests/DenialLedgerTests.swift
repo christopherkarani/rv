@@ -37,6 +37,29 @@ struct DenialLedgerTests {
         #expect(try decode(LedgerJSONL.grokBashResetHard).observed == false)
     }
 
+    /// `session` is additive: rows without it keep their bytes, rows with
+    /// it round-trip, and older readers ignore the key.
+    @Test func sessionRow_addsOnlyTheSessionKey() throws {
+        var record = try decode(LedgerJSONL.grokBashResetHard)
+        #expect(record.session == nil)
+        record.session = "019a2b3c-codex"
+        let line = try encode(record)
+        #expect(line == LedgerJSONL.grokBashResetHard.replacingOccurrences(
+            of: #","timestamp":"#, with: #","session":"019a2b3c-codex","timestamp":"#))
+        #expect(try decode(line) == record)
+    }
+
+    @Test func attributableSession_keepsOpaqueTokensOnly() {
+        #expect(DenialLedgerRecord.attributableSession("0b7f3c2e-1d2a-4c5b-9e8f-112233445566")
+            == "0b7f3c2e-1d2a-4c5b-9e8f-112233445566")
+        #expect(DenialLedgerRecord.attributableSession("ses_01HX:turn.2") == "ses_01HX:turn.2")
+        #expect(DenialLedgerRecord.attributableSession("") == nil)
+        #expect(DenialLedgerRecord.attributableSession("rm -rf ~") == nil, "never command text")
+        #expect(DenialLedgerRecord.attributableSession("a\nb") == nil)
+        #expect(DenialLedgerRecord.attributableSession(String(repeating: "a", count: 128)) != nil)
+        #expect(DenialLedgerRecord.attributableSession(String(repeating: "a", count: 129)) == nil)
+    }
+
     /// Observed rows written before `would_be` existed were would-be denies.
     @Test func observedRowWithoutWouldBe_decodesAsDeny() throws {
         let record = try decode(LedgerJSONL.claudeObservedResetHard)

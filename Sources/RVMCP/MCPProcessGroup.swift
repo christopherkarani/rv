@@ -150,7 +150,7 @@ final class MCPProcessGroup: MCPSupervisedGroup {
         // its standard descriptors itself, after the dups, so a descriptor
         // another thread opens meanwhile is closed too (glibc 2.34; a spawn
         // whose close fails does not run).
-        guard posix_spawn_file_actions_addclosefrom_np(&actions, STDERR_FILENO + 1) == 0 else {
+        guard systemSpawnAddCloseFrom(&actions, STDERR_FILENO + 1) == 0 else {
             return .failure(MCPStartFailure("spawn file actions"))
         }
         #endif
@@ -185,7 +185,7 @@ final class MCPProcessGroup: MCPSupervisedGroup {
     }
     #else
     private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ path: String) -> Int32 {
-        posix_spawn_file_actions_addchdir_np(&actions, path)
+        systemSpawnAddChangeDirectory(&actions, path)
     }
     #endif
 }
@@ -195,6 +195,17 @@ final class MCPProcessGroup: MCPSupervisedGroup {
 /// only under `_GNU_SOURCE`).
 @_silgen_name("pipe2")
 private func systemPipe2(_ fds: UnsafeMutablePointer<Int32>, _ flags: Int32) -> Int32
+
+/// glibc 2.34's `posix_spawn_file_actions_addclosefrom_np` and 2.29's
+/// `posix_spawn_file_actions_addchdir_np`, also declared only under
+/// `_GNU_SOURCE`: Ubuntu 22.04's Glibc module (where Linux releases are
+/// built) does not export them, though 24.04's does.
+@_silgen_name("posix_spawn_file_actions_addclosefrom_np")
+private func systemSpawnAddCloseFrom(_ actions: UnsafeMutablePointer<posix_spawn_file_actions_t>, _ from: Int32) -> Int32
+
+@_silgen_name("posix_spawn_file_actions_addchdir_np")
+private func systemSpawnAddChangeDirectory(
+    _ actions: UnsafeMutablePointer<posix_spawn_file_actions_t>, _ path: UnsafePointer<CChar>) -> Int32
 #endif
 
 /// One pipe, both ends close-on-exec and numbered above 2, so a spawn can

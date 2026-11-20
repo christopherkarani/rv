@@ -9,6 +9,7 @@ public enum IPCMethod: Sendable, Equatable {
     case listPacks
     case setPackEnabled(SetPackEnabledParams)
     case doctorSnapshot
+    case policyStatus(PolicyStatusParams)
     case pendingList
     case pendingWatch(PendingWatchParams)
     case pendingResolve(PendingResolveParams)
@@ -29,6 +30,7 @@ public enum IPCResult: Sendable, Equatable {
     case listPacks(ListPacksReply)
     case setPackEnabled(SetPackEnabledReply)
     case doctorSnapshot(DoctorSnapshotReply)
+    case policyStatus(PolicyStatusReply)
     case pendingList(PendingListReply)
     case pendingWatch(PendingWatchReply)
     case pendingResolve(PendingResolveReply)
@@ -64,6 +66,7 @@ extension IPCMethod: Codable {
         case listPacks
         case setPackEnabled
         case doctorSnapshot
+        case policyStatus
         case pendingList
         case pendingWatch
         case pendingResolve
@@ -98,6 +101,8 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .setPackEnabled)
         case .doctorSnapshot:
             try container.encode(EmptyPayload(), forKey: .doctorSnapshot)
+        case .policyStatus(let params):
+            try container.encode(params, forKey: .policyStatus)
         case .pendingList:
             try container.encode(EmptyPayload(), forKey: .pendingList)
         case .pendingWatch(let params):
@@ -137,6 +142,8 @@ extension IPCMethod: Codable {
             self = .setPackEnabled(params)
         } else if container.contains(.doctorSnapshot) {
             self = .doctorSnapshot
+        } else if let params = try container.decodeIfPresent(PolicyStatusParams.self, forKey: .policyStatus) {
+            self = .policyStatus(params)
         } else if container.contains(.pendingList) {
             self = .pendingList
         } else if let params = try container.decodeIfPresent(PendingWatchParams.self, forKey: .pendingWatch) {
@@ -179,6 +186,7 @@ extension IPCResult: Codable {
         case listPacks
         case setPackEnabled
         case doctorSnapshot
+        case policyStatus
         case pendingList
         case pendingWatch
         case pendingResolve
@@ -222,6 +230,8 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .setPackEnabled)
         case .doctorSnapshot(let reply):
             try container.encode(reply, forKey: .doctorSnapshot)
+        case .policyStatus(let reply):
+            try container.encode(reply, forKey: .policyStatus)
         case .pendingList(let reply):
             try container.encode(reply, forKey: .pendingList)
         case .pendingWatch(let reply):
@@ -289,6 +299,8 @@ extension IPCResult: Codable {
             self = .setPackEnabled(reply)
         } else if let reply = try container.decodeIfPresent(DoctorSnapshotReply.self, forKey: .doctorSnapshot) {
             self = .doctorSnapshot(reply)
+        } else if let reply = try container.decodeIfPresent(PolicyStatusReply.self, forKey: .policyStatus) {
+            self = .policyStatus(reply)
         } else if let reply = try container.decodeIfPresent(PendingListReply.self, forKey: .pendingList) {
             self = .pendingList(reply)
         } else if let reply = try container.decodeIfPresent(PendingWatchReply.self, forKey: .pendingWatch) {
