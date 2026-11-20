@@ -56,9 +56,14 @@ public enum AuditOCSF {
             ] as [String: Any],
             "device": ["hostname": hostName, "type_id": 0],
         ]
-        if let agent = event.agent { object["actor"] = ["app_name": agent] }
+        var actorObject: [String: Any]? = event.agent.map { ["app_name": $0] }
         // API and Process Activity require an actor; rv may not know the agent.
-        if event.agent == nil, mapped.uid == 6003 || mapped.uid == 1007 { object["actor"] = ["app_name": "unknown"] }
+        if actorObject == nil, mapped.uid == 6003 || mapped.uid == 1007 { actorObject = ["app_name": "unknown"] }
+        // The agent session a hook deny came from (also kept in `rv_detail`).
+        if let session = event.detail["session"] {
+            actorObject = (actorObject ?? [:]).merging(["session": ["uid": session]]) { $1 }
+        }
+        if let actorObject { object["actor"] = actorObject }
         if let code = AuditReasonCode(event) { object["status_code"] = code.rawValue }
         switch mapped.uid {
         case 6003:

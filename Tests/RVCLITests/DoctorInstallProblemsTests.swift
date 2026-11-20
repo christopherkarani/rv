@@ -336,6 +336,150 @@ private let adHocUnderManifest = DoctorServiceTrust(
 }
 #endif
 
+// MARK: - Other peer-trust roles
+
+private let pinnedHostElsewhere = DoctorRoleTrust(
+    role: "workspaceHost",
+    path: "/Users/u/.local/bin/rv-workspace-host",
+    trust: DoctorServiceTrust(
+        source: "manifest",
+        satisfied: false,
+        reason: "manifest pins rv-workspace-host cdhash a5331737d2161ce1dc7e2167de78783e084a458c at "
+            + "/Library/Application Support/RV/phase2a-development/rv-workspace-host; installed rv-workspace-host "
+            + "is cdhash a150a5ddb10b8d5ce1bb1a42c93a0f5db8877173 at /Users/u/.local/bin/rv-workspace-host "
+            + "(signed as dev.rv.rv-workspace-host, team 5V273URY46)"
+    )
+)
+
+/// The live failure: rvd satisfies the manifest, but the workspace host
+/// is pinned to another build, so `rv workspace start` can never connect.
+@Test func doctorInstall_workspaceHostPinnedToAnotherBuild_warnsWithManifestFix() throws {
+    try withInstallHome(trustManifest: .valid) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.roleTrust = [pinnedHostElsewhere]
+        let problem = try #require(problems(fixture).first { $0.id == "peer-trust-role-unsatisfied-workspaceHost" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.hasPrefix(
+            "the peer-trust manifest pins the workspace host to a different build; rv workspace and rv opencode will not start"
+        ))
+        #expect(problem.summary.contains("a150a5ddb10b8d5ce1bb1a42c93a0f5db8877173"))
+        #expect(problem.fix.contains("'/Library/Application Support/RV/peer-trust.json'"))
+        #expect(problem.fix.contains("workspaceHost"))
+        #expect(problem.fix.contains("administrator"))
+        let outcome = doctorPretty(fixture)
+        #expect(outcome.stdout.contains(problem.summary))
+        #expect(outcome.stdout.contains("fix: \(problem.fix)"))
+        // Hooks still work, so the warning alone does not fail doctor.
+        #expect(outcome.exitCode == 0)
+    }
+}
+
+@Test func doctorInstall_everyUnsatisfiedRoleGetsItsOwnRow_satisfiedRolesNone() throws {
+    let rejected = DoctorServiceTrust(source: "manifest", satisfied: false, reason: "r")
+    try withInstallHome(trustManifest: .valid) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.roleTrust = [
+            DoctorRoleTrust(role: "cli", path: fixture.paths.localRvCli, trust: rejected),
+            DoctorRoleTrust(role: "mcpCustodian", path: fixture.paths.custodianAppExecutable, trust: rejected),
+            DoctorRoleTrust(
+                role: "workspaceHost", path: fixture.paths.localWorkspaceHost,
+                trust: DoctorServiceTrust(source: "manifest", satisfied: true, reason: nil)
+            ),
+        ]
+        let ids = problems(fixture).map(\.id)
+        #expect(ids == ["peer-trust-role-unsatisfied-cli", "peer-trust-role-unsatisfied-mcpCustodian"])
+        #expect(problems(fixture).allSatisfy { $0.severity == .warn })
+    }
+}
+
+@Test func doctorRobot_roleTrustProblemIsAdditive() throws {
+    try withInstallHome(trustManifest: .valid) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.roleTrust = [pinnedHostElsewhere]
+        let outcome = DoctorRun.run(environment: fixture.environment, diagnostics: runningDiagnostics, appearance: .robot)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any])
+        let rows = try #require(json["problems"] as? [[String: Any]])
+        #expect(rows.map { $0["id"] as? String } == ["peer-trust-role-unsatisfied-workspaceHost"])
+        #expect(rows[0]["severity"] as? String == "warn")
+        #expect(json["service"] is [String: Any])
+    }
+}
+
+/// Without a manifest nothing grants the workspace host or cli role, so
+/// rv workspace cannot start: doctor says so instead of staying silent.
+@Test func doctorInstall_noManifestWithWorkspaceHostInstalled_warns() throws {
+    try withInstallHome(trustManifest: .absent) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.workspaceRoles = .noManifest
+        let problem = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("no peer-trust manifest"))
+        #expect(problem.summary.contains("rv workspace and rv opencode will not start"))
+        #expect(problem.fix.contains("'/Library/Application Support/RV/peer-trust.json'"))
+        #expect(problem.fix.contains("workspaceHost"))
+        #expect(problem.fix.contains("cli"))
+        #expect(problem.fix.contains("administrator"))
+        #expect(doctorPretty(fixture).exitCode == 0)
+    }
+}
+
+/// A manifest without a workspaceHost or cli entry names only what it lacks.
+@Test func doctorInstall_manifestMissingWorkspaceRoles_namesEachMissingRole() throws {
+    try withInstallHome(trustManifest: .valid) { fixture in
+        try stageHealthyInstall(fixture)
+        fixture.environment.install?.workspaceRoles = .manifest(["service", "cli"])
+        let problem = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("no workspaceHost entry"))
+        #expect(problem.summary.contains("cli") == false)
+        #expect(problem.fix.contains("administrator"))
+
+        fixture.environment.install?.workspaceRoles = .manifest(["service"])
+        let both = try #require(problems(fixture).first { $0.id == "peer-trust-workspace-roles-missing" })
+        #expect(both.summary.contains("no workspaceHost or cli entry"))
+
+        fixture.environment.install?.workspaceRoles = .manifest(["service", "cli", "workspaceHost"])
+        #expect(problems(fixture).contains { $0.id == "peer-trust-workspace-roles-missing" } == false)
+    }
+}
+
+#if os(macOS)
+/// Live wiring: only an installed workspace host is judged, and an invalid
+/// manifest is left to its own row.
+@Test func roleTrustProbe_workspaceRolesFollowTheTrustSource() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-role-probe-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = try #require(HomeDirectory(validating: root.path))
+    let paths = OwnedPaths(home: home)
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .siblingPin) == .notEvaluated)
+    try makeExecutable(URL(fileURLWithPath: paths.localWorkspaceHost))
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .siblingPin) == .noManifest)
+    #expect(RoleTrustProbe.workspaceRoles(paths, source: .invalid) == .notEvaluated)
+}
+
+/// Live probe wiring: each manifest role is judged on its installed binary;
+/// a binary that is not installed, or a role with no verdict, is skipped.
+@Test func roleTrustProbe_judgesInstalledBinariesOnly() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-role-probe-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = try #require(HomeDirectory(validating: root.path))
+    let paths = OwnedPaths(home: home)
+    try makeExecutable(URL(fileURLWithPath: paths.localWorkspaceHost))
+    try makeExecutable(URL(fileURLWithPath: paths.localRvCli))
+    let binaries = RoleTrustProbe.binaries(paths)
+    #expect(binaries.map { $0.role } == [.cli, .workspaceHost, .mcpCustodian])
+    let found = RoleTrustProbe.evaluate(binaries: binaries) { role, path in
+        role == .cli ? nil : DaemonTrustVerdict(source: .manifest, satisfied: false, reason: "pinned \(path)")
+    }
+    #expect(found == [DoctorRoleTrust(
+        role: "workspaceHost", path: paths.localWorkspaceHost,
+        trust: DoctorServiceTrust(source: "manifest", satisfied: false, reason: "pinned \(paths.localWorkspaceHost)")
+    )])
+}
+#endif
+
 // MARK: - Rendering
 
 @Test func doctorRender_everyProblemRowPrintsAFixLine() throws {

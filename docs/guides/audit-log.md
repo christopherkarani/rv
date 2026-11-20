@@ -19,8 +19,8 @@ denials, workspace logs) are joined with it by `rv audit` into one
 `rv.audit.v1` stream, but only `audit.jsonl` is hash-chained.
 
 Nothing in it is command text, a secret value, a policy body or a tool's
-arguments. Records carry rule ids, host names, secret names, argument
-*names*, fingerprints and home-redacted paths.
+arguments. Records carry rule ids, host names, agent session ids, secret
+names, argument *names*, fingerprints and home-redacted paths.
 
 ## One record
 
@@ -111,7 +111,7 @@ forwarded events carry `rv_chain_head`, so compare it off the machine.
 
 | Kind | Decision | `subject` | `detail` |
 | --- | --- | --- | --- |
-| `command.denied` | `denied` | rule id, e.g. `core.git:reset-hard` | `host`, `tool`, `category`, `path` (home shown as `~`) |
+| `command.denied` | `denied` | rule id, e.g. `core.git:reset-hard` | `host`, `tool`, `category`, `path` (home shown as `~`), `session` (the agent session id, when the host sent one; OCSF `actor.session.uid`) |
 | `command.observed` | `info` | rule id | as above, plus `would_be` (`deny` or `ask`): observe mode let it run |
 | `command.override` | `allowed` | rule id | `host`, `override` (allow-once, allowlist, rebase recovery, contained delete); `reason` repeats the override |
 | `owner.action` | | | every owner-authentication attempt, passed or not |

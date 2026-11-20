@@ -132,7 +132,7 @@ public struct PacksRenderer: FrameRenderer {
         lines.append("")
         lines.append(paint("Legend: ● = enabled, ○ = disabled", slot: palette.muted, reset: palette.reset))
         lines.append("")
-        lines.append(paint("Enable packs in ~/.config/rv/config.toml", slot: palette.muted, reset: palette.reset))
+        lines.append(paint("Enable a pack: rv packs enable <id> (disable: rv packs disable <id>)", slot: palette.muted, reset: palette.reset))
         return lines
     }
 
