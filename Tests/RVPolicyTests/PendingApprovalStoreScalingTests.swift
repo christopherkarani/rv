@@ -65,26 +65,38 @@ struct PendingApprovalStoreScalingTests {
         ]
     }
 
-    /// Mean wall time of `count` fresh asks against a store holding `rows`.
-    private func meanAsk(seeded rows: Int, count: Int) async throws -> Duration {
-        let store = PendingApprovalStore(baseDirectory: try Self.directory())
-        for index in 0..<rows {
-            _ = try await store.create(Self.request(index), now: Self.now)
-        }
-        let started = ContinuousClock.now
-        for index in rows..<(rows + count) {
-            _ = try await store.create(Self.request(index), now: Self.now)
-        }
-        return (ContinuousClock.now - started) / count
+    /// The rows file's inode: a rewrite (temp file + rename) changes it, an
+    /// append keeps it.
+    private static func inode(_ url: URL) throws -> UInt64 {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try #require((attrs[.systemFileNumber] as? NSNumber)?.uint64Value)
     }
 
-    @Test func askCostDoesNotScaleWithStoreSize() async throws {
-        let small = try await meanAsk(seeded: 10, count: 10)
-        let large = try await meanAsk(seeded: 236, count: 10)
-        print("pending create mean: 10 rows \(small), 236 rows \(large)")
-        // Before the cache a 236-row create decoded and re-encoded every row
-        // (tens of ms in a debug build). Generous for a shared CI host.
-        #expect(large < small * 4 + .milliseconds(5), "236-row ask \(large) vs 10-row \(small)")
+    /// What an ask costs is what it writes: before the cache a 236-row ask
+    /// decoded and rewrote every row. Asserted on the file, not the clock
+    /// (a timing bound flakes on a loaded CI host): a fresh ask on a large
+    /// store keeps the file's inode (no temp + rename) and grows it by
+    /// exactly the new row's line, with every earlier byte untouched.
+    @Test func aFreshAskOnALargeStoreAppendsOnlyItsLine() async throws {
+        let root = try Self.directory()
+        defer { Self.remove(root) }
+        let store = PendingApprovalStore(baseDirectory: root)
+        for index in 0..<236 {
+            _ = try await store.create(Self.request(index), now: Self.now)
+        }
+        let before = try Data(contentsOf: Self.file(root))
+        let inodeBefore = try Self.inode(Self.file(root))
+
+        _ = try await store.create(Self.request(236), now: Self.now)
+
+        let after = try Data(contentsOf: Self.file(root))
+        #expect(try Self.inode(Self.file(root)) == inodeBefore)
+        #expect(after.prefix(before.count) == before)
+        let added = try #require(String(data: after.dropFirst(before.count), encoding: .utf8))
+        #expect(added.hasSuffix("\n"))
+        #expect(added.dropLast().contains("\n") == false, "exactly one new line")
+        #expect(added.contains("ask-236"))
+        #expect(try await PendingApprovalStore(baseDirectory: root).records(now: Self.now).count == 237)
     }
 
     @Test func aRepeatedAskWritesNothing() async throws {
@@ -107,9 +119,13 @@ struct PendingApprovalStoreScalingTests {
         defer { Self.remove(root) }
         let store = PendingApprovalStore(baseDirectory: root)
         var created: [PendingApproval] = []
-        for index in 0..<5 {
+        created.append(try await store.create(Self.request(0), now: Self.now))
+        // Rows 1-4 take the append path: the first row's file is kept.
+        let firstInode = try Self.inode(Self.file(root))
+        for index in 1..<5 {
             created.append(try await store.create(Self.request(index), now: Self.now))
         }
+        #expect(try Self.inode(Self.file(root)) == firstInode)
         let lines = try String(contentsOf: Self.file(root), encoding: .utf8).split(separator: "\n")
         #expect(lines.count == 5)
 
