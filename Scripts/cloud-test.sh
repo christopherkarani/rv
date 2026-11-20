@@ -103,9 +103,21 @@ if [[ "$(id -u)" -eq 0 ]]; then
   # A login shell gives the user's own HOME, PATH and environment, not root's.
   # The agent proxy settings (HTTPS_PROXY, CA bundle) are passed through for
   # the toolchain download; nothing else from root's environment is.
+  # A CA file under root's home is unreadable to the user, so it gets a copy.
   keep=()
-  for v in HTTPS_PROXY https_proxy NO_PROXY no_proxy SSL_CERT_FILE CURL_CA_BUNDLE; do
+  for v in HTTPS_PROXY https_proxy NO_PROXY no_proxy; do
     [[ -n "${!v:-}" ]] && keep+=("$v=${!v}")
+  done
+  for v in SSL_CERT_FILE CURL_CA_BUNDLE; do
+    ca="${!v:-}"
+    [[ -n "$ca" && -r "$ca" ]] || continue
+    if ! su "$RUN_USER" -s /bin/bash -c "test -r $(printf '%q' "$ca")"; then
+      copy="$user_home/.cache/rv-cloud-test/$(basename "$ca")"
+      install -d -o "$RUN_USER" -g "$RUN_USER" "$user_home/.cache/rv-cloud-test"
+      install -o "$RUN_USER" -g "$RUN_USER" -m 0644 "$ca" "$copy"
+      ca="$copy"
+    fi
+    keep+=("$v=$ca")
   done
   printf -v cmd '%q ' env "${keep[@]}" "$ROOT/Scripts/cloud-test.sh" "${args[@]}"
   exec su - "$RUN_USER" -s /bin/bash -c "cd $(printf '%q' "$ROOT") && $cmd"

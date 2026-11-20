@@ -129,9 +129,12 @@ fetch_resumable() {
     curl -fL --retry 3 --retry-delay 4 -C - -o "$out" "$url" || status=$?
     case "$status" in
       0) return 0 ;;
-      22) return 1 ;;                       # HTTP error (404 for a missing pin)
       33) rm -f "$out" ;;                   # server refused the range: restart
-      *) log "download interrupted (curl $status), resuming (attempt $attempt)" ;;
+      # Connection dropped or stalled: resume from what arrived.
+      18|28|52|55|56|92) log "download interrupted (curl $status), resuming (attempt $attempt)" ;;
+      # Anything else (22 HTTP error such as the 404 for a bare pin, 77 an
+      # unreadable CA file, 6 DNS) will not get better by retrying.
+      *) return 1 ;;
     esac
     sleep 2
   done
