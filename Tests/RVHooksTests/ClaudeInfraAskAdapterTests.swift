@@ -59,13 +59,6 @@ struct ClaudeInfraAskAdapterTests {
             "\(mode)")
     }
 
-    /// A very long command is cut so the warning still shows.
-    @Test func daemonDown_longCommandIsTruncated() async throws {
-        let command = String(repeating: "a", count: 5000)
-        let reason = try await Self.askReason(command: command)
-        let subject = "Bash: " + String(repeating: "a", count: 300) + "… (4700 more characters)"
-        #expect(reason == Self.prompt(subject: subject, layer: "rvd is not reachable", reason: daemonUnreachableMessage))
-    }
 
     /// The command is shown on one line, with line breaks, controls,
     /// format (bidi, zero-width) and separator characters escaped, so it
@@ -82,13 +75,30 @@ struct ClaudeInfraAskAdapterTests {
         #expect(reason.components(separatedBy: "\n").count == 3, "\(forgery)")
     }
 
-    /// The cap counts escaped text, never splits an escape, and counts the
-    /// remainder in characters of the original command.
-    @Test func daemonDown_escapedTailIsCappedWithoutSplittingAnEscape() async throws {
-        let command = String(repeating: "a", count: 298) + String(repeating: "\u{202E}", count: 10)
-        let reason = try await Self.askReason(command: command)
-        let subject = "Bash: " + String(repeating: "a", count: 298) + "… (10 more characters)"
-        #expect(reason == Self.prompt(subject: subject, layer: "rvd is not reachable", reason: daemonUnreachableMessage))
+    /// Past 300 escaped characters the subject keeps its first 220 and last
+    /// 80 and says how many characters of the command it leaves out, so a
+    /// long or padded command cannot hide its end.
+    @Test(arguments: LongSubject.allCases)
+    func daemonDown_longCommandKeepsItsHeadAndTail(_ long: LongSubject) async throws {
+        let reason = try await Self.askReason(command: long.command)
+        #expect(
+            reason == Self.prompt(
+                subject: "Bash: " + long.shown, layer: "rvd is not reachable", reason: daemonUnreachableMessage),
+            "\(long): \(reason)")
+    }
+
+    /// A lone surrogate in the request is shown escaped, not dropped and
+    /// not a reason to fail.
+    @Test func daemonDown_loneSurrogateIsShownEscaped() async throws {
+        let raw = #"{"hook_event_name":"PreToolUse","tool_name":"Bash","permission_mode":"default","tool_input":{"command":"ls "#
+            + escaped("d800") + #" x"}}"#
+        let run = try await runPythonAdapter(
+            host: .claude, stub: daemonDownWire(.claude), rawEvent: raw, environment: Self.attended)
+        let reason = try expectClaudeAsk(run)
+        #expect(
+            reason == Self.prompt(
+                subject: "Bash: ls " + escaped("d800") + " x", layer: "rvd is not reachable",
+                reason: daemonUnreachableMessage))
     }
 
     static func askReason(command: String) async throws -> String {
@@ -345,9 +355,43 @@ struct ClaudeInfraAskAdapterTests {
         }
     }
 
+    enum LongSubject: String, CaseIterable, CustomStringConvertible {
+        case plainLong, spacePadding, escapesAtTheCut, oneCharacterLeftOut
+
+        static let rlo = "\u{202E}"
+
+        var command: String {
+            switch self {
+            case .plainLong: String(repeating: "a", count: 5000)
+            case .spacePadding: "git status" + String(repeating: " ", count: 400) + "; rm -rf ~"
+            case .escapesAtTheCut: String(repeating: "a", count: 400) + String(repeating: Self.rlo, count: 14)
+            case .oneCharacterLeftOut: String(repeating: "a", count: 220) + Self.rlo + String(repeating: "a", count: 80)
+            }
+        }
+
+        var shown: String {
+            let a = { (n: Int) in String(repeating: "a", count: n) }
+            switch self {
+            case .plainLong:
+                return a(220) + "… (4700 characters not shown) …" + a(80)
+            case .spacePadding:
+                return "git status" + String(repeating: " ", count: 210) + "… (120 characters not shown) …"
+                    + String(repeating: " ", count: 70) + "; rm -rf ~"
+            case .escapesAtTheCut:
+                // The 14th escape would push the tail past 80: it is left out whole.
+                return a(220) + "… (181 characters not shown) …" + String(repeating: escaped("202e"), count: 13)
+            case .oneCharacterLeftOut:
+                return a(220) + "… (1 character not shown) …" + a(80)
+            }
+        }
+
+        var description: String { rawValue }
+    }
+
     enum SubjectForgery: CaseIterable, CustomStringConvertible {
         case forgedParagraph, newlinePadding, carriageReturnAndTab, ansiEscape, bidiOverride
         case zeroWidth, lineAndParagraphSeparators, nonBreakingAndIdeographicSpace, astralFormatTag
+        case typedBackslashN, typedBackslashU
 
         var command: String {
             switch self {
@@ -360,6 +404,9 @@ struct ClaudeInfraAskAdapterTests {
             case .lineAndParagraphSeparators: "ls\u{2028}rm -rf ~\u{2029}"
             case .nonBreakingAndIdeographicSpace: "rm\u{00A0}-rf\u{3000}~"
             case .astralFormatTag: "ls\u{E0041}"
+            // Typed backslash text, not escapes: it must not pass for one.
+            case .typedBackslashN: "echo " + backslash + "n done"
+            case .typedBackslashU: "echo " + escaped("202e") + " done"
             }
         }
 
@@ -374,6 +421,8 @@ struct ClaudeInfraAskAdapterTests {
             case .lineAndParagraphSeparators: "ls" + escaped("2028") + "rm -rf ~" + escaped("2029")
             case .nonBreakingAndIdeographicSpace: "rm" + escaped("00a0") + "-rf" + escaped("3000") + "~"
             case .astralFormatTag: "ls" + escaped("db40") + escaped("dc41")
+            case .typedBackslashN: "echo " + backslash + backslash + "n done"
+            case .typedBackslashU: "echo " + backslash + escaped("202e") + " done"
             }
         }
 
@@ -388,6 +437,8 @@ struct ClaudeInfraAskAdapterTests {
             case .lineAndParagraphSeparators: "lineAndParagraphSeparators"
             case .nonBreakingAndIdeographicSpace: "nonBreakingAndIdeographicSpace"
             case .astralFormatTag: "astralFormatTag"
+            case .typedBackslashN: "typedBackslashN"
+            case .typedBackslashU: "typedBackslashU"
             }
         }
     }
@@ -622,8 +673,10 @@ private func writeOwnerConfig(_ text: String, at path: URL, mode: Int = 0o600) t
 /// four lowercase hex digits (built without a backslash literal so the
 /// expectation stays readable as ASCII).
 private func escaped(_ hex: String) -> String {
-    String(UnicodeScalar(92)) + "u" + hex
+    backslash + "u" + hex
 }
+
+private let backslash = String(UnicodeScalar(92))
 
 /// `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
 /// (pinned by `ClaudeAdapterHookTests.cDownReasons_matchHookFallbackSource`).

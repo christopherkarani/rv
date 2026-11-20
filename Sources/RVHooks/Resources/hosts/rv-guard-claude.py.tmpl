@@ -51,6 +51,8 @@ _INFRA_ASK_TEXT = (
     "overloading rvd. Approve only if you expected it. %s"
 )
 _SUBJECT_MAX = 300
+_SUBJECT_HEAD = 220
+_SUBJECT_TAIL = 80
 
 # rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
 # Swift twin HookDaemonFallback) words each down class, with the layer the
@@ -316,21 +318,37 @@ def _subject(tool, tool_input):
 def _one_line(text):
     # Line breaks, controls, format (bidi, zero-width), separator and
     # non-ASCII space characters are shown escaped, as rv's
-    # HookDenyJSON.jsonQuoted does; a plain space stays. The escaped text is
-    # capped at _SUBJECT_MAX characters, never inside an escape, and the
-    # rest is counted in characters of the original text.
-    shown = []
+    # HookDenyJSON.jsonQuoted does, and a typed backslash is doubled so it
+    # cannot pass for an escape; a plain space stays. Past _SUBJECT_MAX
+    # escaped characters, the first _SUBJECT_HEAD and last _SUBJECT_TAIL
+    # are kept (never splitting an escape) so padding cannot hide the end,
+    # and the characters of the original text left out are counted.
+    pieces = [_escaped_char(ch) for ch in text]
+    if sum(len(piece) for piece in pieces) <= _SUBJECT_MAX:
+        return "".join(pieces)
+    head = _fitting(pieces, _SUBJECT_HEAD)
+    tail = _fitting(pieces[len(head):][::-1], _SUBJECT_TAIL)[::-1]
+    left_out = len(pieces) - len(head) - len(tail)
+    return "%s… (%d %s not shown) …%s" % (
+        "".join(head),
+        left_out,
+        "character" if left_out == 1 else "characters",
+        "".join(tail),
+    )
+
+
+def _fitting(pieces, budget):
+    kept = []
     used = 0
-    for index, ch in enumerate(text):
-        piece = _escaped_char(ch)
-        if used + len(piece) > _SUBJECT_MAX:
-            return "".join(shown) + "… (%d more characters)" % (len(text) - index)
-        shown.append(piece)
+    for piece in pieces:
+        if used + len(piece) > budget:
+            break
+        kept.append(piece)
         used += len(piece)
-    return "".join(shown)
+    return kept
 
 
-_SHORT_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_SHORT_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 
 def _escaped_char(ch):
