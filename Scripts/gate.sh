@@ -154,6 +154,10 @@ infer_filters() {
           Sources/*/*|Tests/*/*) ;;
           *) continue ;;
         esac
+        # Compiled into Packages/rv-microvm too, through a symlink.
+        if [[ "$f" == Sources/RVIsolation/ProtectedWorkspacePaths.swift ]]; then
+          RUN_MICROVM_PACKAGE=1
+        fi
         base="${f#Sources/}"
         base="${base#Tests/}"
         m="${base%%/*}"
