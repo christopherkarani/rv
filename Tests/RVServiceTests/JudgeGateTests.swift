@@ -240,6 +240,23 @@ struct SafeCommandLaneTests {
             #expect(!SafeCommandLane.isSafe(cmd), "\(cmd)")
         }
     }
+
+    /// A Swift `Character` is a grapheme cluster: `"\r\n"`, `">\u{301}"`
+    /// and `"\u{600};"` are one Character each, but the shell sees the
+    /// `\r`, `>` or `;` byte. Metacharacter scans must see every scalar.
+    @Test("grapheme-joined metacharacters never enter")
+    func graphemeProbes() {
+        for cmd in [
+            "echo hi >\u{301} out",
+            "echo hi \u{600};rm -rf build",
+            "ls src \u{600}|sh",
+            "ls x \r\nrm -rf build",
+            "ls x \rrm -rf build",
+            "echo hi \u{200D}>out",
+        ] {
+            #expect(!SafeCommandLane.isSafe(cmd), "\(cmd.debugDescription)")
+        }
+    }
 }
 
 @Suite("Package script gate (tri-state)")

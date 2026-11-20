@@ -33,7 +33,11 @@ import RVDomain
 /// `git`, running `~/.local/bin/rv`) stay allowed.
 public enum RVInstallPathGuard {
     public static func touchesInstall(_ command: ShellCommand, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
-        let raw = command.rawValue
+        touchesInstall(raw: command.rawValue, home: home, cwd: cwd)
+            || ShellLexer.guardReadings(command.rawValue).contains { touchesInstall(raw: $0, home: home, cwd: cwd) }
+    }
+
+    private static func touchesInstall(raw: String, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
         let model = InstallPathModel(home: home)
         let launched = launchedCommandHeads(raw).filter { $0.truncated == false }
         let bases = trackedBases(launched, raw: raw, cwd: cwd, model: model)
