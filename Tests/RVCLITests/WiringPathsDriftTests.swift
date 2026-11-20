@@ -9,6 +9,14 @@ import RVService
 /// the table fails here, so setup and the two doors cannot drift.
 @Suite("Setup wiring paths are guarded")
 struct WiringPathsDriftTests {
+    /// setup's LaunchAgent label is the Mach service rvd listens on, which
+    /// is the label `StartupBackoff.isSupervised` trusts.
+    @Test("setup's LaunchAgent label is rvd's Mach service")
+    func launchAgentLabelIsTheMachService() {
+        #expect(SetupRun.launchAgentLabel == RVService.machServiceName)
+        #expect(StartupBackoff.isSupervised(environment: ["XPC_SERVICE_NAME": SetupRun.launchAgentLabel]))
+    }
+
     @Test("every OwnedPaths wiring destination is an RVWiringPaths match")
     func ownedPathsAreGuarded() throws {
         let home = try #require(HomeDirectory(validating: "/tmp/rv-wiring-drift"))

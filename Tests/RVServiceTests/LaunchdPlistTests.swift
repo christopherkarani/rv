@@ -23,6 +23,22 @@ struct LaunchdPlistTests {
         #expect(plist["ThrottleInterval"] as? Int == 5)
     }
 
+    /// The plist's Label and Mach service, the name rvd listens on, and the
+    /// label `isSupervised` trusts are one string.
+    @Test func labelMatchesMachServiceAndSupervisorCheck() throws {
+        let url = packageRoot()
+            .appendingPathComponent("Sources/RVCLI/Resources/launchd")
+            .appendingPathComponent("dev.rv.evaluate.plist")
+        let object = try PropertyListSerialization.propertyList(from: try Data(contentsOf: url), format: nil)
+        let plist = try #require(object as? [String: Any])
+        let label = try #require(plist["Label"] as? String)
+        #expect(label == RVService.machServiceName)
+        let mach = try #require(plist["MachServices"] as? [String: Any])
+        #expect(Array(mach.keys) == [RVService.machServiceName])
+        #expect(StartupBackoff.isSupervised(environment: ["XPC_SERVICE_NAME": label]))
+        #expect(StartupBackoff.isSupervised(environment: ["XPC_SERVICE_NAME": label + ".other"]) == false)
+    }
+
     #if os(Linux)
     @Test func linuxAcceptsSocketFlag() throws {
         let flagged = try RVDLaunch.parse(arguments: ["rvd", "--socket"])
