@@ -252,6 +252,36 @@ struct WorkspaceControlParityTests {
 
     // MARK: - The catalog itself
 
+    /// Golden list: removing or renaming a protection must be a deliberate
+    /// edit here, not a side effect of an edit to the catalog.
+    @Test("the catalog protects exactly these paths")
+    func catalogIsPinned() {
+        #expect(Catalog.gitDirectory == ".git")
+        #expect(Catalog.controlFiles == [".git/config"])
+        #expect(Catalog.controlTrees == [".git/hooks", ".rv", ".config/rv"])
+        #expect(Catalog.controlPinnedDirectories == [".git", ".config"])
+        #expect(Catalog.runLaterFiles == [
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".mcp.json",
+            ".codex/config.toml",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+            ".cursor/mcp.json",
+            ".gemini/settings.json",
+            ".gemini/config/hooks.json",
+            ".vscode/tasks.json",
+            ".vscode/settings.json",
+            "opencode.json",
+            "opencode.jsonc",
+            ".envrc",
+        ])
+        #expect(Catalog.runLaterTrees == [".claude/hooks", ".cursor/hooks", ".codex/hooks"])
+        #expect(Catalog.runLaterPinnedDirectories == [".claude", ".codex", ".cursor", ".gemini", ".vscode"])
+        #expect(Catalog.controlPinned == [".git", ".config"])
+        #expect(Catalog.runLaterPinned == [".claude", ".codex", ".cursor", ".gemini", ".vscode", ".gemini/config"])
+    }
+
     @Test("every directory on the way to a protected path is pinned")
     func everyAncestorIsPinned() {
         let pinned = Set(Catalog.controlPinned + Catalog.runLaterPinned)
