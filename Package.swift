@@ -95,6 +95,17 @@ let terminalProbeTargets: [Target] = [
 let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-signal-probe"] + mcpTestHelperDependencies
 #endif
 
+// Test owner presence (docs/security/test-owner-presence.md): rvd checks
+// the owner against a password from its environment instead of
+// unix_chkpwd, so automated tests can approve owner actions with no person
+// present. Compiled in only for a debug build made with
+// RV_TEST_OWNER_PRESENCE=1 in the build's environment. A release build
+// (-c release) never contains it, whatever the environment;
+// Scripts/check-no-test-owner-presence.sh checks the staged binaries.
+let testOwnerPresence: [SwiftSetting] = Context.environment["RV_TEST_OWNER_PRESENCE"] == "1"
+    ? [.define("RV_TEST_OWNER_PRESENCE", .when(configuration: .debug))]
+    : []
+
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
     .target(name: "RVFileStore"),
@@ -288,7 +299,8 @@ let serviceLibraryAndDaemon: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
             "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC",
-        ]
+        ],
+        swiftSettings: testOwnerPresence
     ),
     .executableTarget(
         name: "rvd",
@@ -305,7 +317,8 @@ let serviceProducts: [Product] = [
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
 ] + macOSOperatorUIProducts + macOSCustodianProducts
 let serviceTestTargets: [Target] = [
-    .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
+    .testTarget(
+        name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"], swiftSettings: testOwnerPresence),
 ] + macOSOperatorUITestTargets + macOSCustodianTestTargets
 
 let cliTargets: [Target] = [
@@ -321,7 +334,8 @@ let cliTargets: [Target] = [
             .embedInCode("Resources/launchd"),
             .embedInCode("Resources/systemd"),
             .embedInCode("Resources/skills"),
-        ]
+        ],
+        swiftSettings: testOwnerPresence
     ),
     .executableTarget(
         name: "rv",
@@ -344,6 +358,7 @@ let cliTestTargets: [Target] = [
     .testTarget(
         name: "RVCLITests",
         dependencies: cliTestDependencies,
+        swiftSettings: testOwnerPresence,
         linkerSettings: scanLinkerSettings
     ),
 ]

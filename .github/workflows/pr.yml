@@ -191,6 +191,11 @@ jobs:
             exit 1
           fi
 
+      # A normal debug build must not carry the test owner presence
+      # (docs/security/test-owner-presence.md); release.sh checks its stage.
+      - name: No test owner presence in the debug products
+        run: Scripts/check-no-test-owner-presence.sh .build/debug/rv .build/debug/rvd .build/debug/rv-workspace-host
+
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 

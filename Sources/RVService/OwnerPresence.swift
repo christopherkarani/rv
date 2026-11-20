@@ -228,6 +228,24 @@ actor OwnerPresence {
     /// (`ServiceClient.confirmOwnerActionTimeoutMs`) so rvd answers first.
     static let defaultPromptTimeout: Duration = .seconds(60)
 
+    /// The owner check rvd runs without a prompt of its own (Linux):
+    /// `unix_chkpwd`. Only a test-owner-presence build
+    /// (TestOwnerPresence.swift, never a release) can answer with the
+    /// harness's password instead, when its environment names one; no other
+    /// build reads that variable.
+    static func liveChecker(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> any OwnerPasswordChecking {
+        #if RV_TEST_OWNER_PRESENCE && !canImport(LocalAuthentication)
+        if let password = TestOwnerPresence.password(in: environment) {
+            try? FileHandle.standardError.write(contentsOf: Data(TestOwnerPresence.notice.utf8))
+            return TestOwnerPasswordChecker(expected: password)
+        }
+        #endif
+        _ = environment
+        return UnixChkpwdChecker()
+    }
+
     /// rvd's own prompt where the platform has one (macOS).
     static var platformAuthenticator: (any OwnerAuthenticating)? {
         #if canImport(LocalAuthentication)
@@ -249,7 +267,7 @@ actor OwnerPresence {
     private var inFlight = false
 
     init(
-        checker: any OwnerPasswordChecking = UnixChkpwdChecker(),
+        checker: any OwnerPasswordChecking = OwnerPresence.liveChecker(),
         authenticator: (any OwnerAuthenticating)? = OwnerPresence.platformAuthenticator,
         promptTimeout: Duration = OwnerPresence.defaultPromptTimeout,
         clock: @escaping @Sendable () -> Date = { Date() }
