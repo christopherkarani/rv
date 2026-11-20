@@ -310,7 +310,9 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     #expect(request.session == nil)
 }
 
-@Test func codexDecode_turnIdWhenSessionIdMissing() {
+/// A turn id names one turn, not the session: it keys the pending
+/// approval but never attributes a block row.
+@Test func codexDecode_turnIdIsNotASession() {
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"Bash","turn_id":"turn_main","tool_input":{"command":"git status"}}
     """
@@ -318,7 +320,20 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         Issue.record("expected .request for turn_id")
         return
     }
-    #expect(request.session == SessionID(validating: "turn_main"))
+    #expect(request.session == nil)
+    #expect(request.approvalSession == SessionID(validating: "turn_main"))
+}
+
+@Test func codexDecode_sessionIdKeysBothRolesOverTurnId() {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"sess_1","turn_id":"turn_main","tool_input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request")
+        return
+    }
+    #expect(request.session == SessionID(validating: "sess_1"))
+    #expect(request.approvalSession == SessionID(validating: "sess_1"))
 }
 
 @Test func codexHookRequest_emptySessionStringIsNil() {

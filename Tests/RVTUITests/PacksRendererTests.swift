@@ -90,7 +90,8 @@ private func renderGrouped(
     #expect(text.contains("● core.git"))
     #expect(text.contains("○ core.filesystem"))
     #expect(text.contains("Legend: ● = enabled, ○ = disabled"))
-    #expect(text.contains("Enable packs in ~/.config/rv/config.toml"))
+    #expect(text.contains("Enable a pack: rv packs enable <id> (disable: rv packs disable <id>)"))
+    #expect(text.contains("config.toml") == false, "packs are toggled with the CLI, not by hand-editing")
 }
 
 @Test func packsRenderer_treeVerbose_countsWithoutPatternsStayLeaves() {

@@ -14,7 +14,7 @@ import Testing
     let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
     #expect(inner.count == 1)
     #expect(inner[0]["type"] as? String == "command")
-    #expect(inner[0]["command"] as? String == "/usr/bin/python3 -I -S \(adapter)")
+    #expect(inner[0]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(adapter)")
     #expect(inner[0]["timeout"] as? Int == 18)
     #expect(inner[0]["statusMessage"] as? String == "RV")
 }
@@ -48,7 +48,7 @@ import Testing
     let foreign = try #require(pre[0]["hooks"] as? [[String: Any]])
     #expect(foreign[0]["command"] as? String == "other-guard evaluate")
     let rv = try #require(pre[1]["hooks"] as? [[String: Any]])
-    #expect(rv[0]["command"] as? String == "/usr/bin/python3 -I -S \(adapter)")
+    #expect(rv[0]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(adapter)")
 }
 
 @Test func codexHooksMerge_uninstallStripsFingerprintAndKeepsForeign() throws {
