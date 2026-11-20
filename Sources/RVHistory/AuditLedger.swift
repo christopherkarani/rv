@@ -107,7 +107,9 @@ public struct AuditLedger: Sendable {
         guard let time = f.isoDate("timestamp"), let rule = f.string("rule_id") else { return nil }
         let host = f.string("host")
         let observed = f.string("observed") == "true"
-        var detail = f.compact(["tool": "tool", "host": "host", "category": "category", "path": "path"])
+        var detail = f.compact([
+            "tool": "tool", "host": "host", "category": "category", "path": "path", "session": "session",
+        ])
         // Only copy a recorded `would_be`: synthesizing one for legacy rows would change
         // their OCSF uid (it hashes `detail`) and defeat SIEM uid-dedup after upgrade.
         if observed, let wouldBe = f.string("would_be").flatMap(LedgerWouldBe.init(rawValue:)) {

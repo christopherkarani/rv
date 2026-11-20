@@ -277,6 +277,7 @@ func museEncodeDeny_blankReasonFallsBackToGuidance(_ blank: String) throws {
     #expect(request.session == nil)
 }
 
+/// A turn id keys the pending approval but never attributes a block row.
 @Test func museDecode_turnIdWhenSessionIdMissing() {
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"bash","turn_id":"turn_main","tool_input":{"command":"git status"}}
@@ -285,7 +286,8 @@ func museEncodeDeny_blankReasonFallsBackToGuidance(_ blank: String) throws {
         Issue.record("expected .request for turn_id")
         return
     }
-    #expect(request.session == SessionID(validating: "turn_main"))
+    #expect(request.session == nil)
+    #expect(request.approvalSession == SessionID(validating: "turn_main"))
 }
 
 private final class MuseEvaluateProbe: Sendable {

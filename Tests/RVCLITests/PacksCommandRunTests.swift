@@ -11,7 +11,7 @@ import RVTheme
 struct PacksCommandRunTests {
     @Test func list_missingHome() async throws {
         try await withCLIProcess(environment: [:]) {
-            let command = try Packs.parse([])
+            let command = try Packs.List.parse([])
             await #expect(throws: ExitCode(1)) {
                 try await command.run()
             }
@@ -21,17 +21,17 @@ struct PacksCommandRunTests {
     @Test func list_defaultPrettyAndRobot() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            let pretty = try Packs.parse(["--plain", "--no-color"])
+            let pretty = try Packs.List.parse(["--plain", "--no-color"])
             try await pretty.run()
-            let robot = try Packs.parse(["--json"])
+            let robot = try Packs.List.parse(["--json"])
             try await robot.run()
-            let verbose = try Packs.parse([
+            let verbose = try Packs.List.parse([
                 "--verbose", "--expand", "--max-patterns", "0", "--search", "git",
             ])
             try await verbose.run()
-            let enabled = try Packs.parse(["--enabled", "--category", "core"])
+            let enabled = try Packs.List.parse(["--enabled", "--category", "core"])
             try await enabled.run()
-            let all = try Packs.parse(["--all", "--enabled"])
+            let all = try Packs.List.parse(["--all", "--enabled"])
             try await all.run()
         }
     }
@@ -39,9 +39,9 @@ struct PacksCommandRunTests {
     @Test func list_emptyFilterHints() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            let none = try Packs.parse(["--search", "zzz-no-such-pack"])
+            let none = try Packs.List.parse(["--search", "zzz-no-such-pack"])
             try await none.run()
-            let category = try Packs.parse(["--category", "no-such-category"])
+            let category = try Packs.List.parse(["--category", "no-such-category"])
             try await category.run()
         }
         try PacksConfigStore.save(
@@ -49,7 +49,7 @@ struct PacksCommandRunTests {
             home: home
         )
         try await withCLIProcess(home: home) {
-            let enabled = try Packs.parse(["--enabled"])
+            let enabled = try Packs.List.parse(["--enabled"])
             try await enabled.run()
         }
     }
