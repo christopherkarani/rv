@@ -107,8 +107,9 @@ private let readerRows: [String] = [
 
 private let launchctlStop = "launchctl bootout gui/501/dev.rv.evaluate"
 
-/// A literal feed is read, not trusted: its text is scanned and stop-read,
-/// through every transparent wrapper, group, here-string and heredoc.
+/// A literal feed is read, not trusted: its text is scanned and read by
+/// every floor detector, through every transparent wrapper, group,
+/// here-string and heredoc.
 private let literalFeedRows: [String] = [
     "echo 'echo \(stop) | base64 -d | sh' | sh",
     "command echo '\(launchctlStop)' | sh",
@@ -231,7 +232,9 @@ struct ObserveFloorBypassTests {
         #expect(deny.ruleID == BuiltinRule.unwrapLimited.ruleID)
     }
 
-    @Test("detector: stdin readers, data-fed executors, lifecycle runners", arguments: readerRows + literalFeedRows)
+    /// Literal feeds are not opaque in themselves: the floor reads their
+    /// text (`floorHoldsLiteralFeeds`).
+    @Test("detector: stdin readers, data-fed executors, lifecycle runners", arguments: readerRows)
     func detectorFloorsReaders(command: String) {
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)), "\(command)")
     }
@@ -340,32 +343,20 @@ struct ObserveFloorBypassTests {
 
     /// Thousands of interpreters fed one large literal heredoc: each reader
     /// is charged for the text it reads, the text is read once, and the
-    /// lifecycle floor's readings are capped, so the floors fail closed
-    /// fast instead of reading the body thousands of times (and stalling
-    /// rvd past the hook's timeout).
-    @Test("floors: thousands of readers fed one big heredoc fail closed fast")
-    func floorsBoundRepeatedLiteralFeeds() {
+    /// texts' readings are capped, so the floor fails closed fast instead
+    /// of reading the body thousands of times (and stalling rvd past the
+    /// hook's timeout).
+    @Test("floor: thousands of readers fed one big heredoc fail closed fast")
+    func floorBoundsRepeatedLiteralFeeds() {
         let body = (0..<1000).map { "print('fed line \($0)')" }.joined(separator: "\n")
-        let command = ShellCommand(
-            rawValue: "sh -c '" + String(repeating: "python3;", count: 4000) + "' <<'EOF'\n" + body + "\nEOF"
-        )
-        let allow = EvaluationResult(outcome: .plain)
+        let command = "sh -c '" + String(repeating: "python3;", count: 4000) + "' <<'EOF'\n" + body + "\nEOF"
         let clock = ContinuousClock()
-        var lifecycle: EvaluationResult?
-        var unanalyzable: EvaluationResult?
-        let lifecycleTime = clock.measure {
-            lifecycle = ObserveFloor.lifecycleFloor(allow, command: command, home: nil, cwd: nil)
-        }
-        let unanalyzableTime = clock.measure {
-            unanalyzable = ObserveFloor.unanalyzableFloor(allow, command: command)
-        }
-        let timing = "lifecycle \(lifecycleTime), unanalyzable \(unanalyzableTime)"
-        #expect(lifecycle?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
-        #expect(unanalyzable?.decision == .indeterminate(.observeUnanalyzable), "\(timing)")
-        // Debug build: about 0.35 s each; loose so a starved CI runner does
-        // not flake, while the uncharged walk (over ten minutes) fails.
-        #expect(lifecycleTime < Self.wallClockBound, "\(timing)")
-        #expect(unanalyzableTime < Self.wallClockBound, "\(timing)")
+        var ruling: ObserveFloor.Ruling?
+        let elapsed = clock.measure { ruling = floorRule(command) }
+        #expect(ruling == .enforce(unanalyzable), "\(elapsed)")
+        // Debug build: well under a second; loose so a starved CI runner
+        // does not flake, while the uncharged walk (over ten minutes) fails.
+        #expect(elapsed < Self.wallClockBound, "\(elapsed)")
     }
 
     /// Fed texts are deduped byte for byte. `==` on String is canonical
@@ -373,65 +364,160 @@ struct ObserveFloorBypassTests {
     /// decomposed one reads as a `pkill` that may match `rvd`, so reading
     /// one for both would let the second through (a heredoc apostrophe
     /// sits between them, so only the fed texts carry them apart).
-    @Test("lifecycle floor: canonically equal fed texts are both read")
-    func lifecycleFloorReadsEquivalentFeedsApart() {
+    @Test("floor: canonically equal fed texts are both read")
+    func floorReadsEquivalentFeedsApart() {
         let precomposed = "pkill rv[\u{1E0D}]"
         let decomposed = "pkill rv[d\u{0323}]"
         #expect(precomposed == decomposed)
         #expect(RVDStopGuard.stopsRVD(decomposed))
-        let command = ShellCommand(
-            rawValue: "sh <<'E1'\n\(precomposed)\nE1\ncat <<'X' >/dev/null\nit's\nX\nsh <<'E2'\n\(decomposed)\nE2"
-        )
-        #expect(scanOpaqueProgram(command).innerTexts.count == 2)
-        let result = ObserveFloor.lifecycleFloor(EvaluationResult(outcome: .plain), command: command, home: nil, cwd: nil)
-        #expect(result != nil)
-        #expect(result?.decision != .allow)
+        let command = "sh <<'E1'\n\(precomposed)\nE1\ncat <<'X' >/dev/null\nit's\nX\nsh <<'E2'\n\(decomposed)\nE2"
+        let fed = observeTexts(ShellCommand(rawValue: command)).texts.filter { $0.origin == .fed }
+        #expect(fed.count == 2)
+        #expect(floorRule(command) == .enforce(held))
     }
 
     /// A long fed script of dynamic-head lines (`d['k'] = 'v'`) is read in
-    /// linear time: the stop guard's rvd lookup is computed once per text,
-    /// not once per `kill`-shaped command. The verdict must come from
-    /// reading it, not from running out of budget.
-    @Test("floors: a long fed script of dynamic-head lines reads fast")
-    func floorsReadDynamicHeadScriptsLinearly() {
+    /// linear time by every detector: the stop guard's rvd lookup is
+    /// computed once per text, not once per `kill`-shaped command. The
+    /// ruling must come from reading it, not from running out of budget.
+    @Test("floor: a long fed script of dynamic-head lines reads fast")
+    func floorReadsDynamicHeadScriptsLinearly() {
         let body = (0..<1500).map { "d['key\($0)'] = 'value\($0)'" }.joined(separator: "\n")
-        let command = ShellCommand(rawValue: "python3 - <<'EOF'\n" + body + "\nEOF")
-        let allow = EvaluationResult(outcome: .plain)
+        let command = "python3 - <<'EOF'\n" + body + "\nEOF"
         let clock = ContinuousClock()
-        var lifecycle: EvaluationResult?
-        var unanalyzable: EvaluationResult?
-        let lifecycleTime = clock.measure {
-            lifecycle = ObserveFloor.lifecycleFloor(allow, command: command, home: nil, cwd: nil)
-        }
-        let unanalyzableTime = clock.measure {
-            unanalyzable = ObserveFloor.unanalyzableFloor(allow, command: command)
-        }
-        let timing = "lifecycle \(lifecycleTime), unanalyzable \(unanalyzableTime)"
-        #expect(scanOpaqueProgram(command).exhausted == false)
-        #expect(lifecycle == nil, "\(timing)")
-        #expect(unanalyzable == nil, "\(timing)")
-        #expect(lifecycleTime < Self.wallClockBound, "\(timing)")
-        #expect(unanalyzableTime < Self.wallClockBound, "\(timing)")
+        var ruling: ObserveFloor.Ruling?
+        let elapsed = clock.measure { ruling = floorRule(command) }
+        #expect(observeTexts(ShellCommand(rawValue: command)).exhausted == false)
+        #expect(ruling == .observed, "\(elapsed)")
+        #expect(elapsed < Self.wallClockBound, "\(elapsed)")
     }
 
-    /// Past `readingCap` readings the lifecycle floor reads nothing and
+    /// Past `ObserveTexts.readingCap` readings the floor reads nothing and
     /// fails closed: a fed script whose lines and string literals (each a
-    /// reading) outnumber it.
-    @Test("lifecycle floor: too many readings fail closed, never allow")
-    func lifecycleFloorCapsReadings() {
+    /// reading) outnumber it, though the scan itself stays in budget.
+    @Test("floor: too many readings fail closed, never allow")
+    func floorCapsReadings() {
         // About two readings a line (the line, its string literal).
-        let lines = (0..<(ObserveFloor.readingCap / 2 + 64)).map { "print('s\($0)')" }.joined(separator: "\n")
-        let command = ShellCommand(rawValue: "python3 - <<'EOF'\n" + lines + "\nEOF")
-        #expect(scanOpaqueProgram(command).exhausted == false)
-        let result = ObserveFloor.lifecycleFloor(EvaluationResult(outcome: .plain), command: command, home: nil, cwd: nil)
-        #expect(result?.decision == .indeterminate(.observeUnanalyzable))
+        let lines = (0..<(ObserveTexts.readingCap / 2 + 64)).map { "print('s\($0)')" }.joined(separator: "\n")
+        let command = "python3 - <<'EOF'\n" + lines + "\nEOF"
+        #expect(scanOpaqueProgram(ShellCommand(rawValue: command)).exhausted == false)
+        #expect(observeTexts(ShellCommand(rawValue: command)).exhausted)
+        #expect(floorRule(command) == .enforce(unanalyzable))
     }
 
-    /// The stop guard itself reads past a heredoc apostrophe.
-    @Test("stop guard: a heredoc body cannot desync the lines after it")
-    func stopGuardSkipsHeredocBodies() {
-        #expect(RVDStopGuard.stopsRVD("cat <<EOF\nit's\nEOF\n\(launchctlStop)"))
-        #expect(RVDStopGuard.stopsRVD("echo $'\\'' ; \(launchctlStop)"))
+    /// The floor reads past a heredoc apostrophe or an ANSI-C escaped
+    /// quote: the guard readings split the text the way the shell does.
+    @Test("floor: a heredoc body cannot desync the lines after it", arguments: [
+        "cat <<EOF\nit's\nEOF\n\(launchctlStop)",
+        "echo $'\\'' ; \(launchctlStop)",
+    ])
+    func floorReadsPastHeredocBodies(command: String) {
+        #expect(floorRule(command) == .enforce(held), "\(command)")
+    }
+
+    /// A literal feed is read, not trusted: an rvd stop in it holds even
+    /// where the rest of the feed is readable.
+    @Test("floor: literal feeds hold", arguments: literalFeedRows)
+    func floorHoldsLiteralFeeds(command: String) {
+        guard case .enforce(let result) = floorRule(command) else {
+            Issue.record("observed: \(command)")
+            return
+        }
+        #expect(result.decision != .allow, "\(command)")
+    }
+
+    /// rv's own protection in program text a shell or interpreter is fed,
+    /// or behind a heredoc apostrophe: the engine never read that text, so
+    /// an allow is raised to "run it in Terminal".
+    @Test("floor: rv's own protection holds in fed program text", arguments: [
+        "echo 'rv host mode cursor off' | sh",
+        "sh <<< 'rv allowlist add rm'",
+        "echo 'rv setup --observe' | bash",
+        "echo 'secret-tool lookup service rv' | sh",
+        "python3 <<< 'import subprocess; subprocess.run(\"secret-tool clear service rv\", shell=True)'",
+        "cat <<EOF\nit's\nEOF\nrv host mode cursor off",
+    ])
+    func floorHoldsFedOwnProtection(command: String) {
+        #expect(floorRule(command) == .enforce(held), "\(command)")
+    }
+
+    /// The same programs typed as data, not fed to a reader, are observed.
+    @Test("floor: the same text as data is observed", arguments: [
+        "echo 'rv host mode cursor off'",
+        "echo 'secret-tool lookup service rv' > notes.txt",
+        "git commit -m 'rv setup --observe docs'",
+    ])
+    func floorObservesTextAsData(command: String) {
+        #expect(floorRule(command) == .observed, "\(command)")
+    }
+
+    /// The command as written is what the engine read (and floored), so it
+    /// takes the enforce branch with the engine's own verdict.
+    @Test("floor: the command as written holds with the engine's verdict", arguments: [
+        "rv host mode cursor off",
+        "bash <<'EOF'\nrv setup --observe\nEOF",
+    ])
+    func floorHoldsCommandWithVerdict(command: String) {
+        #expect(floorRule(command) == .enforce(EvaluationResult(outcome: .plain)), "\(command)")
+    }
+
+    /// A deny the engine already gave is kept: the floor never weakens.
+    @Test("floor: a deny stays the deny")
+    func floorKeepsDeny() {
+        let deny = EvaluationResult(outcome: .deny(Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"), matched: nil))
+        #expect(floorRule("echo 'rv host mode cursor off' | sh", result: deny) == .enforce(deny))
+        #expect(floorRule(launchctlStop, result: deny) == .enforce(deny))
+        #expect(floorRule("eval \"$X\"", result: deny) == .enforce(deny))
+    }
+
+    /// The process table is the context's: a literal-pid `kill` of rvd fed
+    /// to a shell holds, another pid is observed, and an unreadable table
+    /// fails closed.
+    @Test("floor: a literal kill of rvd's pid reads the substituted process table")
+    func floorReadsProcessTable() {
+        let command = "echo 'kill 4242' | sh"
+        #expect(floorRule(command, rvdPIDs: { [4242] }) == .enforce(held))
+        #expect(floorRule(command, rvdPIDs: { [1] }) == .observed)
+        #expect(floorRule(command, rvdPIDs: { nil }) == .enforce(held))
+    }
+
+    /// File door: a write of rv's install holds; a read, or a write
+    /// elsewhere, is observed.
+    @Test("floor: file door writes of rv's install hold")
+    func floorFileDoor() throws {
+        let home = try #require(HomeDirectory(rawValue: "/Users/agent"))
+        func rule(_ kind: FileToolKind, _ path: String) -> ObserveFloor.Ruling {
+            ObserveFloor.rule(
+                EvaluationResult(outcome: .plain),
+                door: .file(FileToolAction(kind: kind, path: FileToolPath(rawValue: path))),
+                context: ObserveFloor.Context(home: home, cwd: nil, rvdPIDs: { [] })
+            )
+        }
+        #expect(rule(.write, "/Users/agent/.local/bin/rvd") == .enforce(held))
+        #expect(rule(.read, "/Users/agent/.local/bin/rvd") == .observed)
+        #expect(rule(.write, "/Users/agent/project/notes.txt") == .observed)
+    }
+
+    private var held: EvaluationResult {
+        EvaluationResult(outcome: .indeterminate(.selfProtection))
+    }
+
+    private var unanalyzable: EvaluationResult {
+        EvaluationResult(outcome: .indeterminate(.observeUnanalyzable))
+    }
+
+    /// The floor on a shell door, over an allow unless given a verdict,
+    /// with a substituted process table.
+    private func floorRule(
+        _ command: String,
+        result: EvaluationResult = EvaluationResult(outcome: .plain),
+        rvdPIDs: @escaping () -> Set<Int32>? = { [] }
+    ) -> ObserveFloor.Ruling {
+        ObserveFloor.rule(
+            result,
+            door: .shell(ShellCommand(rawValue: command), store: .gather(home: nil, cwd: nil)),
+            context: ObserveFloor.Context(home: nil, cwd: nil, rvdPIDs: rvdPIDs)
+        )
     }
 
     /// The narrowing must not open what the lexical floors hold: the
@@ -451,6 +537,23 @@ struct ObserveFloorBypassTests {
         let result = await observeApply(command, home: home)
         #expect(result.decision != .allow, "\(command)")
         #expect(result.decision != .indeterminate(.observeUnanalyzable), "\(command)")
+    }
+
+    /// rv's own protection holds in program text a shell is fed, not only
+    /// in the visible command.
+    @Test("observe host: rv's own protection holds in fed program text", arguments: [
+        "echo 'rv host mode cursor off' | sh",
+        "sh <<< 'rv host mode cursor off'",
+        "echo 'secret-tool lookup service rv' | sh",
+        "sh <<'EOF'\nsecret-tool clear service rv\nEOF",
+        "sh <<'EOF'\necho x > ~/.config/rv/config.json\nEOF",
+        "cat <<EOF\nit's\nEOF\nrv host mode cursor off",
+    ])
+    func observeHoldsFedOwnProtection(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await observeApply(command, home: home)
+        #expect(result.decision != .allow, "\(command)")
     }
 
     /// A literal verb with dynamic arguments, or an inner script whose

@@ -149,8 +149,9 @@ The README's "MCP governance" section lists every case.
     `python3 -c "print(…)" | sh`, `… | base64 -d | sh` and
     `printf '\x6c…' | sh` go to Terminal whatever the producer is. A
     literal feed is read, not trusted: its text is scanned like the line
-    and read by the stop and install floors (`echo 'echo … | base64 -d |
-    sh' | sh` goes to Terminal). In a pipeline the producers are the
+    and read by every observe floor rule (`echo 'echo … | base64 -d |
+    sh' | sh` goes to Terminal, and so does an rv admin command, a
+    `secret-tool` call or an rvd stop fed to a shell). In a pipeline the producers are the
     stages before the reader; inside a compound command (`if`, `for`,
     `while`, `case`), a `{ …; }`/`( … )` group or a function body they
     are every other command of the text, each of which must print whole
@@ -195,8 +196,8 @@ The README's "MCP governance" section lists every case.
     input), and `parallel` with no verb.
 
   What the lexical floors read is the command line itself: the words of
-  each command (which the observe stop and install floors, not enforce,
-  also re-read with heredoc bodies removed and one command at a time),
+  each command (which the observe floors, not enforce, also re-read with
+  heredoc bodies removed and one command at a time),
   the inline `-c` script of a shell, the text a shell or
   interpreter is fed from a literal pipe, here-string or heredoc, and the
   string literals of inline interpreter code. They do not read files. So

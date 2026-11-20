@@ -662,6 +662,13 @@ public struct GatedEvaluate: Sendable {
     private enum Door {
         case file(FileToolAction)
         case shell(EvaluationRequest, inputs: EvaluationInputs, isPeek: Bool)
+
+        var observeFloor: ObserveFloor.Door {
+            switch self {
+            case .file(let action): .file(action)
+            case .shell(let request, let inputs, _): .shell(request.command, store: inputs.store)
+            }
+        }
     }
 
     /// `observed` is final: the door returns it as-is; `wouldBe` is what
@@ -682,11 +689,13 @@ public struct GatedEvaluate: Sendable {
     /// check, then the judge, over a pack-allow; anything else is returned
     /// untouched (a pack deny is a floor neither may lower).
     ///
-    /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
-    /// result takes the enforce branch, on every door. Stopping rvd or
-    /// writing its install is also floored at "run it in Terminal" there
-    /// (an allow becomes indeterminate; a deny stays the deny). Otherwise a
-    /// shell command running a program rv cannot see is sent to Terminal
+    /// Observe never relaxes rv's own protection (`ObserveFloor.rule`):
+    /// such a result takes the enforce branch, on every door, with the
+    /// result the floor hands back. Stopping rvd, writing its install, or
+    /// touching rv's protection only in program text the command feeds a
+    /// shell is floored at "run it in Terminal" there (an allow becomes
+    /// indeterminate; a deny stays the deny). Otherwise a shell command
+    /// running a program rv cannot see is sent to Terminal
     /// (`observe.floor:unanalyzable`) whatever its verdict, since observe
     /// would have let it run.
     private func posture(
@@ -700,18 +709,13 @@ public struct GatedEvaluate: Sendable {
     ) -> Posture {
         var result = evaluated
         var mode = guardMode
-        if guardMode == .observe {
-            if let floored = lifecycleFloor(evaluated, door: door, cwd: cwd, home: home) {
-                result = floored
-                mode = .enforce
-            } else if observeFloorHolds(evaluated, door: door, cwd: cwd, home: home) {
-                mode = .enforce
-            } else if case .shell(let request, _, _) = door,
-                      let floored = ObserveFloor.unanalyzableFloor(evaluated, command: request.command)
-            {
-                result = floored
-                mode = .enforce
-            }
+        if guardMode == .observe,
+           case .enforce(let floored) = ObserveFloor.rule(
+               evaluated, door: door.observeFloor, context: ObserveFloor.Context(home: home, cwd: cwd)
+           )
+        {
+            result = floored
+            mode = .enforce
         }
         switch (mode, door) {
         case (.observe, .file):
@@ -745,34 +749,6 @@ public struct GatedEvaluate: Sendable {
                 effects.append(.judgeLog(log))
             }
             return .enforced(judged.result)
-        }
-    }
-
-    private func lifecycleFloor(
-        _ result: EvaluationResult,
-        door: Door,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory?
-    ) -> EvaluationResult? {
-        switch door {
-        case .file(let action):
-            ObserveFloor.lifecycleFloor(result, action: action, home: home, cwd: cwd)
-        case .shell(let request, _, _):
-            ObserveFloor.lifecycleFloor(result, command: request.command, home: home, cwd: cwd)
-        }
-    }
-
-    private func observeFloorHolds(
-        _ result: EvaluationResult,
-        door: Door,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory?
-    ) -> Bool {
-        switch door {
-        case .file:
-            ObserveFloor.holds(result)
-        case .shell(let request, let inputs, _):
-            ObserveFloor.holds(result, command: request.command, store: inputs.store, home: home, cwd: cwd)
         }
     }
 

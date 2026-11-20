@@ -10,7 +10,8 @@ import RVDomain
 /// dynamic or encoded inline code; a shell or interpreter reading its
 /// program from stdin unless every producer is a literal `echo`/`printf`,
 /// a `cat` of literal paths or a literal heredoc, and then the program
-/// text it is fed is scanned like the line (and read by the stop floor);
+/// text it is fed is scanned like the line (and recorded for the observe
+/// floor's detectors, `ObserveTexts`);
 /// inline code that runs a command over input rv cannot read; `awk`
 /// running a command; `sed` with `e`; `ssh` with a dynamic remote
 /// command; a dynamic `trap` action; `xargs`, `find -exec` and `parallel`
@@ -252,12 +253,13 @@ enum OpaqueExecution {
     }
 
     /// Program text a shell reads from a literal pipe, here-string or
-    /// heredoc: the stop floor reads it, then it is scanned with the same
-    /// text as its stdin (a nested `sh` reads the rest of it).
+    /// heredoc: it is recorded (the observe floor's detectors read it),
+    /// then scanned with the same text as its stdin (a nested `sh` reads
+    /// the rest of it).
     private static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
         guard text.isEmpty == false else { return false }
         guard state.charge(work: text.utf8.count) else { return true }
-        if state.record(text), RVDStopGuard.stopsRVD(text) { return true }
+        _ = state.record(text)
         return scan(text, depth: context.depth + 1, inherited: { Feed(literal: true, text: text) }, state: &state)
     }
 
@@ -316,7 +318,7 @@ enum OpaqueExecution {
         }
         if payloads.isEmpty == false {
             return payloads.contains { payload in
-                if codeStopsRVD(payload.decoded, state: &state) { return true }
+                recordStrings(payload.decoded, state: &state)
                 if payload.wasAnsiC || carriesSubstitution(payload.decoded) || payload.decoded.hasPrefix("$")
                     || (payload.wasQuoted == false && payload.decoded.contains("$"))
                 {
@@ -333,7 +335,7 @@ enum OpaqueExecution {
         }
         guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
             // The program is stdin: unreadable unless fed literal text;
-            // then it is judged like inline code, and the stop floor reads it.
+            // then it is judged like inline code, and recorded.
             let fed = context.stdin()
             guard fed.literal else { return true }
             return fed.texts.contains { program in
@@ -341,20 +343,21 @@ enum OpaqueExecution {
                 // Every reader of the text is charged for it, so thousands
                 // of readers of one big feed run out of budget.
                 guard state.charge(work: program.utf8.count) else { return true }
-                if state.record(program), RVDStopGuard.stopsRVD(program) { return true }
+                _ = state.record(program)
                 // Code read before was clean then, and is the same text now.
                 guard state.firstCodeRead(program) else { return false }
-                return codeStopsRVD(program, state: &state) || execsCode(program) && readsUnseen(program)
+                recordStrings(program, state: &state)
+                return execsCode(program) && readsUnseen(program)
             }
         }
         return isDynamic(operand)
     }
 
     /// The string literals of inline code (`os.system("launchctl …")`):
-    /// each may be a command it runs, so the stop floor reads each.
-    private static func codeStopsRVD(_ code: String, state: inout ScanState) -> Bool {
-        let fresh = quotedStrings(code).filter { state.record($0) }
-        return fresh.contains { RVDStopGuard.stopsRVD($0) }
+    /// each may be a command it runs, so each is recorded for the observe
+    /// floor's detectors.
+    private static func recordStrings(_ code: String, state: inout ScanState) {
+        for string in quotedStrings(code) { _ = state.record(string) }
     }
 
     private static func quotedStrings(_ code: String) -> [String] {
