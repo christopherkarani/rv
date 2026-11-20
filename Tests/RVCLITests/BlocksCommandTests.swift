@@ -97,6 +97,32 @@ struct BlocksCommandTests {
         #expect(lines[1].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
     }
 
+    /// A row that names its agent session prints it last (`session=<id>`)
+    /// and carries `session` in JSON; rows without one are unchanged.
+    @Test func sessionIsShownWhenRecorded() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ledger = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        func record(_ offset: TimeInterval, session: String?) -> DenialLedgerRecord {
+            DenialLedgerRecord(
+                timestamp: now.addingTimeInterval(offset), host: .hook(.claude), tool: .bash,
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), category: .pack(.coreGit),
+                path: "", session: session
+            )
+        }
+        ledger.append(record(-5, session: nil), now: now)
+        ledger.append(record(0, session: "0b7f3c2e-1d2a"), now: now)
+        let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
+        #expect(lines.count == 2)
+        #expect(lines[0].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git    session=0b7f3c2e-1d2a"))
+        #expect(lines[1].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git  "))
+        let json = try BlocksRun.list(home: home, json: true, now: now)
+        let rows = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        #expect(rows[0]["session"] as? String == "0b7f3c2e-1d2a")
+        #expect(rows[1]["session"] == nil)
+    }
+
     /// Observed would-ask rows (enforcement would have asked a human) say
     /// `observed ask`; would-deny rows keep printing `observed`. JSON
     /// carries `would_be` on observed rows only.

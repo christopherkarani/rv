@@ -41,6 +41,7 @@ public enum RVDStopGuard {
     /// literal pid: fail closed.
     public static func stopsRVD(_ raw: String, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
         stopsRVD(raw, depth: 0, rvdPIDs: rvdPIDs)
+            || ShellLexer.guardReadings(raw).contains { stopsRVD($0, depth: 1, rvdPIDs: rvdPIDs) }
     }
 
     private static func stopsRVD(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
@@ -67,7 +68,9 @@ public enum RVDStopGuard {
 /// scheduler that runs it (`sh`, `bash`, `zsh`, `dash`, `at`, `batch`,
 /// `crontab`). Then the echoed string is a command: evaluate it.
 /// `echo "pkill rvd" | sh`, `… echo '* * * * * pkill rvd' … | crontab -`.
-private let shellConsumers: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "at", "batch", "crontab"]
+private let shellConsumers: Set<String> = [
+    "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash", "fish", "csh", "tcsh", "at", "batch", "crontab",
+]
 
 private func echoFedShellStops(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
     let segments = rawSegments(raw).filter { $0.isEmpty == false }
@@ -85,6 +88,17 @@ private struct StopContext {
     let launched: [LaunchedCommand]
     let depth: Int
     let rvdPIDs: () -> Set<Int32>?
+    /// Computed once: every `kill`/`pkill` operand asks, and each answer
+    /// is O(n) in the text, so a lazy getter made long lines quadratic.
+    let looksUpRVD: Bool
+
+    init(raw: String, launched: [LaunchedCommand], depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) {
+        self.raw = raw
+        self.launched = launched
+        self.depth = depth
+        self.rvdPIDs = rvdPIDs
+        looksUpRVD = Self.looksUpRVD(raw: raw, launched: launched)
+    }
 
     /// A literal pid that is rvd's now; an unreadable process table fails
     /// closed on any positive pid.
@@ -99,7 +113,7 @@ private struct StopContext {
     /// is folded (`[r]vd` → `rvd`, quotes stripped so `'r''vd'` → `rvd`)
     /// before the mention check, and grep/awk regexes are tested against
     /// rvd's names, so a pipeline that hides the name still counts.
-    var looksUpRVD: Bool {
+    private static func looksUpRVD(raw: String, launched: [LaunchedCommand]) -> Bool {
         let folded = foldHiddenMentions(raw)
         if rvdMentions.contains(where: { folded.contains($0) }) { return true }
         if pipelinePatterns(raw).contains(where: patternMatchesRVDName) { return true }

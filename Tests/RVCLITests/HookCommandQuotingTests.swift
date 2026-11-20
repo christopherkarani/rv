@@ -32,7 +32,7 @@ import RVPolicy
     @Test func claudeCommandQuotesEveryPathAndParsesBack() {
         let command = SettingsMergePolicy.hookCommand(rvPath: rv, interpreter: interpreter, adapterPath: adapter)
         #expect(command
-            == "RV_BINARY='/Users/a b/.local/bin/rv' '/Users/a b/py/bin/python3' -I -S '/Users/a b/.claude/hooks/rv-guard.py'")
+            == "RV_BINARY='/Users/a b/.local/bin/rv' \(adapterLauncher)'/Users/a b/py/bin/python3' -I -S '/Users/a b/.claude/hooks/rv-guard.py'")
         #expect(ClaudeSettingsMerge.bakedRvPath(in: command) == rv)
         #expect(SettingsMergePolicy.adapterPath(in: command) == adapter)
         #expect(SettingsMergePolicy.bakedInterpreter(in: command) == interpreter)
@@ -40,10 +40,10 @@ import RVPolicy
 
     @Test func codexAndCursorBakeTheInterpreterAndQuoteTheAdapter() {
         #expect(CodexHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/h x/.codex/hooks/rv-guard.py")
-            == "/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
+            == "\(adapterLauncher)/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
         #expect(CursorHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/h x/.cursor/hooks/rv-guard.py")
-            == "/usr/bin/python3 -I -S '/h x/.cursor/hooks/rv-guard.py'")
-        #expect(CodexHooksMerge.adapterPath(in: "/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
+            == "\(adapterLauncher)/usr/bin/python3 -I -S '/h x/.cursor/hooks/rv-guard.py'")
+        #expect(CodexHooksMerge.adapterPath(in: "\(adapterLauncher)/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
             == "/h x/.codex/hooks/rv-guard.py")
         #expect(CodexHooksMerge.adapterPath(in: "python3 '/h x/.codex/hooks/rv-guard.py'")
             == "/h x/.codex/hooks/rv-guard.py")
@@ -93,7 +93,7 @@ import RVPolicy
         #expect(outcome.exitCode == 0, "\(outcome.stderr)")
         let settings = try String(contentsOfFile: layout.claudeSettings, encoding: .utf8)
         #expect(settings.contains(
-            "RV_BINARY='\(rvPath)' /usr/bin/python3 -I -S '\(root.path)/.claude/hooks/rv-guard.py'"))
+            "RV_BINARY='\(rvPath)' \(adapterLauncher)/usr/bin/python3 -I -S '\(root.path)/.claude/hooks/rv-guard.py'"))
     }
 
     private func claudeHook(_ command: String) -> JSONValue {
