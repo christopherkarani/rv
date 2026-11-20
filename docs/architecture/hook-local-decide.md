@@ -90,13 +90,34 @@ lock is bounded (200 ms in total across the in-process and `flock` waits,
 non-blocking attempts); on timeout the row is dropped and reported to
 rvd.log (`AuditDropLog`, kind `judge-log`), and the verdict is not held.
 
-Every one of those writes shares one 200 ms budget
-(`LocalHookDecider.recordBudget`, `GatedEvaluate.performBounded`): a log
-another process holds is retried with non-blocking locks until the budget
-passes, and the row is then dropped. rvd's own writes keep their waits
-(the audit chain's 2 s bound, the ledgers' blocking locks); the evaluator
-cannot, since a write that held it past the C hook's 1 s deadline would
-kill it after it wrote, and rvd would then write the same rows again.
+Every one of those writes ends by one write deadline
+(`LocalHookDecider.writeDeadline`, `GatedEvaluate.performBounded`): 750 ms
+after the evaluator started, the C hook's 1 s less a 250 ms margin for the
+spawn and signature check before it started and the reply after. rvd's own
+writes keep their waits (the audit chain's 2 s bound, the ledgers'
+blocking locks); the evaluator cannot, since a write that held it past the
+C hook's deadline would kill it after it wrote, and rvd would then write
+the same rows again.
+
+- **The audit row goes first**, with up to 500 ms (`auditFloor`) of what
+  is left. In **enforce** an audit row that cannot land by then is not
+  answered locally: the evaluator escalates (`audit-unwritten`) having
+  written nothing, and rvd answers the call and writes every row itself. A
+  deny is never delivered with its chained record missing. In
+  **observe** it never escalates (the C hook's observe step-aside could
+  turn a floor deny into an allow): the row's fields go to the spool and
+  rvd appends them.
+- **The other rows share what is left**, in rvd's order. Before each
+  write the deadline is checked; past it the row is dropped unwritten, and
+  a held lock is retried with non-blocking attempts only until it passes.
+- **The spool write counts inside the deadline**: its 50 ms lock bound is
+  cut to what is left (one non-blocking attempt once it has passed).
+- **Nothing on this path can hang**: every open is `O_NONBLOCK` and
+  accepts only a regular file (the logs, their lock sidecars, the
+  `.tmp` of a rewrite, the spool and its uncounted file, and
+  `config.json` for the guard mode, `blocks.enabled` and
+  `analytics.enabled`), so a FIFO planted at any of them fails that one
+  read or write at once.
 
 #### The spool rvd drains
 
@@ -109,22 +130,49 @@ hands rvd a spool instead, `<config>/hook-local-spool.jsonl`
 - `{"v":1,"decision":"allow|deny|indeterminate"}`: the decision rvd's
   analytics recorder counts for the shell door (none for the file door, as
   in rvd), only when `analytics.enabled` is not off;
-- `{"v":1,"dropped":"audit|denial-ledger|judge-log|exemption"}`: a row
-  the record budget dropped.
+- `{"v":1,"dropped":"denial-ledger|judge-log|exemption"}`: a row dropped
+  at the deadline;
+- `{"v":1,"dropped":"audit","audit":{...}}`: an observe-mode audit row
+  that did not land: its kind (`command.denied` or `command.observed`),
+  rule, host, tool, category, home-redacted path, `wouldBe` and time.
+  Never the command text.
 
-A batch is one flocked `O_APPEND` write (`JSONLAppendLog`, 50 ms lock
-bound, no `fsync`, a 4 MiB cap). A batch that cannot land is counted, one
-byte per row, in `<config>/hook-local-spool.uncounted`, appended with no
-lock at all (64 KiB cap), so a lost row is still a counted row. Rows
-carry a kind and nothing else: no command text, path or session.
+A batch is one flocked `O_APPEND` write (`JSONLAppendLog`, no `fsync`, a
+4 MiB cap). A batch that cannot land is counted, one byte per row, in
+`<config>/hook-local-spool.uncounted`, appended with no lock at all (64
+KiB cap): `a` for an audit row, `x` for any other, so a lost row is still
+a counted row. Both files must be this user's regular files.
 
-rvd drains both off the reply path, on the task that records its own
-analytics for each evaluation (`ServiceRuntime.ingestHookLocalSpool`):
-the spool is read and truncated under the writers' lock (1 s bound), the
-decisions join rvd's counts, and dropped or lost rows produce one
-`rvd.log` line (`rvd: the hook-local evaluator dropped records ...`). An
-rvd without analytics discards spooled decisions. Malformed lines count as
-lost; the spool can only add analytics counts, never change a verdict.
+rvd drains both (`HookLocalSpoolDrainer`) on a private serial queue, never
+on the cooperative pool: each evaluation requests a drain and a 60 s timer
+requests one too, and a request while one is queued is folded into it, so
+exactly one drain runs at a time. The drain takes the spool lock with one
+non-blocking attempt; an evaluator holding it costs nothing but a later
+drain. Per drain:
+
+- each spooled audit row is validated (every field must be one the
+  evaluator writes; the spool is a file, so it is read as untrusted) and
+  appended to `audit.jsonl` with `detail.recorded_by: "hook-local"`;
+- audit rows lost without their fields (the `a` bytes, or spooled fields
+  that do not validate) get one `audit.gap` event with their count, so a
+  verifier sees that the chain is missing rows;
+- one `rvd.log` line names the recovered rules and counts the rest, at
+  most once a minute;
+- the decisions join rvd's counts and the daily analytics flush runs, so
+  it no longer waits for rvd to evaluate something. An rvd without
+  analytics discards spooled decisions.
+
+Malformed lines count as lost, and spool bytes past the cap are counted
+and dropped. The spool can add analytics counts and audit rows marked
+`recorded_by: hook-local`, never change a verdict. Anything running as the
+user could write those rows; it could already append to `audit.jsonl`
+itself (the chain is unkeyed, see `docs/guides/audit-log.md`).
+
+Double counting: the C hook kills an evaluator that is still running at
+its deadline and asks rvd. An evaluator killed after its spool write (in
+the 250 ms margin) has counted its decision, and rvd counts the call
+again. The margin makes this rare, and it costs one analytics count, never
+a row in the chain or a verdict.
 
 `LocalHookRecordParityTests` proves the parity: two identical homes on
 one fixed clock, the evaluator deciding every call over one and rvd
