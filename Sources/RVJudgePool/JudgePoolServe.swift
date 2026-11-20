@@ -36,10 +36,24 @@ public enum JudgePoolLog {
         if lstat(file, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size > maxBytes {
             _ = rename(file, file + ".1")
         }
-        let fd = open(file, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return false }
+        guard let fd = openLog(at: file) else { return false }
         defer { close(fd) }
         return dup2(fd, STDERR_FILENO) == STDERR_FILENO
+    }
+
+    /// Opens `path` for appending, only when it is (or is created as) a
+    /// regular file the supervisor can write without blocking: never through
+    /// a symlink, and never a FIFO or device someone planted there (an open
+    /// of a FIFO with no reader would hang the supervisor at startup).
+    static func openLog(at path: String) -> Int32? {
+        let fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { return nil }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            close(fd)
+            return nil
+        }
+        return fd
     }
 
     /// One timestamped line on stderr. Control characters become spaces so a
@@ -49,7 +63,20 @@ public enum JudgePoolLog {
             $0.properties.generalCategory == .control || $0 == "\u{2028}" || $0 == "\u{2029}" ? " " : $0
         }).prefix(512))
         let stamp = ISO8601DateFormatter().string(from: Date())
-        FileHandle.standardError.write(Data("\(stamp) rv-judge[\(getpid())] \(clean)\n".utf8))
+        write("\(stamp) rv-judge[\(getpid())] \(clean)\n", to: STDERR_FILENO)
+    }
+
+    /// One `write(2)`, errors ignored: a full disk or a closed stderr must
+    /// not raise (FileHandle does) or stall the supervisor.
+    static func write(_ text: String, to fd: Int32) {
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBytes { raw in
+            #if canImport(Darwin)
+            _ = Darwin.write(fd, raw.baseAddress, raw.count)
+            #else
+            _ = Glibc.write(fd, raw.baseAddress, raw.count)
+            #endif
+        }
     }
 
     private static func isDevNull(_ fd: Int32) -> Bool {

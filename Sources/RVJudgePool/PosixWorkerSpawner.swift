@@ -29,11 +29,6 @@ public struct PosixWorkerSpawner: WorkerSpawning {
         self.executable = executable
         self.environment = environment
         self.arguments = arguments
-        #if !canImport(Darwin)
-        // Linux has no per-descriptor SIGPIPE opt-out: a write to a dead
-        // worker must fail with EPIPE, not kill the supervisor.
-        signal(SIGPIPE, SIG_IGN)
-        #endif
     }
 
     /// The worker arguments for `rv-judge --worker`.
@@ -152,20 +147,52 @@ final class PosixWorkerProcess: WorkerProcess, @unchecked Sendable {
 
     func send(_ frame: Data) {
         writer.async { [stdinFD] in
-            frame.withUnsafeBytes { raw in
-                guard var base = raw.baseAddress else { return }
-                var remaining = raw.count
-                while remaining > 0 {
-                    let n = write(stdinFD, base, remaining)
-                    if n < 0 {
-                        if errno == EINTR { continue }
-                        return // EPIPE: the exit event follows.
+            Self.withoutSigpipe {
+                frame.withUnsafeBytes { raw in
+                    guard var base = raw.baseAddress else { return }
+                    var remaining = raw.count
+                    while remaining > 0 {
+                        let n = write(stdinFD, base, remaining)
+                        if n < 0 {
+                            if errno == EINTR { continue }
+                            return // EPIPE: the exit event follows.
+                        }
+                        remaining -= n
+                        base += n
                     }
-                    remaining -= n
-                    base += n
                 }
             }
         }
+    }
+
+    /// Runs `body` so a write to a dead worker fails with EPIPE instead of
+    /// killing the supervisor, without touching the process-wide SIGPIPE
+    /// disposition. Darwin opts the descriptor out (`F_SETNOSIGPIPE` at
+    /// spawn). Linux has no such flag: SIGPIPE is blocked on this thread for
+    /// the write, and one it raised is consumed before unblocking.
+    private static func withoutSigpipe(_ body: () -> Void) {
+        #if canImport(Darwin)
+        body()
+        #else
+        var pipeOnly = sigset_t()
+        sigemptyset(&pipeOnly)
+        sigaddset(&pipeOnly, SIGPIPE)
+        var pendingBefore = sigset_t()
+        sigpending(&pendingBefore)
+        let wasPending = sigismember(&pendingBefore, SIGPIPE) == 1
+        var previous = sigset_t()
+        pthread_sigmask(SIG_BLOCK, &pipeOnly, &previous)
+        body()
+        if !wasPending {
+            var pendingAfter = sigset_t()
+            sigpending(&pendingAfter)
+            if sigismember(&pendingAfter, SIGPIPE) == 1 {
+                var zero = timespec(tv_sec: 0, tv_nsec: 0)
+                while sigtimedwait(&pipeOnly, nil, &zero) < 0 && errno == EINTR {}
+            }
+        }
+        pthread_sigmask(SIG_SETMASK, &previous, nil)
+        #endif
     }
 
     func kill() {
