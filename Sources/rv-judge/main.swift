@@ -1,5 +1,18 @@
 import Foundation
+import RVJudgePool
 import RVLaya
+
+// Pool modes (docs/architecture/judge-pool.md): `rv-judge serve` is the
+// dev.rv.judge launchd agent (supervisor; never loads a model itself), and
+// `rv-judge --worker ...` is one worker it spawns. Neither reads the bench
+// flags or environment below.
+if CommandLine.arguments.count > 1 {
+    switch CommandLine.arguments[1] {
+    case "serve": JudgePoolServe.run()
+    case "--worker": JudgeWorker.main(Array(CommandLine.arguments.dropFirst(2)))
+    default: break
+    }
+}
 
 // rv-judge [--ft|--stock] --bundle DIR 'command' ...   (or commands on
 // stdin, one per line). Emits one JSON verdict per command; per-command

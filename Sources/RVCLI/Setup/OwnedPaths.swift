@@ -46,6 +46,7 @@ struct OwnedPaths: Equatable, Sendable {
     var openCodeAgentSkill: String { home.rawValue + "/.config/opencode/skills/rv/SKILL.md" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
+    var judgeLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.judge.plist" }
     /// Written by `rv audit forward --install` (`AuditForwardInstall.label`).
     var auditForwardLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.audit-forward.plist" }
     var custodianAppExecutable: String {

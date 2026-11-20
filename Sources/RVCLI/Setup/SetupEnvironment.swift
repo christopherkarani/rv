@@ -77,6 +77,10 @@ struct SetupEnvironment {
     /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.resolveRunnable`
     /// on this PATH.
     var resolveInterpreter: (String) -> String? = { "/usr/bin/" + $0 }
+    /// Does a valid judge bundle sit where rvd looks? Setup warns only then
+    /// about a missing or unloaded judge pool agent. Default false (tests);
+    /// live: `JudgeRuntime.bundleHealth`.
+    var judgeBundleInstalled: (HomeDirectory) -> Bool = { _ in false }
 
     /// This run loads the real launchd/systemd service, so it can (and
     /// must) prove rvd answers before wiring hooks.

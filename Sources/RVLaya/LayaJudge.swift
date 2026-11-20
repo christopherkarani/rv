@@ -105,22 +105,46 @@ public struct LayaQuestions: Sendable {
     )
 }
 
+/// Which Core ML compute units a judge loads with. `accelerated` is the
+/// production configuration (`.cpuAndGPU`); `cpu` (`.cpuOnly`) never
+/// touches the GPU, so it skips the MPSGraph path that has aborted rvd
+/// (`MPSGraphTensorData.mm` assertion). The judge pool runs one worker of
+/// each (docs/architecture/judge-pool.md).
+public enum JudgeComputeUnits: String, Sendable, Codable, CaseIterable {
+    case accelerated
+    case cpu
+}
+
 #if canImport(CoreML)
+extension JudgeComputeUnits {
+    var mlComputeUnits: MLComputeUnits {
+        switch self {
+        case .accelerated: .cpuAndGPU
+        case .cpu: .cpuOnly
+        }
+    }
+}
+
 /// Loads an .mlpackage through a stable compiled-model cache.
 /// `MLModel.compileModel` returns a temp directory macOS may purge
-/// under a long-lived daemon; copying the .mlmodelc into the user
-/// caches directory (keyed by package path + modification time) keeps
-/// the loaded artifact stable and skips recompilation on reuse.
+/// under a long-lived daemon; copying the .mlmodelc into a cache directory
+/// (keyed by package path, modification time and compute units) keeps the
+/// loaded artifact stable and skips recompilation on reuse.
+///
+/// `root` nil is the shared per-user cache (`~/Library/Caches/rv-laya`),
+/// used by the in-process judge (`rv test`, the CLI). The judge pool's
+/// workers pass a private directory their supervisor created for its own
+/// lifetime, so they never load an entry planted in the shared cache.
 enum CompiledModelCache {
-    static func load(package: URL) throws -> MLModel {
+    static func load(package: URL, computeUnits: JudgeComputeUnits = .accelerated, root: URL? = nil) throws -> MLModel {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndGPU
+        configuration.computeUnits = computeUnits.mlComputeUnits
         let fm = FileManager.default
         var cached: URL?
-        if let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let stamp = (try? fm.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
-            let key = fnv1a(package.path + "|" + String(stamp?.timeIntervalSince1970 ?? 0))
-            let dir = caches.appendingPathComponent("rv-laya/\(key).mlmodelc", isDirectory: true)
+        let sharedRoot = fm.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("rv-laya", isDirectory: true)
+        if let cacheRoot = root ?? sharedRoot {
+            let dir = entry(package: package, computeUnits: computeUnits, root: cacheRoot)
             if fm.fileExists(atPath: dir.path), let model = try? MLModel(contentsOf: dir, configuration: configuration) {
                 return model
             }
@@ -144,6 +168,13 @@ enum CompiledModelCache {
         } catch {
             throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
         }
+    }
+
+    /// The cache entry for `package` loaded with `computeUnits` under `root`.
+    static func entry(package: URL, computeUnits: JudgeComputeUnits, root: URL) -> URL {
+        let stamp = (try? FileManager.default.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
+        let key = fnv1a(package.path + "|" + String(stamp?.timeIntervalSince1970 ?? 0) + "|" + computeUnits.rawValue)
+        return root.appendingPathComponent("\(key).mlmodelc", isDirectory: true)
     }
 
     /// Process-stable path key (String.hashValue is per-process seeded).
@@ -172,7 +203,10 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
 
     /// The question set's action labels are checked here, before any bundle
     /// file is touched, so judging never meets an invalid label set.
-    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+    public init(
+        bundleDir: URL, questions: LayaQuestions = .guardQuestions,
+        computeUnits: JudgeComputeUnits = .accelerated, compiledCacheRoot: URL? = nil
+    ) throws {
         actionLabels = try questions.actionLabels()
         self.questions = questions
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)
@@ -196,7 +230,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         lengths = candidates.isEmpty ? [maxLen] : candidates
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
-        model = try CompiledModelCache.load(package: package)
+        model = try CompiledModelCache.load(package: package, computeUnits: computeUnits, root: compiledCacheRoot)
     }
 
     func questionProbabilities(
@@ -310,7 +344,10 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
 /// Linux seam: symmetric with the FineTunedJudge stub. The gate treats
 /// this as unavailable (packs-only); it never invents an allow.
 public struct LayaCoreMLJudge: Sendable {
-    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+    public init(
+        bundleDir: URL, questions: LayaQuestions = .guardQuestions,
+        computeUnits: JudgeComputeUnits = .accelerated, compiledCacheRoot: URL? = nil
+    ) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 

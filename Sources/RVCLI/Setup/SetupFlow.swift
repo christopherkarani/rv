@@ -1,6 +1,7 @@
 import Foundation
 import RVPolicy
 import RVPresentation
+import RVService
 
 /// Which lifecycle operation an intent asks for. Selects the orchestration
 /// path and the failure-output prefix (`setup` vs `uninstall`).
@@ -201,6 +202,9 @@ extension SetupEnvironment {
         setup.directRvd = ProcessDirectRvd()
 #endif
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
+        setup.judgeBundleInstalled = { home in
+            if case .ok = JudgeRuntime.bundleHealth(home: home) { true } else { false }
+        }
         return setup
     }
 }

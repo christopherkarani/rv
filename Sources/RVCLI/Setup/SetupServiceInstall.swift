@@ -56,6 +56,38 @@ extension SetupRun {
         }
     }
 
+    /// The judge pool supervisor, `rv-judge` beside rvd (rvd pins it there).
+    static func judgeExecutable(rvdPath: String) -> String {
+        (rvdPath as NSString).deletingLastPathComponent + "/rv-judge"
+    }
+
+    /// Registers `dev.rv.judge` when `rv-judge` is installed beside rvd,
+    /// before rvd, so rvd's first judged call finds the pool. Never fatal:
+    /// without the pool rvd's judged calls go to review, so a problem is
+    /// returned for setup to warn about (and doctor reports), and every
+    /// other setup step goes ahead.
+    static func writeJudgeLaunchAgent(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) -> JudgeAgentProblem? {
+        let judge = judgeExecutable(rvdPath: env.rvdPath)
+        guard env.fileManager.isExecutableFile(atPath: judge) else { return .missing(judge) }
+        do {
+            let body = try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+            try files.write(body, to: layout.judgeLaunchAgent)
+            if env.touchLaunchd {
+                try loadLaunchAgent(
+                    env: env,
+                    plist: URL(fileURLWithPath: layout.judgeLaunchAgent),
+                    label: judgeLaunchAgentLabel)
+            }
+        } catch {
+            return .notLoaded
+        }
+        return nil
+    }
+
     /// Polling cadence and ceiling for the job to leave launchd after bootout.
     static let unloadPollInterval: TimeInterval = 0.1
     static let unloadPollLimit: TimeInterval = 3.0

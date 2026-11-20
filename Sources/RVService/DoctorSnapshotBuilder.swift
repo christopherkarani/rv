@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVJudgePool
 import RVPacks
 import RVPolicy
 
@@ -11,7 +12,8 @@ public enum DoctorSnapshotBuilder {
         idleExitSeconds: Int,
         lastError: String? = nil,
         keepAlive: Bool = false,
-        home: HomeDirectory? = nil
+        home: HomeDirectory? = nil,
+        judgePool: JudgePoolProbe = .unbound
     ) -> DoctorSnapshotReply {
 #if os(Linux)
         let reportedKeepAlive = false
@@ -39,6 +41,8 @@ public enum DoctorSnapshotBuilder {
             DoctorCheck(id: .opencode, status: .skipped, message: "T7"),
         ]
         checks.append(judgeCheck(home: home))
+        let bundleInstalled = if case .ok = JudgeRuntime.bundleHealth(home: home) { true } else { false }
+        if let pool = judgePoolCheck(judgePool, bundleInstalled: bundleInstalled) { checks.append(pool) }
         if lastError != nil {
             checks.append(DoctorCheck(id: .lastError, status: .warning, message: "see lastError"))
         }
@@ -83,6 +87,34 @@ public enum DoctorSnapshotBuilder {
                 message: "no \(engine.rawValue) bundle installed at \(expected?.path ?? engine.rawValue); packs only (guard \(mode.rawValue))"
             )
         }
+    }
+
+    /// The judge pool rvd routes through (macOS): unreachable is a warning,
+    /// since every judged call then goes to review; a degraded or
+    /// unloadable worker is a warning too. Nil when rvd runs the judge
+    /// in-process (no pool to report).
+    /// Nil when there is no pool to report: none bound (Linux, the CLI), or
+    /// an unreachable pool while no bundle is installed (nothing is judged,
+    /// so the pool is never asked).
+    static func judgePoolCheck(_ probe: JudgePoolProbe, bundleInstalled: Bool = true) -> DoctorCheck? {
+        guard probe.bound else { return nil }
+        guard let status = probe.status else {
+            guard bundleInstalled else { return nil }
+            return DoctorCheck(
+                id: .judgePool, status: .warning,
+                message: "judge pool unreachable or unverified (\(JudgePoolWire.machServiceName)): judged calls go to review; run `rv setup` (a peer-trust manifest needs a `judge` entry)"
+            )
+        }
+        let workers = status.workers.map { worker in
+            var line = "\(worker.slot.rawValue) \(worker.compute) \(worker.phase), restarts \(worker.restarts)"
+            if worker.degraded { line += ", degraded" }
+            if let failure = worker.loadFailure { line += ", load failed: \(failure.message)" }
+            return line
+        }
+        let unhealthy = status.workers.contains { $0.degraded || $0.loadFailure != nil }
+        let message = "workers \(workers.joined(separator: "; ")); routing \(status.routing); "
+            + "served \(status.served), hedged \(status.hedged), killed \(status.killed), late \(status.late), busy \(status.refusedBusy)"
+        return DoctorCheck(id: .judgePool, status: unhealthy ? .warning : .ok, message: message)
     }
 
     private static var dayOnePacksLoadedMessage: String {

@@ -16,6 +16,10 @@ public enum TrustedRVComponentRole: String, Sendable, Codable, CaseIterable, Has
     /// It alone may hold the approvals keychain item; the role proves code
     /// identity to its clients, never human authorization.
     case mcpCustodian
+    /// The Laya judge pool supervisor (`rv-judge serve`, `dev.rv.judge`).
+    /// Proves code identity to rvd before rvd trusts a verdict from it;
+    /// confers nothing else.
+    case judge
 }
 
 public struct PeerCodeIdentity: Sendable, Equatable {

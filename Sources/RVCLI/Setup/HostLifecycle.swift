@@ -40,6 +40,7 @@ enum HostLifecycle {
         )
         var serviceSkippedMissingRvd: String?
         var serviceStartedDirectly = false
+        var judgeAgent: JudgeAgentProblem?
         var runtimeMissing: [String: [HookHost]] = [:]
         var agentSkillNotes: [AgentSkillNote] = []
 
@@ -62,7 +63,7 @@ enum HostLifecycle {
                     .rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired, observing: observing(env))
             case .writeLaunchAgent:
                 do {
-                    serviceStartedDirectly = try startService(env: env, layout: layout, files: files)
+                    (serviceStartedDirectly, judgeAgent) = try startService(env: env, layout: layout, files: files)
                 } catch {
                     throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired, observing: observing(env))
                 }
@@ -103,6 +104,7 @@ enum HostLifecycle {
         )
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
         report.serviceStartedDirectly = serviceStartedDirectly
+        report.judgeAgent = judgeAgent
         report.unwiredForMissingInterpreter = runtimeMissing
         report.agentSkillNotes = agentSkillNotes
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -114,16 +116,19 @@ enum HostLifecycle {
     }
 
     /// Installs and starts the service, then waits (bounded) for rvd to
-    /// answer. Throws before any host is wired when it does not. True when
-    /// rvd was started without a supervisor (Linux, no systemd user manager).
+    /// answer. Throws before any host is wired when it does not. `direct`
+    /// is true when rvd was started without a supervisor (Linux, no systemd
+    /// user manager); `judge` says why the judge pool agent is not running.
     private static func startService(
         env: SetupEnvironment,
         layout: OwnedPaths,
         files: FileOps
-    ) throws(SetupError) -> Bool {
+    ) throws(SetupError) -> (direct: Bool, judge: JudgeAgentProblem?) {
         var direct = false
+        var judge: JudgeAgentProblem?
         switch env.supervisor {
         case .launchd:
+            judge = SetupRun.writeJudgeLaunchAgent(env: env, layout: layout, files: files)
             try SetupRun.writeLaunchAgent(
                 env: env,
                 layout: layout,
@@ -134,14 +139,14 @@ enum HostLifecycle {
         case .systemdUser:
             direct = try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files) == .direct
         }
-        guard env.managesService else { return direct }
+        guard env.managesService else { return (direct, judge) }
         guard env.serviceAnswers() else {
             throw direct
                 ? SetupError.directRvdNotAnswering(
                     rvdPath: env.rvdPath, logPath: RVDLogFile.path(home: env.home.rawValue))
                 : SetupError.serviceNotAnswering(env.supervisor)
         }
-        return direct
+        return (direct, judge)
     }
 
     static func perform(

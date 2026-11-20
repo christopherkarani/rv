@@ -470,12 +470,14 @@ private func isInstalledBinary(_ name: String) -> Bool {
 }
 
 private let binarySamples = [
-    "rv", "rvd", "rv-cli", "rv-workspace-host", "rv-isolation-exec", "rv-pty-claim", "rv-microvm",
+    "rv", "rvd", "rv-cli", "rv-workspace-host", "rv-isolation-exec", "rv-pty-claim", "rv-judge", "rv-microvm",
     "rv-guest-relay", "rv-macvm", "rv-macvm-agent", ".rvd.installing", "rv_rvpacks.bundle",
     "rv_rvpacks.resources", "libswiftcompatibilityspan.dylib", "libswiftcore.so",
 ]
 
-private let jobSamples = ["dev.rv.evaluate.plist", "dev.rv.mcp-custodian.plist", "dev.rv.audit-forward.plist"]
+private let jobSamples = [
+    "dev.rv.evaluate.plist", "dev.rv.mcp-custodian.plist", "dev.rv.audit-forward.plist", "dev.rv.judge.plist",
+]
 
 private func globMatches(_ pattern: String, _ name: String) -> Bool {
     fnmatch(pattern, name, 0) == 0
