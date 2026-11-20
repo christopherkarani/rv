@@ -34,6 +34,15 @@ public actor AnalyticsCoordinator {
     private let platform: PlatformSnapshot
     private var state: AnalyticsCounterState
     private var installSent: Bool
+    private let persistDelay: Duration
+    /// A deferred counters write is scheduled and has not run yet.
+    private var persistScheduled = false
+
+    /// How long decision counts may sit in memory before the counters file
+    /// is rewritten. rvd records every decision, and writing the file (an
+    /// atomic replace with fsync, ~2 ms on Linux) per decision kept the disk
+    /// busy and queued work on this actor at a few hundred decisions a second.
+    public static let defaultPersistDelay: Duration = .seconds(1)
 
     public init(
         paths: AnalyticsPaths,
@@ -41,9 +50,11 @@ public actor AnalyticsCoordinator {
         identity: AnalyticsIdentity,
         sink: any AnalyticsSink,
         productVersion: String,
-        platform: PlatformSnapshot
+        platform: PlatformSnapshot,
+        persistDelay: Duration = AnalyticsCoordinator.defaultPersistDelay
     ) {
         self.paths = paths
+        self.persistDelay = persistDelay
         self.preferences = preferences
         self.identity = identity
         self.sink = sink
@@ -65,7 +76,7 @@ public actor AnalyticsCoordinator {
         case .deny: state.denyCount += 1
         case .indeterminate: state.indeterminateCount += 1
         }
-        persistState()
+        schedulePersist()
     }
 
     /// Records enabled pack identifiers for the next daily flush.
@@ -74,7 +85,10 @@ public actor AnalyticsCoordinator {
     ///   stays `[String]` to keep the analytics boundary free of domain types.
     public func noteEnabledPacks(_ packIDs: [String]) {
         guard preferences.isEnabled else { return }
-        state.enabledPackIDs = packIDs.sorted()
+        let sorted = packIDs.sorted()
+        // rvd notes the packs after every decision; they rarely change.
+        guard sorted != state.enabledPackIDs else { return }
+        state.enabledPackIDs = sorted
         persistState()
     }
 
@@ -145,6 +159,29 @@ public actor AnalyticsCoordinator {
             distinctID: identity.distinctID,
             properties: properties
         )
+    }
+
+    /// Coalesces decision-count writes: at most one per `persistDelay`. A
+    /// crash or kill loses at most that long's counts, the same kind of loss
+    /// the best-effort writes (`try?`) and rvd's detached per-decision task
+    /// already accept. The daily flush and every other change write at once.
+    private func schedulePersist() {
+        guard persistDelay > .zero else {
+            persistState()
+            return
+        }
+        guard persistScheduled == false else { return }
+        persistScheduled = true
+        let delay = persistDelay
+        Task {
+            try? await Task.sleep(for: delay)
+            self.runScheduledPersist()
+        }
+    }
+
+    private func runScheduledPersist() {
+        persistScheduled = false
+        persistState()
     }
 
     private func persistState() {
