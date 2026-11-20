@@ -28,6 +28,11 @@ public enum IndeterminateReason: String, Sendable, Equatable, Codable {
     /// `eval`, a command after `source`, or an unknown git subcommand
     /// (an alias or extension defined outside the command line).
     case unresolvedInvocation
+    /// Observe only: rv could not see what the command runs (a decoded or
+    /// dynamic program, an unresolved alias), so an observe host sends it
+    /// to Terminal instead of letting it run unchecked. Its own rule id, so
+    /// logs and denial rows do not read as rv self-protection.
+    case observeUnanalyzable = "observe.floor:unanalyzable"
 }
 
 /// Pack-door evaluate result: allow, deny, or indeterminate. Never Ask.

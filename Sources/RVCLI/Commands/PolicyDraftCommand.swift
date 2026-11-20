@@ -22,6 +22,13 @@ struct PolicyDraftCommand: AsyncParsableCommand {
     @OptionGroup
     var format: FormatFlags
 
+    @OptionGroup
+    var waitFlags: PolicyWaitFlags
+
+    func validate() throws {
+        try waitFlags.check(save: save)
+    }
+
     func run() async throws {
         let ctx = CommandContext.current(command: "policy draft", format: format)
         guard save == false || english.isEmpty == false else {
@@ -55,6 +62,11 @@ struct PolicyDraftCommand: AsyncParsableCommand {
             if save && saved == false {
                 throw ExitCode(1)
             }
+            if let savedHash = result.savedHash {
+                try await PolicyLoadWait.confirm(
+                    command: "policy draft", layer: repo ? .repo : .machine, hash: savedHash,
+                    flags: waitFlags, robot: ctx.explicitRobot)
+            }
         case .refuse:
             throw ExitCode(1)
         }
@@ -64,6 +76,8 @@ struct PolicyDraftCommand: AsyncParsableCommand {
 struct PolicyDraftResult: Equatable, Sendable {
     var text: String
     var outcome: PolicyDraftOutcome
+    /// `PolicyRevisionIdentity.hash` of the layer document the save wrote.
+    var savedHash: String? = nil
 }
 
 enum PolicyDraftOutcome: Equatable, Sendable {
@@ -91,19 +105,19 @@ enum PolicyDraftRun {
                 outcome: .refuse(reason)
             )
         case .preview(let preview):
-            var saved = false
+            var savedDocument: PolicyDocument?
             if save, preview.allowedToSave {
-                try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                savedDocument = try await ConfigChangeAudit.$authorization.withValue(authorization) {
                     try PolicyWorkspace(home: home, workspace: workspace).upsert(
                         preview.rule,
                         layer: repo ? .repo : .machine
                     )
                 }
-                saved = true
             }
             return PolicyDraftResult(
                 text: try render(compiled, robot: robot),
-                outcome: .preview(saved: saved)
+                outcome: .preview(saved: savedDocument != nil),
+                savedHash: savedDocument.map(PolicyRevisionIdentity.hash)
             )
         }
     }

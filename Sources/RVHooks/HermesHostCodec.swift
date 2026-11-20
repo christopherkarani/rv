@@ -26,13 +26,16 @@ public struct HermesHostCodec: HostCodec {
         }
         let cwdText = firstNonEmpty(envelope.args?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId, envelope.taskId)
-            .flatMap { SessionID(validating: $0) }
+        // A task id is not a session: it may key a pending approval when
+        // Hermes sent no session id, but never names one on a block row.
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
+        let task = firstNonEmpty(envelope.taskId).flatMap { SessionID(validating: $0) }
         return HookRequest.decoded(
             host: .hermes,
             command: envelope.args?.command,
             cwd: cwd,
-            session: session
+            session: session,
+            approvalSession: task
         )
     }
 

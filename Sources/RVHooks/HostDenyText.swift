@@ -275,8 +275,8 @@ public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -
     switch result.decision {
     case .allow:
         return nil
-    case .indeterminate:
-        return incompleteEvalSentence
+    case .indeterminate(let reason):
+        return indeterminateSentence(reason)
     case .deny(let deny):
         return hostDenyLine(command: command, reason: deny.reason)
     }

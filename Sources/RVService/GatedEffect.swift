@@ -88,6 +88,9 @@ enum GatedEffect: Sendable, Equatable {
         /// when observe let it run), never written to the rule-oriented
         /// denial ledger.
         var indeterminate: IndeterminateReason?
+        /// The hook request's host session id, when it is an opaque token
+        /// (`DenialLedgerRecord.attributableSession`); nil otherwise.
+        var session: String?
     }
 
     struct OverrideRow: Sendable, Equatable {

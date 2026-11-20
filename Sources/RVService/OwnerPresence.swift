@@ -384,7 +384,7 @@ actor OwnerPresence {
         var detail = ["outcome": outcome]
         if let role = context.componentRole { detail["caller"] = String(describing: role) }
         let event = AuditEvent(
-            time: Date(), kind: AuditEventKind(rawValue: "owner.action"),
+            time: Date(), kind: .ownerAction,
             decision: approved ? .allowed : .denied,
             subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
             source: AuditLedger.Source.audit.rawValue, detail: detail)

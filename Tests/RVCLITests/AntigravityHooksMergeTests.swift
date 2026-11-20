@@ -40,7 +40,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         let inner = try #require(entry["hooks"] as? [[String: Any]])
         #expect(inner.count == 1)
         #expect(inner[0]["type"] as? String == "command")
-        #expect(inner[0]["command"] as? String == "RV_BINARY=\(antigravityRvPath) /usr/bin/python3 -I -S \(antigravityAdapter)")
+        #expect(inner[0]["command"] as? String == "RV_BINARY=\(antigravityRvPath) \(adapterLauncher)/usr/bin/python3 -I -S \(antigravityAdapter)")
         #expect(inner[0]["timeout"] as? Int == 18)
     }
 }

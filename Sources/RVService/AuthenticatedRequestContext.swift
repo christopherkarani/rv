@@ -80,7 +80,7 @@ public enum ServiceMethodAuthorization {
 
     public static func requirement(for method: IPCMethod) -> Requirement {
         switch method {
-        case .explain, .classify, .listPacks, .doctorSnapshot:
+        case .explain, .classify, .listPacks, .doctorSnapshot, .policyStatus:
             return .diagnostic
         case .evaluate:
             return .agent
