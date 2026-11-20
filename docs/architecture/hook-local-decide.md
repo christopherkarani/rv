@@ -58,7 +58,10 @@ of call can later go from the hook straight to the judge pool
 Under observe, a final allow also needs the enforce verdict for the same
 call to be that allow. rvd's launch environment may pin enforce (the env
 may only tighten), and the local process cannot see it; requiring both
-verdicts to agree makes the answer independent of it.
+verdicts to agree makes the answer independent of it. The comparison
+keys off the guard mode the live pass itself read (from its own
+`EvaluationInputs`), never a separate read of `config.json`: a writer
+flipping the mode between two reads must not skip the enforce rerun.
 
 ### Environment
 
@@ -82,7 +85,9 @@ writes nothing, so rvd's own evaluation writes each row once.
 `.atomic` replace on first create). It now goes through
 `JSONLAppendLog.append` (a `.lock` sidecar under `flock`, `O_APPEND`,
 `O_NOFOLLOW`, 0600), so rvd and any number of evaluators append whole rows
-and never replace one another's file.
+and never replace one another's file. The wait for another writer's
+lock is bounded (200 ms, non-blocking attempts); on timeout the row is
+dropped, as on any other judge-log failure, and the verdict is not held.
 
 Known gap: analytics events rvd records for a hook call are not recorded
 for a locally decided one. Phase 3 (an analytics spool rvd drains) closes
@@ -142,7 +147,8 @@ no local door.
 
 ### Budget
 
-The local door has 1 s. The C hook's evaluate send cutoff (5 s) is
+The local door has 1 s, the signature check included: a check that ends
+past it kills the child before it resumes. The C hook's evaluate send cutoff (5 s) is
 measured from process start, so the door's time comes out of it: the
 "5 s cutoff + rvd's 7 s < the 15 s host shim" bound is unchanged, and a
 slow door followed by a slow rvd start fails closed (timeout class, never
