@@ -118,8 +118,10 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   daemon that fails its identity check, or a malformed reply still asks or
   denies (an "ask" is Claude Code's own prompt only in a session Claude
   Code reports as attended, in a prompting permission mode, a block
-  everywhere else), and `RV_HOOK_WHEN_DOWN=deny` or `"hookAskWhenDown":
-  false` in `config.json` keeps denying, in the adapters too. "Absent" is
+  everywhere else). Only `RV_HOOK_WHEN_DOWN=deny` closes the step-aside
+  and keeps denying an absent `rvd`; `"hookAskWhenDown": false` in
+  `config.json` only turns Claude Code's prompt into a block and does not
+  stop the observe step-aside. "Absent" is
   platform-specific: on **macOS**, rv's launchd service is not registered
   (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
   is *not* absent; on **Linux**, the connect to

@@ -19,7 +19,9 @@ slow, or dropped the connection, or the rv process ran past 15 s), you
 may get Claude Code's own permission prompt instead of a block. It shows
 the command (or the file path) first, on one line, with line breaks and
 invisible or direction-changing characters shown escaped (`\n`, or `\u`
-and four hex digits), cut after 300 characters. Then comes
+and four hex digits) and a typed backslash shown doubled. A command
+longer than 300 characters keeps its first 220 and last 80, with a count
+of what is left out between them, so you always see how it ends. Then comes
 **`rv could not check this call (<layer>). An agent can cause this by stopping or overloading rvd. Approve only if you expected it.`**
 followed by one of the daemon messages below. Claude Code answers this
 prompt the way it answers any permission prompt. That is you, or whatever
@@ -31,14 +33,20 @@ persistent Claude Code allow rule; rv's deny still wins once `rvd`
 answers again.
 
 To never get this prompt, add `"hookAskWhenDown": false` at the top level
-of `~/.config/rv/config.json` (your own, not group- or world-writable
-file, as for observe mode), or set `RV_HOOK_WHEN_DOWN=deny`.
+of `~/.config/rv/config.json`, or set `RV_HOOK_WHEN_DOWN=deny`. rv reads
+that file from your passwd home. If the file exists but rv cannot use it
+(a symlink, unreadable, not a regular file, over 1 MiB, or not one
+valid JSON object without duplicate keys), the call is blocked too. A
+missing file, or one without the key, keeps the prompt.
+`"hookAskWhenDown": false` affects only this Claude Code prompt. In
+observe mode it does not stop an unreachable `rvd` from letting calls
+run unchecked; only `RV_HOOK_WHEN_DOWN=deny` does that.
 
 The call is blocked instead, with the daemon message, when any of these
 holds:
 
 - `RV_HOOK_WHEN_DOWN=deny` is set, or `config.json` has
-  `"hookAskWhenDown": false`;
+  `"hookAskWhenDown": false` or exists but cannot be used;
 - the permission mode is `bypassPermissions` or `dontAsk`, or the hook
   request names no mode or one rv does not know;
 - Claude Code does not report the session as attended
