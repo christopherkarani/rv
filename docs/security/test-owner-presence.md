@@ -107,7 +107,9 @@ throwaway `HOME` and `XDG_RUNTIME_DIR`, it runs the real rvd and rv:
 - `rv audit verify` passes and the log has the `owner.action` events;
 - the same build's rvd with no password set refuses the password the CLI
   sends (it went to `unix_chkpwd`);
-- a normal build given the variable on both sides approves nothing.
+- a normal rvd given the variable, with the test build's rv sending the
+  password, approves nothing: the refusal is rvd's login-password check,
+  not the CLI's "needs a terminal", so the normal rvd was really asked.
 
 ## Why this keeps the trust model
 
@@ -116,10 +118,26 @@ it has no finger and does not know the password, and rvd, not the caller,
 decides. A release keeps that property unchanged, because the release
 contains none of this code, which the release guard checks.
 
-In a test build the property does not hold, by design: whoever sets
-`RV_TEST_OWNER_PASSWORD` for rvd can approve anything. That is the point of
-the build, and the reason it must never be installed for real use. What
-stops that:
+In a test build the property does not hold, by design, and the build
+gives **no protection against the agent at all**. The agent runs as the
+owner's uid, and any process of that uid can:
+
+- read the password from `/proc/<rvd pid>/environ` (rvd is not
+  non-dumpable, and same-uid processes may read each other's environment
+  and memory), or from the environment of the `rv` it was given to;
+- kill rvd and start the same build's rvd again with a password of its
+  own choosing, then approve anything with it.
+
+So "the agent does not know the password" is not true of a test build in
+any sense that matters. Removing the variable from rvd's environment after
+reading it would not change that: `/proc/<pid>/environ` shows the
+environment as the process started, `unsetenv` does not erase it, and the
+restart above needs no secret anyway. That is why rvd does not try.
+
+A test build exists to exercise the plumbing (the CLI, the socket, rvd's
+checks, the lockout, the audit chain) with nobody present, in a throwaway
+environment. Never install one, or run its rvd, where an agent works
+against real code, credentials or policy. What keeps it out of real use:
 
 - a normal `swift build` does not contain it, so building from source
   for use does not get it by accident;
