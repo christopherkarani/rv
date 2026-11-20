@@ -1,7 +1,8 @@
 import Foundation
 import Synchronization
 
-/// rvd's stderr line for an `audit.jsonl` row it could not write. One line
+/// rvd's stderr line for an `audit.jsonl` (or `judge-log.jsonl`) row it
+/// could not write. One line
 /// per kind of row per minute at most: `rvd.log` rotates only at start, and
 /// a broken log must not let an agent that keeps causing denies fill it.
 final class AuditDropLog: Sendable {
@@ -10,6 +11,7 @@ final class AuditDropLog: Sendable {
         case commandOverride = "command.override"
         case commandDenied = "command.denied"
         case commandObserved = "command.observed"
+        case judgeLog = "judge-log"
     }
 
     static let interval: TimeInterval = 60

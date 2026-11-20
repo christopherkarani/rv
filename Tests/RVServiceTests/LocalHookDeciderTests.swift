@@ -109,17 +109,40 @@ struct LocalHookDeciderTests {
         #expect(reply == rvd)
     }
 
+    /// The calls and observe configs the mode-flip test runs: each call is a
+    /// final deny under enforce and an observed allow (which must escalate)
+    /// under observe, through the file door and the shell door, with
+    /// observe set globally or for this host only.
+    enum ModeFlip: String, CaseIterable, Sendable {
+        case fileGlobal, shellGlobal, shellHost
+
+        var stdin: String {
+            switch self {
+            case .fileGlobal: claudeFile("Read", path: "/Users/x/.ssh/id_rsa", cwd: "/tmp")
+            case .shellGlobal, .shellHost: claudeBash("touch /etc/x", cwd: "/tmp")
+            }
+        }
+
+        var observe: Data {
+            switch self {
+            case .fileGlobal, .shellGlobal: Data(#"{"guard":{"mode":"observe"}}"#.utf8)
+            case .shellHost: Data(#"{"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
+            }
+        }
+    }
+
     /// A config.json flipping between enforce and observe must never get
     /// an observed would-be deny past the enforce comparison: the mode that
     /// decides the comparison is the one the evaluation itself read, not a
     /// separate read a writer can flip in between. (Before the fix about a
-    /// third of these decides came back a final allow.)
-    @Test func guardModeFlipsNeverFinalizeAnObservedDeny() async throws {
-        // A sensitive Read: a final deny under enforce, an observed allow
-        // (which must escalate) under observe.
-        let denied = claudeFile("Read", path: "/Users/x/.ssh/id_rsa", cwd: "/tmp")
+    /// third of the file-door decides came back a final allow.) Each run
+    /// must also see the observe side at least once, so it cannot pass with
+    /// the flip never landing.
+    @Test(arguments: ModeFlip.allCases)
+    func guardModeFlipsNeverFinalizeAnObservedDeny(_ flip: ModeFlip) async throws {
+        let stdin = flip.stdin
         let enforced = await (try LocalHookFixture(guardMode: "enforce")).decider
-            .decide(host: .claude, stdin: denied)
+            .decide(host: .claude, stdin: stdin)
         guard case .final(let deny) = enforced, deny.stdout.isEmpty == false else {
             Issue.record("expected a final enforce deny, got \(enforced)")
             return
@@ -128,24 +151,28 @@ struct LocalHookDeciderTests {
         let fixture = try LocalHookFixture(guardMode: "enforce")
         let config = RVPolicyPaths.configDirectory(home: fixture.home).appendingPathComponent("config.json")
         let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
-        let observe = Data(#"{"guard":{"mode":"observe"}}"#.utf8)
+        let observe = flip.observe
         let stop = UnfairLock(false)
         let flipper = Thread {
-            var flip = false
+            var toggle = false
             while stop.withLock({ $0 }) == false {
-                try? (flip ? observe : enforce).write(to: config, options: .atomic)
-                flip.toggle()
+                try? (toggle ? observe : enforce).write(to: config, options: .atomic)
+                toggle.toggle()
             }
         }
         flipper.start()
         defer { stop.withLock { $0 = true } }
+        var observed = 0
         for _ in 0..<200 {
-            let local = await fixture.decider.decide(host: .claude, stdin: denied)
-            guard local == enforced || local == .escalate(.observe) else {
+            let local = await fixture.decider.decide(host: .claude, stdin: stdin)
+            if local == .escalate(.observe) {
+                observed += 1
+            } else if local != enforced {
                 Issue.record("a mode flip let a would-be deny through: \(local)")
                 return
             }
         }
+        #expect(observed > 0, "the observe side of the flip never landed")
     }
 
     @Test func observeAllowIsFinalOnlyWhenEnforceAllowsToo() async throws {

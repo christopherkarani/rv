@@ -1,6 +1,8 @@
 import Foundation
 import Synchronization
 import Testing
+import RVDomain
+import RVPolicy
 @testable import RVService
 
 /// G1, G6: a dropped `audit.jsonl` row is logged, once per kind per minute.
@@ -42,6 +44,25 @@ struct AuditDropLogTests {
         log.report(.ownerAction, file: nil, consequence: "the owner's approval was refused", now: Self.start)
         let line = try #require(lines.written.withLock { $0.first })
         #expect(line.contains("no home directory"))
+    }
+
+    /// A judge-log row that could not be written (here the path is a
+    /// directory; in production a full disk or a lock held past the bound)
+    /// is reported, not dropped silently.
+    @Test func aDroppedJudgeLogRowIsLogged() throws {
+        let root = try isolatedHomeDirectory()
+        let home = try #require(HomeDirectory(validating: root.path))
+        let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        let lines = Lines()
+        let log = AuditDropLog(write: { line in lines.written.withLock { $0.append(line) } })
+        let row = GatedEffect.JudgeLogRow(
+            at: Self.start, guardMode: .enforce, engine: .ft, hash: "h",
+            subject: .live(.allow), note: "safe-lane", isPeek: false, score: nil)
+        JudgeRuntime.appendLog(row, home: home, dropLog: log)
+        let line = try #require(lines.written.withLock { $0.first })
+        #expect(line.contains(file.path))
+        #expect(line.contains("judge-log"))
     }
 
     /// G3: with no home there is nowhere to record an approval, so rvd

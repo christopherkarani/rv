@@ -86,8 +86,9 @@ writes nothing, so rvd's own evaluation writes each row once.
 `JSONLAppendLog.append` (a `.lock` sidecar under `flock`, `O_APPEND`,
 `O_NOFOLLOW`, 0600), so rvd and any number of evaluators append whole rows
 and never replace one another's file. The wait for another writer's
-lock is bounded (200 ms, non-blocking attempts); on timeout the row is
-dropped, as on any other judge-log failure, and the verdict is not held.
+lock is bounded (200 ms in total across the in-process and `flock` waits,
+non-blocking attempts); on timeout the row is dropped and reported to
+rvd.log (`AuditDropLog`, kind `judge-log`), and the verdict is not held.
 
 Every one of those writes shares one 200 ms budget
 (`LocalHookDecider.recordBudget`, `GatedEvaluate.performBounded`): a log
