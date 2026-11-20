@@ -97,41 +97,21 @@ public enum JudgePoolLog {
     }
 }
 
-/// The running executable's on-disk identity. An upgrade replaces the file;
-/// a supervisor that notices exits so launchd (KeepAlive) restarts it from
-/// the new bytes, and never spawns workers from bytes newer than itself.
-public struct ExecutableIdentity: Sendable, Equatable {
-    let device: UInt64
-    let inode: UInt64
-    let size: Int64
-    let modified: Int
-
-    public init?(path: String) {
-        var info = stat()
-        guard stat(path, &info) == 0 else { return nil }
-        device = UInt64(info.st_dev)
-        inode = UInt64(info.st_ino)
-        size = Int64(info.st_size)
-        #if canImport(Darwin)
-        modified = info.st_mtimespec.tv_sec
-        #else
-        modified = info.st_mtim.tv_sec
-        #endif
-    }
-}
-
 /// Refuses to spawn from an executable that changed under the supervisor:
 /// exits instead, for launchd to restart the supervisor on the new bytes.
+/// "Changed" is a different file identity, or (Darwin) on-disk code whose
+/// CDHash is not the running supervisor's.
 struct UpgradeGuardedSpawner: WorkerSpawning {
     let base: any WorkerSpawning
     let executable: String
     let identity: ExecutableIdentity?
+    var codeMatches: @Sendable () -> Bool = { true }
     let onUpgrade: @Sendable () -> Void
 
     func spawn(
         slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess {
-        if ExecutableIdentity(path: executable) != identity { onUpgrade() }
+        if ExecutableIdentity(path: executable) != identity || !codeMatches() { onUpgrade() }
         return try base.spawn(slot: slot, compute: compute, key: key, output: output)
     }
 }
@@ -183,12 +163,16 @@ public enum JudgePoolServe {
             JudgePoolLog.line("executable changed on disk; exiting for launchd to restart the new one")
             exit(0)
         }
+        let running = JudgePoolTrust.runningCodeHash()
+        if running == nil { JudgePoolLog.line("own code hash unreadable; workers are checked by file identity only") }
         let spawner = UpgradeGuardedSpawner(
             base: PosixWorkerSpawner(
                 executable: executable,
                 environment: workerEnvironment(environment),
                 arguments: PosixWorkerSpawner.judgeWorkerArguments),
-            executable: executable, identity: identity, onUpgrade: upgraded)
+            executable: executable, identity: identity,
+            codeMatches: { running.map { JudgePoolTrust.siblingHashes.hash(ofPath: executable) == $0 } ?? true },
+            onUpgrade: upgraded)
         let supervisor = JudgePoolSupervisor(spawner: spawner, log: JudgePoolLog.line)
         let siblingClient = ((executable as NSString).deletingLastPathComponent as NSString)
             .appendingPathComponent("rvd")

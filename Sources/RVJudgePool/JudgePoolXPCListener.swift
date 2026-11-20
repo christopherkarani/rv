@@ -11,18 +11,31 @@ import Synchronization
 public final class JudgePoolXPCListener: Sendable {
     private let supervisor: JudgePoolSupervisor
     private let authorize: @Sendable (xpc_object_t) -> Bool
-    private let serviceName: String
+    private let makeDiscoveryListener: @Sendable () -> xpc_connection_t
     private let listener = Mutex<JudgePoolHeld?>(nil)
     private let endpointListener = Mutex<JudgePoolHeld?>(nil)
+    private let peers = Mutex<[ObjectIdentifier: JudgePoolHeld]>([:])
 
-    public init(
+    public convenience init(
         supervisor: JudgePoolSupervisor,
         machServiceName: String = JudgePoolWire.machServiceName,
         authorize: @escaping @Sendable (xpc_object_t) -> Bool
     ) {
+        self.init(supervisor: supervisor, authorize: authorize) {
+            xpc_connection_create_mach_service(machServiceName, nil, UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER))
+        }
+    }
+
+    /// `discoveryListener` makes the listener the hello arrives on (the
+    /// Mach service in production, an anonymous listener in tests).
+    init(
+        supervisor: JudgePoolSupervisor,
+        authorize: @escaping @Sendable (xpc_object_t) -> Bool,
+        discoveryListener: @escaping @Sendable () -> xpc_connection_t
+    ) {
         self.supervisor = supervisor
-        self.serviceName = machServiceName
         self.authorize = authorize
+        self.makeDiscoveryListener = discoveryListener
     }
 
     public func start() {
@@ -32,8 +45,7 @@ public final class JudgePoolXPCListener: Sendable {
         }
         endpointListener.withLock { $0 = JudgePoolHeld(requests) }
         xpc_connection_resume(requests)
-        let discovery = xpc_connection_create_mach_service(
-            serviceName, nil, UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER))
+        let discovery = makeDiscoveryListener()
         xpc_connection_set_event_handler(discovery) { [weak self] event in
             if xpc_get_type(event) == XPC_TYPE_CONNECTION { self?.accept(event, discoveryOnly: true) }
         }
@@ -52,7 +64,11 @@ public final class JudgePoolXPCListener: Sendable {
                 return state
             },
         ]
-        for held in taken.compactMap({ $0 }) { xpc_connection_cancel(held.object) }
+        let connected = peers.withLock { state -> [JudgePoolHeld] in
+            defer { state = [:] }
+            return Array(state.values)
+        }
+        for held in taken.compactMap({ $0 }) + connected { xpc_connection_cancel(held.object) }
     }
 
     private func accept(_ peer: xpc_connection_t, discoveryOnly: Bool) {
@@ -61,7 +77,16 @@ public final class JudgePoolXPCListener: Sendable {
             : nil
         let session = JudgePoolPeerSession(
             supervisor: supervisor, authorize: authorize, discoveryOnly: discoveryOnly, endpoint: endpoint)
-        xpc_connection_set_event_handler(peer) { event in session.handle(event) }
+        let held = JudgePoolHeld(peer)
+        let id = ObjectIdentifier(held)
+        peers.withLock { $0[id] = held }
+        xpc_connection_set_event_handler(peer) { [weak self] event in
+            if xpc_get_type(event) == XPC_TYPE_ERROR {
+                self?.peers.withLock { $0[id] = nil }
+                return
+            }
+            session.handle(event)
+        }
         xpc_connection_resume(peer)
     }
 }
