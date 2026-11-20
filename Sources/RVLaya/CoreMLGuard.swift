@@ -53,7 +53,7 @@ public struct CoreMLDiskSpaceError: Error, Sendable, Equatable {
 ///   the page cache; only a kernel panic loses the byte, and that is not a
 ///   Core ML crash.
 /// - Disk precheck: refuses any call below `minimumFreeBytes` free on the
-///   cache volume (one `statfs`).
+///   cache volume (one `statfs`/`statvfs`).
 ///
 /// An untracked guard (no store) only does the disk precheck: short-lived
 /// CLI processes share no marker with rvd, so they cannot miscount its runs.
@@ -262,15 +262,24 @@ extension CoreMLGuard {
     }
 }
 
-/// `statfs` free space for unprivileged writers (`f_bavail` blocks).
+/// Free space for unprivileged writers (`f_bavail` blocks): `statfs` on
+/// Darwin (64-bit block counts), POSIX `statvfs` elsewhere (Glibc does not
+/// export `statfs` to Swift).
 public struct StatfsDiskSpace: DiskSpaceProbe {
     public init() {}
 
     public func availableBytes(at url: URL) -> Int64? {
+        #if canImport(Darwin)
         var info = statfs()
         guard statfs(url.path, &info) == 0 else { return nil }
+        let blockSize = Int64(info.f_bsize)
+        #else
+        var info = statvfs()
+        guard statvfs(url.path, &info) == 0 else { return nil }
+        let blockSize = Int64(info.f_frsize)
+        #endif
         let blocks = Int64(clamping: UInt64(info.f_bavail))
-        let (bytes, overflow) = blocks.multipliedReportingOverflow(by: Int64(info.f_bsize))
+        let (bytes, overflow) = blocks.multipliedReportingOverflow(by: blockSize)
         return overflow ? Int64.max : bytes
     }
 }
