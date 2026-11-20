@@ -88,8 +88,9 @@ public enum DoctorSnapshotBuilder {
         }
     }
 
-    /// Degraded Core ML states doctor names: CPU-only after crashes, and a
-    /// disk too full for the judge to load or predict (calls go to review).
+    /// Degraded Core ML states doctor names: CPU-only after crashes, a disk
+    /// too full for the judge to load or predict (calls go to review), and
+    /// rvd running without its crash marker.
     static func coreMLNotes(_ status: CoreMLGuard.Status) -> [String] {
         var notes: [String] = []
         if status.units == .cpuOnly {
@@ -98,6 +99,9 @@ public enum DoctorSnapshotBuilder {
         }
         if status.diskLow {
             notes.append("disk nearly full; judge disabled until space is freed")
+        }
+        if status.crashMarkerUnavailable {
+            notes.append("Core ML crash marker held by another process or unwritable; no CPU-only fallback after a crash")
         }
         return notes
     }

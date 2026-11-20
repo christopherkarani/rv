@@ -106,4 +106,11 @@ struct DoctorCoreMLNotesTests {
         #expect(notes[0].hasSuffix("after repeated Core ML crashes"))
         #expect(notes[1] == "disk nearly full; judge disabled until space is freed")
     }
+
+    @Test("rvd running without its crash marker is named")
+    func markerUnavailable() {
+        let notes = DoctorSnapshotBuilder.coreMLNotes(
+            .init(units: .cpuAndGPU, cpuOnlyUntil: nil, diskLow: false, crashMarkerUnavailable: true))
+        #expect(notes == ["Core ML crash marker held by another process or unwritable; no CPU-only fallback after a crash"])
+    }
 }

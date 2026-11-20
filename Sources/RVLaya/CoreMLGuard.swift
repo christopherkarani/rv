@@ -95,11 +95,15 @@ public final class CoreMLGuard: Sendable {
         public let units: JudgeComputeUnits
         public let cpuOnlyUntil: Date?
         public let diskLow: Bool
+        /// rvd's guard runs without its crash marker (another rvd holds it,
+        /// or it could not be written): no CPU-only fallback after a crash.
+        public let crashMarkerUnavailable: Bool
 
-        public init(units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool) {
+        public init(units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool, crashMarkerUnavailable: Bool = false) {
             self.units = units
             self.cpuOnlyUntil = cpuOnlyUntil
             self.diskLow = diskLow
+            self.crashMarkerUnavailable = crashMarkerUnavailable
         }
     }
 
@@ -112,6 +116,8 @@ public final class CoreMLGuard: Sendable {
 
     /// `~/.config/rv/cache/laya`: `models/` and `guard/` below it.
     public let stateRoot: URL?
+    /// rvd's guard: it is meant to hold the crash marker.
+    private let tracksCrashes: Bool
     /// Opened on first Core ML use, so an rvd that never loads a judge
     /// never touches the state directory.
     private let makeStore: @Sendable () -> (any CoreMLCrashStore)?
@@ -141,6 +147,7 @@ public final class CoreMLGuard: Sendable {
         disk: any DiskSpaceProbe,
         cacheVolume: URL?,
         stateRoot: URL? = nil,
+        tracksCrashes: Bool = false,
         purgeCoreMLCache: @escaping @Sendable () -> Void,
         log: @escaping @Sendable (String) -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
@@ -149,6 +156,7 @@ public final class CoreMLGuard: Sendable {
         self.disk = disk
         self.cacheVolume = cacheVolume
         self.stateRoot = stateRoot
+        self.tracksCrashes = tracksCrashes
         self.purgeCoreMLCache = purgeCoreMLCache
         self.log = log
         self.now = now
@@ -168,7 +176,9 @@ public final class CoreMLGuard: Sendable {
     /// the disk is below the floor right now.
     public var status: Status {
         let current = startedState()
-        return Status(units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil)
+        return Status(
+            units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil,
+            crashMarkerUnavailable: tracksCrashes && current.store == nil)
     }
 
     /// Throws when the cache volume is below `minimumFreeBytes`. Unknown free
@@ -321,7 +331,7 @@ extension CoreMLGuard {
                 if store == nil { log("rvd: Core ML crash marker unavailable or held by another rvd; judge runs without crash fallback") }
                 return store
             },
-            disk: StatfsDiskSpace(), cacheVolume: caches, stateRoot: stateRoot,
+            disk: StatfsDiskSpace(), cacheVolume: caches, stateRoot: stateRoot, tracksCrashes: true,
             purgeCoreMLCache: {
                 guard let caches else { return }
                 if !CoreMLCachePurge.purge(cachesRoot: caches, processName: processName) {

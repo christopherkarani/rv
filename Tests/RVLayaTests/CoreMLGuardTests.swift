@@ -107,6 +107,18 @@ private func makeGuard(
 
 @Suite("Core ML guard")
 struct CoreMLGuardTests {
+    @Test("a crash-tracking guard whose marker could not be opened says so; others do not")
+    func markerUnavailableIsReported() {
+        let blind = CoreMLGuard(
+            makeStore: { nil }, disk: FakeDisk(free: 100 << 30), cacheVolume: nil, tracksCrashes: true,
+            purgeCoreMLCache: {}, log: { _ in })
+        #expect(blind.status.crashMarkerUnavailable)
+        #expect(!makeGuard(FakeCrashStore()).status.crashMarkerUnavailable)
+        let untracked = CoreMLGuard(
+            store: nil, disk: FakeDisk(free: 100 << 30), cacheVolume: nil, purgeCoreMLCache: {}, log: { _ in })
+        #expect(!untracked.status.crashMarkerUnavailable)
+    }
+
     @Test("run marks Core ML in flight around the body and clears it after")
     func marksAroundBody() throws {
         let store = FakeCrashStore()
