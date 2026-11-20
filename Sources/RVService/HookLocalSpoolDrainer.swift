@@ -16,11 +16,14 @@ import Synchronization
 /// costs nothing but a later drain.
 ///
 /// Per drain: audit rows the evaluator could not append are appended to
-/// `audit.jsonl`, marked `recorded_by: hook-local`; audit rows lost without
-/// their fields get one `audit.gap` event with their count; `rvd.log` gets
-/// one rate-limited line naming the rules; then `deliver` hands the
-/// analytics decisions to rvd's coordinator (and runs its daily flush, so
-/// that no longer waits for an evaluation).
+/// `audit.jsonl`, marked `recorded_by: hook-local`, under one shared lock
+/// deadline, stopping at the first that fails (it and the rest stay for the
+/// next drain); audit rows lost without their fields get one `audit.gap`
+/// event with their count, written back to the uncounted file when the gap
+/// itself cannot be appended; `rvd.log` gets one rate-limited line naming
+/// the rules; then `deliver` hands the analytics decisions to rvd's
+/// coordinator (and runs its daily flush, so that no longer waits for an
+/// evaluation). Spooled rows reach the chain only when rvd next runs.
 package final class HookLocalSpoolDrainer: Sendable {
     package typealias Deliver = @Sendable (HookLocalSpool.Drained) async -> Void
 
@@ -104,38 +107,37 @@ package final class HookLocalSpoolDrainer: Sendable {
         }
     }
 
-    /// Runs only on `queue`.
+    /// Runs only on `queue`. Every audit append of one drain shares one
+    /// lock deadline; the first that fails ends the drain's appends.
     private func drainOnce(now: Date = Date()) -> HookLocalSpool.Drained {
-        let drained = HookLocalSpool.drain(home: home)
-        guard drained.isEmpty == false else { return drained }
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
-        var unappended: [String] = []
-        for audit in drained.audits {
-            guard let event = audit.event(),
-                AuditLog.append(
-                    event, configDirectory: configDirectory,
-                    wait: AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout))
-            else {
-                unappended.append(audit.rule)
-                continue
-            }
+        let wait = AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout)
+        let drained = HookLocalSpool.drain(home: home, now: now) { event in
+            AuditLog.append(event, configDirectory: configDirectory, wait: wait)
         }
+        guard drained.isEmpty == false else { return drained }
+        var gapUnwritten = false
         if drained.lostAudits > 0 {
-            AuditLog.append(
+            var detail = ["lost": String(drained.lostAudits), "recorded_by": "hook-local"]
+            if drained.atLeast { detail["at_least"] = "true" }
+            let written = AuditLog.append(
                 AuditEvent(
                     time: now, kind: .auditGap, decision: .failed, subject: "hook-local",
-                    reason: "audit rows the hook-local evaluator lost before they reached its spool",
-                    source: AuditLedger.Source.audit.rawValue,
-                    detail: ["lost": String(drained.lostAudits), "recorded_by": "hook-local"]),
-                configDirectory: configDirectory,
-                wait: AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout))
+                    reason: "audit rows the hook-local evaluator lost before rvd could chain them",
+                    source: AuditLedger.Source.audit.rawValue, detail: detail),
+                configDirectory: configDirectory, wait: wait)
+            if written == false {
+                // A later drain counts them again: the gap is never lost.
+                HookLocalSpool.countLost(audits: drained.lostAudits, others: 0, home: home)
+                gapUnwritten = true
+            }
         }
-        report(drained, unappended: unappended, now: now)
+        report(drained, gapUnwritten: gapUnwritten, now: now)
         return drained
     }
 
-    private func report(_ drained: HookLocalSpool.Drained, unappended: [String], now: Date) {
-        guard let message = HookLocalSpool.reportMessage(drained, unappended: unappended) else { return }
+    private func report(_ drained: HookLocalSpool.Drained, gapUnwritten: Bool, now: Date) {
+        guard let message = HookLocalSpool.reportMessage(drained, gapUnwritten: gapUnwritten) else { return }
         let due = state.withLock { state -> Bool in
             if let last = state.lastReport, now >= last, now.timeIntervalSince(last) < Self.reportInterval {
                 return false

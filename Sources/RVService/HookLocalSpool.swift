@@ -40,8 +40,8 @@ package enum HookLocalDrop: String, Sendable, CaseIterable, Codable {
 /// and time: never command text or a session.
 ///
 /// Every open here is `O_NONBLOCK | O_NOFOLLOW` and accepts only a regular
-/// file this user owns, so nothing planted at these paths can hang or
-/// redirect a write. Nothing here can change or hold a verdict.
+/// file this user owns with one link, so nothing planted at these paths can
+/// hang or redirect a write. Nothing here can change or hold a verdict.
 package enum HookLocalSpool {
     static let fileName = "hook-local-spool.jsonl"
     static let uncountedFileName = "hook-local-spool.uncounted"
@@ -50,6 +50,9 @@ package enum HookLocalSpool {
     static let lockTimeout: Duration = .milliseconds(50)
     /// Past this size a batch is counted, not written.
     static let maxBytes = 4 << 20
+    /// What a drain reads past `maxBytes`: a batch that started below the
+    /// cap may end above it.
+    static let readSlack = 64 << 10
     /// Past this size a lost row is no longer counted either.
     static let maxUncountedBytes = 64 << 10
     /// The uncounted file's byte for a lost audit row; any other byte is
@@ -58,6 +61,14 @@ package enum HookLocalSpool {
     static let lostRowByte = UInt8(ascii: "x")
     /// A redacted path longer than this is left out of a spooled audit row.
     static let maxPathBytes = 4096
+    /// A spooled rule id longer than this is not one the evaluator wrote.
+    static let maxRuleBytes = 256
+    /// A spooled audit row timed further than this from the drain is not
+    /// chained: it is counted as lost.
+    static let timeWindow: TimeInterval = 24 * 3600
+    /// The most rows one drain takes, so rvd's other audit writers are not
+    /// starved behind a full spool. The rest wait for the next drain.
+    package static let maxRowsPerDrain = 2000
 
     /// The fields of a `command.denied` or `command.observed` audit row the
     /// evaluator could not append (`GatedEvaluate.auditDenial`), for rvd to
@@ -76,19 +87,21 @@ package enum HookLocalSpool {
         /// Seconds since 1970.
         var at: Double
 
-        /// The audit event rvd appends, or nil when any field is not one
-        /// the evaluator writes: the spool is a file, so it is read as
-        /// untrusted input.
-        package func event() -> AuditEvent? {
+        /// The audit event rvd appends at `now`, or nil when any field is
+        /// not one the evaluator writes, or the row is not from within a
+        /// day of `now`: the spool is a file, so it is read as untrusted
+        /// input.
+        package func event(now: Date) -> AuditEvent? {
             let observed: Bool
             switch kind {
             case AuditEventKind.commandDenied.rawValue: observed = false
             case AuditEventKind.commandObserved.rawValue: observed = true
             default: return nil
             }
-            guard RuleID(rawValue: rule) != nil, LedgerHost(rawValue: host) != nil,
-                LedgerTool(rawValue: tool) != nil, LedgerCategory(rawValue: category) != nil,
-                at.isFinite, at > 0
+            guard rule.utf8.count <= HookLocalSpool.maxRuleBytes, RuleID(rawValue: rule) != nil,
+                LedgerHost(rawValue: host) != nil, LedgerTool(rawValue: tool) != nil,
+                LedgerCategory(rawValue: category) != nil,
+                at.isFinite, abs(at - now.timeIntervalSince1970) <= HookLocalSpool.timeWindow
             else { return nil }
             if observed {
                 guard let wouldBe, LedgerWouldBe(rawValue: wouldBe) != nil else { return nil }
@@ -129,22 +142,30 @@ package enum HookLocalSpool {
     package struct Drained: Sendable, Equatable {
         package var decisions: [AnalyticsDecisionKind: Int] = [:]
         package var drops: [HookLocalDrop: Int] = [:]
-        /// Audit rows to append in the evaluator's place.
+        /// Recovered audit rows, appended in the evaluator's place.
         package var audits: [Audit] = []
         /// Audit rows lost without their fields: counted in the uncounted
-        /// file, or spooled with fields that did not validate.
+        /// file, or spooled with fields that did not validate. At least one
+        /// whenever `atLeast` is set.
         package var lostAudits = 0
         /// Other rows lost before they reached the spool, and spool lines
         /// that did not parse.
         package var lost = 0
-        /// Spool bytes past the cap, dropped unread.
+        /// Spool bytes past the read cap, dropped unread.
         package var truncatedBytes = 0
+        /// The counts are a lower bound: the uncounted file was full, the
+        /// spool was cut at the cap or held a line that did not parse, or a
+        /// file planted at a spool path was removed.
+        package var atLeast = false
+        /// Rows left for the next drain: past the per-drain row cap, or
+        /// from the first audit row that could not be appended on.
+        package var kept = 0
 
         package init() {}
 
         package var isEmpty: Bool {
             decisions.isEmpty && drops.isEmpty && audits.isEmpty && lostAudits == 0 && lost == 0
-                && truncatedBytes == 0
+                && truncatedBytes == 0 && atLeast == false && kept == 0
         }
     }
 
@@ -159,8 +180,18 @@ package enum HookLocalSpool {
         RVPolicyPaths.configDirectory(home: home).appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// Where a drain moves the spool before reading it; only rvd uses it.
+    static func drainingURL(home: HomeDirectory) -> URL {
+        fileURL(home: home).appendingPathExtension("draining")
+    }
+
     static func uncountedURL(home: HomeDirectory) -> URL {
         RVPolicyPaths.configDirectory(home: home).appendingPathComponent(uncountedFileName, isDirectory: false)
+    }
+
+    /// Where a drain moves the uncounted file; counted one drain later.
+    static func uncountedDrainingURL(home: HomeDirectory) -> URL {
+        uncountedURL(home: home).appendingPathExtension("draining")
     }
 
     /// Appends `batch` as one write, waiting at most `lockTimeout` for the
@@ -197,8 +228,8 @@ package enum HookLocalSpool {
     /// One byte per lost row, appended with no lock: `O_APPEND` keeps
     /// concurrent single writes whole, and a count needs nothing more.
     /// Refuses a symlink, a FIFO or other non-regular file, a file another
-    /// user owns, and stops at the cap.
-    private static func countLost(audits: Int, others: Int, home: HomeDirectory) {
+    /// user owns or with another link, and stops at the cap.
+    package static func countLost(audits: Int, others: Int, home: HomeDirectory) {
         let url = uncountedURL(home: home)
         let fd = url.path.withCString {
             open($0, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
@@ -211,128 +242,222 @@ package enum HookLocalSpool {
         _ = bytes.withUnsafeBytes { posixWrite(fd, $0.baseAddress, $0.count) }
     }
 
-    /// Takes everything out of the spool and the uncounted file without
-    /// ever waiting: a spool another process holds is left for the next
-    /// drain. Cheap when both are empty (two `lstat`s). Callers must not
-    /// drain one home concurrently (`HookLocalSpoolDrainer` runs one at a
-    /// time), or a leftover uncounted file could be counted twice.
-    package static func drain(home: HomeDirectory) -> Drained {
+    /// rvd's drain, never waiting for the evaluators' spool lock. It takes
+    /// at most `maxRows` rows, in order: first those a previous drain left
+    /// in the draining file, then the spool, which it renames aside under
+    /// the writers' lock (one non-blocking attempt; a held lock leaves the
+    /// rows for the next drain). Each recovered audit row goes to `append`;
+    /// the first one that fails stops the drain, and it and every row after
+    /// it stay in the draining file. That file is removed only once every
+    /// row in it was taken. The uncounted file is renamed aside and counted
+    /// by the next drain, by when a writer that opened it just before the
+    /// rename has long finished its one write. Anything not this user's
+    /// single-link regular file at these paths is removed unread and
+    /// counted. Callers must not drain one home concurrently
+    /// (`HookLocalSpoolDrainer` runs one at a time).
+    package static func drain(
+        home: HomeDirectory, now: Date, maxRows: Int = maxRowsPerDrain, append: (AuditEvent) -> Bool
+    ) -> Drained {
         var drained = Drained()
-        let url = fileURL(home: home)
-        if let size = lstatSize(url), size > 0, let taken = takeSpool(url) {
-            parse(taken.data, into: &drained)
-            drained.truncatedBytes = taken.truncated
+        var rows = maxRows
+        let spool = fileURL(home: home)
+        let draining = drainingURL(home: home)
+        removePlanted(spool, &drained)
+        removePlanted(uncountedURL(home: home), &drained)
+        var clear = consume(draining, now: now, rows: &rows, into: &drained, append: append)
+        if clear, let size = lstatSize(spool), size > 0, takeSpool(spool, to: draining) {
+            clear = consume(draining, now: now, rows: &rows, into: &drained, append: append)
         }
-        let lost = takeUncounted(home: home)
-        drained.lostAudits += lost.audits
-        drained.lost += lost.others
+        takeUncounted(home: home, into: &drained)
+        if drained.atLeast, drained.lostAudits == 0 { drained.lostAudits = 1 }
         return drained
     }
 
-    private static func parse(_ data: Data, into drained: inout Drained) {
-        let decoder = JSONDecoder()
-        for line in data.split(separator: UInt8(ascii: "\n")) where line.isEmpty == false {
-            guard let row = try? decoder.decode(Row.self, from: Data(line)), row.v == 1 else {
-                drained.lost += 1
+    /// One spool line.
+    private enum Line {
+        case decision(AnalyticsDecisionKind)
+        case drop(HookLocalDrop)
+        case audit(Audit, AuditEvent)
+        case lostAudit
+        case unreadable
+    }
+
+    private static func line(_ bytes: Data, now: Date) -> Line {
+        guard let row = try? JSONDecoder().decode(Row.self, from: bytes), row.v == 1 else { return .unreadable }
+        switch (row.decision, row.dropped, row.audit) {
+        case (let decision?, nil, nil):
+            return AnalyticsDecisionKind(rawValue: decision).map { .decision($0) } ?? .unreadable
+        case (nil, HookLocalDrop.audit.rawValue?, let audit):
+            guard let audit, let event = audit.event(now: now) else { return .lostAudit }
+            return .audit(audit, event)
+        case (nil, let dropped?, nil):
+            return HookLocalDrop(rawValue: dropped).map { .drop($0) } ?? .unreadable
+        default:
+            return .unreadable
+        }
+    }
+
+    /// Takes rows from the draining file at `url`; true when it is gone
+    /// (absent, or every row taken and the file removed).
+    private static func consume(
+        _ url: URL, now: Date, rows: inout Int, into drained: inout Drained, append: (AuditEvent) -> Bool
+    ) -> Bool {
+        guard let (data, size) = readOwned(url, limit: maxBytes + readSlack, into: &drained) else { return true }
+        if size > data.count {
+            drained.truncatedBytes += size - data.count
+            drained.atLeast = true
+        }
+        let newline = UInt8(ascii: "\n")
+        var start = data.startIndex
+        var stop: Int?
+        lines: while start < data.endIndex {
+            let end = data[start...].firstIndex(of: newline) ?? data.endIndex
+            let next = end == data.endIndex ? end : end + 1
+            guard end > start else {
+                start = next
                 continue
             }
-            switch (row.decision, row.dropped, row.audit) {
-            case (let decision?, nil, nil):
-                if let kind = AnalyticsDecisionKind(rawValue: decision) {
-                    drained.decisions[kind, default: 0] += 1
-                } else {
-                    drained.lost += 1
-                }
-            case (nil, HookLocalDrop.audit.rawValue?, let audit):
-                if let audit, audit.event() != nil {
-                    drained.audits.append(audit)
-                } else {
-                    drained.lostAudits += 1
-                }
-            case (nil, let dropped?, nil):
-                if let drop = HookLocalDrop(rawValue: dropped) {
-                    drained.drops[drop, default: 0] += 1
-                } else {
-                    drained.lost += 1
-                }
-            default:
+            guard rows > 0 else {
+                stop = start
+                break
+            }
+            // A tail with no newline is a torn write (or the cap's cut).
+            let parsed = end == data.endIndex ? .unreadable : line(data[start..<end], now: now)
+            switch parsed {
+            case .decision(let kind): drained.decisions[kind, default: 0] += 1
+            case .drop(let drop): drained.drops[drop, default: 0] += 1
+            case .lostAudit: drained.lostAudits += 1
+            case .unreadable:
                 drained.lost += 1
-            }
-        }
-    }
-
-    /// Reads and empties the spool under the writers' lock, taken with one
-    /// non-blocking attempt. Nil when another process holds it (or it
-    /// cannot be opened); the rows stay for the next drain. A spool that is
-    /// not this user's regular file is removed unread.
-    private static func takeSpool(_ url: URL) -> (data: Data, truncated: Int)? {
-        let taken = JSONLAppendLog.withExclusiveLock(at: url, lockTimeout: .zero) { locked -> (Data, Int)? in
-            let fd = locked.path.withCString { open($0, O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK) }
-            guard fd >= 0 else { return nil }
-            defer { close(fd) }
-            var info = stat()
-            guard fstat(fd, &info) == 0 else { return nil }
-            guard isOwnedRegular(info) else {
-                unlink(locked.path)
-                return nil
-            }
-            // Past the cap the spool is read up to it; the rest is
-            // counted and dropped with the truncate.
-            let size = Int(info.st_size)
-            let limit = min(size, maxBytes)
-            var data = Data(count: limit)
-            var read = 0
-            let complete = data.withUnsafeMutableBytes { buffer -> Bool in
-                while read < limit {
-                    let count = pread(fd, buffer.baseAddress! + read, limit - read, off_t(read))
-                    if count < 0, errno == EINTR { continue }
-                    guard count > 0 else { return count == 0 }
-                    read += count
+                drained.atLeast = true
+            case .audit(let audit, let event):
+                guard append(event) else {
+                    stop = start
+                    break lines
                 }
-                return true
+                drained.audits.append(audit)
             }
-            guard complete, ftruncate(fd, 0) == 0 else { return nil }
-            return (data.prefix(read), size - read)
+            rows -= 1
+            start = next
         }
-        return (taken ?? nil).map { (data: $0.0, truncated: $0.1) }
+        guard let stop else {
+            unlink(url.path)
+            return true
+        }
+        let rest = data[stop...]
+        if keep(rest, at: url) {
+            drained.kept += rest.split(separator: newline).count
+            return false
+        }
+        // The rest cannot be kept: counted, never appended twice.
+        for bytes in rest.split(separator: newline) {
+            if case .unreadable = line(Data(bytes), now: now) { drained.lost += 1 } else { drained.lostAudits += 1 }
+        }
+        drained.atLeast = true
+        unlink(url.path)
+        return true
     }
 
-    /// The uncounted file's bytes, taken by renaming it aside first, so a
-    /// byte appended meanwhile lands in the next drain (or, rarely, in the
-    /// file being counted).
-    private static func takeUncounted(home: HomeDirectory) -> (audits: Int, others: Int) {
-        let url = uncountedURL(home: home)
-        let aside = url.appendingPathExtension("draining")
-        // A drain that stopped between rename and unlink left this behind.
-        var total = countAndRemove(aside)
-        guard rename(url.path, aside.path) == 0 else { return total }
-        let more = countAndRemove(aside)
-        total.audits += more.audits
-        total.others += more.others
-        return total
-    }
-
-    private static func countAndRemove(_ url: URL) -> (audits: Int, others: Int) {
-        let fd = url.path.withCString { open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK) }
-        defer { unlink(url.path) }
-        guard fd >= 0 else { return (0, 0) }
-        defer { close(fd) }
+    /// Replaces the draining file with `rest` (write aside, then rename).
+    private static func keep(_ rest: Data, at url: URL) -> Bool {
+        let temporary = url.appendingPathExtension("tmp")
+        let fd = temporary.path.withCString {
+            open($0, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
+        }
+        guard fd >= 0 else { return false }
         var info = stat()
-        guard fstat(fd, &info) == 0, isOwnedRegular(info) else { return (0, 0) }
-        var buffer = [UInt8](repeating: 0, count: min(Int(info.st_size), maxUncountedBytes))
-        var read = 0
-        while read < buffer.count {
-            let count = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress! + read, $0.count - read, off_t(read)) }
-            if count < 0, errno == EINTR { continue }
-            guard count > 0 else { break }
-            read += count
+        guard fstat(fd, &info) == 0, isOwnedRegular(info) else {
+            close(fd)
+            unlink(temporary.path)
+            return false
         }
-        let audits = buffer[0..<read].lazy.filter { $0 == lostAuditByte }.count
-        return (audits, read - audits)
+        var written = 0
+        let complete = rest.withUnsafeBytes { buffer -> Bool in
+            while written < buffer.count {
+                let count = posixWrite(fd, buffer.baseAddress! + written, buffer.count - written)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { return false }
+                written += count
+            }
+            return true
+        }
+        close(fd)
+        guard complete, rename(temporary.path, url.path) == 0 else {
+            unlink(temporary.path)
+            return false
+        }
+        return true
+    }
+
+    /// Renames the spool aside under the writers' lock, taken with one
+    /// non-blocking attempt: a writer opens the spool only while holding
+    /// it, so every later batch lands in a new spool.
+    private static func takeSpool(_ url: URL, to draining: URL) -> Bool {
+        JSONLAppendLog.withExclusiveLock(at: url, lockTimeout: .zero) { locked in
+            var info = stat()
+            guard lstat(locked.path, &info) == 0, isOwnedRegular(info) else { return false }
+            return rename(locked.path, draining.path) == 0
+        } ?? false
+    }
+
+    /// Counts the uncounted file the previous drain moved aside, then moves
+    /// the current one aside for the next drain.
+    private static func takeUncounted(home: HomeDirectory, into drained: inout Drained) {
+        let aside = uncountedDrainingURL(home: home)
+        if let (data, size) = readOwned(aside, limit: maxUncountedBytes, into: &drained) {
+            let audits = data.lazy.filter { $0 == lostAuditByte }.count
+            drained.lostAudits += audits
+            drained.lost += data.count - audits
+            // Full: the writers stopped counting.
+            if size >= maxUncountedBytes { drained.atLeast = true }
+            unlink(aside.path)
+        }
+        var info = stat()
+        guard lstat(aside.path, &info) != 0, errno == ENOENT else { return }
+        _ = rename(uncountedURL(home: home).path, aside.path)
+    }
+
+    /// The bytes (at most `limit`) and size of this user's single-link
+    /// regular file at `url`; nil when it is absent, or anything else,
+    /// which is then removed unread and counted.
+    private static func readOwned(_ url: URL, limit: Int, into drained: inout Drained) -> (Data, Int)? {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else { return nil }
+        let fd = url.path.withCString { open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK) }
+        var info = stat()
+        guard fd >= 0, fstat(fd, &info) == 0, isOwnedRegular(info) else {
+            if fd >= 0 { close(fd) }
+            unlink(url.path)
+            drained.atLeast = true
+            return nil
+        }
+        defer { close(fd) }
+        let size = Int(info.st_size)
+        var data = Data(count: min(size, limit))
+        var read = 0
+        data.withUnsafeMutableBytes { buffer in
+            while read < buffer.count {
+                let count = pread(fd, buffer.baseAddress! + read, buffer.count - read, off_t(read))
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { return }
+                read += count
+            }
+        }
+        return (data.prefix(read), size)
+    }
+
+    /// Removes anything at `url` that is not this user's single-link
+    /// regular file (a symlink, FIFO or hard link someone planted), never
+    /// following it, so the evaluators' writes work again; counted.
+    private static func removePlanted(_ url: URL, _ drained: inout Drained) {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, isOwnedRegular(info) == false else { return }
+        unlink(url.path)
+        drained.atLeast = true
     }
 
     private static func isOwnedRegular(_ info: stat) -> Bool {
-        (info.st_mode & S_IFMT) == S_IFREG && info.st_uid == geteuid()
+        (info.st_mode & S_IFMT) == S_IFREG && info.st_uid == geteuid() && info.st_nlink == 1
     }
 
     /// The `lstat` size; nil when missing.
@@ -342,8 +467,9 @@ package enum HookLocalSpool {
         return Int(info.st_size)
     }
 
-    /// The spool's size when it is missing (0) or this user's regular file;
-    /// nil for anything else, which the batch is then counted against.
+    /// The spool's size when it is missing (0) or this user's single-link
+    /// regular file; nil for anything else, which the batch is then counted
+    /// against.
     private static func ownedRegularSize(_ url: URL) -> Int? {
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return errno == ENOENT ? 0 : nil }
@@ -351,9 +477,9 @@ package enum HookLocalSpool {
     }
 
     /// The `rvd.log` message for one drain (without the timestamp), or nil
-    /// when it found only decisions. `unappended` lists the rules of
-    /// recovered audit rows rvd could not append either.
-    static func reportMessage(_ drained: Drained, unappended: [String] = []) -> String? {
+    /// when it found only decisions. `gapUnwritten`: the `audit.gap` event
+    /// could not be appended, and its count went back to the uncounted file.
+    static func reportMessage(_ drained: Drained, gapUnwritten: Bool = false) -> String? {
         var parts: [String] = []
         if drained.audits.isEmpty == false {
             var rules: [String] = []
@@ -361,11 +487,14 @@ package enum HookLocalSpool {
             let listed = rules.prefix(10).joined(separator: ", ") + (rules.count > 10 ? ", …" : "")
             parts.append("\(drained.audits.count) audit row(s) recovered and appended marked recorded_by=hook-local (\(listed))")
         }
-        if unappended.isEmpty == false {
-            parts.append("\(unappended.count) recovered audit row(s) could not be appended either")
+        if drained.kept > 0 {
+            parts.append("\(drained.kept) spooled row(s) left for the next drain")
         }
         if drained.lostAudits > 0 {
-            parts.append("\(drained.lostAudits) audit row(s) lost without their fields (an audit.gap event records the count)")
+            let count = (drained.atLeast ? "at least " : "") + String(drained.lostAudits)
+            parts.append(gapUnwritten
+                ? "\(count) audit row(s) lost without their fields; the audit.gap event could not be appended and its count is kept for the next drain"
+                : "\(count) audit row(s) lost without their fields (an audit.gap event records the count)")
         }
         let drops = HookLocalDrop.allCases.compactMap { kind in drained.drops[kind].map { "\(kind.rawValue)=\($0)" } }
         if drops.isEmpty == false { parts.append("dropped " + drops.joined(separator: " ")) }

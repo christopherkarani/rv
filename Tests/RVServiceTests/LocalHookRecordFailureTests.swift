@@ -164,10 +164,13 @@ struct LocalHookRecordFailureTests {
 
     // MARK: rvd's drain
 
-    static func validAudit(rule: String = "core.git:reset-hard") -> HookLocalSpool.Audit {
+    /// One fixed time near now: a spooled row must be within a day of its drain.
+    static let validAt = Date().timeIntervalSince1970
+
+    static func validAudit(rule: String = "core.git:reset-hard", at: Double = validAt) -> HookLocalSpool.Audit {
         HookLocalSpool.Audit(
             kind: "command.observed", rule: rule, host: "claude", tool: "Bash", category: "core.git",
-            path: nil, wouldBe: "deny", at: 1_790_000_000)
+            path: nil, wouldBe: "deny", at: at)
     }
 
     @Test func drainWithTheSpoolLockHeldReturnsAtOnceAndKeepsTheRows() async throws {
@@ -205,9 +208,12 @@ struct LocalHookRecordFailureTests {
             landed += drained.decisions[.allow] ?? 0
             lost += drained.lost
         }
-        let last = await drainer.drainNow()
-        landed += last.decisions[.allow] ?? 0
-        lost += last.lost
+        // Lost rows are counted one drain late.
+        for _ in 0..<2 {
+            let last = await drainer.drainNow()
+            landed += last.decisions[.allow] ?? 0
+            lost += last.lost
+        }
         #expect(landed + lost == total)
         #expect(await drainer.drainNow().isEmpty)
     }
@@ -223,9 +229,11 @@ struct LocalHookRecordFailureTests {
 
         let drained = await drainer.drainNow()
         #expect(drained.audits == [Self.validAudit()])
-        #expect(drained.lostAudits == 2)
-        #expect(drained.lost == 1)
         #expect(drained.drops == [.judgeLog: 1])
+        // The uncounted bytes are counted by the next drain.
+        let counted = await drainer.drainNow()
+        #expect(counted.lostAudits == 2)
+        #expect(counted.lost == 1)
 
         let audit = AuditLog.fileURL(configDirectory: Self.config(fixture))
         let rows = try String(contentsOf: audit, encoding: .utf8).split(separator: "\n")
@@ -265,11 +273,158 @@ struct LocalHookRecordFailureTests {
 
     @Test func oversizedSpoolCountsTheBytesItDrops() throws {
         let fixture = try LocalHookFixture()
-        try Data(repeating: UInt8(ascii: "\n"), count: HookLocalSpool.maxBytes + 100)
+        try Data(repeating: UInt8(ascii: "\n"), count: HookLocalSpool.maxBytes + HookLocalSpool.readSlack + 100)
             .write(to: HookLocalSpool.fileURL(home: fixture.home))
         let drained = HookLocalSpool.drain(home: fixture.home)
         #expect(drained.truncatedBytes == 100)
+        // Bytes dropped unread may have been audit rows: a gap is recorded.
+        #expect(drained.atLeast)
+        #expect(drained.lostAudits == 1)
         #expect(HookLocalSpool.drain(home: fixture.home).isEmpty)
+    }
+
+    @Test func aBatchThatCrossedTheCapIsStillRead() throws {
+        let fixture = try LocalHookFixture()
+        var data = Data(repeating: UInt8(ascii: "\n"), count: HookLocalSpool.maxBytes - 10)
+        data.append(Data((#"{"decision":"allow","v":1}"# + "\n").utf8))
+        try data.write(to: HookLocalSpool.fileURL(home: fixture.home))
+        let drained = HookLocalSpool.drain(home: fixture.home)
+        #expect(drained.decisions == [.allow: 1])
+        #expect(drained.truncatedBytes == 0)
+        #expect(drained.atLeast == false)
+    }
+
+    @Test func aTornTailIsALostRowAndAGap() throws {
+        let fixture = try LocalHookFixture()
+        #expect(HookLocalSpool.write(.init(decision: .allow, drops: []), home: fixture.home))
+        let handle = try FileHandle(forWritingTo: HookLocalSpool.fileURL(home: fixture.home))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(#"{"v":1,"dropped":"au"#.utf8))
+        try handle.close()
+        let drained = HookLocalSpool.drain(home: fixture.home)
+        #expect(drained.decisions == [.allow: 1])
+        #expect(drained.lost == 1)
+        #expect(drained.lostAudits == 1)
+        #expect(drained.atLeast)
+    }
+
+    @Test func aFullUncountedFileMakesTheGapALowerBound() async throws {
+        let fixture = try LocalHookFixture()
+        let full = Data(repeating: HookLocalSpool.lostRowByte, count: HookLocalSpool.maxUncountedBytes)
+        try full.write(to: HookLocalSpool.uncountedURL(home: fixture.home))
+        let drained = HookLocalSpool.drain(home: fixture.home)
+        #expect(drained.lost == HookLocalSpool.maxUncountedBytes)
+        #expect(drained.atLeast)
+        #expect(drained.lostAudits == 1)
+
+        try full.write(to: HookLocalSpool.uncountedURL(home: fixture.home))
+        let drainer = HookLocalSpoolDrainer(home: fixture.home, deliver: { _ in })
+        await drainer.drainNow()
+        await drainer.drainNow()
+        let text = try String(contentsOf: AuditLog.fileURL(configDirectory: Self.config(fixture)), encoding: .utf8)
+        #expect(text.contains(#""kind":"audit.gap""#))
+        #expect(text.contains(#""at_least":"true""#))
+    }
+
+    // MARK: A failed append keeps the rows
+
+    @Test func aFailedAppendKeepsTheRowsForALaterDrainThatChainsThem() async throws {
+        let fixture = try LocalHookFixture()
+        let audits = [Self.validAudit(rule: "core.git:reset-hard"), Self.validAudit(rule: "core.git:clean-force")]
+        #expect(HookLocalSpool.write(.init(decision: .deny, drops: [], audits: audits), home: fixture.home))
+        let audit = AuditLog.fileURL(configDirectory: Self.config(fixture))
+        let holder = try FileLockHolder(path: audit.path)
+        defer { holder.release() }
+        let lines = UnfairLock([String]())
+        let drainer = HookLocalSpoolDrainer(
+            home: fixture.home, deliver: { _ in }, write: { line in lines.withLock { $0.append(line) } })
+        let draining = HookLocalSpool.drainingURL(home: fixture.home).path
+
+        let held = await drainer.drainNow()
+        #expect(held.audits.isEmpty)
+        #expect(held.kept == 2)
+        #expect(held.decisions == [.deny: 1])
+        #expect(FileManager.default.fileExists(atPath: draining))
+        #expect(lines.withLock { $0.first?.contains("2 spooled row(s) left for the next drain") } == true)
+
+        holder.release()
+        let later = await drainer.drainNow()
+        #expect(later.audits == audits)
+        #expect(later.decisions.isEmpty, "the decision was taken once")
+        #expect(FileManager.default.fileExists(atPath: draining) == false)
+        let rows = try String(contentsOf: audit, encoding: .utf8).split(separator: "\n")
+        #expect(rows.count == 2)
+        #expect(try AuditChain.verify(fileURL: audit).get().isIntact)
+    }
+
+    @Test func aGapThatCannotBeAppendedIsCountedAgain() async throws {
+        let fixture = try LocalHookFixture()
+        try Data("aa".utf8).write(to: HookLocalSpool.uncountedURL(home: fixture.home))
+        let drainer = HookLocalSpoolDrainer(home: fixture.home, deliver: { _ in })
+        await drainer.drainNow()  // moves the count aside for the next drain
+        let audit = AuditLog.fileURL(configDirectory: Self.config(fixture))
+        let holder = try FileLockHolder(path: audit.path)
+        defer { holder.release() }
+        #expect(await drainer.drainNow().lostAudits == 2)
+        holder.release()
+        #expect(try Data(contentsOf: HookLocalSpool.uncountedURL(home: fixture.home)) == Data("aa".utf8))
+        await drainer.drainNow()
+        #expect(await drainer.drainNow().lostAudits == 2)
+        let text = try String(contentsOf: audit, encoding: .utf8)
+        #expect(text.contains(#""kind":"audit.gap""#))
+        #expect(text.contains(#""lost":"2""#))
+    }
+
+    @Test func oneDrainTakesAtMostItsRowCap() throws {
+        let fixture = try LocalHookFixture()
+        for _ in 0..<5 { #expect(HookLocalSpool.write(.init(decision: .allow, drops: []), home: fixture.home)) }
+        let first = HookLocalSpool.drain(home: fixture.home, now: Date(), maxRows: 3) { _ in true }
+        #expect(first.decisions == [.allow: 3])
+        #expect(first.kept == 2)
+        let second = HookLocalSpool.drain(home: fixture.home, now: Date(), maxRows: 3) { _ in true }
+        #expect(second.decisions == [.allow: 2])
+        #expect(second.kept == 0)
+    }
+
+    @Test func rowsOutOfTimeOrWithOverlongRulesAreGapsNotChained() async throws {
+        let fixture = try LocalHookFixture()
+        let now = Date().timeIntervalSince1970
+        #expect(HookLocalSpool.write(.init(decision: nil, drops: [], audits: [
+            Self.validAudit(at: now - 25 * 3600),
+            Self.validAudit(at: now + 25 * 3600),
+            Self.validAudit(rule: "core.git:" + String(repeating: "x", count: 300)),
+            Self.validAudit(at: now - 23 * 3600),
+        ]), home: fixture.home))
+        let drained = await HookLocalSpoolDrainer(home: fixture.home, deliver: { _ in }).drainNow()
+        #expect(drained.audits.count == 1)
+        #expect(drained.lostAudits == 3)
+    }
+
+    // MARK: Planted files at the spool paths
+
+    @Test(arguments: ["symlink", "fifo", "hardlink"])
+    func aPlantedSpoolOrUncountedFileIsRemovedAndCounted(_ kind: String) throws {
+        for target in ["spool", "uncounted"] {
+            let fixture = try LocalHookFixture()
+            let url = target == "spool"
+                ? HookLocalSpool.fileURL(home: fixture.home) : HookLocalSpool.uncountedURL(home: fixture.home)
+            let other = Self.config(fixture).appendingPathComponent("other.txt")
+            try Data("keep".utf8).write(to: other)
+            switch kind {
+            case "symlink": try FileManager.default.createSymbolicLink(at: url, withDestinationURL: other)
+            case "fifo": #expect(mkfifo(url.path, 0o600) == 0)
+            default: #expect(link(other.path, url.path) == 0)
+            }
+            // A planted file refuses the evaluator's write, never redirects it.
+            HookLocalSpool.write(.init(decision: .allow, drops: []), home: fixture.home)
+            #expect(try Data(contentsOf: other) == Data("keep".utf8), "\(target) \(kind)")
+            let drained = HookLocalSpool.drain(home: fixture.home, now: Date()) { _ in true }
+            #expect(drained.atLeast, "\(target) \(kind)")
+            #expect(drained.lostAudits >= 1)
+            #expect(try Data(contentsOf: other) == Data("keep".utf8))
+            // The spool works again.
+            #expect(HookLocalSpool.write(.init(decision: .allow, drops: []), home: fixture.home), "\(target) \(kind)")
+        }
     }
 
     @Test func timerDrainsWithoutAnEvaluation() async throws {
@@ -285,5 +440,28 @@ struct LocalHookRecordFailureTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(delivered.withLock { $0 } == [.deny: 1])
+    }
+}
+
+extension HookLocalSpool {
+    /// Two drains that append every row, merged: uncounted counts reach
+    /// the drain after the one that moved them aside.
+    static func drain(home: HomeDirectory) -> Drained {
+        var drained = drain(home: home, now: Date()) { _ in true }
+        drained.add(drain(home: home, now: Date()) { _ in true })
+        return drained
+    }
+}
+
+extension HookLocalSpool.Drained {
+    mutating func add(_ other: Self) {
+        decisions.merge(other.decisions, uniquingKeysWith: +)
+        drops.merge(other.drops, uniquingKeysWith: +)
+        audits += other.audits
+        lostAudits += other.lostAudits
+        lost += other.lost
+        truncatedBytes += other.truncatedBytes
+        atLeast = atLeast || other.atLeast
+        kept += other.kept
     }
 }
