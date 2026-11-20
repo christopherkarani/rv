@@ -345,6 +345,10 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     /// rows are read on the next call. Same scheme as `AllowOnceStore`.
     private struct LedgerCache {
         var stamp: FileStamp
+        /// Exactly what `load` returns for the file: rows this instance wrote
+        /// are cached as read back from their lines (dates keep whole
+        /// seconds), so callers see the same values as any other reader.
+        /// Review tokens hash these rows across processes.
         var records: [PendingApproval]
         /// `lines[i]` is `records[i]` as saved, when this instance wrote the
         /// file. Nil after a plain load: the file may then hold rows `load`
@@ -384,17 +388,19 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                     // A fresh ask appends one row: append its line instead of
                     // rewriting them all.
                     let line = try Self.encodeLine(added)
+                    let readBack = try Self.decodeLine(line)
                     ledgerCache = nil
                     try store.append(line: line)
                     lines.append(line)
-                    ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: records, lines: lines) }
+                    let saved = cache.records + [readBack]
+                    ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: saved, lines: lines) }
                     return
                 }
             }
-            let lines = try encodedLines(for: records, reusing: ledgerCache)
+            let (lines, saved) = try encodedLines(for: records, reusing: ledgerCache)
             ledgerCache = nil
             try store.save(lines: lines)
-            ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: records, lines: lines) }
+            ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: saved, lines: lines) }
         } catch {
             ledgerCache = nil
             // RVFileStore boundary: every save failure (encode or IO) becomes
@@ -413,21 +419,32 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
             PendingApprovalRecord(schemaVersion: 1, approval: approval), encoder: encoder)
     }
 
-    /// Saved lines for `records`, re-encoding only rows the cache does not
-    /// hold verbatim (matched by full equality). Ledger transitions keep row
-    /// order (sweep flips states in place, create appends), so a forward
-    /// merge against the cached rows finds each reusable line; a row it does
-    /// not find nearby is encoded again.
+    private static func decodeLine(
+        _ line: String,
+        decoder: JSONDecoder = FileLockedJSONLStore<PendingApprovalRecord>.lineDecoder()
+    ) throws(FileLockedJSONLStoreError) -> PendingApproval {
+        try FileLockedJSONLStore<PendingApprovalRecord>.decodeLine(line, decoder: decoder).approval
+    }
+
+    /// Saved lines for `records`, and the rows as `load` will read them back,
+    /// re-encoding only rows the cache does not hold verbatim (matched by
+    /// full equality). Ledger transitions keep row order (sweep flips states
+    /// in place, create appends), so a forward merge against the cached rows
+    /// finds each reusable line; a row it does not find nearby is encoded
+    /// again and read back from its new line.
     private func encodedLines(
         for records: [PendingApproval],
         reusing cache: LedgerCache?
-    ) throws(FileLockedJSONLStoreError) -> [String] {
+    ) throws(FileLockedJSONLStoreError) -> (lines: [String], saved: [PendingApproval]) {
         let cachedRecords = cache?.records ?? []
         let cachedLines = cache?.lines ?? []
         let reusable = cachedLines.count == cachedRecords.count ? cachedRecords.count : 0
         let encoder = FileLockedJSONLStore<PendingApprovalRecord>.lineEncoder()
+        let decoder = FileLockedJSONLStore<PendingApprovalRecord>.lineDecoder()
         var lines: [String] = []
+        var saved: [PendingApproval] = []
         lines.reserveCapacity(records.count)
+        saved.reserveCapacity(records.count)
         var cursor = 0
         for record in records {
             var hit: Int?
@@ -441,12 +458,15 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
             }
             if let hit {
                 lines.append(cachedLines[hit])
+                saved.append(cachedRecords[hit])
                 cursor = hit + 1
             } else {
-                lines.append(try Self.encodeLine(record, encoder: encoder))
+                let line = try Self.encodeLine(record, encoder: encoder)
+                lines.append(line)
+                saved.append(try Self.decodeLine(line, decoder: decoder))
             }
         }
-        return lines
+        return (lines, saved)
     }
 
     /// Maximum retained rejection reasons. Past the cap the oldest

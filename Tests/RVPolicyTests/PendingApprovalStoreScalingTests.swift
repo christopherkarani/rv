@@ -118,6 +118,27 @@ struct PendingApprovalStoreScalingTests {
             == [created[0], created[1], created[3], created[4]].map(\.id))
     }
 
+    /// The file keeps whole-second dates. The instance that wrote a row must
+    /// hand out the same row as any other reader, or a review token hashed
+    /// in one process never matches the one checked in another.
+    @Test func theWriterSeesTheSameRowsAsAFreshReader() async throws {
+        let root = try Self.directory()
+        let store = PendingApprovalStore(baseDirectory: root)
+        let fractional = Date(timeIntervalSince1970: 1_700_000_000.123_456)
+        _ = try await store.create(Self.request(1), now: fractional)
+        _ = try await store.create(Self.request(2), now: fractional.addingTimeInterval(0.5))
+        let fresh = try await PendingApprovalStore(baseDirectory: root).list(now: fractional)
+        #expect(try await store.list(now: fractional) == fresh)
+        // Also after a rewrite (a resolve flips a row in place).
+        _ = try await store.resolve(
+            id: ApprovalID(rawValue: "ask-1"), decision: .deny,
+            fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:branch-1"),
+            identity: Self.identity, now: fractional.addingTimeInterval(1.25)
+        )
+        let afterResolve = try await PendingApprovalStore(baseDirectory: root).records(now: fractional)
+        #expect(try await store.records(now: fractional) == afterResolve)
+    }
+
     /// After a plain load the file may hold rows `load` skipped. The next
     /// write is a full rewrite, which drops them, never an append after them.
     @Test func aCorruptLineIsRewrittenAwayNotAppendedAfter() async throws {
