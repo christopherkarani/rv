@@ -117,6 +117,27 @@ bind_artifact() {
   SIG_PATH="$TAR_PATH.sig"
 }
 
+# Download $1 to $2, resuming after a dropped connection. The tarball is
+# about 1 GB, and proxies (cloud sessions, some CI egress) can cut a long
+# transfer partway; plain `curl --retry` would start over from byte 0.
+# A 404 or other HTTP error fails at once: it is not a dropped connection.
+# The GPG check below still covers the reassembled file.
+fetch_resumable() {
+  local url="$1" out="$2" attempt status
+  for attempt in 1 2 3 4 5 6 7 8; do
+    status=0
+    curl -fL --retry 3 --retry-delay 4 -C - -o "$out" "$url" || status=$?
+    case "$status" in
+      0) return 0 ;;
+      22) return 1 ;;                       # HTTP error (404 for a missing pin)
+      33) rm -f "$out" ;;                   # server refused the range: restart
+      *) log "download interrupted (curl $status), resuming (attempt $attempt)" ;;
+    esac
+    sleep 2
+  done
+  return 1
+}
+
 for id in $ARTIFACT_IDS; do
   bind_artifact "$id"
   if already_ok; then
@@ -143,7 +164,7 @@ else
     mkdir -p "$CACHE_DIR" "$(dirname "$DEST")"
     if [[ ! -s "$TAR_PATH" ]]; then
       log "trying $URL"
-      if ! curl -fL --retry 5 --retry-delay 4 -o "$TAR_PATH.partial" "$URL"; then
+      if ! fetch_resumable "$URL" "$TAR_PATH.partial"; then
         rm -f "$TAR_PATH.partial"
         continue
       fi
