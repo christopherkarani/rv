@@ -8,10 +8,11 @@ import Synchronization
 
 /// One hardened append primitive for the append-only JSONL ledgers.
 ///
-/// Guarantees: a `<name>.lock` sidecar taken under an in-process lock for
-/// that sidecar (macOS `flock` does not exclude threads of one process; one
-/// log's writers never wait for another's) with an EINTR
-/// retry; the target opens only after exclusion is held, with
+/// Guarantees: a `<name>.lock` sidecar `flock`ed with an EINTR retry, under
+/// an in-process lock for that sidecar file (for filesystems that count
+/// `flock` per process, where threads would not exclude each other, and so
+/// this process's writers queue on one deadline; one log's writers never
+/// wait for another's); the target opens only after exclusion is held, with
 /// `O_APPEND | O_CLOEXEC | O_NOFOLLOW`, so a symlink at the ledger path is
 /// refused and a compaction rename cannot strand an append on a replaced
 /// inode; the opened file must be regular; new files are 0600 and a created
@@ -36,16 +37,22 @@ public enum JSONLAppendLog {
         case sync(errno: Int32)
     }
 
-    /// The lock sidecar paths a writer in this process holds: one
-    /// in-process lock per log, so one log's writers never wait for
-    /// another's.
-    private static let heldPaths = Mutex<Set<String>>([])
+    /// A lock sidecar by file identity, so every path to one log shares
+    /// one in-process lock.
+    private struct Sidecar: Hashable {
+        let device: UInt64
+        let inode: UInt64
+    }
 
-    /// Takes `path`'s in-process lock, retrying until `deadline` (nil:
+    /// The sidecars a writer in this process holds. Held only to insert or
+    /// remove one, never across a wait.
+    private static let heldSidecars = Mutex<Set<Sidecar>>([])
+
+    /// Takes `sidecar`'s in-process lock, retrying until `deadline` (nil:
     /// until it is free). A deadline already passed is one attempt.
-    private static func holdPath(_ path: String, until deadline: ContinuousClock.Instant?) -> Bool {
+    private static func hold(_ sidecar: Sidecar, until deadline: ContinuousClock.Instant?) -> Bool {
         while true {
-            if heldPaths.withLock({ $0.insert(path).inserted }) {
+            if heldSidecars.withLock({ $0.insert(sidecar).inserted }) {
                 return true
             }
             if let deadline, ContinuousClock.now >= deadline {
@@ -55,20 +62,43 @@ public enum JSONLAppendLog {
         }
     }
 
-    private static func releasePath(_ path: String) {
-        heldPaths.withLock { _ = $0.remove(path) }
+    private static func release(_ sidecar: Sidecar) {
+        heldSidecars.withLock { _ = $0.remove(sidecar) }
     }
 
-    private static func lockPath(_ url: URL) -> String {
-        url.appendingPathExtension("lock").standardizedFileURL.path
+    /// Opens (creating) `url`'s `<name>.lock` sidecar and reads its identity.
+    private static func openSidecar(_ url: URL) -> Result<(fd: Int32, sidecar: Sidecar), AppendError> {
+        // O_NONBLOCK: a FIFO or device planted at the sidecar fails here
+        // instead of hanging the writer; it must be a regular file.
+        let fd = url.appendingPathExtension("lock").path.withCString { path in
+            open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
+        }
+        guard fd >= 0 else {
+            return .failure(.lock(errno: errno))
+        }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            let code = errno
+            close(fd)
+            return .failure(.lock(errno: code))
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            close(fd)
+            return .failure(.lock(errno: EINVAL))
+        }
+        return .success((fd, Sidecar(
+            device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino))))
     }
 
     /// Runs `body` holding `url`'s in-process writer lock, as a contending
-    /// writer would (tests).
+    /// writer would (tests). The sidecar's directory must exist.
     static func holdingProcessLock(at url: URL, _ body: () -> Void) {
-        let path = lockPath(url)
-        _ = holdPath(path, until: nil)
-        defer { releasePath(path) }
+        guard case .success(let opened) = openSidecar(url) else { return }
+        _ = hold(opened.sidecar, until: nil)
+        defer {
+            close(opened.fd)
+            release(opened.sidecar)
+        }
         body()
     }
 
@@ -118,24 +148,13 @@ public enum JSONLAppendLog {
         } catch {
             return .failure(.directory)
         }
-        let lockURL = url.appendingPathExtension("lock")
-        var openError: Int32 = 0
-        let fd = lockURL.path.withCString { path -> Int32 in
-            // O_NONBLOCK: a FIFO or device planted at the sidecar fails here
-            // instead of hanging the writer; it must be a regular file.
-            let opened = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
-            if opened < 0 {
-                openError = errno
-            }
-            return opened
-        }
-        guard fd >= 0 else {
-            return .failure(.lock(errno: openError))
-        }
-        defer { close(fd) }
-        var sidecar = stat()
-        guard fstat(fd, &sidecar) == 0, (sidecar.st_mode & S_IFMT) == S_IFREG else {
-            return .failure(.lock(errno: EINVAL))
+        let fd: Int32
+        let sidecar: Sidecar
+        switch openSidecar(url) {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success(let opened):
+            (fd, sidecar) = opened
         }
         func locked(until deadline: ContinuousClock.Instant?) -> Result<T, AppendError> {
             if let failure = lock(fd, until: deadline) {
@@ -148,11 +167,20 @@ public enum JSONLAppendLog {
         // not stack a fresh timeout per waiting writer. A zero timeout is
         // one non-blocking attempt at each.
         let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
-        let path = lockPath(url)
-        guard holdPath(path, until: deadline) else {
+        guard hold(sidecar, until: deadline) else {
+            // Never entered: this descriptor took no lock. Closing it is
+            // harmless where each open has its own `flock` (local Darwin
+            // and Linux filesystems). Where locks are counted per process
+            // (some network filesystems) it can drop the holder's lock, as
+            // in AuditLog: a waiter only gets here by timing out.
+            close(fd)
             return .failure(.lock(errno: EWOULDBLOCK))
         }
-        defer { releasePath(path) }
+        defer { release(sidecar) }
+        // Closed before the entry is given up: where `flock` is counted
+        // per process, closing a descriptor that held the lock drops it for
+        // every thread, the next one to take it included.
+        defer { close(fd) }
         return locked(until: deadline)
     }
 

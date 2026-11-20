@@ -87,8 +87,11 @@ writes nothing, so rvd's own evaluation writes each row once.
 `O_NOFOLLOW`, 0600), so rvd and any number of evaluators append whole rows
 and never replace one another's file. The wait for another writer's
 lock is bounded (200 ms in total across the in-process and `flock` waits,
-non-blocking attempts); on timeout the row is dropped and reported to
-rvd.log (`AuditDropLog`, kind `judge-log`), and the verdict is not held.
+non-blocking attempts); on timeout the row is dropped and the verdict is
+not held. A drop in rvd is reported to rvd.log (`AuditDropLog`, kind
+`judge-log`); a drop in `rv-hook-local` is not, as its stderr is
+`/dev/null`; it names the drop in its spool instead, and rvd's drain
+reports it in rvd.log (see "The spool rvd drains").
 
 Every one of those writes ends by one write deadline
 (`LocalHookDecider.writeDeadline`, `GatedEvaluate.performBounded`): 750 ms

@@ -248,6 +248,24 @@ struct JSONLAppendLogTests {
         #expect(try text(url) == "{}\n")
     }
 
+    /// The in-process lock belongs to the sidecar file, not its spelling: a
+    /// writer reaching the same log through another directory path waits
+    /// for the holder like any other.
+    @Test func theSameLogThroughAnotherPathSharesTheLock() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("real", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let alias = dir.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        let holder = holdProcessLock(at: real.appendingPathComponent("a.jsonl"))
+        defer { holder.release() }
+        #expect(throws: JSONLAppendLog.AppendError.lock(errno: EWOULDBLOCK)) {
+            try JSONLAppendLog.append(
+                Data("{}".utf8), to: alias.appendingPathComponent("a.jsonl"), sync: false, lockTimeout: .zero)
+        }
+    }
+
     /// Writers of one log exclude each other; writers of another log do
     /// not wait for them.
     @Test func anotherLogsWriterDoesNotBlockThisOne() throws {
