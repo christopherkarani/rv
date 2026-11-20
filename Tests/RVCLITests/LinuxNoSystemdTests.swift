@@ -249,7 +249,10 @@ import Testing
             "HOME=/home/u", "PATH=/usr/bin:/bin", "LD_PRELOAD=/tmp/x.so", "LD_LIBRARY_PATH=/tmp",
             "LD_AUDIT=/tmp/a.so", "GCONV_PATH=/tmp", "GLIBC_TUNABLES=x", "SWIFT_BACKTRACE=swift-backtrace=/tmp/b",
             "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8", "OLD_LD_PRELOAD=kept", "=odd",
+            "INVOCATION_ID=0123abcd", "XPC_SERVICE_NAME=dev.rv.evaluate",
         ])
+        // Supervisor markers go too: rvd started this way is unsupervised
+        // and must never wait out a startup backoff.
         #expect(kept == [
             "HOME=/home/u", "PATH=/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8",
             "OLD_LD_PRELOAD=kept", "=odd",
