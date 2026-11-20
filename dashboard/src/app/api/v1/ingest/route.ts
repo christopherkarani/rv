@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { parseBatch } from "@/lib/ingest/normalize";
 import { authenticateIngest } from "@/lib/server/tokens";
 import { deviceHeader, errorResponse, parseJSONBody, readBody } from "@/lib/server/http";
-import { pruneIfDue, storeEvents } from "@/lib/server/store";
+import { ingestAnswer, pruneIfDue, storeEvents } from "@/lib/server/store";
+import { alertsOnIngest } from "@/lib/server/alerts";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,9 @@ export async function POST(request: Request) {
     const events = parseBatch(body, device.toLowerCase());
     const outcome = storeEvents(events, device);
     pruneIfDue();
-    return NextResponse.json(outcome);
+    // After the commit and off the response path: rv's retry depends only on storage.
+    alertsOnIngest(outcome);
+    return NextResponse.json(ingestAnswer(outcome));
   } catch (error) {
     return errorResponse(error);
   }

@@ -103,6 +103,61 @@ const MIGRATIONS: string[] = [
 
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // 2: single sign-on identities, alert destinations, rules and deliveries.
+  `
+  ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password';
+  ALTER TABLE users ADD COLUMN oidc_sub TEXT;
+  CREATE UNIQUE INDEX users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL;
+
+  CREATE TABLE alert_destinations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('slack','webhook')),
+    url_enc TEXT NOT NULL,
+    url_hint TEXT NOT NULL,
+    secret_enc TEXT,
+    min_severity TEXT NOT NULL DEFAULT 'high' CHECK (min_severity IN ('critical','high','medium')),
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    created_by TEXT,
+    last_status TEXT,
+    last_delivery_at INTEGER
+  );
+
+  CREATE TABLE alert_rules (
+    id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL,
+    threshold INTEGER,
+    updated_at INTEGER NOT NULL,
+    updated_by TEXT
+  );
+
+  CREATE TABLE alerts (
+    id TEXT PRIMARY KEY,
+    rule TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    device_id TEXT,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX alerts_created ON alerts(created_at);
+
+  CREATE TABLE alert_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL,
+    destination_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('sent','failed')),
+    http_status INTEGER,
+    error TEXT,
+    attempts INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX alert_deliveries_created ON alert_deliveries(created_at);
+
+  CREATE TABLE alert_cooldowns (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
+  `,
 ];
 
 function open(): DatabaseSync {

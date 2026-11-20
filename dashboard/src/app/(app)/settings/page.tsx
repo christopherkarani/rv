@@ -10,6 +10,8 @@ import { listUsers, requireUser } from "@/lib/server/auth";
 import { listTokens } from "@/lib/server/tokens";
 import { consoleLog } from "@/lib/server/queries";
 import { config } from "@/lib/server/config";
+import { redirectUri, ssoSettings } from "@/lib/server/sso";
+import { StatusPill } from "@/components/console/badges";
 import { fmtAgo, fmtTime } from "@/lib/format";
 
 export const metadata = { title: "Settings" };
@@ -129,6 +131,46 @@ rv audit export --since 30d | curl -fsS -X POST \\
           </div>
         </Panel>
 
+        <Panel title="Single sign-on" description="OpenID Connect: Okta, Microsoft Entra ID, Google Workspace, Auth0, OneLogin, Ping, Keycloak.">
+          {ssoSettings ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <dl className="grid gap-0 text-[12.5px]">
+                {[
+                  ["Status", <StatusPill key="s" status="good" label={`${ssoSettings.name} enabled`} />],
+                  ["Issuer", <span key="i" className="font-mono text-[11.5px] break-all">{ssoSettings.issuer}</span>],
+                  ["Client ID", <span key="c" className="font-mono text-[11.5px] break-all">{ssoSettings.clientId}</span>],
+                  ["Password sign-in", ssoSettings.enforce ? "Local admins only (break-glass)" : "Allowed alongside SSO"],
+                  ["New users", ssoSettings.policy.autoProvision ? `Created on first sign-in as ${ssoSettings.policy.defaultRole}` : "Must be added by an admin first"],
+                  ["Email domains", ssoSettings.policy.allowedDomains.join(", ") || "Any"],
+                  ["Admin groups", ssoSettings.policy.adminGroups.join(", ") || "None (roles set in the console)"],
+                  ["Viewer groups", ssoSettings.policy.viewerGroups.join(", ") || (ssoSettings.policy.adminGroups.length ? "Everyone else" : "None (roles set in the console)")],
+                ].map(([k, v]) => (
+                  <div key={String(k)} className="grid grid-cols-[132px_minmax(0,1fr)] gap-3 border-b border-dashed py-2 last:border-0">
+                    <dt className="text-muted-foreground">{k}</dt><dd className="min-w-0">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="grid content-start gap-2">
+                <CodeBlock code={redirectUri(origin)} label="redirect URI to register with your IdP" />
+                <p className="text-[11.5px] text-muted-foreground">Register a web application using the authorization code flow (the console sends PKCE). With group mapping, roles follow the IdP on every sign-in. These settings come from <code className="font-mono">RV_CONSOLE_OIDC_*</code> environment variables.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <p className="text-[12.5px] text-muted-foreground">Not configured. Set these on the console and restart it; the sign-in page then offers your provider. The redirect URI to register is <code className="font-mono">{redirectUri(origin)}</code>.</p>
+              <CodeBlock label="environment" code={`RV_CONSOLE_PUBLIC_URL=${origin}
+RV_CONSOLE_OIDC_ISSUER=https://your-org.okta.com
+RV_CONSOLE_OIDC_CLIENT_ID=<client id>
+RV_CONSOLE_OIDC_CLIENT_SECRET=<client secret>
+RV_CONSOLE_OIDC_NAME=Okta
+RV_CONSOLE_OIDC_ALLOWED_DOMAINS=your-org.com
+RV_CONSOLE_OIDC_ADMIN_GROUPS=rv-admins        # optional group-to-role mapping
+RV_CONSOLE_OIDC_VIEWER_GROUPS=engineering      # optional; anyone in neither is refused
+RV_CONSOLE_SSO_ENFORCE=1                       # optional; passwords for local admins only`} />
+            </div>
+          )}
+        </Panel>
+
         {isAdmin && (
           <div className="grid gap-3 xl:grid-cols-2">
             <Panel title="Users" description="Admins manage tokens and users; viewers see everything else.">
@@ -138,7 +180,7 @@ rv audit export --since 30d | curl -fsS -X POST \\
                   <li key={u.id} className="flex items-center justify-between gap-3 py-2 text-[12.5px]">
                     <span className="min-w-0">
                       <span className="block truncate">{u.name} <span className="text-muted-foreground">· {u.email}</span></span>
-                      <span className="text-[11px] text-muted-foreground">{u.role} · last sign-in {fmtAgo(u.lastLoginAt)}</span>
+                      <span className="text-[11px] text-muted-foreground">{u.role} · {u.provider === "oidc" ? (ssoSettings?.name ?? "SSO") : "password"} · last sign-in {fmtAgo(u.lastLoginAt)}</span>
                     </span>
                     {u.id !== user.id && <RemoveUserButton id={u.id} email={u.email} />}
                   </li>

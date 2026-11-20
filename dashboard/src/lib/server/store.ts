@@ -2,16 +2,40 @@ import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { config } from "./config";
 import { db, transaction } from "./db";
+import { pruneAlerts } from "./alerts";
 import { advanceChain } from "../ingest/chain";
 import { deviceIdFor, type NormalizedEvent } from "../ingest/normalize";
-import { isCompliant, type RVReport } from "../ingest/report";
+import { complianceFindings, isCompliant, type RVReport } from "../ingest/report";
+
+export interface StoredEvent {
+  event: NormalizedEvent;
+  deviceId: string;
+  hostname: string;
+  seq: number;
+}
+
+export interface StoredBreak {
+  deviceId: string;
+  hostname: string;
+  seq: number;
+  time: number;
+  expected: string;
+  got: string | null;
+}
 
 export interface IngestOutcome {
   accepted: number;
   duplicates: number;
   chainBreaks: number;
   devices: string[];
+  /** New events and breaks, for the alert engine; not part of the HTTP answer. */
+  stored: StoredEvent[];
+  breaks: StoredBreak[];
 }
+
+/** What the ingest endpoint answers rv with. */
+export const ingestAnswer = ({ accepted, duplicates, chainBreaks, devices }: IngestOutcome) =>
+  ({ accepted, duplicates, chainBreaks, devices });
 
 function upsertDevice(handle: DatabaseSync, id: string, hostname: string, now: number) {
   handle.prepare(`
@@ -49,6 +73,8 @@ export function storeEvents(events: NormalizedEvent[], fallbackHost: string): In
       WHERE id = ?
     `);
     const seen = new Set<string>();
+    const stored: StoredEvent[] = [];
+    const breakList: StoredBreak[] = [];
     let accepted = 0;
     let duplicates = 0;
     let breaks = 0;
@@ -71,21 +97,33 @@ export function storeEvents(events: NormalizedEvent[], fallbackHost: string): In
       const seq = Number(result.lastInsertRowid);
       const current = chainOf.get(deviceId) as { chain_head: string | null };
       const step = advanceChain({ head: current.chain_head }, event);
+      stored.push({ event, deviceId, hostname, seq });
       if (step.broken) {
         breaks++;
         recordBreak.run(deviceId, seq, event.time, now, step.broken.expected, step.broken.got);
+        breakList.push({ deviceId, hostname, seq, time: event.time, ...step.broken });
       }
       const chained = event.chainHead ? 1 : 0;
       touch.run(event.time, event.time, step.head, chained, step.broken ? 1 : 0, step.anchored ? seq : null, deviceId);
     }
-    return { accepted, duplicates, chainBreaks: breaks, devices: [...seen] };
+    return { accepted, duplicates, chainBreaks: breaks, devices: [...seen], stored, breaks: breakList };
   });
 }
 
-export function storeReport(report: RVReport) {
+export interface StoredReport {
+  deviceId: string;
+  hostname: string;
+  compliant: boolean;
+  /** Compliance before this report; null for a device's first report. */
+  previous: boolean | null;
+  findings: string[];
+}
+
+export function storeReport(report: RVReport): StoredReport {
   const now = Date.now();
   const id = deviceIdFor(report.host.name);
-  transaction((handle) => {
+  return transaction((handle) => {
+    const before = handle.prepare("SELECT compliant FROM devices WHERE id = ?").get(id) as { compliant: number | null } | undefined;
     upsertDevice(handle, id, report.host.name, now);
     handle.prepare(`
       UPDATE devices SET
@@ -98,8 +136,11 @@ export function storeReport(report: RVReport) {
       JSON.stringify(report), now, report.audit.chainHead ?? null,
       report.audit.chainIntact === undefined || report.audit.chainIntact === null ? null : report.audit.chainIntact ? 1 : 0,
       id);
+    return {
+      deviceId: id, hostname: report.host.name, compliant: isCompliant(report),
+      previous: before?.compliant == null ? null : before.compliant === 1, findings: complianceFindings(report),
+    };
   });
-  return id;
 }
 
 let lastPrune = 0;
@@ -111,4 +152,5 @@ export function pruneIfDue() {
   const cutoff = now - config.retentionDays * 86_400_000;
   db().prepare("DELETE FROM events WHERE time < ?").run(cutoff);
   db().prepare("DELETE FROM chain_breaks WHERE detected_at < ?").run(cutoff);
+  pruneAlerts(config.retentionDays);
 }

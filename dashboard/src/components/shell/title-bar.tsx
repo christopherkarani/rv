@@ -8,6 +8,7 @@ import { RvMark } from "@/components/brand";
 import { navFor } from "./nav";
 import { RangePicker } from "./range-picker";
 import { UserMenu, type ShellUser } from "./user-menu";
+import { ThemeToggle } from "./theme-toggle";
 
 export function TitleBar({ user, organization, onToggleSidebar, onOpenPalette }: {
   user: ShellUser;
@@ -74,6 +75,7 @@ export function TitleBar({ user, organization, onToggleSidebar, onOpenPalette }:
           <Search className="size-4" />
         </button>
         <RangePicker className="hidden sm:flex" />
+        <ThemeToggle />
         <UserMenu user={user} />
       </div>
     </header>

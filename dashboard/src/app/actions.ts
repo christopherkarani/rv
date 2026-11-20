@@ -9,6 +9,7 @@ import {
 } from "@/lib/server/auth";
 import { logConsoleAction } from "@/lib/server/db";
 import { createToken, revokeToken } from "@/lib/server/tokens";
+import { createDestination, deleteDestination, sendTest, setDestinationEnabled, updateRule } from "@/lib/server/alerts";
 
 /** `values` echoes what was typed (never passwords): React resets a form after its action runs. */
 export type FormState = { error?: string; ok?: boolean; token?: string; values?: Record<string, string> } | undefined;
@@ -99,4 +100,57 @@ export async function deleteUserAction(id: string) {
   deleteUser(id);
   logConsoleAction(admin.email, "user.removed", id);
   revalidatePath("/settings");
+}
+
+// --- alerts -------------------------------------------------------------------
+
+const newDestination = z.object({
+  name: z.string().trim().min(1, "Name the destination").max(80),
+  kind: z.enum(["slack", "webhook"]),
+  url: z.string().trim().min(1, "Enter the webhook URL").max(2048),
+  minSeverity: z.enum(["critical", "high", "medium"]),
+});
+
+export type DestinationFormState = { error?: string; ok?: boolean; signingSecret?: string | null; values?: Record<string, string> } | undefined;
+
+export async function createDestinationAction(_: DestinationFormState, form: FormData): Promise<DestinationFormState> {
+  const admin = await requireAdmin();
+  const parsed = newDestination.safeParse({
+    name: form.get("name"), kind: form.get("kind"), url: form.get("url"), minSeverity: form.get("minSeverity"),
+  });
+  const values = echo(form, "name", "kind", "minSeverity");
+  if (!parsed.success) return { error: parsed.error.issues[0].message, values };
+  const result = createDestination(parsed.data, admin.email);
+  if (!result.ok) return { error: result.error, values };
+  revalidatePath("/alerts");
+  return { ok: true, signingSecret: result.signingSecret };
+}
+
+export async function toggleDestinationAction(id: string, enabled: boolean) {
+  const admin = await requireAdmin();
+  setDestinationEnabled(id, enabled, admin.email);
+  revalidatePath("/alerts");
+}
+
+export async function deleteDestinationAction(id: string) {
+  const admin = await requireAdmin();
+  deleteDestination(id, admin.email);
+  revalidatePath("/alerts");
+}
+
+export async function testDestinationAction(id: string) {
+  const admin = await requireAdmin();
+  const result = await sendTest(id, admin.email);
+  revalidatePath("/alerts");
+  return result;
+}
+
+const ruleIds = z.enum(["chain.break", "secret.misuse", "mcp.forged", "gate.loosened", "device.noncompliant", "blocks.spike", "device.silent"]);
+
+export async function updateRuleAction(id: string, patch: { enabled?: boolean; threshold?: number }) {
+  const admin = await requireAdmin();
+  const rule = ruleIds.parse(id);
+  const clean = z.object({ enabled: z.boolean().optional(), threshold: z.number().int().positive().max(100_000).optional() }).parse(patch);
+  updateRule(rule, clean, admin.email);
+  revalidatePath("/alerts");
 }

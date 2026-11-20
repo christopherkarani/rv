@@ -5,6 +5,8 @@ import { cache } from "react";
 import { config, sessionSecret } from "./config";
 import { db, logConsoleAction } from "./db";
 import { hashPassword, newId, safeEqual, sha256Hex, sign, verifyPassword } from "./crypto";
+import { ssoSettings } from "./sso";
+import type { SsoDecision } from "../sso-policy";
 
 export const SESSION_COOKIE = "rvc_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -15,6 +17,7 @@ export interface User {
   email: string;
   name: string;
   role: Role;
+  provider: "password" | "oidc";
   createdAt: number;
   lastLoginAt: number | null;
 }
@@ -22,10 +25,15 @@ export interface User {
 interface UserRow {
   id: string; email: string; name: string; role: Role; password_hash: string;
   session_epoch: number; created_at: number; last_login_at: number | null;
+  auth_provider: "password" | "oidc"; oidc_sub: string | null;
 }
 
+/** Stored in place of a password hash for SSO-only users; never verifies. */
+const NO_PASSWORD = "!sso";
+
 const toUser = (row: UserRow): User => ({
-  id: row.id, email: row.email, name: row.name, role: row.role, createdAt: row.created_at, lastLoginAt: row.last_login_at,
+  id: row.id, email: row.email, name: row.name, role: row.role, provider: row.auth_provider ?? "password",
+  createdAt: row.created_at, lastLoginAt: row.last_login_at,
 });
 
 export function userCount(): number {
@@ -103,7 +111,7 @@ export const currentUser = cache(async (): Promise<User | null> => {
 
 export async function requireUser(): Promise<User> {
   const user = await currentUser();
-  if (!user) redirect(userCount() === 0 ? "/setup" : "/login");
+  if (!user) redirect(userCount() === 0 && !ssoSettings ? "/setup" : "/login");
   return user;
 }
 
@@ -113,11 +121,23 @@ export async function requireAdmin(): Promise<User> {
   return user;
 }
 
+export interface SessionCookie {
+  name: string;
+  value: string;
+  options: { httpOnly: true; sameSite: "lax"; secure: boolean; path: string; maxAge: number };
+}
+
+function sessionCookie(row: UserRow): SessionCookie {
+  return {
+    name: SESSION_COOKIE,
+    value: encodeSession(row),
+    options: { httpOnly: true, sameSite: "lax", secure: config.secureCookies, path: "/", maxAge: SESSION_TTL_MS / 1000 },
+  };
+}
+
 async function setSessionCookie(row: UserRow) {
-  const store = await cookies();
-  store.set(SESSION_COOKIE, encodeSession(row), {
-    httpOnly: true, sameSite: "lax", secure: config.secureCookies, path: "/", maxAge: SESSION_TTL_MS / 1000,
-  });
+  const c = sessionCookie(row);
+  (await cookies()).set(c.name, c.value, c.options);
 }
 
 // --- login rate limiting ----------------------------------------------------
@@ -155,6 +175,10 @@ export async function login(email: string, password: string): Promise<LoginResul
     return { ok: false, error: "Email or password is incorrect." };
   }
   attempts.delete(key);
+  // With SSO enforced, passwords only work for local admins (break-glass).
+  if (ssoSettings?.enforce && !(row.role === "admin" && row.auth_provider === "password")) {
+    return { ok: false, error: `Sign in with ${ssoSettings.name}.` };
+  }
   db().prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(now, row.id);
   await setSessionCookie(row);
   logConsoleAction(row.email, "session.login");
@@ -174,4 +198,49 @@ export function revokeSessions(userId: string) {
 export async function startSessionFor(userId: string) {
   const row = db().prepare("SELECT * FROM users WHERE id = ?").get(userId) as unknown as UserRow;
   await setSessionCookie(row);
+}
+
+// --- single sign-on -----------------------------------------------------------
+
+/** The caller sets `session` on its response (a route handler's redirect). */
+export type SsoSignIn = { ok: true; user: User; created: boolean; session: SessionCookie } | { ok: false; reason: string };
+
+/**
+ * Signs in a verified OIDC identity. The account is found by its subject,
+ * then by email (linking it), else created when auto-provisioning is on.
+ * With group mapping, the role follows the IdP on every sign-in. The very
+ * first account a console ever has becomes an admin.
+ */
+export function ssoSignIn(decision: Extract<SsoDecision, { ok: true }>): SsoSignIn {
+  const settings = ssoSettings;
+  if (!settings) return { ok: false, reason: "sso-unavailable" };
+  const now = Date.now();
+  let row = db().prepare("SELECT * FROM users WHERE oidc_sub = ?").get(decision.sub) as UserRow | undefined;
+  let created = false;
+  if (!row) {
+    const byEmail = db().prepare("SELECT * FROM users WHERE email = ?").get(decision.email) as UserRow | undefined;
+    if (byEmail) {
+      if (byEmail.oidc_sub && byEmail.oidc_sub !== decision.sub) return { ok: false, reason: "not-provisioned" };
+      db().prepare("UPDATE users SET oidc_sub = ? WHERE id = ?").run(decision.sub, byEmail.id);
+      row = { ...byEmail, oidc_sub: decision.sub };
+    } else {
+      const first = userCount() === 0;
+      if (!settings.policy.autoProvision && !first) return { ok: false, reason: "not-provisioned" };
+      const id = newId("usr");
+      const role: Role = first ? "admin" : decision.role ?? settings.policy.defaultRole;
+      db().prepare(`INSERT INTO users (id, email, name, role, password_hash, created_at, auth_provider, oidc_sub)
+        VALUES (?, ?, ?, ?, ?, ?, 'oidc', ?)`).run(id, decision.email, decision.name, role, NO_PASSWORD, now, decision.sub);
+      row = db().prepare("SELECT * FROM users WHERE id = ?").get(id) as unknown as UserRow;
+      created = true;
+      logConsoleAction(decision.email, "user.provisioned", `${decision.email} (${role}, ${settings.name})`);
+    }
+  }
+  if (!created && decision.role && decision.role !== row.role) {
+    db().prepare("UPDATE users SET role = ? WHERE id = ?").run(decision.role, row.id);
+    logConsoleAction(decision.email, "user.role-synced", `${row.role} -> ${decision.role}`);
+    row = { ...row, role: decision.role };
+  }
+  db().prepare("UPDATE users SET last_login_at = ?, name = ? WHERE id = ?").run(now, decision.name, row.id);
+  logConsoleAction(decision.email, "session.login", settings.name);
+  return { ok: true, user: toUser(row), created, session: sessionCookie(row) };
 }

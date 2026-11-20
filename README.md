@@ -512,7 +512,8 @@ configured per machine or fleet-wide through `audit.forward` in the
 organization policy, and post their posture with `rv report --json`. It
 shows blocks, observe-mode would-be blocks, overrides, MCP and secret
 activity, and compliance across the fleet. It also verifies each machine's
-audit hash chain off the machine. To try it:
+audit hash chain off the machine, signs people in with OpenID Connect
+single sign-on, and sends alerts to Slack or signed webhooks. To try it:
 `cd dashboard && npm ci && RV_CONSOLE_DEMO=1 npm run dev`.
 
 ## Platform support

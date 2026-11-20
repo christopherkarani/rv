@@ -29,7 +29,8 @@ to ship it.
 | **Secrets** | Which secrets are used, any misuse? | `secret.use`, `secret.misuse` (names and fingerprints only — rv never forwards values) |
 | **Policy & changes** | Who loosened the gate, was it authorized? Is the org policy rolled out? | `config.changed`, `policy.changed`, `policy.managed`, `owner.action`, report `managed.serial` |
 | **Integrity** | Has any machine's audit log been edited, cut, or gone quiet? | Chain verification per device, chain breaks, report head vs last forwarded head, stale devices |
-| **Settings** | How do I connect machines, who can see this? | Ingest tokens, onboarding snippets (CLI, org policy, MDM), users and roles |
+| **Alerts** | Who gets told, and where, when something needs a person? | Slack and signed webhooks; rules for chain breaks, secret misuse, forged MCP approvals, unauthorized loosening, non-compliance, block spikes, silent devices |
+| **Settings** | How do I connect machines, who can see this? | Ingest tokens, onboarding snippets (CLI, org policy, MDM), SSO status, users and roles |
 
 ## Architecture
 
@@ -47,6 +48,8 @@ to ship it.
   derives OCSF reason codes for `rv`-format events, and advances each device's
   hash chain incrementally (a mismatch is stored as a chain break). Bearer
   tokens are random 256-bit values stored as SHA-256 hashes.
+- **SSO**: OpenID Connect (openid-client) with PKCE, state and nonce; email-domain allowlist, group-to-role mapping, just-in-time accounts, optional enforcement with local-admin break-glass.
+- **Alerts**: rules evaluated after each ingest commit and on a one-minute sweep; per-subject cooldowns, a flood cap, retries, and a delivery log. Slack Block Kit or a signed JSON webhook; URLs encrypted at rest.
 - **Auth**: email + scrypt password, HMAC-signed session cookie checked in
   `proxy.ts` and again server-side; roles `admin` / `viewer`. First run shows a
   one-time setup screen (or seeds from `RV_CONSOLE_ADMIN_*`). Login is rate

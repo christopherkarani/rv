@@ -1,5 +1,5 @@
 import {
-  Activity, KeyRound, Laptop, LayoutDashboard, Link2, Plug, Scale, Settings, ShieldAlert, type LucideIcon,
+  Activity, Bell, KeyRound, Laptop, LayoutDashboard, Link2, Plug, Scale, Settings, ShieldAlert, type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem {
@@ -31,7 +31,10 @@ export const NAV: { section: string; items: NavItem[] }[] = [
   },
   {
     section: "Console",
-    items: [{ href: "/settings", title: "Settings", icon: Settings, hint: "Ingest tokens, users, onboarding" }],
+    items: [
+      { href: "/alerts", title: "Alerts", icon: Bell, hint: "Slack and webhook notifications", keys: "G L" },
+      { href: "/settings", title: "Settings", icon: Settings, hint: "Ingest tokens, users, SSO, onboarding" },
+    ],
   },
 ];
 

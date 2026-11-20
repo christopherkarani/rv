@@ -17,6 +17,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except auth pages, machine endpoints, health, and static files.
-  matcher: ["/((?!login|setup|api/v1/ingest|api/v1/reports|api/health|api/v1|_next|icon.svg|favicon.ico).*)"],
+  // Everything except sign-in pages and routes, APIs (they check auth themselves), health, and static files.
+  matcher: ["/((?!login|setup|api/auth|api/health|api/v1|_next|icon.svg|favicon.ico).*)"],
 };

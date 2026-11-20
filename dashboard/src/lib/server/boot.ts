@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "./db";
 import { ensureBootstrapAdmin } from "./auth";
 import { demoEnabled, seedDemo, startDemoSimulator } from "./demo";
+import { startAlertSweep } from "./alerts";
 
 const globalBoot = globalThis as unknown as { __rvBoot?: Promise<void> };
 
@@ -9,6 +10,7 @@ const globalBoot = globalThis as unknown as { __rvBoot?: Promise<void> };
 export function boot(): Promise<void> {
   globalBoot.__rvBoot ??= (async () => {
     await ensureBootstrapAdmin();
+    startAlertSweep();
     if (demoEnabled()) {
       const seeded = db().prepare("SELECT value FROM meta WHERE key = 'demo_seeded'").get();
       if (!seeded) {

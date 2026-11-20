@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -66,5 +66,16 @@ export function SetupForm() {
         Create admin and continue
       </Button>
     </form>
+  );
+}
+
+/** Full-page navigation to the OIDC start route (the IdP needs a top-level redirect). */
+export function SsoButton({ name, next }: { name: string; next: string }) {
+  return (
+    <Button variant="outline" size="lg" className="h-10 w-full bg-faint" asChild>
+      <a href={`/api/auth/sso/start?next=${encodeURIComponent(next)}`}>
+        <KeyRound /> Continue with {name}
+      </a>
+    </Button>
   );
 }

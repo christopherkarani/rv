@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "./db";
 import { storeEvents, storeReport } from "./store";
+import { alertsOnIngest } from "./alerts";
 import { parseBatch } from "../ingest/normalize";
 import { parseReport } from "../ingest/report";
 import { chain, demoDevices, demoFleet, randomEvent, toOCSF, toRV } from "../demo/generate";
@@ -34,7 +35,7 @@ export function startDemoSimulator() {
       const row = db().prepare("SELECT chain_head FROM devices WHERE id = ?").get(device.hostname.toLowerCase()) as { chain_head: string | null } | undefined;
       chain([event], row?.chain_head ?? null);
       const body = device.format === "rv" ? [toRV(event)] : [toOCSF(event, device.hostname)];
-      storeEvents(parseBatch(body, device.hostname.toLowerCase()), device.hostname);
+      alertsOnIngest(storeEvents(parseBatch(body, device.hostname.toLowerCase()), device.hostname));
     } catch (error) {
       console.error("[rv-console] demo simulator", error);
     }
