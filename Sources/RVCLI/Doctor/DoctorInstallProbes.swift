@@ -148,7 +148,9 @@ enum DoctorInstallChecks {
             daemonTrust(probes.daemonTrust),
             installedBinaries(paths: paths, fileManager: fileManager),
             launchAgentProgram(paths: paths, fileManager: fileManager),
+            launchAgentOnDemand(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
+            launchdDuplicate(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
         ].compactMap { $0 }
     }
@@ -336,6 +338,54 @@ enum DoctorInstallChecks {
             return first
         }
         return dictionary["Program"] as? String
+    }
+
+    /// The installed plist, not the template rvd was built with: one an
+    /// earlier rv wrote runs rvd on demand, so a crash leaves it down until
+    /// the next hook call. `rv setup` rewrites it. KeepAlive is checked
+    /// against the plist's own program; a wrong program is its own row.
+    static func launchAgentOnDemand(paths: OwnedPaths, fileManager: FileManager) -> DoctorProblem? {
+        guard fileManager.fileExists(atPath: paths.launchAgent),
+            let program = launchAgentProgram(at: paths.launchAgent),
+            launchAgentKeepsRvdUp(at: paths.launchAgent, rvdPath: program) == false
+        else { return nil }
+        return DoctorProblem(
+            id: "launch-agent-on-demand",
+            severity: .warn,
+            summary: "LaunchAgent \(paths.launchAgent) is not RunAtLoad + KeepAlive: "
+                + "after a crash rvd stays down until the next hook call",
+            fix: setupFix(paths)
+        )
+    }
+
+    /// RunAtLoad true and KeepAlive true, or KeepAlive while `rvdPath`
+    /// exists (what setup writes).
+    static func launchAgentKeepsRvdUp(at path: String, rvdPath: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: path),
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            plist["RunAtLoad"] as? Bool == true
+        else { return false }
+        if plist["KeepAlive"] as? Bool == true { return true }
+        guard let conditions = plist["KeepAlive"] as? [String: Any],
+            let pathState = conditions["PathState"] as? [String: Bool]
+        else { return false }
+        return conditions.count == 1 && pathState == [rvdPath: true]
+    }
+
+    /// Loaded in both domains: two always-on rvds race for the socket.
+    static func launchdDuplicate(
+        _ observation: LaunchdObservation?,
+        paths: OwnedPaths,
+        userID: uid_t
+    ) -> DoctorProblem? {
+        guard let observation, observation.loadedInGui, observation.loadedInUser else { return nil }
+        return DoctorProblem(
+            id: "launchd-domain-duplicate",
+            severity: .warn,
+            summary: "\(SetupRun.launchAgentLabel) is loaded in both \(LaunchdDomain.gui(userID)) and "
+                + "\(LaunchdDomain.user(userID)), so launchd keeps two rvds running",
+            fix: setupFix(paths)
+        )
     }
 
     /// A job only in `user/<uid>` is invisible to hosts in the Aqua session.
