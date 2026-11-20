@@ -593,6 +593,57 @@ struct JudgeInvalidLabelsTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
     }
 
+    /// Core ML failing to compile or load the model (after the store's one
+    /// retry) refuses to review: a failure an agent can provoke must never
+    /// buy the packs-only allow.
+    @Test func coreMLCompileFailureIsRefusedNotUnavailable() throws {
+        let (base, bundle) = try Self.fakeBundle(package: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let run = Self.runFakeBundle(bundle, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .refused(let why) = run else {
+            Issue.record("expected .refused, got \(run)")
+            return
+        }
+        #expect(why.contains("Core ML could not compile or load the model"))
+    }
+
+    /// A bundle without its model is absence, not failure: packs-only, as
+    /// before (doctor names it).
+    @Test func missingModelPackageStaysUnavailable() throws {
+        let (base, bundle) = try Self.fakeBundle(package: false)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let run = Self.runFakeBundle(bundle, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .unavailable = run else {
+            Issue.record("expected .unavailable, got \(run)")
+            return
+        }
+    }
+
+    static func fakeBundle(package: Bool) throws -> (base: URL, bundle: URL) {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-fake-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let bundle = base.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        if package {
+            try FileManager.default.createDirectory(
+                at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        }
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent("tokenizer.json"))
+        return (base, bundle)
+    }
+
+    static func runFakeBundle(_ bundle: URL, state: URL) -> JudgeRuntime.JudgeRun {
+        struct Roomy: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 100 << 30 }
+        }
+        let guardian = CoreMLGuard(
+            store: nil, disk: Roomy(), cacheVolume: nil, stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
+        return JudgeRuntime.runJudge(
+            command: "ls", context: JudgeContext(), engine: .ft, bundle: bundle, wait: nil,
+            slot: JudgeSlot(coreML: { guardian }))
+    }
+
     /// End to end through the real slot: a nearly full disk refuses the
     /// load (review, never the packs-only allow), and the slot's cached
     /// failure keeps refusing on the next request.

@@ -15,18 +15,24 @@ struct CompiledFileRecord: Codable, Equatable, Sendable {
 /// (`~/.config/rv/cache/laya/models`, which `core.secrets:home-rv-config`
 /// keeps agents from writing).
 ///
-/// `MLModel.compileModel` writes into the temp dir, which agents can write
-/// and macOS may purge, so the compiled `.mlmodelc` is moved into an
-/// rv-owned entry and only ever loaded from there:
+/// `MLModel.compileModel` writes into the per-user temp dir
+/// (`confstr(_CS_DARWIN_USER_TEMP_DIR)`; `TMPDIR` does not move it, checked
+/// on macOS 27), which any process of this user can write and macOS may
+/// purge. The compiled `.mlmodelc` is copied into an rv-owned entry and only
+/// ever loaded from there:
 ///
 /// - Versioned: `<path key>-<version key>.mlmodelc`, where the version key
 ///   covers the package's modification time and the OS build, so an
 ///   updated bundle or OS compiles fresh. Superseded entries of the same
 ///   package are swept.
-/// - Moved before it is read: the compile output must be this user's real
-///   directory and is renamed into a `.partial-` sibling under the root
-///   first, hashed there, then renamed into place; the manifest is written
-///   last and is the commit record.
+/// - Copied before it is read: the compile output must be this user's real
+///   directory and is copied (an APFS clone: new inodes) into a `.partial-`
+///   sibling under the root, hashed there, then renamed into place; the
+///   manifest is written last and is the commit record. A descriptor held
+///   open, or a hard link made, inside the temp output cannot reach the
+///   copy. Residual: a same-user process that replaces the whole temp
+///   output between the compile returning and the copy gets its model
+///   hashed and installed.
 /// - Verified: the manifest records every file's size and SHA-256 and is
 ///   checked before every load. A missing or mismatched manifest (a crash
 ///   or full disk mid-install, or a planted or edited model) discards the
@@ -34,11 +40,13 @@ struct CompiledFileRecord: Codable, Equatable, Sendable {
 ///   loaded. A hard-linked file is refused (it could be rewritten through
 ///   the other link). (Hashing the ~600 MB model costs well under a second
 ///   against a multi-second load.)
-/// - Fail closed: with no usable root, or when the output cannot be moved,
+/// - Fail closed: with no usable root, or when the output cannot be copied,
 ///   hashed or committed, the load throws `CompiledModelRefusal` (review);
 ///   the temp output is never loaded.
 /// - Self-healing: a failed load discards the entry, purges Core ML's own
-///   e5rt cache, and retries exactly once.
+///   e5rt cache, and retries exactly once. A failure that survives the
+///   retry throws `CoreMLLoadRefusal` (review), never the plain error the
+///   gate would read as an unavailable judge (packs-only).
 ///
 /// Every compile and load goes through `coreML` (disk precheck plus the
 /// in-flight crash marker). Generic over the model so tests need no Core ML.
@@ -60,7 +68,13 @@ struct CompiledModelStore<Model> {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
             if let entry = try? entry(for: package) { discard(entry) }
             coreML.purgeCache()
+        }
+        do {
             return try attempt(package)
+        } catch let refusal as any CoreMLRefusal {
+            throw refusal
+        } catch {
+            throw CoreMLLoadRefusal(detail: "\(error)")
         }
     }
 
@@ -115,27 +129,25 @@ struct CompiledModelStore<Model> {
     }
 
     /// Core ML compiles into the temp dir, which agents can write. The output
-    /// is checked (this user's real directory), moved into the protected
-    /// root first (a same-volume rename; a copy across volumes), hashed
-    /// there, then committed under its entry name with the manifest. Any
-    /// failure refuses. The temp output and the partial copy are removed on
-    /// every path.
+    /// is checked (this user's real directory), copied into the protected
+    /// root (an APFS clone, so new inodes nothing in the temp dir can
+    /// write), hashed there, then committed under its entry name with the
+    /// manifest. Any failure refuses. The temp output and the partial copy
+    /// are removed on every path.
     private func install(_ compiled: URL, as entry: Entry) throws(CompiledModelRefusal) {
         let fm = FileManager.default
         let partial = entry.dir.deletingLastPathComponent()
             .appendingPathComponent(".\(entry.dir.lastPathComponent)\(Self.partialMarker)\(UUID().uuidString)")
         defer {
-            // Gone after a move or commit; a refused symlink is removed itself.
+            // A refused symlink is removed itself, never its target.
             try? fm.removeItem(at: compiled)
             try? fm.removeItem(at: partial)
         }
         guard Self.isOwnedDirectory(compiled) else {
             throw CompiledModelRefusal(detail: "compile output is not this user's real directory")
         }
-        if rename(compiled.path, partial.path) != 0 {
-            guard errno == EXDEV, (try? fm.copyItem(at: compiled, to: partial)) != nil else {
-                throw CompiledModelRefusal(detail: "could not move the compile output into the cache")
-            }
+        guard (try? fm.copyItem(at: compiled, to: partial)) != nil else {
+            throw CompiledModelRefusal(detail: "could not copy the compile output into the cache")
         }
         guard let manifest = Self.manifest(of: partial, digest: digest),
               let data = try? JSONEncoder().encode(manifest)
@@ -195,11 +207,15 @@ struct CompiledModelStore<Model> {
     /// Relative path → size and SHA-256 of every regular file. nil when the
     /// root is not this user's real directory, or on a symlink, a special
     /// file, a foreign file, a file with another hard link (it could be
-    /// rewritten through that link after the hash), an unreadable file, or
-    /// an empty tree: such an entry is never trusted.
+    /// rewritten through that link after the hash), an unreadable file or
+    /// directory (never skipped), or an empty tree: such an entry is never
+    /// trusted.
     static func manifest(of dir: URL, digest: (URL) -> String?) -> [String: CompiledFileRecord]? {
+        let walkFailed = WalkFailure()
         guard isOwnedDirectory(dir),
-              let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)
+              let walker = FileManager.default.enumerator(
+                at: dir, includingPropertiesForKeys: nil, options: [],
+                errorHandler: { _, _ in walkFailed.set(); return false })
         else { return nil }
         let base = dir.resolvingSymlinksInPath().path + "/"
         var records: [String: CompiledFileRecord] = [:]
@@ -213,7 +229,7 @@ struct CompiledModelStore<Model> {
             guard path.hasPrefix(base) else { return nil }
             records[String(path.dropFirst(base.count))] = CompiledFileRecord(size: Int64(info.st_size), sha256: sha)
         }
-        return records.isEmpty ? nil : records
+        return records.isEmpty || walkFailed.value ? nil : records
     }
 
     /// The root must be this user's real directory (created owner-only if
@@ -237,42 +253,6 @@ struct CompiledModelStore<Model> {
             hash &*= 0x100000001b3
         }
         return String(hash, radix: 16)
-    }
-}
-
-/// The compiled copies older builds kept in `~/Library/Caches/rv-laya`
-/// (agent-writable, so no longer trusted or loaded).
-enum LegacyCompiledModels {
-    /// Left alone this long after their last write, so a still-running older
-    /// rvd keeps its copy for a while.
-    static let minimumAge: TimeInterval = 7 * 24 * 3600
-
-    /// Removes `<hex>.mlmodelc`, `<hex>-<hex>.mlmodelc` and their
-    /// `.manifest.json` siblings older than `minimumAge`. Nothing else in
-    /// the directory is touched; a symlinked or foreign root is skipped.
-    static func sweep(root: URL, now: Date) {
-        guard CompiledModelStore<Never>.isOwnedDirectory(root),
-              let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return }
-        for name in names where isLegacyName(name) {
-            let url = root.appendingPathComponent(name)
-            var info = stat()
-            guard lstat(url.path, &info) == 0, info.st_uid == geteuid() else { continue }
-            let modified = Date(timeIntervalSince1970: TimeInterval(info.modificationSeconds))
-            guard now.timeIntervalSince(modified) >= minimumAge else { continue }
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    static func isLegacyName(_ name: String) -> Bool {
-        var stem = Substring(name)
-        if stem.hasSuffix(".manifest.json") { stem = stem.dropLast(".manifest.json".count) }
-        guard stem.hasSuffix(".mlmodelc") else { return false }
-        stem = stem.dropLast(".mlmodelc".count)
-        let parts = stem.split(separator: "-", omittingEmptySubsequences: false)
-        guard (1...2).contains(parts.count) else { return false }
-        return parts.allSatisfy { part in
-            !part.isEmpty && part.count <= 16 && part.allSatisfy { $0.isHexDigit && !$0.isUppercase }
-        }
     }
 }
 
@@ -316,13 +296,11 @@ private func systemRead(_ fd: Int32, _ buffer: UnsafeMutableRawPointer?, _ count
     #endif
 }
 
-extension stat {
-    /// Modification time in seconds, on Darwin and Glibc.
-    var modificationSeconds: Int {
-        #if canImport(Darwin)
-        Int(st_mtimespec.tv_sec)
-        #else
-        Int(st_mtim.tv_sec)
-        #endif
-    }
+/// Set by the directory walker's error handler: a directory it could not
+/// read means the manifest does not cover the tree.
+private final class WalkFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failed = false
+    func set() { lock.withLock { failed = true } }
+    var value: Bool { lock.withLock { failed } }
 }

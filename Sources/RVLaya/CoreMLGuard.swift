@@ -49,9 +49,11 @@ public protocol CoreMLRefusal: Error, Sendable {
 
 extension CoreMLDiskSpaceError: CoreMLRefusal {}
 
-/// The compiled model could not be moved into, or verified inside, rv's
-/// protected cache, so it is not loaded: Core ML's compile output sits in
-/// the agent-writable temp dir and is never trusted where it lands.
+/// The compiled model could not be copied into, or verified inside, rv's
+/// protected cache, so it is not loaded. Core ML compiles into the per-user
+/// temp dir, which any process of this user can write; the store loads only
+/// its own hashed copy, never the output where it lands. Residual: a process
+/// that replaces the whole output before the copy is not detected.
 public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
     public let detail: String
 
@@ -61,6 +63,22 @@ public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
 
     public var reason: String {
         "Laya judge: compiled model not verified (\(detail)); judge disabled until it can be."
+    }
+}
+
+/// Core ML could not compile or load the judge model even after the store's
+/// one discard-and-retry. An agent can provoke that (a swapped compile
+/// output, a poisoned e5rt cache), so it refuses to review like any other
+/// refusal; a bundle with no model at all stays packs-only (absence).
+public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
+    public let detail: String
+
+    public init(detail: String) {
+        self.detail = detail
+    }
+
+    public var reason: String {
+        "Laya judge: Core ML could not compile or load the model (\(detail)); judge disabled until it can."
     }
 }
 
@@ -339,13 +357,6 @@ extension CoreMLGuard {
                 }
             },
             log: log)
-    }
-
-    /// rvd only (never tests or CLI runs): removes older builds' compiled
-    /// copies from `~/Library/Caches/rv-laya` once they are a week old.
-    public static func sweepLegacyCompiledModels(now: Date = Date()) {
-        guard let caches = cachesRoot() else { return }
-        LegacyCompiledModels.sweep(root: caches.appendingPathComponent("rv-laya", isDirectory: true), now: now)
     }
 
     /// `~/Library/Caches` (Linux: `~/.cache`).

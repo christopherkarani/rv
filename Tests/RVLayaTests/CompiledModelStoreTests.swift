@@ -171,14 +171,40 @@ struct CompiledModelStoreTests {
         #expect(f.recorder.all.contains { $0.contains("retrying once") })
     }
 
-    @Test("a load that keeps failing throws after the one retry")
-    func persistentFailureThrows() throws {
+    @Test("a load that keeps failing refuses (review) after the one retry")
+    func persistentFailureRefuses() throws {
         let f = try Fixture()
         defer { f.remove() }
         f.coreML.failNextLoads(10)
-        #expect(throws: FakeCoreML.LoadFailed.self) { try f.store().model(package: f.package) }
+        #expect(throws: CoreMLLoadRefusal.self) { try f.store().model(package: f.package) }
         #expect(f.coreML.loads == 2)
         #expect(f.recorder.purgeCount == 1)
+    }
+
+    @Test("a verified entry whose load keeps failing refuses after the one retry")
+    func verifiedEntryLoadFailureRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.store().model(package: f.package)
+        f.coreML.failNextLoads(10)
+        #expect(throws: CoreMLLoadRefusal.self) { try f.store().model(package: f.package) }
+        #expect(f.coreML.compiles == 2)
+        #expect(f.recorder.purgeCount == 1)
+    }
+
+    @Test("a compile that keeps failing refuses after the one retry")
+    func persistentCompileFailureRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        struct CompileFailed: Error {}
+        let compiles = Mutex(0)
+        let store = f.store(compile: { _ in
+            compiles.withLock { $0 += 1 }
+            throw CompileFailed()
+        })
+        #expect(throws: CoreMLLoadRefusal.self) { try store.model(package: f.package) }
+        #expect(compiles.withLock { $0 } == 2)
+        #expect(f.coreML.loads == 0)
     }
 
     @Test("low disk refuses before compiling and is not retried")
@@ -223,27 +249,6 @@ struct CompiledModelStoreTests {
         #expect(after.count == otherEntries.count + 3)
     }
 
-    @Test("legacy copies in the old caches dir are removed only after a week")
-    func legacySweepWaitsAWeek() throws {
-        let f = try Fixture()
-        defer { f.remove() }
-        let legacy = f.base.appendingPathComponent("legacy-caches/rv-laya", isDirectory: true)
-        let names = ["a7cf96588a1d54f5.mlmodelc", "a7cf9658-1d54f5.mlmodelc", "a7cf9658-1d54f5.mlmodelc.manifest.json"]
-        for name in names {
-            try FileManager.default.createDirectory(
-                at: legacy.appendingPathComponent(name), withIntermediateDirectories: true)
-        }
-        let foreign = ["coreml-guard", "notes.txt.mlmodelc", "A7CF.mlmodelc"]
-        for name in foreign {
-            try FileManager.default.createDirectory(
-                at: legacy.appendingPathComponent(name), withIntermediateDirectories: true)
-        }
-        LegacyCompiledModels.sweep(root: legacy, now: Date().addingTimeInterval(6 * 86_400))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: legacy.path).count == 6)
-        LegacyCompiledModels.sweep(root: legacy, now: Date().addingTimeInterval(8 * 86_400))
-        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: legacy.path)) == Set(foreign))
-    }
-
     @Test("a symlinked cache root refuses (review); nothing compiles or loads from temp")
     func symlinkedRootRefuses() throws {
         let f = try Fixture()
@@ -286,8 +291,8 @@ struct CompiledModelStoreTests {
         #expect(try f.rootEntries().filter { $0.hasSuffix(".mlmodelc") }.isEmpty)
     }
 
-    @Test("a hard-linked file in the compile output refuses (it could be rewritten after the hash)")
-    func hardLinkedCompileOutputRefuses() throws {
+    @Test("a hard link into the compile output cannot rewrite the installed model")
+    func hardLinkedCompileOutputCannotRewrite() throws {
         let f = try Fixture()
         defer { f.remove() }
         let coreML = f.coreML
@@ -297,10 +302,62 @@ struct CompiledModelStoreTests {
             try FileManager.default.linkItem(at: out.appendingPathComponent("model.mil"), to: outside)
             return out
         })
+        #expect(try store.model(package: f.package) == "model")
+        try Data("evil!".utf8).write(to: outside)
+        #expect(try store.model(package: f.package) == "model")
+        #expect(f.coreML.compiles == 1, "the installed copy still verifies")
+        #expect(try f.tempEntries().isEmpty)
+    }
+
+    @Test("a descriptor held open on the compile output cannot rewrite the installed model")
+    func heldDescriptorCannotRewrite() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.coreML
+        let held = Mutex<Int32>(-1)
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            held.withLock { $0 = open(out.appendingPathComponent("model.mil").path, O_RDWR) }
+            return out
+        })
+        #expect(try store.model(package: f.package) == "model")
+        let fd = held.withLock { $0 }
+        try #require(fd >= 0)
+        defer { close(fd) }
+        let evil = Array("evil!".utf8)
+        #expect(pwrite(fd, evil, evil.count, 0) == evil.count)
+        #expect(try store.model(package: f.package) == "model")
+        #expect(f.coreML.compiles == 1, "the installed copy still verifies")
+    }
+
+    @Test("an unreadable directory in the compile output refuses; nothing is skipped silently", .enabled(if: geteuid() != 0, "root reads mode-000 directories"))
+    func unreadableSubdirectoryRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.coreML
+        let locked = Mutex<URL?>(nil)
+        defer { locked.withLock { $0 }.map { _ = chmod($0.path, 0o700) } }
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            let dir = out.appendingPathComponent("weights")
+            locked.withLock { $0 = dir }
+            chmod(dir.path, 0)
+            return out
+        })
         #expect(throws: CompiledModelRefusal.self) { try store.model(package: f.package) }
         #expect(f.coreML.loads == 0)
-        #expect(try f.tempEntries().isEmpty)
-        #expect(try f.rootEntries().filter { !$0.hasPrefix(".") || $0.contains(".partial-") }.isEmpty)
+    }
+
+    @Test("the manifest refuses a tree with a directory it cannot read", .enabled(if: geteuid() != 0, "root reads mode-000 directories"))
+    func manifestRefusesUnreadableDirectory() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let out = try f.coreML.compile(f.package)
+        let weights = out.appendingPathComponent("weights")
+        #expect(CompiledModelStore<String>.manifest(of: out, digest: contentDigest) != nil)
+        chmod(weights.path, 0)
+        defer { chmod(weights.path, 0o700) }
+        #expect(CompiledModelStore<String>.manifest(of: out, digest: contentDigest) == nil)
     }
 
     @Test("a compile output that cannot be hashed refuses and leaves nothing behind")
@@ -315,10 +372,13 @@ struct CompiledModelStoreTests {
         #expect(try f.rootEntries().isEmpty)
     }
 
-    @Test("the refusal reason says the judge is off and why")
+    @Test("the refusal reasons say the judge is off and why")
     func refusalReason() {
         let refusal = CompiledModelRefusal(detail: "could not hash the compiled model")
         #expect(refusal.reason.contains("Laya judge"))
         #expect(refusal.reason.contains("could not hash the compiled model"))
+        let load = CoreMLLoadRefusal(detail: "LoadFailed()")
+        #expect(load.reason.hasPrefix("Laya judge: Core ML could not compile or load the model"))
+        #expect(load.reason.contains("LoadFailed()"))
     }
 }

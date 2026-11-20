@@ -298,8 +298,10 @@ public enum JudgeRuntime {
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
         // only when a loaded judge errors mid-prediction (`.failed`).
-        // A bundle that cannot LOAD is unavailable: packs-only plus a
-        // note (doctor surfaces it), never an eternal Ask loop.
+        // A bundle that is invalid or has no model is unavailable:
+        // packs-only plus a note (doctor surfaces it), never an eternal Ask
+        // loop. Core ML failing on a model that is there refuses
+        // (`CoreMLLoadRefusal`, review): an agent can provoke that.
         guard let bundle = selection.bundle else {
             return (packsOnlyFloor(result, command: command), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),

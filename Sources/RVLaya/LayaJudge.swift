@@ -112,6 +112,12 @@ public struct LayaQuestions: Sendable {
 /// caching verified copies under the guard's protected `modelRoot`.
 enum CompiledModelCache {
     static func load(package: URL, coreML: CoreMLGuard) throws -> MLModel {
+        // No model in the bundle is absence (packs-only, doctor names it);
+        // Core ML failing on one that is there refuses (review).
+        var info = stat()
+        guard lstat(package.path, &info) == 0 else {
+            throw LayaError.modelUnavailable("no model at \(package.path)")
+        }
         let configuration = MLModelConfiguration()
         switch coreML.computeUnits {
         case .cpuAndGPU: configuration.computeUnits = .cpuAndGPU
