@@ -47,38 +47,80 @@ extension ProtectedPeerTrustConfiguration.HookTrustSource {
     }
 }
 
+extension ProtectedPeerTrustConfiguration.HookTrustSource {
+    /// Would an installed manifest grant `role` to the binary at `path`?
+    /// Same rule as `evaluateDaemon(atPath:)`, for any component. Nil when
+    /// no valid manifest is installed (the sibling pin only covers rvd, and
+    /// an invalid manifest has its own doctor row) or the manifest has no
+    /// entry for `role`. Diagnostic only: it never grants or widens trust.
+    public func evaluateRole(_ role: TrustedRVComponentRole, atPath path: String) -> DaemonTrustVerdict? {
+        guard case .manifest(let trust) = self, trust.configuredRoles.contains(role) else { return nil }
+        return trust.evaluate(role: role, atPath: path)
+    }
+
+    /// The roles an installed manifest names; nil without a valid manifest.
+    public var manifestRoles: Set<TrustedRVComponentRole>? {
+        guard case .manifest(let trust) = self else { return nil }
+        return Set(trust.configuredRoles)
+    }
+}
+
+extension TrustedRVComponentRole {
+    /// The installed executable that holds this role, as messages name it.
+    var binaryName: String {
+        switch self {
+        case .service: "rvd"
+        case .cli: "rv-cli"
+        case .workspaceHost: "rv-workspace-host"
+        case .operatorUI: "rv-operator-ui"
+        case .mcpCustodian: "rv-mcp-custodian"
+        }
+    }
+}
+
 extension ProtectedPeerTrustConfiguration {
     func evaluateDaemon(atPath path: String) -> DaemonTrustVerdict {
+        guard entries.contains(where: { $0.role == .service }) else {
+            return DaemonTrustVerdict(
+                source: .manifest, satisfied: false,
+                reason: "manifest grants no service role, so hooks reject every rvd")
+        }
+        return evaluate(role: .service, atPath: path)
+    }
+
+    /// The on-disk bytes at `path` against `role`'s entry. The caller
+    /// checked the entry exists.
+    func evaluate(role: TrustedRVComponentRole, atPath path: String) -> DaemonTrustVerdict {
         func rejected(_ reason: String) -> DaemonTrustVerdict {
             DaemonTrustVerdict(source: .manifest, satisfied: false, reason: reason)
         }
-        guard let entry = entries.first(where: { $0.role == .service }) else {
-            return rejected("manifest grants no service role, so hooks reject every rvd")
+        guard let entry = entries.first(where: { $0.role == role }) else {
+            return rejected("manifest grants no \(role.rawValue) role")
         }
-        let requires = Self.requirementText(entry)
-        // The live daemon's executable path is canonical; match it.
+        let binary = role.binaryName
+        let requires = Self.requirementText(entry, binary: binary)
+        // The live peer's executable path is canonical; match it.
         let canonical = posixRealpath(path) ?? path
         var created: SecStaticCode?
         guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: canonical) as CFURL, [], &created) == errSecSuccess,
               let staticCode = created,
               SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess,
               let identity = try? MacOSPeerCodeVerifier.identity(fromStaticCode: staticCode).identity else {
-            return rejected("\(requires); installed rvd has no valid code signature")
+            return rejected("\(requires); installed \(binary) has no valid code signature")
         }
-        // Only the service entry decides (C `has_service_role`): another
-        // role's entry that also matches must not shadow it.
-        let role = restricted(to: .service).role(identity: identity) {
+        // Only this role's entry decides (C `has_service_role` for rvd):
+        // another role's entry that also matches must not shadow it.
+        if restricted(to: role).role(identity: identity, satisfies: {
             SecStaticCodeCheckValidity(staticCode, [], $0) == errSecSuccess
-        }
-        if role == .service {
+        }) == role {
             return DaemonTrustVerdict(source: .manifest, satisfied: true, reason: nil)
         }
-        return rejected("\(requires); installed rvd \(Self.describe(identity, against: entry))")
+        return rejected("\(requires); installed \(binary) \(Self.describe(identity, against: entry))")
     }
 
-    private static func requirementText(_ entry: Entry) -> String {
+    private static func requirementText(_ entry: Entry, binary: String) -> String {
         if let hash = entry.developmentCDHash {
-            return "manifest pins rvd cdhash \(hash.lowercased()) at \(entry.developmentExecutablePath ?? "?")"
+            return "manifest pins \(binary) cdhash \(hash.lowercased()) at \(entry.developmentExecutablePath ?? "?")"
         }
         return "manifest requires Developer ID \(entry.requiredIdentifier ?? "?") (team \(entry.requiredTeamIdentifier ?? "?"))"
     }
@@ -88,7 +130,13 @@ extension ProtectedPeerTrustConfiguration {
         var facts: [String] = []
         if entry.developmentCDHash != nil {
             let hash = identity.cdHash.map { String(format: "%02x", $0) }.joined()
-            facts.append("is cdhash \(hash) at \(identity.executablePath)")
+            var fact = "is cdhash \(hash) at \(identity.executablePath)"
+            // A team-signed build cannot match a cdhash pin; name its
+            // signer so the manifest can pin it by Developer ID instead.
+            if identity.isAdHoc == false, let team = identity.teamIdentifier {
+                fact += " (signed as \(identity.identifier), team \(team))"
+            }
+            facts.append(fact)
         } else if identity.isAdHoc {
             facts.append("is ad-hoc signed")
         } else if identity.identifier != entry.requiredIdentifier || identity.teamIdentifier != entry.requiredTeamIdentifier {

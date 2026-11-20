@@ -94,15 +94,23 @@ enum SecretPatternRules {
         return found.filter { $0.generic == false || specificLines.contains($0.line) == false }
     }
 
-    /// Byte search through `memmem`; a Swift loop over every buffer is too
-    /// slow for a whole-tree scan.
+    /// Byte search through `memchr` + `memcmp`; a Swift loop over every buffer
+    /// is too slow for a whole-tree scan. Not `memmem`: Swift's Glibc module
+    /// does not export it on Ubuntu 22.04, where Linux releases are built.
     static func contains(_ needle: [UInt8], in haystack: [UInt8]) -> Bool {
         guard needle.isEmpty == false, haystack.count >= needle.count else { return needle.isEmpty }
         return haystack.withUnsafeBytes { hay in
             needle.withUnsafeBytes { pin in
-                // Both are non-empty here; Glibc's memmem takes non-optional pointers.
                 guard let h = hay.baseAddress, let n = pin.baseAddress else { return false }
-                return memmem(h, hay.count, n, pin.count) != nil
+                let lastStart = hay.count - pin.count
+                var offset = 0
+                while offset <= lastStart {
+                    guard let hit = memchr(h + offset, Int32(pin[0]), lastStart - offset + 1) else { return false }
+                    let start = h.distance(to: UnsafeRawPointer(hit))
+                    if memcmp(h + start, n, pin.count) == 0 { return true }
+                    offset = start + 1
+                }
+                return false
             }
         }
     }

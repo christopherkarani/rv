@@ -11,6 +11,11 @@ public struct ExplainRenderer: FrameRenderer {
                 "Decision: \(model.explainDecisionWord)",
                 emphasis: outlineEmphasis(model.decisionTone)
             ),
+        ]
+        if let note = model.observeNote {
+            children.append(.leaf(label: observeNoteLabel, value: note, emphasis: .plain))
+        }
+        children += [
             .group(
                 label: "Command",
                 emphasis: .heading,

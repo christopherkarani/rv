@@ -20,7 +20,8 @@ enum BlocksRun {
 
     /// Observe-mode rows (the agent was not blocked) carry an `observed`
     /// column after the timestamp (`observed ask` when enforcement would
-    /// have asked a human); a host name is never that word.
+    /// have asked a human); a host name is never that word. A row that
+    /// names its agent session ends with `session=<id>`.
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
         [
             iso8601(record.timestamp),
@@ -30,6 +31,7 @@ enum BlocksRun {
             DisplayedText.field(record.ruleID.rawValue),
             record.category.rawValue,
             DisplayedText.field(record.path),
+            record.session.map { "session=" + DisplayedText.field($0) },
         ].compactMap { $0 }.joined(separator: "  ")
     }
 

@@ -31,6 +31,9 @@ public struct TestRenderer: FrameRenderer {
             lines += labeledField("Source", source, valueSlot: palette.muted, palette: palette, width: width)
         }
         lines.append(resultLine(model, palette: palette))
+        if let note = model.observeNote {
+            lines += labeledField(observeNoteLabel, note, valueSlot: "", palette: palette, width: width)
+        }
         return lines
     }
 }

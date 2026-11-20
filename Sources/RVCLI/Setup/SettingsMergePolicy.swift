@@ -45,14 +45,22 @@ enum SettingsMergePolicy {
             + AdapterCommand.render(interpreter: interpreter, adapterPath: adapterPath)
     }
 
-    /// The forms rv wrote before the interpreter was baked: quoted, and
-    /// before that unquoted. Still rv's own command: setup rewrites it
-    /// without `--force`.
-    static func legacyHookCommands(rvPath: String, adapterPath: String) -> [String] {
-        [
+    /// The forms earlier rv releases wrote: the baked interpreter without
+    /// `/usr/bin/env` (0.2.2 on macOS), and before the interpreter was
+    /// baked `python3` quoted, and before that unquoted. Still rv's own
+    /// command: setup rewrites it without `--force`.
+    static func legacyHookCommands(rvPath: String, interpreter: String, adapterPath: String) -> [String] {
+        var forms = [
             "RV_BINARY=\(ShellWord.quote(rvPath)) " + AdapterCommand.renderLegacy(adapterPath: adapterPath),
             "RV_BINARY=\(rvPath) \(AdapterCommand.legacyInterpreter) \(adapterPath)",
         ]
+        if interpreter.hasPrefix("/") {
+            forms.append(
+                "RV_BINARY=\(ShellWord.quote(rvPath)) "
+                    + AdapterCommand.render(interpreter: interpreter, adapterPath: adapterPath, throughEnv: false)
+            )
+        }
+        return forms
     }
 
     /// Exclusive adapter location next to the host config file.
@@ -162,7 +170,8 @@ enum SettingsMergePolicy {
             return true
         }
         return acceptLegacy
-            && legacyHookCommands(rvPath: parsed.rvPath, adapterPath: parsed.adapterPath).contains(command)
+            && legacyHookCommands(rvPath: parsed.rvPath, interpreter: parsed.interpreter, adapterPath: parsed.adapterPath)
+                .contains(command)
     }
 
     static func isFingerprintedHook(
