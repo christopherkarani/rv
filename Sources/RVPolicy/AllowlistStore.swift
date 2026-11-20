@@ -48,7 +48,7 @@ public struct AllowlistStore: Sendable {
         if isSymlinkIntoWorkspace(url: url, workspacePath: workspacePath) {
             return .symlinkIntoWorkspace
         }
-        guard let data = try? Data(contentsOf: url),
+        guard let data = readRegularFile(url),
               let text = String(data: data, encoding: .utf8)
         else {
             return .invalid(.invalidTOML)

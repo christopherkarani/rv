@@ -17,7 +17,7 @@ public enum MachineConfigJSONError: Error, Sendable, Equatable {
 
 enum MachineConfigJSON {
     static func load(from file: URL) -> [String: JSONValue] {
-        guard let data = try? Data(contentsOf: file) else { return [:] }
+        guard let data = readRegularFile(file) else { return [:] }
         return object(in: data) ?? [:]
     }
 
