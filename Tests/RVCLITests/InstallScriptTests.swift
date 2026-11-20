@@ -1492,8 +1492,11 @@ private func writeSignatureShims(in shim: URL) throws {
               case "$mode" in
                 identifier-team|identifier-newline|team-text-only) team=OTHERTEAM9 ;;
                 adhoc-plus-unpinned-dylib) case "$name" in *.dylib) team=V9AUD2URP3 ;; esac ;;
+                # An ad-hoc signature has no certificate chain, so no
+                # anchor-apple requirement is satisfied, whatever -dvv says.
+                adhoc-forged) case "$name" in *.dylib) team="" ;; esac ;;
               esac
-              want="certificate leaf[subject.OU] = \"$team\""
+              want="certificate leaf[subject.OU] = \\"$team\\""
               case "$requirement" in
                 "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and $want") exit 0 ;;
               esac
