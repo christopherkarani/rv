@@ -51,8 +51,10 @@ _INFRA_ASK_TEXT = (
     "overloading rvd. Approve only if you expected it. %s"
 )
 _SUBJECT_MAX = 300
-_SUBJECT_HEAD = 220
-_SUBJECT_TAIL = 80
+_TOO_LONG_TO_ASK = (
+    "The command or path is too long to show in full for approval, so rv "
+    "blocked it instead of asking."
+)
 
 # rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
 # Swift twin HookDaemonFallback) words each down class, with the layer the
@@ -194,15 +196,15 @@ def _resolve(mapped, envelope, tool):
         # rv could not check the call: a person decides in Claude Code's
         # prompt when one will reach them; otherwise it blocks.
         reason = _blocking_reason(mapped.get("reason"))
-        if _forwards_infra_ask(envelope, os.environ):
-            return {
-                "action": "host_ask",
-                "reason": "%s\n\n%s" % (
-                    _subject(tool, envelope.get("tool_input")),
-                    _INFRA_ASK_TEXT % (mapped.get("layer"), reason),
-                ),
-            }
-        return {"action": "block", "reason": reason}
+        if not _forwards_infra_ask(envelope, os.environ):
+            return {"action": "block", "reason": reason}
+        subject = _subject(tool, envelope.get("tool_input"))
+        if subject is None:
+            return {"action": "block", "reason": "%s %s" % (reason, _TOO_LONG_TO_ASK)}
+        return {
+            "action": "host_ask",
+            "reason": "%s\n\n%s" % (subject, _INFRA_ASK_TEXT % (mapped.get("layer"), reason)),
+        }
     # A legacy `ask` decision blocks like a deny: host dialogs never
     # authorize. The human approves in RVOperatorUI and the agent retries.
     if mapped["action"] == "ask":
@@ -301,7 +303,9 @@ def _session_attended(environ):
 def _subject(tool, tool_input):
     # What the person is approving, first: the command, or the path, on
     # one escaped line (_one_line), so it cannot forge text of its own or
-    # push rv's warning out of view.
+    # push rv's warning out of view. None when the escaped command or path
+    # is longer than _SUBJECT_MAX: any cut could hide part of what would be
+    # approved, so the caller blocks instead of asking.
     name = tool if isinstance(tool, str) else "Unknown tool"
     keys = ("command",) if tool == "Bash" else ("file_path", "notebook_path", "path", "pattern")
     value = None
@@ -312,40 +316,18 @@ def _subject(tool, tool_input):
                 break
     if value is None:
         return "%s: (no command or path given)" % _one_line(name)
-    return "%s: %s" % (_one_line(name), _one_line(value))
+    shown = _one_line(value)
+    if len(shown) > _SUBJECT_MAX:
+        return None
+    return "%s: %s" % (_one_line(name), shown)
 
 
 def _one_line(text):
     # Line breaks, controls, format (bidi, zero-width), separator and
     # non-ASCII space characters are shown escaped, as rv's
     # HookDenyJSON.jsonQuoted does, and a typed backslash is doubled so it
-    # cannot pass for an escape; a plain space stays. Past _SUBJECT_MAX
-    # escaped characters, the first _SUBJECT_HEAD and last _SUBJECT_TAIL
-    # are kept (never splitting an escape) so padding cannot hide the end,
-    # and the characters of the original text left out are counted.
-    pieces = [_escaped_char(ch) for ch in text]
-    if sum(len(piece) for piece in pieces) <= _SUBJECT_MAX:
-        return "".join(pieces)
-    head = _fitting(pieces, _SUBJECT_HEAD)
-    tail = _fitting(pieces[len(head):][::-1], _SUBJECT_TAIL)[::-1]
-    left_out = len(pieces) - len(head) - len(tail)
-    return "%s… (%d %s not shown) …%s" % (
-        "".join(head),
-        left_out,
-        "character" if left_out == 1 else "characters",
-        "".join(tail),
-    )
-
-
-def _fitting(pieces, budget):
-    kept = []
-    used = 0
-    for piece in pieces:
-        if used + len(piece) > budget:
-            break
-        kept.append(piece)
-        used += len(piece)
-    return kept
+    # cannot pass for an escape; a plain space stays.
+    return "".join(_escaped_char(ch) for ch in text)
 
 
 _SHORT_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
