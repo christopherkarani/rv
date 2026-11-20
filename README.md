@@ -14,7 +14,6 @@
   <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20(Apple%20Silicon)%20%7C%20Linux-111827" alt="macOS 15+ Apple Silicon and Linux">
 </p>
 
-
 # rv
 
 **Your coding agent just tried to run `rm -rf /`. rv said no.**
@@ -171,9 +170,11 @@ rv uninstall              # remove rv's hooks, config, and rvd (asks for owner a
 rv is one binary with 25 commands. Beyond the shell guard:
 
 ### Secrets without exposure
-Agents see placeholders, never values. The real value is injected at the
-boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical or
-Bitwarden, and scrubbed from everything that comes back.
+Agents in a contained workspace (macOS), or a command started with
+`rv run`, see placeholders, never values. The real value is injected at
+the boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical or
+Bitwarden, and scrubbed from everything that comes back. Hook-guarded
+agents get secret-path blocking instead.
 
 ```sh
 rv run --secret NAME -- command   # placeholders for one command (macOS, Linux)
@@ -276,7 +277,7 @@ in `~/.config/rv/config.json`.
 ## Architecture
 
 ```text
- rv (C front door) ──exec──▶ rv-cli (RVCLI) ──Unix socket / XPC──▶ rvd (RVService)
+ rv (C front door) ──exec──▶ Swift CLI (RVCLI) ──Unix socket / XPC──▶ rvd (RVService)
                                                                      │
    Capabilities   RVPolicy · RVHooks · RVMCP · RVIsolation · RVScan · RVLaya
    Core           RVEngine · RVPacks · RVHistory · RVIPC
