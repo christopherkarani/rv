@@ -100,6 +100,55 @@ struct LinuxUnixSocketTests {
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
+    /// rvd binds before its startup backoff wait and accepts after it. The
+    /// hook's connect then succeeds into the backlog and its read times out
+    /// (TIMEOUT: ask/deny), never ENOENT/ECONNREFUSED (UNREACHABLE, which
+    /// observe mode steps aside for).
+    @Test func boundButNotAcceptingQueuesClientsUntilAccepting() throws {
+        let xdg = try makeInjectedXDG("hold")
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        let listener = UnixEvaluateListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.bind()
+        defer { listener.stop() }
+
+        let client = try retryUnixConnect(path: socketURL.path)
+        defer { client.close() }
+        let box = LinuxReplyBox()
+        let done = DispatchSemaphore(value: 0)
+        let held = LinuxUncheckedClient(client)
+        DispatchQueue.global().async {
+            box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
+            done.signal()
+        }
+        #expect(done.wait(timeout: .now() + 1.5) == .timedOut, "nothing answers before accepting")
+        listener.startAccepting()
+        guard done.wait(timeout: .now() + 5) == .success, let data = box.get() else {
+            Issue.record("queued client was not served once the listener accepted")
+            return
+        }
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    @Test func stopWhileNotAcceptingRemovesTheSocket() throws {
+        let xdg = try makeInjectedXDG("holdstop")
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        let listener = UnixEvaluateListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.bind()
+        #expect(FileManager.default.fileExists(atPath: socketURL.path))
+        listener.stop()
+        #expect(FileManager.default.fileExists(atPath: socketURL.path) == false)
+    }
+
     @Test func stopWithoutStartRemovesNothing() throws {
         let xdg = try makeInjectedXDG("nostart")
         defer { try? FileManager.default.removeItem(at: xdg) }

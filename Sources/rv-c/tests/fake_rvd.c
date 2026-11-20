@@ -9,6 +9,9 @@
  *       sends nothing; the record is then never written.
  *   fake_rvd stale <socket>           bind and exit without listening: the
  *       socket file stays and connect gets ECONNREFUSED.
+ *   fake_rvd hold  <socket> <seconds> bind and listen but never accept for
+ *       <seconds>, then unlink and exit: rvd during its startup backoff
+ *       wait. connect lands in the backlog and the reply never comes.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -76,8 +79,19 @@ int main(int argc, char **argv) {
         close(server);
         return 0;
     }
+    if (argc == 4 && strcmp(argv[1], "hold") == 0) {
+        alarm(60); /* never hang the suite */
+        server = bind_at(argv[2]);
+        if (server < 0 || listen(server, 8) != 0) {
+            return 1;
+        }
+        sleep((unsigned)atoi(argv[3]));
+        unlink(argv[2]);
+        close(server);
+        return 0;
+    }
     if (argc != 4 || strcmp(argv[1], "drop") != 0) {
-        fprintf(stderr, "usage: fake_rvd drop <socket> <record> | stale <socket>\n");
+        fprintf(stderr, "usage: fake_rvd drop <socket> <record> | stale <socket> | hold <socket> <seconds>\n");
         return 2;
     }
     alarm(20); /* never hang the suite */
