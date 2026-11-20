@@ -109,6 +109,88 @@ lock, plus analytics counters rewritten with `fsync` on every decision
 10,000 calls at concurrency 8 rose from 65 MB to 79 MB with the higher
 throughput; a soak run should confirm it levels off.
 
+### Fix 2: denial ledger and analytics writes
+
+After Fix 1 a deny at concurrency 8 still cost several times an allow.
+Two per-decision writes did far more work than they needed:
+
+- `DenialLedger.append` (`blocks.jsonl`, the 200-row, 7-day view behind
+  `rv blocks`) loaded the whole file, pruned and sorted it, re-encoded
+  every row and renamed a new file into place, under `blocks.lock`, on
+  every deny. It now keeps what this process last wrote (rows as read back
+  from their lines, and the lines), keyed by the file's stamp, as the
+  pending store does. While the file is still that, a deny appends one
+  line. The file is rewritten, from the cached lines, only when it would
+  pass 250 rows (200 plus `compactionSlack`, 50), holds a row past the
+  7-day window, or another writer changed it. That writer's rows are read
+  and kept, and a torn or unreadable line is rewritten away, never
+  appended after. Reads are unchanged: newest first, at most 200 rows,
+  none older than 7 days; only the file holds up to 250 rows between
+  rewrites. Side effect: `rv audit forward` restarts its `blocks.jsonl`
+  cursor when the file is replaced, which used to happen on every deny and
+  now happens once per 50.
+- `AnalyticsCoordinator` rewrote `analytics-counters.json` (atomic
+  replace with `fsync`) twice per decision: once for the count, once for
+  a pack list that had not changed. An unchanged pack list now writes
+  nothing, and counts reach the file at most once a second
+  (`persistDelay`). A crash or kill can lose up to a second of counts, the
+  same kind of loss the existing best-effort `try?` writes and the
+  detached per-decision task already accept. Pack changes, host notes and
+  the daily flush still write at once. rvd's RSS after 10,000 socket calls
+  at concurrency 8 fell from 84 MB to 64 MB, which suggests the
+  per-decision tasks had been queuing on the coordinator actor.
+
+`DenialLedgerScalingTests` pins the ledger: an append writes in place,
+there is one rewrite per 50 rows past the cap with reads capped
+throughout, a row past 7 days leaves the file on the next append, another
+writer's rewrite or append is kept (also while racing an old-style
+writer), a torn line is rewritten away, and an append costs the same at 5
+and 180 rows. `AnalyticsCounterPersistenceTests` pins the counters: 50
+decisions leave the file untouched, counts land after the delay and
+survive a restart, a pack change and the daily flush write at once.
+
+Before is `08b1f53` (Fix 1), after is `fc2cd23`, both release builds, run
+back to back for each row, in two rounds. Two other agents were building
+on the same 4 vCPUs (load average 2 to 17 during the runs), so absolute
+numbers move between rounds; compare within a row. The `rv hook` rows
+are dominated by process start-up under that load.
+
+| Run (release) | Round | p50 ms before → after | p99 ms before → after | Calls/s before → after |
+| --- | --- | --- | --- | --- |
+| socket, concurrency 1 | 1 | 6.4 → 5.1 | 22.8 → 18.1 | 125 → 166 |
+| socket, concurrency 1 | 2 | 5.5 → 4.7 | 20.5 → 13.0 | 138 → 186 |
+| socket, concurrency 8 | 1 | 26.8 → 18.1 | 106.9 → 65.8 | 223 → 376 |
+| socket, concurrency 8 | 2 | 26.5 → 17.2 | 99.2 → 65.3 | 230 → 393 |
+| `rv hook`, concurrency 1 | 1 | 18.0 → 15.0 | 25.7 → 23.5 | 55 → 64 |
+| `rv hook`, concurrency 1 | 2 | 28.1 → 23.5 | 50.8 → 44.4 | 34 → 41 |
+| `rv hook`, concurrency 8 | 1 | 67.2 → 38.1 | 175.6 → 104.8 | 110 → 188 |
+| `rv hook`, concurrency 8 | 2 | 64.7 → 60.0 | 160.7 → 176.0 | 116 → 119 |
+| denies only, socket, concurrency 8 | 1 | 47.5 → 7.8 | 69.0 → 25.4 | 171 → 904 |
+| denies only, socket, concurrency 8 | 2 | 60.4 → 17.0 | 90.1 → 69.8 | 136 → 388 |
+
+By verdict, socket at concurrency 8: deny p50 58.0 → 15.1 ms (round 1)
+and 55.7 → 14.5 ms (round 2); allow p50 19.4 → 20.8 and 18.9 → 19.4 ms.
+A deny is now no slower than an allow on this path.
+
+What is left: rvd's phase timing on the after build, denies only at
+concurrency 8, puts a deny at 7 to 11 ms mean: effects (audit append and
+ledger row) 2.8 to 5.4 ms, reply (unlock-code mint and pending row) 1.3
+to 1.6 ms, waiting for an offload thread 0.5 to 1.2 ms. A local
+experiment that skipped the audit `fsync` (not committed) cut effects to
+0.9 to 1.2 ms mean but did not raise throughput or lower the deny p50
+(891 and 781 calls/s without it, 926 and 737 with it, run alternately):
+the time moved into the reply phase, where the allow-once and pending
+stores take their own locks. So the audit `fsync` stays. It is
+`AuditLog`'s documented guarantee (a crash cannot drop an append that
+already returned true) and is not the bottleneck at this load. If it
+becomes one, two changes would keep that guarantee: `fsync` after
+releasing the log's locks, so concurrent appends share a journal commit,
+or a blocking wait bounded by the same deadline in place of the 2 ms
+sleep-poll that `AppendLock` and the `flock` wait use today. The first
+changes what a crash can leave behind (more than one unacknowledged line
+torn, not only the last), so it needs a decision about the chain
+verifier first.
+
 ### Corpus agreement
 
 Of the 1,353 corpus commands, 367 got a different verdict from the live
@@ -135,6 +217,7 @@ Scripts/cloud-test.sh                       # as root in a cloud session
 swift build -c release --product rvd && swift build -c release --product rv
 Scripts/hook-replay.py --bin-dir .build/release --client socket --calls 10000 --concurrency 8
 Scripts/hook-replay.py --bin-dir .build/release --client rv --calls 10000 --concurrency 8
+Scripts/hook-replay.py --bin-dir .build/release --client socket --filter deny.json --calls 2000 --concurrency 8
 ```
 
 `--json FILE` writes the full summary, including latency per corpus file,
