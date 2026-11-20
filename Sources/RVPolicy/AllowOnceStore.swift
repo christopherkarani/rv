@@ -146,8 +146,7 @@ public actor AllowOnceStore {
                                 command: issuedCommand,
                                 ruleID: ruleID,
                                 code: code,
-                                expiresAt: Self.savedExpiry(of: hash, in: written)
-                                    ?? now.addingTimeInterval(ttl),
+                                expiresAt: Self.issuedExpiry(of: hash, in: written, now: now, ttl: ttl),
                                 redeemed: false
                             )
                         }
@@ -228,8 +227,7 @@ public actor AllowOnceStore {
                             command: rawCommand,
                             ruleID: ruleID,
                             code: code,
-                            expiresAt: Self.savedExpiry(of: hash, in: written)
-                                ?? now.addingTimeInterval(ttl),
+                            expiresAt: Self.issuedExpiry(of: hash, in: written, now: now, ttl: ttl),
                             redeemed: false
                         )
                         pruneLiveUnlockCodes(against: written, now: now)
@@ -467,10 +465,30 @@ public actor AllowOnceStore {
         }
     }
 
-    /// When the row for `codeHash` expires as saved. rvd's memory of a code
-    /// it issued must not outlive the row the CLI's redeem checks.
-    private static func savedExpiry(of codeHash: String, in saved: [AllowOnceRecord]) -> Date? {
-        saved.last { $0.codeHash.rawValue == codeHash }?.expiresAt
+    /// When the pending row for `codeHash` expires as saved. Only a pending
+    /// row counts: a granted or consumed row can share the six-hex code's
+    /// hash (a collision with a spent code, a planted row) and, created
+    /// later, sort after the fresh row once the cap re-sorts by creation.
+    static func savedExpiry(of codeHash: String, in saved: [AllowOnceRecord]) -> Date? {
+        saved.last { record in
+            guard case .pending = record.lifecycle else { return false }
+            return record.codeHash.rawValue == codeHash
+        }?.expiresAt
+    }
+
+    /// Expiry of rvd's memory of a code it just issued. It must not outlive
+    /// the row the CLI's redeem checks (the saved pending row), and it is
+    /// never later than the mint's own deadline, whatever the saved row
+    /// says: `issued` decides whether rvd raises the owner prompt and plants
+    /// a grant, so no row on disk may lengthen it.
+    static func issuedExpiry(
+        of codeHash: String,
+        in saved: [AllowOnceRecord],
+        now: Date,
+        ttl: TimeInterval
+    ) -> Date {
+        let deadline = now.addingTimeInterval(ttl)
+        return min(savedExpiry(of: codeHash, in: saved) ?? deadline, deadline)
     }
 
     /// Saved lines for `records`, and the rows as `load` will read them
