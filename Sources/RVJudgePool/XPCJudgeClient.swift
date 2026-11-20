@@ -29,6 +29,7 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
     private let rewarmDelays: [Duration]
     private let cached = Mutex<JudgePoolHeld?>(nil)
     private let lastKey = Mutex<ModelKey?>(nil)
+    private let rewarming = Mutex(false)
 
     public convenience init(
         serviceName: String = JudgePoolWire.machServiceName,
@@ -69,7 +70,10 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
         DispatchQueue.global(qos: .utility).async {
             let deadline = ContinuousClock.now + Self.helloTimeout * 2
             // A new connection sends warm itself.
-            guard let connection = self.connection(until: deadline, warmNew: false) else { return }
+            guard let connection = self.connection(until: deadline, warmNew: false) else {
+                self.startRewarm()
+                return
+            }
             _ = self.call(.warm(key: key), on: connection, until: deadline)
         }
     }
@@ -82,7 +86,8 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
     }
 
     /// One request on `connection`. A reply that fails verification, is
-    /// malformed or refused, or an XPC error, drops the cached connection.
+    /// malformed or refused, or an XPC error, drops the cached connection
+    /// and starts a re-warm.
     /// A timeout does not: the supervisor answers late but the connection
     /// is sound, and dropping it would fail every other request in flight.
     private func call(
@@ -93,14 +98,14 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
         case .timedOut:
             return nil
         case .failed:
-            forget(connection)
+            drop(connection)
             return nil
         case .reply(let reply):
             guard verify(reply.object),
                   let data = JudgePoolXPCBody.get(from: reply.object),
                   let decoded = JudgePoolJSON.decode(JudgePoolReply.self, from: data),
                   decoded != .refused else {
-                forget(connection)
+                drop(connection)
                 return nil
             }
             return decoded
@@ -135,7 +140,7 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
             guard xpc_get_type(event) == XPC_TYPE_ERROR else { return }
             // Only the live cached connection breaking means the supervisor
             // went away; one this client dropped or cancelled itself does not.
-            if let self, self.forget(held) { self.rewarm(attempt: 0) }
+            self?.drop(held)
             xpc_connection_cancel(held.object)
         }
         xpc_connection_resume(requests)
@@ -162,16 +167,32 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
         return held
     }
 
-    /// Reconnects (which re-warms) after the supervisor went away, retrying
-    /// at `rewarmDelays` until a connection is up or the delays run out.
+    /// Starts one re-warm chain unless one is running.
+    private func startRewarm() {
+        let start = rewarming.withLock { running -> Bool in
+            defer { running = true }
+            return !running
+        }
+        if start { rewarm(attempt: 0) }
+    }
+
+    /// Reconnects (which re-warms) after the supervisor went away or could
+    /// not be reached, retrying at `rewarmDelays` until a connection is up
+    /// or the delays run out.
     private func rewarm(attempt: Int) {
-        guard attempt < rewarmDelays.count, lastKey.withLock({ $0 }) != nil else { return }
+        guard attempt < rewarmDelays.count, lastKey.withLock({ $0 }) != nil else {
+            rewarming.withLock { $0 = false }
+            return
+        }
         let delay = JudgePoolSupervisor.dispatchInterval(rewarmDelays[attempt])
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.cached.withLock({ $0 }) == nil else { return }
-            if self.connection(until: ContinuousClock.now + Self.helloTimeout) == nil {
-                self.rewarm(attempt: attempt + 1)
+            guard let self else { return }
+            if self.cached.withLock({ $0 }) != nil
+                || self.connection(until: ContinuousClock.now + Self.helloTimeout) != nil {
+                self.rewarming.withLock { $0 = false }
+                return
             }
+            self.rewarm(attempt: attempt + 1)
         }
     }
 
@@ -184,8 +205,12 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
         return version == JudgePoolWire.protocolVersion
     }
 
+    /// Forgets `connection` and, when it was the cached one, re-warms.
+    private func drop(_ connection: JudgePoolHeld) {
+        if forget(connection) { startRewarm() }
+    }
+
     /// Drops `connection` if it is the cached one; returns whether it was.
-    @discardableResult
     private func forget(_ connection: JudgePoolHeld) -> Bool {
         let dropped = cached.withLock { slot -> Bool in
             guard let current = slot, current === connection else { return false }

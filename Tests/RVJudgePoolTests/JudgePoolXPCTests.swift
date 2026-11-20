@@ -240,6 +240,44 @@ struct JudgePoolXPCTests {
         #expect(await eventually { second.seen.contains(.warm(key: key)) }, "re-warmed without a judged request")
         #expect(second.seen.allSatisfy { if case .judge = $0 { false } else { true } })
     }
+
+    @Test("a warm that cannot connect retries until the supervisor is up")
+    func warmRetriesUntilReachable() async {
+        let down = XPCRig()
+        down.stop()
+        let current = Mutex(down.discoveryEndpoint)
+        let client = XPCJudgeClient(
+            discover: { xpc_connection_create_from_endpoint(current.withLock { $0 }.object) },
+            verify: { _ in true },
+            rewarmDelays: [.milliseconds(100), .milliseconds(200), .milliseconds(400), .milliseconds(800)])
+        client.warm(key: key)
+        try? await Task.sleep(for: .milliseconds(50))
+        let up = XPCRig()
+        defer { up.stop() }
+        current.withLock { $0 = up.discoveryEndpoint }
+        #expect(await eventually { up.seen.contains(.warm(key: key)) }, "warmed once the supervisor answered")
+    }
+
+    @Test("a dropped connection (unverifiable reply) reconnects and re-warms with no request")
+    func droppedConnectionRewarms() async {
+        let rig = XPCRig()
+        defer { rig.stop() }
+        let rejectReplies = Mutex(false)
+        let client = XPCJudgeClient(
+            discover: { xpc_connection_create_from_endpoint(rig.discoveryEndpoint.object) },
+            verify: { _ in !rejectReplies.withLock { $0 } },
+            rewarmDelays: [.milliseconds(50), .milliseconds(100), .milliseconds(200)])
+        _ = client.judge(key: key, input: input, budget: .milliseconds(500))
+        #expect(await eventually { rig.seen.filter { $0 == .warm(key: key) }.count == 1 })
+        #expect(rig.hellos == 2)
+
+        rejectReplies.withLock { $0 = true }
+        #expect(client.judge(key: key, input: input, budget: .milliseconds(500)) == nil)
+        rejectReplies.withLock { $0 = false }
+        #expect(await eventually { rig.seen.filter { $0 == .warm(key: key) }.count == 2 }, "re-warmed")
+        #expect(rig.hellos == 4, "one reconnect")
+        #expect(rig.seen.filter { if case .judge = $0 { true } else { false } }.count == 2)
+    }
 }
 
 @Suite("Judge pool trust wiring")
@@ -300,6 +338,15 @@ struct CodeHashCacheTests {
         #expect(rename(staged, path) == 0)
         #expect(cache.hash(ofPath: path) == Data("two".utf8))
         #expect(calls.withLock { $0 } == 2)
+        // Rewritten in place: same inode, same size, new bytes.
+        let inode = ExecutableIdentity(path: path).map(\.inode)
+        let fd = open(path, O_WRONLY)
+        #expect(fd >= 0)
+        #expect(pwrite(fd, "six", 3, 0) == 3)
+        close(fd)
+        #expect(ExecutableIdentity(path: path).map(\.inode) == inode)
+        #expect(cache.hash(ofPath: path) == Data("six".utf8))
+        #expect(calls.withLock { $0 } == 3)
         #expect(cache.hash(ofPath: directory.appendingPathComponent("missing").path) == nil)
     }
 }
