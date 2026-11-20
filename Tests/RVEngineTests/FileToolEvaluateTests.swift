@@ -191,3 +191,24 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
         #expect(deny.ruleID.rawValue == "core.secrets:home-rv-config", "\(path)")
     }
 }
+
+/// The judge's compiled models and Core ML crash marker live here; an
+/// agent that could write them could plant a model or reset the crash
+/// history.
+@Test func evaluateFileTool_deniesJudgeModelCache() {
+    for path in [
+        "~/.config/rv/cache/laya/models/abc-def.mlmodelc/weights/weight.bin",
+        "$HOME/.config/rv/cache/laya/models/abc-def.mlmodelc.manifest.json",
+        "/Users/u/.config/rv/cache/laya/guard/coreml-in-flight",
+        "/Users/u/.config/rv/cache/laya/guard/coreml-crashes.json",
+    ] {
+        for kind in [FileToolKind.read, .write] {
+            let result = evaluateFileTool(FileToolAction(kind: kind, path: FileToolPath(rawValue: path)))
+            guard case .deny(let deny, _) = result.outcome else {
+                Issue.record("expected deny for \(kind) \(path)")
+                continue
+            }
+            #expect(deny.ruleID.rawValue == "core.secrets:home-rv-config", "\(path)")
+        }
+    }
+}

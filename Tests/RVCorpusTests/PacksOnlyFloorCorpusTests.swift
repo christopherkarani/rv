@@ -57,12 +57,31 @@ struct PacksOnlyFloorCorpusTests {
             "cat ~/.config/rv/policy-revisions.key",
             "cat $HOME/.config/rv/policy.toml",
             "cp evil.toml ~/.config/rv/policy.toml",
+            // The judge's verified model cache.
+            "cp -R evil.mlmodelc ~/.config/rv/cache/laya/models/",
         ] {
             guard case .deny(let deny) = harness.pin(command).decision else {
                 Issue.record("rv config access must deny: \(command)")
                 continue
             }
             #expect(deny.ruleID.rawValue == "core.secrets:home-rv-config", "\(command)")
+        }
+    }
+
+    /// Planting a judge model or resetting the Core ML crash marker denies,
+    /// whichever pack sees it first.
+    @Test func judgeModelCacheWrites_deny() throws {
+        let harness = try StressHarness.dayOne()
+        for command in [
+            "cp -R evil.mlmodelc ~/.config/rv/cache/laya/models/",
+            "mv /tmp/x.mlmodelc $HOME/.config/rv/cache/laya/models/a-b.mlmodelc",
+            "echo 0 > ~/.config/rv/cache/laya/guard/coreml-in-flight",
+            "rm -rf $HOME/.config/rv/cache/laya",
+        ] {
+            guard case .deny = harness.pin(command).decision else {
+                Issue.record("judge cache write must deny: \(command)")
+                continue
+            }
         }
     }
 }
