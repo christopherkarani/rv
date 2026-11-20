@@ -1197,40 +1197,74 @@ public struct GatedEvaluate: Sendable {
         return overridesRecorded
     }
 
+    /// What `performBounded` could not write.
+    struct BoundedRecord: Sendable, Equatable {
+        /// Rows dropped (ledger, judge log, exemption audit; `.audit` only
+        /// for an override row, which never reaches the evaluator).
+        var drops: [HookLocalDrop] = []
+        /// Audit rows that did not land, for rvd to append from the spool.
+        var audits: [HookLocalSpool.Audit] = []
+        /// An audit row did not land and `escalateUnrecordedDeny` was set:
+        /// nothing else was written, and the caller must escalate.
+        var unrecordedDeny = false
+    }
+
     /// The hook-local evaluator's form of `perform`
     /// (docs/architecture/hook-local-decide.md, "Effects"): the same rows,
-    /// in the same order, but every write shares `wait`'s one deadline, so
-    /// logs another process holds cost the verdict at most that long in all.
-    /// A row that cannot land in time is dropped, never retried past the
-    /// deadline, and named in the result for the evaluator to count. The
-    /// verdict was decided before this runs and nothing here changes it.
-    /// An override row never reaches it (the evaluator escalates any pass
-    /// that emits one); one that did would be dropped, not written, since
-    /// only rvd spends what an override needs.
+    /// all ending by one `deadline`, so logs another process holds (or a
+    /// FIFO planted in their place) cost the verdict at most that long.
+    ///
+    /// The `audit.jsonl` rows go first, each with up to `auditFloor` of
+    /// what is left. When one cannot land: with `escalateUnrecordedDeny`
+    /// (enforce) the evaluator must not answer a deny whose chained record
+    /// is missing, so this returns `unrecordedDeny` having written nothing
+    /// else, and rvd re-evaluates and writes every row itself; without it
+    /// (observe, where the C hook's step-aside could turn a floor deny into
+    /// an allow, so escalating is never safer) the row's non-secret fields
+    /// go to the spool for rvd to append. The other rows share what is
+    /// left, in `perform`'s order; one past the deadline is dropped
+    /// unwritten and named for the evaluator to count. An override row
+    /// never reaches here (the evaluator escalates any pass that emits
+    /// one); one that did would be dropped, since only rvd spends what an
+    /// override needs.
     static func performBounded(
-        _ effects: [GatedEffect], home: HomeDirectory, wait: AuditLog.LockWait
-    ) -> [HookLocalDrop] {
-        var drops: [HookLocalDrop] = []
+        _ effects: [GatedEffect],
+        home: HomeDirectory,
+        deadline: ContinuousClock.Instant,
+        auditFloor: Duration,
+        escalateUnrecordedDeny: Bool,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) -> BoundedRecord {
+        var record = BoundedRecord()
+        for case .denialRow(let row) in effects {
+            let wait = AuditLog.LockWait(deadline: min(now() + auditFloor, deadline), now: now)
+            guard auditDenial(row, home: home, wait: wait) == false else { continue }
+            if escalateUnrecordedDeny { return BoundedRecord(unrecordedDeny: true) }
+            record.audits.append(HookLocalSpool.Audit(row, home: home))
+        }
+        let wait = AuditLog.LockWait(deadline: deadline, now: now)
         for effect in effects {
             switch effect {
             case .exemptionAudit(let audit):
                 if auditDroppedRepoLiterals(
                     audit.dropped, home: home, workspace: audit.workspace, now: audit.at, wait: wait) == false {
-                    drops.append(.exemption)
+                    record.drops.append(.exemption)
                 }
             case .judgeLog(let row):
-                let timeout = min(JudgeRuntime.logLockTimeout, wait.remaining ?? JudgeRuntime.logLockTimeout)
-                if JudgeRuntime.appendLog(row, home: home, lockTimeout: timeout) == false {
-                    drops.append(.judgeLog)
+                let remaining = wait.remaining ?? .zero
+                if remaining <= .zero
+                    || JudgeRuntime.appendLog(
+                        row, home: home, lockTimeout: min(JudgeRuntime.logLockTimeout, remaining)) == false
+                {
+                    record.drops.append(.judgeLog)
                 }
             case .denialRow(let row):
-                if auditDenial(row, home: home, wait: wait) == false { drops.append(.audit) }
-                if recordDenial(row, home: home, wait: wait) == false { drops.append(.denialLedger) }
+                if recordDenial(row, home: home, wait: wait) == false { record.drops.append(.denialLedger) }
             case .overrideAudit:
-                drops.append(.audit)
+                record.drops.append(.audit)
             }
         }
-        return drops
+        return record
     }
 
     /// Appends a `command.denied` event to the hash-chained `audit.jsonl`
@@ -1297,8 +1331,9 @@ public struct GatedEvaluate: Sendable {
     /// Appends a denial row when the ledger is enabled (`blocks.enabled`,
     /// read here, deny-only). The path is redacted against home. With a
     /// `wait`, a held ledger lock is retried only until it passes; returns
-    /// false when the row was dropped for that (true when it landed, the
-    /// ledger is off, or no `wait` bounds it).
+    /// false when the row was dropped for that or the wait had already
+    /// passed (true when it landed, the ledger is off, or no `wait` bounds
+    /// it).
     @discardableResult
     private static func recordDenial(
         _ row: GatedEffect.DenialRow, home: HomeDirectory, wait: AuditLog.LockWait? = nil
@@ -1316,6 +1351,7 @@ public struct GatedEvaluate: Sendable {
             wouldBe: row.wouldBe
         )
         let ledger = DenialLedger(configDirectory: configDir)
+        if let wait, wait.expired { return false }
         guard let wait else {
             ledger.append(record, now: row.at)
             return true
@@ -1361,8 +1397,9 @@ extension GatedEvaluate {
     /// other workspaces' history.
     ///
     /// With a `wait`, a held lock is retried (non-blocking) only until it
-    /// passes. Returns false when the row was dropped for a lock or I/O
-    /// failure, true when it landed or there was nothing to write.
+    /// passes, and nothing is tried once it has. Returns false when the row
+    /// was dropped for a lock or I/O failure or a passed wait, true when it
+    /// landed or there was nothing to write.
     @discardableResult
     static func auditDroppedRepoLiterals(
         _ dropped: [String],
@@ -1372,6 +1409,7 @@ extension GatedEvaluate {
         wait: AuditLog.LockWait? = nil
     ) -> Bool {
         guard dropped.isEmpty == false, let home else { return true }
+        if let wait, wait.expired { return false }
         let store = FileLockedJSONLStore<ExemptionDropRecord>(
             baseDirectory: RVPolicyPaths.configDirectory(home: home),
             fileName: exemptionDropsFileName
@@ -1407,5 +1445,23 @@ extension GatedEvaluate {
             }
         }
         return landed ?? false
+    }
+}
+
+extension HookLocalSpool.Audit {
+    /// The fields `GatedEvaluate.auditDenial` writes for `row`, never the
+    /// command text: the path is redacted against home, as in the chain,
+    /// and left out when empty or past `HookLocalSpool.maxPathBytes`.
+    init(_ row: GatedEffect.DenialRow, home: HomeDirectory) {
+        let path = DenialPathRedaction.redact(row.path, home: home)
+        self.init(
+            kind: (row.observed ? AuditEventKind.commandObserved : .commandDenied).rawValue,
+            rule: row.ruleID.rawValue,
+            host: row.host.rawValue,
+            tool: row.tool.rawValue,
+            category: row.category.rawValue,
+            path: path.isEmpty || path.utf8.count > HookLocalSpool.maxPathBytes ? nil : path,
+            wouldBe: row.observed ? row.wouldBe.rawValue : nil,
+            at: row.at.timeIntervalSince1970)
     }
 }

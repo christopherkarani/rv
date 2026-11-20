@@ -35,16 +35,19 @@ package enum LocalHookCommand {
 
     /// The framed answer for one call. `home` is the passwd home; nil
     /// escalates, as does input past the hook's cap or not UTF-8.
+    /// `started` is when the process began (the decider's write deadline
+    /// counts from it).
     package static func respond(
         to arguments: Arguments,
         input: Data,
-        home: HomeDirectory?
+        home: HomeDirectory?,
+        started: ContinuousClock.Instant = .now
     ) async -> Data {
         guard let home else { return escalation(.unexpected) }
         guard input.count <= inputLimit, let stdin = String(data: input, encoding: .utf8) else {
             return escalation(.malformed)
         }
-        let outcome = await LocalHookDecider(home: home).decide(host: arguments.host, stdin: stdin)
+        let outcome = await LocalHookDecider(home: home).decide(host: arguments.host, stdin: stdin, started: started)
         switch outcome {
         case .escalate(let reason):
             return escalation(reason)

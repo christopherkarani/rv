@@ -1,6 +1,7 @@
 import Foundation
 import RVAnalytics
 import RVDomain
+import RVFileStore
 import RVHistory
 import RVHooks
 import RVIPC
@@ -31,6 +32,9 @@ package enum LocalHookEscalation: String, Sendable, CaseIterable {
     case observe
     /// Anything this evaluator did not expect.
     case unexpected
+    /// Enforce mode: the deny's hash-chained audit row could not be
+    /// written by the write deadline, so rvd answers (and records) it.
+    case auditUnwritten = "audit-unwritten"
 }
 
 /// The hook-local verdict: the exact host reply rvd would send, or a reason
@@ -89,7 +93,11 @@ package struct LocalHookDecider: Sendable {
     /// log, audit and denial rows, exemption audit) are done before it
     /// returns, exactly as rvd does them before it replies; an escalation
     /// writes nothing, so rvd's own evaluation writes each row once.
-    package func decide(host: HookHost, stdin: String) async -> LocalHookOutcome {
+    /// `started` is when this process started work: every write ends by
+    /// `writeDeadline(started:)`.
+    package func decide(
+        host: HookHost, stdin: String, started: ContinuousClock.Instant = .now
+    ) async -> LocalHookOutcome {
         let codec = productionHostCodec(host)
         switch codec.decode(stdin) {
         case .malformed:
@@ -114,29 +122,48 @@ package struct LocalHookDecider: Sendable {
                 environment: ["RV_GUARD_MODE": GuardMode.enforce.rawValue])
             guard enforced.outcome == live.outcome else { return .escalate(.observe) }
         }
-        record(live)
-        return live.outcome
+        return record(live, deadline: Self.writeDeadline(started: started))
     }
 
-    /// The whole budget for a final answer's writes. Logs another process
-    /// holds cost the verdict at most this, well inside the C hook's 1 s
-    /// deadline; a row that cannot land in it is dropped and counted.
-    package static let recordBudget: Duration = .milliseconds(200)
+    /// The C hook's deadline for this process (`local_eval.c`), counted
+    /// from before it spawned it: past it the hook kills the evaluator and
+    /// asks rvd.
+    package static let localDeadline: Duration = .seconds(1)
+    /// Kept back from `localDeadline` for what this process cannot see:
+    /// the spawn and signature check before it started, and the reply and
+    /// exit after its last write.
+    package static let replyMargin: Duration = .milliseconds(250)
+    /// The most an audit row may wait, out of what is left.
+    package static let auditFloor: Duration = .milliseconds(500)
+
+    /// When every write of a final answer must be done.
+    package static func writeDeadline(started: ContinuousClock.Instant) -> ContinuousClock.Instant {
+        started + localDeadline - replyMargin
+    }
 
     /// A final answer's writes (docs/architecture/hook-local-decide.md,
-    /// "Effects"): rvd's rows under one bounded wait, then the spool rvd
-    /// drains, holding the analytics decision rvd would have counted (when
-    /// analytics is on) and the rows dropped here. Nothing it does changes
-    /// the answer.
-    private func record(_ live: Run) {
-        let drops = GatedEvaluate.performBounded(
-            live.effects, home: home, wait: AuditLog.LockWait(timeout: Self.recordBudget))
+    /// "Effects"), all by `deadline`: rvd's rows, the audit row first, then
+    /// the spool rvd drains, holding the analytics decision rvd would have
+    /// counted (when analytics is on), the rows dropped here and the fields
+    /// of an audit row that did not land. The answer stands, except that an
+    /// enforced deny whose audit row could not be written escalates, having
+    /// written nothing, so rvd answers and records it.
+    private func record(_ live: Run, deadline: ContinuousClock.Instant) -> LocalHookOutcome {
+        let recorded = GatedEvaluate.performBounded(
+            live.effects, home: home, deadline: deadline, auditFloor: Self.auditFloor,
+            escalateUnrecordedDeny: live.guardMode != .observe)
+        if recorded.unrecordedDeny { return .escalate(.auditUnwritten) }
         let decision = live.analytics.flatMap { kind in
             AnalyticsPreferences.load(
-                from: AnalyticsPaths(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                configData: readRegularFile(AnalyticsPaths(
+                    configDirectory: RVPolicyPaths.configDirectory(home: home)).configFile)
             ).isEnabled ? kind : nil
         }
-        HookLocalSpool.write(HookLocalSpool.Batch(decision: decision, drops: drops), home: home)
+        let left = max(.zero, deadline - ContinuousClock.now)
+        HookLocalSpool.write(
+            HookLocalSpool.Batch(decision: decision, drops: recorded.drops, audits: recorded.audits),
+            home: home, lockTimeout: min(HookLocalSpool.lockTimeout, left))
+        return live.outcome
     }
 
     private struct Run {
