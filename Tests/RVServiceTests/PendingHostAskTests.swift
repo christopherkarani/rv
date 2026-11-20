@@ -108,6 +108,8 @@ struct PendingHostAskServiceTests {
         #expect(try await env.store.list(now: now).count == 1)
     }
 
+    /// No session id and no turn or task id: no row, so the wire says the
+    /// ask went unrecorded instead of promising one.
     @Test func PendingHostAsk_missingSessionEncodesAskWithEmptyList() async throws {
         let env = try IsolatedPendingHostAsk()
         defer { env.tearDown() }
@@ -125,7 +127,7 @@ struct PendingHostAskServiceTests {
             ),
             context: peerHookContext()
         )
-        try assertAsk(wire)
+        try assertAsk(wire, recorded: false)
         #expect(try await env.store.list(now: now).isEmpty)
         let listed = await env.runtime.dispatch(IPCRequest(method: .pendingList), context: peerServiceContext())
         guard case .pendingList(let reply) = listed.result else {
@@ -186,7 +188,7 @@ struct PendingHostAskServiceTests {
         #expect(listed.first?.identity.agent == .grok)
     }
 
-    private func assertAsk(_ response: IPCResponse) throws {
+    private func assertAsk(_ response: IPCResponse, recorded: Bool = true) throws {
         guard case .hookEvaluate(let reply) = response.result else {
             Issue.record("expected hookEvaluate, got \(response.result)")
             throw PendingHostAskExpectation()
@@ -196,7 +198,8 @@ struct PendingHostAskServiceTests {
         )
         // Step 8B: ASK renders as deny-with-guidance on the wire.
         #expect(json["decision"] as? String == "deny")
-        #expect(reply.stdout.contains(approvalPendingLine))
+        #expect(reply.stdout.contains(recorded ? approvalPendingLine : approvalUnrecordedLine))
+        #expect(reply.stdout.contains(recorded ? approvalUnrecordedLine : approvalPendingLine) == false)
         #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
         #expect(reply.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(reply.exitCode == 1)
