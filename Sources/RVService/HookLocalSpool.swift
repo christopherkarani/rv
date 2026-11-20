@@ -283,8 +283,10 @@ package enum HookLocalSpool {
             var data = Data(count: limit)
             var read = 0
             let complete = data.withUnsafeMutableBytes { buffer -> Bool in
+                // Only an empty buffer has no base address, and then there is nothing to read.
+                guard let base = buffer.baseAddress else { return true }
                 while read < limit {
-                    let count = pread(fd, buffer.baseAddress! + read, limit - read, off_t(read))
+                    let count = pread(fd, base + read, limit - read, off_t(read))
                     if count < 0, errno == EINTR { continue }
                     guard count > 0 else { return count == 0 }
                     read += count
@@ -322,7 +324,10 @@ package enum HookLocalSpool {
         var buffer = [UInt8](repeating: 0, count: min(Int(info.st_size), maxUncountedBytes))
         var read = 0
         while read < buffer.count {
-            let count = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress! + read, $0.count - read, off_t(read)) }
+            let count = buffer.withUnsafeMutableBytes { bytes -> Int in
+                guard let base = bytes.baseAddress else { return 0 }
+                return pread(fd, base + read, bytes.count - read, off_t(read))
+            }
             if count < 0, errno == EINTR { continue }
             guard count > 0 else { break }
             read += count
