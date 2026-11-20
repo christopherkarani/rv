@@ -10,9 +10,7 @@ import RVTheme
 import Synchronization
 import Testing
 @testable import RVCLI
-#if canImport(XPC)
 import RVService
-#endif
 #if os(macOS)
 import RVIsolation
 #endif
