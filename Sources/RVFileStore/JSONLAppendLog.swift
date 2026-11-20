@@ -38,8 +38,15 @@ public enum JSONLAppendLog {
     private static let processLock = Mutex<Void>(())
 
     /// Appends `line` (a newline is added when absent) as one whole record.
-    public static func append(_ line: Data, to url: URL, sync: Bool = true) throws(AppendError) {
-        try exclusively(at: url) { locked in
+    /// `lockTimeout` bounds the wait for another process's lock (non-blocking
+    /// attempts until it passes, then `.lock(errno: EWOULDBLOCK)`); nil waits.
+    public static func append(
+        _ line: Data,
+        to url: URL,
+        sync: Bool = true,
+        lockTimeout: Duration? = nil
+    ) throws(AppendError) {
+        try exclusively(at: url, lockTimeout: lockTimeout) { locked in
             appendLocked(line, to: locked, sync: sync)
         }.get()
     }
@@ -60,6 +67,7 @@ public enum JSONLAppendLog {
 
     private static func exclusively<T: Sendable>(
         at url: URL,
+        lockTimeout: Duration? = nil,
         body: (URL) -> Result<T, AppendError>
     ) -> Result<T, AppendError> {
         let directory = url.deletingLastPathComponent()
@@ -86,7 +94,7 @@ public enum JSONLAppendLog {
         }
         defer { close(fd) }
         return processLock.withLock { _ in
-            if let failure = lock(fd) {
+            if let failure = lock(fd, timeout: lockTimeout) {
                 return .failure(failure)
             }
             defer { _ = flock(fd, LOCK_UN) }
@@ -123,7 +131,24 @@ public enum JSONLAppendLog {
     /// Excludes other processes. Callers already hold `processLock`. Returns
     /// nil once the lock is held, else the failure with `errno` captured
     /// immediately at the failing `flock`.
-    private static func lock(_ fd: Int32) -> AppendError? {
+    private static func lock(_ fd: Int32, timeout: Duration?) -> AppendError? {
+        if let timeout {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while true {
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+                    return nil
+                }
+                let code = errno
+                guard code == EWOULDBLOCK || code == EINTR else {
+                    return .lock(errno: code)
+                }
+                guard clock.now < deadline else {
+                    return .lock(errno: EWOULDBLOCK)
+                }
+                usleep(1_000)
+            }
+        }
         var code: Int32 = EINTR
         for _ in 0..<16 {
             if flock(fd, LOCK_EX) == 0 {

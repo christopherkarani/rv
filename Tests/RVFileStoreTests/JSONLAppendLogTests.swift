@@ -183,4 +183,31 @@ struct JSONLAppendLogTests {
         }
         #expect(try text(url) == String(workers))
     }
+
+    /// Another process holding the sidecar lock costs a bounded append at
+    /// most its timeout, and the record is dropped, never half-written.
+    @Test func lockTimeoutBoundsTheWaitForAnotherProcess() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("held.jsonl")
+        let holder = Process()
+        holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        holder.arguments = [
+            "-e", #"use Fcntl qw(:flock); open(F, ">>", $ARGV[0]) or die; flock(F, LOCK_EX) or die; $| = 1; print "locked\n"; sleep 30"#,
+            url.path + ".lock",
+        ]
+        let out = Pipe()
+        holder.standardOutput = out
+        try holder.run()
+        defer { holder.terminate(); holder.waitUntilExit() }
+        let ready = out.fileHandleForReading.readData(ofLength: 7)
+        #expect(String(decoding: ready, as: UTF8.self) == "locked\n")
+
+        let started = ContinuousClock.now
+        #expect(throws: JSONLAppendLog.AppendError.lock(errno: EWOULDBLOCK)) {
+            try JSONLAppendLog.append(Data("{}".utf8), to: url, sync: false, lockTimeout: .milliseconds(100))
+        }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(FileManager.default.fileExists(atPath: url.path) == false)
+    }
 }
