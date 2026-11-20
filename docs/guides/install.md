@@ -298,6 +298,39 @@ unchecked and unlogged, with a notice on stderr; an enforcing host blocks
 them. An organization gate pins enforce and `rv setup --observe` refuses
 under one.
 
+### Observe and a stopped `rvd`
+
+`"guard.mode": "observe"` logs would-be verdicts without
+blocking, so you can measure before you enforce. `rv host mode
+<host> observe` does the same for one host (`off` unwires it); `rv
+blocks` marks what observe would have blocked with `"observed": true`.
+`rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
+starts there. Observe never relaxes rv's own protection (rv admin
+commands, rv's config) while `rvd` is running. Because an idle observe
+host lets a call through when `rvd` is absent, observe also raises the
+bar on the common ways to stop or replace `rvd`: `launchctl`/`systemctl`
+stops of rv's job, `pkill`/`killall` of `rvd`, `kill` of a pid looked up
+from `rvd`, launching a second `rvd`, Linux D-Bus stops, and writes to
+rv's binaries, LaunchAgent, systemd unit or socket dir become "run it in
+Terminal". This check is **lexical, not a boundary** — it reads the
+command text, so it raises the bar but a determined agent can still get
+past it. It is observe-only; enforce already fails such a call closed.
+Residual (not caught): `kill` by a numeric pid, or a pid or path held in
+a variable or file; interpreter or script forms (a `python`/`node`
+subprocess, `bash -c "$(… | base64 -d)"`, a script file, a make/npm
+script); and a renamed or symlinked `launchctl`. When `rvd` is *absent*,
+hooks under observe let the call run unchecked and
+unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
+daemon that fails its identity check, or a malformed reply still asks or
+denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+platform-specific: on **macOS**, rv's launchd service is not registered
+(discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
+is *not* absent; on **Linux**, the connect to
+`/run/user/<uid>/rv/evaluate.sock` fails with `ENOENT`/`ECONNREFUSED` and
+`XDG_RUNTIME_DIR` is unset or equals `/run/user/<uid>`. An organization gate pins enforce, and `rv setup
+--observe` refuses under one. A host set `off` before an organization
+gate arrived stays unwired until you run `rv setup`.
+
 Per host, at any time:
 
 ```bash
