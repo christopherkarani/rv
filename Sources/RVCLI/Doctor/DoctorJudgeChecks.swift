@@ -24,6 +24,26 @@ enum DoctorJudgeChecks {
         }
     }
 
+    /// An installed manifest with no `judge` entry verifies no supervisor:
+    /// rvd treats the pool as unreachable.
+    static func manifestRole(lacksJudge: Bool) -> DoctorProblem? {
+        guard lacksJudge else { return nil }
+        return DoctorProblem(
+            id: "peer-trust-judge-role-missing", severity: .warn,
+            summary: "the peer-trust manifest at \(DoctorInstallChecks.trustManifestPath) has no judge entry; "
+                + "rvd verifies no judge pool, so judged calls go to review",
+            fix: "add a judge entry for the installed rv-judge to '\(DoctorInstallChecks.trustManifestPath)'; "
+                + "the file is root-owned, so this needs an administrator (sudo)")
+    }
+
+    /// `rv-judge` is installed and a valid manifest omits the `judge` role.
+    static func lacksJudge(paths: OwnedPaths, manifestRoles: Set<String>?) -> Bool {
+        guard let manifestRoles,
+              FileManager.default.isExecutableFile(atPath: SetupRun.judgeExecutable(rvdPath: paths.localRvd))
+        else { return false }
+        return manifestRoles.contains("judge") == false
+    }
+
     /// With a judge bundle installed (macOS), the pool agent must be
     /// installed beside rvd, registered and loaded. `loaded` is nil when
     /// launchd was not observed: nothing to say then.

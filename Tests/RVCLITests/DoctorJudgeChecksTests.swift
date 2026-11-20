@@ -5,6 +5,9 @@ import RVPolicy
 import RVPresentation
 import RVTheme
 import Testing
+#if os(macOS)
+import RVIsolation
+#endif
 @testable import RVCLI
 
 /// Doctor's judge rows: rvd's judge warnings reach the human output, and on
@@ -89,7 +92,7 @@ import Testing
             paths: layout, fileManager: .default, loaded: nil, bundleInstalled: true) == nil,
             "launchd not observed (Linux, tests): nothing to say")
     }
-    @Test func humanDoctorPrintsThePoolWarningOnceWithTheAgentCause() throws {
+    @Test func humanDoctorPrintsTheAgentCauseAndRvdsPoolWarning() throws {
         let (root, layout) = try paths()
         defer { try? FileManager.default.removeItem(at: root) }
         let environment = DoctorEnvironment(
@@ -105,12 +108,44 @@ import Testing
         ])
         let outcome = DoctorRun.run(environment: environment, diagnostics: diagnostics, appearance: .pretty(colorOffPalette))
         #expect(outcome.stdout.contains("rv-judge is missing"))
-        #expect(outcome.stdout.contains("judge pool unreachable") == false, "the agent row names the cause")
+        #expect(outcome.stdout.contains("judge pool unreachable"), "rvd's own warning is kept beside the cause")
 
         let noAgentIssue = DoctorEnvironment(
             home: layout.home, pathEntries: [], fileManager: .default, launchAgentLoaded: true)
         let plain = DoctorRun.run(environment: noAgentIssue, diagnostics: diagnostics, appearance: .pretty(colorOffPalette))
         #expect(plain.stdout.contains("judge pool unreachable or unverified"))
         #expect(plain.stdout.contains("fix: rv setup"))
+    }
+    @Test func manifestWithoutJudgeEntryIsAProblem() {
+        let problem = DoctorJudgeChecks.manifestRole(lacksJudge: true)
+        #expect(problem?.id == "peer-trust-judge-role-missing")
+        #expect(problem?.severity == .warn)
+        #expect(problem?.summary.contains("judge entry") == true)
+        #expect(problem?.summary.contains("review") == true)
+        #expect(DoctorJudgeChecks.manifestRole(lacksJudge: false) == nil)
+    }
+
+    @Test func manifestLacksJudgeOnlyWhenRvJudgeIsInstalledAndAManifestOmitsIt() throws {
+        let (root, layout) = try paths()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(DoctorJudgeChecks.lacksJudge(paths: layout, manifestRoles: ["service"]) == false, "no rv-judge")
+        try touchExecutable(SetupRun.judgeExecutable(rvdPath: layout.localRvd))
+        #expect(DoctorJudgeChecks.lacksJudge(paths: layout, manifestRoles: ["service"]))
+        #expect(DoctorJudgeChecks.lacksJudge(paths: layout, manifestRoles: ["service", "judge"]) == false)
+        #expect(DoctorJudgeChecks.lacksJudge(paths: layout, manifestRoles: nil) == false, "no manifest: sibling pin")
+    }
+
+    @Test func judgeRoleTrustIsCheckedAndNamesTheEffect() throws {
+        let (root, layout) = try paths()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #if os(macOS)
+        #expect(RoleTrustProbe.binaries(layout).contains { $0.role == .judge })
+        #endif
+        let rows = DoctorInstallChecks.roleTrust([
+            DoctorRoleTrust(role: "judge", path: "/x/rv-judge",
+                            trust: DoctorServiceTrust(source: "manifest", satisfied: false, reason: "cdhash differs")),
+        ])
+        #expect(rows.first?.summary.contains("rv-judge") == true)
+        #expect(rows.first?.summary.contains("review") == true)
     }
 }

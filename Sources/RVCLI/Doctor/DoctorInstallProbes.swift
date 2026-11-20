@@ -54,6 +54,9 @@ struct DoctorInstallProbes {
     var judgeLoaded: Bool? = nil
     /// Does a valid judge bundle sit where rvd looks? Default false (tests).
     var judgeBundleInstalled: Bool = false
+    /// The roles an installed manifest names; nil without a valid manifest
+    /// (sibling pin, invalid, Linux, tests).
+    var manifestRoles: Set<String>? = nil
 
     static func live(
         home: HomeDirectory,
@@ -80,6 +83,9 @@ struct DoctorInstallProbes {
             label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
         probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
         if case .ok = JudgeRuntime.bundleHealth(home: home) { probes.judgeBundleInstalled = true }
+        probes.manifestRoles = ProtectedPeerTrustConfiguration.hookTrustSource().manifestRoles.map {
+            Set($0.map(\.rawValue))
+        }
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
         probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
@@ -199,6 +205,7 @@ enum RoleTrustProbe {
             (.cli, paths.localRvCli),
             (.workspaceHost, paths.localWorkspaceHost),
             (.mcpCustodian, paths.custodianAppExecutable),
+            (.judge, SetupRun.judgeExecutable(rvdPath: paths.localRvd)),
         ]
     }
 
@@ -436,6 +443,9 @@ enum DoctorInstallChecks {
         case "mcpCustodian":
             "the peer-trust manifest pins the approvals custodian to a different build; "
                 + "MCP approvals will fail"
+        case "judge":
+            "the peer-trust manifest pins rv-judge to a different build; "
+                + "rvd refuses the judge pool, so judged calls go to review"
         default:
             "the peer-trust manifest pins \(role) to a different build"
         }

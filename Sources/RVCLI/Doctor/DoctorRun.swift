@@ -174,21 +174,23 @@ enum DoctorRun {
         )
     }
 
-    /// The pool agent row, when there is one, already explains rvd's
-    /// unreachable-pool warning: report the cause once.
+    /// The judge rows: why the pool agent is not running, a manifest that
+    /// verifies no supervisor, and rvd's own judge warnings.
     private static func judgeProblems(
         environment: DoctorEnvironment,
         diagnostics: ServiceDiagnosticResult,
         paths: OwnedPaths
     ) -> [DoctorProblem] {
-        let agent = environment.install.flatMap {
-            DoctorJudgeChecks.agent(
-                paths: paths, fileManager: environment.fileManager,
-                loaded: $0.judgeLoaded, bundleInstalled: $0.judgeBundleInstalled)
-        }
-        let service = DoctorJudgeChecks.serviceWarnings(diagnostics)
-        guard let agent else { return service }
-        return [agent] + service.filter { $0.id != "judge-pool" }
+        let install: [DoctorProblem] = environment.install.map { probes in
+            [
+                DoctorJudgeChecks.agent(
+                    paths: paths, fileManager: environment.fileManager,
+                    loaded: probes.judgeLoaded, bundleInstalled: probes.judgeBundleInstalled),
+                DoctorJudgeChecks.manifestRole(
+                    lacksJudge: DoctorJudgeChecks.lacksJudge(paths: paths, manifestRoles: probes.manifestRoles)),
+            ].compactMap { $0 }
+        } ?? []
+        return install + DoctorJudgeChecks.serviceWarnings(diagnostics)
     }
 
     /// One-line repair for a service that is not running cleanly. Hooks have
