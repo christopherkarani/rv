@@ -110,7 +110,8 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .spawn(let slot, let generation, let key):
             do {
                 let process = try spawner.spawn(slot: slot, key: key) { [weak self] output in
-                    self?.queue.async { self?.received(output, from: slot, generation: generation) }
+                    guard let self else { return }
+                    self.queue.async { self.received(output, from: slot, generation: generation) }
                 }
                 running[slot] = Running(generation: generation, process: process)
                 log("worker \(slot.rawValue) (\(slot.computeArgument)) spawned for \(key.engine)")
