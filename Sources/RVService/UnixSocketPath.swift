@@ -173,7 +173,14 @@ public enum UnixSocketPath {
     private static func prepareUserRuntimeDirectory(_ url: URL, root: String, uid: UInt32) throws {
         if lstatKind(url.path) == nil {
             if lstatKind(root) == nil, uid == 0 {
-                guard mkdir(root, 0o755) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
+                if mkdir(root, 0o755) == 0 {
+                    // mkdir's mode passes through the umask: root's 077
+                    // would leave /run/user 0700, which no other account
+                    // could search for its own directory.
+                    guard chmod(root, 0o755) == 0 else { throw UnixSocketPathError.permission }
+                } else {
+                    guard errno == EEXIST else { throw UnixSocketPathError.permission }
+                }
             }
             guard mkdir(url.path, 0o700) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
         }
