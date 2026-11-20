@@ -150,7 +150,10 @@ public struct StartupBackoffStore: Sendable {
             let data = try? JSONEncoder().encode(record)
         else { return }
         var template = Array((path + ".XXXXXX.tmp").utf8CString)
-        let fd = template.withUnsafeMutableBufferPointer { mkstemps($0.baseAddress!, 4) }
+        let fd = template.withUnsafeMutableBufferPointer { buffer -> Int32 in
+            guard let base = buffer.baseAddress else { return -1 }
+            return mkstemps(base, 4)
+        }
         guard fd >= 0 else { return }
         let temp = String(cString: template)
         let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
