@@ -40,7 +40,7 @@ _INFRA_ASK_TEXT = (
     "rv could not check this call (%s). An agent can cause this by stopping or "
     "overloading rvd. Approve only if you expected it. %s"
 )
-_SUBJECT_MAX = 1000
+_SUBJECT_MAX = 300
 
 # rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
 # Swift twin HookDaemonFallback) words each down class, with the layer the
@@ -226,7 +226,9 @@ def _session_attended(environ):
 
 
 def _subject(tool, tool_input):
-    # What the person is approving, first: the command, or the path.
+    # What the person is approving, first: the command, or the path, on
+    # one escaped line (_one_line), so it cannot forge text of its own or
+    # push rv's warning out of view.
     name = tool if isinstance(tool, str) else "Unknown tool"
     keys = ("command",) if tool == "Bash" else ("file_path", "notebook_path", "path", "pattern")
     value = None
@@ -236,10 +238,40 @@ def _subject(tool, tool_input):
                 value = tool_input.get(key)
                 break
     if value is None:
-        return "%s: (no command or path given)" % name
-    if len(value) > _SUBJECT_MAX:
-        value = value[:_SUBJECT_MAX] + "…"
-    return "%s: %s" % (name, value)
+        return "%s: (no command or path given)" % _one_line(name)
+    return "%s: %s" % (_one_line(name), _one_line(value))
+
+
+def _one_line(text):
+    # Line breaks, controls, format (bidi, zero-width), separator and
+    # non-ASCII space characters are shown escaped, as rv's
+    # HookDenyJSON.jsonQuoted does; a plain space stays. The escaped text is
+    # capped at _SUBJECT_MAX characters, never inside an escape, and the
+    # rest is counted in characters of the original text.
+    shown = []
+    used = 0
+    for index, ch in enumerate(text):
+        piece = _escaped_char(ch)
+        if used + len(piece) > _SUBJECT_MAX:
+            return "".join(shown) + "… (%d more characters)" % (len(text) - index)
+        shown.append(piece)
+        used += len(piece)
+    return "".join(shown)
+
+
+_SHORT_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _escaped_char(ch):
+    if ch in _SHORT_ESCAPES:
+        return _SHORT_ESCAPES[ch]
+    if ch == " " or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Zs", "Zl", "Zp"):
+        return ch
+    code = ord(ch)
+    if code > 0xFFFF:
+        code -= 0x10000
+        return "\\u%04x\\u%04x" % (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF))
+    return "\\u%04x" % code
 
 
 def _parse(raw):

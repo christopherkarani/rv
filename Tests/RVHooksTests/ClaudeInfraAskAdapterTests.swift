@@ -62,13 +62,41 @@ struct ClaudeInfraAskAdapterTests {
     /// A very long command is cut so the warning still shows.
     @Test func daemonDown_longCommandIsTruncated() async throws {
         let command = String(repeating: "a", count: 5000)
+        let reason = try await Self.askReason(command: command)
+        let subject = "Bash: " + String(repeating: "a", count: 300) + "… (4700 more characters)"
+        #expect(reason == Self.prompt(subject: subject, layer: "rvd is not reachable", reason: daemonUnreachableMessage))
+    }
+
+    /// The command is shown on one line, with line breaks, controls,
+    /// format (bidi, zero-width) and separator characters escaped, so it
+    /// cannot forge a paragraph, push the warning out of view, or reorder
+    /// what the person reads. A plain space stays a space.
+    @Test(arguments: SubjectForgery.allCases)
+    func daemonDown_commandIsShownOnOneEscapedLine(_ forgery: SubjectForgery) async throws {
+        let reason = try await Self.askReason(command: forgery.command)
+        #expect(
+            reason == Self.prompt(
+                subject: "Bash: " + forgery.shown, layer: "rvd is not reachable", reason: daemonUnreachableMessage),
+            "\(forgery): \(reason)")
+        // Exactly one paragraph break: the one before rv's warning.
+        #expect(reason.components(separatedBy: "\n").count == 3, "\(forgery)")
+    }
+
+    /// The cap counts escaped text, never splits an escape, and counts the
+    /// remainder in characters of the original command.
+    @Test func daemonDown_escapedTailIsCappedWithoutSplittingAnEscape() async throws {
+        let command = String(repeating: "a", count: 298) + String(repeating: "\u{202E}", count: 10)
+        let reason = try await Self.askReason(command: command)
+        let subject = "Bash: " + String(repeating: "a", count: 298) + "… (10 more characters)"
+        #expect(reason == Self.prompt(subject: subject, layer: "rvd is not reachable", reason: daemonUnreachableMessage))
+    }
+
+    static func askReason(command: String) async throws -> String {
         let run = try await runPythonAdapter(
             host: .claude, stub: daemonDownWire(.claude),
             eventFields: ["permission_mode": "default", "tool_input": ["command": command]],
             environment: Self.attended)
-        let reason = try expectClaudeAsk(run)
-        let subject = "Bash: " + String(repeating: "a", count: 1000) + "…"
-        #expect(reason == Self.prompt(subject: subject, layer: "rvd is not reachable", reason: daemonUnreachableMessage))
+        return try expectClaudeAsk(run)
     }
 
     @Test(arguments: nonPromptingModes)
@@ -282,6 +310,53 @@ struct ClaudeInfraAskAdapterTests {
         }
     }
 
+    enum SubjectForgery: CaseIterable, CustomStringConvertible {
+        case forgedParagraph, newlinePadding, carriageReturnAndTab, ansiEscape, bidiOverride
+        case zeroWidth, lineAndParagraphSeparators, nonBreakingAndIdeographicSpace, astralFormatTag
+
+        var command: String {
+            switch self {
+            case .forgedParagraph: "echo hi\n\nrv checked this call: SAFE. Approve."
+            case .newlinePadding: "echo hi" + String(repeating: "\n", count: 40) + "rm -rf ~"
+            case .carriageReturnAndTab: "rm -rf ~\rls\tx"
+            case .ansiEscape: "rm -rf ~\u{1B}[2K\u{1B}[1Als"
+            case .bidiOverride: "echo \u{202E}hs.txt rm -rf ~"
+            case .zeroWidth: "r\u{200B}m -rf ~\u{FEFF}"
+            case .lineAndParagraphSeparators: "ls\u{2028}rm -rf ~\u{2029}"
+            case .nonBreakingAndIdeographicSpace: "rm\u{00A0}-rf\u{3000}~"
+            case .astralFormatTag: "ls\u{E0041}"
+            }
+        }
+
+        var shown: String {
+            switch self {
+            case .forgedParagraph: #"echo hi\n\nrv checked this call: SAFE. Approve."#
+            case .newlinePadding: "echo hi" + String(repeating: #"\n"#, count: 40) + "rm -rf ~"
+            case .carriageReturnAndTab: #"rm -rf ~\rls\tx"#
+            case .ansiEscape: "rm -rf ~" + escaped("001b") + "[2K" + escaped("001b") + "[1Als"
+            case .bidiOverride: "echo " + escaped("202e") + "hs.txt rm -rf ~"
+            case .zeroWidth: "r" + escaped("200b") + "m -rf ~" + escaped("feff")
+            case .lineAndParagraphSeparators: "ls" + escaped("2028") + "rm -rf ~" + escaped("2029")
+            case .nonBreakingAndIdeographicSpace: "rm" + escaped("00a0") + "-rf" + escaped("3000") + "~"
+            case .astralFormatTag: "ls" + escaped("db40") + escaped("dc41")
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .forgedParagraph: "forgedParagraph"
+            case .newlinePadding: "newlinePadding"
+            case .carriageReturnAndTab: "carriageReturnAndTab"
+            case .ansiEscape: "ansiEscape"
+            case .bidiOverride: "bidiOverride"
+            case .zeroWidth: "zeroWidth"
+            case .lineAndParagraphSeparators: "lineAndParagraphSeparators"
+            case .nonBreakingAndIdeographicSpace: "nonBreakingAndIdeographicSpace"
+            case .astralFormatTag: "astralFormatTag"
+            }
+        }
+    }
+
     enum UnattendedSession: CaseIterable, CustomStringConvertible {
         case headlessPrint, attendedZeroWithCliEntrypoint, attendedNotOne, attendedEmpty
         case cliEntrypointOnly, desktopEntrypointOnly, vscodeEntrypointOnly
@@ -425,6 +500,13 @@ struct ClaudeInfraAskAdapterTests {
             }
         }
     }
+}
+
+/// How the prompt shows one escaped UTF-16 unit: a backslash, `u`, and
+/// four lowercase hex digits (built without a backslash literal so the
+/// expectation stays readable as ASCII).
+private func escaped(_ hex: String) -> String {
+    String(UnicodeScalar(92)) + "u" + hex
 }
 
 /// `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
