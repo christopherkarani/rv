@@ -163,13 +163,25 @@ public enum JudgePoolServe {
             JudgePoolLog.line("executable changed on disk; exiting for launchd to restart the new one")
             exit(0)
         }
+        guard let cache = JudgePoolCacheDirectory.prepare() else {
+            JudgePoolLog.line("cannot create a private model cache directory; exiting")
+            exit(1)
+        }
+        // launchd stops the agent with SIGTERM: leave through exit() so the
+        // private cache is removed.
+        signal(SIGTERM, SIG_IGN)
+        let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminate.setEventHandler { exit(0) }
+        terminate.resume()
         let running = JudgePoolTrust.runningCodeHash()
         if running == nil { JudgePoolLog.line("own code hash unreadable; workers are checked by file identity only") }
         let spawner = UpgradeGuardedSpawner(
             base: PosixWorkerSpawner(
                 executable: executable,
                 environment: workerEnvironment(environment),
-                arguments: PosixWorkerSpawner.judgeWorkerArguments),
+                arguments: { slot, compute, key in
+                    PosixWorkerSpawner.judgeWorkerArguments(slot: slot, compute: compute, key: key, cache: cache)
+                }),
             executable: executable, identity: identity,
             codeMatches: { running.map { JudgePoolTrust.siblingHashes.hash(ofPath: executable) == $0 } ?? true },
             onUpgrade: upgraded)
@@ -191,7 +203,7 @@ public enum JudgePoolServe {
             }
         }
         watch.resume()
-        withExtendedLifetime((listener, watch)) { dispatchMain() }
+        withExtendedLifetime((listener, watch, terminate)) { dispatchMain() }
         #else
         FileHandle.standardError.write(Data("rv-judge serve: the judge pool needs Core ML (macOS); Linux runs packs-only\n".utf8))
         exit(1)
