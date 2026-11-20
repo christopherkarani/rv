@@ -184,6 +184,34 @@ struct JSONLAppendLogTests {
         #expect(try text(url) == String(workers))
     }
 
+    /// A writer in this process holding the lock (another verdict's append,
+    /// or an untimed RVIsolation caller) also costs a bounded append at most
+    /// its timeout: one deadline covers both locks.
+    @Test func lockTimeoutBoundsTheWaitForAnotherThread() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("held.jsonl")
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        Thread {
+            JSONLAppendLog.processLock.withLock { _ in
+                held.signal()
+                _ = release.wait(timeout: .now() + 2)
+            }
+            finished.signal()
+        }.start()
+        held.wait()
+        defer { release.signal(); finished.wait() }
+
+        let started = ContinuousClock.now
+        #expect(throws: JSONLAppendLog.AppendError.lock(errno: EWOULDBLOCK)) {
+            try JSONLAppendLog.append(Data("{}".utf8), to: url, sync: false, lockTimeout: .milliseconds(100))
+        }
+        #expect(ContinuousClock.now - started < .seconds(1))
+        #expect(FileManager.default.fileExists(atPath: url.path) == false)
+    }
+
     /// Another process holding the sidecar lock costs a bounded append at
     /// most its timeout, and the record is dropped, never half-written.
     @Test func lockTimeoutBoundsTheWaitForAnotherProcess() throws {
@@ -193,13 +221,16 @@ struct JSONLAppendLogTests {
         let holder = Process()
         holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         holder.arguments = [
-            "-e", #"use Fcntl qw(:flock); open(F, ">>", $ARGV[0]) or die; flock(F, LOCK_EX) or die; $| = 1; print "locked\n"; sleep 30"#,
+            "-e", #"use Fcntl qw(:flock); open(F, ">>", $ARGV[0]) or die; flock(F, LOCK_EX) or die; $| = 1; print "locked\n"; my @rest = <STDIN>"#,
             url.path + ".lock",
         ]
         let out = Pipe()
         holder.standardOutput = out
+        let input = Pipe()
+        holder.standardInput = input
         try holder.run()
-        defer { holder.terminate(); holder.waitUntilExit() }
+        // The holder keeps the lock until its stdin closes.
+        defer { try? input.fileHandleForWriting.close(); holder.waitUntilExit() }
         let ready = out.fileHandleForReading.readData(ofLength: 7)
         #expect(String(decoding: ready, as: UTF8.self) == "locked\n")
 

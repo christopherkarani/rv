@@ -35,11 +35,13 @@ public enum JSONLAppendLog {
         case sync(errno: Int32)
     }
 
-    private static let processLock = Mutex<Void>(())
+    /// Internal so tests can hold it as a contending writer would.
+    static let processLock = Mutex<Void>(())
 
     /// Appends `line` (a newline is added when absent) as one whole record.
-    /// `lockTimeout` bounds the wait for another process's lock (non-blocking
-    /// attempts until it passes, then `.lock(errno: EWOULDBLOCK)`); nil waits.
+    /// `lockTimeout` bounds the whole wait, for this process's writers and
+    /// another process's lock alike (non-blocking attempts against one
+    /// deadline, then `.lock(errno: EWOULDBLOCK)`); nil waits.
     public static func append(
         _ line: Data,
         to url: URL,
@@ -93,12 +95,27 @@ public enum JSONLAppendLog {
             return .failure(.lock(errno: openError))
         }
         defer { close(fd) }
-        return processLock.withLock { _ in
-            if let failure = lock(fd, timeout: lockTimeout) {
+        func locked(until deadline: ContinuousClock.Instant?) -> Result<T, AppendError> {
+            if let failure = lock(fd, until: deadline) {
                 return .failure(failure)
             }
             defer { _ = flock(fd, LOCK_UN) }
             return body(url)
+        }
+        guard let lockTimeout else {
+            return processLock.withLock { _ in locked(until: nil) }
+        }
+        // One deadline for both locks, so contention in this process does
+        // not stack a fresh timeout per waiting writer.
+        let deadline = ContinuousClock.now.advanced(by: lockTimeout)
+        while true {
+            if let result = processLock.withLockIfAvailable({ _ in locked(until: deadline) }) {
+                return result
+            }
+            guard ContinuousClock.now < deadline else {
+                return .failure(.lock(errno: EWOULDBLOCK))
+            }
+            usleep(1_000)
         }
     }
 
@@ -131,10 +148,8 @@ public enum JSONLAppendLog {
     /// Excludes other processes. Callers already hold `processLock`. Returns
     /// nil once the lock is held, else the failure with `errno` captured
     /// immediately at the failing `flock`.
-    private static func lock(_ fd: Int32, timeout: Duration?) -> AppendError? {
-        if let timeout {
-            let clock = ContinuousClock()
-            let deadline = clock.now.advanced(by: timeout)
+    private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> AppendError? {
+        if let deadline {
             while true {
                 if flock(fd, LOCK_EX | LOCK_NB) == 0 {
                     return nil
@@ -143,7 +158,7 @@ public enum JSONLAppendLog {
                 guard code == EWOULDBLOCK || code == EINTR else {
                     return .lock(errno: code)
                 }
-                guard clock.now < deadline else {
+                guard ContinuousClock.now < deadline else {
                     return .lock(errno: EWOULDBLOCK)
                 }
                 usleep(1_000)
