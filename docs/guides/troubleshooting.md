@@ -10,17 +10,34 @@ produced by a run on Linux.
 
 ## Agent tool calls are blocked
 
-When rv cannot decide, the hook blocks the call. It never quietly allows
-it (unless the host is in observe mode, see below).
+When rv cannot decide, the hook blocks the call or, in one Claude Code
+case below, asks you through Claude Code's own prompt. It never quietly
+allows it (unless the host is in observe mode, see below).
 
 In Claude Code, when rv could not check a call at all (rvd not reachable,
 slow, or dropped the connection, or the rv process ran past 15 s), you
-get Claude Code's own permission prompt instead of a block. The prompt
-starts with
-**`rv could not check this call, and might have blocked it, so Claude Code is asking you. Approve only if you expected it.`**
-followed by one of the daemon messages below. The agent cannot answer
-this prompt; you decide. In `bypassPermissions` and `dontAsk` modes, and
-in other hosts, the call is blocked instead.
+may get Claude Code's own permission prompt instead of a block. It shows
+the command (or the file path) first, then
+**`rv could not check this call (<layer>). An agent can cause this by stopping or overloading rvd. Approve only if you expected it.`**
+followed by one of the daemon messages below. Claude Code answers this
+prompt the way it answers any permission prompt: you, or whatever the
+session hands prompts to (an SDK `canUseTool` callback, a
+`--permission-prompt-tool`, a `PermissionRequest` hook or a mod).
+Choosing "Yes, don't ask again" writes a persistent Claude Code allow
+rule; rv's deny still wins once `rvd` answers again.
+
+The call is blocked instead, with the daemon message, when any of these
+holds:
+
+- `RV_HOOK_WHEN_DOWN=deny` is set;
+- the permission mode is `bypassPermissions` or `dontAsk`, or the hook
+  request names no mode or one rv does not know;
+- the session is not marked attended: `claude -p` and SDK sessions
+  (`CLAUDE_CODE_SESSION_ATTENDED=0`, or an entrypoint other than `cli`,
+  `claude-desktop` or `claude-vscode` when that flag is unset);
+- rv's reply is anything other than one of the three daemon messages
+  (unreachable, did not answer in time, connection dropped);
+- the host is Cursor or any host other than Claude Code.
 
 **`rv blocked this action without giving a reason. Run `rv doctor`.`**
 The host got a block with no reason; rv puts this text in when a reason

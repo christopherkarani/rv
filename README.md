@@ -116,7 +116,9 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   hooks under observe let the call run unchecked and
   unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
   daemon that fails its identity check, or a malformed reply still asks or
-  denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+  denies (an "ask" is Claude Code's own prompt only in an attended session
+  in a prompting permission mode, a block everywhere else), and
+  `RV_HOOK_WHEN_DOWN=deny` keeps denying, in the adapters too. "Absent" is
   platform-specific: on **macOS**, rv's launchd service is not registered
   (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
   is *not* absent; on **Linux**, the connect to
