@@ -41,17 +41,39 @@ hook ──XPC──▶ rvd ──XPC (dev.rv.judge)──▶ rv-judge serve (su
   malformed frame kills that worker. A worker runs one throwaway prediction
   before it reports ready: the first prediction after a load is 0.3–0.5 s
   slower than the rest, and no real request should pay it.
-- **Compiled-model cache (interim).** Workers compile into a directory the
-  supervisor creates at startup and removes on exit (`atexit`, and SIGTERM
-  through a dispatch source): `<per-user temp dir>/rv-judge-<128 random
-  bits>`, 0700, checked to be a directory the user owns and not a link. The
-  per-user temp dir comes from `confstr(_CS_DARWIN_USER_TEMP_DIR)`, not the
-  environment. A supervisor sweeps earlier supervisors' `rv-judge-*`
-  entries it owns (links are removed, never followed). Workers get the path
-  as a required `--cache` and never use the shared `rv-laya` cache an agent
-  could plant; the cache key includes the compute units. When #625's
-  verified store (`~/.config/rv/cache/laya`, SHA-256 manifest) lands, the
-  workers load only through it and this directory goes away.
+- **Compiled-model cache (interim).** Workers load from a directory the
+  supervisor creates at startup and removes on exit (`atexit`, once, from
+  SIGTERM or an upgrade): `~/.config/rv/cache/judge/rv-judge-<128 random
+  bits>`, 0700, under the passwd home (`getpwuid`, never `$HOME`). Neither
+  cage can write there: the isolation cage's write roots are the workspace
+  (whose own `.config/rv` is denied whole), its RV-managed home under
+  `~/.config/rv/workspaces/<id>`, the per-user temp dir and operator write
+  trees; the MCP sandbox writes its scratch, temp dirs, `~/.npm`,
+  `~/.cache`, `~/Library/Caches` and reviewed `writable` paths. (The
+  earlier per-user temp dir location was writable from both, so its random
+  name hid nothing.) Every step is fd-relative: `.config` is opened
+  `O_DIRECTORY` (a dotfile manager's link is followed, as rv's own
+  `~/.config` check does), and `rv`, `cache`, `judge` and the run directory
+  are created 0700 with `mkdirat` and opened `O_DIRECTORY|O_NOFOLLOW`; each
+  is checked with `fstat` on its descriptor (directory, owned by the user,
+  not group/world-writable; `judge` and the run directory exactly 0700).
+  A sibling `rv-judge-<…>.lock`, created already locked (`O_EXLOCK`) before
+  the directory, marks it live. A supervisor sweeps the `rv-judge-*`
+  entries of supervisors that are gone (lock free or missing), skipping any
+  whose lock a live supervisor holds; sweep and exit cleanup are
+  `openat`/`fdopendir`/`unlinkat` with `AT_SYMLINK_NOFOLLOW`, so a link
+  planted anywhere in a swept tree is removed as itself and its target
+  survives. Workers get the path as a required `--cache`, refuse to load
+  unless it `lstat`s as a 0700 directory the user owns, and never create
+  it: a missing or replaced root is a load failure (review). They never use
+  the shared `rv-laya` cache an agent could plant; the cache key includes
+  the compute units. Core ML compiles into the per-user temp dir from
+  `confstr` whatever `TMPDIR` says (measured: `MLModel.compileModel` and
+  `NSTemporaryDirectory()` both ignore it), so the output is renamed into
+  the private directory as soon as the compile returns and loaded only from
+  there; the window during the compile itself remains until #625's verified
+  store (`~/.config/rv/cache/laya`, SHA-256 manifest) replaces this
+  directory.
 - **Spawn.** `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT` (only the two
   pipe ends and stderr are inherited), SIGPIPE reset to default in the child,
   a fixed environment (HOME, USER, LOGNAME, TMPDIR, a fixed PATH). A worker

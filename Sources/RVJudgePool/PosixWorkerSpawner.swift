@@ -10,6 +10,8 @@ import Synchronization
 public enum WorkerSpawnError: Error, Sendable, Equatable {
     case pipe(Int32)
     case spawn(Int32)
+    /// The executable changed on disk; the supervisor is exiting.
+    case upgraded
 }
 
 /// Spawns workers with `posix_spawn`: stdin and stdout are pipes to the

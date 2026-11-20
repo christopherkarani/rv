@@ -16,39 +16,10 @@ import RVLaya
 /// when stdin closes (the supervisor is gone). A worker that hangs or
 /// aborts costs only itself: the supervisor kills and respawns it.
 enum JudgeWorker {
-    struct Options: Equatable {
-        var compute: JudgeComputeUnits
-        var engine: String
-        var bundle: String
-        /// The supervisor-owned compiled-model cache (never the shared one).
-        var cache: String
-    }
-
-    static func parse(_ arguments: [String]) -> Options? {
-        var compute: JudgeComputeUnits?
-        var engine: String?
-        var bundle: String?
-        var cache: String?
-        var index = 0
-        while index + 1 < arguments.count {
-            let value = arguments[index + 1]
-            switch arguments[index] {
-            case "--compute": compute = JudgeComputeUnits(rawValue: value)
-            case "--engine": engine = ["ft", "laya"].contains(value) ? value : nil
-            case "--bundle": bundle = value.hasPrefix("/") ? value : nil
-            case "--cache": cache = value.hasPrefix("/") ? value : nil
-            default: return nil
-            }
-            index += 2
-        }
-        guard index == arguments.count, let compute, let engine, let bundle, let cache else { return nil }
-        return Options(compute: compute, engine: engine, bundle: bundle, cache: cache)
-    }
-
     static func main(_ arguments: [String]) -> Never {
         // A dead supervisor turns writes into EPIPE, and the loop exits.
         signal(SIGPIPE, SIG_IGN)
-        guard let options = parse(arguments) else {
+        guard let options = WorkerOptions.parse(arguments) else {
             FileHandle.standardError.write(Data("rv-judge --worker: bad arguments\n".utf8))
             exit(2)
         }
@@ -61,18 +32,22 @@ enum JudgeWorker {
     }
 
     #if canImport(CoreML)
-    private static func run(_ options: Options) -> Never {
+    private static func run(_ options: WorkerOptions) -> Never {
+        let compute: JudgeComputeUnits = switch options.compute {
+        case .cpu: .cpu
+        case .accelerated: .accelerated
+        }
         let bundle = URL(fileURLWithPath: options.bundle, isDirectory: true)
         let cache = URL(fileURLWithPath: options.cache, isDirectory: true)
         let judge: (JudgeInput) throws -> LayaVerdict
         let checkpoint: String
         do {
             if options.engine == "ft" {
-                let model = try FineTunedJudge(bundleDir: bundle, computeUnits: options.compute, compiledCacheRoot: cache)
+                let model = try FineTunedJudge(bundleDir: bundle, computeUnits: compute, compiledCacheRoot: cache)
                 checkpoint = model.checkpoint
                 judge = { try model.judge($0.command, contextLines: $0.contextLines) }
             } else {
-                let model = try LayaCoreMLJudge(bundleDir: bundle, computeUnits: options.compute, compiledCacheRoot: cache)
+                let model = try LayaCoreMLJudge(bundleDir: bundle, computeUnits: compute, compiledCacheRoot: cache)
                 checkpoint = model.checkpoint
                 judge = { try model.judge($0.command) }
             }

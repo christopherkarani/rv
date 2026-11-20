@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+import Synchronization
 
 /// The supervisor's diagnostic log, `~/Library/Logs/rv/judge.log`.
 ///
@@ -98,7 +99,7 @@ public enum JudgePoolLog {
 }
 
 /// Refuses to spawn from an executable that changed under the supervisor:
-/// exits instead, for launchd to restart the supervisor on the new bytes.
+/// never spawns it, and exits instead (`onUpgrade`), for launchd to restart the supervisor on the new bytes.
 /// "Changed" is a different file identity, or (Darwin) on-disk code whose
 /// CDHash is not the running supervisor's.
 struct UpgradeGuardedSpawner: WorkerSpawning {
@@ -111,8 +112,20 @@ struct UpgradeGuardedSpawner: WorkerSpawning {
     func spawn(
         slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess {
-        if ExecutableIdentity(path: executable) != identity || !codeMatches() { onUpgrade() }
+        if ExecutableIdentity(path: executable) != identity || !codeMatches() {
+            onUpgrade()
+            throw WorkerSpawnError.upgraded
+        }
         return try base.spawn(slot: slot, compute: compute, key: key, output: output)
+    }
+}
+
+/// Lets exactly one caller through.
+final class ExitOnce: Sendable {
+    private let claimed = Atomic(false)
+
+    func claim() -> Bool {
+        !claimed.exchange(true, ordering: .acquiringAndReleasing)
     }
 }
 
@@ -128,6 +141,15 @@ public enum JudgePoolServe {
             if let value = environment[name], !value.isEmpty { out[name] = value }
         }
         return out
+    }
+
+    private static let leaving = ExitOnce()
+
+    /// `exit` from one thread only: SIGTERM and an upgrade can race, and a
+    /// second concurrent `exit` would run the atexit cleanup twice.
+    static func leave(_ status: Int32) -> Never {
+        if leaving.claim() { exit(status) }
+        while true { pause() }
     }
 
     /// The canonical path of the running executable.
@@ -161,17 +183,19 @@ public enum JudgePoolServe {
         let identity = ExecutableIdentity(path: executable)
         let upgraded: @Sendable () -> Void = {
             JudgePoolLog.line("executable changed on disk; exiting for launchd to restart the new one")
-            exit(0)
+            leave(0)
         }
-        guard let cache = JudgePoolCacheDirectory.prepare() else {
-            JudgePoolLog.line("cannot create a private model cache directory; exiting")
+        guard let passwdHome = JudgePoolCacheDirectory.passwdHome(),
+              let cache = JudgePoolCacheDirectory.prepare(home: passwdHome)
+        else {
+            JudgePoolLog.line("cannot create a private model cache under ~/.config/rv/cache/judge; exiting")
             exit(1)
         }
         // launchd stops the agent with SIGTERM: leave through exit() so the
         // private cache is removed.
         signal(SIGTERM, SIG_IGN)
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminate.setEventHandler { exit(0) }
+        terminate.setEventHandler { leave(0) }
         terminate.resume()
         let running = JudgePoolTrust.runningCodeHash()
         if running == nil { JudgePoolLog.line("own code hash unreadable; workers are checked by file identity only") }

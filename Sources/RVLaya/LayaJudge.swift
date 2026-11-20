@@ -127,39 +127,91 @@ extension JudgeComputeUnits {
 
 /// Loads an .mlpackage through a stable compiled-model cache.
 /// `MLModel.compileModel` returns a temp directory macOS may purge
-/// under a long-lived daemon; copying the .mlmodelc into a cache directory
+/// under a long-lived daemon; moving the .mlmodelc into a cache directory
 /// (keyed by package path, modification time and compute units) keeps the
 /// loaded artifact stable and skips recompilation on reuse.
 ///
 /// `root` nil is the shared per-user cache (`~/Library/Caches/rv-laya`),
 /// used by the in-process judge (`rv test`, the CLI). The judge pool's
-/// workers pass a private directory their supervisor created for its own
-/// lifetime, so they never load an entry planted in the shared cache.
+/// workers pass the private directory their supervisor created
+/// (`~/.config/rv/cache/judge/rv-judge-<random>`): it must already exist as
+/// an owner-only (0700) directory of this user and is never created here,
+/// so a missing or replaced root fails the load (the pool answers review)
+/// instead of being silently recreated.
+///
+/// Core ML compiles into the per-user temporary directory from `confstr`
+/// whatever `TMPDIR` says (measured: `compileModel` and
+/// `NSTemporaryDirectory()` both ignore it), and that directory is writable
+/// from the isolation cage. The output is renamed into the private root as
+/// soon as the compile returns and only loaded from there; the window
+/// during the compile itself stays open until the verified store (#625).
 enum CompiledModelCache {
-    static func load(package: URL, computeUnits: JudgeComputeUnits = .accelerated, root: URL? = nil) throws -> MLModel {
+    static func load(
+        package: URL, computeUnits: JudgeComputeUnits = .accelerated, root: URL? = nil,
+        sharedRoot: URL? = defaultSharedRoot
+    ) throws -> MLModel {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = computeUnits.mlComputeUnits
+        if let root {
+            return try loadPrivate(package: package, computeUnits: computeUnits, root: root, configuration: configuration)
+        }
+        return try loadShared(package: package, computeUnits: computeUnits, root: sharedRoot, configuration: configuration)
+    }
+
+    static var defaultSharedRoot: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("rv-laya", isDirectory: true)
+    }
+
+    /// An existing directory (not a link) this user owns, mode exactly 0700.
+    static func isPrivateRoot(_ root: URL) -> Bool {
+        var info = stat()
+        guard lstat(root.path, &info) == 0 else { return false }
+        return info.st_mode & S_IFMT == S_IFDIR && info.st_uid == geteuid() && info.st_mode & 0o777 == 0o700
+    }
+
+    private static func loadPrivate(
+        package: URL, computeUnits: JudgeComputeUnits, root: URL, configuration: MLModelConfiguration
+    ) throws -> MLModel {
+        guard isPrivateRoot(root) else {
+            throw LayaError.modelUnavailable("compiled-model cache \(root.path) is not an owner-only directory")
+        }
+        let cached = entry(package: package, computeUnits: computeUnits, root: root)
+        if let model = try? MLModel(contentsOf: cached, configuration: configuration) { return model }
+        let compiled = try compile(package)
+        let fm = FileManager.default
+        try? fm.removeItem(at: cached)
+        if rename(compiled.path, cached.path) != 0 {
+            // A home on another volume: copy, then drop the temp output.
+            let moved = (try? fm.copyItem(at: compiled, to: cached)) != nil
+            try? fm.removeItem(at: compiled)
+            guard moved else {
+                throw LayaError.modelUnavailable("cannot move the compiled model for \(package.path) into \(root.path)")
+            }
+        }
+        do {
+            return try MLModel(contentsOf: cached, configuration: configuration)
+        } catch {
+            throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
+        }
+    }
+
+    private static func loadShared(
+        package: URL, computeUnits: JudgeComputeUnits, root: URL?, configuration: MLModelConfiguration
+    ) throws -> MLModel {
         let fm = FileManager.default
         var cached: URL?
-        let sharedRoot = fm.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("rv-laya", isDirectory: true)
-        if let cacheRoot = root ?? sharedRoot {
-            let dir = entry(package: package, computeUnits: computeUnits, root: cacheRoot)
+        if let root {
+            let dir = entry(package: package, computeUnits: computeUnits, root: root)
             if fm.fileExists(atPath: dir.path), let model = try? MLModel(contentsOf: dir, configuration: configuration) {
                 return model
             }
             cached = dir
         }
-        let compiled: URL
-        do {
-            compiled = try MLModel.compileModel(at: package)
-        } catch {
-            throw LayaError.modelUnavailable("CoreML compile failed for \(package.path)")
-        }
+        let compiled = try compile(package)
         var loadURL = compiled
         if let cached {
-            let parent = cached.deletingLastPathComponent()
-            try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+            try? fm.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.removeItem(at: cached)
             if (try? fm.copyItem(at: compiled, to: cached)) != nil { loadURL = cached }
         }
@@ -167,6 +219,14 @@ enum CompiledModelCache {
             return try MLModel(contentsOf: loadURL, configuration: configuration)
         } catch {
             throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
+        }
+    }
+
+    private static func compile(_ package: URL) throws -> URL {
+        do {
+            return try MLModel.compileModel(at: package)
+        } catch {
+            throw LayaError.modelUnavailable("CoreML compile failed for \(package.path)")
         }
     }
 
