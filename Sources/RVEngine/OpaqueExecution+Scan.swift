@@ -326,6 +326,7 @@ extension OpaqueExecution {
     private static let readerNames: Set<String> = [
         "echo", "printf", "print", "cat", "eval", "source", ".", "trap", "ssh", "xargs", "parallel", "find",
         "awk", "gawk", "mawk", "nawk", "sed", "gsed", "read", "hash", "alias", "unalias", "enable",
+        "at", "batch", "crontab",
         // Read as silent producers.
         "cd", "true", "false", ":", "test", "[", "export", "unset", "local", "readonly", "shift", "exit",
         "return", "sleep", "wait", "set",

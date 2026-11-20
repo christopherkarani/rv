@@ -257,10 +257,11 @@ as risky.
   Linux Secret Service rule and rv's wiring files, and, in observe only,
   stopping or retuning `rvd` and writing rv's install **[C53]**. A shell
   command whose program rv cannot see (a dynamic command word, `eval` or
-  `trap` action; a shell or interpreter reading its program from stdin
-  unless every producer is a literal `echo`, plain `printf` or `cat` of
-  literal paths, whose fed text is then scanned and read by every floor
-  rule above too; a
+  `trap` action; a shell, interpreter or scheduler (`at`, `batch`,
+  `crontab`) reading its program from stdin unless every producer is a
+  literal `echo`, plain `printf` or `cat` of literal paths, whose fed
+  text is then scanned and read by every floor rule above too, as are
+  the string literals of inline interpreter code; a
   same-line function or alias redefining a name the floor reads,
   `coproc`; dynamic or encoded inline code, or inline code, `awk`
   or `sed e` running a command over unreadable input; `ssh` with a
@@ -933,7 +934,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C50 | Sources/RVService/JudgeGate.swift:412-423; Sources/RVService/JudgeGate.swift:584-585 |
 | C51 | Sources/RVService/GitRebaseProbe.swift:6-16 |
 | C52 | Sources/RVPolicy/RebaseRecovery.swift:20-30; Sources/RVPolicy/PolicyGate.swift:49-50 |
-| C53 | Sources/RVService/ObserveFloor.swift:5-26; Sources/RVService/ObserveFloor.swift:64-112; Sources/RVService/ObserveFloor.swift:118-128; Sources/RVService/ObserveFloor.swift:155-204; Sources/RVService/ObserveFloor.swift:221-264; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-27; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-80; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:710-719 |
+| C53 | Sources/RVService/ObserveFloor.swift:5-26; Sources/RVService/ObserveFloor.swift:68-116; Sources/RVService/ObserveFloor.swift:122-132; Sources/RVService/ObserveFloor.swift:159-220; Sources/RVService/ObserveFloor.swift:237-280; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-30; Sources/RVEngine/OpaqueExecution+Programs.swift:219-315; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-80; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:710-719 |
 | C54 | Sources/RVEngine/FileToolEvaluate.swift:10-33 |
 | C55 | Sources/RVDomain/SecretPathCatalog.swift:93-127 |
 | C56 | Sources/RVHooks/ClaudeSearchTarget.swift:7-10 |

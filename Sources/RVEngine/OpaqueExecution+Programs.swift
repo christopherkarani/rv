@@ -216,6 +216,104 @@ extension OpaqueExecution {
         return scan(String(value), depth: depth + 1, inherited: { .unreadable }, state: &state)
     }
 
+    // MARK: Schedulers
+
+    /// `at`, `batch` and `crontab` run the job they read from stdin later,
+    /// so they are stdin readers like a shell: unreadable input is opaque,
+    /// and a literal feed is recorded and scanned like a shell's program
+    /// (a crontab's commands without their schedule fields). A job in a
+    /// literal file (`at -f job.sh`, `crontab jobs.txt`) is not read, as
+    /// for `sh job.sh`; listing or removing jobs (`at -l`, `crontab -r`)
+    /// reads no job.
+    static func schedulerRunsOpaque(
+        _ head: String, _ rawArguments: [CommandToken], _ context: Context, state: inout ScanState
+    ) -> Bool {
+        let arguments = droppingRedirects(rawArguments)
+        let crontab = head == "crontab"
+        let modes: Set<Character> = crontab ? ["l", "r", "e", "c", "V"] : ["l", "d", "r", "c"]
+        let valued: Set<Character> = crontab ? ["u"] : ["q", "f", "t"]
+        var file: CommandToken?
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            let text = token.decoded
+            if text == "--" {
+                if crontab { file = arguments.dropFirst(index + 1).first }
+                break
+            }
+            guard text.hasPrefix("-"), text.count > 1, token.wasQuoted == false else {
+                // crontab's operand is the job file; at's are the time.
+                if crontab {
+                    file = token
+                    break
+                }
+                index += 1
+                continue
+            }
+            var skip = 1
+            for (offset, flag) in text.dropFirst().enumerated() {
+                if modes.contains(flag) { return false }
+                guard valued.contains(flag) else { continue }
+                let rest = String(text.dropFirst(offset + 2))
+                let value = rest.isEmpty ? arguments.dropFirst(index + 1).first : CommandToken(decoded: rest, wasQuoted: false)
+                if rest.isEmpty { skip = 2 }
+                if flag == "f" { file = value }
+                break
+            }
+            index += skip
+        }
+        if let file, file.decoded != "-", readsStdin(file.decoded) == false {
+            return isDynamic(file)
+        }
+        let fed = context.stdin()
+        guard fed.literal else { return true }
+        return fed.texts.contains { text in
+            literalProgramRunsOpaque(crontab ? crontabCommands(text) : text, context, state: &state)
+        }
+    }
+
+    /// A crontab's commands, one per line: the schedule (five fields, or
+    /// one `@` word) dropped; comments and blank lines skipped; a variable
+    /// setting or a line too short for a schedule kept whole. cron turns an
+    /// unescaped `%` into a newline (the rest is the command's stdin), so
+    /// it is read as one.
+    static func crontabCommands(_ text: String) -> String {
+        var commands: [String] = []
+        for line in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) {
+            let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+            guard let first = trimmed.first, first != "#" else { continue }
+            let firstWord = trimmed.prefix(while: { $0 != " " && $0 != "\t" })
+            var rest = trimmed
+            if firstWord.contains("=") == false {
+                for _ in 0..<(first == "@" ? 1 : 5) {
+                    rest = rest.drop(while: { $0 != " " && $0 != "\t" }).drop(while: { $0 == " " || $0 == "\t" })
+                }
+            }
+            let command = rest.isEmpty ? trimmed : rest
+            commands.append(cronPercents(String(command)))
+        }
+        return commands.joined(separator: "\n")
+    }
+
+    /// `%` → newline, `\%` → `%`.
+    private static func cronPercents(_ command: String) -> String {
+        var out = ""
+        var escaped = false
+        for character in command {
+            if escaped {
+                if character != "%" { out.append("\\") }
+                out.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else {
+                out.append(character == "%" ? "\n" : character)
+            }
+        }
+        if escaped { out.append("\\") }
+        return out
+    }
+
     // MARK: trap
 
     /// `trap <action> <signal…>`: the action runs later as a script, so it

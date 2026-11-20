@@ -11,7 +11,9 @@ import RVDomain
 /// program from stdin unless every producer is a literal `echo`/`printf`,
 /// a `cat` of literal paths or a literal heredoc, and then the program
 /// text it is fed is scanned like the line (and recorded for the observe
-/// floor's detectors, `ObserveTexts`);
+/// floor's detectors, `ObserveTexts`); a scheduler (`at`, `batch`,
+/// `crontab`) reading its job from stdin, under the same rule (a
+/// crontab's commands are read without their schedule fields);
 /// inline code that runs a command over input rv cannot read; `awk`
 /// running a command; `sed` with `e`; `ssh` with a dynamic remote
 /// command; a dynamic `trap` action; `xargs`, `find -exec` and `parallel`
@@ -91,6 +93,9 @@ enum OpaqueExecution {
             return sshRunsOpaque(arguments, depth: depth, inherited: context.stdin, state: &state)
         case "trap":
             return trapRunsOpaque(arguments, depth: depth, state: &state)
+        case "at", "batch", "crontab":
+            if feedsOpaqueInput(arguments) { return true }
+            return schedulerRunsOpaque(head, arguments, context, state: &state)
         case "xargs":
             return optionReadings(arguments, valueOptions: xargsValueOptions, flags: xargsFlags, separators: []).contains(where: verbRunsOpaque)
         case "parallel":
@@ -256,7 +261,7 @@ enum OpaqueExecution {
     /// heredoc: it is recorded (the observe floor's detectors read it),
     /// then scanned with the same text as its stdin (a nested `sh` reads
     /// the rest of it).
-    private static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
+    static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
         guard text.isEmpty == false else { return false }
         guard state.charge(work: text.utf8.count) else { return true }
         _ = state.record(text)
@@ -388,7 +393,7 @@ enum OpaqueExecution {
 
     /// A here-string with dynamic or ANSI-C content, or a process
     /// substitution as an operand: what the program reads is unseen.
-    private static func feedsOpaqueInput(_ arguments: [CommandToken]) -> Bool {
+    static func feedsOpaqueInput(_ arguments: [CommandToken]) -> Bool {
         for (index, token) in arguments.enumerated() {
             if token.wasQuoted == false, isProcessSubstitution(token.decoded) { return true }
             guard ShellLexer.isRedirectOperator(token), redirectOperator(token.decoded) == "<<<" else { continue }

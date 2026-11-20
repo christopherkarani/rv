@@ -34,20 +34,24 @@ enum ObserveFloor {
     /// Where the command runs, and how to read rvd's running pids
     /// (`runningRVDaemonPIDs` in rvd; tests substitute a table). nil from
     /// `rvdPIDs`: the process table could not be read, so a literal-pid
-    /// `kill` fails closed.
+    /// `kill` fails closed. `provesRead` is `ObserveReadProof.proves`;
+    /// tests substitute one that counts its calls.
     struct Context {
         let home: HomeDirectory?
         let cwd: WorkingDirectory?
         let rvdPIDs: () -> Set<Int32>?
+        let provesRead: (ShellCommand, SemanticAnalysis) -> Bool
 
         init(
             home: HomeDirectory?,
             cwd: WorkingDirectory?,
-            rvdPIDs: @escaping () -> Set<Int32>? = runningRVDaemonPIDs
+            rvdPIDs: @escaping () -> Set<Int32>? = runningRVDaemonPIDs,
+            provesRead: @escaping (ShellCommand, SemanticAnalysis) -> Bool = { ObserveReadProof.proves($0, analysis: $1) }
         ) {
             self.home = home
             self.cwd = cwd
             self.rvdPIDs = rvdPIDs
+            self.provesRead = provesRead
         }
     }
 
@@ -92,12 +96,12 @@ enum ObserveFloor {
         if set.texts.contains(where: { stopsOrInstalls($0, context: context) }) {
             return .enforce(floored(result))
         }
-        let protection = OwnProtection(result: result, command: command, store: store, context: context)
+        var protection = OwnProtection(result: result, command: command, store: store, context: context)
         if holds(result) || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
             return .enforce(result)
         }
-        if set.texts.contains(where: { $0.origin != .command && protection.touched(by: $0.raw) }) {
-            return .enforce(floored(result))
+        for text in set.texts where text.origin != .command {
+            if protection.touched(by: text.raw) { return .enforce(floored(result)) }
         }
         if invocationIsOpaque(command) || set.opaque || isUnanalyzable(result) {
             return .enforce(unanalyzable(result))
@@ -166,6 +170,10 @@ enum ObserveFloor {
         let cwd: WorkingDirectory?
         let command: ShellCommand
         let analysis: SemanticAnalysis
+        let provesRead: (ShellCommand, SemanticAnalysis) -> Bool
+        /// `ObserveReadProof` of the command, run at most once: it is
+        /// O(command), and every text that names a wiring file asks.
+        private var provenRead: Bool?
 
         init(result: EvaluationResult, command: ShellCommand, store: PolicyStoreInputs, context: Context) {
             rvConfig = SecretPathDecider(
@@ -179,9 +187,10 @@ enum ObserveFloor {
             cwd = context.cwd
             self.command = command
             analysis = result.analysis
+            provesRead = context.provesRead
         }
 
-        func touched(by text: String, matchingView: String? = nil) -> Bool {
+        mutating func touched(by text: String, matchingView: String? = nil) -> Bool {
             let shell = ShellCommand(rawValue: text)
             if SelfProtectionGuard.weakensPolicy(shell) || SecretServiceGuard.touchesSecretService(shell) {
                 return true
@@ -199,8 +208,15 @@ enum ObserveFloor {
             // allows these verbs unchecked everywhere else: only a write
             // there holds. A command proven to only read (`ObserveReadProof`)
             // feeds no shell or interpreter, so the proof covers its texts.
-            guard words.contains(where: namesWiring) else { return false }
-            return ObserveReadProof.proves(command, analysis: analysis) == false
+            guard words.contains(where: { namesWiring($0) }) else { return false }
+            return provesCommandOnlyReads() == false
+        }
+
+        private mutating func provesCommandOnlyReads() -> Bool {
+            if let provenRead { return provenRead }
+            let proven = provesRead(command, analysis)
+            provenRead = proven
+            return proven
         }
 
         /// A word naming one of rv's wiring files (`RVWiringPaths`): the
