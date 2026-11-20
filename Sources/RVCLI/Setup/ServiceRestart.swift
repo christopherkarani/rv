@@ -39,13 +39,29 @@ enum ServiceRestart {
                 exitCode: EX_USAGE
             )
         }
+        SetupRun.clearStartupBackoff(env)
         do throws(SetupError) {
             let line: String
+            let domain: String
             switch try perform(env) {
-            case .kickstarted(let domain):
+            case .kickstarted(let target):
+                domain = target
                 line = "rv service \(verb): restarted \(SetupRun.launchAgentLabel) in \(domain)"
-            case .reloaded(let domain):
+            case .reloaded(let target):
+                domain = target
                 line = "rv service \(verb): reloaded \(SetupRun.launchAgentLabel) into \(domain)"
+            }
+            // An SSH session cannot look up a gui/ job's Mach service, so a
+            // probe from here would fail against a healthy rvd. Say what
+            // was and was not checked instead of reporting a failure.
+            if domain.hasPrefix("gui/"), env.launchctl.sessionIsAqua() == false {
+                return SetupOutcome(
+                    stdout: line + "\n",
+                    stderr: "rv service \(verb): this session (SSH or another non-desktop login) cannot reach "
+                        + "rvd in \(domain), so rv did not check that it answers; "
+                        + "run rv doctor from the desktop session, or read \(RVDLogFile.path(home: "~"))\n",
+                    exitCode: 0
+                )
             }
             // launchctl accepting the job is not rvd answering: a crash on
             // start or an untrusted binary must fail here, as setup does.
@@ -108,6 +124,7 @@ enum ServiceRestart {
                 exitCode: EX_USAGE
             )
         }
+        SetupRun.clearStartupBackoff(env)
         do throws(SetupError) {
             if env.systemctl.userManagerReachable() {
                 do {

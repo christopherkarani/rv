@@ -213,7 +213,8 @@ private func setupFailureParts(
         switch supervisor {
         case .launchd:
             detail.append(
-                "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
+                "fix: rv doctor (run from the logged-in desktop session, not SSH) and "
+                    + "\(RVDLogFile.path(home: "~")) show why rvd is not answering"
             )
         case .systemdUser:
             detail.append(

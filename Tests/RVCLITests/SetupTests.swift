@@ -103,7 +103,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
         #expect(plist.contains(home.appendingPathComponent("rvd").path))
-        try expectAlwaysOnLaunchAgent(layout.launchAgent)
+        try expectAlwaysOnLaunchAgent(layout.launchAgent, rvdPath: home.appendingPathComponent("rvd").path)
         #expect(launchctl.bootstraps.count == 1)
         let analytics = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -862,7 +862,7 @@ private func fixtureLoginHome() throws -> URL {
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
     let keys = try launchdPlist(plist)
-    #expect(keys["KeepAlive"] as? Bool == true)
+    #expect(keepAlivePathState(keys) == ["/opt/rvd": true])
     #expect(keys["RunAtLoad"] as? Bool == true)
     #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
     #expect(plist.contains("<string>Aqua</string>"))
@@ -1390,7 +1390,7 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
         #expect(outcome.stdout.isEmpty)
         #expect(outcome.stderr == "rv setup failed: rvd did not answer within 10 seconds of starting the service\n"
             + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
-            + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+            + "fix: rv doctor (run from the logged-in desktop session, not SSH) and ~/Library/Logs/rv/rvd.log show why rvd is not answering\n"
             + "then rerun rv setup to wire agent hooks\n")
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
         #expect(launchctl.bootstraps.isEmpty == false, "the service was started before the probe")

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import RVCLI
+import RVService
 
 /// Scripted launchctl: per-domain bootstrap failures, bootout that lingers in
 /// `print` for a few polls, optional missing gui domain, kickstart recording.
@@ -13,6 +14,10 @@ final class ScriptedLaunchctl: LaunchctlApplying {
     /// `isLoaded` keeps reporting a booted-out job for this many polls.
     var lingerPolls = 0
     var kickstartError: Int32?
+    /// False models an SSH (Background) session.
+    var aqua = true
+    /// Runs inside each `bootout`, so a test can see what was on disk then.
+    var onBootout: ((String) -> Void)?
 
     private(set) var events: [String] = []
     private(set) var bootstrapDomains: [String] = []
@@ -35,6 +40,7 @@ final class ScriptedLaunchctl: LaunchctlApplying {
 
     func bootout(domain: String, label _: String) throws {
         events.append("bootout \(domain)")
+        onBootout?(domain)
         if loaded.remove(domain) != nil, lingerPolls > 0 {
             lingering[domain] = lingerPolls
         }
@@ -58,6 +64,8 @@ final class ScriptedLaunchctl: LaunchctlApplying {
             throw LaunchctlError.nonZeroExit(kickstartError)
         }
     }
+
+    func sessionIsAqua() -> Bool { aqua }
 }
 
 private final class SleepLog {
@@ -331,8 +339,74 @@ func restartOrStart_rvdDoesNotAnswer_failsAndSaysSo(onlyIfStopped: Bool) throws 
     }
 }
 
-/// Uninstall must not leave a KeepAlive job respawning a deleted rvd: the
-/// job is booted out of both domains before its plist and binaries go.
+/// From SSH the gui/ job's Mach service is out of reach, so the readiness
+/// probe would fail against a healthy rvd. Restart says it did not check
+/// instead of exiting 69.
+@Test(arguments: [false, true])
+func restartOrStart_fromSSHIntoGui_saysItCouldNotCheck(onlyIfStopped: Bool) throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.aqua = false
+        launchctl.loaded = ["gui/501"]
+        let probes = SleepLog()
+        var environment = scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())
+        environment.serviceAnswers = {
+            probes.record(0)
+            return false
+        }
+        let outcome = ServiceRestart.run(environment, onlyIfStopped: onlyIfStopped)
+        let verb = onlyIfStopped ? "start" : "restart"
+        #expect(outcome.exitCode == 0)
+        #expect(probes.naps.isEmpty)
+        #expect(outcome.stdout == "rv service \(verb): restarted dev.rv.evaluate in gui/501\n")
+        #expect(outcome.stderr.contains("cannot reach rvd in gui/501, so rv did not check that it answers"))
+        #expect(outcome.stderr.contains("~/Library/Logs/rv/rvd.log"))
+        #expect(launchctl.events.contains("kickstart gui/501/dev.rv.evaluate"))
+    }
+}
+
+/// The SSH exemption covers only gui/: a user/ job is reachable, so a dead
+/// rvd there still fails.
+@Test func restart_fromSSHIntoUser_stillRequiresAnAnswer() throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.aqua = false
+        launchctl.guiExists = false
+        launchctl.loaded = ["user/501"]
+        var environment = scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())
+        environment.serviceAnswers = { false }
+        let outcome = ServiceRestart.run(environment)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+    }
+}
+
+/// An operator restart after a fix must not wait out rvd's crash-loop backoff.
+@Test func restartAndSetup_clearRvdStartupBackoff() throws {
+    try withTempHome { home, _, _ in
+        let store = StartupBackoffStore.live(home: home.path)
+        let looping = StartupBackoff.Record(earlyExits: 7, running: true)
+
+        store.save(looping)
+        let launchctl = ScriptedLaunchctl()
+        launchctl.loaded = ["gui/501"]
+        #expect(ServiceRestart.run(scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog())).exitCode == 0)
+        #expect(store.load() == nil)
+
+        store.save(looping)
+        #expect(SetupRun.setup(scriptedEnv(home: home, launchctl: ScriptedLaunchctl(), sleeps: SleepLog())).exitCode == 0)
+        #expect(store.load() == nil)
+
+        store.save(looping)
+        var foreign = scriptedEnv(home: home, launchctl: ScriptedLaunchctl(), sleeps: SleepLog())
+        foreign.touchLaunchd = false
+        _ = ServiceRestart.run(foreign)
+        #expect(store.load() == looping)
+    }
+}
+
+/// Uninstall must not leave a KeepAlive job respawning: the evaluate job is
+/// booted out of both domains while its plist and rvd are still on disk,
+/// and only then are they deleted.
 @Test func uninstall_bootsOutTheAlwaysOnJobBeforeRemovingIt() throws {
     try withTempHome { home, layout, _ in
         try makeExecutable(URL(fileURLWithPath: layout.localRvd))
@@ -342,12 +416,14 @@ func restartOrStart_rvdDoesNotAnswer_failsAndSaysSo(onlyIfStopped: Bool) throws 
         #expect(SetupRun.setup(environment).exitCode == 0)
         try expectAlwaysOnLaunchAgent(layout.launchAgent, rvdPath: layout.localRvd)
         #expect(launchctl.loaded == ["gui/501"])
-        let before = launchctl.events.count
 
+        var onDiskAtBootout: [String: Bool] = [:]
+        launchctl.onBootout = { domain in
+            onDiskAtBootout[domain] = FileManager.default.fileExists(atPath: layout.launchAgent)
+                && FileManager.default.fileExists(atPath: layout.localRvd)
+        }
         #expect(SetupRun.uninstall(environment).exitCode == 0)
-        let uninstallEvents = Array(launchctl.events.dropFirst(before))
-        #expect(uninstallEvents.contains("bootout gui/501"))
-        #expect(uninstallEvents.contains("bootout user/501"))
+        #expect(onDiskAtBootout == ["gui/501": true, "user/501": true])
         #expect(launchctl.loaded.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.localRvd) == false)
@@ -378,6 +454,24 @@ private func recordingTool(exit status: Int32) throws -> (tool: URL, log: URL) {
         source: "#!/bin/sh\necho \"$@\" >> '\(log.path)'\nexit \(status)\n"
     )
     return (tool, log)
+}
+
+@Test(arguments: [("Aqua", 0, true), ("Background", 0, false), ("", 1, true)] as [(String, Int32, Bool)])
+func processLaunchctl_sessionIsAqua_readsManagername(name: String, status: Int32, aqua: Bool) throws {
+    let log = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-launchctl-argv-\(UUID().uuidString).log")
+    let tool = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-launchctl-\(UUID().uuidString)")
+    defer {
+        try? FileManager.default.removeItem(at: tool)
+        try? FileManager.default.removeItem(at: log)
+    }
+    try writeExecutableScript(
+        at: tool,
+        source: "#!/bin/sh\necho \"$@\" >> '\(log.path)'\necho '\(name)'\nexit \(status)\n"
+    )
+    #expect(ProcessLaunchctl(executableURL: tool).sessionIsAqua() == aqua)
+    #expect(try String(contentsOf: log, encoding: .utf8) == "managername\n")
 }
 
 @Test func processLaunchctl_domainExistsAndKickstartArgv() throws {

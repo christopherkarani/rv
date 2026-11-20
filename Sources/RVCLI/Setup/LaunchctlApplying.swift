@@ -31,12 +31,16 @@ protocol LaunchctlApplying {
     func domainExists(_ domain: String) -> Bool
     /// `launchctl kickstart -k <domain>/<label>`: kill and restart the job.
     func kickstart(domain: String, label: String) throws
+    /// Whether this process runs in the Aqua (desktop) session, whose Mach
+    /// namespace reaches jobs in `gui/<uid>`. An SSH login is Background.
+    func sessionIsAqua() -> Bool
 }
 
 extension LaunchctlApplying {
     func isLoaded(domain _: String, label _: String) -> Bool { false }
     func domainExists(_: String) -> Bool { true }
     func kickstart(domain _: String, label _: String) throws {}
+    func sessionIsAqua() -> Bool { true }
 }
 
 enum LaunchctlError: Error, Equatable {
@@ -106,6 +110,23 @@ struct ProcessLaunchctl: LaunchctlApplying {
 
     func kickstart(domain: String, label: String) throws {
         try run(["kickstart", "-k", "\(domain)/\(label)"])
+    }
+
+    /// `launchctl managername` prints `Aqua` in a desktop session and
+    /// `Background` over SSH. Anything else counts as Aqua, so a failed
+    /// probe only keeps the readiness check (and its failure) as before.
+    func sessionIsAqua() -> Bool {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["managername"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? runExecutable(process)) != nil else { return true }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let name = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name != "Background"
     }
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {
