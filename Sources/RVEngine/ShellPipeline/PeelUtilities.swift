@@ -163,10 +163,23 @@ private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: Workin
     }
     let rest = Array(tokens.dropFirst(index))
     if rest.isEmpty { return .notWrapper }
+    // Each nested `xargs` re-enters unwrap at depth 0 (`xargsPeeledWords`),
+    // so the chain is bounded here: `xargs xargs …` 600 deep overflowed
+    // rvd's 512 KB stack. Past the cap it is unanalyzable.
+    if rest.lazy.filter({ isXargsName($0.lexeme) }).dropFirst(maxNestedXargs).first != nil {
+        return .limited(.xargs)
+    }
     if xargsInnerIsMutating(rest.map(\.lexeme), replace: replace) {
         return .limited(.xargs)
     }
     return .next(renderCommand(rest), .xargs, workingDirectory)
+}
+
+/// `xargs` words an `xargs` command may carry after its own name.
+let maxNestedXargs = 4
+
+func isXargsName(_ word: String) -> Bool {
+    ["xargs", "gxargs"].contains(commandName(word))
 }
 
 struct XargsOptionStep {

@@ -107,11 +107,16 @@ enum ObserveFloor {
     /// is fed from a literal pipe, here-string or heredoc (`echo
     /// 'launchctl bootout …' | sh`). Then an allow becomes "run it in
     /// Terminal"; anything else (a deny, an indeterminate) is kept, so the
-    /// floor never weakens. A scan out of budget, or texts needing more than
-    /// `readingCap` readings, fail closed the way `unanalyzableFloor` does.
+    /// floor never weakens. A scan out of budget, texts needing more than
+    /// `readingCap` readings, or reading them past `budget` (rvd must answer
+    /// inside the hook's timeout, or the hook allows unchecked) fail closed
+    /// the way `unanalyzableFloor` does.
     static func lifecycleFloor(
-        _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
+        _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?,
+        budget: Duration = lifecycleBudget
     ) -> EvaluationResult? {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: budget)
         let scan = scanOpaqueProgram(command)
         let inner = scan.innerTexts.filter { sameBytes($0, command.rawValue) == false }
         guard scan.exhausted == false,
@@ -119,14 +124,21 @@ enum ObserveFloor {
         else {
             return unanalyzable(result)
         }
+        let rvdPIDs = readingOnce(runningRVDaemonPIDs)
         let texts = [command] + inner.map { ShellCommand(rawValue: $0) }
-        let hits = texts.contains { text in
-            RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: runningRVDaemonPIDs)
-                || RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd)
+        for text in texts {
+            guard clock.now < deadline else { return unanalyzable(result) }
+            if RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: rvdPIDs) { return floored(result) }
+            guard clock.now < deadline else { return unanalyzable(result) }
+            if RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd) { return floored(result) }
         }
-        guard hits else { return nil }
-        return floored(result)
+        // Everything was read: a late answer is still the answer.
+        return nil
     }
+
+    /// Wall time the lifecycle floor may spend reading one command, a
+    /// quarter of the hook's 8 s timeout.
+    static let lifecycleBudget = Duration.seconds(2)
 
     /// Observe only, after the other floors: a command that runs a program
     /// rv cannot see (`runsUnanalyzable`) is enforced. An allow, or an
