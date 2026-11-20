@@ -84,6 +84,9 @@ enum AuditOCSFSamples {
               detail: ["change": "invalid", "authorized_by": "none"]),
         ConfigChangeAudit.setting("safety", from: "strict", to: "standard", direction: .loosening, time: time),
         event(.ownerAction, .denied, "rv allow core.git:reset-hard", detail: ["outcome": "refused", "caller": "cli"]),
+        event(.auditGap, .failed, "hook-local",
+              reason: "audit rows the hook-local evaluator lost before they reached its spool",
+              detail: ["lost": "2", "recorded_by": "hook-local"]),
     ]
 }
 

@@ -73,7 +73,19 @@ public enum AuditLog {
             self.init(timeout: Duration.seconds(seconds), now: now, pause: pause)
         }
 
-        var expired: Bool {
+        /// A wait that ends at `deadline`, however far off or past it is
+        /// (past: one attempt, no wait).
+        package init(
+            deadline: ContinuousClock.Instant,
+            now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+            pause: @escaping @Sendable () -> Void = { usleep(2_000) }
+        ) {
+            self.now = now
+            self.pause = pause
+            self.deadline = deadline
+        }
+
+        package var expired: Bool {
             guard let deadline else { return false }
             return now() >= deadline
         }
