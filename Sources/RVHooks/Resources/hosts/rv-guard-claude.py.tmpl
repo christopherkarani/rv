@@ -292,10 +292,16 @@ def _map_rv_hook_result(stdout, exit_code):
         # rv's own native ask: rvd was unreachable, slow or dropped, so rv
         # could not check the call. rvd itself never answers a native ask
         # (Step 8B), so only the C hook's exact down texts count; any other
-        # native ask blocks with its text.
+        # native ask blocks with its text. The C hook writes it with exit 0
+        # and no top-level decision; anything else is not that reply.
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
             reason = hook.get("permissionDecisionReason")
-            if isinstance(reason, str) and reason in _DOWN_LAYERS:
+            if (
+                exit_code == 0
+                and "decision" not in parsed
+                and isinstance(reason, str)
+                and reason in _DOWN_LAYERS
+            ):
                 return {"action": "unchecked", "layer": _DOWN_LAYERS[reason], "reason": reason}
             return {
                 "action": "block",

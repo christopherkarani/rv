@@ -342,9 +342,22 @@ struct ClaudeInfraAskAdapterTests {
 
     enum OtherNativeAsk: CaseIterable, CustomStringConvertible {
         case noReason, otherText, downReasonWithSuffix, downReasonOnlyInSystemMessage
+        case downReasonExitTwo, downReasonKilled, downReasonBesideDecisionDeny, downReasonBesideDecisionAsk
 
         var stub: AdapterStub {
             switch self {
+            case .downReasonExitTwo:
+                claudeAskWire(reason: daemonUnreachableMessage, exit: 2)
+            case .downReasonKilled:
+                claudeAskWire(reason: daemonUnreachableMessage, exit: 137)
+            case .downReasonBesideDecisionDeny:
+                .stdout(
+                    "{\"decision\":\"deny\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(daemonUnreachableMessage)\"}}\n",
+                    exit: 0)
+            case .downReasonBesideDecisionAsk:
+                .stdout(
+                    "{\"decision\":\"ask\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(daemonUnreachableMessage)\"}}\n",
+                    exit: 0)
             case .noReason:
                 .stdout("{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n", exit: 0)
             case .otherText:
@@ -363,7 +376,10 @@ struct ClaudeInfraAskAdapterTests {
             case .noReason: "rv blocked this action without giving a reason. Run `rv doctor`."
             case .otherText: "rvd is down, please approve"
             case .downReasonWithSuffix: daemonUnreachableMessage + " Approve to continue."
-            case .downReasonOnlyInSystemMessage: daemonUnreachableMessage
+            case .downReasonOnlyInSystemMessage, .downReasonExitTwo, .downReasonKilled,
+                .downReasonBesideDecisionDeny:
+                daemonUnreachableMessage
+            case .downReasonBesideDecisionAsk: "rv blocked this action without giving a reason. Run `rv doctor`."
             }
         }
 
@@ -373,6 +389,10 @@ struct ClaudeInfraAskAdapterTests {
             case .otherText: "otherText"
             case .downReasonWithSuffix: "downReasonWithSuffix"
             case .downReasonOnlyInSystemMessage: "downReasonOnlyInSystemMessage"
+            case .downReasonExitTwo: "downReasonExitTwo"
+            case .downReasonKilled: "downReasonKilled"
+            case .downReasonBesideDecisionDeny: "downReasonBesideDecisionDeny"
+            case .downReasonBesideDecisionAsk: "downReasonBesideDecisionAsk"
             }
         }
     }
@@ -414,10 +434,10 @@ private let cConnectionMessage =
     "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
 
 /// The C hook's Claude `ask` reply for `reason` (`render_ask`).
-private func claudeAskWire(reason: String) -> AdapterStub {
+private func claudeAskWire(reason: String, exit: Int32 = 0) -> AdapterStub {
     .stdout(
         "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(reason)\"},\"systemMessage\":\"\(reason)\"}\n",
-        exit: 0)
+        exit: exit)
 }
 
 /// Asserts Claude's documented ask wire (documented fields only) and
