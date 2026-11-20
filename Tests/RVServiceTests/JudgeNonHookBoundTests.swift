@@ -134,4 +134,22 @@ struct JudgeNonHookBoundTests {
         }
         try expectLateReview(result, home: home, judge: judge)
     }
+
+    /// The approval paths (`pendingResolve`, the hook review ceremony) peek
+    /// through `LiveCompileSet.livePeek`, which binds the judge bound too.
+    @Test func anApprovalPeekBoundsAStuckJudge() async throws {
+        let home = try homeWithBundle()
+        let judge = StuckJudge()
+        defer {
+            judge.finish()
+            remove(home)
+        }
+        let compileSet = LiveCompileSet(
+            snapshots: nil, catalog: nil, home: home,
+            uptimeNanoseconds: { DispatchTime.now().uptimeNanoseconds }, judge: judge)
+        let peek = compileSet.livePeek(
+            store: nil, grants: EphemeralAllowOnceTable(), judgeBudget: .seconds(2))
+        let result = await peek(judged, wd("/tmp/ws"), now)
+        try expectLateReview(result, home: home, judge: judge)
+    }
 }
