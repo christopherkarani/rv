@@ -515,13 +515,13 @@ public enum JudgeRuntime {
             do {
                 switch engine {
                 case .laya:
-                    let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
+                    let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
                     return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command)) }
                         catch { return .failed }
                     }
                 case .ft:
-                    let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
+                    let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
                     return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command, context: context)) }
                         catch { return .failed }
@@ -554,10 +554,23 @@ public enum JudgeRuntime {
         onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in },
         _ inference: @escaping @Sendable () -> JudgeRun
     ) -> JudgeRun {
-        switch admission.run(until: deadline, since: since, onLate: onLate, inference) {
+        // Admission wait and inference are timed apart for `HookTiming`.
+        // Inference runs on the admission's own thread, where the
+        // task-local timing is not bound: capture it here.
+        let timing = HookTiming.current
+        let entered = ContinuousClock.now
+        let outcome = admission.run(until: deadline, since: since, onLate: onLate) {
+            let predicting = ContinuousClock.now
+            timing?.add(.judgeAdmission, predicting - entered)
+            defer { timing?.add(.judgePredict, ContinuousClock.now - predicting) }
+            return inference()
+        }
+        switch outcome {
         case .answered(let run): return run
-        case .turnedAway(stalled: false): return .busy
-        case .turnedAway(stalled: true), .late: return .late
+        case .turnedAway(let stalled):
+            timing?.add(.judgeAdmission, ContinuousClock.now - entered)
+            return stalled ? .late : .busy
+        case .late: return .late
         }
     }
 

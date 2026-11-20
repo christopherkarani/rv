@@ -43,11 +43,18 @@ enum JudgeOffload {
     static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
         let hook = HookDeadline.current?.expiresAt
         let budget = judgeBudget
+        // `HookTiming` is task-local too: rebind it on the queue thread and
+        // count the wait for that thread.
+        let timing = HookTiming.current
+        let enqueued = ContinuousClock.now
         return await withCheckedContinuation { continuation in
             queue.async {
+                timing?.add(.offloadWait, ContinuousClock.now - enqueued)
                 let judge = hook ?? budget.map { ContinuousClock.now.advanced(by: $0) }
-                let value = $hookDeadline.withValue(hook) {
-                    JudgeAdmission.$deadline.withValue(judge) { body() }
+                let value = HookTiming.$current.withValue(timing) {
+                    $hookDeadline.withValue(hook) {
+                        JudgeAdmission.$deadline.withValue(judge) { body() }
+                    }
                 }
                 continuation.resume(returning: value)
             }

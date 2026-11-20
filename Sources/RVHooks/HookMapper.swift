@@ -92,8 +92,10 @@ func denyPresentation(
     unlockCode: AllowOnceUnlockMint?
 ) -> HookDenyPresentation {
     switch result.decision {
-    case .allow, .indeterminate:
+    case .allow:
         return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .indeterminate(let reason):
+        return HookDenyPresentation(reason: indeterminateSentence(reason))
     case .deny(let deny):
         return HookDenyPresentation(
             reason: hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
