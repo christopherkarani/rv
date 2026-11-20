@@ -236,11 +236,11 @@ struct ClaudeInfraAskAdapterTests {
 
     /// The pin only tightens, so a config.json that exists but cannot be
     /// used pins "block" (as GuardConfig fails closed on a bad config).
-    /// Only a missing file, a clean object without the key, or a key that
-    /// is not exactly JSON `false` keeps the ask. Who owns the file and who
-    /// may write it does not matter for a tightening switch.
+    /// Only a missing file, or a clean object whose top-level key is absent
+    /// or exactly JSON `true`, keeps the ask; any other value pins. Who owns
+    /// the file and who may write it does not matter for a tightening switch.
     @Test(arguments: OwnerConfigCase.allCases)
-    func ownerConfig_pinsUnlessMissingOrNotExplicitlyFalse(_ config: OwnerConfigCase) async throws {
+    func ownerConfig_pinsUnlessMissingAbsentOrTrue(_ config: OwnerConfigCase) async throws {
         let run = try await runPythonAdapter(
             host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
             environment: Self.attended, ownerConfig: config.prepare)
@@ -475,18 +475,18 @@ struct ClaudeInfraAskAdapterTests {
 
     enum OwnerConfigCase: String, CaseIterable, CustomStringConvertible {
         // Keep the ask.
-        case missingFile, parentIsAFile, emptyObject, keyAbsent, switchTrue, stringFalse, zero, null
-        case nestedUnderGuard
+        case missingFile, parentIsAFile, emptyObject, keyAbsent, switchTrue, nestedUnderGuard
         // Pin block: explicit false, whoever may write the file.
         case false0600, false0400, false0664, false0666
+        // Pin block: any present value other than JSON true.
+        case stringFalse, stringOff, stringTrue, zero, one, null, arrayFalse, objectValue
         // Pin block: the file exists but cannot be used.
         case unreadable, symlinkToFalse, symlinkToTrue, danglingSymlink, directory, fifo
         case oversizeSparse, emptyFile, corrupt, byteOrderMark, duplicateKey, arrayRoot, notUTF8
 
         var pins: Bool {
             switch self {
-            case .missingFile, .parentIsAFile, .emptyObject, .keyAbsent, .switchTrue, .stringFalse, .zero, .null,
-                .nestedUnderGuard:
+            case .missingFile, .parentIsAFile, .emptyObject, .keyAbsent, .switchTrue, .nestedUnderGuard:
                 false
             default:
                 true
@@ -506,8 +506,13 @@ struct ClaudeInfraAskAdapterTests {
             case .keyAbsent: try writeOwnerConfig(#"{"guard": {"mode": "enforce"}}"#, at: path)
             case .switchTrue: try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: path)
             case .stringFalse: try writeOwnerConfig(#"{"hookAskWhenDown": "false"}"#, at: path)
+            case .stringOff: try writeOwnerConfig(#"{"hookAskWhenDown": "off"}"#, at: path)
+            case .stringTrue: try writeOwnerConfig(#"{"hookAskWhenDown": "true"}"#, at: path)
             case .zero: try writeOwnerConfig(#"{"hookAskWhenDown": 0}"#, at: path)
+            case .one: try writeOwnerConfig(#"{"hookAskWhenDown": 1}"#, at: path)
             case .null: try writeOwnerConfig(#"{"hookAskWhenDown": null}"#, at: path)
+            case .arrayFalse: try writeOwnerConfig(#"{"hookAskWhenDown": [false]}"#, at: path)
+            case .objectValue: try writeOwnerConfig(#"{"hookAskWhenDown": {}}"#, at: path)
             case .nestedUnderGuard: try writeOwnerConfig(#"{"guard": {"hookAskWhenDown": false}}"#, at: path)
             case .false0600: try writeOwnerConfig(falseJSON, at: path)
             case .false0400: try writeOwnerConfig(falseJSON, at: path, mode: 0o400)

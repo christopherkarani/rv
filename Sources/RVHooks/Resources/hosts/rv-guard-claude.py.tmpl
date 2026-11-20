@@ -37,8 +37,8 @@ RV_HOOK_TIMEOUT_S = 15
 
 # The owner's config.json; None reads it from the passwd home, never $HOME
 # (hook environment can come from project config an agent writes).
-# `"hookAskWhenDown": false` there, or a file rv cannot use, pins "block"
-# (_owner_pinned_block).
+# `"hookAskWhenDown"` set to anything but true there, or a file rv cannot
+# use, pins "block" (_owner_pinned_block).
 _OWNER_CONFIG_PATH = None
 _OWNER_CONFIG_MAX = 1024 * 1024
 
@@ -230,7 +230,8 @@ def _forwards_infra_ask(envelope, environ):
 def _owner_pinned_block():
     # The owner's switch only tightens, so rejecting a bad file would
     # loosen. The ask stays only when config.json is missing, or is a clean
-    # JSON object whose top-level `hookAskWhenDown` is not exactly false.
+    # JSON object whose top-level `hookAskWhenDown` is absent or exactly
+    # true; any other value ("false", 0, null, ...) pins "block".
     # A file that exists but cannot be used pins "block", as GuardConfig
     # fails closed on a bad config: a symlink (O_NOFOLLOW), unreadable, not
     # a regular file (no blocking open on a FIFO), over 1 MiB, not UTF-8,
@@ -257,7 +258,7 @@ def _owner_pinned_block():
         os.close(fd)
     if not isinstance(parsed, dict):
         return True
-    return parsed.get("hookAskWhenDown") is False
+    return parsed.get("hookAskWhenDown", True) is not True
 
 
 def _passwd_config_path():
