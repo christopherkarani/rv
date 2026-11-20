@@ -7,8 +7,15 @@
 # agent (who does not): a hook deny, allow-once redeem on a pseudo-terminal
 # (wrong password, right password, the grant used once), an owner action
 # (`rv packs disable`), the lockout, the audit chain. Then the same password
-# in the environment of a build without the feature, which must approve
-# nothing. Linux only; any user, root included; no systemd, no session bus.
+# sent by the test build's rv to rvd without it in its environment, and to
+# a normal rvd with it there: both must check the login password instead.
+# Linux only; any user, root included; no systemd, no session bus.
+#
+# "The agent does not know the password" holds only inside this script. In a
+# test build any process of the owner's uid, an agent included, can read the
+# password from /proc/<rvd pid>/environ, or restart rvd with its own: a test
+# build gives no protection against the agent. It exists to exercise the
+# plumbing; never install one where an agent works against real work.
 #
 #   RV_TEST_OWNER_PRESENCE=1 swift build --scratch-path .build/test-owner-presence
 #   Scripts/test-owner-presence-e2e.sh .build/test-owner-presence/debug [NORMAL-BUILD-DIR]
@@ -98,6 +105,12 @@ hook() { # BUILD-DIR FIXTURE
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" PATH=/usr/bin:/bin \
     "$1/rv" hook --host claude <"$FIXTURES/$2"
 }
+# rvd, not the CLI, refused the password: only rvd's answers say these.
+# A CLI that refused locally ("needs your login password at an interactive
+# terminal", "was not done: …") never asked rvd anything.
+rvd_checked_login_password() { # OUTPUT
+  [[ "$1" == *"rv: wrong password;"* || "$1" == *"rv: rvd could not check your login password"* ]]
+}
 # Claude's hook prints nothing for an allow.
 decision() {
   python3 -c 'import json, sys
@@ -112,7 +125,7 @@ pass "rvd says it is a test build and uses the test owner check"
 # 1. A destructive command is denied, with a code.
 reply="$(hook "$BUILD" deny-git-reset-hard.json)"
 [[ "$(decision <<<"$reply")" == "deny" ]] || die "git reset --hard was not denied: $reply"
-code="$(grep -oE 'rv allow-once [0-9a-f]{6}' <<<"$reply" | head -n 1 | awk '{print $3}')"
+code="$({ grep -oE 'rv allow-once [0-9a-f]{6}' <<<"$reply" || true; } | head -n 1 | awk '{print $3}')"
 [[ -n "$code" ]] || die "the deny carried no allow-once code: $reply"
 pass "hook denies git reset --hard with code $code"
 
@@ -171,19 +184,33 @@ start_rvd "$BUILD"
 grep -q "rv-test-owner-presence" "$WORK/rvd.err" && die "rvd used the test check with no password set"
 out="$(rv_plain "$BUILD" RV_TEST_OWNER_PASSWORD="$PASSWORD" -- packs disable core.git 2>&1)" \
   && die "packs disable ran against an rvd with no test password: $out"
+rvd_checked_login_password "$out" || die "the refusal did not come from rvd's password check: $out"
 pass "with no test password, rvd checks the login password (refused: ${out##*rv: })"
 stop_rvd
 
-# 7. A build without the feature ignores the variable on both sides.
-if [[ -x "$NORMAL/rv" && -x "$NORMAL/rvd" ]] \
-  && bash "$ROOT/Scripts/check-no-test-owner-presence.sh" "$NORMAL/rv" "$NORMAL/rvd" 2>/dev/null; then
-  start_rvd "$NORMAL" "$PASSWORD"
+# 7. An rvd built without the feature ignores the variable. The test build's
+#    rv is the client, since it is the one that sends the password (a normal
+#    rv ignores the variable and, with no terminal, refuses before asking
+#    rvd). rv trusts only the rvd beside it (its /proc/<pid>/exe must be the
+#    sibling's real path), so both are copied into one directory, with the
+#    resource bundles both look up beside themselves (the same source's).
+if [[ -x "$NORMAL/rvd" ]] \
+  && bash "$ROOT/Scripts/check-no-test-owner-presence.sh" "$NORMAL/rvd" 2>/dev/null; then
+  MIXED="$WORK/mixed"
+  mkdir -p "$MIXED"
+  cp "$BUILD/rv" "$MIXED/rv"
+  cp "$NORMAL/rvd" "$MIXED/rvd"
+  for bundle in "$NORMAL"/*.bundle "$NORMAL"/*.resources; do
+    if [[ -e "$bundle" ]]; then cp -R "$bundle" "$MIXED/"; fi
+  done
+  start_rvd "$MIXED" "$PASSWORD"
   grep -q "rv-test-owner-presence" "$WORK/rvd.err" && die "a normal rvd used the test check"
-  out="$(rv_plain "$NORMAL" RV_TEST_OWNER_PASSWORD="$PASSWORD" -- packs disable core.git 2>&1)" \
-    && die "a normal build approved with the test password: $out"
-  pass "a normal build given the variable approves nothing (refused: ${out##*rv: })"
+  out="$(rv_plain "$MIXED" RV_TEST_OWNER_PASSWORD="$PASSWORD" -- packs disable core.git 2>&1)" \
+    && die "a normal rvd approved the test password: $out"
+  rvd_checked_login_password "$out" || die "the normal rvd was not asked, or refused for another reason: $out"
+  pass "a normal rvd given the variable checks the login password instead (refused: ${out##*rv: })"
   stop_rvd
 else
-  log "SKIP the normal-build check: $NORMAL has no rv and rvd built without the feature"
+  log "SKIP the normal-rvd check: $NORMAL has no rvd built without the feature"
 fi
 log "all checks passed"
