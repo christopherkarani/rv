@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 import RVIsolation
 
 public enum MCPIntegrityStatus: Sendable, Equatable {
