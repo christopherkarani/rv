@@ -88,14 +88,18 @@ ask writes nothing, a fresh ask appends one line, and any other change
 re-encodes only the rows that changed. Another writer's save changes the
 stamp and is read on the next call. `PendingApprovalStoreScalingTests`
 pins this (an ask at 236 rows: 16.8 ms before, 1.0 ms after, debug build).
+Rows this instance wrote are cached as read back from their lines, since
+the file keeps whole-second dates and review tokens hash rows across
+processes (the first version cached the originals and broke six egress
+review tests). "After" numbers are from `eb8032c`.
 
 | Run (release) | p99 before | p99 after | Calls/s before | Calls/s after |
 | --- | --- | --- | --- | --- |
-| socket, concurrency 1 | 31.3 ms | 12.0 ms | 120 | 178 |
-| socket, concurrency 8 | 190.0 ms | 56.7 ms | 213 | 395 |
-| `rv hook`, concurrency 1 | 52.1 ms | 25.9 ms | 44 | 54 |
-| `rv hook`, concurrency 8 | 206.3 ms | 74.5 ms | 130 | 188 |
-| denies only, socket, concurrency 8 (p50) | 112 ms | 41 ms | | |
+| socket, concurrency 1 | 31.3 ms | 12.5 ms | 120 | 176 |
+| socket, concurrency 8 | 190.0 ms | 56.9 ms | 213 | 386 |
+| `rv hook`, concurrency 1 | 52.1 ms | 25.8 ms | 44 | 55 |
+| `rv hook`, concurrency 8 | 206.3 ms | 82.8 ms | 130 | 181 |
+| denies only, socket, concurrency 8 (p50) | 112 ms | 42 ms | | |
 
 Still to do: a deny at concurrency 8 is 41 ms p50 against 9 ms for an
 allow. What remains on the reply path is the audit append with `fsync`
