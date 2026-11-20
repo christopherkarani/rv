@@ -469,13 +469,13 @@ public enum JudgeRuntime {
         do {
             switch engine {
             case .laya:
-                let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
+                let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
                 return admitted {
                     do { return .verdict(try judge.judge(command)) }
                     catch { return .failed }
                 }
             case .ft:
-                let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
+                let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
                 return admitted {
                     do { return .verdict(try judge.judge(command, context: context)) }
                     catch { return .failed }
@@ -504,7 +504,15 @@ public enum JudgeRuntime {
         until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
         _ inference: () -> JudgeRun
     ) -> JudgeRun {
-        admission.run(until: deadline, inference) ?? .busy
+        // Admission wait and inference are timed apart for `HookTiming`.
+        let entered = ContinuousClock.now
+        var predicting: ContinuousClock.Instant?
+        let run = admission.run(until: deadline) {
+            predicting = ContinuousClock.now
+            return HookTiming.measure(.judgePredict, inference)
+        }
+        HookTiming.current?.add(.judgeAdmission, (predicting ?? ContinuousClock.now) - entered)
+        return run ?? .busy
     }
 
     /// A judge that cannot answer this request (prediction failed, still

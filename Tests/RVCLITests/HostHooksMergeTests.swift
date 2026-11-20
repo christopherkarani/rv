@@ -12,7 +12,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -22,7 +22,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -32,7 +32,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -42,7 +42,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -52,7 +52,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -62,7 +62,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -72,7 +72,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -82,7 +82,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -102,7 +102,7 @@ private let codexFreshBytes = """
       {
         "hooks": [
           {
-            "command": "/usr/bin/python3 -I -S /tmp/home/.codex/hooks/rv-guard.py",
+            "command": "\(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.codex/hooks/rv-guard.py",
             "statusMessage": "RV",
             "timeout": 18,
             "type": "command"
@@ -121,21 +121,21 @@ private let cursorFreshBytes = """
   "hooks": {
     "beforeReadFile": [
       {
-        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "\(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
         "timeout": 18
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "\(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
         "timeout": 18
       }
     ],
     "preToolUse": [
       {
-        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "\(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
         "timeout": 18
       }
