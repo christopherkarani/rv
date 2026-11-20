@@ -121,7 +121,9 @@ public enum JSONLAppendLog {
         let lockURL = url.appendingPathExtension("lock")
         var openError: Int32 = 0
         let fd = lockURL.path.withCString { path -> Int32 in
-            let opened = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            // O_NONBLOCK: a FIFO or device planted at the sidecar fails here
+            // instead of hanging the writer; it must be a regular file.
+            let opened = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
             if opened < 0 {
                 openError = errno
             }
@@ -131,6 +133,10 @@ public enum JSONLAppendLog {
             return .failure(.lock(errno: openError))
         }
         defer { close(fd) }
+        var sidecar = stat()
+        guard fstat(fd, &sidecar) == 0, (sidecar.st_mode & S_IFMT) == S_IFREG else {
+            return .failure(.lock(errno: EINVAL))
+        }
         func locked(until deadline: ContinuousClock.Instant?) -> Result<T, AppendError> {
             if let failure = lock(fd, until: deadline) {
                 return .failure(failure)
@@ -153,7 +159,7 @@ public enum JSONLAppendLog {
     /// Runs under `exclusively`.
     private static func appendLocked(_ line: Data, to url: URL, sync: Bool) -> Result<Void, AppendError> {
         let fd = url.path.withCString { path in
-            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
         }
         guard fd >= 0 else {
             return .failure(.open(errno: errno))

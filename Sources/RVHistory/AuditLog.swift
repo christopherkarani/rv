@@ -126,14 +126,16 @@ public enum AuditLog {
         // process holds, or writing a long line, keeps no other log in this
         // process waiting.
         return AppendLock.withLock(log, wait) {
-            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            // O_NONBLOCK: a FIFO or device at the path must fail, not hang
+            // a caller that has to answer; only a regular file is the log.
+            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
             guard fd >= 0 else { return false }
             // The file reached through another directory (a hard link, or
             // this one swapped since the `stat`) is still one log: its own
             // entry, always taken second, so a thread holding a file's
             // entry never waits for a directory's.
             var file = stat()
-            guard fstat(fd, &file) == 0 else {
+            guard fstat(fd, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG else {
                 close(fd)
                 return false
             }

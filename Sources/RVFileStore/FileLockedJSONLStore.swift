@@ -60,7 +60,7 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     /// UTF-8 and undecodable, empty, or whitespace-only lines are skipped.
     /// Fail-open: callers cannot distinguish an empty store from a corrupt one.
     public func load() -> [Record] {
-        guard let data = try? Data(contentsOf: fileURL) else {
+        guard let data = readRegularFile(fileURL) else {
             return []
         }
         return Self.decodeLines(data)
@@ -72,9 +72,9 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     /// no rows. Hold `withLock` so the file cannot appear mid-check.
     public func loadChecked() throws(FileLockedJSONLStoreError) -> [Record] {
         let data: Data
-        do {
-            data = try Data(contentsOf: fileURL)
-        } catch {
+        if let read = readRegularFile(fileURL) {
+            data = read
+        } else {
             var info = stat()
             let missing = fileURL.withUnsafeFileSystemRepresentation { path -> Bool in
                 guard let path else { return false }
@@ -179,7 +179,7 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     public func append(line: String) throws(FileLockedJSONLStoreError) {
         let fd = fileURL.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else { return -1 }
-            return open(path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC)
+            return open(path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         }
         guard fd >= 0 else { throw FileLockedJSONLStoreError.ioFailed }
         let written = Data((line + "\n").utf8).withUnsafeBytes { raw in
@@ -199,7 +199,9 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         // truncated, never exclusive: a stale tmp from a crashed save must not
         // block the next one. Single write + single rename; Foundation's own
         // temp+rename would double both.
-        let fd = temp.path.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, 0o600) }
+        // O_NOFOLLOW | O_NONBLOCK: a symlink or FIFO planted at the temp
+        // path fails the save instead of redirecting or hanging it.
+        let fd = temp.path.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600) }
         guard fd >= 0 else {
             try? FileManager.default.removeItem(at: temp)
             throw FileLockedJSONLStoreError.ioFailed
