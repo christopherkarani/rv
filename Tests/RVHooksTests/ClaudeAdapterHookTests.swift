@@ -539,7 +539,8 @@ private func runClaudeWrapper(
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
     }
 
-    let source = try adapterSource(rvPath: rvPath)
+    let source = try pointingOwnerConfig(
+        adapterSource(rvPath: rvPath), at: root.appendingPathComponent("owner-config.json"))
     let adapter = root.appendingPathComponent("rv-guard.py")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 

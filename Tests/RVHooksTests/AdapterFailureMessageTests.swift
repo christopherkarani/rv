@@ -270,8 +270,22 @@ private func stubEnvironment(_ stub: AdapterStub, root: URL) -> [String: String]
     return environment
 }
 
-private func renderedAdapter(host: HookHost, rvPath: String, timeoutSeconds: String?) throws -> String {
+/// The Claude adapter reads the owner's config from the passwd home. Tests
+/// point it at `ownerConfig` instead (never the real home), the way rv.c
+/// takes `RV_HOOK_OBSERVE_CONFIG_PATH` at build time.
+func pointingOwnerConfig(_ source: String, at ownerConfig: URL) throws -> String {
+    let original = "_OWNER_CONFIG_PATH = None\n"
+    try #require(source.components(separatedBy: original).count == 2, "owner-config seam missing")
+    return source.replacingOccurrences(of: original, with: "_OWNER_CONFIG_PATH = \"\(ownerConfig.path)\"\n")
+}
+
+private func renderedAdapter(
+    host: HookHost, rvPath: String, timeoutSeconds: String?, ownerConfig: URL
+) throws -> String {
     var source = try HostAdapterResources.load(for: host).rendered(rvPath: rvPath)
+    if host == .claude {
+        source = try pointingOwnerConfig(source, at: ownerConfig)
+    }
     if let timeoutSeconds {
         let original = "RV_HOOK_TIMEOUT_S = 15\n"
         #expect(source.contains(original))
@@ -287,7 +301,8 @@ func runPythonAdapter(
     rawEvent: String? = nil,
     eventFields: [String: Any] = [:],
     environment extra: [String: String] = [:],
-    stdoutUnwritable: Bool = false
+    stdoutUnwritable: Bool = false,
+    ownerConfig prepareOwnerConfig: ((URL) throws -> Void)? = nil
 ) async throws -> PythonAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-failmsg-\(UUID().uuidString)", isDirectory: true)
@@ -295,8 +310,10 @@ func runPythonAdapter(
     defer { try? FileManager.default.removeItem(at: root) }
 
     let rvPath = try writeStub(stub, in: root)
+    let ownerConfig = root.appendingPathComponent("owner-config.json")
+    try prepareOwnerConfig?(ownerConfig)
     let adapter = root.appendingPathComponent("rv-guard.py")
-    try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds)
+    try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds, ownerConfig: ownerConfig)
         .write(to: adapter, atomically: true, encoding: .utf8)
 
     let eventText: String
@@ -354,7 +371,9 @@ private func runHermesAdapter(stub: AdapterStub, timeoutSeconds: String? = nil) 
 
     let rvPath = try writeStub(stub, in: root)
     let adapter = root.appendingPathComponent("rv_guard_hermes.py")
-    try renderedAdapter(host: .hermes, rvPath: rvPath, timeoutSeconds: timeoutSeconds)
+    try renderedAdapter(
+        host: .hermes, rvPath: rvPath, timeoutSeconds: timeoutSeconds,
+        ownerConfig: root.appendingPathComponent("owner-config.json"))
         .write(to: adapter, atomically: true, encoding: .utf8)
     let harness = root.appendingPathComponent("harness.py")
     try """

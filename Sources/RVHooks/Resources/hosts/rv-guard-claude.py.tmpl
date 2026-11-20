@@ -13,7 +13,8 @@ permission prompt lets a person decide. It is forwarded only when all of
 these hold, and blocks otherwise:
 - RV_HOOK_WHEN_DOWN is not "deny";
 - the hook request's permission_mode is one of _HUMAN_PROMPT_MODES;
-- Claude Code says the session is attended (_session_attended).
+- Claude Code says the session is attended (_session_attended);
+- the owner has not pinned "block" in config.json (_owner_pinned_block).
 Install problems, unusable rv output and any other native ask block.
 
 Extra hookSpecificOutput keys can fail-open a deny — wrapper-owned JSON
@@ -25,12 +26,20 @@ exit.
 
 import json
 import os
+import pwd
+import stat
 import subprocess
 import sys
 import unicodedata
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
+
+# The owner's config.json; None reads it from the passwd home, never $HOME
+# (hook environment can come from project config an agent writes). Only
+# `"hookAskWhenDown": false` there changes anything: it pins "block".
+_OWNER_CONFIG_PATH = None
+_OWNER_CONFIG_MAX = 1024 * 1024
 
 # Every block says what broke and what to run; never a bare "rv failed".
 _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
@@ -206,7 +215,59 @@ def _forwards_infra_ask(envelope, environ):
     # infrastructure path, as it does in the C hook.
     if environ.get("RV_HOOK_WHEN_DOWN") == "deny":
         return False
-    return _host_prompts_human(envelope.get("permission_mode")) and _session_attended(environ)
+    return (
+        _host_prompts_human(envelope.get("permission_mode"))
+        and _session_attended(environ)
+        and not _owner_pinned_block()
+    )
+
+
+def _owner_pinned_block():
+    # The owner's switch may only tighten: True only for an explicit
+    # `"hookAskWhenDown": false` at the top level of a config.json that
+    # passes the C hook's checks (observe_gate.c): a regular file, not a
+    # symlink, owned by this uid, not group- or world-writable, at most
+    # 1 MiB, with no repeated key. Anything else keeps the default (ask).
+    try:
+        path = _OWNER_CONFIG_PATH or _passwd_config_path()
+        if path is None:
+            return False
+        parsed = json.loads(_read_owned_file(path), object_pairs_hook=_reject_duplicate_keys)
+    except Exception:
+        return False
+    return isinstance(parsed, dict) and parsed.get("hookAskWhenDown") is False
+
+
+def _passwd_config_path():
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    if not isinstance(home, str) or not home.startswith("/"):
+        return None
+    return home + "/.config/rv/config.json"
+
+
+def _read_owned_file(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or info.st_size > _OWNER_CONFIG_MAX
+        ):
+            raise ValueError("owner config fails its checks")
+        chunks = []
+        left = info.st_size
+        while left > 0:
+            chunk = os.read(fd, left)
+            if not chunk:
+                raise ValueError("owner config shrank while read")
+            chunks.append(chunk)
+            left -= len(chunk)
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        os.close(fd)
 
 
 def _host_prompts_human(mode):

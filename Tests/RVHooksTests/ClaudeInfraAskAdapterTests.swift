@@ -182,6 +182,42 @@ struct ClaudeInfraAskAdapterTests {
         #expect(reason.contains("`rv doctor`"), "\(path): \(reason)")
     }
 
+    /// The owner can pin "block" with `"hookAskWhenDown": false` in
+    /// `~/.config/rv/config.json` (passwd home): every infrastructure path
+    /// then blocks, the adapter's own timeout included.
+    @Test(arguments: DownPath.allCases)
+    func ownerSwitchOff_blocksEveryInfraPath(_ path: DownPath) async throws {
+        let run = try await runPythonAdapter(
+            host: .claude, stub: path.stub, timeoutSeconds: "0.3", eventFields: ["permission_mode": "default"],
+            environment: Self.attended, ownerConfig: { try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: $0) })
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason.contains(Self.marker) == false, "\(path): \(reason)")
+        #expect(reason.contains("`rv doctor`"), "\(path): \(reason)")
+    }
+
+    /// Like the C hook, only group or world write access disqualifies the
+    /// file; readable by others is fine.
+    @Test(arguments: [0o644, 0o400])
+    func ownerSwitchOff_inAReadOnlyOrSharedReadFileBlocks(_ mode: Int) async throws {
+        let run = try await runPythonAdapter(
+            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
+            environment: Self.attended,
+            ownerConfig: { try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: $0, mode: mode) })
+        let reason = try expectFailClosed(host: .claude, run: run)
+        #expect(reason == daemonUnreachableMessage, "\(String(mode, radix: 8))")
+    }
+
+    /// The switch may only tighten: anything but an explicit `false` in a
+    /// file that passes the C hook's ownership checks is the default (ask).
+    @Test(arguments: OwnerConfigDefault.allCases)
+    func ownerSwitch_onlyExplicitFalseInAnOwnedFileBlocks(_ config: OwnerConfigDefault) async throws {
+        let run = try await runPythonAdapter(
+            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
+            environment: Self.attended, ownerConfig: config.prepare)
+        let reason = try expectClaudeAsk(run)
+        #expect(reason == Self.prompt(layer: "rvd is not reachable", reason: daemonUnreachableMessage), "\(config)")
+    }
+
     /// Each C hook down reason maps to its own layer.
     @Test(arguments: [
         (cTimeoutMessage, "rvd did not answer in time"),
@@ -357,6 +393,54 @@ struct ClaudeInfraAskAdapterTests {
         }
     }
 
+    enum OwnerConfigDefault: CaseIterable, CustomStringConvertible {
+        case missingFile, switchTrue, keyAbsent, stringFalse, zero, null, nestedUnderGuard
+        case corrupt, duplicateKey, arrayRoot, groupWritable, worldWritable, symlinked, directory
+
+        func prepare(_ path: URL) throws {
+            switch self {
+            case .missingFile: return
+            case .switchTrue: try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: path)
+            case .keyAbsent: try writeOwnerConfig(#"{"guard": {"mode": "enforce"}}"#, at: path)
+            case .stringFalse: try writeOwnerConfig(#"{"hookAskWhenDown": "false"}"#, at: path)
+            case .zero: try writeOwnerConfig(#"{"hookAskWhenDown": 0}"#, at: path)
+            case .null: try writeOwnerConfig(#"{"hookAskWhenDown": null}"#, at: path)
+            case .nestedUnderGuard: try writeOwnerConfig(#"{"guard": {"hookAskWhenDown": false}}"#, at: path)
+            case .corrupt: try writeOwnerConfig(#"{"hookAskWhenDown": false"#, at: path)
+            case .duplicateKey:
+                try writeOwnerConfig(#"{"hookAskWhenDown": false, "hookAskWhenDown": true}"#, at: path)
+            case .arrayRoot: try writeOwnerConfig(#"[{"hookAskWhenDown": false}]"#, at: path)
+            case .groupWritable: try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: path, mode: 0o620)
+            case .worldWritable: try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: path, mode: 0o602)
+            case .symlinked:
+                let target = path.deletingLastPathComponent().appendingPathComponent("real-config.json")
+                try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: target)
+                try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+            case .directory:
+                try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .missingFile: "missingFile"
+            case .switchTrue: "switchTrue"
+            case .keyAbsent: "keyAbsent"
+            case .stringFalse: "stringFalse"
+            case .zero: "zero"
+            case .null: "null"
+            case .nestedUnderGuard: "nestedUnderGuard"
+            case .corrupt: "corrupt"
+            case .duplicateKey: "duplicateKey"
+            case .arrayRoot: "arrayRoot"
+            case .groupWritable: "groupWritable"
+            case .worldWritable: "worldWritable"
+            case .symlinked: "symlinked"
+            case .directory: "directory"
+            }
+        }
+    }
+
     enum UnattendedSession: CaseIterable, CustomStringConvertible {
         case headlessPrint, attendedZeroWithCliEntrypoint, attendedNotOne, attendedEmpty
         case cliEntrypointOnly, desktopEntrypointOnly, vscodeEntrypointOnly
@@ -500,6 +584,13 @@ struct ClaudeInfraAskAdapterTests {
             }
         }
     }
+}
+
+/// Writes the owner config the adapter reads, with `mode` set explicitly
+/// (the umask cannot widen or narrow it).
+private func writeOwnerConfig(_ text: String, at path: URL, mode: Int = 0o600) throws {
+    try Data(text.utf8).write(to: path)
+    try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path.path)
 }
 
 /// How the prompt shows one escaped UTF-16 unit: a backslash, `u`, and
