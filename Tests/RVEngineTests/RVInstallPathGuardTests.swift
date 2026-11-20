@@ -165,8 +165,6 @@ struct RVInstallPathGuardTests {
         "mv /tmp/x $HOME/Library/Caches/rvd/",
         "ln -s /tmp/evil ~/Library/Caches/rvd",
         "echo x > ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/manifest",
-        "rm -rf ~/Library/Caches/rv-laya",
-        "cp -R evil.mlmodelc ~/Library/Caches/rv-laya/a-b.mlmodelc",
         "cd ~/Library/Caches && rm -rf rvd",
         // the expected false positives
         "rm -rf ~/Library/Caches",
@@ -180,6 +178,8 @@ struct RVInstallPathGuardTests {
         "du -sh ~/Library/Caches/rvd",
         "rm -rf ~/Library/Caches/rvdx",
         "rm -rf ~/Library/Caches/com.apple.Safari",
+        // Older builds' model cache: nothing loads from it any more.
+        "rm -rf ~/Library/Caches/rv-laya",
     ]
 
     @Test("rvd's Core ML caches are guarded", arguments: touchingCoreMLCaches)

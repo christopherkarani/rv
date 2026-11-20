@@ -67,4 +67,16 @@ struct WiringShellDoorTests {
             #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .observe)), "\(command)")
         }
     }
+
+    @Test("enforce mode denies a shell write into rvd's Core ML cache; listing it stays allowed", arguments: [
+        "cp x ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/b",
+        "echo x > ../Library/Caches/rvd/planted",
+        "ln -s /tmp/x ~/Library/Caches/rvd",
+    ])
+    func coreMLCacheWritesDeny(command: String) throws {
+        try Self.withRepo { _, home, cwd in
+            #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .enforce)), "\(command)")
+            #expect(Self.decide("ls ~/Library/Caches/rvd", home: home, cwd: cwd, mode: .enforce).decision == .allow)
+        }
+    }
 }

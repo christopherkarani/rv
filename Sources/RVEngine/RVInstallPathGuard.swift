@@ -13,9 +13,9 @@ import RVDomain
 /// executable is replaced), the `dev.rv.*` LaunchAgent plists, everything
 /// under `~/.config/systemd/user` (rv's unit and any unit or drop-in that
 /// could conflict with it), `~/Applications/RVApprovals.app`, rvd's Core
-/// ML caches (`~/Library/Caches/rvd`, `~/Library/Caches/rv-laya`), and the
-/// Linux socket dir `$XDG_RUNTIME_DIR/rv`. (The macOS socket lives under
-/// `~/.config/rv`, which `core.secrets:home-rv-config` already guards.)
+/// ML cache (`~/Library/Caches/rvd`), and the Linux socket dir
+/// `$XDG_RUNTIME_DIR/rv`. (The macOS socket lives under `~/.config/rv`,
+/// which `core.secrets:home-rv-config` already guards.)
 ///
 /// `touchesInstall` is true when a shell command may write, move or remove
 /// one of these. A directory or ancestor hit (`~`, `~/.local`,
@@ -292,9 +292,8 @@ private struct InstallPathModel {
             [.fixed(".local"), .fixed("share"), .fixed("systemd"), .fixed("user"), .rvJob],
             [.fixed("applications"), .fixed("rvapprovals.app")],
             // rvd's Core ML e5rt bundle cache (Core ML loads the judge's
-            // compiled bundle from it) and older builds' judge model cache.
+            // compiled bundle from it).
             [.fixed("library"), .fixed("caches"), .fixed("rvd")],
-            [.fixed("library"), .fixed("caches"), .fixed("rv-laya")],
         ]
         var sequences = homes.flatMap { home in tails.map { (home + $0, home.count) } }
         sequences.append(([.fixed("run"), .fixed("user"), .anyOne, .fixed("rv")], 3))
