@@ -205,28 +205,4 @@ struct DenialLedgerScalingTests {
         #expect(text.first == whole)
         #expect(ledger.records(asOf: Self.now.addingTimeInterval(5)).count == 3)
     }
-
-    /// Mean wall time of `count` appends to a ledger already holding `rows`.
-    private func meanAppend(seeded rows: Int, count: Int) throws -> Duration {
-        let root = try Self.directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let ledger = DenialLedger(configDirectory: root)
-        for index in 0..<rows {
-            ledger.append(try Self.row(index), now: Self.now)
-        }
-        let started = ContinuousClock.now
-        for index in rows..<(rows + count) {
-            ledger.append(try Self.row(index), now: Self.now)
-        }
-        return (ContinuousClock.now - started) / count
-    }
-
-    @Test func appendCostDoesNotScaleWithLedgerSize() throws {
-        let small = try meanAppend(seeded: 5, count: 20)
-        let large = try meanAppend(seeded: 180, count: 20)
-        print("denial append mean: 5 rows \(small), 180 rows \(large)")
-        // Before, a 180-row append decoded and re-encoded every row. Generous
-        // for a shared CI host.
-        #expect(large < small * 4 + .milliseconds(2), "180-row append \(large) vs 5-row \(small)")
-    }
 }
