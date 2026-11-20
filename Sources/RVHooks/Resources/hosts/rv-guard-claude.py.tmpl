@@ -65,11 +65,6 @@ _DOWN_LAYERS = {
 # is treated like those.
 _HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")
 
-# Interactive entry points, consulted only when Claude Code does not set
-# CLAUDE_CODE_SESSION_ATTENDED. `claude -p` and Agent SDK hosts set
-# sdk-cli / sdk-ts / sdk-py (2.1.328 sends sdk-cli and ATTENDED=0).
-_ATTENDED_ENTRYPOINTS = ("cli", "claude-desktop", "claude-vscode")
-
 
 def _missing_reason():
     return "rv is not installed at %s. Reinstall rv or run `rv setup`." % RV_BINARY
@@ -221,15 +216,13 @@ def _host_prompts_human(mode):
 
 
 def _session_attended(environ):
-    # Claude Code sets these for its hooks; the agent's own commands do
-    # not reach the hook's environment. Both are undocumented, so anything
-    # but a plain "attended" answer blocks: an SDK canUseTool callback or
-    # --permission-prompt-tool answers prompts with no person, and reports
-    # permission_mode "default".
-    attended = environ.get("CLAUDE_CODE_SESSION_ATTENDED")
-    if attended is not None:
-        return attended == "1"
-    return environ.get("CLAUDE_CODE_ENTRYPOINT") in _ATTENDED_ENTRYPOINTS
+    # Claude Code computes this for its hooks (`claude -p` sends "0"). It
+    # is undocumented, so anything but a plain "1" blocks, a missing value
+    # included: on older builds a nested `claude -p` inherits an
+    # interactive-looking CLAUDE_CODE_ENTRYPOINT, so that is no proof.
+    # A heuristic, not a boundary: whatever can start Claude Code can make
+    # it report an attended session.
+    return environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "1"
 
 
 def _subject(tool, tool_input):

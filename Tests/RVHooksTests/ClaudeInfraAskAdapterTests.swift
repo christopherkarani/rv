@@ -127,7 +127,10 @@ struct ClaudeInfraAskAdapterTests {
 
     /// A headless, SDK or unknown session blocks even in a prompting mode:
     /// `claude -p` sets `CLAUDE_CODE_SESSION_ATTENDED=0` and entrypoint
-    /// `sdk-cli`, and an SDK host may answer the prompt with code.
+    /// `sdk-cli`, and an SDK host may answer the prompt with code. Without
+    /// the attended flag an interactive-looking entrypoint is no proof
+    /// either: on older builds a nested `claude -p` inherits
+    /// `claude-desktop` or `claude-vscode`.
     @Test(arguments: UnattendedSession.allCases)
     func daemonDown_unattendedSessionBlocks(_ session: UnattendedSession) async throws {
         let run = try await runPythonAdapter(
@@ -135,17 +138,6 @@ struct ClaudeInfraAskAdapterTests {
             environment: session.environment)
         let reason = try expectFailClosed(host: .claude, run: run)
         #expect(reason == daemonUnreachableMessage, "\(session): \(reason)")
-    }
-
-    /// Older Claude Code builds without the attended flag: an interactive
-    /// entrypoint is enough.
-    @Test(arguments: ["cli", "claude-desktop", "claude-vscode"])
-    func daemonDown_interactiveEntrypointAsks(_ entrypoint: String) async throws {
-        let run = try await runPythonAdapter(
-            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
-            environment: ["CLAUDE_CODE_ENTRYPOINT": entrypoint])
-        let reason = try expectClaudeAsk(run)
-        #expect(reason.contains(Self.marker), "\(entrypoint): \(reason)")
     }
 
     /// `RV_HOOK_WHEN_DOWN=deny` blocks every infrastructure path, the
@@ -291,13 +283,19 @@ struct ClaudeInfraAskAdapterTests {
     }
 
     enum UnattendedSession: CaseIterable, CustomStringConvertible {
-        case headlessPrint, attendedZeroWithCliEntrypoint, attendedNotOne, sdkEntrypoint, unknownEntrypoint, nothingSet
+        case headlessPrint, attendedZeroWithCliEntrypoint, attendedNotOne, attendedEmpty
+        case cliEntrypointOnly, desktopEntrypointOnly, vscodeEntrypointOnly
+        case sdkEntrypoint, unknownEntrypoint, nothingSet
 
         var environment: [String: String] {
             switch self {
             case .headlessPrint: ["CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"]
             case .attendedZeroWithCliEntrypoint: ["CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "cli"]
             case .attendedNotOne: ["CLAUDE_CODE_SESSION_ATTENDED": "true"]
+            case .attendedEmpty: ["CLAUDE_CODE_SESSION_ATTENDED": ""]
+            case .cliEntrypointOnly: ["CLAUDE_CODE_ENTRYPOINT": "cli"]
+            case .desktopEntrypointOnly: ["CLAUDE_CODE_ENTRYPOINT": "claude-desktop"]
+            case .vscodeEntrypointOnly: ["CLAUDE_CODE_ENTRYPOINT": "claude-vscode"]
             case .sdkEntrypoint: ["CLAUDE_CODE_ENTRYPOINT": "sdk-ts"]
             case .unknownEntrypoint: ["CLAUDE_CODE_ENTRYPOINT": "local-agent"]
             case .nothingSet: [:]
@@ -309,6 +307,10 @@ struct ClaudeInfraAskAdapterTests {
             case .headlessPrint: "headlessPrint"
             case .attendedZeroWithCliEntrypoint: "attendedZeroWithCliEntrypoint"
             case .attendedNotOne: "attendedNotOne"
+            case .attendedEmpty: "attendedEmpty"
+            case .cliEntrypointOnly: "cliEntrypointOnly"
+            case .desktopEntrypointOnly: "desktopEntrypointOnly"
+            case .vscodeEntrypointOnly: "vscodeEntrypointOnly"
             case .sdkEntrypoint: "sdkEntrypoint"
             case .unknownEntrypoint: "unknownEntrypoint"
             case .nothingSet: "nothingSet"
