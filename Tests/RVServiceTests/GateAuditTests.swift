@@ -335,8 +335,10 @@ struct GateAuditTests {
             (Self.selfProtected, .enforce, .indeterminate(.selfProtection), "selfProtection", .commandDenied),
             (Self.selfProtected, .observe, .indeterminate(.selfProtection), "selfProtection", .commandDenied),
             (Self.oversized, .enforce, .indeterminate(.commandTooLarge), "commandTooLarge", .commandDenied),
-            // Observe lets an unfinished evaluation run (recorded as observed).
-            (Self.oversized, .observe, .allow, "commandTooLarge", .commandObserved),
+            // Observe's floor keeps a command it cannot analyze refused
+            // (an unresolved script graph still runs as observed; see
+            // observeLetsAnUnresolvedScriptGraphRunAndChainsItAsObserved).
+            (Self.oversized, .observe, .indeterminate(.observeUnanalyzable), "observe.floor:unanalyzable", .commandDenied),
         ]
         for (command, mode, expected, reason, kind) in cases {
             let label = "\(command.rawValue.prefix(24)) \(mode)"
