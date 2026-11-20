@@ -83,6 +83,9 @@ public final class FineTunedJudge: @unchecked Sendable {
 
     public init(bundleDir: URL, coreML: CoreMLGuard = .current) throws {
         self.coreML = coreML
+        // Before any bundle work: a nearly full disk refuses (review), whatever
+        // else is wrong with the bundle.
+        try coreML.requireDiskSpace()
         let fm = FileManager.default
         let directTok = bundleDir.appendingPathComponent("tokenizer.json")
         let nestedTok = bundleDir.appendingPathComponent("tokenizer/tokenizer.json")

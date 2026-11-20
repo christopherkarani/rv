@@ -28,7 +28,7 @@ import RVPolicy
 /// always allows and logs what enforcement would have done. Evidence:
 /// docs/plans/laya-judge-decision-record.md.
 public enum JudgeRuntime {
-    private static let slot = JudgeSlot()
+    static let slot = JudgeSlot()
 
     static let ftBundleName = "laya-ft-v2-coreml"
     static let stockBundleName = "laya-multilingual-coreml"
@@ -450,7 +450,8 @@ public enum JudgeRuntime {
         context: JudgeContext,
         engine: JudgeEngine,
         bundle: URL,
-        wait: Duration? = loadWait
+        wait: Duration? = loadWait,
+        slot: JudgeSlot = slot
     ) -> JudgeRun {
         #if canImport(CoreML)
         let wait = JudgeAdmission.loadWait(wait, until: JudgeAdmission.deadline)
@@ -745,6 +746,11 @@ enum JudgeLoadError: Error {
 final class JudgeSlot: Sendable {
     private let stock = SingleFlightLoader<LayaCoreMLJudge>()
     private let ft = SingleFlightLoader<FineTunedJudge>()
+    private let coreML: @Sendable () -> CoreMLGuard
+
+    init(coreML: @escaping @Sendable () -> CoreMLGuard = { JudgeRuntime.coreMLGuard }) {
+        self.coreML = coreML
+    }
 
     private static func stamp(_ bundleDir: URL) -> TimeInterval {
         let package = bundleDir.appendingPathComponent("model.mlpackage")
@@ -754,13 +760,13 @@ final class JudgeSlot: Sendable {
 
     func stockJudge(bundleDir: URL, wait: Duration?) throws -> LayaCoreMLJudge {
         try Self.unwrap(stock.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
-            try LayaCoreMLJudge(bundleDir: bundleDir)
+            try LayaCoreMLJudge(bundleDir: bundleDir, coreML: self.coreML())
         })
     }
 
     func ftJudge(bundleDir: URL, wait: Duration?) throws -> FineTunedJudge {
         try Self.unwrap(ft.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
-            try FineTunedJudge(bundleDir: bundleDir)
+            try FineTunedJudge(bundleDir: bundleDir, coreML: self.coreML())
         })
     }
 
@@ -769,9 +775,9 @@ final class JudgeSlot: Sendable {
         let stamp = Self.stamp(bundleDir)
         switch engine {
         case .laya:
-            stock.prewarm(key: bundleDir, stamp: stamp) { try LayaCoreMLJudge(bundleDir: bundleDir) }
+            stock.prewarm(key: bundleDir, stamp: stamp) { try LayaCoreMLJudge(bundleDir: bundleDir, coreML: self.coreML()) }
         case .ft:
-            ft.prewarm(key: bundleDir, stamp: stamp) { try FineTunedJudge(bundleDir: bundleDir) }
+            ft.prewarm(key: bundleDir, stamp: stamp) { try FineTunedJudge(bundleDir: bundleDir, coreML: self.coreML()) }
         }
     }
 

@@ -64,7 +64,7 @@ public enum DoctorSnapshotBuilder {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
             let base = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
-            let notes = coreMLNotes(CoreMLGuard.current.status)
+            let notes = coreMLNotes(JudgeRuntime.coreMLGuard.status)
             return DoctorCheck(
                 id: .judge, status: notes.isEmpty ? .ok : .warning,
                 message: ([base] + notes).joined(separator: "; ")

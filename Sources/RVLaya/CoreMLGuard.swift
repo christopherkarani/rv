@@ -51,15 +51,19 @@ public struct CoreMLDiskSpaceError: Error, Sendable, Equatable {
 ///   prediction, so every prediction is covered (the MPSGraph aborts in the
 ///   field happened mid-session, not at load). No fsync: an abort keeps
 ///   the page cache; only a kernel panic loses the byte, and that is not a
-///   Core ML crash.
-/// - Disk precheck: refuses any call below `minimumFreeBytes` free on the
-///   cache volume (one `statfs`/`statvfs`).
+///   Core ML crash. An orderly exit or SIGTERM/SIGINT clears it.
+/// - Disk precheck: refuses a compile or load below `minimumFreeBytes`
+///   free on the cache volume (one `statfs`/`statvfs`). Predictions on a
+///   loaded model are not checked.
+///
+/// State (marker, crash history, compiled models) lives under `stateRoot`,
+/// rv's guarded config dir, never in agent-writable caches.
 ///
 /// An untracked guard (no store) only does the disk precheck: short-lived
 /// CLI processes share no marker with rvd, so they cannot miscount its runs.
 public final class CoreMLGuard: Sendable {
     /// Below this much free space on the cache volume the judge refuses to
-    /// load or predict (compiling the ~600 MB model writes the compiled
+    /// compile or load (compiling the ~600 MB model writes the compiled
     /// copy plus Core ML's e5rt bundle).
     public static let minimumFreeBytes: Int64 = 2 << 30
 
@@ -82,8 +86,10 @@ public final class CoreMLGuard: Sendable {
         var depth = 0
     }
 
+    /// `~/.config/rv/cache/laya`: `models/` and `guard/` below it.
+    public let stateRoot: URL?
     /// Opened on first Core ML use, so an rvd that never loads a judge
-    /// never touches the cache directory.
+    /// never touches the state directory.
     private let makeStore: @Sendable () -> (any CoreMLCrashStore)?
     private let disk: any DiskSpaceProbe
     private let cacheVolume: URL?
@@ -96,12 +102,13 @@ public final class CoreMLGuard: Sendable {
         store: (any CoreMLCrashStore)?,
         disk: any DiskSpaceProbe,
         cacheVolume: URL?,
+        stateRoot: URL? = nil,
         purgeCoreMLCache: @escaping @Sendable () -> Void,
         log: @escaping @Sendable (String) -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.init(
-            makeStore: { store }, disk: disk, cacheVolume: cacheVolume,
+            makeStore: { store }, disk: disk, cacheVolume: cacheVolume, stateRoot: stateRoot,
             purgeCoreMLCache: purgeCoreMLCache, log: log, now: now)
     }
 
@@ -109,6 +116,7 @@ public final class CoreMLGuard: Sendable {
         makeStore: @escaping @Sendable () -> (any CoreMLCrashStore)?,
         disk: any DiskSpaceProbe,
         cacheVolume: URL?,
+        stateRoot: URL? = nil,
         purgeCoreMLCache: @escaping @Sendable () -> Void,
         log: @escaping @Sendable (String) -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
@@ -116,20 +124,27 @@ public final class CoreMLGuard: Sendable {
         self.makeStore = makeStore
         self.disk = disk
         self.cacheVolume = cacheVolume
+        self.stateRoot = stateRoot
         self.purgeCoreMLCache = purgeCoreMLCache
         self.log = log
         self.now = now
     }
 
+    /// Where verified compiled models live; nil keeps none (loads compile
+    /// output directly).
+    var modelRoot: URL? {
+        stateRoot?.appendingPathComponent("models", isDirectory: true)
+    }
+
     /// Compute units for the next model load (runs crash recovery once).
     public var computeUnits: JudgeComputeUnits {
-        started.withLock { recover(&$0).units }
+        startedState().units
     }
 
     /// For doctor: the units in force, the CPU-only deadline, and whether
     /// the disk is below the floor right now.
     public var status: Status {
-        let current = started.withLock { recover(&$0) }
+        let current = startedState()
         return Status(units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil)
     }
 
@@ -139,11 +154,12 @@ public final class CoreMLGuard: Sendable {
         if let shortfall = diskShortfall() { throw shortfall }
     }
 
-    /// Runs one Core ML load, compile or prediction: disk precheck, then
-    /// the body with the in-flight marker set.
-    public func run<T>(_ body: () throws -> T) throws -> T {
-        started.withLock { _ = recover(&$0) }
-        try requireDiskSpace()
+    /// Runs one Core ML call with the in-flight marker set. A compile or
+    /// load passes `checkingDisk` (they write the e5rt cache); a prediction
+    /// on a loaded model does not.
+    public func run<T>(checkingDisk: Bool = false, _ body: () throws -> T) throws -> T {
+        _ = startedState()
+        if checkingDisk { try requireDiskSpace() }
         enter()
         defer { leave() }
         return try body()
@@ -174,14 +190,24 @@ public final class CoreMLGuard: Sendable {
         }
     }
 
+    /// The process's started state; the first caller runs recovery. The
+    /// e5rt purge a crash calls for runs after the lock is released (it can
+    /// take seconds); the cache is renamed aside first, so a load that
+    /// starts meanwhile never sees a half-removed cache.
+    private func startedState() -> Started {
+        let (state, purge) = started.withLock { recover(&$0) }
+        if purge { purgeCoreMLCache() }
+        return state
+    }
+
     /// First touch in this process: read the previous run's marker before
     /// any marker write of ours, apply the policy, persist, then clear.
-    private func recover(_ slot: inout Started?) -> Started {
-        if let slot { return slot }
+    private func recover(_ slot: inout Started?) -> (Started, purge: Bool) {
+        if let slot { return (slot, false) }
         guard let store = makeStore() else {
             let fresh = Started(units: .cpuAndGPU)
             slot = fresh
-            return fresh
+            return (fresh, false)
         }
         let crashed = store.previousRunCrashed()
         let before = store.loadState()
@@ -189,7 +215,6 @@ public final class CoreMLGuard: Sendable {
         if next.state != before { store.saveState(next.state) }
         if crashed {
             log("rvd: the previous run died inside Core ML (\(next.state.crashes.count) in 24 h); purging its compiled-model cache")
-            purgeCoreMLCache()
         }
         if next.units == .cpuOnly {
             let until = next.state.cpuOnlyUntil.map { $0.formatted(.iso8601) } ?? "later"
@@ -198,55 +223,62 @@ public final class CoreMLGuard: Sendable {
         store.setInFlight(false)
         let fresh = Started(units: next.units, cpuOnlyUntil: next.state.cpuOnlyUntil, store: store)
         slot = fresh
-        return fresh
+        return (fresh, crashed)
     }
 }
 
 extension CoreMLGuard {
     private static let bound = Mutex<CoreMLGuard?>(nil)
 
-    /// The guard judges use when none is injected. Untracked until rvd binds
-    /// its daemon guard at startup.
+    /// The guard judges use when none is injected: the bound one, else an
+    /// untracked guard with no compiled-model cache.
     public static var current: CoreMLGuard {
+        current(orBind: untracked(stateRoot: nil))
+    }
+
+    /// The bound guard, binding `make()` first when none is.
+    public static func current(orBind make: @autoclosure () -> CoreMLGuard) -> CoreMLGuard {
         bound.withLock { slot in
             if let slot { return slot }
-            let made = untracked()
+            let made = make()
             slot = made
             return made
         }
     }
 
-    /// rvd binds `daemon(log:)` before its listeners start.
+    /// rvd binds `daemon(stateRoot:log:)` before its listeners start.
     public static func bind(_ guardian: CoreMLGuard) {
         bound.withLock { $0 = guardian }
     }
 
-    /// Disk precheck only, on the user caches volume.
-    public static func untracked() -> CoreMLGuard {
+    /// Disk precheck and the verified compiled-model cache under
+    /// `stateRoot`; no crash marker.
+    public static func untracked(stateRoot: URL?) -> CoreMLGuard {
         CoreMLGuard(
-            store: nil, disk: StatfsDiskSpace(), cacheVolume: cachesRoot(),
+            store: nil, disk: StatfsDiskSpace(), cacheVolume: cachesRoot(), stateRoot: stateRoot,
             purgeCoreMLCache: {}, log: { _ in })
     }
 
-    /// rvd's guard: marker and history under `~/Library/Caches/rv-laya/
-    /// coreml-guard`, cleared on orderly exit, plus purge of rvd's own e5rt
-    /// cache. Nothing is opened until the first Core ML use. A store that
-    /// cannot be opened degrades to untracked (logged): the judge still
+    /// rvd's guard: marker and history under `<stateRoot>/guard` (cleared on
+    /// orderly exit and SIGTERM/SIGINT), compiled models under
+    /// `<stateRoot>/models`, plus purge of rvd's own e5rt cache. Nothing is
+    /// opened until the first Core ML use. A store that cannot be opened (or
+    /// that another rvd holds) degrades to untracked, logged: the judge still
     /// loads, only crash-awareness is lost.
-    public static func daemon(log: @escaping @Sendable (String) -> Void) -> CoreMLGuard {
+    public static func daemon(stateRoot: URL?, log: @escaping @Sendable (String) -> Void) -> CoreMLGuard {
         let caches = cachesRoot()
         let processName = ProcessInfo.processInfo.processName
         return CoreMLGuard(
             makeStore: {
-                let store = caches.flatMap {
+                let store = stateRoot.flatMap {
                     FileCoreMLCrashStore(
-                        directory: $0.appendingPathComponent("rv-laya/coreml-guard", isDirectory: true),
+                        directory: $0.appendingPathComponent("guard", isDirectory: true),
                         clearOnExit: true)
                 }
-                if store == nil { log("rvd: Core ML crash marker unavailable; judge runs without crash fallback") }
+                if store == nil { log("rvd: Core ML crash marker unavailable or held by another rvd; judge runs without crash fallback") }
                 return store
             },
-            disk: StatfsDiskSpace(), cacheVolume: caches,
+            disk: StatfsDiskSpace(), cacheVolume: caches, stateRoot: stateRoot,
             purgeCoreMLCache: {
                 guard let caches else { return }
                 if !CoreMLCachePurge.purge(cachesRoot: caches, processName: processName) {
@@ -284,9 +316,10 @@ public struct StatfsDiskSpace: DiskSpaceProbe {
     }
 }
 
-/// Descriptor of the marker the exit handler clears; -1 when none.
+/// Descriptor of the marker the exit and signal handlers clear; -1 when none.
 private let exitMarkerFD = Atomic<Int32>(-1)
 
+/// Async-signal-safe: one lock-free atomic load and one `pwrite`.
 private func clearMarkerAtExit() {
     let fd = exitMarkerFD.load(ordering: .acquiring)
     guard fd >= 0 else { return }
@@ -294,11 +327,23 @@ private func clearMarkerAtExit() {
     _ = pwrite(fd, &zero, 1, 0)
 }
 
+/// SIGTERM/SIGINT: clear the marker, restore the default action and
+/// re-raise, so the process still dies of the signal (launchd sees the same
+/// exit status). Only async-signal-safe calls (`pwrite`, `signal`, `raise`).
+private let clearMarkerAndReraise: @convention(c) (Int32) -> Void = { signo in
+    clearMarkerAtExit()
+    signal(signo, SIG_DFL)
+    raise(signo)
+}
+
 /// Marker byte plus JSON crash history in one owner-only directory.
 ///
 /// The directory, the marker and the state file must be this user's, and
 /// none may be a symlink (refused, so the store cannot be aimed at another
-/// file). The state is replaced atomically (temp file + rename).
+/// file). The state is replaced atomically (temp file + rename). The marker
+/// is held under an exclusive `flock`: a second process gets no store (it
+/// runs untracked) and can neither read our marker as its own crash nor
+/// clear it under us. The lock dies with the process, so no pid is needed.
 public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
     static let markerName = "coreml-in-flight"
     static let stateName = "coreml-crashes.json"
@@ -306,16 +351,18 @@ public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
     private let fd: Int32
     private let stateURL: URL
 
-    /// nil when the directory or marker is unusable. `clearOnExit` clears the
-    /// marker in an `atexit` handler: an orderly `exit` while a prediction is
-    /// running is not a Core ML crash. An abort or signal skips it.
+    /// nil when the directory or marker is unusable or another process holds
+    /// the marker. `clearOnExit` clears the marker on orderly `exit` and on
+    /// SIGTERM/SIGINT: neither is a Core ML crash. An abort still leaves it.
     public init?(directory: URL, clearOnExit: Bool = false) {
         guard Self.prepare(directory) else { return nil }
         let marker = directory.appendingPathComponent(Self.markerName).path
         let fd = open(marker, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { return nil }
         var info = stat()
-        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else {
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
+              flock(fd, LOCK_EX | LOCK_NB) == 0
+        else {
             close(fd)
             return nil
         }
@@ -323,24 +370,33 @@ public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
         stateURL = directory.appendingPathComponent(Self.stateName)
         if clearOnExit {
             exitMarkerFD.store(fd, ordering: .releasing)
-            Self.registerExitHandler()
+            Self.registerExitHandlers()
         }
     }
 
     deinit {
-        // The exit handler must never write into a reused descriptor.
+        // The handlers must never write into a reused descriptor.
         _ = exitMarkerFD.compareExchange(expected: fd, desired: -1, ordering: .acquiringAndReleasing)
         close(fd)
     }
 
-    private static let exitHandler = Mutex(false)
+    private static let exitHandlers = Mutex(false)
 
-    private static func registerExitHandler() {
-        exitHandler.withLock { registered in
+    private static func registerExitHandlers() {
+        exitHandlers.withLock { registered in
             guard !registered else { return }
             registered = true
             atexit { clearMarkerAtExit() }
+            for signo in [SIGTERM, SIGINT] { installClearingHandler(signo) }
         }
+    }
+
+    /// Installs the clearing handler only over the default action: a
+    /// signal the process ignores or already handles is left as it was.
+    static func installClearingHandler(_ signo: Int32) {
+        let previous = signal(signo, clearMarkerAndReraise)
+        let raw = unsafeBitCast(previous, to: Int.self)
+        if raw != 0, raw != -1 { signal(signo, previous) }
     }
 
     public func previousRunCrashed() -> Bool {

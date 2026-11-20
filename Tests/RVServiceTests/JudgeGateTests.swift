@@ -540,6 +540,33 @@ struct JudgeInvalidLabelsTests {
             command: "ls", context: JudgeContext(), engine: .ft, bundle: dir, wait: nil)
         guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
     }
+
+    /// End to end through the real slot: a nearly full disk refuses the
+    /// load (review, never the packs-only allow), and the slot's cached
+    /// failure keeps refusing on the next request.
+    @Test(arguments: [JudgeEngine.ft, .laya])
+    func lowDiskLoadIsRefusedThenCachedRefused(engine: JudgeEngine) throws {
+        struct NearlyFull: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 1 << 20 }
+        }
+        let guardian = CoreMLGuard(
+            store: nil, disk: NearlyFull(), cacheVolume: URL(fileURLWithPath: "/"),
+            purgeCoreMLCache: {}, log: { _ in })
+        let slot = JudgeSlot(coreML: { guardian })
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-disk-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for attempt in ["load", "cached failure"] {
+            let run = JudgeRuntime.runJudge(
+                command: "ls", context: JudgeContext(), engine: engine, bundle: dir, wait: nil, slot: slot)
+            guard case .refused(let why) = run else {
+                Issue.record("\(attempt): expected .refused, got \(run)")
+                continue
+            }
+            #expect(why.contains("disk nearly full"), "\(attempt)")
+        }
+    }
 }
 #endif
 

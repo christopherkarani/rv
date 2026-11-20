@@ -2,6 +2,7 @@ import Foundation
 
 #if canImport(CoreML)
 import CoreML
+import CryptoKit
 #endif
 
 /// The judge's answer for one command: choice probabilities plus the
@@ -107,7 +108,8 @@ public struct LayaQuestions: Sendable {
 
 #if canImport(CoreML)
 /// Core ML binding of `CompiledModelStore`: compile and load with the
-/// compute units `coreML` chooses (CPU only after repeated Core ML crashes).
+/// compute units `coreML` chooses (CPU only after repeated Core ML crashes),
+/// caching verified copies under the guard's protected `modelRoot`.
 enum CompiledModelCache {
     static func load(package: URL, coreML: CoreMLGuard) throws -> MLModel {
         let configuration = MLModelConfiguration()
@@ -115,8 +117,11 @@ enum CompiledModelCache {
         case .cpuAndGPU: configuration.computeUnits = .cpuAndGPU
         case .cpuOnly: configuration.computeUnits = .cpuOnly
         }
+        if let caches = CoreMLGuard.cachesRoot() {
+            LegacyCompiledModels.sweep(root: caches.appendingPathComponent("rv-laya", isDirectory: true), now: Date())
+        }
         let store = CompiledModelStore<MLModel>(
-            root: CoreMLGuard.cachesRoot()?.appendingPathComponent("rv-laya", isDirectory: true),
+            root: coreML.modelRoot,
             coreML: coreML,
             version: ProcessInfo.processInfo.operatingSystemVersionString,
             compile: { package in
@@ -128,9 +133,23 @@ enum CompiledModelCache {
                 do { return try MLModel(contentsOf: compiled, configuration: configuration) } catch {
                     throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
                 }
-            }
+            },
+            digest: sha256Hex
         )
         return try store.model(package: package)
+    }
+
+    /// Streaming SHA-256 of one file (1 MiB reads); nil when unreadable.
+    static func sha256Hex(of url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            guard let chunk = try? handle.read(upToCount: 1 << 20) else { return nil }
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -154,6 +173,9 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         bundleDir: URL, questions: LayaQuestions = .guardQuestions, coreML: CoreMLGuard = .current
     ) throws {
         self.coreML = coreML
+        // Before any bundle work: a nearly full disk refuses (review), whatever
+        // else is wrong with the bundle.
+        try coreML.requireDiskSpace()
         actionLabels = try questions.actionLabels()
         self.questions = questions
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)

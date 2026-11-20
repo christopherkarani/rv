@@ -38,6 +38,18 @@ private final class FakeCoreML: @unchecked Sendable {
     }
 }
 
+/// Deterministic content digest (FNV-1a over the bytes); stands in for
+/// SHA-256 so the tests run without CryptoKit.
+private func contentDigest(_ url: URL) -> String? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    var hash: UInt64 = 0xcbf29ce484222325
+    for byte in data {
+        hash ^= UInt64(byte)
+        hash &*= 0x100000001b3
+    }
+    return String(hash, radix: 16)
+}
+
 private struct Fixture {
     let base: URL
     let root: URL
@@ -65,7 +77,8 @@ private struct Fixture {
         let coreML = self.coreML
         return CompiledModelStore(
             root: root, coreML: guardian, version: version,
-            compile: { try coreML.compile($0) }, load: { try coreML.load($0) })
+            compile: { try coreML.compile($0) }, load: { try coreML.load($0) },
+            digest: contentDigest)
     }
 
     func rootEntries() throws -> [String] {
@@ -105,6 +118,31 @@ struct CompiledModelStoreTests {
         try Data(repeating: 7, count: 10).write(to: f.root.appendingPathComponent("\(dir)/weights/weight.bin"))
         #expect(try f.store().model(package: f.package) == "model")
         #expect(f.coreML.compiles == 2)
+    }
+
+    @Test("a same-size edit (a planted model) fails its digest and is never loaded")
+    func tamperedEntryNeverLoads() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.store().model(package: f.package)
+        let dir = try #require(try f.rootEntries().first { $0.hasSuffix(".mlmodelc") })
+        try Data("evil!".utf8).write(to: f.root.appendingPathComponent("\(dir)/model.mil"))
+        #expect(try f.store().model(package: f.package) == "model")
+        #expect(f.coreML.compiles == 2)
+        #expect(f.recorder.all.contains { $0.contains("failed verification") })
+    }
+
+    @Test("an oversized or non-regular manifest is not read")
+    func oddManifestNotRead() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.root, withIntermediateDirectories: true)
+        let big = f.root.appendingPathComponent("big.manifest.json")
+        try Data(repeating: 32, count: CompiledModelStore<String>.maximumManifestBytes + 1).write(to: big)
+        #expect(CompiledModelStore<String>.readManifest(big) == nil)
+        let fifo = f.root.appendingPathComponent("fifo.manifest.json")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        #expect(CompiledModelStore<String>.readManifest(fifo) == nil)
     }
 
     @Test("an entry without its manifest (crash mid-install) is recompiled")
@@ -165,7 +203,7 @@ struct CompiledModelStoreTests {
         #expect(Set(before).isDisjoint(with: after))
     }
 
-    @Test("legacy entries are swept, another bundle's entry and foreign files are kept")
+    @Test("another bundle's entry and foreign files are kept")
     func sweepKeepsOtherBundles() throws {
         let f = try Fixture()
         defer { f.remove() }
@@ -173,16 +211,34 @@ struct CompiledModelStoreTests {
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         _ = try f.store().model(package: other)
         let otherEntries = try f.rootEntries()
-        let legacy = f.root.appendingPathComponent("a7cf96588a1d54f5.mlmodelc", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
-        let foreign = f.root.appendingPathComponent("coreml-guard", isDirectory: true)
+        let foreign = f.root.appendingPathComponent("guard", isDirectory: true)
         try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: true)
         _ = try f.store().model(package: f.package)
         let after = try f.rootEntries()
-        #expect(!after.contains("a7cf96588a1d54f5.mlmodelc"))
-        #expect(after.contains("coreml-guard"))
+        #expect(after.contains("guard"))
         #expect(Set(otherEntries).isSubset(of: after))
         #expect(after.count == otherEntries.count + 3)
+    }
+
+    @Test("legacy copies in the old caches dir are removed only after a week")
+    func legacySweepWaitsAWeek() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let legacy = f.base.appendingPathComponent("legacy-caches/rv-laya", isDirectory: true)
+        let names = ["a7cf96588a1d54f5.mlmodelc", "a7cf9658-1d54f5.mlmodelc", "a7cf9658-1d54f5.mlmodelc.manifest.json"]
+        for name in names {
+            try FileManager.default.createDirectory(
+                at: legacy.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let foreign = ["coreml-guard", "notes.txt.mlmodelc", "A7CF.mlmodelc"]
+        for name in foreign {
+            try FileManager.default.createDirectory(
+                at: legacy.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        LegacyCompiledModels.sweep(root: legacy, now: Date().addingTimeInterval(6 * 86_400))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: legacy.path).count == 6)
+        LegacyCompiledModels.sweep(root: legacy, now: Date().addingTimeInterval(8 * 86_400))
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: legacy.path)) == Set(foreign))
     }
 
     @Test("a symlinked cache root is not used; the model still loads from the compile output")

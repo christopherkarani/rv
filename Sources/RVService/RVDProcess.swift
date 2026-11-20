@@ -163,7 +163,7 @@ enum RVDLifecycle {
     /// touch Core ML before this. Its lines go to stderr (rvd.log).
     static func bindCoreMLGuard() {
         #if canImport(CoreML)
-        CoreMLGuard.bind(.daemon { message in
+        CoreMLGuard.bind(.daemon(stateRoot: JudgeRuntime.coreMLStateRoot()) { message in
             try? FileHandle.standardError.write(contentsOf: Data(RVDLogFile.line(message).utf8))
         })
         #endif

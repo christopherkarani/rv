@@ -181,10 +181,38 @@ struct CoreMLGuardTests {
         let store = FakeCrashStore()
         let guardian = makeGuard(store, free: CoreMLGuard.minimumFreeBytes - 1)
         var ran = false
-        #expect(throws: CoreMLDiskSpaceError.self) { try guardian.run { ran = true } }
+        #expect(throws: CoreMLDiskSpaceError.self) { try guardian.run(checkingDisk: true) { ran = true } }
         #expect(ran == false)
         #expect(store.writes.contains(true) == false)
         #expect(guardian.status.diskLow == true)
+    }
+
+    @Test("a prediction on a loaded model skips the disk check")
+    func predictionSkipsDiskCheck() throws {
+        let store = FakeCrashStore()
+        let guardian = makeGuard(store, free: CoreMLGuard.minimumFreeBytes - 1)
+        #expect(try guardian.run { 7 } == 7)
+        #expect(store.writes == [false, true, false])
+    }
+
+    @Test("the crash purge runs outside the guard lock (it may take seconds)")
+    func purgeRunsUnlocked() throws {
+        let store = FakeCrashStore()
+        store.setInFlight(true)
+        let box = Mutex<CoreMLGuard?>(nil)
+        let reentered = Mutex(false)
+        let guardian = CoreMLGuard(
+            store: store, disk: FakeDisk(free: 100 << 30), cacheVolume: nil,
+            purgeCoreMLCache: {
+                // Re-entering the guard would deadlock if the purge held its lock.
+                if let again = box.withLock({ $0 }) { _ = again.status }
+                reentered.withLock { $0 = true }
+            },
+            log: { _ in }, now: { t0 })
+        box.withLock { $0 = guardian }
+        #expect(guardian.computeUnits == .cpuAndGPU)
+        #expect(reentered.withLock { $0 })
+        #expect(store.state.crashes == [t0])
     }
 
     @Test("the disk refusal says why and what to do")
@@ -238,24 +266,57 @@ struct FileCoreMLCrashStoreTests {
     func markerSurvives() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let first = try #require(FileCoreMLCrashStore(directory: dir))
-        #expect(first.previousRunCrashed() == false)
-        first.setInFlight(true)
-        let second = try #require(FileCoreMLCrashStore(directory: dir))
-        #expect(second.previousRunCrashed() == true)
-        second.setInFlight(false)
+        // Each store is released before the next opens, as one process
+        // exits before the next starts (the marker is flocked while held).
+        do {
+            let first = try #require(FileCoreMLCrashStore(directory: dir))
+            #expect(first.previousRunCrashed() == false)
+            first.setInFlight(true)
+        }
+        do {
+            let second = try #require(FileCoreMLCrashStore(directory: dir))
+            #expect(second.previousRunCrashed() == true)
+            second.setInFlight(false)
+        }
         let third = try #require(FileCoreMLCrashStore(directory: dir))
         #expect(third.previousRunCrashed() == false)
+    }
+
+    @Test("a second holder gets no store, so it can neither miscount nor clear the marker")
+    func markerIsExclusive() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        do {
+            let first = try #require(FileCoreMLCrashStore(directory: dir))
+            first.setInFlight(true)
+            #expect(FileCoreMLCrashStore(directory: dir) == nil)
+            first.setInFlight(false)
+        }
+        #expect(FileCoreMLCrashStore(directory: dir) != nil)
+    }
+
+    @Test("the SIGTERM/SIGINT handler replaces only the default action")
+    func clearingHandlerOnlyOverDefault() {
+        let signo = SIGUSR2
+        defer { signal(signo, SIG_DFL) }
+        signal(signo, SIG_IGN)
+        FileCoreMLCrashStore.installClearingHandler(signo)
+        let afterIgnored = signal(signo, SIG_DFL)
+        #expect(unsafeBitCast(afterIgnored, to: Int.self) == unsafeBitCast(SIG_IGN, to: Int.self))
+        FileCoreMLCrashStore.installClearingHandler(signo)
+        let afterDefault = signal(signo, SIG_DFL)
+        let raw = unsafeBitCast(afterDefault, to: Int.self)
+        #expect(raw != 0 && raw != unsafeBitCast(SIG_IGN, to: Int.self))
     }
 
     @Test("state round-trips and a corrupt file reads as empty")
     func stateRoundTrip() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = try #require(FileCoreMLCrashStore(directory: dir))
         let state = CoreMLCrashState(crashes: [t0], cpuOnlyUntil: t0.addingTimeInterval(day))
-        store.saveState(state)
-        #expect(try #require(FileCoreMLCrashStore(directory: dir)).loadState() == state)
+        do { try #require(FileCoreMLCrashStore(directory: dir)).saveState(state) }
+        let store = try #require(FileCoreMLCrashStore(directory: dir))
+        #expect(store.loadState() == state)
         try Data("{not json".utf8).write(to: dir.appendingPathComponent(FileCoreMLCrashStore.stateName))
         #expect(store.loadState() == CoreMLCrashState())
     }
