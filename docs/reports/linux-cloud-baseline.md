@@ -69,9 +69,41 @@ several durable writes under file locks (denial ledger, pending row,
 unlock code, audit; see `HookDispatch.swift` and `HookDeadline.swift`).
 
 That is far inside the 7 s budget today, but it grows with the number of
-agents denied at once, which is the cloud-agent case. Candidate work for
-M3: one append per deny instead of several rename-and-fsync rewrites, or
-moving the non-decision writes off the reply path.
+agents denied at once, which is the cloud-agent case.
+
+### Fix 1: pending-approval rows (M3)
+
+`rvd`'s own phase timing (`HookTiming`, logged for every call in a local
+experiment) put a deny at concurrency 8 at 112 ms p50, of which 104 ms was
+the reply phase. Split further, the unlock-code mint took 0.5 ms and the
+pending-approval row 14 ms, growing with the store (9 ms over the first
+200 denies, 14 ms over the last 200). `PendingApprovalStore` decoded the
+whole file, then re-encoded and rewrote it, on every ask, under an
+exclusive lock, and also rewrote it unchanged when an ask reused its
+waiting row. Parallel asks queued behind that.
+
+The store now keeps what it last read or wrote, keyed by the file's stamp
+(inode, size, mtime, ctime), as `AllowOnceStore` already did: a repeated
+ask writes nothing, a fresh ask appends one line, and any other change
+re-encodes only the rows that changed. Another writer's save changes the
+stamp and is read on the next call. `PendingApprovalStoreScalingTests`
+pins this (an ask at 236 rows: 16.8 ms before, 1.0 ms after, debug build).
+
+| Run (release) | p99 before | p99 after | Calls/s before | Calls/s after |
+| --- | --- | --- | --- | --- |
+| socket, concurrency 1 | 31.3 ms | 12.0 ms | 120 | 178 |
+| socket, concurrency 8 | 190.0 ms | 56.7 ms | 213 | 395 |
+| `rv hook`, concurrency 1 | 52.1 ms | 25.9 ms | 44 | 54 |
+| `rv hook`, concurrency 8 | 206.3 ms | 74.5 ms | 130 | 188 |
+| denies only, socket, concurrency 8 (p50) | 112 ms | 41 ms | | |
+
+Still to do: a deny at concurrency 8 is 41 ms p50 against 9 ms for an
+allow. What remains on the reply path is the audit append with `fsync`
+and the 200-row denial ledger rewrite (`blocks.jsonl`), each under its own
+lock, plus analytics counters rewritten with `fsync` on every decision
+(in a detached task, so off the reply but not off the disk). rvd RSS after
+10,000 calls at concurrency 8 rose from 65 MB to 79 MB with the higher
+throughput; a soak run should confirm it levels off.
 
 ### Corpus agreement
 

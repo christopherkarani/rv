@@ -98,7 +98,7 @@ def load_corpus(root: str) -> list[Case]:
 # ---------------------------------------------------------------- rvd
 
 class Daemon:
-    def __init__(self, rvd: str, workdir: str):
+    def __init__(self, rvd: str, workdir: str, extra_env: dict[str, str] | None = None):
         self.home = os.path.join(workdir, "home")
         self.runtime = os.path.join(workdir, "run")
         self.cwd = os.path.join(workdir, "project")
@@ -116,11 +116,12 @@ class Daemon:
             "LANG": "C.UTF-8",
         }
         self._init_project()
+        rvd_env = dict(self.env, **(extra_env or {}))
         self._stderr = open(self.stderr_path, "wb")
         self.proc = subprocess.Popen(
             [rvd, "--idle-exit-seconds", "3600"],
             stdin=subprocess.DEVNULL, stdout=self._stderr, stderr=self._stderr,
-            env=self.env, start_new_session=True,
+            env=rvd_env, start_new_session=True,
         )
         deadline = time.monotonic() + 20
         while not os.path.exists(self.socket):
@@ -300,6 +301,8 @@ def main() -> int:
     ap.add_argument("--filter", help="only corpus files whose name contains this")
     ap.add_argument("--max-p99-ms", type=float, help="fail when p99 latency exceeds this")
     ap.add_argument("--json", help="write the full summary here")
+    ap.add_argument("--rvd-env", action="append", default=[], metavar="KEY=VALUE",
+                    help="extra environment for rvd only (repeatable)")
     ap.add_argument("--keep", action="store_true", help="keep the throwaway HOME and rvd stderr")
     args = ap.parse_args()
 
@@ -314,7 +317,13 @@ def main() -> int:
     rv, rvd = find_bins(args.bin_dir)
 
     workdir = tempfile.mkdtemp(prefix="rvr-", dir="/tmp")
-    daemon = Daemon(rvd, workdir)
+    extra_env = {}
+    for item in args.rvd_env:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise SystemExit(f"--rvd-env needs KEY=VALUE, got {item!r}")
+        extra_env[key] = value
+    daemon = Daemon(rvd, workdir, extra_env)
     try:
         client = RvClient(rv, daemon, args.timeout) if args.client == "rv" else SocketClient(daemon, args.timeout, rvd)
         session = str(uuid.uuid4())
