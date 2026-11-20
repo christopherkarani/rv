@@ -120,23 +120,37 @@ Two per-decision writes did far more work than they needed:
   every deny. It now keeps what this process last wrote (rows as read back
   from their lines, and the lines), keyed by the file's stamp, as the
   pending store does. While the file is still that, a deny appends one
-  line. The file is rewritten, from the cached lines, only when it would
-  pass 250 rows (200 plus `compactionSlack`, 50), holds a row past the
-  7-day window, or another writer changed it. That writer's rows are read
-  and kept, and a torn or unreadable line is rewritten away, never
-  appended after. Reads are unchanged: newest first, at most 200 rows,
-  none older than 7 days; only the file holds up to 250 rows between
-  rewrites. Side effect: `rv audit forward` restarts its `blocks.jsonl`
-  cursor when the file is replaced, which used to happen on every deny and
-  now happens once per 50.
+  line. The file is rewritten only when it would pass 250 rows (200 plus
+  `compactionSlack`, 50), holds a row past the 7-day window, or another
+  writer changed it. In the first two cases the new file is built from the
+  cached lines; after another writer, the file is read back with `load()`
+  and every row re-encoded. That writer's rows are kept, and a torn or
+  unreadable line is rewritten away, never appended after. `DenialLedger`
+  reads (`rv blocks`) are unchanged: newest first, at most 200 rows, none
+  older than 7 days; only the file holds up to 250 rows between rewrites.
+  Two side effects of the larger file. `rv audit`, its OCSF export and
+  `rv audit forward` read `blocks.jsonl` raw (`AuditLedger.events`), not
+  through `DenialLedger`, so they can now see up to 50 more, older rows;
+  most are dropped again as duplicates of the same deny in `audit.jsonl`,
+  and only rows without a chained twin (written before the chain recorded
+  denies, or whose audit write failed) show up. And `rv audit forward`
+  restarts its `blocks.jsonl` cursor when the file is replaced, which used
+  to happen on every deny and now happens on each rewrite: once per 50
+  denies at the cap, when a row ages out of the 7-day window, and after
+  another writer (an rv process evaluating without rvd) changed the file,
+  twice if that writer replaced it.
 - `AnalyticsCoordinator` rewrote `analytics-counters.json` (atomic
   replace with `fsync`) twice per decision: once for the count, once for
   a pack list that had not changed. An unchanged pack list now writes
   nothing, and counts reach the file at most once a second
-  (`persistDelay`). A crash or kill can lose up to a second of counts, the
-  same kind of loss the existing best-effort `try?` writes and the
-  detached per-decision task already accept. Pack changes, host notes and
-  the daily flush still write at once. rvd's RSS after 10,000 socket calls
+  (`persistDelay`). rvd's own exits (idle, or its binary replaced on
+  disk) write pending counts first (`persistPendingNow`, waiting at most
+  2 s). A crash or kill can lose up to a second of counts, and so can
+  SIGTERM: rvd has no SIGTERM handler, so a stop, restart or upgrade by
+  launchd or systemd is that same loss. It is the kind of loss the
+  existing best-effort `try?` writes and the detached per-decision task
+  already accept. A deferred write never creates the config directory.
+  Pack changes, host notes and the daily flush still write at once. rvd's RSS after 10,000 socket calls
   at concurrency 8 fell from 84 MB to 64 MB, which suggests the
   per-decision tasks had been queuing on the coordinator actor.
 
@@ -144,10 +158,13 @@ Two per-decision writes did far more work than they needed:
 there is one rewrite per 50 rows past the cap with reads capped
 throughout, a row past 7 days leaves the file on the next append, another
 writer's rewrite or append is kept (also while racing an old-style
-writer), a torn line is rewritten away, and an append costs the same at 5
-and 180 rows. `AnalyticsCounterPersistenceTests` pins the counters: 50
-decisions leave the file untouched, counts land after the delay and
-survive a restart, a pack change and the daily flush write at once.
+writer), and a torn line is rewritten away. It checks writes by inode and
+line count, not wall time: the per-deny cost is measured by the
+`hook-replay.py` runs below. `AnalyticsCounterPersistenceTests` pins the
+counters: 50 decisions leave the file untouched, counts land after the
+delay, `persistPendingNow` writes them at once and they survive a
+restart, a deferred write does not recreate a removed directory, and a
+pack change and the daily flush write at once.
 
 Before is `08b1f53` (Fix 1), after is `fc2cd23`, both release builds, run
 back to back for each row, in two rounds. Two other agents were building

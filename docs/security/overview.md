@@ -670,7 +670,7 @@ evaluation **[C48]**.
 | MCP OAuth tokens (`rv mcp connect`) | macOS Keychain; Linux a 0600 file under the config directory **[C170]** | 0600 (Linux) |
 | Allow-once rows | store a redacted command and the cwd **[C171]** | as JSONL stores |
 | Pending approvals | store the full proposed action **[C172]** | as JSONL stores |
-| Denial ledger `blocks.jsonl` | timestamp, host, tool, rule, category, path, observed; no argv; 200 rows or 7 days; on unless `blocks.enabled` is false **[C173]** | as JSONL stores |
+| Denial ledger `blocks.jsonl` | timestamp, host, tool, rule, category, path, observed; no argv; 200 rows or 7 days (the file may hold up to 50 more rows between rewrites; `rv blocks` reads at most 200); on unless `blocks.enabled` is false **[C173]** | as JSONL stores |
 | Judge log `judge-log.jsonl` (macOS) | scores and a 16-hex-character unsalted SHA-256 prefix of the command **[C174]** | no explicit mode |
 | Analytics identity and counters | `~/.config/rv/analytics-*` **[C175]** | no explicit mode |
 | `rvd` log | rvd's stderr. When stderr is discarded (launchd on macOS) it goes to `~/Library/Logs/rv/rvd.log` (macOS) or `~/.local/state/rv/rvd.log` (Linux); under systemd it stays on stderr, so the journal keeps it **[C176]** | file: 0700 dir, 0600 file, symlinks refused |
