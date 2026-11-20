@@ -189,6 +189,17 @@ struct HTTPEgressTests {
         #expect(selectHTTPAddresses([public6, public4]) == .pinned(public4))
     }
 
+    /// The admission GET refuses what the egress proxy refuses: a platform
+    /// endpoint in public space, the 6to4 relay anycast, and the IPv6
+    /// documentation and IETF-assignment blocks.
+    @Test(arguments: ["168.63.129.16", "192.88.99.1", "3fff::1", "2001:20::1"])
+    func admissionRefusesWhatTheEgressProxyRefuses(_ text: String) throws {
+        let address = try #require(parseIPv4(text) ?? parseIPv6(text))
+        #expect(address.isPublicGlobal == false)
+        let public4 = try #require(HTTPIPAddress(ipv4: [1, 1, 1, 1]))
+        #expect(selectHTTPAddresses([public4, address]) == .forbidden(address))
+    }
+
     @Test func publicGETIsAllowedAndUnsafeTargetsAreDenied() throws {
         let allowed = try httpAction(url: "https://example.com/a")
         guard case .allowed = AgentAuthorization.decide(action: .http(allowed), policy: .empty) else {
