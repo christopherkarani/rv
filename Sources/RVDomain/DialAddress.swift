@@ -46,8 +46,11 @@ package struct DialRange: Sendable, Hashable, CustomStringConvertible {
     }
 
     package var description: String {
-        let text = network.count == 4 ? network.map(String.init).joined(separator: ".") : egressPresentIPv6(network)
-        return "\(text)/\(prefixLength)"
+        switch network.count {
+        case 4: return "\(network.map(String.init).joined(separator: "."))/\(prefixLength)"
+        case 16: return "\(egressPresentIPv6(network))/\(prefixLength)"
+        default: return "malformed"
+        }
     }
 }
 
@@ -55,8 +58,7 @@ package enum DialAddress {
     /// The judgment for a 4- or 16-byte address read literally. Any other
     /// length is `never`.
     package static func judgment(of address: [UInt8]) -> DialJudgment {
-        guard address.count == 4 || address.count == 16 else { return .never }
-        return range(holding: address)?.judgment ?? .publicUnicast
+        range(holding: address)?.judgment ?? .publicUnicast
     }
 
     /// The judgment for the address a dial reaches: an IPv6 form with a
@@ -67,8 +69,10 @@ package enum DialAddress {
     }
 
     /// The range that decides `address`: the strictest that holds it, then
-    /// the narrowest. Nil when no range holds it (public unicast).
+    /// the narrowest. Nil when no range holds it (public unicast). An
+    /// address that is neither 4 nor 16 bytes is held by `malformed`.
     package static func range(holding address: [UInt8]) -> DialRange? {
+        guard address.count == 4 || address.count == 16 else { return malformed }
         var decided: DialRange?
         for range in ranges where range.contains(address) {
             guard let current = decided else {
@@ -85,10 +89,16 @@ package enum DialAddress {
     }
 
     /// The first `never` range, in table order, that shares any address
-    /// with the network.
+    /// with the network. A network that is neither 4 nor 16 bytes meets
+    /// `malformed`.
     package static func neverRange(overlapping network: [UInt8], prefixLength: Int) -> DialRange? {
-        ranges.first { $0.judgment == .never && $0.overlaps(network: network, prefixLength: prefixLength) }
+        guard network.count == 4 || network.count == 16 else { return malformed }
+        return ranges.first { $0.judgment == .never && $0.overlaps(network: network, prefixLength: prefixLength) }
     }
+
+    /// Refuses input of any length but 4 or 16 bytes, so malformed input
+    /// fails closed instead of reading as public. Not a table row.
+    package static let malformed = DialRange(network: [], prefixLength: 0, judgment: .never, reason: "malformed address")
 
     /// The IPv4 address a dial to this IPv6 address reaches, for the forms
     /// whose embedding is fixed: IPv4-mapped `::ffff:0:0/96`,

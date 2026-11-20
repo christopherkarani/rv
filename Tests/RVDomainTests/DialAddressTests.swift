@@ -203,7 +203,13 @@ import Testing
             let bytes = [UInt8](repeating: 0x26, count: length)
             #expect(DialAddress.judgment(of: bytes) == .never)
             #expect(DialAddress.judgment(followingEmbeddedIPv4: bytes) == .never)
+            #expect(DialAddress.range(holding: bytes) == DialAddress.malformed)
+            for prefix in [0, length * 8] {
+                #expect(DialAddress.neverRange(overlapping: bytes, prefixLength: prefix) == DialAddress.malformed)
+            }
         }
+        #expect(DialAddress.malformed.judgment == .never)
+        #expect(DialAddress.malformed.description == "malformed")
     }
 
     /// `allowed_ips` names the first `never` row, in table order, that an

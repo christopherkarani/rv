@@ -205,6 +205,12 @@ public struct EgressAllowedIPs: Sendable, Hashable {
         networks = parsed.sorted()
     }
 
+    /// Skips the parse-time refusal, so tests can show `covers` refuses a
+    /// `never` address on its own. Internal: nothing outside tests uses it.
+    init(unvalidated networks: [EgressCIDR]) {
+        self.networks = networks.sorted()
+    }
+
     /// Canonical spellings, for listings, reviews and risk reports.
     public var entries: [String] { networks.map(\.description) }
 

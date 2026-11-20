@@ -125,6 +125,18 @@ import Testing
         }
     }
 
+    /// The dial-time half: even a list that somehow spans `never` space
+    /// (parsing refuses one) never covers a `never` address.
+    @Test func coversRefusesNeverAddressesEvenInsideTheList() throws {
+        let list = EgressAllowedIPs(unvalidated: [try EgressCIDR(parsing: "0.0.0.0/0"), try EgressCIDR(parsing: "::/0")])
+        for open in ["10.0.5.20", "8.8.8.8", "fd12::1", "2606:4700::1"] {
+            #expect(list.covers(try #require(EgressIPAddress(parsing: open))), "\(open)")
+        }
+        for never in ["127.0.0.1", "169.254.169.254", "0.0.0.0", "::1", "fe80::1", "fd00:ec2::254", "64:ff9b::a00:1"] {
+            #expect(list.covers(try #require(EgressIPAddress(parsing: never))) == false, "\(never)")
+        }
+    }
+
     /// `::ffff:10.0.5.20` is the IPv4 host 10.0.5.20 and is judged by the
     /// IPv4 list; an IPv4 list never matches a native IPv6 address.
     @Test func mappedIPv6IsJudgedAsItsIPv4Address() throws {
