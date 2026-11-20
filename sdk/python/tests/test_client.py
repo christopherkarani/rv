@@ -654,7 +654,7 @@ def test_method_coverage_is_total():
     assert set(protocol.METHODS) == set(client_module.CURATED_METHODS) | set(
         client_module.RAW_ONLY_METHODS
     )
-    assert client_module.RAW_ONLY_METHODS == frozenset({"hookEvaluate"})
+    assert client_module.RAW_ONLY_METHODS == frozenset({"hookEvaluate", "policyStatus"})
     curated = {
         "evaluate": "evaluate",
         "explain": "explain",

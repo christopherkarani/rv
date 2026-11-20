@@ -179,6 +179,16 @@ struct AuditLedgerTests {
         #expect(enforced.detail["would_be"] == nil)
     }
 
+    @Test func blockRowCarriesItsSessionWhenRecorded() throws {
+        let line = Lines.block.replacingOccurrences(
+            of: #""host":"claude","#, with: #""host":"claude","session":"0b7f3c2e","#)
+        let event = try #require(AuditLedger.event(fromLine: Substring(line), source: .blocks))
+        #expect(event.detail["session"] == "0b7f3c2e")
+        // Rows without one keep their detail (and so their OCSF uid).
+        let legacy = try #require(AuditLedger.event(fromLine: Substring(Lines.block), source: .blocks))
+        #expect(legacy.detail["session"] == nil)
+    }
+
     @Test func chainedObservedCopyDropsOnlyTheMatchingObservedBlocksRow() throws {
         let time = Date(timeIntervalSince1970: 1_791_900_000)
         func event(_ kind: AuditEventKind, _ source: AuditLedger.Source) -> AuditEvent {

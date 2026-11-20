@@ -14,32 +14,38 @@ import Foundation
 /// are deliberately absent.
 /// Split on top-level `&&`, `||`, `;`, `&`, `|`, and newlines outside
 /// quotes (laya-guard chain handling: each segment is judged on its own).
+/// Scans unicode scalars, not Characters: a grapheme cluster joins a
+/// separator to its neighbour (`"\r\n"`, `"\u{600};"`), but the shell
+/// reads the byte. A lone `\r` splits too, as the engine tokenizer does.
 func shellChainSegments(_ raw: String) -> [String] {
     var segments: [String] = []
-    var current = ""
+    var current = String.UnicodeScalarView()
     var inSingle = false
     var inDouble = false
-    var chars = Array(raw)
+    let scalars = Array(raw.unicodeScalars)
     var i = 0
-    while i < chars.count {
-        let ch = chars[i]
+    func cut() {
+        segments.append(String(current))
+        current = String.UnicodeScalarView()
+    }
+    while i < scalars.count {
+        let ch = scalars[i]
         if ch == "'" && !inDouble { inSingle.toggle() }
         else if ch == "\"" && !inSingle { inDouble.toggle() }
         else if !inSingle && !inDouble {
-            if ch == ";" || ch == "\n" { segments.append(current); current = ""; i += 1; continue }
+            if ch == ";" || ch == "\n" || ch == "\r" { cut(); i += 1; continue }
             if ch == "&" || ch == "|" {
-                if i + 1 < chars.count && chars[i + 1] == ch {
-                    segments.append(current); current = ""; i += 2; continue
-                }
-                // A single `|` is a pipe: the receiving segment is a
-                // command of its own and must pass on its own.
-                segments.append(current); current = ""; i += 1; continue
+                // `&&`/`||` take two scalars; a single `|` is a pipe: the
+                // receiving segment is a command of its own and must pass
+                // on its own.
+                let doubled = i + 1 < scalars.count && scalars[i + 1] == ch
+                cut(); i += doubled ? 2 : 1; continue
             }
         }
         current.append(ch)
         i += 1
     }
-    segments.append(current)
+    cut()
     return segments.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
 }
 
@@ -55,14 +61,17 @@ public enum SafeCommandLane {
         // unquoted ones, so any newline surviving in a segment is
         // quoted — not a plain command. Checked on the raw segment,
         // before whitespace normalization can erase it.
-        if raw.contains("\n") || raw.contains("\r") { return false }
+        // Scalars, not Characters, here and below: `">\u{301}"` is one
+        // Character that is not `>`, yet the shell reads the `>` byte.
+        if raw.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return false }
         let text = raw.split(whereSeparator: { $0 == " " || $0 == "\t" })
             .joined(separator: " ")
         guard !text.isEmpty else { return false }
-        if metacharacters.contains(where: { text.contains($0) }) { return false }
+        if text.unicodeScalars.contains(where: { metacharacters.contains($0) }) { return false }
         // The shell strips quotes, so flag/path scans run dequoted:
         // `go test "-exec" /tmp/evil` must scan as `-exec`.
-        let scanned = text.filter { $0 != "'" && $0 != "\"" }
+        var scanned = ""
+        scanned.unicodeScalars.append(contentsOf: text.unicodeScalars.filter { $0 != "'" && $0 != "\"" })
         if regexSearch(riskyFlagPattern, in: scanned) { return false }
         if regexSearch(sensitivePathPattern, in: scanned) { return false }
         guard patterns.contains(where: { regexSearch("^(?:" + $0 + ")$", in: text) }) else { return false }
@@ -107,7 +116,7 @@ public enum SafeCommandLane {
         return true
     }
 
-    private static let metacharacters: [Character] = [";", "&", "|", "`", "$", "<", ">", "(", ")", "{", "}", "\\", "\n", "\r"]
+    private static let metacharacters: Set<Unicode.Scalar> = [";", "&", "|", "`", "$", "<", ">", "(", ")", "{", "}", "\\", "\n", "\r"]
 
     private static let riskyFlagPattern =
         #"(?:^|\s)--?(?:exec|toolexec|vettool|pre|hostname-bin|config|output|out-dir|target-dir|scratch-path|prefix|dir|cwd|workspace|workspaces|pyargs|rootdir|upload-pack|receive-pack|script-shell|node-options|userconfig|globalconfig)(?:[=\s]|$)"#

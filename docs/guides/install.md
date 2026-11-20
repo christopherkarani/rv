@@ -275,8 +275,10 @@ It is the safe way to learn what rv will refuse in your team's workflow.
    ```
 
    Observed rows carry `"observed": true` and `"would_be": "deny"` or
-   `"ask"` in `rv blocks --json` (an `observed` column in text). In the
-   audit log they are `command.observed` records.
+   `"ask"` in `rv blocks --json` (an `observed` column in text), and
+   `"session"`, the agent session id, when the host sent one (a
+   `session=` column in text). In the audit log they are
+   `command.observed` records.
 4. Ask why any one of them would block:
 
    ```bash

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVHistory
+import RVHooks
 import RVPolicy
 @testable import RVService
 import Synchronization
@@ -66,6 +67,47 @@ struct GatedEffectTests {
         #expect(peek.effects.isEmpty)
         let apply = await Self.decide(.apply, Self.packDeny, mode: .enforce)
         #expect(apply.effects == [try #require(Self.denialRow(apply.result))])
+    }
+
+    @Test("the hook's session id rides on the denial row; command text never does")
+    func denialRowCarriesTheHookSession() async throws {
+        let session = try #require(SessionID(validating: "0b7f3c2e-claude-session"))
+        let enforced = await HookSessionAttribution.$current.withValue(session) {
+            await Self.decide(.apply, Self.packDeny, mode: .enforce)
+        }
+        guard case .denialRow(let row)? = enforced.effects.last else {
+            Issue.record("denial row expected, got \(enforced.effects)")
+            return
+        }
+        #expect(row.session == session.rawValue)
+        #expect(row.path.contains("Documents") == false)
+
+        let observed = await HookSessionAttribution.$current.withValue(session) {
+            await Self.decide(.apply, Self.packDeny, mode: .observe)
+        }
+        guard case .denialRow(let observedRow)? = observed.effects.last else {
+            Issue.record("observed denial row expected, got \(observed.effects)")
+            return
+        }
+        #expect(observedRow.session == session.rawValue)
+
+        let unbound = await Self.decide(.apply, Self.packDeny, mode: .enforce)
+        guard case .denialRow(let plain)? = unbound.effects.last else {
+            Issue.record("denial row expected")
+            return
+        }
+        #expect(plain.session == nil, "the TTY and other doors name no session")
+
+        // A host id that is not an opaque token (here: command text) is dropped.
+        let hostile = try #require(SessionID(validating: "rm -rf ~/Documents"))
+        let dropped = await HookSessionAttribution.$current.withValue(hostile) {
+            await Self.decide(.apply, Self.packDeny, mode: .enforce)
+        }
+        guard case .denialRow(let droppedRow)? = dropped.effects.last else {
+            Issue.record("denial row expected")
+            return
+        }
+        #expect(droppedRow.session == nil)
     }
 
     @Test("enforce judge review: judge log precedes the denial row; peek drops only the denial row")

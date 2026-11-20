@@ -46,7 +46,7 @@ enum WorkspaceTUICommand {
         case .success(let value):
             endpoint = value
         case .failure(let error):
-            throw ValidationError(WorkspaceCommandRun.text(error))
+            throw ValidationError(WorkspaceCommandRun.ensureFailureText(error))
         }
         guard case .success(let session) = LiveWorkspaceTUISession.connect(
             endpoint, project: project, hostExecutable: host

@@ -67,6 +67,10 @@ func env(
     return environment
 }
 
+/// What a rendered hook command starts with before its interpreter:
+/// `/usr/bin/env ` on macOS (`AdapterCommand`), nothing elsewhere.
+let adapterLauncher = AdapterCommand.launchesThroughEnv ? AdapterCommand.envLauncher + " " : ""
+
 func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
     try FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(),
@@ -248,7 +252,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         let rvHooks = try #require(pre[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks[0]["type"] as? String == "command")
-        #expect(rvHooks[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.codexHook)")
+        #expect(rvHooks[0]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(layout.codexHook)")
         #expect(rvHooks[0]["timeout"] as? Int == 18)
         #expect(rvHooks[0]["statusMessage"] as? String == "RV")
         #expect(pre[1]["matcher"] as? String == "Bash")
@@ -376,17 +380,17 @@ private func fixtureLoginHome() throws -> URL {
         let before = try #require(hooksRoot["beforeShellExecution"] as? [[String: Any]])
         #expect(before.count == 2)
         #expect(before[0]["command"] as? String == "other-guard evaluate")
-        #expect(before[1]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
+        #expect(before[1]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(before[1]["timeout"] as? Int == 18)
         #expect(before[1]["failClosed"] as? Bool == true)
         #expect(hooksRoot["PreToolUse"] == nil)
         let preToolUse = try #require(hooksRoot["preToolUse"] as? [[String: Any]])
         #expect(preToolUse.count == 1)
-        #expect(preToolUse[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
+        #expect(preToolUse[0]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(preToolUse[0]["failClosed"] as? Bool == true)
         let reads = try #require(hooksRoot["beforeReadFile"] as? [[String: Any]])
         #expect(reads.count == 1)
-        #expect(reads[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
+        #expect(reads[0]["command"] as? String == "\(adapterLauncher)/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(reads[0]["failClosed"] as? Bool == true)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
@@ -454,7 +458,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(pre.count == 5)
         #expect(pre.map { $0["matcher"] as? String } == AntigravityHooksMerge.matchers)
         let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
-        #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv /usr/bin/python3 -I -S \(adapterPath)")
+        #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv \(adapterLauncher)/usr/bin/python3 -I -S \(adapterPath)")
         #expect(inner[0]["timeout"] as? Int == 18)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
@@ -1611,7 +1615,7 @@ private func expectedClaudeHookCommand(
     rvPath: String = "/tmp/rv-bin/rv",
     layout: OwnedPaths
 ) -> String {
-    "RV_BINARY=\(rvPath) /usr/bin/python3 -I -S \(claudeAdapterPath(layout))"
+    "RV_BINARY=\(rvPath) \(adapterLauncher)/usr/bin/python3 -I -S \(claudeAdapterPath(layout))"
 }
 
 @Test func setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() throws {
@@ -1683,7 +1687,7 @@ private func expectedClaudeHookCommand(
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
                 .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
         )
-        #expect(command == "RV_BINARY=/tmp/rv-bin/rv /usr/bin/python3 -I -S \(adapter)")
+        #expect(command == "RV_BINARY=/tmp/rv-bin/rv \(adapterLauncher)/usr/bin/python3 -I -S \(adapter)")
         let timeout = try #require(
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
                 .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int

@@ -606,7 +606,17 @@ note "stage: $STAGE (rvd $("$STAGE/rvd" --version 2>/dev/null))"
 "$ROOT/Scripts/release-assets.sh" "$STAGE" "$WORK/served" linux-x86_64 > "$WORK/assets.log" 2>&1
 check install "Scripts/release-assets.sh packages the stage" $? "$(tail -3 "$WORK/assets.log")"
 ( cd "$WORK/served" && sha256sum -- * > SHA256SUMS )
-cp "$ROOT/install.sh" "$WORK/install.sh"
+# No release key signed this SHA256SUMS, so the copy unpins the release key
+# (as Scripts/install-smoke.sh --local does); InstallScriptTests prove the pin.
+awk '
+  open { if (index($0, "\"")) open = 0; next }
+  index($0, "release_ssh_allowed_signers=\"") == 1 {
+    print "release_ssh_allowed_signers=\"\""
+    if (index(substr($0, 30), "\"") == 0) open = 1
+    next
+  }
+  { print }' "$ROOT/install.sh" > "$WORK/install.sh"
+grep -qx 'release_ssh_allowed_signers=""' "$WORK/install.sh" || die "cannot unpin release_ssh_allowed_signers in install.sh"
 PORT_ASSETS="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
 ( cd "$WORK/served" && exec python3 -m http.server "$PORT_ASSETS" --bind 127.0.0.1 ) > "$WORK/assets-http.log" 2>&1 &
 PIDS+=("$!")
@@ -670,7 +680,7 @@ leaked="$(find /tmp -maxdepth 1 -name 'rv-install.*' -user "$OWNER" 2>/dev/null 
 [[ "$staged" == "0" && -z "$leaked" ]]
 check install "install.sh removes its download directory" $? "staged: $staged; left $leaked($(du -sch $leaked 2>/dev/null | tail -1 | cut -f1))"
 grep -q "release signatures are not verified on Linux" "$WORK/install.log"
-check install "install.sh warns that Linux release signatures are not verified" $?
+check install "install.sh with the release key unpinned warns that Linux release signatures are not verified" $?
 [[ "$install_status" == "0" ]]
 check install "install.sh's own rv setup completes once /run/user/<uid> exists" $? \
   "exit $install_status: $(grep -m1 'rv setup failed' "$WORK/install.log"); rvd.log: $(grep -m1 'XDG_RUNTIME_DIR' "$OWNER_HOME/.local/state/rv/rvd.log" 2>/dev/null)"

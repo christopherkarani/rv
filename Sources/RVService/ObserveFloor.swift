@@ -30,7 +30,7 @@ enum ObserveFloor {
     /// File door: the one path's verdict says it.
     static func holds(_ result: EvaluationResult) -> Bool {
         switch result.decision {
-        case .indeterminate(.selfProtection):
+        case .indeterminate(.selfProtection), .indeterminate(.observeUnanalyzable):
             true
         case .deny(let deny):
             ruleIDs.contains(deny.ruleID) || hitsFloorTarget(result.analysis)
@@ -80,12 +80,18 @@ enum ObserveFloor {
         let words = Set([command.rawValue, unquoted, result.matchingView.rawValue].flatMap { text in
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
-        return words.contains { rvConfig.filePathHit($0) != nil || namesWiring($0, home: home, cwd: cwd) }
+        // rv's config is secret: any word naming it holds, read or not.
+        if words.contains(where: { rvConfig.filePathHit($0) != nil }) { return true }
+        // Wiring files hold no secret, and an observe host already allows
+        // these verbs unchecked everywhere else: only a write there holds.
+        if ObserveReadProof.proves(command, analysis: result.analysis) { return false }
+        return words.contains { namesWiring($0, home: home, cwd: cwd) }
     }
 
     /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
-    /// door enforces writes there, so an observe host must too. Reads are
-    /// allowed under enforce anyway.
+    /// door enforces writes there, so an observe host must too. The enforce
+    /// branch also runs the judge, so a command proven to only read
+    /// (`ObserveReadProof`) is not escalated for naming one.
     /// The word is normalised first (`~`/`$HOME`/`~user` expanded, joined
     /// to the cwd, `.`/`..` collapsed). Host settings files at any scope
     /// count: a project one can disable hooks for every host.
@@ -97,15 +103,85 @@ enum ObserveFloor {
     }
 
     /// Observe only: nil unless the command stops rvd or writes rv's
-    /// install. Then an allow becomes "run it in Terminal"; anything else
-    /// (a deny, an indeterminate) is kept, so the floor never weakens.
+    /// install, in its own text or in program text a shell or interpreter
+    /// is fed from a literal pipe, here-string or heredoc (`echo
+    /// 'launchctl bootout …' | sh`). Then an allow becomes "run it in
+    /// Terminal"; anything else (a deny, an indeterminate) is kept, so the
+    /// floor never weakens. A scan out of budget, or texts needing more than
+    /// `readingCap` readings, fail closed the way `unanalyzableFloor` does.
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
-            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
+        let scan = scanOpaqueProgram(command)
+        let inner = scan.innerTexts.filter { sameBytes($0, command.rawValue) == false }
+        guard scan.exhausted == false,
+              lifecycleReadingCount([command.rawValue] + inner, cap: readingCap) <= readingCap
+        else {
+            return unanalyzable(result)
+        }
+        let texts = [command] + inner.map { ShellCommand(rawValue: $0) }
+        let hits = texts.contains { text in
+            RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: runningRVDaemonPIDs)
+                || RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd)
+        }
+        guard hits else { return nil }
         return floored(result)
     }
+
+    /// Observe only, after the other floors: a command that runs a program
+    /// rv cannot see (`runsUnanalyzable`) is enforced. An allow, or an
+    /// "unanalyzable" indeterminate, becomes "run it in Terminal" under
+    /// its own rule id; it never becomes a hard deny. Any other verdict (a
+    /// deny, a self-protection hold) is kept as is, with its row, rule id,
+    /// allow-once path and judge log, like `floored`.
+    static func unanalyzableFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult? {
+        guard runsUnanalyzable(result, command: command) else { return nil }
+        return unanalyzable(result)
+    }
+
+    /// Readings the lifecycle floor makes of a command and its fed texts
+    /// (each text, then each of its list commands; an interpreter's string
+    /// literals are texts too): a 1500-line python script with two strings
+    /// a line takes about 6000. The texts' total size is already bounded
+    /// by the scan's work budget; this bounds the per-reading overhead.
+    /// Past it nothing is read: it fails closed.
+    static let readingCap = 8192
+
+    private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
+        switch result.decision {
+        case .allow:
+            break
+        case .indeterminate(let reason) where unanalyzableReasons.contains(reason):
+            break
+        case .deny, .indeterminate:
+            return result
+        }
+        return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
+    }
+
+    /// The stop and install floors read the command's text, so an encoded
+    /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
+    /// passes them, stops rvd, and leaves every later call unchecked. So a
+    /// command holds when what rv cannot read can take a command position
+    /// (`runsOpaqueProgram`: a dynamic command word, a shell or interpreter
+    /// reading stdin that is not from literal producers, a runner whose
+    /// verb is a shell or a lifecycle verb), when its program or git
+    /// subcommand is unresolved (`invocationIsOpaque`: a dynamic `eval`, a
+    /// variable head, a git alias or extension), or when it is too large or
+    /// too costly to analyze. A literal verb with dynamic arguments (`xargs
+    /// rm`) is not floored here; the lexical floors above read its words,
+    /// though not its operands' values. The program checks read the
+    /// command again because an earlier pack deny hides them:
+    /// `$(echo <b64> | base64 -d)` reports only an out-of-repo write.
+    static func runsUnanalyzable(_ result: EvaluationResult, command: ShellCommand) -> Bool {
+        if invocationIsOpaque(command) || runsOpaqueProgram(command) { return true }
+        if case .indeterminate(let reason) = result.decision { return unanalyzableReasons.contains(reason) }
+        return false
+    }
+
+    private static let unanalyzableReasons: Set<IndeterminateReason> = [
+        .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
+    ]
 
     /// File door: a write or edit of rv's install, typed or resolved.
     static func lifecycleFloor(

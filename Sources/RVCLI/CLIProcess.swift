@@ -43,6 +43,10 @@ enum CLIProcess: Sendable {
         /// `rv host mode`). Nil assumes rvd reachable, so `ownerAuthOutcome`
         /// alone decides and tests never probe rvd or read a terminal.
         var daemonDownConfirmation: DaemonDownOwnerConfirmation.Seams?
+        /// Stand-in for rvd's `policyStatus` answer (`rv policy status`,
+        /// `--wait`). Nil in an installed context reads as rvd unavailable,
+        /// so tests never reach the live daemon.
+        var policyStatusSource: PolicyStatusSource?
 
         init(
             home: HomeDirectory? = nil,

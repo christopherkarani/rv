@@ -146,6 +146,69 @@ import Testing
         #expect(verdict.reason == "trust manifest is present but rejected, so hooks reject every rvd")
     }
 
+    // MARK: - Other component roles (doctor checks each installed one)
+
+    /// The live failure: the manifest pins the workspace host to a
+    /// development cdhash at a protected path, but the installed host is a
+    /// different build. The reason names both builds.
+    @Test func workspaceHostDevelopmentPinRejectsAnotherBuild() throws {
+        let pinned = String(repeating: "cd", count: 20)
+        let json = #"[{"role":"workspaceHost","requirement":"cdhash H\"\#(pinned)\"","developmentCDHash":"\#(pinned)","developmentExecutablePath":"/usr/bin/true"}]"#
+        let trust = try ProtectedPeerTrustConfiguration.parse(Data(json.utf8))
+        let (dir, host) = try Self.fixture(["-o", "runtime"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let verdict = try #require(
+            ProtectedPeerTrustConfiguration.HookTrustSource.manifest(trust).evaluateRole(.workspaceHost, atPath: host)
+        )
+        #expect(verdict.source == .manifest)
+        #expect(verdict.satisfied == false)
+        let reason = try #require(verdict.reason)
+        #expect(reason.hasPrefix(
+            "manifest pins rv-workspace-host cdhash \(pinned) at /usr/bin/true; installed rv-workspace-host is cdhash "
+        ))
+    }
+
+    @Test func productionRoleNamesItsBinary() throws {
+        let (dir, cli) = try Self.fixture(["-o", "runtime"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let verdict = try #require(
+            ProtectedPeerTrustConfiguration.HookTrustSource
+                .manifest(try Self.productionManifest(role: "cli"))
+                .evaluateRole(.cli, atPath: cli)
+        )
+        #expect(verdict.satisfied == false)
+        #expect(verdict.reason == "manifest requires Developer ID dev.rv.rvd (team 5V273URY46); installed rv-cli is ad-hoc signed")
+    }
+
+    /// Only a role the manifest names is judged: no manifest (or an invalid
+    /// one, which has its own doctor row) and an absent role give no verdict.
+    @Test func roleVerdictOnlyForARoleInAValidManifest() throws {
+        let (dir, host) = try Self.fixture(["-o", "runtime"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let serviceOnly = ProtectedPeerTrustConfiguration.HookTrustSource.manifest(try Self.productionManifest())
+        #expect(serviceOnly.evaluateRole(.workspaceHost, atPath: host) == nil)
+        #expect(ProtectedPeerTrustConfiguration.HookTrustSource.siblingPin.evaluateRole(.workspaceHost, atPath: host) == nil)
+        #expect(ProtectedPeerTrustConfiguration.HookTrustSource.invalid.evaluateRole(.workspaceHost, atPath: host) == nil)
+    }
+
+    /// Mirrors `onlyTheServiceEntryDecides` for another role: a matching
+    /// entry for a different role must not satisfy this one.
+    @Test(.enabled(if: Self.hardenedPlatformFixture != nil, "needs a hardened root-owned platform binary"))
+    func onlyTheRolesOwnEntryDecides() throws {
+        let fixture = try #require(Self.hardenedPlatformFixture)
+        let hash = fixture.identity.cdHash.map { String(format: "%02x", $0) }.joined()
+        let other = String(repeating: "ef", count: 20)
+        func pin(_ role: String, _ value: String) -> String {
+            #"{"role":"\#(role)","requirement":"cdhash H\"\#(value)\"","developmentCDHash":"\#(value)","developmentExecutablePath":"\#(fixture.path)"}"#
+        }
+        let trust = try ProtectedPeerTrustConfiguration.parse(
+            Data("[\(pin("service", hash)),\(pin("workspaceHost", other))]".utf8)
+        )
+        let source = ProtectedPeerTrustConfiguration.HookTrustSource.manifest(trust)
+        #expect(source.evaluateRole(.workspaceHost, atPath: fixture.path)?.satisfied == false)
+        #expect(source.evaluateRole(.service, atPath: fixture.path)?.satisfied == true)
+    }
+
     @Test func injectedManifestPathSelectsTrustSource() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-trust-source-\(UUID().uuidString)", isDirectory: true)

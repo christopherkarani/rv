@@ -57,7 +57,9 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession {
     public func reconnect() -> Result<Void, WorkspaceTUIError> {
         let target: WorkspaceEndpoint
         if let project, let hostExecutable {
-            switch WorkspaceHosts.ensure(project: project, executable: hostExecutable, timeout: 15) {
+            // Raw mode: a stderr line would garble the screen, so a host
+            // that outlives SIGKILL is not reported here.
+            switch WorkspaceHosts.ensure(project: project, executable: hostExecutable, timeout: 15, report: { _ in }) {
             case .success(let endpoint):
                 target = endpoint
             case .failure(.control(.incompatibleProtocol)):
