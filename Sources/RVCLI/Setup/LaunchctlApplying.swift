@@ -42,8 +42,10 @@ protocol LaunchctlApplying {
 enum LaunchdJobProcess: Equatable {
     case running(pid: Int32)
     case notRunning
-    /// `launchctl print` failed or said neither.
+    /// `launchctl print` succeeded but said neither.
     case unknown
+    /// `launchctl print` could not run or exited non-zero (job not found).
+    case printFailed
 
     /// Parses `launchctl print` output: the job's own `state` and `pid`
     /// lines are indented by one tab; nested sections use more.
@@ -172,10 +174,10 @@ struct ProcessLaunchctl: LaunchctlApplying {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        guard (try? runExecutable(process)) != nil else { return .unknown }
+        guard (try? runExecutable(process)) != nil else { return .printFailed }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return .unknown }
+        guard process.terminationStatus == 0 else { return .printFailed }
         return LaunchdJobProcess.parse(String(decoding: data, as: UTF8.self))
     }
 

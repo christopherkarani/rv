@@ -69,8 +69,8 @@ enum ServiceRestart {
 
     /// From SSH: success only once launchd reports rvd running with the
     /// same pid across `stableFor` (it did not crash on start). When
-    /// `launchctl print` cannot tell, the restart is reported as requested,
-    /// not verified.
+    /// `launchctl print` works but shows no state, the restart is reported
+    /// as requested, not verified; when print fails, as a failure.
     private static func outsideTheDesktopSession(
         _ env: SetupEnvironment,
         verb: String,
@@ -94,6 +94,13 @@ enum ServiceRestart {
                 stderr: "rv service \(verb): launchctl print did not report rvd's state; " + unreachable,
                 exitCode: 0
             )
+        case .printFailed:
+            return SetupOutcome(
+                stdout: "",
+                stderr: "rv service \(verb): launchctl print \(domain)/\(SetupRun.launchAgentLabel) failed "
+                    + "(launchd job not found or print failed); " + unreachable,
+                exitCode: EX_UNAVAILABLE
+            )
         case .notRunning:
             throw SetupError.serviceNotAnswering(.launchd)
         }
@@ -102,14 +109,15 @@ enum ServiceRestart {
     static let stableFor: TimeInterval = 2
 
     /// Polls `launchctl print` until rvd runs with one pid for `stableFor`,
-    /// up to `ServiceReadiness.deadline`. `.unknown` as soon as print
-    /// cannot tell; `.notRunning` when the deadline passes.
+    /// up to `ServiceReadiness.deadline`. `.unknown` or `.printFailed` as
+    /// soon as print cannot tell; `.notRunning` when the deadline passes.
     private static func launchdKeepsRvdRunning(_ env: SetupEnvironment, domain: String) -> LaunchdJobProcess {
         var waited: TimeInterval = 0
         while waited < ServiceReadiness.deadline {
-            switch env.launchctl.jobProcess(domain: domain, label: SetupRun.launchAgentLabel) {
-            case .unknown:
-                return .unknown
+            let process = env.launchctl.jobProcess(domain: domain, label: SetupRun.launchAgentLabel)
+            switch process {
+            case .unknown, .printFailed:
+                return process
             case .running(let pid):
                 env.sleep(stableFor)
                 waited += stableFor

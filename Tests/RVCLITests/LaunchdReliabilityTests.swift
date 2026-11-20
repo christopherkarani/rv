@@ -407,6 +407,21 @@ func restart_fromSSH_rvdNotStayingUp_fails(processes: [LaunchdJobProcess]) throw
     }
 }
 
+/// launchctl print failing (job not found) is a failure, not an unverified
+/// success.
+@Test func restart_fromSSH_launchctlPrintFails_saysSoAndFails() throws {
+    try withTempHome { home, _, _ in
+        let launchctl = ScriptedLaunchctl()
+        launchctl.aqua = false
+        launchctl.loaded = ["gui/501"]
+        launchctl.jobProcesses = [.printFailed]
+        let outcome = ServiceRestart.run(scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog()))
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr.contains("launchctl print gui/501/dev.rv.evaluate failed (launchd job not found or print failed)"))
+    }
+}
+
 @Test func launchdJobProcess_parsesTheJobsOwnStateAndPid() {
     let running = "gui/501/dev.rv.evaluate = {\n\tactive count = 1\n\tstate = running\n\tpid = 913\n"
         + "\tendpoints = {\n\t\t\"dev.rv.evaluate\" = {\n\t\t\tstate = active\n\t\t}\n\t}\n}\n"
