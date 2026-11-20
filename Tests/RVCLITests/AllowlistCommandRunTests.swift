@@ -115,6 +115,32 @@ struct AllowlistCommandRunTests {
         }
     }
 
+    /// The config directory is a regular file, so allowlist.toml cannot be
+    /// written: a plain message and exit 1, not a bare rethrown error.
+    @Test func addAndRemove_unwritableConfigDirectory() async throws {
+        let home = try isolatedHome()
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(
+            at: directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: directory)
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
+            var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
+            await #expect(throws: ExitCode(1)) {
+                try await add.run()
+            }
+            var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
+            await #expect(throws: ExitCode(1)) {
+                try await remove.run()
+            }
+        }
+        #expect(out.stderr == """
+            rv allowlist add: could not write allowlist.toml
+            rv allowlist remove: could not write allowlist.toml
+
+            """)
+    }
+
     @Test func addCommand_emptyReasonAndTTYAndSuccess() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {

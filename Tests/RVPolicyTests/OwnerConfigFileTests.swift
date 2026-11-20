@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 import RVHistory
 import Testing
 @testable import RVPolicy
@@ -207,6 +208,40 @@ struct OwnerConfigFileTests {
         try textFile(file).update(audit: { _, _ in event("text", direction: .tightening) }) { $0 = "after" }
         #expect(try String(contentsOf: file, encoding: .utf8) == "after")
         #expect(try posixMode(file) == 0o600)
+    }
+
+    /// Once the new file is renamed into place it is in effect, so a
+    /// directory sync that fails after the rename does not fail the write,
+    /// and the audit trail records the change as made, not as failed.
+    @Test func update_aFileReplacedWithoutADirectorySyncIsWritten() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("config.toml")
+        try Data("before".utf8).write(to: file)
+        var store = textFile(file)
+        store.replace = { data, url in
+            #expect(OwnerOnlyFile.write(data, to: url))
+            return .replacedDirectoryNotSynced
+        }
+        try store.update(audit: { _, _ in event("text") }) { $0 = "after" }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "after")
+        #expect(changes(root).map(\.decision) == [.info])
+    }
+
+    /// A file left as it was is `unwritable`, and the event gets its
+    /// `failed` copy.
+    @Test func update_aFileNotReplacedIsUnwritableAndRecordedAsFailed() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("config.toml")
+        try Data("before".utf8).write(to: file)
+        var store = textFile(file)
+        store.replace = { _, _ in .notReplaced }
+        #expect(throws: OwnerConfigWriteError.unwritable) {
+            try store.update(audit: { _, _ in event("text") }) { $0 = "after" }
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "before")
+        #expect(changes(root).map(\.decision) == [.info, .failed])
     }
 
     private func textFile(_ url: URL) -> OwnerConfigFile<String> {

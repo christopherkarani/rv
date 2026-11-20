@@ -99,6 +99,8 @@ struct AllowlistAdd: AsyncParsableCommand {
             ctx.writeStdout("added \(DisplayedText.field(ruleID.rawValue))\n")
         } catch OwnerConfigWriteError.unreadable {
             try ctx.fail("rv allowlist add: invalid allowlist.toml\n", exitCode: 2)
+        } catch OwnerConfigWriteError.unwritable {
+            try ctx.fail("rv allowlist add: could not write allowlist.toml\n")
         } catch {
             try ctx.failOwnerGate(error, command: "allowlist add", subject: .allowlistEntry)
         }
@@ -147,6 +149,8 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             ctx.writeStdout("added exact command\n")
         } catch OwnerConfigWriteError.unreadable {
             try ctx.fail("rv allowlist add-command: invalid allowlist.toml\n", exitCode: 2)
+        } catch OwnerConfigWriteError.unwritable {
+            try ctx.fail("rv allowlist add-command: could not write allowlist.toml\n")
         } catch {
             try ctx.failOwnerGate(error, command: "allowlist add-command", subject: .allowlistEntry)
         }
@@ -185,6 +189,8 @@ struct AllowlistRemove: AsyncParsableCommand {
             ctx.writeStdout("removed \(removed)\n")
         } catch OwnerConfigWriteError.unreadable {
             try ctx.fail("rv allowlist remove: invalid allowlist.toml\n", exitCode: 2)
+        } catch OwnerConfigWriteError.unwritable {
+            try ctx.fail("rv allowlist remove: could not write allowlist.toml\n")
         } catch {
             try ctx.failOwnerGate(error, command: "allowlist remove", subject: .allowlistEntry)
         }

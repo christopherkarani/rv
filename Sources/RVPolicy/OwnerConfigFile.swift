@@ -28,7 +28,7 @@ public enum OwnerConfigWriteError: Error, Sendable, Equatable {
 /// 3. commits the change event write-ahead (`ConfigChangeAudit.commit`), so
 ///    a loosening change the audit log cannot hold is not written;
 /// 4. runs `beforeWrite`, then replaces the file atomically with one that is
-///    owner-only from creation (`OwnerOnlyFile.write`), in a directory made
+///    owner-only from creation (`OwnerOnlyFile.replace`), in a directory made
 ///    owner-only (0700) before the lock is taken.
 struct OwnerConfigFile<Document> {
     var url: URL
@@ -39,6 +39,8 @@ struct OwnerConfigFile<Document> {
     var parse: (Data) -> Document?
     /// The bytes for a document; nil fails the write.
     var render: (Document) -> Data?
+    /// Puts the bytes in place; a seam for tests.
+    var replace: (Data, URL) -> OwnerOnlyFile.Replacement = { OwnerOnlyFile.replace($0, at: $1) }
 
     /// `lockURL` defaults to `<file>.lock`.
     init(
@@ -71,7 +73,10 @@ struct OwnerConfigFile<Document> {
             guard let data = render(after) else { throw OwnerConfigWriteError.unwritable }
             func apply() throws {
                 try beforeWrite()
-                guard OwnerOnlyFile.write(data, to: url) else { throw OwnerConfigWriteError.unwritable }
+                // Once renamed, the new file is in effect even when the
+                // directory sync after it fails, so the write (and its audit
+                // row) succeeded; only `.notReplaced` left the old file.
+                guard replace(data, url) != .notReplaced else { throw OwnerConfigWriteError.unwritable }
             }
             guard let event = audit(before, after) else { return try apply() }
             try ConfigChangeAudit.commit(event, configDirectory: configDirectory, apply)
@@ -94,7 +99,7 @@ struct OwnerConfigFile<Document> {
     }
 
     /// Creates the directory and makes it owner-only, as it already is when
-    /// rv made it: `OwnerOnlyFile.write` only sets the mode on a directory
+    /// rv made it: `OwnerOnlyFile.replace` only sets the mode on a directory
     /// it creates.
     private func prepareDirectory() throws(OwnerConfigWriteError) {
         do {
