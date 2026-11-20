@@ -58,6 +58,11 @@ So:
 | `swift build -c release`, with or without the variable | no |
 | `Scripts/release.sh` | no, and it refuses to run with the variable set |
 
+Checked on Linux: `RV_TEST_OWNER_PRESENCE=1 swift build -c release
+--product rvd` gives an rvd whose `--version` is plain and which carries
+none of the markers below; the same variable on a debug build gives one
+that carries all three, stripped or not.
+
 The variable at run time does nothing in a build without the feature: the
 code that reads it is not compiled. `TestOwnerPresenceTests` checks that
 rvd's checker stays `unix_chkpwd` with the variable set in a normal build.
