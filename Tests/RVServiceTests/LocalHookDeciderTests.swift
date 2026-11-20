@@ -109,6 +109,45 @@ struct LocalHookDeciderTests {
         #expect(reply == rvd)
     }
 
+    /// A config.json flipping between enforce and observe must never get
+    /// an observed would-be deny past the enforce comparison: the mode that
+    /// decides the comparison is the one the evaluation itself read, not a
+    /// separate read a writer can flip in between. (Before the fix about a
+    /// third of these decides came back a final allow.)
+    @Test func guardModeFlipsNeverFinalizeAnObservedDeny() async throws {
+        // A sensitive Read: a final deny under enforce, an observed allow
+        // (which must escalate) under observe.
+        let denied = claudeFile("Read", path: "/Users/x/.ssh/id_rsa", cwd: "/tmp")
+        let enforced = await (try LocalHookFixture(guardMode: "enforce")).decider
+            .decide(host: .claude, stdin: denied)
+        guard case .final(let deny) = enforced, deny.stdout.isEmpty == false else {
+            Issue.record("expected a final enforce deny, got \(enforced)")
+            return
+        }
+
+        let fixture = try LocalHookFixture(guardMode: "enforce")
+        let config = RVPolicyPaths.configDirectory(home: fixture.home).appendingPathComponent("config.json")
+        let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
+        let observe = Data(#"{"guard":{"mode":"observe"}}"#.utf8)
+        let stop = UnfairLock(false)
+        let flipper = Thread {
+            var flip = false
+            while stop.withLock({ $0 }) == false {
+                try? (flip ? observe : enforce).write(to: config, options: .atomic)
+                flip.toggle()
+            }
+        }
+        flipper.start()
+        defer { stop.withLock { $0 = true } }
+        for _ in 0..<200 {
+            let local = await fixture.decider.decide(host: .claude, stdin: denied)
+            guard local == enforced || local == .escalate(.observe) else {
+                Issue.record("a mode flip let a would-be deny through: \(local)")
+                return
+            }
+        }
+    }
+
     @Test func observeAllowIsFinalOnlyWhenEnforceAllowsToo() async throws {
         let fixture = try LocalHookFixture(guardMode: "observe")
         let allowed = claudeBash("ls", cwd: fixture.workspace)

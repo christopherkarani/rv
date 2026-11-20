@@ -102,12 +102,11 @@ package struct LocalHookDecider: Sendable {
         }
         let built = session()
         let now = clock()
-        let ledger = LedgerHost.hook(host)
-        let mode = JudgeRuntime.effectiveGuardMode(
-            home: home, host: ledger, environment: [:], config: GuardConfig.read(home: home))
         let live = await run(host: host, stdin: stdin, session: built, now: now, environment: [:])
         guard case .final = live.outcome else { return live.outcome }
-        if mode == .observe {
+        // The mode the live pass itself read, never a second read of the
+        // config that a concurrent writer could flip in between.
+        if live.guardMode != .enforce {
             // The enforce verdict for the same call, written nowhere.
             let enforced = await run(
                 host: host, stdin: stdin, session: built, now: now,
@@ -121,6 +120,8 @@ package struct LocalHookDecider: Sendable {
     private struct Run {
         let outcome: LocalHookOutcome
         let effects: [GatedEffect]
+        /// The guard mode the evaluation read; nil when none ran.
+        let guardMode: GuardMode?
     }
 
     /// One pass of rvd's hook door with probe ports. `environment` stands
@@ -138,6 +139,9 @@ package struct LocalHookDecider: Sendable {
         let ledger = LedgerHost.hook(host)
         let world = HookEvaluateWorld(
             evaluate: { command, cwd in
+                let inputs = EvaluationInputs.gather(
+                    home: home, cwd: cwd, environment: environment, host: ledger)
+                probe.recordGuardMode(inputs.guardMode)
                 let decided = await gated.decideVerdict(
                     .apply,
                     GatedEvaluate.makeRequest(command: command, home: home),
@@ -154,19 +158,18 @@ package struct LocalHookDecider: Sendable {
                     host: ledger,
                     tool: .bash,
                     previewsWouldBe: false,
-                    inputs: EvaluationInputs.gather(
-                        home: home, cwd: cwd, environment: environment, host: ledger)
+                    inputs: inputs
                 )
                 probe.record(.shell(decided.result, cwd: cwd), effects: decided.effects)
                 return decided.result
             },
             evaluateFile: { action, cwd in
+                let mode = JudgeRuntime.effectiveGuardMode(
+                    home: home, host: ledger, environment: environment,
+                    config: GuardConfig.read(home: home))
+                probe.recordGuardMode(mode)
                 let decided = gated.decideFile(
-                    action, home: home, cwd: cwd, host: ledger, now: now,
-                    guardMode: JudgeRuntime.effectiveGuardMode(
-                        home: home, host: ledger, environment: environment,
-                        config: GuardConfig.read(home: home))
-                )
+                    action, home: home, cwd: cwd, host: ledger, now: now, guardMode: mode)
                 probe.record(.file(decided.result), effects: decided.effects)
                 return decided.result
             },
@@ -184,7 +187,7 @@ package struct LocalHookDecider: Sendable {
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)
         let classified = probe.classify(Self.reply(wire))
-        return Run(outcome: classified.outcome, effects: classified.effects)
+        return Run(outcome: classified.outcome, effects: classified.effects, guardMode: probe.guardMode)
     }
 
     /// The reply rvd builds from a wire (`HookDoor`).
@@ -204,6 +207,7 @@ private final class LocalHookProbe: JudgePort, Sendable {
 
     private struct State: Sendable {
         var escalation: LocalHookEscalation?
+        var guardMode: GuardMode?
         var door: Door?
         var effects: [GatedEffect] = []
     }
@@ -214,6 +218,15 @@ private final class LocalHookProbe: JudgePort, Sendable {
         state.withLock { state in
             if state.escalation == nil { state.escalation = reason }
         }
+    }
+
+    /// The guard mode the evaluation read.
+    func recordGuardMode(_ mode: GuardMode) {
+        state.withLock { $0.guardMode = mode }
+    }
+
+    var guardMode: GuardMode? {
+        state.withLock { $0.guardMode }
     }
 
     func record(_ door: Door, effects: [GatedEffect]) {
