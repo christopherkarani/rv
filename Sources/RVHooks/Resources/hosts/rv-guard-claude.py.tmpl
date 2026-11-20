@@ -6,21 +6,25 @@ agent retries afterwards, so rv's policy `ask` blocks (leftover-ask-as-
 permit: host Allow would run the tool with no RV approval).
 
 The one host ask is rv's infrastructure ask: rv could not check the call
-at all (rvd unreachable, slow or dropped — rv's own native ask — or the
-whole rv process past RV_HOOK_TIMEOUT_S). There is no rv verdict to
-bypass, so Claude Code's permission prompt lets the human decide, and the
-agent cannot answer it. Only in the permission modes listed in
-_HUMAN_PROMPT_MODES; bypassPermissions, dontAsk and a missing or unknown
-permission_mode block instead. Install problems and unusable rv output
-still block.
+at all (rvd unreachable, slow or dropped — rv's own native ask, with
+exactly the C hook's text — or the whole rv process past
+RV_HOOK_TIMEOUT_S). There is no rv verdict to bypass, so Claude Code's
+permission prompt lets a person decide. It is forwarded only when all of
+these hold, and blocks otherwise:
+- RV_HOOK_WHEN_DOWN is not "deny";
+- the hook request's permission_mode is one of _HUMAN_PROMPT_MODES;
+- Claude Code says the session is attended (_session_attended).
+Install problems, unusable rv output and any other native ask block.
 
 Extra hookSpecificOutput keys can fail-open a deny — wrapper-owned JSON
 uses documented fields only. Allow is empty stdout exit 0. Deny and ask
 are documented Claude permissionDecision JSON exit 0 (never passthrough
-rv stdout).
+rv stdout). A decision that cannot be written exits 2, Claude's blocking
+exit.
 """
 
 import json
+import os
 import subprocess
 import sys
 import unicodedata
@@ -32,21 +36,39 @@ RV_HOOK_TIMEOUT_S = 15
 _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
 _BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
 _ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
-_INFRA_ASK_PREFIX = (
-    "rv could not check this call, and might have blocked it, so Claude Code is asking you. "
-    "Approve only if you expected it. "
+_INFRA_ASK_TEXT = (
+    "rv could not check this call (%s). An agent can cause this by stopping or "
+    "overloading rvd. Approve only if you expected it. %s"
 )
+_SUBJECT_MAX = 1000
+
+# rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
+# Swift twin HookDaemonFallback) words each down class, with the layer the
+# prompt names. A native ask with any other text blocks.
+_DOWN_LAYERS = {
+    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.":
+        "rvd is not reachable",
+    "RV daemon did not answer in time. Retry; if it persists run `rv doctor`.":
+        "rvd did not answer in time",
+    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`.":
+        "the connection to rvd dropped",
+}
 
 # Claude Code permission modes that put a hook `ask` to a person: Manual
 # (sent as "default"), plan, acceptEdits, and auto. Hooks reference: "In
 # auto mode, a PreToolUse hook's "ask" normally sends the tool call to the
 # permission prompt, and the classifier doesn't decide it." Probed on
-# Claude Code 2.1.328 (claude -p, nobody to answer): acceptEdits did not
-# auto-accept a hook ask on Write, and a `Bash` allow rule did not
-# override it; both were denied. bypassPermissions skips prompts and
-# dontAsk auto-denies them; any other or missing value is treated like
-# those.
+# Claude Code 2.1.328 (claude -p, nobody to answer): in default, plan,
+# acceptEdits and auto the hook ask was denied and the command did not
+# run, and a `Bash` allow rule did not override it. bypassPermissions
+# skips prompts and dontAsk auto-denies them; any other or missing value
+# is treated like those.
 _HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")
+
+# Interactive entry points, consulted only when Claude Code does not set
+# CLAUDE_CODE_SESSION_ATTENDED. `claude -p` and Agent SDK hosts set
+# sdk-cli / sdk-ts / sdk-py (2.1.328 sends sdk-cli and ATTENDED=0).
+_ATTENDED_ENTRYPOINTS = ("cli", "claude-desktop", "claude-vscode")
 
 
 def _missing_reason():
@@ -155,21 +177,25 @@ def _guard(raw):
     tool = _canonical(envelope.get("tool_name"), ("Bash",) + _FILE_TOOLS)
     if tool != "Bash" and tool not in _FILE_TOOLS and isinstance(tool, str):
         return {"action": "allow"}
-    return _resolve(_spawn_rv_hook("claude", raw), envelope)
+    return _resolve(_spawn_rv_hook("claude", raw), envelope, tool)
 
 
-def _resolve(mapped, envelope):
+def _resolve(mapped, envelope, tool):
     if mapped["action"] == "allow":
         return mapped
     if mapped["action"] == "unchecked":
-        # rv could not check the call: the human decides in Claude Code's
-        # prompt when this mode shows one; otherwise it blocks.
-        if _host_prompts_human(envelope.get("permission_mode")):
+        # rv could not check the call: a person decides in Claude Code's
+        # prompt when one will reach them; otherwise it blocks.
+        reason = _blocking_reason(mapped.get("reason"))
+        if _forwards_infra_ask(envelope, os.environ):
             return {
                 "action": "host_ask",
-                "reason": _INFRA_ASK_PREFIX + _blocking_reason(mapped.get("reason")),
+                "reason": "%s\n\n%s" % (
+                    _subject(tool, envelope.get("tool_input")),
+                    _INFRA_ASK_TEXT % (mapped.get("layer"), reason),
+                ),
             }
-        return {"action": "block", "reason": _blocking_reason(mapped.get("reason"))}
+        return {"action": "block", "reason": reason}
     # A legacy `ask` decision blocks like a deny: host dialogs never
     # authorize. The human approves in RVOperatorUI and the agent retries.
     if mapped["action"] == "ask":
@@ -180,10 +206,47 @@ def _resolve(mapped, envelope):
     return mapped
 
 
+def _forwards_infra_ask(envelope, environ):
+    # RV_HOOK_WHEN_DOWN may only tighten: "deny" blocks every
+    # infrastructure path, as it does in the C hook.
+    if environ.get("RV_HOOK_WHEN_DOWN") == "deny":
+        return False
+    return _host_prompts_human(envelope.get("permission_mode")) and _session_attended(environ)
+
+
 def _host_prompts_human(mode):
     # Exact spellings only: the host writes this field, and anything it
     # does not say plainly is no proof a person will see the prompt.
     return isinstance(mode, str) and mode in _HUMAN_PROMPT_MODES
+
+
+def _session_attended(environ):
+    # Claude Code sets these for its hooks; the agent's own commands do
+    # not reach the hook's environment. Both are undocumented, so anything
+    # but a plain "attended" answer blocks: an SDK canUseTool callback or
+    # --permission-prompt-tool answers prompts with no person, and reports
+    # permission_mode "default".
+    attended = environ.get("CLAUDE_CODE_SESSION_ATTENDED")
+    if attended is not None:
+        return attended == "1"
+    return environ.get("CLAUDE_CODE_ENTRYPOINT") in _ATTENDED_ENTRYPOINTS
+
+
+def _subject(tool, tool_input):
+    # What the person is approving, first: the command, or the path.
+    name = tool if isinstance(tool, str) else "Unknown tool"
+    keys = ("command",) if tool == "Bash" else ("file_path", "notebook_path", "path", "pattern")
+    value = None
+    if isinstance(tool_input, dict):
+        for key in keys:
+            if isinstance(tool_input.get(key), str) and tool_input.get(key).strip():
+                value = tool_input.get(key)
+                break
+    if value is None:
+        return "%s: (no command or path given)" % name
+    if len(value) > _SUBJECT_MAX:
+        value = value[:_SUBJECT_MAX] + "…"
+    return "%s: %s" % (name, value)
 
 
 def _parse(raw):
@@ -208,7 +271,11 @@ def _spawn_rv_hook(host, stdin):
     except FileNotFoundError:
         return {"action": "block", "reason": _missing_reason()}
     except subprocess.TimeoutExpired:
-        return {"action": "unchecked", "reason": _timeout_reason()}
+        return {
+            "action": "unchecked",
+            "layer": "rv did not answer within %gs" % RV_HOOK_TIMEOUT_S,
+            "reason": _timeout_reason(),
+        }
     except OSError as error:
         return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
@@ -230,14 +297,16 @@ def _map_rv_hook_result(stdout, exit_code):
             }
         hook = parsed.get("hookSpecificOutput")
         # rv's own native ask: rvd was unreachable, slow or dropped, so rv
-        # could not check the call. rv's message says what broke and how
-        # to repair it. rvd itself never answers a native ask (Step 8B).
+        # could not check the call. rvd itself never answers a native ask
+        # (Step 8B), so only the C hook's exact down texts count; any other
+        # native ask blocks with its text.
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
+            reason = hook.get("permissionDecisionReason")
+            if isinstance(reason, str) and reason in _DOWN_LAYERS:
+                return {"action": "unchecked", "layer": _DOWN_LAYERS[reason], "reason": reason}
             return {
-                "action": "unchecked",
-                "reason": _blocking_reason(
-                    hook.get("permissionDecisionReason") or parsed.get("systemMessage")
-                ),
+                "action": "block",
+                "reason": _blocking_reason(reason or parsed.get("systemMessage")),
             }
         if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
             return {
@@ -283,8 +352,23 @@ def _emit_decision(decision, mapped):
             "permissionDecisionReason": text,
         },
     }
-    sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
-    sys.exit(0)
+    _write_or_block(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n", text)
+
+
+def _write_or_block(line, reason):
+    # Exit 1 after a failed write would be Claude's non-blocking error,
+    # which runs the tool. Exit 2 blocks, with the reason on stderr.
+    data = line.encode("utf-8")
+    try:
+        while data:
+            data = data[os.write(1, data):]
+    except Exception:
+        try:
+            os.write(2, (reason + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        os._exit(2)
+    os._exit(0)
 
 
 if __name__ == "__main__":

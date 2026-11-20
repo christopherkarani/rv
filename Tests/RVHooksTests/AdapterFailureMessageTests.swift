@@ -245,8 +245,17 @@ private func writeStub(_ stub: AdapterStub, in root: URL) throws -> String {
     return rvPath
 }
 
+/// The test process's environment without what the Claude adapter reads
+/// to decide whether a person is asked: a test run inside a Claude Code
+/// session must not inherit that session's answer.
+func adapterTestEnvironment() -> [String: String] {
+    ProcessInfo.processInfo.environment.filter { key, _ in
+        !key.hasPrefix("CLAUDE_CODE_") && key != "CLAUDECODE" && key != "RV_HOOK_WHEN_DOWN"
+    }
+}
+
 private func stubEnvironment(_ stub: AdapterStub, root: URL) -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
+    var environment = adapterTestEnvironment()
     environment["HOME"] = root.path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     switch stub {
@@ -276,7 +285,9 @@ func runPythonAdapter(
     stub: AdapterStub,
     timeoutSeconds: String? = nil,
     rawEvent: String? = nil,
-    eventFields: [String: Any] = [:]
+    eventFields: [String: Any] = [:],
+    environment extra: [String: String] = [:],
+    stdoutUnwritable: Bool = false
 ) async throws -> PythonAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-failmsg-\(UUID().uuidString)", isDirectory: true)
@@ -300,18 +311,24 @@ func runPythonAdapter(
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["python3", adapter.path]
-    process.environment = stubEnvironment(stub, root: root)
+    process.environment = stubEnvironment(stub, root: root).merging(extra) { _, value in value }
     process.currentDirectoryURL = root
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
     process.standardInput = stdin
-    process.standardOutput = stdout
+    // A read-only descriptor: every write to stdout fails (EBADF).
+    let readOnlyStdout = stdoutUnwritable ? FileHandle(forReadingAtPath: "/dev/null") : nil
+    if let readOnlyStdout {
+        process.standardOutput = readOnlyStdout
+    } else {
+        process.standardOutput = stdout
+    }
     process.standardError = stderr
     try process.run()
     stdin.fileHandleForWriting.write(Data(eventText.utf8))
     try stdin.fileHandleForWriting.close()
-    let out = stdout.fileHandleForReading.readDataToEndOfFile()
+    let out = readOnlyStdout == nil ? stdout.fileHandleForReading.readDataToEndOfFile() : Data()
     let err = stderr.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
 
