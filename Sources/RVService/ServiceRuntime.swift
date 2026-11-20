@@ -110,7 +110,8 @@ public actor ServiceRuntime {
         hookCeremonies: HookReviewCeremonyService? = nil,
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
-        policyStatusService: PolicyStatusService = PolicyStatusService()
+        policyStatusService: PolicyStatusService = PolicyStatusService(),
+        judge: any JudgePort = LiveJudgePort()
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -122,7 +123,9 @@ public actor ServiceRuntime {
         let compileSet = LiveCompileSet(
             snapshots: snapshots,
             catalog: catalog,
-            home: resolvedHome
+            home: resolvedHome,
+            uptimeNanoseconds: { DispatchTime.now().uptimeNanoseconds },
+            judge: judge
         )
         self.compileSet = compileSet
         self.corePacksReady = compileSet.corePacksReady

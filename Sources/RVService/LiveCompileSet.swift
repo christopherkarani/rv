@@ -54,14 +54,28 @@ package final class LiveCompileSet: Sendable {
     private let snapshots: [PackSnapshot]
     private let home: HomeDirectory?
     private let uptimeNanoseconds: @Sendable () -> UInt64
+    private let judge: any JudgePort
 
-    package init(
+    package convenience init(
         snapshots providedSnapshots: [PackSnapshot]?,
         catalog providedCatalog: PackCatalog?,
         home: HomeDirectory?,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
+    ) {
+        self.init(
+            snapshots: providedSnapshots, catalog: providedCatalog, home: home,
+            uptimeNanoseconds: uptimeNanoseconds, judge: LiveJudgePort())
+    }
+
+    /// `judge` is the door's judge (tests pass a pool stub).
+    init(
+        snapshots providedSnapshots: [PackSnapshot]?,
+        catalog providedCatalog: PackCatalog?,
+        home: HomeDirectory?,
+        uptimeNanoseconds: @escaping @Sendable () -> UInt64,
+        judge: any JudgePort
     ) {
         let catalog = providedCatalog ?? Self.makeCatalog(home: home) ?? PackCatalog()
         let snapshots = EvaluationWorld.resolveSnapshots(providedSnapshots)
@@ -72,10 +86,11 @@ package final class LiveCompileSet: Sendable {
         self.snapshots = snapshots
         self.home = home
         self.uptimeNanoseconds = uptimeNanoseconds
+        self.judge = judge
         self.corePacksReady = session.corePacksReady
         self.state = UnfairLock(State(
             catalog: catalog,
-            door: GatedEvaluate(session),
+            door: GatedEvaluate(session, judge: judge),
             compiledPackIDs: session.compiledPackIDs,
             compiledIDSet: Set(session.compiledPackIDs)
         ))
@@ -209,7 +224,7 @@ package final class LiveCompileSet: Sendable {
         )
         state.compiledPackIDs = session.compiledPackIDs
         state.compiledIDSet = Set(session.compiledPackIDs)
-        state.door = GatedEvaluate(session)
+        state.door = GatedEvaluate(session, judge: judge)
     }
 
     /// Catalog for a home; nil home mirrors the old empty-HOME catalog
