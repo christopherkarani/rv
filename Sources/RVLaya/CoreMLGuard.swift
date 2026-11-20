@@ -79,7 +79,8 @@ public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     }
 
     public var reason: String {
-        "Laya judge: Core ML could not compile or load the model (\(detail)); judge disabled until it can."
+        "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review. "
+            + "Run `rv doctor`; if it persists, reinstall the judge model (re-run rv's install script)."
     }
 }
 
@@ -117,12 +118,19 @@ public final class CoreMLGuard: Sendable {
         /// rvd's guard runs without its crash marker (another rvd holds it,
         /// or it could not be written): no CPU-only fallback after a crash.
         public let crashMarkerUnavailable: Bool
+        /// The reason of the last judge load this guard refused; nil once a
+        /// load succeeds.
+        public let lastRefusal: String?
 
-        public init(units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool, crashMarkerUnavailable: Bool = false) {
+        public init(
+            units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool,
+            crashMarkerUnavailable: Bool = false, lastRefusal: String? = nil
+        ) {
             self.units = units
             self.cpuOnlyUntil = cpuOnlyUntil
             self.diskLow = diskLow
             self.crashMarkerUnavailable = crashMarkerUnavailable
+            self.lastRefusal = lastRefusal
         }
     }
 
@@ -146,6 +154,7 @@ public final class CoreMLGuard: Sendable {
     let log: @Sendable (String) -> Void
     private let now: @Sendable () -> Date
     private let started = Mutex<Started?>(nil)
+    private let refusal = Mutex<String?>(nil)
 
     public convenience init(
         store: (any CoreMLCrashStore)?,
@@ -197,7 +206,13 @@ public final class CoreMLGuard: Sendable {
         let current = startedState()
         return Status(
             units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil,
-            crashMarkerUnavailable: tracksCrashes && current.store == nil)
+            crashMarkerUnavailable: tracksCrashes && current.store == nil,
+            lastRefusal: refusal.withLock { $0 })
+    }
+
+    /// Records the last refused load (nil after a good one) for doctor.
+    func noteRefusal(_ reason: String?) {
+        refusal.withLock { $0 = reason }
     }
 
     /// Throws when the cache volume is below `minimumFreeBytes`. Unknown free

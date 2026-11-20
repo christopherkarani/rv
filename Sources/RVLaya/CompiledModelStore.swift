@@ -60,7 +60,20 @@ struct CompiledModelStore<Model> {
     /// Lowercase hex SHA-256 of one regular file; nil when unreadable.
     let digest: (URL) -> String?
 
+    /// Records each refusal on the guard (doctor shows the last one) and
+    /// clears it on the next good load.
     func model(package: URL) throws -> Model {
+        do {
+            let model = try loadRetryingOnce(package)
+            coreML.noteRefusal(nil)
+            return model
+        } catch let refusal as any CoreMLRefusal {
+            coreML.noteRefusal(refusal.reason)
+            throw refusal
+        }
+    }
+
+    private func loadRetryingOnce(_ package: URL) throws -> Model {
         do {
             return try attempt(package)
         } catch let refusal as any CoreMLRefusal {
@@ -150,6 +163,9 @@ struct CompiledModelStore<Model> {
         guard (try? fm.copyItem(at: compiled, to: partial)) != nil else {
             throw CompiledModelRefusal(detail: "could not copy the compile output into the cache")
         }
+        guard Self.restrictToOwner(partial) else {
+            throw CompiledModelRefusal(detail: "compile output holds something other than files and directories")
+        }
         guard let manifest = Self.manifest(of: partial, digest: digest),
               let data = try? JSONEncoder().encode(manifest)
         else { throw CompiledModelRefusal(detail: "could not hash the compiled model") }
@@ -207,10 +223,14 @@ struct CompiledModelStore<Model> {
 
     /// Relative path → size and SHA-256 of every regular file. nil when the
     /// root is not this user's real directory, or on a symlink, a special
-    /// file, a foreign file, a file with another hard link (it could be
-    /// rewritten through that link after the hash), an unreadable file or
-    /// directory (never skipped), or an empty tree: such an entry is never
-    /// trusted.
+    /// file, a file with another hard link, a file not owned by this user,
+    /// an unreadable file or directory (never skipped), or an empty tree:
+    /// such an entry is never trusted. On the install path every file is
+    /// the store's own fresh copy, so these checks fail only on a copy that
+    /// could not be made cleanly; they matter when an installed entry is
+    /// re-verified before a load, where a hard link or another user's file
+    /// in the protected root means something other than the store put it
+    /// there (and a hard-linked file could be rewritten through the link).
     static func manifest(of dir: URL, digest: (URL) -> String?) -> [String: CompiledFileRecord]? {
         let walkFailed = WalkFailure()
         guard isOwnedDirectory(dir),
@@ -233,12 +253,58 @@ struct CompiledModelStore<Model> {
         return records.isEmpty || walkFailed.value ? nil : records
     }
 
-    /// The root must be this user's real directory (created owner-only if
-    /// missing), as must its parent.
+    /// The root must be this user's real directory, as must its parent, and
+    /// owner-only: it is created 0700, and narrowed to 0700 through a
+    /// no-follow descriptor if something made it wider, so the privacy of
+    /// `.partial-` copies never depends on who created the root.
     static func usableRoot(_ root: URL) -> Bool {
         try? FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        return isOwnedDirectory(root) && isOwnedDirectory(root.deletingLastPathComponent())
+        guard isOwnedDirectory(root.deletingLastPathComponent()) else { return false }
+        let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == geteuid() else {
+            return false
+        }
+        if info.st_mode & 0o077 != 0 {
+            guard fchmod(fd, 0o700) == 0, fstat(fd, &info) == 0 else { return false }
+        }
+        return info.st_mode & 0o077 == 0
+    }
+
+    /// Narrows the store's fresh copy to owner-only (directories 0700, files
+    /// 0600) before it is hashed; false on anything that is not a directory
+    /// or regular file, or a directory that cannot be walked.
+    static func restrictToOwner(_ dir: URL) -> Bool {
+        guard isOwnedDirectory(dir), chmod(dir.path, 0o700) == 0 else { return false }
+        let walkFailed = WalkFailure()
+        guard let walker = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: nil, options: [],
+            errorHandler: { _, _ in walkFailed.set(); return false })
+        else { return false }
+        for case let url as URL in walker {
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else { return false }
+            switch info.st_mode & S_IFMT {
+            case S_IFDIR: guard chmod(url.path, 0o700) == 0 else { return false }
+            case S_IFREG: guard chmod(url.path, 0o600) == 0 else { return false }
+            default: return false
+            }
+        }
+        return !walkFailed.value
+    }
+
+    /// Whether the bundle's model package is there. Only ENOENT is absence
+    /// (the packs-only floor); any other error refuses (review), so an error
+    /// an agent can provoke never reads as "no model".
+    static func packageExists(_ url: URL) throws(CoreMLLoadRefusal) -> Bool {
+        var info = stat()
+        if lstat(url.path, &info) == 0 { return true }
+        let code = errno
+        if code == ENOENT { return false }
+        throw CoreMLLoadRefusal(detail: "cannot check \(url.lastPathComponent): \(String(cString: strerror(code)))")
     }
 
     static func isOwnedDirectory(_ url: URL) -> Bool {

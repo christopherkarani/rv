@@ -378,7 +378,98 @@ struct CompiledModelStoreTests {
         #expect(refusal.reason.contains("Laya judge"))
         #expect(refusal.reason.contains("could not hash the compiled model"))
         let load = CoreMLLoadRefusal(detail: "LoadFailed()")
-        #expect(load.reason.hasPrefix("Laya judge: Core ML could not compile or load the model"))
+        #expect(load.reason.hasPrefix("Laya judge: Core ML could not compile or load the judge model"))
         #expect(load.reason.contains("LoadFailed()"))
+        #expect(load.reason.contains("judged calls go to review"))
+        #expect(load.reason.contains("Run `rv doctor`"))
+    }
+
+    @Test("a nested symlink in the compile output refuses")
+    func nestedSymlinkRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.coreML
+        let target = f.base.appendingPathComponent("outside.bin")
+        try Data("evil!".utf8).write(to: target)
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            try FileManager.default.createSymbolicLink(
+                at: out.appendingPathComponent("weights/link.bin"), withDestinationURL: target)
+            return out
+        })
+        #expect(throws: CompiledModelRefusal.self) { try store.model(package: f.package) }
+        #expect(f.coreML.loads == 0)
+        #expect(try f.tempEntries().isEmpty)
+        #expect(try f.rootEntries().isEmpty)
+    }
+
+    @Test("a FIFO in the compile output refuses without blocking")
+    func fifoRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let coreML = f.coreML
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            #expect(mkfifo(out.appendingPathComponent("weights/pipe").path, 0o600) == 0)
+            return out
+        })
+        #expect(throws: CompiledModelRefusal.self) { try store.model(package: f.package) }
+        #expect(f.coreML.loads == 0)
+        #expect(try f.tempEntries().isEmpty)
+        #expect(try f.rootEntries().isEmpty)
+    }
+
+    @Test("the store root is made owner-only, and the installed copy is 0700/0600 whatever Core ML wrote")
+    func installedTreeIsOwnerOnly() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(
+            at: f.root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let coreML = f.coreML
+        let store = f.store(compile: { package in
+            let out = try coreML.compile(package)
+            chmod(out.appendingPathComponent("weights").path, 0o777)
+            chmod(out.appendingPathComponent("model.mil").path, 0o666)
+            return out
+        })
+        #expect(try store.model(package: f.package) == "model")
+        #expect(try Self.mode(f.root) == 0o700)
+        let entry = try #require(try f.rootEntries().first { $0.hasSuffix(".mlmodelc") })
+        let dir = f.root.appendingPathComponent(entry)
+        #expect(try Self.mode(dir) == 0o700)
+        #expect(try Self.mode(dir.appendingPathComponent("weights")) == 0o700)
+        #expect(try Self.mode(dir.appendingPathComponent("model.mil")) == 0o600)
+        #expect(try Self.mode(dir.appendingPathComponent("weights/weight.bin")) == 0o600)
+    }
+
+    static func mode(_ url: URL) throws -> mode_t {
+        var info = stat()
+        try #require(lstat(url.path, &info) == 0)
+        return info.st_mode & 0o7777
+    }
+
+    @Test("only ENOENT is a missing model; any other lstat error refuses")
+    func packagePresence() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        #expect(try CompiledModelStore<String>.packageExists(f.package) == true)
+        #expect(try CompiledModelStore<String>.packageExists(f.base.appendingPathComponent("absent")) == false)
+        let tooLong = URL(fileURLWithPath: "/" + String(repeating: "a/", count: 700) + "model.mlpackage")
+        #expect(throws: CoreMLLoadRefusal.self) { try CompiledModelStore<String>.packageExists(tooLong) }
+    }
+
+    @Test("a refusal is recorded on the guard for doctor, and cleared by the next good load")
+    func lastRefusalIsRecorded() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let failing = f.store(digest: { _ in nil })
+        #expect(throws: CompiledModelRefusal.self) { try failing.model(package: f.package) }
+        let reason = try #require(failing.coreML.status.lastRefusal)
+        #expect(reason.contains("could not hash the compiled model"))
+        let good = CompiledModelStore(
+            root: failing.root, coreML: failing.coreML, version: failing.version,
+            compile: f.store().compile, load: f.store().load, digest: contentDigest)
+        #expect(try good.model(package: f.package) == "model")
+        #expect(failing.coreML.status.lastRefusal == nil)
     }
 }

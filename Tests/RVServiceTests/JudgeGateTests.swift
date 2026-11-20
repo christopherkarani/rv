@@ -604,7 +604,23 @@ struct JudgeInvalidLabelsTests {
             Issue.record("expected .refused, got \(run)")
             return
         }
-        #expect(why.contains("Core ML could not compile or load the model"))
+        #expect(why.contains("Core ML could not compile or load the judge model"))
+    }
+
+    /// The stock engine reaches `CompiledModelCache.load`'s presence check
+    /// (the FT engine checks for the package earlier): a missing package is
+    /// absence (packs-only), a present one Core ML cannot compile refuses.
+    @Test func stockEngineMissingModelIsUnavailableBrokenModelIsRefused() throws {
+        for package in [false, true] {
+            let (base, bundle) = try Self.fakeBundle(package: package, engine: .laya)
+            defer { try? FileManager.default.removeItem(at: base) }
+            let run = Self.runFakeBundle(
+                bundle, state: base.appendingPathComponent("state", isDirectory: true), engine: .laya)
+            switch (package, run) {
+            case (false, .unavailable), (true, .refused): break
+            default: Issue.record("package present \(package): \(run)")
+            }
+        }
     }
 
     /// A bundle without its model is absence, not failure: packs-only, as
@@ -619,7 +635,7 @@ struct JudgeInvalidLabelsTests {
         }
     }
 
-    static func fakeBundle(package: Bool) throws -> (base: URL, bundle: URL) {
+    static func fakeBundle(package: Bool, engine: JudgeEngine = .ft) throws -> (base: URL, bundle: URL) {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-judge-fake-\(UUID().uuidString)", isDirectory: true)
             .resolvingSymlinksInPath()
@@ -629,18 +645,21 @@ struct JudgeInvalidLabelsTests {
             try FileManager.default.createDirectory(
                 at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
         }
-        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent("tokenizer.json"))
+        let tokenizer = engine == .laya ? "tokenizer/tokenizer.json" : "tokenizer.json"
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent(tokenizer).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent(tokenizer))
         return (base, bundle)
     }
 
-    static func runFakeBundle(_ bundle: URL, state: URL) -> JudgeRuntime.JudgeRun {
+    static func runFakeBundle(_ bundle: URL, state: URL, engine: JudgeEngine = .ft) -> JudgeRuntime.JudgeRun {
         struct Roomy: DiskSpaceProbe {
             func availableBytes(at url: URL) -> Int64? { 100 << 30 }
         }
         let guardian = CoreMLGuard(
             store: nil, disk: Roomy(), cacheVolume: nil, stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
         return JudgeRuntime.runJudge(
-            command: "ls", context: JudgeContext(), engine: .ft, bundle: bundle, wait: nil,
+            command: "ls", context: JudgeContext(), engine: engine, bundle: bundle, wait: nil,
             slot: JudgeSlot(coreML: { guardian }))
     }
 

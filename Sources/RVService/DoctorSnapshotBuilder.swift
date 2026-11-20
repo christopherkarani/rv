@@ -103,6 +103,9 @@ public enum DoctorSnapshotBuilder {
         if status.crashMarkerUnavailable {
             notes.append("Core ML crash marker held by another process or unwritable; no CPU-only fallback after a crash")
         }
+        if let reason = status.lastRefusal {
+            notes.append("last judge load refused: \(reason)")
+        }
         return notes
     }
 

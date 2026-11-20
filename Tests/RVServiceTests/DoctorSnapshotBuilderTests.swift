@@ -107,6 +107,13 @@ struct DoctorCoreMLNotesTests {
         #expect(notes[1] == "disk nearly full; judge disabled until space is freed")
     }
 
+    @Test("the last judge load refusal is shown")
+    func lastRefusal() {
+        let notes = DoctorSnapshotBuilder.coreMLNotes(
+            .init(units: .cpuAndGPU, cpuOnlyUntil: nil, diskLow: false, lastRefusal: "Laya judge: nope"))
+        #expect(notes == ["last judge load refused: Laya judge: nope"])
+    }
+
     @Test("rvd running without its crash marker is named")
     func markerUnavailable() {
         let notes = DoctorSnapshotBuilder.coreMLNotes(
