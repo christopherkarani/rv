@@ -108,11 +108,14 @@ public struct PosixWorkerSpawner: WorkerSpawning {
         }
         var pid: pid_t = 0
         let result = (argv + [nil]).withUnsafeBufferPointer { argvBuffer in
-            (envp + [nil]).withUnsafeBufferPointer { envpBuffer in
-                posix_spawn(
+            (envp + [nil]).withUnsafeBufferPointer { envpBuffer -> Int32 in
+                // Never nil (each array holds at least the terminator);
+                // Glibc's posix_spawn takes non-optional argv/envp.
+                guard let argv = argvBuffer.baseAddress, let envp = envpBuffer.baseAddress else { return EINVAL }
+                return posix_spawn(
                     &pid, executable, &actions, &attributes,
-                    UnsafeMutablePointer(mutating: argvBuffer.baseAddress),
-                    UnsafeMutablePointer(mutating: envpBuffer.baseAddress))
+                    UnsafeMutablePointer(mutating: argv),
+                    UnsafeMutablePointer(mutating: envp))
             }
         }
         guard result == 0 else { throw WorkerSpawnError.spawn(result) }
