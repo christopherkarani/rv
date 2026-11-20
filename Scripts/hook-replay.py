@@ -33,6 +33,7 @@ Wire facts this relies on (see sdk/WIRE.md, Sources/RVHooks):
 from __future__ import annotations
 
 import argparse
+import collections
 import concurrent.futures as cf
 import glob
 import json
@@ -118,18 +119,27 @@ class Daemon:
         self._init_project()
         rvd_env = dict(self.env, **(extra_env or {}))
         self._stderr = open(self.stderr_path, "wb")
-        self.proc = subprocess.Popen(
-            [rvd, "--idle-exit-seconds", "3600"],
-            stdin=subprocess.DEVNULL, stdout=self._stderr, stderr=self._stderr,
-            env=rvd_env, start_new_session=True,
-        )
-        deadline = time.monotonic() + 20
-        while not os.path.exists(self.socket):
-            if self.proc.poll() is not None:
-                raise SystemExit(f"rvd exited during startup (status {self.proc.returncode}); see {self.stderr_path}")
-            if time.monotonic() > deadline:
-                raise SystemExit("rvd did not bind its socket within 20 s")
-            time.sleep(0.05)
+        try:
+            self.proc = subprocess.Popen(
+                [rvd, "--idle-exit-seconds", "3600"],
+                stdin=subprocess.DEVNULL, stdout=self._stderr, stderr=self._stderr,
+                env=rvd_env, start_new_session=True,
+            )
+        except BaseException:
+            self._stderr.close()
+            raise
+        try:
+            deadline = time.monotonic() + 20
+            while not os.path.exists(self.socket):
+                if self.proc.poll() is not None:
+                    raise SystemExit(f"rvd exited during startup (status {self.proc.returncode}); see {self.stderr_path}")
+                if time.monotonic() > deadline:
+                    raise SystemExit("rvd did not bind its socket within 20 s")
+                time.sleep(0.05)
+        except BaseException:
+            # No Daemon comes back to stop, so never leave this rvd running.
+            self.kill()
+            raise
 
     def _init_project(self) -> None:
         """Make the agent's cwd a real repository, as it is for a coding agent.
@@ -176,6 +186,12 @@ class Daemon:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
+        self._stderr.close()
+
+    def kill(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
         self._stderr.close()
 
 
@@ -247,7 +263,12 @@ class SocketClient:
         try:
             reply = self._client().raw.call("hookEvaluate", {"host": "claude", "stdin": body.decode()})
         except Exception as exc:  # noqa: BLE001  (any transport failure is a harness failure)
-            self._local.client = None
+            failed, self._local.client = getattr(self._local, "client", None), None
+            if failed is not None:
+                try:
+                    failed.close()  # its socket, before the next call reconnects
+                except Exception:  # noqa: BLE001, S110
+                    pass
             kind = "timeout" if "timed out" in str(exc).lower() or isinstance(exc, TimeoutError) else "error"
             return kind, f"{type(exc).__name__}: {exc}"[:300]
         return classify(reply.get("stdout", ""), int(reply.get("exitCode", -1))), reply.get("stdout", "")[:300]
@@ -316,14 +337,27 @@ def main() -> int:
     total = args.calls or len(cases)
     rv, rvd = find_bins(args.bin_dir)
 
-    workdir = tempfile.mkdtemp(prefix="rvr-", dir="/tmp")
     extra_env = {}
     for item in args.rvd_env:
         key, sep, value = item.partition("=")
         if not sep or not key:
             raise SystemExit(f"--rvd-env needs KEY=VALUE, got {item!r}")
         extra_env[key] = value
-    daemon = Daemon(rvd, workdir, extra_env)
+    workdir = tempfile.mkdtemp(prefix="rvr-", dir="/tmp")
+    daemon: Daemon | None = None
+    try:
+        daemon = Daemon(rvd, workdir, extra_env)
+        return run(args, cases, total, rv, rvd, daemon)
+    finally:
+        if daemon is not None:
+            daemon.stop()  # idempotent: run() stops it before reading its stderr
+        if args.keep:
+            print(f"  kept        {workdir}")
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run(args: argparse.Namespace, cases: list[Case], total: int, rv: str, rvd: str, daemon: Daemon) -> int:
     try:
         client = RvClient(rv, daemon, args.timeout) if args.client == "rv" else SocketClient(daemon, args.timeout, rvd)
         session = str(uuid.uuid4())
@@ -339,12 +373,29 @@ def main() -> int:
 
         work = (cases[i % len(cases)] for i in range(total))
         results: list[Result] = []
+
+        def take(res: Result) -> None:
+            results.append(res)
+            if len(results) % 1000 == 0:
+                print(f"  {len(results)}/{total}", file=sys.stderr, flush=True)
+
+        # Submitted a few per worker at a time, in order, not all up front
+        # (pool.map queues every call): Ctrl-C then cancels what is queued
+        # and waits only for the calls in flight, each bounded by --timeout.
         started = time.perf_counter()
-        with cf.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            for res in pool.map(one, work, chunksize=1):
-                results.append(res)
-                if len(results) % 1000 == 0:
-                    print(f"  {len(results)}/{total}", file=sys.stderr, flush=True)
+        pool = cf.ThreadPoolExecutor(max_workers=args.concurrency)
+        pending: collections.deque[cf.Future[Result]] = collections.deque()
+        try:
+            for case in work:
+                pending.append(pool.submit(one, case))
+                if len(pending) >= args.concurrency * 4:
+                    take(pending.popleft().result())
+            while pending:
+                take(pending.popleft().result())
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown(wait=True)
         elapsed = time.perf_counter() - started
         after = daemon.stats()
     finally:
@@ -457,11 +508,6 @@ def main() -> int:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2)
         print(f"  summary     {args.json}")
-    if args.keep:
-        print(f"  kept        {workdir}")
-    else:
-        shutil.rmtree(workdir, ignore_errors=True)
-
     ok = not failures and after.get("alive", False)
     if args.max_p99_ms is not None and lat["p99"] > args.max_p99_ms:
         print(f"  p99 {lat['p99']} ms exceeds --max-p99-ms {args.max_p99_ms}", file=sys.stderr)
@@ -470,4 +516,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("hook-replay: interrupted", file=sys.stderr)
+        sys.exit(130)
