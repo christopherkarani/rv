@@ -229,7 +229,9 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 
 `Sources/RVIPC/IPCDoctor.swift`. `DoctorSnapshotReply{protocol, serviceSemver,
 label, state, keepAlive, idleExitSeconds, packsEnabled[], lastError?, checks[]}`.
-`state` ∈ `running|idleExitArmed|down|skew` (closed). `DoctorCheck{id, status,
+`state` ∈ `running|idleExitArmed|down|skew` (closed). `idleExitSeconds` 0
+means idle exit is off, the default (rvd stays up until stopped; supervised
+installs keep it running). `DoctorCheck{id, status,
 message}`: `status` ∈ `ok|warning|error|skipped` (closed); `id` is an open
 extension point — decoders must tolerate unknown check ids (preserve raw,
 degrade gracefully), because new checks are additive.
