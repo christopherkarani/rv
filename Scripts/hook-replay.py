@@ -16,7 +16,7 @@ The `rv` used must sit next to the `rvd` it talks to: the client refuses an
 rvd whose /proc/<pid>/exe is not its own sibling, and that refusal is a deny.
 
 Usage:
-  swift build -c release --product rv --product rvd
+  swift build -c release --product rvd && swift build -c release --product rv
   Scripts/hook-replay.py --bin-dir .build/release --calls 10000 --concurrency 8
 
 Exit status: 0 when every call got an allow or deny from rvd and the optional
@@ -367,6 +367,32 @@ def main() -> int:
         agg[0] += 1
         agg[1] += r.outcome != r.case.expected
 
+    # Where the time goes: latency per corpus file and the slowest commands
+    # (by median over their repeats, so one unlucky call does not rank).
+    lat_by_file: dict[str, list[float]] = {}
+    lat_by_case: dict[tuple[str, str], list[float]] = {}
+    for r in results:
+        lat_by_file.setdefault(r.case.source, []).append(r.ms)
+        lat_by_case.setdefault((r.case.source, r.case.case_id), []).append(r.ms)
+    case_index = {(c.source, c.case_id): c for c in cases}
+    lat_by_outcome: dict[str, list[float]] = {}
+    for r in results:
+        lat_by_outcome.setdefault(r.outcome, []).append(r.ms)
+    latency_by_outcome = {
+        k: {"calls": len(v), "p50": round(statistics.median(v), 2), "p99": round(pct(sorted(v), 99), 2)}
+        for k, v in sorted(lat_by_outcome.items())
+    }
+    latency_by_file = {
+        name: {"calls": len(v), "p50": round(statistics.median(v), 2), "p99": round(pct(sorted(v), 99), 2)}
+        for name, v in sorted(lat_by_file.items(), key=lambda kv: -statistics.median(kv[1]))
+    }
+    slowest = sorted(lat_by_case.items(), key=lambda kv: -statistics.median(kv[1]))[:15]
+    slowest_cases = [
+        {"source": k[0], "id": k[1], "median_ms": round(statistics.median(v), 2), "calls": len(v),
+         "command": case_index[k].command[:160]}
+        for k, v in slowest
+    ]
+
     summary = {
         "client": args.client,
         "bin": rv,
@@ -379,6 +405,9 @@ def main() -> int:
             "p50": round(pct(ms, 50), 2), "p90": round(pct(ms, 90), 2), "p99": round(pct(ms, 99), 2),
             "max": round(ms[-1], 2) if ms else 0, "mean": round(statistics.fmean(ms), 2) if ms else 0,
         },
+        "latency_by_outcome": latency_by_outcome,
+        "latency_by_file": latency_by_file,
+        "slowest_cases": slowest_cases,
         "outcomes": outcomes,
         "failures": len(failures),
         "failure_examples": [
@@ -401,6 +430,9 @@ def main() -> int:
     print(f"\nrv hook replay · client={args.client} · {len(results)} calls · concurrency {args.concurrency}")
     print(f"  {summary['calls_per_second']} calls/s over {summary['seconds']} s")
     print(f"  latency ms  p50 {lat['p50']}  p90 {lat['p90']}  p99 {lat['p99']}  max {lat['max']}  mean {lat['mean']}")
+    print("  by verdict  " + "  ".join(f"{k} p50 {v['p50']} p99 {v['p99']}" for k, v in latency_by_outcome.items()))
+    print("  slowest files by p50:  " + "  ".join(
+        f"{n} {v['p50']}" for n, v in list(latency_by_file.items())[:4]))
     print(f"  outcomes    {outcomes}")
     print(f"  failures    {len(failures)}" + (f"  e.g. {failures[0].outcome}: {failures[0].detail[:160]!r}" if failures else ""))
     ca = summary["corpus_agreement"]
