@@ -19,27 +19,29 @@ extension CommandGrammar.Command {
     /// under test lands in its own slot). On a command with a passthrough
     /// capture, the first positional starts the capture, so `--help` after
     /// any positional belongs to the captured command: those are in
-    /// `passthrough`.
+    /// `passthrough`. Each value is one the argument takes (its first
+    /// enumerated value, else `1`), so the parser reads it too.
     func helpProbes(path: [String]) -> (own: [[String]], passthrough: [[String]]) {
         var own: [[String]] = []
         var passthrough: [[String]] = []
         var positionals: [String] = []
         for argument in arguments ?? [] where argument.isHelp == false {
+            let value = argument.allValues?.first ?? "1"
             switch argument.kind {
             case .option:
                 guard let spelling = argument.spellings.first else { continue }
-                own.append(path + [spelling, "x", "--help"])
-                own.append(path + ["\(spelling)=x", "--help"])
+                own.append(path + [spelling, value, "--help"])
+                own.append(path + ["\(spelling)=\(value)", "--help"])
             case .flag:
                 guard let spelling = argument.spellings.first else { continue }
                 own.append(path + [spelling, "--help"])
             case .positional:
                 if capturesPassthrough {
-                    passthrough.append(path + positionals + ["x", "--help"])
+                    passthrough.append(path + positionals + [value, "--help"])
                 } else {
-                    own.append(path + positionals + ["x", "--help"])
+                    own.append(path + positionals + [value, "--help"])
                 }
-                positionals.append("x")
+                positionals.append(value)
             }
         }
         return (own, passthrough)

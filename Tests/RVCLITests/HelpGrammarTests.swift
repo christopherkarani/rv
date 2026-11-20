@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import Testing
 @testable import RVCLI
 
@@ -63,6 +64,26 @@ struct HelpGrammarTests {
         }
     }
 
+    @Test("every command on a usage-row page declares its rows")
+    func usagePagesListEveryCommand() {
+        // `UsageRows.under` skips a command with neither rows nor
+        // subcommands, so a new subcommand without `usage` would drop off
+        // its page without this.
+        var parents = 0
+        for command in Self.commands(RV.self) {
+            guard command.configuration.subcommands.contains(where: { $0 is any CommandUsage.Type }) else { continue }
+            parents += 1
+            let usage = HelpTopic.owning(command).flatMap { topic in
+                HelpCatalog.page(topic).sections.first { $0.heading == "Usage" }?.rows
+            }
+            #expect(usage == UsageRows.under(command), "\(command._commandName)'s page does not list UsageRows.under")
+            for missing in Self.withoutUsage(under: command) {
+                Issue.record("`\(command._commandName) \(missing._commandName)` has no usage rows, so its page leaves it out")
+            }
+        }
+        #expect(parents >= 2)
+    }
+
     @Test("--help after any real flag, option or positional is the command's rv page")
     func helpAfterEveryArgument() throws {
         let grammar = try #require(CommandGrammar.rv)
@@ -74,9 +95,78 @@ struct HelpGrammarTests {
             for argv in probes.own {
                 #expect(HelpDispatch.topic(arguments: argv) == page, "`rv \(argv.joined(separator: " "))`")
             }
+            // Dispatch walks the same grammar these probes come from, so the
+            // parser itself is asked too.
             for argv in probes.passthrough {
                 #expect(HelpDispatch.topic(arguments: argv) == nil, "`rv \(argv.joined(separator: " "))` stole the command's --help")
+                if Self.parserDiffers[argv] == nil {
+                    #expect(Self.parserAsksForHelp(argv) == false, "`rv \(argv.joined(separator: " "))`: the parser answers this --help, not the captured command")
+                }
             }
+            // Before a passthrough capture starts, the parser reads `--help`
+            // as the first captured word and never asks for help: that is
+            // why rv answers it first. Elsewhere both must ask for help.
+            guard command.capturesPassthrough == false else { continue }
+            for argv in [path + ["--help"]] + probes.own where Self.parserDiffers[argv] == nil {
+                #expect(Self.parserAsksForHelp(argv), "`rv \(argv.joined(separator: " "))` gets rv's page, but the parser does not ask for help")
+            }
+        }
+    }
+
+    @Test("each known difference from the parser's help is still one")
+    func knownParserDifferences() {
+        for (argv, _) in Self.parserDiffers {
+            let rvPage = HelpDispatch.topic(arguments: argv) != nil
+            #expect(Self.parserAsksForHelp(argv) != rvPage, "`rv \(argv.joined(separator: " "))` now agrees with the parser; drop it from parserDiffers")
+        }
+    }
+
+    @Test("a grammar rv cannot read leaves --help to ArgumentParser")
+    func unreadableGrammarFallsBack() {
+        #expect(CommandGrammar.decode(Data("{}".utf8)) == nil)
+        #expect(CommandGrammar.decode(Data("not json".utf8)) == nil)
+        #expect(HelpDispatch.page(before: ["workspace", "run", "--rows", "5"], grammar: nil) == nil)
+        #expect(HelpDispatch.page(before: [], grammar: nil) == nil)
+        // Fields rv does not read may change or go away.
+        let minimal = #"{"command":{"commandName":"rv","subcommands":[{"commandName":"x","arguments":[{"kind":"flag","names":[{"kind":"long","name":"y"}],"parsingStrategy":"default"}]}]}}"#
+        let grammar = CommandGrammar.decode(Data(minimal.utf8))
+        #expect(grammar?.command.subcommand(named: "x")?.argument(spelled: "--y")?.kind == .flag)
+    }
+
+    /// Where rv's help dispatch and the parser's own help knowingly differ,
+    /// besides passthrough commands. Each one is harmless: nothing runs.
+    static let parserDiffers: [[String]: String] = [
+        // `-n` is `audit tail`'s, reached through the default subcommand;
+        // the parser reports its missing value, rv shows the audit page.
+        ["audit", "-n", "--help"]: "option of the default subcommand",
+        // The `--help` is the captured command's, so rv leaves it alone; the
+        // parser answers it with help only because the required
+        // `--expected-content-digest-sha256` is missing.
+        ["workspace", "custom", "1", "--help"]: "missing required option",
+    ]
+
+    /// Whether ArgumentParser answers `argv` with its own help: parsing
+    /// gives its built-in help command, or stops with a help message.
+    static func parserAsksForHelp(_ argv: [String]) -> Bool {
+        do {
+            let command = try RV.parseAsRoot(argv)
+            return String(describing: type(of: command)) == "HelpCommand"
+        } catch {
+            return RV.exitCode(for: error) == .success && RV.fullMessage(for: error).contains("USAGE:")
+        }
+    }
+
+    /// Every command type under `command`, `command` first.
+    static func commands(_ command: ParsableCommand.Type) -> [ParsableCommand.Type] {
+        [command] + command.configuration.subcommands.flatMap { commands($0) }
+    }
+
+    /// The commands `UsageRows.under(parent)` reaches that have no rows.
+    static func withoutUsage(under parent: ParsableCommand.Type) -> [ParsableCommand.Type] {
+        parent.configuration.subcommands.flatMap { command -> [ParsableCommand.Type] in
+            if let declared = command as? any CommandUsage.Type { return declared.usage.isEmpty ? [command] : [] }
+            let subcommands = command.configuration.subcommands
+            return subcommands.isEmpty ? [command] : withoutUsage(under: command)
         }
     }
 

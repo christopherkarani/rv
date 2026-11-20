@@ -110,9 +110,12 @@ public enum HelpDispatch {
     /// input a passthrough argument captures (a positional or an unknown
     /// option on a command like `rv run`). Anywhere else an unknown option
     /// or an extra positional still gets the page: ArgumentParser would
-    /// answer it with its own help.
-    static func page(before tokens: ArraySlice<String>) -> HelpTopic? {
-        guard var node = CommandGrammar.rv?.command else { return nil }
+    /// answer it with its own help. Without a grammar (`CommandGrammar.rv`
+    /// is `nil`) it is always `nil`: ArgumentParser answers on its own.
+    static func page(
+        before tokens: ArraySlice<String>, grammar: CommandGrammar? = CommandGrammar.rv
+    ) -> HelpTopic? {
+        guard var node = grammar?.command else { return nil }
         var command: ParsableCommand.Type = RV.self
         var page = HelpTopic.root
         var rest = tokens

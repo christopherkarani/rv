@@ -6,6 +6,10 @@ import Foundation
 /// parser's own `--experimental-dump-help` description of `RV`. The
 /// `@Option` / `@Flag` / `@Argument` declarations stay the only place a
 /// flag is spelled; help dispatch and the help tests read them from here.
+///
+/// Only the fields rv reads are decoded, so a change to any other part of
+/// the dump cannot stop it loading. If a field rv reads changes, decoding
+/// fails and `rv` is `nil`.
 struct CommandGrammar: Decodable, Sendable {
     struct Name: Decodable, Sendable {
         var kind: String
@@ -27,7 +31,6 @@ struct CommandGrammar: Decodable, Sendable {
 
         var kind: Kind
         var names: [Name]?
-        var isOptional: Bool
         var parsingStrategy: String
         /// The values an enumerated argument takes, when it has a fixed set.
         var allValues: [String]?
@@ -75,8 +78,13 @@ struct CommandGrammar: Decodable, Sendable {
         do {
             _ = try RV.parseAsRoot(["--experimental-dump-help"])
         } catch {
-            return try? JSONDecoder().decode(CommandGrammar.self, from: Data(RV.fullMessage(for: error).utf8))
+            return decode(Data(RV.fullMessage(for: error).utf8))
         }
         return nil
     }()
+
+    /// The grammar in `dump`, or `nil` if it does not decode.
+    static func decode(_ dump: Data) -> CommandGrammar? {
+        try? JSONDecoder().decode(CommandGrammar.self, from: dump)
+    }
 }
