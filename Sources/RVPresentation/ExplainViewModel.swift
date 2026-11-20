@@ -55,6 +55,8 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var steps: [ExplainStep]
     public var suggestions: [ExplainSuggestion]
     public var semantic: ExplainSemanticView?
+    /// Observe-mode note, when observe let a would-be block or ask run.
+    package var observeNote: String?
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
@@ -78,7 +80,8 @@ public struct ExplainViewModel: Equatable, Sendable {
         explanation: String? = nil,
         regex: String? = nil,
         suggestions: [ExplainSuggestion] = [],
-        semantic: ExplainSemanticView? = nil
+        semantic: ExplainSemanticView? = nil,
+        observeNote: String? = nil
     ) {
         self.command = command
         self.normalized = normalized
@@ -94,13 +97,17 @@ public struct ExplainViewModel: Equatable, Sendable {
         self.steps = steps
         self.suggestions = suggestions
         self.semantic = semantic
+        self.observeNote = observeNote
     }
 }
 
+/// `observed`: observe let `result` (the would-be verdict) run, which
+/// enforce would have authorized this way; adds the observe note.
 public func explainViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
-    normalized: String? = nil
+    normalized: String? = nil,
+    observed: HookAuthorization? = nil
 ) -> ExplainViewModel {
     let fact: String
     let next: String?
@@ -133,7 +140,8 @@ public func explainViewModel(
         explanation: match?.explanation,
         regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
-        semantic: explainSemantic(from: result.analysis)
+        semantic: explainSemantic(from: result.analysis),
+        observeNote: observed.flatMap { observeNote(for: result.decision, authorization: $0) }
     )
 }
 

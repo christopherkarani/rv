@@ -116,6 +116,18 @@ struct SecretLeakScannerTests {
         #expect(report.findings == [SecretLeakFinding(path: "a.env", line: 2, secret: "aws-access-key-id")])
     }
 
+    @Test func byteSearchFindsNeedlesAtEveryPosition() {
+        let hay = Array("aab_aabc_xyz".utf8)
+        #expect(SecretPatternRules.contains(Array("aabc".utf8), in: hay))
+        #expect(SecretPatternRules.contains(Array("aab".utf8), in: hay))
+        #expect(SecretPatternRules.contains(Array("xyz".utf8), in: hay))
+        #expect(SecretPatternRules.contains(hay, in: hay))
+        #expect(SecretPatternRules.contains(Array("abd".utf8), in: hay) == false)
+        #expect(SecretPatternRules.contains(Array("xyzq".utf8), in: hay) == false)
+        #expect(SecretPatternRules.contains(Array("a".utf8), in: []) == false)
+        #expect(SecretPatternRules.contains([], in: hay))
+    }
+
     @Test func shannonEntropy() {
         #expect(SecretPatternRules.entropy("aaaa") == 0)
         #expect(abs(SecretPatternRules.entropy("abcd") - 2) < 0.0001)

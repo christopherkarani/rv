@@ -64,6 +64,7 @@ struct OwnedPaths: Equatable, Sendable {
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }
+    var localWorkspaceHost: String { home.rawValue + "/.local/bin/rv-workspace-host" }
     /// install.sh's bin dir; `InstallManifest` names what rv owns in it.
     var localBinDirectory: String { home.rawValue + "/.local/bin" }
     /// The approvals custodian bundle install.sh copies on macOS.

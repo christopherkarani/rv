@@ -15,6 +15,9 @@ public struct TestViewModel: Equatable, Sendable {
     public var resultTone: DecisionTone
     public var columns: Int
     public var deny: DenyViewModel?
+    /// Observe-mode note under the result, when observe let a would-be
+    /// block or ask run.
+    package var observeNote: String?
 
     public init(
         command: ShellCommand,
@@ -28,7 +31,8 @@ public struct TestViewModel: Equatable, Sendable {
         resultWord: String,
         resultTone: DecisionTone,
         columns: Int = 80,
-        deny: DenyViewModel? = nil
+        deny: DenyViewModel? = nil,
+        observeNote: String? = nil
     ) {
         self.command = command
         self.span = span
@@ -42,6 +46,7 @@ public struct TestViewModel: Equatable, Sendable {
         self.resultTone = resultTone
         self.columns = max(16, columns)
         self.deny = deny
+        self.observeNote = observeNote
     }
 }
 
@@ -96,10 +101,23 @@ package func remapMatchSpan(
     MatchSpan.projected(span: span, matchedText: matchedText, searchText: searchText, onto: command)
 }
 
+/// `observed`: observe let `result` (the would-be verdict) run, which
+/// enforce would have authorized this way; adds the observe note.
 public func testViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
-    columns: Int = 80
+    columns: Int = 80,
+    observed: HookAuthorization? = nil
+) -> TestViewModel {
+    var model = baseTestViewModel(from: result, command: command, columns: columns)
+    model.observeNote = observed.flatMap { observeNote(for: result.decision, authorization: $0) }
+    return model
+}
+
+private func baseTestViewModel(
+    from result: EvaluationResult,
+    command: ShellCommand,
+    columns: Int
 ) -> TestViewModel {
     let resultWord = result.decision.testResultName
     let tone = result.decision.tone
