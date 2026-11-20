@@ -68,9 +68,9 @@ enum ServiceRestart {
     }
 
     /// From SSH: success only once launchd reports rvd running with the
-    /// same pid across `stableFor` (it did not crash on start). When
-    /// `launchctl print` works but shows no state, the restart is reported
-    /// as requested, not verified; when print fails, as a failure.
+    /// same pid across `stableFor` (it did not crash on start). Anything
+    /// else fails: print failing (job not found), print showing no state
+    /// (rv cannot verify rvd started), or rvd not staying up.
     private static func outsideTheDesktopSession(
         _ env: SetupEnvironment,
         verb: String,
@@ -89,10 +89,10 @@ enum ServiceRestart {
             )
         case .unknown:
             return SetupOutcome(
-                stdout: "rv service \(verb): restart requested for \(SetupRun.launchAgentLabel) "
-                    + "in \(domain) (not verified)\n",
-                stderr: "rv service \(verb): launchctl print did not report rvd's state; " + unreachable,
-                exitCode: 0
+                stdout: "",
+                stderr: "rv service \(verb): launchctl print \(domain)/\(SetupRun.launchAgentLabel) showed no "
+                    + "state; could not verify rvd started; " + unreachable,
+                exitCode: EX_UNAVAILABLE
             )
         case .printFailed:
             return SetupOutcome(

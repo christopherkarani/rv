@@ -394,16 +394,19 @@ func restart_fromSSH_rvdNotStayingUp_fails(processes: [LaunchdJobProcess]) throw
 
 /// When launchctl print cannot tell, the restart is reported as requested
 /// and not verified, never as restarted.
-@Test func restart_fromSSH_launchdCannotTell_saysNotVerified() throws {
+/// launchctl print works but shows no state: rv cannot tell rvd started,
+/// so the restart fails like any unverified one.
+@Test func restart_fromSSH_launchdCannotTell_failsUnverified() throws {
     try withTempHome { home, _, _ in
         let launchctl = ScriptedLaunchctl()
         launchctl.aqua = false
         launchctl.loaded = ["gui/501"]
         launchctl.jobProcesses = [.unknown]
         let outcome = ServiceRestart.run(scriptedEnv(home: home, launchctl: launchctl, sleeps: SleepLog()))
-        #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == "rv service restart: restart requested for dev.rv.evaluate in gui/501 (not verified)\n")
-        #expect(outcome.stderr.contains("launchctl print did not report rvd's state"))
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr.contains(
+            "launchctl print gui/501/dev.rv.evaluate showed no state; could not verify rvd started"))
     }
 }
 
