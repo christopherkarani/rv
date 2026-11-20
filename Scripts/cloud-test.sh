@@ -10,21 +10,29 @@
 #   --build-only   build the tests, do not run them
 #   -- ARGS        passed to `swift test --skip-build` (e.g. --filter RVPacksTests)
 #
-# Why not just `swift test`:
+# Why not just `swift test` as root, which is how cloud containers start:
 #   - CI runs as an ordinary user. As root, the tests that make a directory
 #     unreadable or read-only to prove rv refuses safely all fail, because
-#     root ignores file permissions. Started as root, this script re-runs
-#     itself as NAME.
-#   - Ubuntu gives such a user umask 002. rv rightly refuses group-writable
-#     managed policy files, so the policy store tests fail under it. The
-#     suite runs with umask 022, as on CI.
-#   - The toolchain is the official Swift tarball (Scripts/install-official-
-#     swift-linux.sh), never apt swift. As root, a tarball already in
-#     root's cache is copied to NAME's cache instead of downloaded again.
+#     root ignores file permissions.
+#   - CI's runner owns its checkout. Tests write under <repo>/.build and run
+#     the products built there (signal probes, the C hook, install.sh), so
+#     the user needs a checkout and build of its own, not a read-only one.
+#   - CI starts on a fresh VM. Tests use fixed paths under /tmp, and a run
+#     as root leaves root-owned ones behind (and can create /private/tmp,
+#     which turns on macOS-shaped fixtures), so a later run as the user
+#     fails on them. The suite gets a private, empty /tmp.
+#   - Ubuntu gives a new user umask 002. rv rightly refuses group-writable
+#     managed policy files, so the suite runs with umask 022, as on CI.
 #
-# The checkout stays root-owned and is only read: the build goes to
-# NAME's ~/.cache/rv-build (--scratch-path). ~/.config/rv is fingerprinted
-# before and after the run, as in .github/workflows/pr.yml.
+# Started as root, this script therefore: installs the pr.yml runtime deps,
+# creates NAME, mirrors this checkout to ~NAME/rv (rsync, .build excluded),
+# seeds NAME's Swift tarball cache from root's, and re-runs itself from
+# that copy as NAME, in a mount namespace with a fresh tmpfs on /tmp.
+# Started as any other user, it builds and tests the checkout it is in.
+#
+# The toolchain is the official Swift tarball (Scripts/install-official-
+# swift-linux.sh), never apt swift. ~/.config/rv is fingerprinted before and
+# after the run, as in .github/workflows/pr.yml.
 #
 # Not covered here (see pr.yml "linux root e2e"): the root-only filtered
 # runs, the rv run HTTPS e2e, and the systemd custodian e2e.
@@ -42,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     --user) RUN_USER="${2:?--user needs a name}"; shift 2 ;;
     --build-only) BUILD_ONLY=1; shift ;;
     --) shift; TEST_ARGS=("$@"); break ;;
-    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) log "unknown option $1"; exit 2 ;;
   esac
 done
@@ -52,10 +60,10 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-# Same list as pr.yml "Tarball runtime deps (not apt swift)".
+# Same list as pr.yml "Tarball runtime deps (not apt swift)", plus rsync.
 APT_DEPS=(binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev
   libncurses-dev libpython3-dev libsqlite3-0 libsqlite3-dev libstdc++-13-dev libxml2-dev
-  libz3-dev pkg-config tzdata zip unzip zlib1g-dev)
+  libz3-dev pkg-config tzdata zip unzip zlib1g-dev rsync)
 
 if [[ "$(id -u)" -eq 0 ]]; then
   if dpkg-query -W -f='${Status}\n' swift swiftlang 2>/dev/null | grep -q 'install ok installed'; then
@@ -77,10 +85,17 @@ if [[ "$(id -u)" -eq 0 ]]; then
     useradd --create-home --user-group --shell /bin/bash "$RUN_USER"
   fi
   user_home="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+  as_user() { install -d -o "$RUN_USER" -g "$RUN_USER" "$@"; }
+
+  # The user's own checkout, so the build and the tests can write under it.
+  copy="$user_home/rv"
+  log "mirroring $ROOT to $copy"
+  as_user "$copy"
+  rsync -a --delete --exclude '/.build/' --chown="$RUN_USER:$RUN_USER" "$ROOT/" "$copy/"
 
   # Seed the user's tarball cache from root's, so the 1 GB download happens once.
   if compgen -G "/root/.cache/swift/swift-*.tar.gz" >/dev/null; then
-    install -d -o "$RUN_USER" -g "$RUN_USER" "$user_home/.cache" "$user_home/.cache/swift"
+    as_user "$user_home/.cache" "$user_home/.cache/swift"
     for f in /root/.cache/swift/swift-*.tar.gz /root/.cache/swift/swift-*.tar.gz.sig; do
       [[ -e "$f" ]] || continue
       dest="$user_home/.cache/swift/$(basename "$f")"
@@ -91,19 +106,9 @@ if [[ "$(id -u)" -eq 0 ]]; then
     done
   fi
 
-  if ! su "$RUN_USER" -s /bin/bash -c "test -r '$ROOT/Package.swift' && test -x '$ROOT/Scripts/cloud-test.sh'"; then
-    log "$RUN_USER cannot read $ROOT; every directory above it needs o+x and the checkout o+r"
-    exit 1
-  fi
-
-  args=()
-  [[ "$BUILD_ONLY" -eq 1 ]] && args+=(--build-only)
-  [[ ${#TEST_ARGS[@]} -gt 0 ]] && args+=(-- "${TEST_ARGS[@]}")
-  log "re-running as $RUN_USER (root ignores the permissions some tests rely on)"
-  # A login shell gives the user's own HOME, PATH and environment, not root's.
-  # The agent proxy settings (HTTPS_PROXY, CA bundle) are passed through for
-  # the toolchain download; nothing else from root's environment is.
-  # A CA file under root's home is unreadable to the user, so it gets a copy.
+  # Proxy settings for the toolchain download. A CA file under root's home is
+  # unreadable to the user, so it gets a copy. Nothing else of root's
+  # environment is passed on.
   keep=()
   for v in HTTPS_PROXY https_proxy NO_PROXY no_proxy; do
     [[ -n "${!v:-}" ]] && keep+=("$v=${!v}")
@@ -112,15 +117,34 @@ if [[ "$(id -u)" -eq 0 ]]; then
     ca="${!v:-}"
     [[ -n "$ca" && -r "$ca" ]] || continue
     if ! su "$RUN_USER" -s /bin/bash -c "test -r $(printf '%q' "$ca")"; then
-      copy="$user_home/.cache/rv-cloud-test/$(basename "$ca")"
-      install -d -o "$RUN_USER" -g "$RUN_USER" "$user_home/.cache/rv-cloud-test"
-      install -o "$RUN_USER" -g "$RUN_USER" -m 0644 "$ca" "$copy"
-      ca="$copy"
+      as_user "$user_home/.cache/rv-cloud-test"
+      install -o "$RUN_USER" -g "$RUN_USER" -m 0644 "$ca" "$user_home/.cache/rv-cloud-test/$(basename "$ca")"
+      ca="$user_home/.cache/rv-cloud-test/$(basename "$ca")"
     fi
     keep+=("$v=$ca")
   done
-  printf -v cmd '%q ' env "${keep[@]}" "$ROOT/Scripts/cloud-test.sh" "${args[@]}"
-  exec su - "$RUN_USER" -s /bin/bash -c "cd $(printf '%q' "$ROOT") && $cmd"
+
+  args=()
+  [[ "$BUILD_ONLY" -eq 1 ]] && args+=(--build-only)
+  [[ ${#TEST_ARGS[@]} -gt 0 ]] && args+=(-- "${TEST_ARGS[@]}")
+  printf -v cmd '%q ' env "${keep[@]}" "$copy/Scripts/cloud-test.sh" "${args[@]}"
+  inner="cd $(printf '%q' "$copy") && $cmd"
+  # A login shell gives the user's own HOME and PATH, not root's.
+  printf -v su_cmd '%q ' su - "$RUN_USER" -s /bin/bash -c "$inner"
+
+  if unshare --mount --propagation private true 2>/dev/null; then
+    # Linux CI has no /private. Some tests switch on macOS-shaped fixtures
+    # when /private/tmp exists, and an earlier root run can leave one
+    # behind, so the namespace hides it rather than the host losing it.
+    hide_private=""
+    [[ -d /private ]] && hide_private="mount -t tmpfs -o size=1m,mode=0755 rv-cloud-test-private /private && "
+    log "re-running as $RUN_USER from $copy with a private /tmp"
+    exec unshare --mount --propagation private /bin/sh -c \
+      "mount -t tmpfs -o size=8g,mode=1777 rv-cloud-test-tmp /tmp && ${hide_private}exec $su_cmd"
+  fi
+  log "cannot make a mount namespace; re-running as $RUN_USER with the shared /tmp"
+  log "fixed /tmp paths left by an earlier root run may fail tests"
+  exec /bin/sh -c "$su_cmd"
 fi
 
 umask 022
@@ -134,15 +158,16 @@ swift --version 2>&1 | head -n 1 | grep -Eq "Swift version ${pin}( |\.|$)" || {
   exit 1
 }
 
-SCRATCH="$HOME/.cache/rv-build"
-mkdir -p "$SCRATCH" "$HOME/.config"
+mkdir -p "$HOME/.config"
 LOGDIR="$HOME/.cache/rv-cloud-test"
 mkdir -p "$LOGDIR"
 
-log "swift $(swift --version 2>&1 | head -n 1 | sed 's/.*version //') · $(id -un) · umask $(umask) · scratch $SCRATCH"
+log "swift $(swift --version 2>&1 | head -n 1 | sed 's/.*version //') · $(id -un) · umask $(umask) · $ROOT"
 start=$(date +%s)
-swift build --build-tests --scratch-path "$SCRATCH" 2>&1 | tee "$LOGDIR/build.log" | grep -E "error:|Compiling|Build complete" | grep -v Compiling || true
-if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
+status=0
+swift build --build-tests > "$LOGDIR/build.log" 2>&1 || status=$?
+if [[ "$status" -ne 0 ]]; then
+  grep -E "error:" "$LOGDIR/build.log" | head -20 >&2 || true
   log "build failed; see $LOGDIR/build.log"
   exit 1
 fi
@@ -151,15 +176,14 @@ log "built in $(( $(date +%s) - start ))s"
 
 python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$LOGDIR/config-rv.before"
 
-status=0
 start=$(date +%s)
-swift test --skip-build --scratch-path "$SCRATCH" "${TEST_ARGS[@]}" > "$LOGDIR/test.log" 2>&1 || status=$?
+swift test --skip-build "${TEST_ARGS[@]}" > "$LOGDIR/test.log" 2>&1 || status=$?
 log "tests finished in $(( $(date +%s) - start ))s (exit $status); full log $LOGDIR/test.log"
 
 sed 's/\x1b\[[0-9;]*m//g' "$LOGDIR/test.log" | grep -E '^. Test run with' || true
 if [[ "$status" -ne 0 ]]; then
-  log "failures:"
-  sed 's/\x1b\[[0-9;]*m//g' "$LOGDIR/test.log" | grep -E '^✘ Test .* (failed after|recorded an issue)' | head -60 >&2 || true
+  log "failing tests:"
+  sed 's/\x1b\[[0-9;]*m//g' "$LOGDIR/test.log" | grep -E '^✘ Test .* failed after' | head -60 >&2 || true
 fi
 
 python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$LOGDIR/config-rv.after"
