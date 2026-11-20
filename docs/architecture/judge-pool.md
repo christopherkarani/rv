@@ -167,6 +167,15 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 | No manifest (one-click install) | same euid and exact on-disk bytes of `rvd` beside `rv-judge` (canonical path + CDHash) | same euid and exact bytes of `rv-judge` beside `rvd` |
 | Manifest present but invalid | never | never |
 
+The hook-local evaluator (`rv-hook-local`, `docs/architecture/hook-local-decide.md`)
+is a second, judge-only client. The supervisor accepts it, with a manifest,
+when its live code is hardened, non-adhoc, Developer ID signed
+`dev.rv.rv-hook-local` from the team the `service` entry names (the identity
+the C hook pins; the manifest has no entry of its own for it), and without
+one when it is the exact bytes of `rv-hook-local` beside `rv-judge`. It may
+send `judge` requests only: `warm` and `status` are refused, and its client
+never warms. It verifies the supervisor exactly as rvd does.
+
 - **A manifest without a `judge` entry verifies no supervisor.** rvd then
   treats the pool as unreachable and every judged call goes to review; it
   does not fall back to a sibling pin or to the in-process judge. Add a
@@ -179,7 +188,8 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 - Before each spawn the supervisor compares the on-disk `rv-judge`'s CDHash
   with its own running code (`SecCodeCopySelf`), not only the file identity.
 - The C hook validates a `judge` entry like Swift does (it is a known role in
-  `daemon_trust.c`), though the hook itself never talks to the pool.
+  `daemon_trust.c`), though the C hook itself never talks to the pool (its
+  `rv-hook-local` child does).
 - Every message on the listener is authorized before it is read; the Mach
   service connection only performs the hello and hands out an anonymous
   endpoint, and requests are refused on any connection that has not

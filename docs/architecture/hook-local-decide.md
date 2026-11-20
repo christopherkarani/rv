@@ -1,8 +1,9 @@
 # Hook-local decide
 
-Status: Phase 2a. The C hook decides a call itself when rvd could give
-no other answer, so rvd is off the hot path for most calls. Everything
-else goes to rvd exactly as before.
+Status: Phase 2b. The C hook decides a call itself when rvd could give
+no other answer, so rvd is off the hot path for most calls. A call the
+judge scores is asked of the judge pool directly (see "The judge").
+Everything else goes to rvd exactly as before.
 
 ## Shape
 
@@ -35,14 +36,14 @@ that fires escalates:
 
 | rvd memory | Local stand-in | Fires when |
 | --- | --- | --- |
-| Judge model | `JudgePort` that records the call | a pack-allowed, non-safe-lane command with a judge bundle installed → `judge` |
+| Judge model | `JudgePort` that asks the judge pool once per call (see "The judge") | the pool gave no well-formed verdict in time → `judge` |
 | Allow-once grants, allowlist, rebase recovery, contained delete (Policy gate) | empty grant table plus an allowlist loader that records being called | any deny the Policy gate would see → `policy-gate` |
 | Unlock codes, pending approvals | mint / pending ports that record the call | a human-approvable deny → `ask` |
 | rvd's launch environment | rerun pinned to `RV_GUARD_MODE=enforce` | observe mode, where the enforce verdict is not the same allow → `observe` |
 
 A final answer is therefore only:
 
-- an allow no probe touched (no judge, no Policy gate);
+- an allow no probe touched (no Policy gate), the judge's allow included;
 - a shell deny the Policy gate never sees (`policyGateAccess == .skip`)
   that no transport may unlock (`denyPinned`);
 - a file-tool allow or deny (the file door has no Policy gate, unlock
@@ -51,9 +52,49 @@ A final answer is therefore only:
 
 Indeterminate results, malformed payloads, a second evaluation in one
 call, or an override-audit effect escalate (`indeterminate`, `malformed`,
-`unexpected`). The `judge` escalation is the Phase 2b slot: that class
-of call can later go from the hook straight to the judge pool
-(`rv-judge serve`) instead of to rvd.
+`unexpected`).
+
+### The judge
+
+A pack-allowed, non-safe-lane command with a judge bundle installed is
+scored by the judge. The evaluator asks the pool (`dev.rv.judge`,
+`docs/architecture/judge-pool.md`) itself, through the same
+`XPCJudgeClient` rvd uses, and reads the answer with rvd's own code
+(`JudgeRuntime.read`, the provenance thresholds, the truncation guard):
+
+- **Trust, both ways.** The supervisor is verified as rvd verifies it
+  (`JudgePoolTrust.verifySupervisor`: the manifest's `judge` entry, or
+  `rv-judge` beside this executable). The supervisor accepts the
+  evaluator as a judge-only client: with a manifest, hardened, non-adhoc,
+  Developer ID signed `dev.rv.rv-hook-local` from the service entry's
+  team (the identity the C hook pins); without one, the `rv-hook-local`
+  sibling's cdhash. It may send judge requests and nothing else: no warm,
+  no status, and its client never warms.
+- **A verdict or rvd.** Only a well-formed verdict is read. No client,
+  too little time, unreachable, untrusted, late, busy, warming, a load or
+  prediction failure, or a malformed verdict all escalate (`judge`) and
+  rvd asks the pool itself. None is ever an allow, so no breaker state is
+  shared with rvd. A review or block verdict becomes rvd's deny, which
+  the classifier escalates (the Policy gate or a human may lift a review)
+  or answers when pinned.
+- **Once per call.** The observe pass and its enforce pass read the same
+  answer.
+- **Inside the deadline.** The budget is the pool's own 1.5 s cut to
+  what is left: the client may take its budget plus the 250 ms transport
+  slack (handshake and round trip), and must be back 150 ms
+  (`judgeWriteReserve`) before the 750 ms write deadline, leaving that for
+  the judge-log row (and a block's audit rows). With less than 50 ms of
+  budget left the pool is not asked. The C hook's 1 s kill therefore
+  never lands during a judge wait.
+
+Double work. A call the evaluator escalates after asking the pool is
+judged again by rvd: every review verdict (the deny goes to the Policy
+gate), and every request that went late. A late request also keeps its
+worker busy until it answers or the pool kills it at 1.5 s, so rvd's
+request may wait for the hedge. The equivalence harness counts pool
+requests per judged call (see "Measurements"). A request cache in the
+pool, keyed by the call, would make the second request free; that is a
+follow-up.
 
 Under observe, a final allow also needs the enforce verdict for the same
 call to be that allow. rvd's launch environment may pin enforce (the env
@@ -291,7 +332,8 @@ the observe step-aside).
 
 See the PR description for the numbers measured on the change (cold
 `rv hook` local path p50 / p99, and the share of calls decided locally
-per configuration from `RV_LOCAL_EQUIVALENCE_REPORT`). No policy
+per configuration from `RV_LOCAL_EQUIVALENCE_REPORT`, with the judge
+configurations' pool requests per judged call). No policy
 snapshot is built: it is only warranted if the local p99 exceeds 60 ms.
 
 ## Packaging
