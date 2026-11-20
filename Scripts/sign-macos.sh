@@ -226,12 +226,22 @@ if [[ "$from_env" -eq 1 ]]; then
   run security set-keychain-settings -lut 3600 "$keychain"
   run security unlock-keychain -p "$keychain_password" "$keychain"
   run security import "$p12_file" -k "$keychain" -P "$cert_password" -T /usr/bin/codesign
+  # Apple's public Developer ID G2 intermediate (SHA-256 f16cd3c5…df3a). CI
+  # runners lack it, and without the chain codesign reports "no identity found".
+  run security import "$script_dir/certs/DeveloperIDG2CA.cer" -k "$keychain"
   run security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
   if [[ "$dry_run" -eq 1 ]]; then
     run security list-keychains -d user -s "$keychain" "<existing keychains>"
   else
     run security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
     rm -f "$p12_file"
+  fi
+  # Fail here, naming the cause, rather than at the first codesign.
+  if [[ "$dry_run" -eq 1 ]]; then
+    run security find-identity -v -p codesigning "$keychain"
+  else
+    security find-identity -v -p codesigning "$keychain" | grep -qF "\"$identity\"" \
+      || fail "no valid signing identity in the imported .p12 matches DEVELOPER_ID_APP (wrong name, or the certificate chain does not verify)"
   fi
   keychain_args=(--keychain "$keychain")
 fi

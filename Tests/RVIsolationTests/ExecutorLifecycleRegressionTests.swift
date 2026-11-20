@@ -131,7 +131,11 @@ struct ExecutorLifecycleRegressionTests {
             arguments: [started.path, pidFile.path]
         )
         let executor = LocalExecutor()
-        let task = Task { try await lifecycleRun(executor, executable) }
+        let returnExecutor = DedicatedTaskExecutor(label: "rv.test.cancel-return")
+        let task = Task(executorPreference: returnExecutor) {
+            let result = try await lifecycleRun(executor, executable)
+            return (result, Date())
+        }
         // DiskArbitration can queue hdiutil behind other suites. Wait until the
         // owned child exists, then cancel. The old failure was cancelling during
         // that wait: Process.waitUntilExit ignored the task, so this test hung
@@ -151,8 +155,11 @@ struct ExecutorLifecycleRegressionTests {
         }
         task.cancel()
         let cancelledAt = Date()
-        let result = try await task.value
-        #expect(Date().timeIntervalSince(cancelledAt) < 8)
+        // Stamped where `run` returns, on the dedicated executor. Resuming
+        // this test function needs a cooperative thread, and sync tests in
+        // other suites can hold all of them past the bound.
+        let (result, returnedAt) = try await task.value
+        #expect(returnedAt.timeIntervalSince(cancelledAt) < 8)
         guard let pid = sleepPID else {
             Issue.record("contained sleep pid did not appear; launch returned \(result)")
             return
@@ -225,6 +232,27 @@ private final class HelperCancelBox: Sendable {
 private struct HelperCancelState: Sendable {
     var flag: CooperativeLaunchStop.Flag?
     var status: Int32?
+}
+
+/// Runs a task's jobs, and the default actors it calls, on one serial
+/// Dispatch queue instead of the cooperative pool. Swift Testing runs
+/// synchronous `@Test` bodies on that pool, so blocking tests elsewhere in
+/// the run can hold every pool thread for seconds. A clock stopped only
+/// after the awaiting task gets a pool thread back would include that wait.
+private final class DedicatedTaskExecutor: TaskExecutor {
+    private let queue: DispatchQueue
+
+    init(label: String) {
+        queue = DispatchQueue(label: label)
+    }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedTaskExecutor()
+        queue.async {
+            job.runSynchronously(on: executor)
+        }
+    }
 }
 
 private enum ExecutorLifecycleFixtureError: Error {

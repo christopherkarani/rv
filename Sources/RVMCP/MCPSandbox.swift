@@ -126,10 +126,15 @@ public enum MCPSandbox {
     /// a server that asks for one is refused, never run bare.
     /// `notice` hears what rv says about a cage it built (on Linux, what
     /// the kernel's Landlock leaves open); it goes to stderr by default.
+    /// `enforcement` is the configuration's effective answer per server
+    /// (`MCPConfiguration.sandboxEnforcement(for:integrity:)`); `audited` must record
+    /// each audit pass durably and return false when it could not.
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
         notice: @escaping @Sendable (String) -> Void = { MCPGatewayRuntime.writeStderrLine($0 + "\n") },
-        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
+        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in },
+        enforcement: @escaping @Sendable (MCPServerDefinition) -> MCPSandboxEnforcement = { _ in .enforce },
+        audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool = { _, _ in false }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch, reach in
             guard let policy = definition.sandbox else { return .success(launch) }
@@ -153,10 +158,9 @@ public enum MCPSandbox {
             if policy.hosts.isEmpty == false {
                 let server = definition.name
                 let credential = proxyCredential()
-                let proxy = EgressProxy(
-                    policy: EgressHostPolicy(
-                        allowedHosts: Set(policy.hosts), allowedIPs: policy.allowedIPs, relaysLoopback: false),
-                    record: { denied(server, $0) }, clientCredential: credential)
+                let proxy = hostsProxy(
+                    server: server, hosts: policy.hosts, allowedIPs: policy.allowedIPs,
+                    enforcement: enforcement(definition), credential: credential, denied: denied, audited: audited)
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
@@ -188,11 +192,25 @@ public enum MCPSandbox {
             #elseif os(Linux)
             return applyLinux(
                 definition: definition, launch: launch, policy: policy, configDirectory: configDirectory, home: home,
-                notice: notice, denied: denied)
+                notice: notice, denied: denied, enforcement: enforcement(definition), audited: audited)
             #else
             return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name)))
             #endif
         }
+    }
+
+    /// The `sandbox.hosts` allowlist proxy for one server. In audit mode a
+    /// host outside the list passes only after `audited` durably recorded it.
+    static func hostsProxy(
+        server: String, hosts: [String], allowedIPs: [String: EgressAllowedIPs],
+        enforcement: MCPSandboxEnforcement, credential: String,
+        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void,
+        audited: @escaping @Sendable (String, EgressProxyDenial) -> Bool
+    ) -> EgressProxy {
+        EgressProxy(
+            policy: EgressHostPolicy(allowedHosts: Set(hosts), allowedIPs: allowedIPs, relaysLoopback: false),
+            record: { denied(server, $0) }, clientCredential: credential,
+            audit: enforcement == .audit ? EgressAuditMode(record: { audited(server, $0) }) : nil)
     }
 
     /// 32 random bytes, hex. The proxy requires this as `Proxy-Authorization`.

@@ -143,6 +143,14 @@ import Testing
     #expect(object["total_count"] as? Int == 95)
     #expect((object["packs"] as? [[String: Any]])?.count == 2)
 
+    let listed = try runRV(
+        binary: binary,
+        arguments: ["packs", "list", "--enabled", "--category", "core", "--json"],
+        home: home
+    )
+    #expect(listed.status == 0, "\(listed.stderr)")
+    #expect(listed.stdout == filtered.stdout, "`rv packs list` is `rv packs`")
+
     let verbose = try runRV(
         binary: binary,
         arguments: ["packs", "--search", "sqlite", "--verbose", "--expand", "--plain"],
@@ -159,6 +167,21 @@ import Testing
     )
     #expect(coreVerbose.status == 0)
     #expect(coreVerbose.stdout.contains("\\ rewrite history") == false)
+}
+
+/// Top-level help says "packs  List and enable or disable packs", so
+/// `rv packs list` must list, and the bare form keeps every flag.
+@Test func packsListIsTheDefaultSubcommandAndKeepsItsFlags() throws {
+    let bare = try #require(try Packs.parseAsRoot([]) as? Packs.List)
+    #expect(bare.enabledOnly == false)
+    let flagged = try #require(try Packs.parseAsRoot(["--enabled", "--category", "core"]) as? Packs.List)
+    #expect(flagged.enabledOnly)
+    #expect(flagged.category == "core")
+    let listed = try #require(try Packs.parseAsRoot(["list", "--verbose", "--search", "git"]) as? Packs.List)
+    #expect(listed.verbose)
+    #expect(listed.search == "git")
+    #expect(try Packs.parseAsRoot(["info", "core.git"]) is Packs.Info)
+    #expect(try Packs.parseAsRoot(["enable", "core.git"]) is Packs.Enable)
 }
 
 private func runRV(

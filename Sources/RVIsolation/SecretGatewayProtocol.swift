@@ -101,7 +101,9 @@ struct GatewayRequestHead: Equatable {
             let text = String(bytes: bytes, encoding: .utf8)
         else { return nil }
         let lines = text.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first, lines.allSatisfy({ $0.contains("\n") == false && $0.contains("\r") == false })
+        // Bytes, not `String.contains`: Linux Foundation's Unicode-aware match misses
+        // a CR or LF followed by a combining mark.
+        guard let requestLine = lines.first, lines.allSatisfy({ $0.utf8.contains(10) == false && $0.utf8.contains(13) == false })
         else { return nil }
         let parts = requestLine.split(separator: " ", omittingEmptySubsequences: false)
         guard parts.count == 3, parts[2] == "HTTP/1.1" || parts[2] == "HTTP/1.0",

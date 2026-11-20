@@ -34,6 +34,15 @@ struct SecretGatewayProtocolTests {
         #expect(head("GET / HTTP/1.1\r\n" + many) == nil)
     }
 
+    /// libFuzzer crash on Linux: a bare CR followed by a combining mark (U+05AF)
+    /// slipped past a Unicode-aware `contains("\r")` into a header value.
+    @Test func bareCRBeforeCombiningMarkIsRefused() {
+        let bytes = Array("GET /s/K/x HTTP/1.1\r\nHost: 12.1".utf8) + [0x0D, 0xD6, 0xAF, 0x06]
+        #expect(GatewayRequestHead.parse(bytes) == nil)
+        let lf = Array("GET /s/K/x HTTP/1.1\r\nHost: 12.1".utf8) + [0x0A, 0xD6, 0xAF]
+        #expect(GatewayRequestHead.parse(lf) == nil)
+    }
+
     @Test func duplicateContentLengthIsRefused() {
         let maximum = 32 * 1024 * 1024
         #expect(gatewayBodyFraming(

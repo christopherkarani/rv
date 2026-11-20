@@ -82,6 +82,9 @@ enum GatedEffect: Sendable, Equatable {
         /// Observed rows: whether that enforced deny would have surfaced
         /// as an ask (`HookAuthorization.project`).
         var wouldBe: LedgerWouldBe = .deny
+        /// The hook request's host session id, when it is an opaque token
+        /// (`DenialLedgerRecord.attributableSession`); nil otherwise.
+        var session: String?
     }
 
     struct OverrideRow: Sendable, Equatable {

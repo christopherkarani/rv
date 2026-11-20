@@ -81,7 +81,7 @@ struct MCPHostSpellingTests {
         { "sh -c \(shQuoted($0))" },
         { "watch \(shQuoted($0))" },
         { "echo \(shQuoted($0)) | sh" },
-        { "stdbuf -o0 \($0)" },
+        { "chronic \($0)" },
     ]
 
     static let spellingCases: [SpellCase] = {
@@ -199,7 +199,7 @@ struct MCPHostSpellingTests {
         #"watch "env '{clau?e,x y}' '{m?p,x y}' add s -- x""#,
         #"watch "'cl[;a]ude' 'm[;c]p' add s -- x""#,
         #"echo "env '{clau?e,x|y}' '{m?p,x&y}' add s -- x" | sh"#,
-        #"stdbuf -o0 '{clau?e,x y}' '{m?p,x y}' add s -- x"#,
+        #"chronic '{clau?e,x y}' '{m?p,x y}' add s -- x"#,
         #"chronic 'm[;c]p' 'i[(n]stall' srv"#,
         #"watch "'cl[[:alpha:];]ude' 'm[[:alpha:];]p' add s -- x""#,
         #"watch "echo [; env '{clau?e,x y}' '{m?p,x y}' add s -- x ]""#,
@@ -257,7 +257,7 @@ struct MCPHostSpellingTests {
             }
         }
         return lines.flatMap { line in
-            [line, "stdbuf -o0 \(line)", "watch \(shQuoted(line))", "$x \(shQuoted("env " + line))"]
+            [line, "chronic \(line)", "watch \(shQuoted(line))", "$x \(shQuoted("env " + line))"]
         }
     }()
 
@@ -281,10 +281,10 @@ struct MCPHostSpellingTests {
     /// A brace word the shell splits into several words, a POSIX class, and
     /// a word the shell expands to nothing before the subcommand.
     @Test("a spelling the shell splits or classes still asks", arguments: [
-        "{claude,mcp} add evil -- x", "stdbuf -o0 {claude,mcp} add evil -- x", "chronic {mcp,install} srv",
+        "{claude,mcp} add evil -- x", "chronic {claude,mcp} add evil -- x", "chronic {mcp,install} srv",
         "chronic mcp {,} install srv",
-        "stdbuf -o0 clau[[:alpha:]]e mcp add evil -- x", "claude m[[:alpha:]]p add evil -- x",
-        "stdbuf -o0 {code,--add-mcp} x", "chronic {mcp,$SUB} srv",
+        "chronic clau[[:alpha:]]e mcp add evil -- x", "claude m[[:alpha:]]p add evil -- x",
+        "chronic {code,--add-mcp} x", "chronic {mcp,$SUB} srv",
     ])
     func splitSpellingAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
@@ -308,11 +308,13 @@ struct MCPHostSpellingTests {
 
     /// A program not known to leave its operands alone may run them: these
     /// ask as their literal forms (`ls mcp install`) always have. So does a
-    /// command that leaves them alone when a wrapper or a path runs it, or
+    /// command that leaves them alone when a wrapper rv does not model
+    /// (`caffeinate -Q`, `firejail`, `chpst -e`) or a path runs it, or
     /// git with an option before its subcommand; and its literal words and
     /// carried text are read as before.
     @Test("a spelled operand of a program that may run still asks", arguments: [
-        "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "stdbuf -o0 ls mcp $DIR", "/bin/ls mcp $DIR",
+        "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "caffeinate -Q ls mcp $DIR", "firejail ls mcp $DIR",
+        "chpst -e env ls mcp $DIR", "/bin/ls mcp $DIR",
         "git -C . add mcp *", "ls mcp install", "ls 'chronic mcp install x'",
         "git add mcp install", "ls 'npx install-m[x]cp srv'", "grep 'npx install-m[x]cp srv' docs/",
     ])
@@ -326,7 +328,7 @@ struct MCPHostSpellingTests {
     @Test("a spelled operand of a command that leaves its operands alone allows", arguments: [
         "ls mcp *", "git add mcp *", "ls mcp $DIR", "cp -r packages/mcp \"$DEST\"", "rm -rf build/mcp $TMP",
         "mv mcp $BACKUP", "touch {a..z}{0..9}", "mkdir -p {a..h}/{1..9}", "git status mcp *",
-        "git diff mcp $REF", "cat mcp/{a,b}.md", "sudo rm -rf build/mcp $TMP",
+        "git diff mcp $REF", "cat mcp/{a,b}.md", "sudo rm -rf build/mcp $TMP", "stdbuf -o0 ls mcp $DIR",
     ])
     func operandsLeftAloneAllow(_ command: String) {
         #expect(judgeSpelling(command) == false, "\(command)")
@@ -487,19 +489,142 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling(command), "\(command)")
     }
 
-    /// A program rv does not list as a runner, given options before the
-    /// host, may still run it: the host's words after those options are
-    /// read as their own command line, so a dynamic group word or a
-    /// dynamic head there asks as it does with no options.
-    @Test("a host after an unlisted wrapper's options asks with a dynamic word", arguments: [
+    /// A listed wrapper (`optionTailWrappers`), given options before the
+    /// host, still runs it: the host's words after those options are read
+    /// as their own command line, so a dynamic group word or a dynamic head
+    /// there asks as it does with no options.
+    @Test("a host after a listed wrapper's options asks with a dynamic word", arguments: [
         "strace -f claude \"$(printf mcp)\" add evil -- npx -y evil-mcp",
         "C=claude; strace -f $C mcp add evil -- npx evil",
         "xvfb-run -a claude $(printf mcp) add evil -- x",
         "firejail --quiet claude $SUB add evil -- x",
         "strace -o out.txt claude $SUB add evil -- x",
         "strace -o out.txt $C mcp add evil -- x",
+        "/usr/bin/strace -f $C mcp add evil -- x",
+        "xvfb-run -a $C mcp add evil -- x",
+        "firejail --quiet $C mcp add evil -- x",
+        "valgrind -q claude $SUB add evil -- x",
+        "systemd-run --wait codex $SUB add evil -- x",
+        "bwrap --dev /dev claude $SUB add evil -- x",
     ])
-    func unlistedWrapperWithOptionsAsks(_ command: String) {
+    func listedWrapperWithOptionsAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Host names before the real one do not use up the re-reads: every
+    /// host or dynamic word after the options is read from.
+    @Test("a host after decoy hosts in a wrapper's options asks", arguments: [
+        "strace -o cursor -o cursor -o cursor -o cursor -f claude $SUB add evil -- x",
+        "strace -o cursor -o cursor -o cursor -o cursor -o cursor -o cursor -f claude $SUB add evil -- x",
+    ])
+    func decoyHostsBeforeWrappedHostAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// A dynamic option value of a program rv does not list as a wrapper
+    /// is no program it runs, so a group word after it is no host's, as
+    /// before any option tail was read.
+    @Test("a dynamic option value outside a listed wrapper, with a group word, allows", arguments: [
+        "docker compose -f \"$COMPOSE_FILE\" config",
+        "git -C \"$REPO\" config --get remote.origin.url",
+        "kubectl --context \"$C\" config view",
+        "tar -C \"$D\" -xf x.tgz config",
+        "curl -H \"$A\" -H \"$B\" -H \"$C\" -H \"$D\" -H \"$E\" https://example.com/config",
+        "docker run -e A=\"$A\" -e B=\"$B\" -e C=\"$C\" -e D=\"$D\" -e E=\"$E\" image config",
+        "git -c a=\"$A\" -c b=\"$B\" -c c=\"$C\" -c d=\"$D\" -c e=\"$E\" config --list",
+        "git --git-dir \"$GIT_DIR\" config --list",
+        "git -c user.name=\"$NAME\" config --get remote.origin.url",
+        "docker --context \"$CTX\" plugin ls",
+        "docker compose -p \"$PROJECT\" config",
+        "kubectl --kubeconfig \"$KUBECONFIG\" config view",
+        "kubectl -n \"$NS\" plugin list",
+        "helm --kube-context \"$C\" plugin list",
+        "cargo --manifest-path \"$M\" run --bin mcp",
+        "gcloud --project \"$P\" config list",
+        "make -C \"$D\" config",
+        "pip --python \"$PY\" config list",
+        "ssh -i \"$KEY\" host cat config",
+        "sed -e \"$EXPR\" config",
+        "python3 -W \"$W\" manage.py config",
+        "systemctl -H \"$HOST\" status mcp",
+    ])
+    func dynamicOptionValueOutsideWrapperAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A host name that is an option's value or an operand of a program rv
+    /// does not list as a wrapper is no program it runs, so a dynamic word
+    /// after it allows, as before any option tail was read.
+    @Test("a host name as a non-wrapper's option value or operand allows", arguments: [
+        "gh issue list --label claude --search \"$Q\"",
+        "git checkout -b codex \"$BASE\"",
+        "ln -sf codex \"$DIR\"",
+        "rsync -av claude \"$DEST\"",
+        "docker run --rm --name codex -v \"$PWD\":/w img",
+        "screen -S cursor -dm \"$CMD\"",
+        "kubectl -n claude get pods -l \"$SEL\"",
+        "git worktree add -b codex \"$DIR\"",
+    ])
+    func hostNameOutsideWrapperAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A listed wrapper running a dynamic program with dynamic words allows,
+    /// as the same program run unwrapped does (`$C $G add` on the main line).
+    @Test("a listed wrapper running a dynamic program with dynamic words allows", arguments: [
+        "strace -o \"$LOG\" \"$BIN\"",
+        "valgrind --log-file=\"$LOG\" \"$BIN\" \"$ARG\"",
+        "systemd-run --unit \"$U\" \"$CMD\"",
+        "numactl -N \"$NODE\" \"$BIN\" --config c.yml",
+    ])
+    func wrappedDynamicProgramWithDynamicWordsAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// The nearest ways those programs run something still ask: a git
+    /// alias, a program given to another option as text, and a host named
+    /// in a container or pod command.
+    @Test("a command those programs run still asks", arguments: [
+        "git -c alias.x='!claude mcp add evil' x",
+        "git -C \"$REPO\" -c alias.x='!claude mcp add evil' x",
+        "tar -C \"$D\" --to-command='claude mcp add evil' -xf x.tgz",
+        "docker compose -f \"$F\" run svc claude mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- claude mcp add evil -- x",
+    ])
+    func pathOptionProgramsStillAsk(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Known limits, not pins: a dynamic program run through an option or
+    /// subcommand of a program rv does not list as a wrapper (git -C, a
+    /// redefined git, tar -I, docker compose exec, kubectl exec) is an
+    /// existing gap not modelled here; these allowed before any option
+    /// tail was read. So did the last two: a listed wrapper running a
+    /// dynamic program given a dynamic group word, and an unlisted wrapper.
+    @Test("a dynamic program rv does not read as a host command is a known gap", arguments: [
+        "git -C \"$REPO\" $C mcp add evil -- x",
+        "alias git=strace; git -C \"$C\" mcp add evil -- x",
+        "tar -C \"$D\" -I \"$P\" -xf x.tgz mcp add evil",
+        "docker compose -f \"$F\" exec -T svc $X mcp add evil -- x",
+        "kubectl --context \"$C\" exec pod -- $X mcp add evil -- x",
+        // Same as the unwrapped form: `$C $G add` does not ask on the main line.
+        "strace -f $C $G add evil -- x",
+        // An unlisted wrapper is not read, as before the change.
+        "gdb --args claude $SUB add evil -- x",
+        // A launcher prefix the resolver strips leaves that same command.
+        "stdbuf -o0 gdb --args claude $SUB add evil -- x",
+    ])
+    func dynamicProgramBehindNonWrapperIsKnownGap(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// Known cost: under a listed wrapper a dynamic option value is read
+    /// as the program, so a later group word asks (`xargs -P "$J" echo
+    /// config` does on the main line too).
+    @Test("a listed wrapper's dynamic option value with a group word asks", arguments: [
+        "strace -o \"$LOG\" ls config",
+    ])
+    func wrapperDynamicOptionValueAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
     }
 
@@ -555,7 +680,7 @@ struct MCPHostSpellingTests {
     /// brace stays in every word.
     @Test("a blank inside a brace alternative still splits", arguments: [
         "claude {mcp,add,srv,\"x y\"}", "claude {mcp,add,srv,'x y'}", "chronic {'a b',mcp} install srv",
-        "stdbuf -o0 {claude,'x y'} mcp add evil -- x",
+        "chronic {claude,'x y'} mcp add evil -- x",
     ])
     func blankInBraceAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
@@ -582,7 +707,7 @@ struct MCPHostSpellingTests {
         #expect(globCanMatch("cl[x]ude", "claude", budget: &budget) == false)
         #expect(globCanMatch("cl[!.]ude", "cl.ude", budget: &budget) == false)
         #expect(globCanMatch("cl[!0-9]ude", "cl5ude", budget: &budget) == false)
-        for command in ["stdbuf -o0 cl[M-c]ude mcp add evil -- x", "stdbuf -o0 cl[!A-Z]ude mcp add evil -- x"] {
+        for command in ["chronic cl[M-c]ude mcp add evil -- x", "chronic cl[!A-Z]ude mcp add evil -- x"] {
             #expect(judgeSpelling(command), "\(command)")
         }
     }
@@ -605,7 +730,7 @@ struct MCPHostSpellingTests {
         #expect(judgeSpelling("curl -o f.zip \"\(url)\"") == false)
         let stars = String(repeating: "*", count: 300)
         let deep = "/" + String(repeating: "d/", count: 150) + "clau?e"
-        for command in ["stdbuf -o0 \(stars) mcp add evil -- x", "stdbuf -o0 \(deep) mcp add evil -- x"] {
+        for command in ["chronic \(stars) mcp add evil -- x", "chronic \(deep) mcp add evil -- x"] {
             #expect(judgeSpelling(command), "\(command.prefix(40))")
         }
     }
@@ -698,7 +823,7 @@ struct MCPHostSpellingTests {
             #expect(reads.wordVisits <= 4 * (args.count + 1) + 2)
             #expect(reads.wordVisits >= 4 * (args.count + 1))
             #expect(reads.spelling.steps == 0)
-            #expect(judgeSpelling("stdbuf " + args.joined(separator: " ")) == false)
+            #expect(judgeSpelling("chronic " + args.joined(separator: " ")) == false)
             let grouped = LaunchedCommand.make(
                 head: "stdbuf", program: "stdbuf", args: args + ["mcp"], headIsDynamic: false)
             var groupedReads = HostTextReads()
@@ -717,7 +842,7 @@ struct MCPHostSpellingTests {
         }
         let args = ["-o0"] + Array(repeating: "${a}", count: 2_000) + stars
             + [String(repeating: "{", count: 4_000) + ",", String(repeating: "*a", count: 2_000)]
-        let line = "stdbuf " + args.joined(separator: " ")
+        let line = "chronic " + args.joined(separator: " ")
         #expect(line.utf8.count > 60_000)
         let command = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: args, headIsDynamic: false)
         var reads = HostTextReads()

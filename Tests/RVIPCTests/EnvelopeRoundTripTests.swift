@@ -405,6 +405,9 @@ extension IPCMethod {
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: true))
             ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
+            // One sample per wire key (SDKVectorTests goldens are keyed by
+            // it); the cwd variant is pinned in SDKVectorTests.
+            NamedMethod(key: "policyStatus", id: id, method: .policyStatus(PolicyStatusParams(cwd: nil))),
             NamedMethod(key: "pendingList", id: id, method: .pendingList),
             NamedMethod(
                 key: "pendingWatch",
@@ -505,6 +508,23 @@ extension IPCResult {
                         idleExitSeconds: 300,
                         packsEnabled: [.coreGit],
                         checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
+                    )
+                )
+            ),
+            // One sample per wire key; the failed and busy variants are
+            // pinned in SDKVectorTests.
+            NamedResult(
+                key: "policyStatus",
+                id: id,
+                result: .policyStatus(
+                    PolicyStatusReply.status(
+                        PolicyLoadStatus(
+                            state: .loaded,
+                            machine: .init(hash: "abc", ruleCount: 2, exceedsCeiling: true),
+                            repo: .init(hash: "def", ruleCount: 0, exceedsCeiling: false),
+                            ceilingRuleCount: 1,
+                            effectiveRuleCount: 3
+                        )
                     )
                 )
             ),

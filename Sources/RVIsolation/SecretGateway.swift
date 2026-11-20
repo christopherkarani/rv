@@ -1012,7 +1012,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             var scrubber = headerScrubber
             let value = String(
                 decoding: scrubber.process(Array(header.value.utf8)) + scrubber.finish(), as: UTF8.self)
-            guard value.contains("\r") == false, value.contains("\n") == false else { continue }
+            guard value.utf8.contains(13) == false, value.utf8.contains(10) == false else { continue }
             text += "\(header.name): \(value)\r\n"
         }
         if framed {

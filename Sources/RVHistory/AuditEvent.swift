@@ -17,6 +17,11 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// recovery, contained delete).
     public static let commandOverride = AuditEventKind(rawValue: "command.override")
     public static let egressDenied = AuditEventKind(rawValue: "egress.denied")
+    /// An audit-mode would-be deny (`sandbox.enforcement: audit`): the egress
+    /// allowlist would have refused, and the proxy admitted the request past
+    /// it, after every other check and before dialing. A later `egress.denied`
+    /// for the same host means the request still failed (dial filter, DNS).
+    public static let egressObserved = AuditEventKind(rawValue: "egress.observed")
     public static let admission = AuditEventKind(rawValue: "admission")
     public static let runtimeSession = AuditEventKind(rawValue: "runtime.session")
     public static let runtimeStarted = AuditEventKind(rawValue: "runtime.started")
@@ -41,6 +46,8 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// One gate setting: safety, a host mode, guard mode, packs, the
     /// allowlist, secret definitions, an egress review.
     public static let configChanged = AuditEventKind(rawValue: "config.changed")
+    /// An owner-authentication attempt (`OwnerPresence`), passed or not.
+    public static let ownerAction = AuditEventKind(rawValue: "owner.action")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")
@@ -62,6 +69,18 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
     }
+}
+
+extension AuditEventKind: CaseIterable {
+    /// Every fixed kind. The `workspace.*` and `agent.*` families are open
+    /// (one per lifecycle phase) and not listed. `AuditOCSFSchemaTests`
+    /// checks this list against the declarations above, so a new kind must
+    /// be added here and get an OCSF fixture.
+    public static let allCases: [AuditEventKind] = [
+        .commandDenied, .commandObserved, .commandOverride, .egressDenied, .egressObserved, .admission,
+        .runtimeSession, .runtimeStarted, .runtimeEnded, .secretUse, .secretMisuse, .mcpCall, .mcpApproval,
+        .mcpToolChanged, .mcpHostsUngoverned, .policyChanged, .policyManaged, .configChanged, .ownerAction,
+    ]
 }
 
 public enum AuditDecision: String, Sendable, Hashable, Codable {

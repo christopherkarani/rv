@@ -290,15 +290,17 @@ jobs:
               linux-aarch64) file "$stage/$bin" | grep -q 'ARM aarch64' ;;
             esac
           done
-          "$stage/rv-cli" --help > /tmp/rv-cli-help.txt
-          grep -q 'setup' /tmp/rv-cli-help.txt
-          "$stage/rvd" --version > /tmp/rvd-version.txt
-          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' /tmp/rvd-version.txt
-          # No daemon beside the stage: the hook fails closed with a deny.
+          "$stage/rv-cli" --help > /tmp/rv-cli-help.txt || { echo "::error::rv-cli --help exited $?"; cat /tmp/rv-cli-help.txt; exit 1; }
+          grep -q 'setup' /tmp/rv-cli-help.txt || { echo '::error::smoke check failed: grep -q setup /tmp/rv-cli-help.txt'; cat /tmp/rv-cli-help.txt; exit 1; }
+          "$stage/rvd" --version > /tmp/rvd-version.txt || { echo "::error::rvd --version exited $?"; exit 1; }
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' /tmp/rvd-version.txt || { echo '::error::smoke check failed: grep -Eq ^[0-9]+\.[0-9]+\.[0-9]+ /tmp/rvd-version.txt'; cat /tmp/rvd-version.txt; exit 1; }
+          # No daemon beside the stage: the hook fails closed. With XDG_RUNTIME_DIR
+          # off the uid-derived path the miss is a connection failure, which asks
+          # the human (6f2feb0d); a deny is fine too. It must never allow.
           tmp_run="$(mktemp -d)"
           printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
-            | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude > /tmp/hook-out.json
-          grep -q 'deny' /tmp/hook-out.json
+            | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude > /tmp/hook-out.json || { echo "::error::rv hook exited $?"; cat /tmp/hook-out.json; exit 1; }
+          grep -Eq '"permissionDecision":"(deny|ask)"' /tmp/hook-out.json || { echo '::error::smoke check failed: hook did not fail closed'; cat /tmp/hook-out.json; exit 1; }
 
       # The newest GLIBC_ symbol version any staged binary or library needs
       # must not exceed install.sh's floor, or the installer would let a

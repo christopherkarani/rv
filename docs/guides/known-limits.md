@@ -9,8 +9,7 @@ measurements; they were not run for these guides.
 
 ## Releases and platforms
 
-- **No signed release yet.** The newest release, v0.2.1, is unsigned and
-  predates most features described in these guides. The installer checks
+- **No signed release yet.** The newest release, v0.2.2, is unsigned. The installer checks
   downloads against `SHA256SUMS` but does not yet check `SHA256SUMS`
   against a release key, and on macOS an unsigned binary only warns. See
   [Install](install.md#release-status-read-this-first).
@@ -134,8 +133,152 @@ The README's "MCP governance" section lists every case.
   non-ignored secret files there; rv does not read file contents.
 - **Observe mode's protection of `rvd` is lexical.** It raises the bar on
   stopping or replacing `rvd` but does not catch `kill` by a numeric pid,
-  interpreter or script forms, or a renamed `launchctl`. When `rvd` is
-  absent, an observe host lets calls run unchecked.
+  interpreter or script forms, or a renamed `launchctl`. A command whose
+  program rv cannot see is sent to Terminal on an observe host
+  (`observe.floor:unanalyzable`), never hard-denied (a command the
+  engine already denies keeps that deny):
+  - a dynamic command word (`$x`, `$(…)`, backticks), a dynamic `eval`,
+    or a dynamic `trap` action (`trap "$X" EXIT`);
+  - a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `mksh`, `ash`, `yash`,
+    `fish`, `csh`, `tcsh`, `nu`, `xonsh`) or interpreter that reads its
+    program from stdin, unless what it reads is a literal here-string, a
+    literal heredoc, or the output of commands that are all a literal
+    `echo`, a `printf` with no `%` or escape other than `\n`, a `cat` of
+    literal paths or of a literal heredoc, or a silent builtin (`cd`,
+    `test`, `export`, …). So `… | sed 's/^/launchctl /' | sh`,
+    `python3 -c "print(…)" | sh`, `… | base64 -d | sh` and
+    `printf '\x6c…' | sh` go to Terminal whatever the producer is. A
+    literal feed is read, not trusted: its text is scanned like the line
+    and read by the stop and install floors (`echo 'echo … | base64 -d |
+    sh' | sh` goes to Terminal). In a pipeline the producers are the
+    stages before the reader; inside a compound command (`if`, `for`,
+    `while`, `case`), a `{ …; }`/`( … )` group or a function body they
+    are every other command of the text, each of which must print whole
+    lines (no `echo -n`, no backslash). Wrappers are seen through on both
+    sides (`command`, `builtin`, `env`, `sudo`, `exec`, `nohup`, `time`,
+    `nice`, `timeout`, `stdbuf`, `caffeinate`, `arch`, `xcrun`, `X=1`),
+    and command names are matched unescaped, case-folded and by basename
+    (`\sh`, `Bash`, `/BIN/SH`). The line is split the way the shell
+    splits it: quotes (`$'\''` included), heredoc bodies (an apostrophe in
+    one does not hide the lines after it), continuations, groups and
+    `$((…))`;
+  - a shell or interpreter running `<(…)` or zsh's `=(…)`, a dynamic
+    here-string or heredoc, `source /dev/stdin` or a dynamic script
+    operand (`bash "$SCRIPT"`);
+  - a same-line definition that changes what a name runs: a function or
+    alias named like a command the floor reads (`echo(){ …; }`, `alias
+    cat=…`), a function whose body is not a group, `coproc`, `>&p`, and
+    `hash -p`; any other function or alias used as a stdin reader is
+    floored like a shell;
+  - text the shells may split differently than rv does (an unbalanced
+    group, a `}` in argument position, which zsh closes on and bash does
+    not), and a command too large to walk within budget (over 4096
+    commands, or fed texts too large to read: every reader of a text
+    is charged for it, so thousands of readers of one big heredoc run
+    out of budget);
+  - dynamic or encoded inline code (`osascript -e "$(…)"`,
+    `python3 -c "…os.system(base64.b64decode(…))"`), and inline code
+    that runs a command over input rv cannot read: stdin from a
+    producer rv cannot read, `perl -n`/`-p`, a dynamic argument or
+    assignment (`perl -e 'system @ARGV' "$X"`), or code that reads
+    stdin, arguments, the environment, a file or the network;
+  - `awk` whose program runs a command (`system`, a `|` to or from a
+    command), and GNU `sed` with the `e` command or `s///e` flag,
+    whatever feeds them;
+  - `ssh` whose remote command has a dynamic word (`ssh localhost
+    "$X"`; the remote shell re-parses it), or a dynamic or unreadable
+    `ProxyCommand`, `LocalCommand`, `KnownHostsCommand` or
+    `RemoteCommand`;
+  - `xargs`, `find -exec` or `parallel` running a shell, an interpreter,
+    `awk`, `sed`, `ssh`, a dynamic verb, or `kill`, `pkill`, `killall`,
+    `launchctl`, `systemctl`, `rv` or `rvd` (their operands come from
+    input), and `parallel` with no verb.
+
+  What the lexical floors read is the command line itself: the words of
+  each command (which the observe stop and install floors, not enforce,
+  also re-read with heredoc bodies removed and one command at a time),
+  the inline `-c` script of a shell, the text a shell or
+  interpreter is fed from a literal pipe, here-string or heredoc, and the
+  string literals of inline interpreter code. They do not read files. So
+  a literal verb with dynamic arguments (`xargs rm`), an inner script
+  whose commands are all literal (`bash -c 'for f in *; do echo $f;
+  done'`) and a literal script file stay observed, and the file's
+  contents are not checked: `bash x.sh`, `sh < x.sh` and `cat x.sh | sh`
+  run whatever `x.sh` holds. An agent that writes a decoded script to a
+  file and then runs it (`echo … | base64 -d > /tmp/x.sh && sh
+  /tmp/x.sh`), or a build step that stops `rvd`, is not modelled.
+- **Where observe's command reading differs from the shell.** These
+  observe-floor gaps let a program through that rv reads differently
+  than the shell runs it (0.2.2 allowed them all):
+  - a heredoc body is attached to the last command of its line, not to
+    the command that holds the `<<`;
+  - with several stdin redirects on one command, rv reads the first,
+    where the shell uses the last;
+  - `$$'…'` and `\$'…'` are read as ANSI-C quoting, which they are not;
+  - wrappers rv does not see through: `ionice`, `chrt`, `taskset`,
+    `flock`, `unbuffer`, `numactl`, `prlimit`, `chpst`, `busybox sh`,
+    `su -c`, `sudo --user root sh`, `bash --rcfile`;
+  - zsh's short `for x (a) …` loop;
+  - and, the other way round, `$(( … ))` arithmetic is sometimes read as
+    a command (a false positive).
+
+  The floors are lexical and will always have gaps like these. The
+  structural fix is for the hook's fallback to fail closed after a
+  deliberate `rvd` stop instead of stepping aside.
+- **Interpreter forms observe does not read.** Inline code whose
+  command is built from literal pieces (`python3 -c
+  "import os; os.system('launch'+'ctl …')"`, the same code piped in by a
+  literal `echo`, or in a heredoc) passes when it reads no input rv
+  cannot see; the floor reads code for a few markers, not its meaning.
+  Also not read: a script file an interpreter runs (`python3 x.py`,
+  `awk -f x.awk`, `sed -f x.sed`), an `ssh -F` config file's
+  `ProxyCommand`, an environment variable set by an earlier call, and
+  an interpreter not on the list (`python*`, `pypy*`, `node`, `bun`,
+  `deno`, `ruby`, `perl`, `php`, `lua`, `luajit`, `osascript`,
+  `Rscript`, `tclsh`, `pwsh`).
+  Once `rvd` is absent, an observe host lets calls run unchecked, rv's
+  config and wiring included. Running `rvd` in the system domain, where a
+  process running as you cannot stop it, is future work; use enforce
+  where that matters.
+- **Observe sends some everyday commands to Terminal.** The floor above
+  cannot tell a tool's generated setup code from an attacker's, so
+  `eval "$(tool …)"` always goes to Terminal, and so does any other
+  `eval` of a command's output:
+  - shell setup: `eval "$(brew shellenv)"`,
+    `eval "$(/opt/homebrew/bin/brew shellenv)"`;
+  - version managers and environment loaders: `eval "$(pyenv init -)"`,
+    `eval "$(rbenv init -)"`, `eval "$(fnm env)"`,
+    `eval "$(mise activate bash)"`, `eval "$(direnv hook zsh)"`,
+    `eval "$(direnv export bash)"`;
+  - prompts and shell integrations: `eval "$(starship init zsh)"`,
+    `eval "$(zoxide init zsh)"`, `eval "$(fzf --zsh)"`;
+  - completions: `eval "$(gh completion -s zsh)"`,
+    `eval "$(kubectl completion zsh)"`, `eval "$(cargo completions zsh)"`,
+    `eval "$(pip completion --zsh)"`;
+  - agents and credentials: `eval "$(ssh-agent -s)"`, `eval $(ssh-agent)`,
+    `eval "$(op signin)"`,
+    `eval "$(aws configure export-credentials --format env)"`.
+
+  Run those in Terminal or put them in your shell's startup file. A
+  `find -exec` or `xargs` that runs a shell (`find . -exec sh -c 'echo
+  {}' \;`) goes to Terminal too, as do `pgrep node | xargs kill`, `ssh
+  host 'echo $HOME'` (rv cannot tell single from double quotes there),
+  `curl … | sh` installers, `cat <<EOF | sh` whose body expands (`$`,
+  backticks), and `awk` programs that call `system` or pipe to a command.
+  A shell or interpreter reading stdin inside a compound command, group
+  or function body goes to Terminal when any other command there is not
+  a literal producer (`(npm ci && cat x | sh)`), as does a line that
+  defines a function named like a command rv reads (`cd() { …; }`) or
+  has a `}` argument inside a group. rv also cannot see what a git alias or
+  extension runs, so observe sends an unknown git subcommand (`git st`,
+  `git lg`) to Terminal even when `core.git` is off.
+- **On an observe host, reading rv's install is observed.** A command
+  that names one of rv's hook, service or binary files and is proven to
+  only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display
+  or verify, `log show`, written plainly) runs and is recorded like any
+  other observed command. Anything else that names one, including a read
+  through another program, quoting or a redirect, is enforced. rv's
+  config directory is enforced on every command that names it.
 - **Plain allows are not logged** in the audit log, only denies,
   overrides and changes.
 

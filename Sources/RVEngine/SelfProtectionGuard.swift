@@ -10,7 +10,8 @@ import RVDomain
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
-/// (`rv host mode <host> observe|off`), or switching rv to observe
+/// (`rv host mode <host> observe|off`), moving files across a workspace's
+/// wall (`rv workspace upload|download`), or switching rv to observe
 /// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
@@ -170,7 +171,7 @@ private let xargsExecNames: Set<String> = plainLaunchers.union(shellNames).union
 private let weakeningWords: Set<String> = subcommandVerbs.union([
     "uninstall", "setup", "--observe", "--save", "apply", "draft", "rollback", "disable", "add",
     "add-command", "redeem", "mint", "approve", "trust", "set", "remove", "import", "oauth-reset",
-    "hook", "sign", "mode", "ceiling",
+    "hook", "sign", "mode", "ceiling", "upload", "download",
 ])
 
 /// Past this many words or characters, the uncertain scan (quadratic in
@@ -325,6 +326,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
+    "workspace",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -405,6 +407,10 @@ private func isWeakeningSub(
         }
     case "managed":
         return sub == "sign"
+    case "workspace":
+        // File transfer crosses the cage wall: `upload` reads host paths
+        // into the workspace, `download` writes workspace files to the host.
+        return sub == "upload" || sub == "download"
     case "host":
         // `mode <host> block` is the one tightening form; a missing, extra,
         // unknown or unmodelled word fails closed. `--json`/`--robot` take

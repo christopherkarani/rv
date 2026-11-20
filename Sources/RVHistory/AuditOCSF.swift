@@ -13,7 +13,14 @@ public enum AuditOCSF {
         var categoryName: String
         var activity: Int
         var activityName: String
+        /// OCSF profiles whose attributes the event uses (`metadata.profiles`):
+        /// `host` for `device` and `actor`, `security_control` for `action`
+        /// and `disposition` on the classes 1.3.0 applies it to.
+        var profiles: [String]
     }
+
+    static let hostProfiles = ["host"]
+    static let securityControlProfiles = ["host", "security_control"]
 
     public static func object(_ event: AuditEvent, hostName: String) -> [String: Any] {
         let mapped = mappedClass(event)
@@ -42,13 +49,22 @@ public enum AuditOCSF {
                 + (event.reason.map { " (\($0))" } ?? ""),
             "metadata": [
                 "version": version,
+                "profiles": mapped.profiles,
                 "uid": uid(event),
                 "log_name": event.source,
                 "product": ["name": "rv", "vendor_name": "rv", "version": ProductVersion.semver],
             ] as [String: Any],
             "device": ["hostname": hostName, "type_id": 0],
         ]
-        if let agent = event.agent { object["actor"] = ["app_name": agent] }
+        var actorObject: [String: Any]? = event.agent.map { ["app_name": $0] }
+        // API and Process Activity require an actor; rv may not know the agent.
+        if actorObject == nil, mapped.uid == 6003 || mapped.uid == 1007 { actorObject = ["app_name": "unknown"] }
+        // The agent session a hook deny came from (also kept in `rv_detail`).
+        if let session = event.detail["session"] {
+            actorObject = (actorObject ?? [:]).merging(["session": ["uid": session]]) { $1 }
+        }
+        if let actorObject { object["actor"] = actorObject }
+        if let code = AuditReasonCode(event) { object["status_code"] = code.rawValue }
         switch mapped.uid {
         case 6003:
             let parts = event.subject.split(separator: "/", maxSplits: 1).map(String.init)
@@ -64,7 +80,9 @@ public enum AuditOCSF {
             object["dst_endpoint"] = endpoint
             object["src_endpoint"] = ["hostname": hostName]
         case 1007:
-            object["process"] = ["name": event.detail["tool"] ?? "command"]
+            // OCSF needs a process uid or pid. A denied command never ran,
+            // so it has no pid: the event's own uid stands in.
+            object["process"] = ["name": event.detail["tool"] ?? "command", "uid": uid(event)]
         case 5019:
             // Device Config State Change: the gate itself changed. A change
             // is neither "Enabled" nor "Disabled" as a whole, so `state` is
@@ -81,7 +99,7 @@ public enum AuditOCSF {
                 "types": [event.detail["refusal"] ?? "unknown"],
             ] as [String: Any]
         default:
-            object["app"] = ["name": "rv", "version": ProductVersion.semver]
+            object["app"] = ["name": "rv", "vendor_name": "rv", "version": ProductVersion.semver]
         }
         var unmapped: [String: Any] = ["rv_kind": event.kind.rawValue, "rv_subject": event.subject]
         if let reason = event.reason { unmapped["rv_reason"] = reason }
@@ -115,23 +133,26 @@ public enum AuditOCSF {
     static func mappedClass(_ event: AuditEvent) -> Class {
         let kind = event.kind
         if kind == .mcpCall || kind == .mcpApproval || kind == .secretUse {
-            return Class(uid: 6003, name: "API Activity", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other")
+            return Class(uid: 6003, name: "API Activity", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other", profiles: hostProfiles)
         }
         if kind == .secretMisuse {
-            return Class(uid: 2004, name: "Detection Finding", category: 2, categoryName: "Findings", activity: 1, activityName: "Create")
+            return Class(uid: 2004, name: "Detection Finding", category: 2, categoryName: "Findings", activity: 1, activityName: "Create", profiles: securityControlProfiles)
         }
         if kind == .policyChanged || kind == .policyManaged || kind == .configChanged {
-            return Class(uid: 5019, name: "Device Config State Change", category: 5, categoryName: "Discovery", activity: 1, activityName: "Log")
+            return Class(uid: 5019, name: "Device Config State Change", category: 5, categoryName: "Discovery", activity: 1, activityName: "Log", profiles: hostProfiles)
         }
         if kind == .egressDenied {
-            return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse")
+            return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse", profiles: securityControlProfiles)
+        }
+        if kind == .egressObserved {
+            return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 6, activityName: "Traffic", profiles: securityControlProfiles)
         }
         if kind == .commandDenied || kind == .commandObserved {
-            return Class(uid: 1007, name: "Process Activity", category: 1, categoryName: "System Activity", activity: 1, activityName: "Launch")
+            return Class(uid: 1007, name: "Process Activity", category: 1, categoryName: "System Activity", activity: 1, activityName: "Launch", profiles: securityControlProfiles)
         }
-        let lifecycle = Class(uid: 6002, name: "Application Lifecycle", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other")
-        if kind == .runtimeStarted { return Class(uid: 6002, name: lifecycle.name, category: 6, categoryName: lifecycle.categoryName, activity: 3, activityName: "Start") }
-        if kind == .runtimeEnded { return Class(uid: 6002, name: lifecycle.name, category: 6, categoryName: lifecycle.categoryName, activity: 4, activityName: "Stop") }
+        let lifecycle = Class(uid: 6002, name: "Application Lifecycle", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other", profiles: hostProfiles)
+        if kind == .runtimeStarted { return Class(uid: 6002, name: lifecycle.name, category: 6, categoryName: lifecycle.categoryName, activity: 3, activityName: "Start", profiles: hostProfiles) }
+        if kind == .runtimeEnded { return Class(uid: 6002, name: lifecycle.name, category: 6, categoryName: lifecycle.categoryName, activity: 4, activityName: "Stop", profiles: hostProfiles) }
         return lifecycle
     }
 
