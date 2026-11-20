@@ -610,23 +610,37 @@ only when the reason is exactly one of the C hook's three down messages
 (unreachable, timeout, connection dropped) or the whole rv process ran
 past its 15 s budget, and all of these hold: `RV_HOOK_WHEN_DOWN` is not
 `deny`; the hook request's top-level `permission_mode` is `default`,
-`plan`, `acceptEdits` or `auto`; and Claude Code marks the session
-attended (`CLAUDE_CODE_SESSION_ATTENDED=1`, or, when that is unset,
-`CLAUDE_CODE_ENTRYPOINT` is `cli`, `claude-desktop` or `claude-vscode`).
-Otherwise it blocks: `bypassPermissions`, `dontAsk`, a missing or unknown
-mode, `claude -p` (which sets `CLAUDE_CODE_SESSION_ATTENDED=0` and
-entrypoint `sdk-cli`), SDK and unknown entrypoints. The prompt shows the
-command or path first, then "rv could not check this call (<layer>). An
-agent can cause this by stopping or overloading rvd. Approve only if you
-expected it." Residual: a hook `ask` is answered by whatever Claude Code
-routes permission prompts to, not necessarily a person. That includes an
-SDK `canUseTool` callback, a `--permission-prompt-tool`, a
-`PermissionRequest` hook and Claude Code mods; the attended check keeps
-out `claude -p` and SDK entrypoints, but rv does not verify the
-environment values Claude Code sets, and anything able to change Claude
-Code's settings or environment can change them. Choosing "Yes, don't ask
-again" writes a persistent Claude Code allow rule; rv's deny still wins
-once `rvd` answers again. Cursor's adapter always blocks, because Cursor
+`plan`, `acceptEdits` or `auto`; Claude Code reports the session as
+attended (`CLAUDE_CODE_SESSION_ATTENDED=1`; a missing value blocks); and
+the owner has not set `"hookAskWhenDown": false` at the top level of
+`~/.config/rv/config.json`. That file is read from the passwd home with
+the observe gate's checks; the switch can only tighten, so a missing,
+corrupt or unqualified value keeps the ask. Otherwise it blocks:
+`bypassPermissions`, `dontAsk`, a missing or unknown mode, an ordinary
+`claude -p` run (which sets `CLAUDE_CODE_SESSION_ATTENDED=0`), and any
+other native ask, including one with a non-zero exit or a top-level
+`decision`. The prompt shows the command or path first, on one line with
+line breaks, controls, format, separator and non-ASCII space characters
+escaped and the text capped at 300 characters. Then comes "rv could not
+check this call (<layer>). An agent can cause this by stopping or
+overloading rvd. Approve only if you expected it." Residuals:
+
+- A hook `ask` is answered by whatever Claude Code routes permission
+  prompts to, not necessarily a person. That includes an SDK `canUseTool`
+  callback, a `--permission-prompt-tool`, a `PermissionRequest` hook and
+  Claude Code mods.
+- The attended check is a heuristic, not a boundary against anything that
+  can start Claude Code. An agent can run `env -u CLAUDE_CODE_CHILD_SESSION
+  -u CLAUDECODE claude -p` and be reported as attended. rv does not verify
+  the values Claude Code sets. Anything able to change Claude Code's
+  settings or environment can change them.
+- A process that can type into the person's terminal can answer the
+  prompt, for example with `tmux send-keys` or `osascript` keystrokes.
+- Choosing "Yes, don't ask again" writes a persistent Claude Code allow
+  rule. rv's deny still wins once `rvd` answers again.
+
+An owner who wants no prompt sets `"hookAskWhenDown": false`, or
+`RV_HOOK_WHEN_DOWN=deny`. Cursor's adapter always blocks, because Cursor
 gives the hook no signal for auto-run, background agents or
 `cursor-agent --force` **[C151a]**.
 
@@ -1040,7 +1054,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C149 | Sources/RVPolicy/ManagedSerialRecord.swift:3-5; Sources/RVPolicy/ManagedSerialRecord.swift:49-71 |
 | C150 | Sources/RVPolicy/ManagedPolicy.swift:523-524 |
 | C151 | Sources/rv-c/hook_fallback.c:104-119; Sources/rv-c/hook_fallback.c:171-177 |
-| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:39-71; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:183-249; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:273; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:306; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:356-369; Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl:170-175 |
+| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:38-75; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:187-335; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:359; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:386-398; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:450-463; Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl:170-175 |
 | C152 | Sources/rv-c/rv.c:594-596; Sources/rv-c/rv.c:985-987 |
 | C153 | Sources/rv-c/hook_fallback.c:30-38; Sources/rv-c/hook_fallback.c:155-178 |
 | C154 | Sources/rv-c/rv.c:330-342; Sources/rv-c/observe_gate.c:48-57 |

@@ -5,11 +5,13 @@ import Testing
 @testable import RVService
 import RVDomain
 
-/// A pack deny (self-protection, `git reset --hard`, `rm -rf ~`) never
-/// waits behind the judge: it is final before the judge is asked, and the
-/// offload queue still gives it a thread while every admitted judge call is
-/// stuck on the model.
-@Suite("Pack denies do not wait for the judge")
+/// A pack deny (self-protection, `git reset --hard`, `rm -rf ~`) does not
+/// wait behind admitted judge calls: it is final before the judge is asked,
+/// and the offload queue still gives it a thread while every admitted judge
+/// call is stuck on the model. Not covered: model-load waits are not
+/// admitted (JudgeGate's single-flight load), so a burst during a cold
+/// load can still delay a deny by up to the 5 s load wait.
+@Suite("Pack denies do not wait behind admitted judge calls")
 struct JudgeDenyBypassTests {
     static let denies: [(pack: PackID, pattern: String, command: String)] = [
         (.coreSecrets, "home-rv-config", "rm ~/.config/rv/config.json"),
