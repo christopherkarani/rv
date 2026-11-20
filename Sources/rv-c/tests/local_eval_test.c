@@ -1,6 +1,9 @@
 /* local_eval.c: output framing, and the spawn/verify/deadline contract.
  * argv: <final> <escalate> <hang> <crash> <garbage> <final-log> — fake
  * evaluators built by run.sh from fake_evaluator.c. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "local_eval.h"
 
 #include <stdio.h>
