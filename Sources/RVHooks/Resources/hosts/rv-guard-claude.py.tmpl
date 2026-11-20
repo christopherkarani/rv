@@ -36,8 +36,9 @@ RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
 # The owner's config.json; None reads it from the passwd home, never $HOME
-# (hook environment can come from project config an agent writes). Only
-# `"hookAskWhenDown": false` there changes anything: it pins "block".
+# (hook environment can come from project config an agent writes).
+# `"hookAskWhenDown": false` there, or a file rv cannot use, pins "block"
+# (_owner_pinned_block).
 _OWNER_CONFIG_PATH = None
 _OWNER_CONFIG_MAX = 1024 * 1024
 
@@ -223,19 +224,36 @@ def _forwards_infra_ask(envelope, environ):
 
 
 def _owner_pinned_block():
-    # The owner's switch may only tighten: True only for an explicit
-    # `"hookAskWhenDown": false` at the top level of a config.json that
-    # passes the C hook's checks (observe_gate.c): a regular file, not a
-    # symlink, owned by this uid, not group- or world-writable, at most
-    # 1 MiB, with no repeated key. Anything else keeps the default (ask).
+    # The owner's switch only tightens, so rejecting a bad file would
+    # loosen. The ask stays only when config.json is missing, or is a clean
+    # JSON object whose top-level `hookAskWhenDown` is not exactly false.
+    # A file that exists but cannot be used pins "block", as GuardConfig
+    # fails closed on a bad config: a symlink (O_NOFOLLOW), unreadable, not
+    # a regular file (no blocking open on a FIFO), over 1 MiB, not UTF-8,
+    # corrupt, a BOM, a repeated key or a non-object root. Who owns the
+    # file or may write it does not matter for a tightening switch.
     try:
         path = _OWNER_CONFIG_PATH or _passwd_config_path()
-        if path is None:
-            return False
-        parsed = json.loads(_read_owned_file(path), object_pairs_hook=_reject_duplicate_keys)
     except Exception:
         return False
-    return isinstance(parsed, dict) and parsed.get("hookAskWhenDown") is False
+    if path is None:
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except Exception:
+        return True
+    try:
+        parsed = json.loads(_read_regular_file(fd), object_pairs_hook=_reject_duplicate_keys)
+    except Exception:
+        return True
+    finally:
+        os.close(fd)
+    if not isinstance(parsed, dict):
+        return True
+    return parsed.get("hookAskWhenDown") is False
 
 
 def _passwd_config_path():
@@ -245,29 +263,21 @@ def _passwd_config_path():
     return home + "/.config/rv/config.json"
 
 
-def _read_owned_file(path):
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
-    fd = os.open(path, flags)
-    try:
-        info = os.fstat(fd)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-            or info.st_size > _OWNER_CONFIG_MAX
-        ):
-            raise ValueError("owner config fails its checks")
-        chunks = []
-        left = info.st_size
-        while left > 0:
-            chunk = os.read(fd, left)
-            if not chunk:
-                raise ValueError("owner config shrank while read")
-            chunks.append(chunk)
-            left -= len(chunk)
-        return b"".join(chunks).decode("utf-8")
-    finally:
-        os.close(fd)
+def _read_regular_file(fd):
+    # Bounded: a regular file of at most _OWNER_CONFIG_MAX bytes, read
+    # whole, as UTF-8. Anything else raises.
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _OWNER_CONFIG_MAX:
+        raise ValueError("owner config is not a regular file of at most 1 MiB")
+    chunks = []
+    left = info.st_size
+    while left > 0:
+        chunk = os.read(fd, left)
+        if not chunk:
+            raise ValueError("owner config shrank while read")
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks).decode("utf-8")
 
 
 def _host_prompts_human(mode):

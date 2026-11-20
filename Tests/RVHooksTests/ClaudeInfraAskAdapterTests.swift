@@ -189,33 +189,32 @@ struct ClaudeInfraAskAdapterTests {
     func ownerSwitchOff_blocksEveryInfraPath(_ path: DownPath) async throws {
         let run = try await runPythonAdapter(
             host: .claude, stub: path.stub, timeoutSeconds: "0.3", eventFields: ["permission_mode": "default"],
-            environment: Self.attended, ownerConfig: { try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: $0) })
+            environment: Self.attended, ownerConfig: { path in
+                try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: path)
+                return path
+            })
         let reason = try expectFailClosed(host: .claude, run: run)
         #expect(reason.contains(Self.marker) == false, "\(path): \(reason)")
         #expect(reason.contains("`rv doctor`"), "\(path): \(reason)")
     }
 
-    /// Like the C hook, only group or world write access disqualifies the
-    /// file; readable by others is fine.
-    @Test(arguments: [0o644, 0o400])
-    func ownerSwitchOff_inAReadOnlyOrSharedReadFileBlocks(_ mode: Int) async throws {
-        let run = try await runPythonAdapter(
-            host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
-            environment: Self.attended,
-            ownerConfig: { try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: $0, mode: mode) })
-        let reason = try expectFailClosed(host: .claude, run: run)
-        #expect(reason == daemonUnreachableMessage, "\(String(mode, radix: 8))")
-    }
-
-    /// The switch may only tighten: anything but an explicit `false` in a
-    /// file that passes the C hook's ownership checks is the default (ask).
-    @Test(arguments: OwnerConfigDefault.allCases)
-    func ownerSwitch_onlyExplicitFalseInAnOwnedFileBlocks(_ config: OwnerConfigDefault) async throws {
+    /// The pin only tightens, so a config.json that exists but cannot be
+    /// used pins "block" (as GuardConfig fails closed on a bad config).
+    /// Only a missing file, a clean object without the key, or a key that
+    /// is not exactly JSON `false` keeps the ask. Who owns the file and who
+    /// may write it does not matter for a tightening switch.
+    @Test(arguments: OwnerConfigCase.allCases)
+    func ownerConfig_pinsUnlessMissingOrNotExplicitlyFalse(_ config: OwnerConfigCase) async throws {
         let run = try await runPythonAdapter(
             host: .claude, stub: daemonDownWire(.claude), eventFields: ["permission_mode": "default"],
             environment: Self.attended, ownerConfig: config.prepare)
-        let reason = try expectClaudeAsk(run)
-        #expect(reason == Self.prompt(layer: "rvd is not reachable", reason: daemonUnreachableMessage), "\(config)")
+        if config.pins {
+            let reason = try expectFailClosed(host: .claude, run: run)
+            #expect(reason == daemonUnreachableMessage, "\(config): \(reason)")
+        } else {
+            let reason = try expectClaudeAsk(run)
+            #expect(reason == Self.prompt(layer: "rvd is not reachable", reason: daemonUnreachableMessage), "\(config)")
+        }
     }
 
     /// Each C hook down reason maps to its own layer.
@@ -393,52 +392,78 @@ struct ClaudeInfraAskAdapterTests {
         }
     }
 
-    enum OwnerConfigDefault: CaseIterable, CustomStringConvertible {
-        case missingFile, switchTrue, keyAbsent, stringFalse, zero, null, nestedUnderGuard
-        case corrupt, duplicateKey, arrayRoot, groupWritable, worldWritable, symlinked, directory
+    enum OwnerConfigCase: String, CaseIterable, CustomStringConvertible {
+        // Keep the ask.
+        case missingFile, parentIsAFile, emptyObject, keyAbsent, switchTrue, stringFalse, zero, null
+        case nestedUnderGuard
+        // Pin block: explicit false, whoever may write the file.
+        case false0600, false0400, false0664, false0666
+        // Pin block: the file exists but cannot be used.
+        case unreadable, symlinkToFalse, symlinkToTrue, danglingSymlink, directory, fifo
+        case oversizeSparse, emptyFile, corrupt, byteOrderMark, duplicateKey, arrayRoot, notUTF8
 
-        func prepare(_ path: URL) throws {
+        var pins: Bool {
             switch self {
-            case .missingFile: return
-            case .switchTrue: try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: path)
+            case .missingFile, .parentIsAFile, .emptyObject, .keyAbsent, .switchTrue, .stringFalse, .zero, .null,
+                .nestedUnderGuard:
+                false
+            default:
+                true
+            }
+        }
+
+        func prepare(_ path: URL) throws -> URL {
+            let dir = path.deletingLastPathComponent()
+            let falseJSON = #"{"hookAskWhenDown": false}"#
+            switch self {
+            case .missingFile: break
+            case .parentIsAFile:
+                let file = dir.appendingPathComponent("not-a-dir")
+                try writeOwnerConfig("{}", at: file)
+                return file.appendingPathComponent("config.json")
+            case .emptyObject: try writeOwnerConfig("{}", at: path)
             case .keyAbsent: try writeOwnerConfig(#"{"guard": {"mode": "enforce"}}"#, at: path)
+            case .switchTrue: try writeOwnerConfig(#"{"hookAskWhenDown": true}"#, at: path)
             case .stringFalse: try writeOwnerConfig(#"{"hookAskWhenDown": "false"}"#, at: path)
             case .zero: try writeOwnerConfig(#"{"hookAskWhenDown": 0}"#, at: path)
             case .null: try writeOwnerConfig(#"{"hookAskWhenDown": null}"#, at: path)
             case .nestedUnderGuard: try writeOwnerConfig(#"{"guard": {"hookAskWhenDown": false}}"#, at: path)
-            case .corrupt: try writeOwnerConfig(#"{"hookAskWhenDown": false"#, at: path)
-            case .duplicateKey:
-                try writeOwnerConfig(#"{"hookAskWhenDown": false, "hookAskWhenDown": true}"#, at: path)
-            case .arrayRoot: try writeOwnerConfig(#"[{"hookAskWhenDown": false}]"#, at: path)
-            case .groupWritable: try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: path, mode: 0o620)
-            case .worldWritable: try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: path, mode: 0o602)
-            case .symlinked:
-                let target = path.deletingLastPathComponent().appendingPathComponent("real-config.json")
-                try writeOwnerConfig(#"{"hookAskWhenDown": false}"#, at: target)
+            case .false0600: try writeOwnerConfig(falseJSON, at: path)
+            case .false0400: try writeOwnerConfig(falseJSON, at: path, mode: 0o400)
+            case .false0664: try writeOwnerConfig(falseJSON, at: path, mode: 0o664)
+            case .false0666: try writeOwnerConfig(falseJSON, at: path, mode: 0o666)
+            case .unreadable: try writeOwnerConfig(falseJSON, at: path, mode: 0o000)
+            case .symlinkToFalse, .symlinkToTrue:
+                let target = dir.appendingPathComponent("real-config.json")
+                try writeOwnerConfig(
+                    self == .symlinkToFalse ? falseJSON : #"{"hookAskWhenDown": true}"#, at: target)
                 try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+            case .danglingSymlink:
+                try FileManager.default.createSymbolicLink(
+                    at: path, withDestinationURL: dir.appendingPathComponent("nowhere.json"))
             case .directory:
                 try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+            case .fifo:
+                try #require(mkfifo(path.path, 0o600) == 0)
+            case .oversizeSparse:
+                try writeOwnerConfig("{}", at: path)
+                let handle = try FileHandle(forWritingTo: path)
+                try handle.truncate(atOffset: 2 * 1024 * 1024)
+                try handle.close()
+            case .emptyFile: try writeOwnerConfig("", at: path)
+            case .corrupt: try writeOwnerConfig(#"{"hookAskWhenDown": true"#, at: path)
+            case .byteOrderMark: try writeOwnerConfig(String(UnicodeScalar(0xFEFF)!) + "{}", at: path)
+            case .duplicateKey:
+                try writeOwnerConfig(#"{"hookAskWhenDown": true, "hookAskWhenDown": true}"#, at: path)
+            case .arrayRoot: try writeOwnerConfig("[]", at: path)
+            case .notUTF8:
+                try Data([0x7B, 0x22, 0xFF, 0x22, 0x3A, 0x31, 0x7D]).write(to: path)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
             }
+            return path
         }
 
-        var description: String {
-            switch self {
-            case .missingFile: "missingFile"
-            case .switchTrue: "switchTrue"
-            case .keyAbsent: "keyAbsent"
-            case .stringFalse: "stringFalse"
-            case .zero: "zero"
-            case .null: "null"
-            case .nestedUnderGuard: "nestedUnderGuard"
-            case .corrupt: "corrupt"
-            case .duplicateKey: "duplicateKey"
-            case .arrayRoot: "arrayRoot"
-            case .groupWritable: "groupWritable"
-            case .worldWritable: "worldWritable"
-            case .symlinked: "symlinked"
-            case .directory: "directory"
-            }
-        }
+        var description: String { rawValue }
     }
 
     enum UnattendedSession: CaseIterable, CustomStringConvertible {

@@ -302,7 +302,7 @@ func runPythonAdapter(
     eventFields: [String: Any] = [:],
     environment extra: [String: String] = [:],
     stdoutUnwritable: Bool = false,
-    ownerConfig prepareOwnerConfig: ((URL) throws -> Void)? = nil
+    ownerConfig prepareOwnerConfig: ((URL) throws -> URL)? = nil
 ) async throws -> PythonAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-failmsg-\(UUID().uuidString)", isDirectory: true)
@@ -310,8 +310,12 @@ func runPythonAdapter(
     defer { try? FileManager.default.removeItem(at: root) }
 
     let rvPath = try writeStub(stub, in: root)
-    let ownerConfig = root.appendingPathComponent("owner-config.json")
-    try prepareOwnerConfig?(ownerConfig)
+    // The closure prepares the owner config and returns the path the
+    // adapter reads (default: a file under `root` that does not exist).
+    let defaultOwnerConfig = root.appendingPathComponent("owner-config.json")
+    let ownerConfig = try prepareOwnerConfig?(defaultOwnerConfig) ?? defaultOwnerConfig
+    // Restore permissions so the cleanup can remove what a test locked.
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ownerConfig.path) }
     let adapter = root.appendingPathComponent("rv-guard.py")
     try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds, ownerConfig: ownerConfig)
         .write(to: adapter, atomically: true, encoding: .utf8)
