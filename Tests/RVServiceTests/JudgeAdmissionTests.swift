@@ -274,23 +274,40 @@ struct JudgeAdmissionTests {
     }
 
     /// rvd's non-hook doors (SDK evaluate, explain, classify, the agent
-    /// bridge) bind a judge deadline of one hook budget, so their judge
-    /// waits are bounded too; the offload carries it. A hook deadline wins.
-    @Test func theOffloadCarriesANonHookJudgeDeadline() async {
-        let now = ContinuousClock.now
-        let bound = ServiceRuntime.judgeDeadline(now: now)
-        #expect(bound == now.advanced(by: HookDeadline.budget))
-        let seen = await JudgeAdmission.$deadline.withValue(bound) {
-            await JudgeOffload.run { JudgeAdmission.deadline }
+    /// bridge, approval peeks) bind a judge budget of one hook budget. The
+    /// offload turns it into the judge's deadline when its body starts, so
+    /// time spent waiting for a thread is not charged to the judge, and it
+    /// never becomes the hook deadline that pattern search reads.
+    @Test func theOffloadAnchorsANonHookJudgeBudgetWhenItsBodyStarts() async throws {
+        #expect(JudgeOffload.nonHookBudget == HookDeadline.budget)
+        let (queued, judge, hook, started) = try await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
+            // Time the caller spends before the offload runs is not the judge's.
+            try await Task.sleep(for: .milliseconds(200))
+            let queued = ContinuousClock.now
+            let seen = await JudgeOffload.run {
+                (JudgeAdmission.deadline, JudgeOffload.hookDeadline, ContinuousClock.now)
+            }
+            return (queued, seen.0, seen.1, seen.2)
         }
-        #expect(seen == bound)
+        let bound = try #require(judge)
+        // Counted from inside the offload: after the caller queued it, and
+        // no later than the body's first instruction.
+        #expect(bound >= queued.advanced(by: JudgeOffload.nonHookBudget))
+        #expect(bound <= started.advanced(by: JudgeOffload.nonHookBudget))
+        #expect(hook == nil, "a non-hook judge budget must not bound pattern search")
+    }
+
+    /// A hook deadline wins over a judge budget, and is the one deadline
+    /// the offloaded pattern search sees.
+    @Test func aHookDeadlineWinsOverANonHookJudgeBudget() async {
         let hook = HookDeadline()
-        let preferred = await HookDeadline.$current.withValue(hook) {
-            await JudgeAdmission.$deadline.withValue(bound) {
-                await JudgeOffload.run { JudgeAdmission.deadline }
+        let seen = await HookDeadline.$current.withValue(hook) {
+            await JudgeOffload.$judgeBudget.withValue(.zero) {
+                await JudgeOffload.run { (JudgeAdmission.deadline, JudgeOffload.hookDeadline) }
             }
         }
-        #expect(preferred == hook.expiresAt)
+        #expect(seen.0 == hook.expiresAt)
+        #expect(seen.1 == hook.expiresAt)
     }
 
     @Test func aModelLoadWaitNeverOutlastsTheHookDeadline() {

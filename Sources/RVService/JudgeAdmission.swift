@@ -57,10 +57,13 @@ final class JudgeAdmission: Sendable {
     /// The admission every live judge call goes through.
     static let live = JudgeAdmission(limit: liveLimit)
 
-    /// The hook deadline of the request this thread is judging, if any.
-    /// `JudgeOffload.run` binds it: the judge runs on a Dispatch thread,
-    /// where the task-local `HookDeadline.current` is not visible. Only
-    /// the judge reads it, so binding it changes no other deadline check.
+    /// The judge deadline of the request this thread is judging, if any:
+    /// its hook deadline, or the non-hook judge budget counted from when
+    /// the offloaded work started (`JudgeOffload.run` binds it; the judge
+    /// runs on a Dispatch thread, where `HookDeadline.current` is not
+    /// visible). Only the judge reads it: pattern search and side-effect
+    /// checks use the hook deadline alone (`JudgeOffload.hookDeadline`,
+    /// `HookDeadline`), so a non-hook judge bound never cuts them short.
     @TaskLocal static var deadline: ContinuousClock.Instant?
 
     /// What one request came to.

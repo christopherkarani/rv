@@ -755,7 +755,7 @@ public actor ServiceRuntime {
         )
         let home = configHome
         // Off the actor: the judge path blocks (load wait, inference).
-        let reply = EvaluateReply(result: await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+        let reply = EvaluateReply(result: await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
             await JudgeOffload.run {
                 gated.evaluateAgent(request, cwd: params.cwd, home: home)
             }
@@ -817,21 +817,13 @@ public actor ServiceRuntime {
     ) async -> EvaluationResult {
         let scoped = ownerScoped(request)
         let world = readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
-        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+        // No hook deadline on this door: bound the judge alone (see
+        // `JudgeOffload.nonHookBudget`); pattern search keeps its own ceiling.
+        let result = await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
             await world.apply(scoped, cwd: cwd, host: host)
         }
         recordAnalytics(for: result)
         return result
-    }
-
-    /// The judge deadline for a door with no hook deadline (SDK evaluate,
-    /// explain, classify, the workspace agent bridge): one hook budget from
-    /// now. Without it such a caller waits on the model as long as a stuck
-    /// prediction runs, and can hold the judge circuit's half-open trial
-    /// that long. Only the judge (and pattern search) reads it; side-effect
-    /// checks stay unbounded on these doors.
-    static func judgeDeadline(now: ContinuousClock.Instant = .now) -> ContinuousClock.Instant {
-        now.advanced(by: HookDeadline.budget)
     }
 
     /// Frame-level major-version guard: runs even when a Hello on this
@@ -892,7 +884,7 @@ public actor ServiceRuntime {
         // a door compiled before the request's packs were enabled.
         let request = ownerScoped(params.request)
         let world = readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
-        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+        let result = await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
             await world.peek(request, cwd: cwd)
         }
         let normalized = result.matchingView.rawValue
@@ -921,7 +913,7 @@ public actor ServiceRuntime {
         // Same coverage rule as evaluate (see `explain`).
         let request = ownerScoped(params.request)
         let world = readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
-        let result = await JudgeAdmission.$deadline.withValue(Self.judgeDeadline()) {
+        let result = await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
             await world.peek(request, cwd: cwd)
         }
         let suggestions: [String]
