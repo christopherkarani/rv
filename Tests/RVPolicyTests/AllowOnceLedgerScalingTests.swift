@@ -142,8 +142,19 @@ struct AllowOnceLedgerScalingTests {
             .validatePending(code: code.rawValue, now: between) != nil
         #expect(await (writer.validatePending(code: code.rawValue, now: between) != nil) == freshSeesLive)
         #expect(await (writer.issued(codeHash: sha256Hex(code.rawValue), now: between) != nil) == freshSeesLive)
-        let again = await writer.mintFromDeny(
-            matchingView: "git push --force", cwd: cwd, ruleID: nil, now: between, ttl: ttl)
-        #expect((again == .code(code)) == freshSeesLive, "deny reprints the code only while redeem accepts it")
+        // A repeated deny reuses the saved row (reprinting the code) only
+        // while redeem still accepts it; otherwise it mints a new row. Judge
+        // by the row a fresh reader sees, not by the printed code, which a
+        // new random mint could repeat.
+        let again = try #require(await writer.mintFromDeny(
+            matchingView: "git push --force", cwd: cwd, ruleID: nil, now: between, ttl: ttl))
+        let rows = await AllowOnceStore(baseDirectory: root).list(now: between)
+        let live = try #require(rows.count == 1 ? rows.first : nil, "one live row: \(rows)")
+        #expect((live.expiresAt == saved) == freshSeesLive, "deny reuses the row only while redeem accepts it")
+        if freshSeesLive {
+            #expect(again == .code(code), "a reused row reprints its code")
+        } else {
+            #expect(again.code != nil, "an expired row is replaced by a fresh code")
+        }
     }
 }
