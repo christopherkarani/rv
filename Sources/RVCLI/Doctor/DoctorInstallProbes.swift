@@ -34,6 +34,11 @@ struct DoctorInstallProbes {
     var trustManifest: TrustManifestState
     /// Would hooks trust the installed `rvd`? Nil when not evaluated.
     var daemonTrust: DoctorServiceTrust? = nil
+    /// Verdicts for the other manifest roles whose binaries are installed
+    /// (`RoleTrustProbe`). Empty with no manifest or when not evaluated.
+    var roleTrust: [DoctorRoleTrust] = []
+    /// Which workspace peer-trust roles exist at all (`RoleTrustProbe`).
+    var workspaceRoles: WorkspaceTrustRoles = .notEvaluated
     /// Does a hook interpreter run: the absolute path a hook command bakes,
     /// or `python3` on PATH for an earlier rv's command? Asked only for an
     /// interpreter some hooked host needs. Default true (tests).
@@ -65,7 +70,11 @@ struct DoctorInstallProbes {
                 launchctl: launchctl
             ),
             trustManifest: liveTrustManifest(),
-            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
+            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd),
+            roleTrust: RoleTrustProbe.live(OwnedPaths(home: home)),
+            workspaceRoles: RoleTrustProbe.workspaceRoles(
+                OwnedPaths(home: home), source: ProtectedPeerTrustConfiguration.hookTrustSource()
+            )
         )
         let judge = LaunchAgentProbe.observe(
             label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
@@ -134,6 +143,82 @@ enum DaemonTrustProbe {
     }
 }
 
+/// Whether the manifest grants the roles `rv workspace` needs: the host
+/// must hold workspaceHost and this rv must hold cli, and only a manifest
+/// grants either.
+enum WorkspaceTrustRoles: Equatable, Sendable {
+    /// No workspace host installed, an invalid manifest (its own row), or tests.
+    case notEvaluated
+    case noManifest
+    /// The role names the installed manifest has entries for.
+    case manifest(Set<String>)
+}
+
+/// One manifest role's verdict on its installed binary.
+struct DoctorRoleTrust: Equatable, Sendable {
+    /// The manifest role name (`workspaceHost`, `cli`, `mcpCustodian`).
+    var role: String
+    var path: String
+    var trust: DoctorServiceTrust
+}
+
+/// Static trust check of the other installed rv components against their
+/// manifest entries, with the rule their peers apply live. `service` is
+/// `DaemonTrustProbe`; the operator UI has no install location to check.
+enum RoleTrustProbe {
+    static func live(_ paths: OwnedPaths) -> [DoctorRoleTrust] {
+#if os(macOS)
+        let source = ProtectedPeerTrustConfiguration.hookTrustSource()
+        return evaluate(binaries: binaries(paths)) { role, path in source.evaluateRole(role, atPath: path) }
+#else
+        []
+#endif
+    }
+
+#if os(macOS)
+    /// What the manifest grants `rv workspace`, judged only when the
+    /// workspace host is installed.
+    static func workspaceRoles(
+        _ paths: OwnedPaths,
+        source: ProtectedPeerTrustConfiguration.HookTrustSource
+    ) -> WorkspaceTrustRoles {
+        guard FileManager.default.fileExists(atPath: paths.localWorkspaceHost) else { return .notEvaluated }
+        switch source {
+        case .manifest:
+            return .manifest(Set((source.manifestRoles ?? []).map(\.rawValue)))
+        case .siblingPin:
+            return .noManifest
+        case .invalid:
+            return .notEvaluated
+        }
+    }
+
+    /// Each role and the binary rv installs for it.
+    static func binaries(_ paths: OwnedPaths) -> [(role: TrustedRVComponentRole, path: String)] {
+        [
+            (.cli, paths.localRvCli),
+            (.workspaceHost, paths.localWorkspaceHost),
+            (.mcpCustodian, paths.custodianAppExecutable),
+        ]
+    }
+
+    /// Installed binaries only; a role the manifest does not name gives no verdict.
+    static func evaluate(
+        binaries: [(role: TrustedRVComponentRole, path: String)],
+        verdict: (TrustedRVComponentRole, String) -> DaemonTrustVerdict?
+    ) -> [DoctorRoleTrust] {
+        binaries.compactMap { role, path in
+            guard FileManager.default.fileExists(atPath: path), let found = verdict(role, path) else { return nil }
+            return DoctorRoleTrust(
+                role: role.rawValue,
+                path: path,
+                trust: DoctorServiceTrust(source: found.source.rawValue, satisfied: found.satisfied, reason: found.reason)
+            )
+        }
+    }
+#endif
+}
+
 /// Install/runtime problems that make hooks deny even though rv "looks"
 /// installed. Each carries the exact repair command.
 enum DoctorInstallChecks {
@@ -160,7 +245,8 @@ enum DoctorInstallChecks {
             launchAgentProgram(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
-        ].compactMap { $0 }
+            workspaceRoles(probes.workspaceRoles),
+        ].compactMap { $0 } + roleTrust(probes.roleTrust)
     }
 
     /// One failing row per hooked host whose hook interpreter does not run:
@@ -287,6 +373,72 @@ enum DoctorInstallChecks {
             summary: "hooks reject the installed rvd (\(trust.reason ?? "untrusted")); hooks deny every tool call",
             fix: DaemonTrustProbe.fix(trust)
         )
+    }
+
+    /// The roles `rv workspace` needs and nothing grants: without a
+    /// manifest, or without its workspaceHost or cli entry, every start is
+    /// refused. Hooks keep working, so a warning.
+    static func workspaceRoles(_ state: WorkspaceTrustRoles) -> DoctorProblem? {
+        let required = ["workspaceHost", "cli"]
+        let administrator = "the file is root-owned, so this needs an administrator (sudo)"
+        switch state {
+        case .notEvaluated:
+            return nil
+        case .noManifest:
+            return DoctorProblem(
+                id: "peer-trust-workspace-roles-missing",
+                severity: .warn,
+                summary: "no peer-trust manifest is installed at \(trustManifestPath), and only it grants the "
+                    + "workspace host and rv-cli roles; rv workspace and rv opencode will not start",
+                fix: "install '\(trustManifestPath)' with workspaceHost and cli entries for the installed builds; "
+                    + administrator
+            )
+        case .manifest(let roles):
+            let missing = required.filter { roles.contains($0) == false }
+            guard missing.isEmpty == false else { return nil }
+            let names = missing.joined(separator: " or ")
+            return DoctorProblem(
+                id: "peer-trust-workspace-roles-missing",
+                severity: .warn,
+                summary: "the peer-trust manifest at \(trustManifestPath) has no \(names) entry; "
+                    + "rv workspace and rv opencode will not start",
+                fix: "add \(missing.joined(separator: " and ")) entries for the installed builds to "
+                    + "'\(trustManifestPath)'; " + administrator
+            )
+        }
+    }
+
+    /// A manifest role whose installed binary fails its entry: that
+    /// component's peers refuse it. Hooks keep working, so a warning.
+    static func roleTrust(_ verdicts: [DoctorRoleTrust]) -> [DoctorProblem] {
+        verdicts.compactMap { verdict in
+            guard verdict.trust.satisfied == false else { return nil }
+            let reason = verdict.trust.reason.map { " (\($0))" } ?? ""
+            return DoctorProblem(
+                id: "peer-trust-role-unsatisfied-\(verdict.role)",
+                severity: .warn,
+                summary: roleImpact(verdict.role) + reason,
+                fix: "update the \(verdict.role) entry in '\(trustManifestPath)' to pin the installed build "
+                    + "(for a release build, a Developer ID entry with its identifier and team); "
+                    + "the file is root-owned, so updating it needs an administrator (sudo)"
+            )
+        }
+    }
+
+    private static func roleImpact(_ role: String) -> String {
+        switch role {
+        case "workspaceHost":
+            "the peer-trust manifest pins the workspace host to a different build; "
+                + "rv workspace and rv opencode will not start"
+        case "cli":
+            "the peer-trust manifest pins rv-cli to a different build; "
+                + "the workspace host and the approvals custodian refuse this rv"
+        case "mcpCustodian":
+            "the peer-trust manifest pins the approvals custodian to a different build; "
+                + "MCP approvals will fail"
+        default:
+            "the peer-trust manifest pins \(role) to a different build"
+        }
     }
 
     /// `rvd` beside the hook `rv`, and the pack bundle `rvd` loads beside it.

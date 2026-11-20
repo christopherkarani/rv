@@ -2,6 +2,15 @@
 public let incompleteEvalSentence =
     "rv could not finish evaluating this command. Run it in Terminal."
 
+/// Hook voice for the observe floor (`IndeterminateReason.observeUnanalyzable`).
+public let observeUnanalyzableSentence =
+    "rv could not see what this command runs, so observe mode sends it to Terminal. Run it in Terminal."
+
+/// The sentence a person reads for an indeterminate verdict.
+public func indeterminateSentence(_ reason: IndeterminateReason) -> String {
+    reason == .observeUnanalyzable ? observeUnanalyzableSentence : incompleteEvalSentence
+}
+
 /// Text a person or a client reads. Control characters stay inside the field,
 /// so a value cannot redraw the screen or start a line. A literal backslash
 /// is doubled before a control is written as `\n` or `\uXXXX`, so the escape
