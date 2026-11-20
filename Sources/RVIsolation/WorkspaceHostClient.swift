@@ -119,7 +119,16 @@ public enum WorkspaceHostFailure: Error, Sendable, Equatable {
     case spawnFailed
     case recoveryBlocked(WorkspaceRecoveryBlock)
     case endpointUnavailable
+    /// The startup bound passed; this call launched no host that still runs.
     case timedOut
+    /// The startup bound passed and the host this call launched was stopped.
+    case timedOutAndStopped
+    /// The host published a live endpoint but did not answer on it within
+    /// `WorkspaceHosts.readinessTimeout`.
+    case notAnswering
+    /// The overall timeout came while the host this call spawned was still
+    /// mounting or recovering. It keeps running in the background.
+    case stillStarting
     case hostExited(Int32)
     case control(WorkspaceClientFailure)
 }

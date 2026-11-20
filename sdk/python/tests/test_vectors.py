@@ -59,6 +59,10 @@ REQUESTS = {
         b'{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"doctorSnapshot":{}},'
         b'"protocol":"rv.ipc.v1"}'
     ),
+    "policyStatus": (
+        b'{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"policyStatus":{}},'
+        b'"protocol":"rv.ipc.v1"}'
+    ),
     "pendingList": (
         b'{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"pendingList":{}},'
         b'"protocol":"rv.ipc.v1"}'
@@ -124,6 +128,12 @@ RESPONSES = {
         b'"status":"ok"}],"idleExitSeconds":300,"keepAlive":false,"label":"dev.rv.evaluate",'
         b'"packsEnabled":["core.git"],"protocol":"rv.ipc.v1","serviceSemver":"1.0.0",'
         b'"state":"running"}}}'
+    ),
+    "policyStatus": (
+        b'{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1",'
+        b'"result":{"policyStatus":{"status":{"ceilingRuleCount":1,"effectiveRuleCount":3,'
+        b'"machine":{"exceedsCeiling":true,"hash":"abc","ruleCount":2},"repo":'
+        b'{"exceedsCeiling":false,"hash":"def","ruleCount":0},"state":"loaded"}}}}'
     ),
     "pendingList": (
         b'{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1",'

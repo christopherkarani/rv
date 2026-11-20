@@ -31,6 +31,8 @@ public final class HookDeadline: Sendable {
 
     /// When the budget runs out. `JudgeAdmission` bounds its model wait by it.
     let expiresAt: ContinuousClock.Instant
+    /// When the budget started (frame receipt). `HookTiming` reads it.
+    let receivedAt: ContinuousClock.Instant
     private let now: @Sendable () -> ContinuousClock.Instant
     private struct State {
         var tripped = false
@@ -43,11 +45,17 @@ public final class HookDeadline: Sendable {
         receivedAt: ContinuousClock.Instant = .now,
         budget: Duration = HookDeadline.budget
     ) {
-        self.init(expiresAt: receivedAt.advanced(by: budget), now: { .now })
+        self.init(expiresAt: receivedAt.advanced(by: budget), receivedAt: receivedAt, now: { .now })
     }
 
-    init(expiresAt: ContinuousClock.Instant, now: @escaping @Sendable () -> ContinuousClock.Instant) {
+    /// `receivedAt` defaults to one default `budget` before `expiresAt`.
+    init(
+        expiresAt: ContinuousClock.Instant,
+        receivedAt: ContinuousClock.Instant? = nil,
+        now: @escaping @Sendable () -> ContinuousClock.Instant
+    ) {
         self.expiresAt = expiresAt
+        self.receivedAt = receivedAt ?? expiresAt.advanced(by: .zero - Self.budget)
         self.now = now
     }
 

@@ -49,7 +49,7 @@ private enum SharedMergeHost: CaseIterable, Sendable {
 }
 
 private func currentEntry(matcher: String, timeout: Int) -> String {
-    "{\"matcher\":\"\(matcher)\",\"hooks\":[{\"type\":\"command\",\"command\":\"RV_BINARY=/r /usr/bin/python3 -I -S /c/hooks/rv-guard.py\",\"timeout\":\(timeout)}]}"
+    "{\"matcher\":\"\(matcher)\",\"hooks\":[{\"type\":\"command\",\"command\":\"RV_BINARY=/r \(adapterLauncher)/usr/bin/python3 -I -S /c/hooks/rv-guard.py\",\"timeout\":\(timeout)}]}"
 }
 
 private func foreignEntry(matcher: String) -> String {
@@ -61,7 +61,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
 }
 
 @Test func sharedMerge_hookCommandIsSingleSite() {
-    let expected = "RV_BINARY=/r /usr/bin/python3 -I -S /c/hooks/rv-guard.py"
+    let expected = "RV_BINARY=/r \(adapterLauncher)/usr/bin/python3 -I -S /c/hooks/rv-guard.py"
     #expect(SettingsMergePolicy.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)
     #expect(ClaudeSettingsMerge.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)
     #expect(AntigravityHooksMerge.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)

@@ -27,8 +27,10 @@ struct PolicyStoreInputs: Sendable {
     /// Typed rules: machine from `$HOME/.config/rv`, repo from `<cwd>/.rv`;
     /// missing HOME skips machine and still loads repo when cwd is present.
     static func gather(home: HomeDirectory?, cwd: WorkingDirectory?) -> PolicyStoreInputs {
-        let workspace = cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+        let workspace = workspaceURL(cwd)
         let allowPaths = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
+        // No last-good fallback: a policy that fails to load leaves `policy`
+        // nil and the door denies `typed-rules-invalid` (fail closed).
         let policy = try? EffectiveActionPolicy(
             rules: PolicyWorkspace(home: home, workspace: workspace).loadEffectiveRules(builtin: [])
         )
@@ -37,6 +39,16 @@ struct PolicyStoreInputs: Sendable {
         return PolicyStoreInputs(
             allowPaths: allowPaths, policy: policy, safety: safety,
             mcpHostConfigGuard: MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home)))
+    }
+
+    /// `rv policy status`: the typed-policy load `gather` runs, for the
+    /// same (home, cwd), reported instead of enforced.
+    static func loadStatus(home: HomeDirectory?, cwd: WorkingDirectory?) -> PolicyLoadStatus {
+        PolicyWorkspace(home: home, workspace: workspaceURL(cwd)).loadStatus()
+    }
+
+    private static func workspaceURL(_ cwd: WorkingDirectory?) -> URL? {
+        cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
     }
 }
 

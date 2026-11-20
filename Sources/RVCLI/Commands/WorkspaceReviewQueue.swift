@@ -97,11 +97,15 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
     static func item(
         for view: EgressProposalView, loaded: EgressLoadedSnapshot?, reviewToken: EgressReviewToken
     ) -> ReviewItem {
-        ReviewItem(
+        // A same-host approval stays visible beside the row; the row
+        // itself still needs its own decision.
+        let related =
+            view.related.isEmpty ? "" : "  related approved " + view.related.map { ":\($0.port)" }.joined(separator: ", ")
+        return ReviewItem(
             id: .egress(view.id),
             kind: .pendingEgress,
             at: view.createdAt,
-            summary: "\(DisplayedText.field(view.host)):\(view.port)",
+            summary: "\(DisplayedText.field(view.host)):\(view.port)\(related)",
             detail: EgressReviewRun.prettyShow(view, rejectionReason: nil, loaded: loaded)
                 .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
                 .filter { $0.isEmpty == false },

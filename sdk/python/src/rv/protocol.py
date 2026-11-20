@@ -30,6 +30,7 @@ METHODS = (
     "listPacks",
     "setPackEnabled",
     "doctorSnapshot",
+    "policyStatus",
     "pendingList",
     "pendingWatch",
     "pendingResolve",

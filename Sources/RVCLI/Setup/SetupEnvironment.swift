@@ -75,8 +75,8 @@ struct SetupEnvironment {
     /// The absolute path of a runnable interpreter (`python3`), baked into
     /// the hook command; nil when none runs. Setup will not wire a host
     /// whose hook command needs one that does not. Default
-    /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.resolveRunnable`
-    /// on this PATH.
+    /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.chooseRunnable`
+    /// (a protected system interpreter's real path, else this PATH).
     var resolveInterpreter: (String) -> String? = { "/usr/bin/" + $0 }
     /// `rv uninstall --purge` deletes the values rv stored under
     /// `SecretKeychain.service` through this. Default deletes nothing and

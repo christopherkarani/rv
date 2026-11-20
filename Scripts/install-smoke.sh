@@ -93,7 +93,9 @@ want='RV_FROM_INSTALL=1 exec "$bin/rv" setup'
 sed '$ s/.*/echo SMOKE-STAGE-OK/' "$install_path" > "$WORK/neutered.sh"
 # --local serves a SHA256SUMS this smoke wrote, which no release key signed
 # (publish signs the real one later), so its copy unpins the release key.
-# The signature check is proven by InstallScriptTests and by --live.
+# The signature check is proven by InstallScriptTests and by --live. The
+# Team ID pin and signed_releases stay as shipped, so on macOS the smoke
+# refuses assets that are not notarized and signed by rv's team.
 if [ "$mode" = "local" ]; then
   awk '
     open { if (index($0, "\"")) open = 0; next }

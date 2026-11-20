@@ -61,6 +61,25 @@ package struct LiveEvaluateWorld: Sendable {
         await run(.peek, command: command, cwd: cwd, host: host)
     }
 
+    /// Peek plus, under observe, the verdict enforce would show.
+    package func peekVerdict(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        host: LedgerHost = .tty
+    ) async -> GatedVerdict {
+        let now = clock()
+        let load = allowlist
+        return await gated.peekVerdict(
+            command: command,
+            cwd: cwd,
+            home: home,
+            grants: grants,
+            now: now,
+            allowlist: { load(cwd, now) },
+            host: host
+        )
+    }
+
     /// Apply spends a matching grant.
     package func apply(
         command: ShellCommand,
