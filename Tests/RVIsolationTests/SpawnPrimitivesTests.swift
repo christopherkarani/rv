@@ -36,6 +36,8 @@ struct SpawnPrimitivesTests {
         // whatever number lowest-free allocation handed us.
         let floor = fd + 8
         let original = fd
+        var pipeStat = stat()
+        try #require(fstat(original, &pipeStat) == 0)
         #expect(relocateDescriptor(&fd, above: floor) == true)
         #expect(fd >= floor)
         #expect(fd != original)
@@ -43,11 +45,18 @@ struct SpawnPrimitivesTests {
         let movedFlags = fcntl(fd, F_GETFD)
         #expect(movedFlags >= 0)
         #expect(movedFlags & FD_CLOEXEC != 0)
-        // Original is closed; capture errno before the framework runs.
-        let probe = fcntl(original, F_GETFD)
+        // Original no longer names the pipe. Parallel suites may already
+        // have opened something else under that number, so it need not be
+        // free: closed (EBADF) or another file both pass. Capture errno
+        // before the framework runs.
+        var probeStat = stat()
+        let probe = fstat(original, &probeStat)
         let probeErrno = errno
-        #expect(probe == -1)
-        #expect(probeErrno == EBADF)
+        if probe == 0 {
+            #expect(probeStat.st_dev != pipeStat.st_dev || probeStat.st_ino != pipeStat.st_ino)
+        } else {
+            #expect(probeErrno == EBADF)
+        }
         // Moved end is the same pipe: a byte round-trips.
         let written: [UInt8] = [0x7A]
         #expect(written.withUnsafeBytes { write(writeEnd, $0.baseAddress, $0.count) } == 1)
