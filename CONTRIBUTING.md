@@ -1,7 +1,7 @@
 # Contributing to rv
 
 Thanks for helping. This file covers building, testing, and opening a PR.
-For the domain vocabulary, read [`CONTEXT.md`](CONTEXT.md) first.
+For the domain vocabulary, read [`GLOSSARY.md`](GLOSSARY.md) first.
 
 ## Toolchain
 

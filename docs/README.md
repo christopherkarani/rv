@@ -4,7 +4,7 @@ Design and audit material for contributors. User guides (install,
 secrets placeholders, the MCP gateway, the audit log, troubleshooting,
 known limits) are in [`guides/`](guides/README.md); the website docs are
 at [rykanv.com/docs](https://rykanv.com/docs/introduction). Start with
-[`CONTEXT.md`](../CONTEXT.md) for the domain vocabulary.
+[`GLOSSARY.md`](../GLOSSARY.md) for the domain vocabulary.
 
 Files under `plans/` and the phase folders in `security/` are point-in-time
 records. They describe intent or evidence as of when they were written, not

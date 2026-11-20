@@ -450,4 +450,4 @@ Per-ticket acceptance + AC-001..003; fresh-context review per ticket
 ## 11. Related Specifications / Further Reading
 
 - `spec/spec-architecture-27dc7ddd-deepening.md` (prior run)
-- `CONTEXT.md` (domain glossary)
+- `GLOSSARY.md` (domain glossary)

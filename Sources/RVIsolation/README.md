@@ -3,7 +3,7 @@
 The cage around a coding agent: the walls that stop it reaching outside the
 project, the private copy of the project it works on, the guarded doors for
 network, secrets and "may I run this?" requests, and the cleanup that
-publishes its work back. Vocabulary is in [`CONTEXT.md`](../../CONTEXT.md);
+publishes its work back. Vocabulary is in [`GLOSSARY.md`](../../GLOSSARY.md);
 the security contract and its limits are in
 [`docs/security/runtime-boundary.md`](../../docs/security/runtime-boundary.md).
 

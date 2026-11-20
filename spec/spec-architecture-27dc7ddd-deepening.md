@@ -488,5 +488,5 @@ acceptance or an explicit blocked reason recorded against this spec.
   remaining strip/union half, not a relitigation)
 - `spec/spec-architecture-spawn-fd-hygiene.md` (landed)
 - `spec/spec-architecture-type-system-enums.md` (landed)
-- `CONTEXT.md` (domain glossary; Secret release / Lease terms used by
+- `GLOSSARY.md` (domain glossary; Secret release / Lease terms used by
   T6's neighboring code)

@@ -215,6 +215,6 @@ Frontier at start: T1, T3 (disjoint writes). T2 stacks on T1's branch. In T2, `G
 ## 11. Related Specifications / Further Reading
 
 - Report: `$TMPDIR/swift-functional-evolution-rv-20261117-165714.html`
-- `CONTEXT.md` (Guard: host mode, observe floor; Isolation: publish)
+- `GLOSSARY.md` (Guard: host mode, observe floor; Isolation: publish)
 - `Sources/RVIsolation/README.md`
 - `spec/spec-architecture-functional-evolution-643e16.md` (earlier run)

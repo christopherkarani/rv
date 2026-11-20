@@ -147,7 +147,7 @@ Each agent needs an adapter, selected with `rv workspace run --microvm IMAGE --a
   1. Only servers marked `"cage": true` in `mcp.json` are listed. The default is none.
   2. Elicitation approvals are off. The guest agent is the MCP client and could accept its own prompt (`Sources/RVMCP/MCPGatewayCore.swift:21-27, :132-148`). An `ask` waits for host-side `rv mcp approve` (with `UserPresence`) or, later, the owner action route.
   3. `MCPCallRecord` gains the calling principal (instance, runtime), per identity spec §19.
-  4. Upstream secrets are released host-side through `SecretRelease` (stdio server and header targets, `CONTEXT.md`) and never cross into the guest.
+  4. Upstream secrets are released host-side through `SecretRelease` (stdio server and header targets, `GLOSSARY.md`) and never cross into the guest.
 - **Which servers are safe for cages.** Remote HTTP upstreams run nothing on the host. Local stdio servers run on the host, and `MCPSandbox` is allow-default for reads (`Sources/RVMCP/MCPSandbox.swift:11-14`), so a filesystem-style server would hand the guest host reads. `rv mcp trust` refuses `"cage": true` on a local server without `sandbox`, and warns when the sandbox allows reads outside the workspace.
 - **Guest config.** The adapter writes an MCP entry with URL `${RV_GUEST_SERVICES_URL}/mcp` and header `Authorization: Bearer ${RV_GUEST_SERVICES_TOKEN}`, using the agent's environment expansion. The file in `/.rv` stays secret-free.
 - **Bypass check.** If a cage server's remote host is also on the runtime's egress allowlist, the guest can reach it directly. `rv workspace status` flags that.
