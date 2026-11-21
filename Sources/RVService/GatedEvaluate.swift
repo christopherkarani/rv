@@ -567,6 +567,14 @@ public struct GatedEvaluate: Sendable {
             // timeout deny.
             var recordsDenial = false
             if verb.recordsDenial, case .deny = unfloored.decision { recordsDenial = true }
+            if verb.recordsDenial, case .indeterminate = unfloored.decision, let row = Self.denialRow(
+                for: unfloored, path: nil, host: host, tool: tool, now: now, observed: true,
+                wouldBe: Self.ledgerWouldBe(HookAuthorization.project(result: unfloored, cwd: cwd))
+            ) {
+                // An unfinished evaluation enforcement would refuse. It never
+                // reaches the Policy gate as a ledger row, not even a preview.
+                effects.append(row)
+            }
             guard recordsDenial || previewsWouldBe else { return (observed, effects, nil) }
             // The packs-only floor only turns an allow indeterminate, so it
             // never changes whether a denial row is recorded: it runs here,
@@ -1131,7 +1139,8 @@ public struct GatedEvaluate: Sendable {
         ))
     }
 
-    /// The denial-ledger row a final deny asks for; nil for anything else.
+    /// The denial row a final deny or an indeterminate refusal asks for;
+    /// nil for an allow.
     private static func denialRow(
         for result: EvaluationResult,
         path: String?,
@@ -1141,6 +1150,13 @@ public struct GatedEvaluate: Sendable {
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny
     ) -> GatedEffect? {
+        if case .indeterminate(let reason) = result.outcome {
+            let ruleID = indeterminateRuleID(reason)
+            return .denialRow(GatedEffect.DenialRow(
+                at: now, host: host, tool: tool, ruleID: ruleID, category: .pack(ruleID.pack), path: path ?? "",
+                observed: observed, wouldBe: wouldBe, indeterminate: reason, session: attributedSession()
+            ))
+        }
         guard case .deny(let deny, let matched) = result.outcome else { return nil }
         let rawPath: String
         if let path, path.isEmpty == false {
@@ -1164,6 +1180,13 @@ public struct GatedEvaluate: Sendable {
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
             observed: observed, wouldBe: wouldBe, session: attributedSession()
         ))
+    }
+
+    /// The audit subject of an indeterminate refusal, in rule-id form:
+    /// `rv.indeterminate:<reason>`, the stable `IndeterminateReason` raw
+    /// value. Not a pack rule; no allowlist entry or grant ever applies.
+    static func indeterminateRuleID(_ reason: IndeterminateReason) -> RuleID {
+        RuleID(pack: PackID(rawValue: "rv.indeterminate"), pattern: reason.rawValue)
     }
 
     /// The bound hook request's session id, if it is an opaque token.
@@ -1213,7 +1236,9 @@ public struct GatedEvaluate: Sendable {
                 // Chained record first: a forward that runs between the two
                 // writes then sees the chained row and drops the blocks copy.
                 auditDenial(row, home: home)
-                recordDenial(row, home: home)
+                // The ledger is rule-oriented (`rv blocks`; the review queue
+                // offers allow-once): an indeterminate refusal is neither.
+                if row.indeterminate == nil { recordDenial(row, home: home) }
             case .overrideAudit(let row):
                 let wait = lockWait()
                 guard auditOverride(row, home: home, wait: wait) == false else { continue }
@@ -1238,8 +1263,9 @@ public struct GatedEvaluate: Sendable {
     /// observe-mode would-be deny), whatever `blocks.enabled` says: the
     /// ledger is a pruned convenience view, the chain is the record.
     /// Carries the rule, host, tool, redacted path and the hook session id
-    /// (when an opaque token), never the command
-    /// text.
+    /// (when an opaque token), never the command text. An indeterminate
+    /// refusal is the same row marked `verdict: indeterminate`, its reason
+    /// class in `reason`.
     private static func auditDenial(
         _ row: GatedEffect.DenialRow, home: HomeDirectory,
         wait: AuditLog.LockWait = AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout)
@@ -1248,13 +1274,15 @@ public struct GatedEvaluate: Sendable {
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
         if row.observed { detail["would_be"] = row.wouldBe.rawValue }
+        if row.indeterminate != nil { detail["verdict"] = "indeterminate" }
         if let session = row.session { detail["session"] = session }
         let recorded = AuditLog.append(
             AuditEvent(
                 time: row.at,
                 kind: row.observed ? .commandObserved : .commandDenied,
                 decision: row.observed ? .info : .denied,
-                subject: row.ruleID.rawValue, agent: row.host == .tty ? nil : row.host.rawValue,
+                subject: row.ruleID.rawValue, reason: row.indeterminate?.rawValue,
+                agent: row.host == .tty ? nil : row.host.rawValue,
                 source: AuditLedger.Source.audit.rawValue, detail: detail
             ),
             configDirectory: RVPolicyPaths.configDirectory(home: home),
@@ -1266,7 +1294,9 @@ public struct GatedEvaluate: Sendable {
                 row.observed ? .commandObserved : .commandDenied, file: auditFile(home),
                 consequence: row.observed
                     ? "the observed allow under \(row.ruleID.rawValue) stands unrecorded"
-                    : "the deny by \(row.ruleID.rawValue) stands unrecorded")
+                    : row.indeterminate == nil
+                    ? "the deny by \(row.ruleID.rawValue) stands unrecorded"
+                    : "the indeterminate refusal \(row.ruleID.rawValue) stands unrecorded")
         }
     }
 

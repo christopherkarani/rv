@@ -46,6 +46,7 @@ export function reasonCode(event: ReasonInput): string | null {
   if (event.decision !== "denied") return null;
   switch (event.kind) {
     case "command.denied":
+      if (event.detail.verdict === "indeterminate") return "rv.command.denied-indeterminate";
       if (event.detail.category && SECRET_PATH_CATEGORIES.has(event.detail.category)) return "rv.command.denied-secret-path";
       if (JUDGE_RULES.has(event.subject)) return "rv.command.denied-judge";
       return "rv.command.denied-rule";

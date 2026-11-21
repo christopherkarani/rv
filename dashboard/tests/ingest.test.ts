@@ -108,6 +108,7 @@ describe("reasonCode", () => {
   const base = { reason: null, source: "audit.jsonl", detail: {} as Record<string, string> };
   it("matches rv's derivation for common kinds", () => {
     expect(reasonCode({ ...base, kind: "command.denied", decision: "denied", subject: "core.judge:laya-block" })).toBe("rv.command.denied-judge");
+    expect(reasonCode({ ...base, kind: "command.denied", decision: "denied", subject: "rv.indeterminate:selfProtection", detail: { verdict: "indeterminate" } })).toBe("rv.command.denied-indeterminate");
     expect(reasonCode({ ...base, kind: "command.observed", decision: "info", subject: "x", detail: { would_be: "ask" } })).toBe("rv.command.observed-ask");
     expect(reasonCode({ ...base, kind: "egress.denied", decision: "denied", subject: "h:443", reason: "sni-mismatch" })).toBe("rv.egress.sni-mismatch");
     expect(reasonCode({ ...base, kind: "secret.misuse", decision: "denied", subject: "K", detail: { refusal: "foreignPlaceholder" } })).toBe("rv.secret.foreign-placeholder");
