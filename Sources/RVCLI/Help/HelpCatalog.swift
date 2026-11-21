@@ -978,8 +978,20 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
+                    name: "code",
+                    description: "The six-character code printed in the agent's block message (\"rv allow-once a1b2c3\")"
+                ),
+                HelpRow(
                     name: "redeem",
-                    description: "Paste the six-character code from a hook deny on a TTY"
+                    description: "Lets exactly that command run once; the agent then retries it"
+                ),
+                HelpRow(
+                    name: "expiry",
+                    description: "A code works once and expires; rv allow-once list shows what is still open"
+                ),
+                HelpRow(
+                    name: "terminal",
+                    description: "Type it in your own Terminal: rv refuses it from an agent or a script"
                 ),
                 HelpRow(
                     name: "mint",
