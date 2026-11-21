@@ -198,7 +198,7 @@ test. The plan defers termination into `EgressProxy`
   - The key is a Keychain item (`rv.transparent-ca`) on macOS, as the plan
     says.
   - The cert is written atomically with `OwnerOnlyFile`
-    (`Sources/RVIsolation/OwnerOnlyFile.swift:50-79`) under `~/.config/rv`,
+    (`Sources/RVFileStore/OwnerOnlyFile.swift:50-79`) under `~/.config/rv`,
     which is already outside the cage grant.
   - An `flock` serializes creation across workspace hosts.
   - Leaves are cached in an LRU bounded at 1024 entries. The terminate

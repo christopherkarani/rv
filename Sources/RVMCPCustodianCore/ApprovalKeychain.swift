@@ -12,6 +12,7 @@ import Security
 #endif
 import Synchronization
 import RVDomain
+import RVFileStore
 import RVIsolation
 import RVMCP
 

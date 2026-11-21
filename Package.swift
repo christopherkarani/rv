@@ -147,7 +147,7 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVXPC", dependencies: ["RVIPC", "RVIsolation"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
-    .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation", "RVPolicy"]),
+    .target(name: "RVMCP", dependencies: ["RVDomain", "RVFileStore", "RVHistory", "RVIsolation", "RVPolicy"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVDomain", "RVTheme", "RVPresentation"]),
     .target(
@@ -263,7 +263,7 @@ let macOSOperatorUITestTargets: [Target] = []
 let macOSCustodianTargets: [Target] = [
     .target(
         name: "RVMCPCustodianCore",
-        dependencies: ["RVMCP", "RVIPC", "RVIsolation", "RVDomain", "RVPolicy"]
+        dependencies: ["RVMCP", "RVIPC", "RVIsolation", "RVDomain", "RVFileStore", "RVPolicy"]
     ),
     .executableTarget(
         name: "rv-mcp-custodian",
@@ -319,7 +319,7 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVMCP",
+            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [

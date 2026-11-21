@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVIsolation
 
 /// Where a listed tool stands against the definition the owner trusted.

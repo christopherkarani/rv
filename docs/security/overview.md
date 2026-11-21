@@ -1009,7 +1009,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C72 | Sources/RVIsolation/SecretProviders.swift:147-287; Sources/RVIsolation/SecretProviders.swift:310-333 |
 | C73 | Sources/RVIsolation/SecretProviders.swift:414-434; Sources/RVIsolation/SecretProviders.swift:465-474 |
 | C74 | Sources/RVIsolation/SecretStore.swift:142-231 |
-| C75 | Sources/RVIsolation/OwnerOnlyFile.swift:16-18; Sources/RVIsolation/OwnerOnlyFile.swift:29-32; Sources/RVIsolation/OwnerOnlyFile.swift:50-61; Sources/RVIsolation/SecretsConfiguration.swift:277-278; Sources/RVIsolation/SecretStore.swift:263-267 |
+| C75 | Sources/RVFileStore/OwnerOnlyFile.swift:16-18; Sources/RVFileStore/OwnerOnlyFile.swift:29-32; Sources/RVFileStore/OwnerOnlyFile.swift:50-61; Sources/RVIsolation/SecretsConfiguration.swift:277-278; Sources/RVIsolation/SecretStore.swift:263-267 |
 | C76 | Sources/RVIsolation/SecretLaunchBroker.swift:191; Sources/RVIsolation/SecretRun.swift:93-98 |
 | C77 | Sources/RVIsolation/SecretGatewayProtocol.swift:190-195 |
 | C78 | Sources/RVIsolation/SecretGatewayProtocol.swift:3-4; Sources/RVIsolation/SecretGatewayProtocol.swift:20-23; Sources/RVIsolation/SecretLaunchBroker.swift:221 |
@@ -1102,7 +1102,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C164 | install.sh:274; install.sh:320-334; install.sh:380-392 |
 | C165 | install.sh:341-345 |
 | C166 | Sources/RVFileStore/FileLockedJSONLStore.swift:178; Sources/RVFileStore/FileLockedJSONLStore.swift:243-258 |
-| C167 | Sources/RVIsolation/OwnerOnlyFile.swift:30-32; Sources/RVIsolation/OwnerOnlyFile.swift:50-61 |
+| C167 | Sources/RVFileStore/OwnerOnlyFile.swift:30-32; Sources/RVFileStore/OwnerOnlyFile.swift:50-61 |
 | C168 | Sources/RVIsolation/SecretFingerprint.swift:14; Sources/RVIsolation/SecretFingerprint.swift:30-41 |
 | C169 | Sources/RVIsolation/SecretOAuth.swift:71; Sources/RVIsolation/SecretOAuth.swift:139-149; Sources/RVIsolation/SecretOAuth.swift:378-401 |
 | C170 | Sources/RVMCP/MCPOAuth.swift:736-760 |
