@@ -113,8 +113,11 @@ enum ObserveFloor {
             if stopsOrInstalls(text, rvdPIDs: rvdPIDs, context: context) { return .enforce(floored(result)) }
         }
         var protection = OwnProtection(result: result, command: command, store: store, context: context)
-        if holds(result) || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
-            return .enforce(result)
+        if holds(result) { return .enforce(result) }
+        // The engine may allow a command whose own text weakens rv (an rv
+        // admin command fed to a shell, interpreter or scheduler): floor it.
+        if protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
+            return .enforce(floored(result))
         }
         for text in set.texts where text.origin != .command {
             guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
