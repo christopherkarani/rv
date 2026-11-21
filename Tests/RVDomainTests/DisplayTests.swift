@@ -12,7 +12,10 @@ struct DisplayTests {
         #expect(selfProtectionSentence.contains("rv blocks agents"))
         #expect(selfProtectionSentence.contains("could not finish") == false)
         #expect(indeterminateSentence(.observeUnanalyzable) == observeUnanalyzableSentence)
-        #expect(indeterminateSentence(.budgetExhausted) == incompleteEvalSentence)
+        #expect(indeterminateSentence(.budgetExhausted) == budgetExhaustedSentence)
+        #expect(budgetExhaustedSentence.contains("ran out of time"))
+        #expect(budgetExhaustedSentence.contains(":") == false)
+        #expect(indeterminateSentence(.commandTooLarge) == incompleteEvalSentence)
     }
 
     @Test func fieldEscapesUnenumeratedBidiFormatAndControlScalars() {

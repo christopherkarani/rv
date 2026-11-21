@@ -12,11 +12,18 @@ public let observeUnanalyzableSentence =
 public let selfProtectionSentence =
     "rv blocks agents from running rv commands that could weaken it (changing, stopping or approving through rv). Run it in your own Terminal."
 
+/// Hook voice for `IndeterminateReason.budgetExhausted`: the matcher ran out
+/// of its time budget, usually on a very long or deeply nested command. Says
+/// so, so a benign long command does not read as a crash.
+public let budgetExhaustedSentence =
+    "rv ran out of time checking this long or complex command, so it could not tell whether it is safe. Split it into smaller commands, or run it in Terminal."
+
 /// The sentence a person reads for an indeterminate verdict.
 public func indeterminateSentence(_ reason: IndeterminateReason) -> String {
     switch reason {
     case .observeUnanalyzable: observeUnanalyzableSentence
     case .selfProtection: selfProtectionSentence
+    case .budgetExhausted: budgetExhaustedSentence
     default: incompleteEvalSentence
     }
 }
