@@ -291,3 +291,72 @@ def test_keeps_review_rule():
         assert not p.keeps_review(c), c
     for c in keep:
         assert p.keeps_review(c), c
+
+
+def test_proxy_end_to_end(env):
+    pytest.importorskip("sklearn")
+    import proxy_tfidf_v3 as P
+    _run_prepare(env)
+    rc = P.main([])
+    rep = json.loads((env["work"] / "v3" / "proxy-report.json").read_text())
+    assert rc in (0, 1) and set(rep["checks"]) == {"bare", "in-repo"}
+    assert rep["go"] == (rc == 0)
+
+
+class _FakeScorer:
+    """Keyword 'model' standing in for torch/ONNX in calibrate/eval main()."""
+    tokenizer = None
+    BAD = ("| sh", "| bash", "| zsh", "rm -rf ~", "rm -rf /", "credentials", "nc ", "base64 -d",
+           "crontab", "launchctl", "/dev/tcp", "| perl", "| python3", "curl -d", "printf '\\")
+
+    def logits(self, texts):
+        import numpy as np
+        out = []
+        for t in texts:
+            bad = any(b in t for b in self.BAD)
+            out.append([-4.0, 0.0, 4.0] if bad else [4.0, -1.0, -4.0])
+        return np.array(out)
+
+
+def test_calibrate_and_eval_main_end_to_end(env, monkeypatch):
+    import calibrate_v3
+    import eval_v3
+    import laya_v3_model as LM
+    _run_prepare(env)
+    monkeypatch.setattr(LM, "make_scorer", lambda *a, **k: _FakeScorer())
+    assert calibrate_v3.main([]) == 0
+    cal = json.loads((env["work"] / "v3" / "calibration.json").read_text())
+    assert {"temperature", "block_threshold", "review_threshold", "metrics"} <= set(cal)
+    ext = env["work"] / "ext.json"
+    ext.write_text(json.dumps({"measurements": [
+        {"gate": "bundle_size_mb", "slice": "-", "group": "mlpackage", "value": 600.0}]}))
+    blind = env["work"] / "blind"
+    _write_jsonl(blind / "b.jsonl", [{"command": "secret transcript cmd", "set": "benign"}])
+    rc = eval_v3.main(["--external", str(ext), "--blind"])
+    rep = json.loads((env["work"] / "v3" / "eval-report.json").read_text())
+    assert rc == 1 and not rep["passed"]          # door/latency/fresh are not measured
+    gates = {r["gate"] for r in rep["results"]}
+    assert {"exam_shell_held", "exam_adversarial_held", "critical_zero_miss"} <= gates
+    size = [r for r in rep["results"] if r["gate"] == "bundle_size_mb"]
+    assert size and size[0]["passed"]
+    lat = [r for r in rep["results"] if r["gate"] == "latency_p95_ms"]
+    assert lat and not lat[0]["passed"] and "not measured" in lat[0]["note"]
+    assert rep["blind_slices"] == ["blind/b"]
+    assert all(r["command"] is None for r in rep["rows"]["blind/b"])
+
+
+def test_convert_configure_v3(env):
+    import convert_ft as C
+    v3 = env["work"] / "v3"
+    v3.mkdir(parents=True)
+    (v3 / "stats.json").write_text(json.dumps({"sha256": {"train": "a" * 64, "validation": "b" * 64}}))
+    with pytest.raises(SystemExit, match="calibration.json missing"):
+        C.configure(["--version", "v3"])
+    (v3 / "calibration.json").write_text(json.dumps({"temperature": 1.7, "block_threshold": 0.97,
+                                                     "review_threshold": 0.6}))
+    C.configure(["--version", "v3"])
+    assert C.CHECKPOINT_NAME == "laya-ft-v3-fp16" and C.FT_DIR == v3 / "ft"
+    assert C.COREML_DIR == v3 / "ft" / "coreml"
+    assert C.EXPECTED_HASH == {"train": "aaaaaaaa", "validation": "bbbbbbbb"}
+    C.configure([])
+    assert C.CHECKPOINT_NAME == "laya-ft-v2-fp16" and str(C.FT_DIR) == "/tmp/laya-train/ft"
