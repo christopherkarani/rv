@@ -1,0 +1,5 @@
+[
+  {"prompt":"Why does mutating this copied Swift value change the other instance?","should_trigger":true},
+  {"prompt":"Design an XPC version handshake.","should_trigger":false},
+  {"prompt":"Handle a Swift 6 Sendable diagnostic.","should_trigger":false}
+]

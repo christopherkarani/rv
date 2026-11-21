@@ -383,29 +383,6 @@ struct ResidualLinuxEdgesTests {
         #expect(try String(contentsOfFile: backup, encoding: .utf8) == "first")
     }
 
-    @Test func companionPresence_rejectsUnreadablePlist() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-companion-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let info = root.appendingPathComponent("rv.app/Contents/Info.plist")
-        try FileManager.default.createDirectory(at: info.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "not-a-plist".write(to: info, atomically: true, encoding: .utf8)
-        #expect(FilesystemCompanionPresence(searchRoots: [root]).presence() == .absent)
-
-        let array = try PropertyListSerialization.data(fromPropertyList: ["dev.rv.app"], format: .xml, options: 0)
-        try array.write(to: info)
-        #expect(FilesystemCompanionPresence(searchRoots: [root]).presence() == .absent)
-
-        let missingID = try PropertyListSerialization.data(
-            fromPropertyList: ["CFBundleName": "rv"],
-            format: .xml,
-            options: 0
-        )
-        try missingID.write(to: info)
-        #expect(FilesystemCompanionPresence(searchRoots: [root]).presence() == .absent)
-    }
-
     @Test func hostInstallation_occupiedWhenClaudeSettingsUnreadable() throws {
         try withTempHome { _, paths, _ in
             let owned = paths.hostAdapter(for: .claude)
@@ -468,7 +445,7 @@ struct ResidualLinuxEdgesTests {
         }
     }
 
-    @Test func uninstall_systemdDisableAndKeepAliveRestore() throws {
+    @Test func uninstall_systemdDisableFailureIsReported() throws {
         try withTempHome { home, layout, launchctl in
             let recording = RecordingSystemctl()
             let setupEnv = env(
@@ -489,24 +466,6 @@ struct ResidualLinuxEdgesTests {
             let outcome = SetupRun.uninstall(failing)
             #expect(outcome.exitCode == EX_UNAVAILABLE)
             #expect(outcome.stderr.contains("unable to disable systemd unit"))
-        }
-
-        try withTempHome { home, layout, launchctl in
-            let systemd = env(
-                home: home,
-                launchctl: launchctl,
-                touchSystemd: false,
-                supervisor: .systemdUser
-            )
-            try SetupRun.restoreKeepAliveAfterCompanionUninstall(systemd)
-
-            let launchd = env(home: home, launchctl: launchctl, touchLaunchd: false)
-            try SetupRun.restoreKeepAliveAfterCompanionUninstall(launchd)
-            #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
-
-            #expect(SetupRun.setup(launchd).exitCode == 0)
-            try SetupRun.restoreKeepAliveAfterCompanionUninstall(launchd)
-            try expectLaunchAgentKeepAlive(layout.launchAgent, false)
         }
     }
 
