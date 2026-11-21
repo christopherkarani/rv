@@ -163,19 +163,13 @@ private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: Workin
     }
     let rest = Array(tokens.dropFirst(index))
     if rest.isEmpty { return .notWrapper }
-    // Each nested `xargs` re-enters unwrap at depth 0 (`xargsPeeledWords`),
-    // so the chain is bounded here: `xargs xargs …` 600 deep overflowed
-    // rvd's 512 KB stack. Past the cap it is unanalyzable.
-    if rest.lazy.filter({ isXargsName($0.lexeme) }).dropFirst(maxNestedXargs).first != nil {
-        return .limited(.xargs)
-    }
     if xargsInnerIsMutating(rest.map(\.lexeme), replace: replace) {
         return .limited(.xargs)
     }
     return .next(renderCommand(rest), .xargs, workingDirectory)
 }
 
-/// `xargs` words an `xargs` command may carry after its own name.
+/// Nested `xargs` the rvd stop guard reads through before it fails closed.
 let maxNestedXargs = 4
 
 func isXargsName(_ word: String) -> Bool {
@@ -293,14 +287,26 @@ private func dropXargsLauncherPrefixes(_ words: [String]) -> [String] {
     return Array(rest)
 }
 
+private enum XargsCheckNesting {
+    /// `xargsPeeledWords` calls on the current stack.
+    @TaskLocal static var level = 0
+}
+
 /// The command left after peeling known wrappers, `limited` when the unwrap
 /// cannot decide; nil when `words` is not a wrapper invocation.
 private func xargsPeeledWords(_ words: [String]) -> (words: [String], limited: Bool)? {
     guard words.isEmpty == false else { return nil }
+    // Each nested `xargs` re-enters unwrap here at depth 0, so its depth
+    // cap never applied: `xargs xargs …` 600 deep overflowed rvd's 512 KB
+    // stack. The checks nest as deep as unwrap's own depth cap allows;
+    // past it the inner command is limited, which fails closed.
+    let nesting = XargsCheckNesting.level
+    guard nesting < UnwrapBudget.default.maxDepth else { return ([], true) }
     let text = renderCommand(words.map { ShellPipeline.Token(lexeme: $0, wasQuoted: false) })
-    switch ShellPipeline.unwrap(
-        text, workingDirectory: nil, budget: .default, depth: 0, layers: [], splitChains: false
-    ) {
+    let outcome = XargsCheckNesting.$level.withValue(nesting + 1) {
+        ShellPipeline.unwrap(text, workingDirectory: nil, budget: .default, depth: 0, layers: [], splitChains: false)
+    }
+    switch outcome {
     case .limited:
         return ([], true)
     case .complete(let unwrapped):

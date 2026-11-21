@@ -35,17 +35,19 @@ struct ObserveFloorBoundsTests {
         #expect(result.decision != .allow)
     }
 
-    /// The unwrap stops at an `xargs` whose inner verb writes or whose
-    /// nesting passes the cap, but xargs still runs that inner command:
-    /// its git config must be read as it is for `xargs git … status`.
-    @Test("observe host: git config behind an xargs the unwrap stops at is held", arguments: [
+    /// Bounding the nested xargs check must not limit a peel main
+    /// completed: `xargs` words as data, as option values or inside a
+    /// script once hid the inner git config from alias analysis.
+    @Test("observe host: git config behind xargs with xargs words as data is held", arguments: [
         "echo . | xargs git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
-        "echo . | xargs git -c core.fsmonitor='./x.sh' commit",
         "echo . | xargs -n1 sudo git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
         "bash -c \"xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs\"",
+        "env -u xargs -u xargs -u xargs -u xargs -u xargs xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs",
+        "echo . | xargs -E -x git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs",
+        "python3 -c \"import os; os.system('xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs')\"",
         "echo . | xargs xargs xargs git -c alias.s='!pkill rvd' s",
     ])
-    func gitConfigBehindLimitedXargsHeld(command: String) async throws {
+    func gitConfigBehindXargsHeld(command: String) async throws {
         let home = try observeHome()
         defer { remove(home) }
         let result = await GatedEvaluate().apply(
@@ -56,9 +58,8 @@ struct ObserveFloorBoundsTests {
         #expect(result.decision != .allow, "\(command)")
     }
 
-    /// The read-through takes the first few launchers and two script
-    /// levels, so a long line stays linear.
-    @Test("observe host: a long xargs line the unwrap stops at is read in bounded time")
+    /// Thousands of `xargs` words as data, some inside quoted scripts.
+    @Test("observe host: a long line of xargs words is read in bounded time")
     func longLimitedXargsLineBounded() async throws {
         let home = try observeHome()
         defer { remove(home) }

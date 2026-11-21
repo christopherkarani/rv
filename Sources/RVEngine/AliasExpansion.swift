@@ -143,7 +143,7 @@ private func aliasSegments(_ command: String) -> [String] {
             return words.isEmpty || words.contains { isShellAssignmentWord($0.lexeme) == false }
         }
         .flatMap { splitSegments(ShellPipeline.stripLeadingAssignmentPrefixes($0)) }
-        .flatMap(peeledSegmentsReadingXargs)
+        .flatMap(peeledSegments)
 }
 
 /// Git subcommands that rewrite or discard history, the tree or the
