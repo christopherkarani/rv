@@ -16,33 +16,89 @@ import RVDomain
 /// is scanned like the line and read by the stop floor.
 extension OpaqueExecution {
     /// What `segment`'s command reads on stdin: its own redirect (a
-    /// here-string, a heredoc, a file, a descriptor), else `feed`.
+    /// here-string, a heredoc, a file, a descriptor), else `feed`. As in
+    /// the shell, only a redirect of fd 0 (`<`, `0<`) replaces stdin and
+    /// the last one wins; another fd (`3</dev/null`, `{fd}<f`) leaves it
+    /// alone. A heredoc is read only when it is the segment's last (the
+    /// body `heredoc` holds); a descriptor (`<&`, `/dev/fd/3`) is
+    /// unreadable.
     static func stdin(_ segment: [CommandToken], heredoc: ShellLexer.Heredoc?, feed: () -> Feed) -> Feed {
+        let lastHeredoc = segment.lastIndex { token in
+            ShellLexer.isRedirectOperator(token) && ["<<", "<<-"].contains(redirectOperator(token.decoded))
+        }
+        var input: Feed?
         for (index, token) in segment.enumerated() where ShellLexer.isRedirectOperator(token) {
+            guard redirectsStdin(token.decoded) else { continue }
             let target = segment.dropFirst(index + 1).first
             switch redirectOperator(token.decoded) {
             case "<<<":
-                guard let target, target.wasAnsiC == false, isDynamic(target) == false else { return .unreadable }
-                return Feed(literal: true, text: target.decoded + "\n")
+                guard let target, target.wasAnsiC == false, isDynamic(target) == false else {
+                    input = .unreadable
+                    continue
+                }
+                input = Feed(literal: true, text: target.decoded + "\n")
             case "<<", "<<-":
-                guard let heredoc else { return .unreadable }
-                return Feed(literal: heredoc.literal, text: heredoc.literal ? heredoc.body + "\n" : "")
-            case "<&":
-                return .unreadable
+                guard index == lastHeredoc, let heredoc else {
+                    input = .unreadable
+                    continue
+                }
+                input = Feed(literal: heredoc.literal, text: heredoc.literal ? heredoc.body + "\n" : "")
             case "<", "<>":
-                guard let target, isDynamic(target) == false else { return .unreadable }
-                // A literal file: a script rv does not read.
-                return readsStdin(target.decoded) ? feed() : .empty
+                guard let target, isDynamic(target) == false else {
+                    input = .unreadable
+                    continue
+                }
+                if readsOwnStdin(target.decoded) {
+                    // fd 0 as the redirects before left it.
+                    input = input ?? feed()
+                } else if readsStdin(target.decoded) {
+                    input = .unreadable
+                } else {
+                    // A literal file: a script rv does not read.
+                    input = .empty
+                }
             default:
-                continue
+                // `<&`: a descriptor.
+                input = .unreadable
             }
         }
-        return feed()
+        return input ?? feed()
     }
 
-    /// The redirect operator part of a word: `0<&` → `<&`.
+    /// An input redirect of fd 0: no fd, or one spelled all zeros (`0<`,
+    /// `00<&3`). Output redirects and any other fd, numbered or named
+    /// (`3<`, `{fd}<`), are not.
+    private static func redirectsStdin(_ word: String) -> Bool {
+        let fd = redirectFD(word)
+        guard redirectOperator(word).hasPrefix("<") else { return false }
+        return fd.allSatisfy { $0 == "0" }
+    }
+
+    /// `-`, `/dev/stdin` and fd 0 by path read fd 0 itself.
+    private static func readsOwnStdin(_ path: String) -> Bool {
+        path == "-" || path == "/dev/stdin" || path == "/dev/fd/0" || path == "/proc/self/fd/0"
+    }
+
+    /// The redirect operator part of a word: `0<&` → `<&`, `{fd}<` → `<`.
     static func redirectOperator(_ word: String) -> Substring {
-        word.drop(while: { $0.isASCII && $0.isNumber })
+        word.dropFirst(redirectFD(word).count)
+    }
+
+    /// The fd a redirect word names: its digits (`2>`), or a bash/zsh
+    /// named fd (`{fd}<`); empty for none.
+    static func redirectFD(_ word: String) -> Substring {
+        if word.first == "{", let close = word.firstIndex(of: "}"),
+           isFDName(word[word.index(after: word.startIndex)..<close])
+        {
+            return word[...close]
+        }
+        return word.prefix(while: { $0.isASCII && $0.isNumber })
+    }
+
+    /// A shell variable name, as `{name}` takes.
+    static func isFDName(_ name: Substring) -> Bool {
+        guard let first = name.first, first.isASCII, first.isLetter || first == "_" else { return false }
+        return name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
     }
 
     // MARK: Producers

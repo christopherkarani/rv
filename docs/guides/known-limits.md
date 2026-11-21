@@ -157,8 +157,12 @@ The README's "MCP governance" section lists every case.
     literal job is read like a shell's (a crontab's commands without
     their schedule fields, `%` read as a newline), so `echo 'rv host mode
     cursor off' | at now` and `echo '* * * * * rv …' | crontab -` do as
-    well. A job file (`at -f job.sh`, `crontab jobs.txt`) is not read,
-    like `sh job.sh`. In a pipeline the producers are the
+    well. A crontab line rv cannot split into a schedule and a command,
+    a crontab that sets `SHELL`, and `crontab -e` (its editor reads
+    stdin) go to Terminal. A job file (`at -f job.sh`, `crontab
+    jobs.txt`) is not read, like `sh job.sh`. Only a redirect of fd 0
+    replaces a reader's stdin, the last one winning (`… | sh
+    3</dev/null` still reads the pipe). In a pipeline the producers are the
     stages before the reader; inside a compound command (`if`, `for`,
     `while`, `case`), a `{ …; }`/`( … )` group or a function body they
     are every other command of the text, each of which must print whole
@@ -287,7 +291,7 @@ The README's "MCP governance" section lists every case.
   allowlist add rm")'`), as one that prints an rvd stop already did.
   Editing a crontab through a pipe whose input rv cannot read
   (`(crontab -l; echo '0 3 * * * job') | crontab -`) goes to Terminal
-  too.
+  too, as do `crontab -e` and a literal crontab that sets `SHELL`.
 - **On an observe host, reading rv's install is observed.** A command
   that names one of rv's hook, service or binary files and is proven to
   only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display

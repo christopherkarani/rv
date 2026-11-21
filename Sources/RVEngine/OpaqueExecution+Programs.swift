@@ -224,15 +224,17 @@ extension OpaqueExecution {
     /// (a crontab's commands without their schedule fields). A job in a
     /// literal file (`at -f job.sh`, `crontab jobs.txt`) is not read, as
     /// for `sh job.sh`; listing or removing jobs (`at -l`, `crontab -r`)
-    /// reads no job.
+    /// reads no job. `crontab -e` installs what its editor reads, and an
+    /// agent's editor reads a stdin that is no terminal: opaque.
     static func schedulerRunsOpaque(
         _ head: String, _ rawArguments: [CommandToken], _ context: Context, state: inout ScanState
     ) -> Bool {
         let arguments = droppingRedirects(rawArguments)
         let crontab = head == "crontab"
-        let modes: Set<Character> = crontab ? ["l", "r", "e", "c", "V"] : ["l", "d", "r", "c"]
+        let modes: Set<Character> = crontab ? ["l", "r", "c", "V"] : ["l", "d", "r", "c"]
         let valued: Set<Character> = crontab ? ["u"] : ["q", "f", "t"]
         var file: CommandToken?
+        var readsNoJob = false
         var index = 0
         while index < arguments.count {
             let token = arguments[index]
@@ -252,7 +254,8 @@ extension OpaqueExecution {
             }
             var skip = 1
             for (offset, flag) in text.dropFirst().enumerated() {
-                if modes.contains(flag) { return false }
+                if crontab, flag == "e" { return true }
+                if modes.contains(flag) { readsNoJob = true }
                 guard valued.contains(flag) else { continue }
                 let rest = String(text.dropFirst(offset + 2))
                 let value = rest.isEmpty ? arguments.dropFirst(index + 1).first : CommandToken(decoded: rest, wasQuoted: false)
@@ -262,38 +265,111 @@ extension OpaqueExecution {
             }
             index += skip
         }
+        if readsNoJob { return false }
         if let file, file.decoded != "-", readsStdin(file.decoded) == false {
             return isDynamic(file)
         }
         let fed = context.stdin()
         guard fed.literal else { return true }
         return fed.texts.contains { text in
-            literalProgramRunsOpaque(crontab ? crontabCommands(text) : text, context, state: &state)
+            crontab ? crontabRunsOpaque(text, context, state: &state) : literalProgramRunsOpaque(text, context, state: &state)
         }
     }
 
-    /// A crontab's commands, one per line: the schedule (five fields, or
-    /// one `@` word) dropped; comments and blank lines skipped; a variable
-    /// setting or a line too short for a schedule kept whole. cron turns an
-    /// unescaped `%` into a newline (the rest is the command's stdin), so
-    /// it is read as one.
-    static func crontabCommands(_ text: String) -> String {
+    /// A literal crontab: charged for and recorded whole (a line read
+    /// wrongly drops nothing), then its commands are scanned. A crontab
+    /// rv cannot split into schedules and commands, or one that sets
+    /// `SHELL` (its jobs then run under another interpreter), is opaque.
+    private static func crontabRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
+        guard text.isEmpty == false else { return false }
+        guard state.charge(work: text.utf8.count) else { return true }
+        _ = state.record(text)
+        guard let commands = crontabCommands(text) else { return true }
+        return literalProgramRunsOpaque(commands, context, state: &state)
+    }
+
+    /// A crontab's commands, one per line, or nil when a line is not one
+    /// rv can read. A schedule is five time fields or a known `@` word,
+    /// either after an optional `-` (cronie: do not log), and is dropped;
+    /// comments and blank lines are skipped; a variable setting is kept
+    /// whole, but a `SHELL` setting is nil. cron turns an unescaped `%`
+    /// into a newline (the rest is the command's stdin), so it is read as
+    /// one.
+    static func crontabCommands(_ text: String) -> String? {
+        let isBlank: (Character) -> Bool = { $0 == " " || $0 == "\t" }
         var commands: [String] = []
         for line in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) {
-            let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+            let trimmed = line.drop(while: isBlank)
             guard let first = trimmed.first, first != "#" else { continue }
-            let firstWord = trimmed.prefix(while: { $0 != " " && $0 != "\t" })
-            var rest = trimmed
-            if firstWord.contains("=") == false {
-                for _ in 0..<(first == "@" ? 1 : 5) {
-                    rest = rest.drop(while: { $0 != " " && $0 != "\t" }).drop(while: { $0 == " " || $0 == "\t" })
+            if let name = cronVariableName(trimmed) {
+                if name.filter({ isBlank($0) == false }) == "SHELL" { return nil }
+                commands.append(cronPercents(String(trimmed)))
+                continue
+            }
+            var rest = first == "-" ? trimmed.dropFirst() : trimmed
+            if rest.first == "@" {
+                let word = rest.prefix(while: { isBlank($0) == false })
+                guard cronSpecials.contains(String(word.dropFirst())) else { return nil }
+                rest = rest.dropFirst(word.count)
+            } else {
+                for _ in 0..<5 {
+                    let field = rest.prefix(while: { isBlank($0) == false })
+                    guard isCronTimeField(field) else { return nil }
+                    rest = rest.dropFirst(field.count).drop(while: isBlank)
                 }
             }
-            let command = rest.isEmpty ? trimmed : rest
+            let command = rest.drop(while: isBlank)
+            guard command.isEmpty == false else { return nil }
             commands.append(cronPercents(String(command)))
         }
         return commands.joined(separator: "\n")
     }
+
+    /// The name a cron variable setting sets (`NAME=value`, `NAME =
+    /// value`, `"NAME"=value`), or nil when the line is not one.
+    private static func cronVariableName(_ line: Substring) -> String? {
+        var rest = line
+        let name: Substring
+        if let quote = rest.first, quote == "\"" || quote == "'" {
+            let body = rest.dropFirst()
+            guard let close = body.firstIndex(of: quote) else { return nil }
+            name = body[..<close]
+            rest = body[body.index(after: close)...]
+        } else {
+            name = rest.prefix(while: { $0 != "=" && $0 != " " && $0 != "\t" })
+            rest = rest.dropFirst(name.count)
+        }
+        guard rest.drop(while: { $0 == " " || $0 == "\t" }).first == "=" else { return nil }
+        return String(name)
+    }
+
+    private static let cronSpecials: Set<String> = [
+        "reboot", "yearly", "annually", "monthly", "weekly", "daily", "midnight", "hourly",
+    ]
+
+    /// A time field: numbers, `*`, ranges, steps, lists, cronie's `~`, and
+    /// month or weekday names.
+    private static func isCronTimeField(_ field: Substring) -> Bool {
+        guard field.isEmpty == false else { return false }
+        var name = ""
+        for character in field {
+            if character.isASCII, character.isLetter {
+                name.append(character)
+                continue
+            }
+            if name.isEmpty == false {
+                guard cronNames.contains(name.lowercased()) else { return false }
+                name = ""
+            }
+            guard character.isASCII, character.isNumber || "*,/-~".contains(character) else { return false }
+        }
+        return name.isEmpty || cronNames.contains(name.lowercased())
+    }
+
+    private static let cronNames: Set<String> = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+        "sun", "mon", "tue", "wed", "thu", "fri", "sat",
+    ]
 
     /// `%` → newline, `\%` → `%`.
     private static func cronPercents(_ command: String) -> String {
