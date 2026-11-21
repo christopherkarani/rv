@@ -42,6 +42,7 @@ public enum RVDProcess {
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listeners?.stop()
+            RVDLifecycle.persistAnalytics(analytics)
             Darwin.exit(0)
         }
         let listeners = ListenerPair(
@@ -128,6 +129,7 @@ public enum RVDProcess {
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listener?.stop()
+            RVDLifecycle.persistAnalytics(analytics)
             Foundation.exit(0)
         }
         let listener = UnixEvaluateListener(
@@ -289,6 +291,25 @@ enum RVDLifecycle {
 
     /// Keeps the re-arm timer alive for the process lifetime.
     private static let stateMarkerTimer = TimerSlot()
+
+    /// Before an orderly exit (idle, or the binary replaced on disk): write
+    /// the decision counts still waiting for the coordinator's deferred
+    /// write, which `exit` would drop. Waits at most `wait`, so analytics can
+    /// never hold the daemon up. SIGTERM (stop, restart, upgrade by the
+    /// service manager) is not handled and still loses up to
+    /// `AnalyticsCoordinator.defaultPersistDelay` of counts.
+    static func persistAnalytics(
+        _ analytics: AnalyticsCoordinator?,
+        wait: DispatchTimeInterval = .seconds(2)
+    ) {
+        guard let analytics else { return }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await analytics.persistPendingNow()
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + wait)
+    }
 
     /// Loads the judge off the main path after the listeners are up: the
     /// first Hello is never delayed, and the first judged request joins the
