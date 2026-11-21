@@ -34,8 +34,9 @@ struct FileIdentity: Sendable, Equatable {
 
 /// Detects that the running `rvd` binary was replaced on disk (upgrade or
 /// rebuild). Clients pin the on-disk sibling's code identity, so a stale
-/// daemon's replies are all rejected; it must exit so launchd starts the new
-/// binary on the next connect. Records identity once at startup.
+/// daemon's replies are all rejected; it must exit so launchd (KeepAlive) or
+/// systemd (Restart=always) start the new binary. Records identity once at
+/// startup.
 final class ExecutableChangeProbe: Sendable {
     let path: String
     private let original: FileIdentity

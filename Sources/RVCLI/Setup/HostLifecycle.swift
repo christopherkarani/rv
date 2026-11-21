@@ -122,14 +122,12 @@ enum HostLifecycle {
         files: FileOps
     ) throws(SetupError) -> Bool {
         var direct = false
+        if env.managesService {
+            SetupRun.clearStartupBackoff(env)
+        }
         switch env.supervisor {
         case .launchd:
-            try SetupRun.writeLaunchAgent(
-                env: env,
-                layout: layout,
-                files: files,
-                keepAlive: env.companionPresence.presence().keepAlive
-            )
+            try SetupRun.writeLaunchAgent(env: env, layout: layout, files: files)
             try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
         case .systemdUser:
             direct = try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files) == .direct

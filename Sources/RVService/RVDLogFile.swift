@@ -24,20 +24,29 @@ public enum RVDLogFileError: Error, Sendable, Equatable {
 /// dropped audit writes (`AuditDropLog`, naming rv's own audit file) and
 /// hooks that ran past their deadline (`SlowHookLog`: host, door, rule id
 /// and phase timings). Neither carries command text, the paths an agent
-/// touched, session ids or secrets. Growth is bounded
-/// by rotating once at startup: at most `maxBytes` per generation, one
-/// previous generation.
+/// touched, session ids or secrets. Growth is bounded by rotating at
+/// startup and then every `rotationCheckInterval` while rvd runs (it stays
+/// up for days): at most about `maxBytes` per generation, one previous
+/// generation.
 public enum RVDLogFile {
     public static let maxBytes = 1 << 20
     static let maxLineBytes = 512
+    public static let rotationCheckInterval: Duration = .seconds(60)
 
     /// macOS: `~/Library/Logs/rv/rvd.log`. Elsewhere: the XDG state default.
     public static func path(home: String) -> String {
         #if os(macOS)
-        return home + "/Library/Logs/rv/rvd.log"
+        return launchdPath(home: home)
         #else
         return home + "/.local/state/rv/rvd.log"
         #endif
+    }
+
+    /// Where the rvd that launchd runs logs. Text about the launchd job
+    /// names this one on every platform: that job exists only on macOS,
+    /// whatever platform built the text.
+    public static func launchdPath(home: String) -> String {
+        home + "/Library/Logs/rv/rvd.log"
     }
 
     /// Redirects stderr into the log when it is discarded. Returns the log
@@ -80,6 +89,24 @@ public enum RVDLogFile {
     /// errors). Launch errors carry no request data.
     public static func describe(_ error: any Error) -> String {
         String(describing: error)
+    }
+
+    /// Rotates the log `fd` writes to once it reaches `maxBytes`: renames it
+    /// to `path.1`, opens a fresh `path` and points `fd` at it. Only when
+    /// `fd` is that very file (stderr kept by a terminal or the journal is
+    /// left alone). True when it rotated.
+    @discardableResult
+    public static func rotateIfFull(fd: Int32 = STDERR_FILENO, path: String, maxBytes: Int = maxBytes) -> Bool {
+        var current = stat()
+        guard fstat(fd, &current) == 0, isRegularFile(current), Int(current.st_size) >= maxBytes else {
+            return false
+        }
+        var onDisk = stat()
+        guard lstat(path, &onDisk) == 0, onDisk.st_dev == current.st_dev, onDisk.st_ino == current.st_ino,
+            let fresh = try? open(path: path, maxBytes: maxBytes)
+        else { return false }
+        defer { close(fresh) }
+        return dup2(fresh, fd) == fd
     }
 
     /// True when `fd` is closed or is /dev/null.
