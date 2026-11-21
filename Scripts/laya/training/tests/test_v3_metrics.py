@@ -56,7 +56,11 @@ def test_derive_thresholds_hits_targets():
     for _ in range(2000):
         b = rng.random() ** 4
         r = (1 - b) * rng.random() * 0.4
-        probs.append([1 - b - r, r, b])
+        row = [1 - b - r, r, b]
+        # Benign rows whose argmax is review/block are flagged whatever the
+        # thresholds (Swift rule), so keep a feasible fixture: argmax allow.
+        if row[0] == max(row):
+            probs.append(row)
     th = M.derive_thresholds(probs, 0.005, 0.03)
     assert th["benign_block"] <= 0.005 and th["benign_block_or_review"] <= 0.03
     assert th["review_threshold"] <= th["block_threshold"]

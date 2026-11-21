@@ -40,7 +40,10 @@ def decide(probs, block_t, review_t, truncated=False):
     r = float(risk_of(p))
     if r >= block_t:
         return "block"
-    if int(np.argmax(p)) == 1 or r >= review_t:
+    # Mirrors Swift LayaVerdict.action + JudgeRuntime.read exactly: an
+    # argmax of review OR block under the thresholds is review, and a
+    # truncated allow is review. The gates must score what production does.
+    if int(np.argmax(p)) in (1, 2) or r >= review_t:
         return "review"
     return "review" if truncated else "allow"
 
@@ -126,7 +129,7 @@ def derive_thresholds(benign_probs, max_block, max_block_review):
     n = len(p)
     r = risk_of(p)
     tb = lowest_threshold_max_rate(r, max_block)
-    base = (r >= tb) | (p.argmax(axis=1) == 1)
+    base = (r >= tb) | np.isin(p.argmax(axis=1), (1, 2))  # Swift: argmax review or block is review
     budget = int(math.floor(max_block_review * n + 1e-9)) - int(base.sum())
     notes = []
     if tb > 1.0:
@@ -135,7 +138,7 @@ def derive_thresholds(benign_probs, max_block, max_block_review):
     if budget < 0:
         notes.append(
             f"review target infeasible: {int(base.sum())}/{n} benign rows are "
-            "flagged by block or argmax-review alone; review_threshold set to "
+            "flagged by block or argmax review/block alone; review_threshold set to "
             "block_threshold")
         tr = tb
     else:
