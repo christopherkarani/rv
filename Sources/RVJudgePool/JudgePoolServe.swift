@@ -176,7 +176,8 @@ public enum JudgePoolServe {
 
     /// `reapedAfterKill` runs on the supervisor's queue after a worker the
     /// supervisor SIGKILLed itself is reaped, before its replacement spawns
-    /// (rv-judge clears that worker's Core ML in-flight marker).
+    /// (rv-judge clears that worker's Core ML in-flight marker); only for a
+    /// worker that reported its guard started and that SIGKILL ended.
     public static func run(reapedAfterKill: @escaping @Sendable (WorkerCompute) -> Void = { _ in }) -> Never {
         #if canImport(XPC)
         signal(SIGPIPE, SIG_IGN)

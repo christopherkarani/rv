@@ -17,7 +17,8 @@ struct PosixWorkerPoolTests {
         .first { FileManager.default.isExecutableFile(atPath: $0) }
 
     /// Answers each request with a verdict naming its mode, after logging
-    /// `pid id` to the marker file. `hang` never answers.
+    /// `pid id` to the marker file. `hang` never answers. Every mode but
+    /// `hang-unguarded` reports its Core ML guard started before ready.
     static let script = #"""
     import base64, json, os, struct, sys, time
     mode, marker = sys.argv[1], sys.argv[2]
@@ -26,6 +27,8 @@ struct PosixWorkerPoolTests {
         b = json.dumps(o).encode()
         out.write(struct.pack(">I", len(b)) + b)
         out.flush()
+    if mode != "hang-unguarded":
+        send({"guardStarted": {}})
     send({"ready": {"checkpoint": "fake-" + mode}})
     while True:
         h = inp.read(4)
@@ -34,7 +37,7 @@ struct PosixWorkerPoolTests {
         r = json.loads(inp.read(struct.unpack(">I", h)[0]))
         with open(marker, "a") as f:
             f.write("%d %s\n" % (os.getpid(), r["id"]))
-        if mode == "hang":
+        if mode.startswith("hang"):
             time.sleep(3600)
         v = base64.b64encode(json.dumps({"from": mode}).encode()).decode()
         send({"verdict": {"id": r["id"], "verdict": v}})
@@ -157,6 +160,25 @@ struct PosixWorkerPoolTests {
         // The supervisor's own budget kill is not a Core ML crash: the shell
         // is told once, for that worker, before the replacement reads it.
         #expect(pool.reaped.all == ["primary \(PoolPolicy.live.compute(for: .primary).rawValue)"])
+    }
+
+    @Test("a budget kill before the worker's guard started leaves its marker alone", .enabled(if: python != nil, "python3 not installed"))
+    func killBeforeGuardStartedKeepsMarker() async throws {
+        let python = try #require(Self.python)
+        let policy = PoolPolicy(hedgeAfter: .milliseconds(150), budget: .milliseconds(600), backoffBase: .milliseconds(50))
+        let pool = try fixture(python: python, policy: policy, modes: [.primary: "hang-unguarded", .hedge: "ok"])
+        defer {
+            pool.supervisor.stop()
+            try? FileManager.default.removeItem(at: pool.directory)
+        }
+        pool.supervisor.warm(key: key)
+        #expect(await eventually { bothReady(pool.supervisor) })
+        _ = await pool.supervisor.submit(key: key, input: input, budget: .seconds(5))
+        #expect(await eventually { pool.supervisor.status().workers.first { $0.slot == .primary }?.restarts ?? 0 >= 1 })
+        #expect(pool.supervisor.status().killed == 1)
+        // Its guard never ran crash recovery: a marker there may be the
+        // previous generation's real crash, so it is not cleared.
+        #expect(pool.reaped.all.isEmpty)
     }
 
     @Test("a worker that is not an executable is a spawn failure, retried with backoff, never an answer")

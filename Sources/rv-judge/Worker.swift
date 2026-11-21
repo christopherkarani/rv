@@ -32,9 +32,9 @@ enum JudgeWorker {
         }
     }
 
-    /// The supervisor's `reapedAfterKill`: a worker it SIGKILLed did not
-    /// crash inside Core ML, so its in-flight marker is cleared before the
-    /// replacement reads it.
+    /// The supervisor's `reapedAfterKill`: a worker it SIGKILLed after the
+    /// worker's guard started did not crash inside Core ML, so its in-flight
+    /// marker is cleared before the replacement reads it.
     static func clearMarker(after compute: WorkerCompute) {
         guard let root = stateRoot() else { return }
         FileCoreMLCrashStore.clearStaleMarker(
@@ -61,6 +61,11 @@ enum JudgeWorker {
         let coreML = CoreMLGuard.worker(
             stateRoot: stateRoot(), worker: options.compute.rawValue, cpuOnly: options.compute == .cpu,
             log: JudgePoolLog.line)
+        // Crash recovery first (it reads the previous generation's marker),
+        // then tell the supervisor: from here a marker is this worker's own,
+        // so the supervisor's SIGKILL may clear it.
+        _ = coreML.computeUnits
+        emit(.guardStarted)
         let bundle = URL(fileURLWithPath: options.bundle, isDirectory: true)
         let judge: (JudgeInput) throws -> LayaVerdict
         let checkpoint: String

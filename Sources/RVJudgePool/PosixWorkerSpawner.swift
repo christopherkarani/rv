@@ -238,7 +238,8 @@ final class PosixWorkerProcess: WorkerProcess, @unchecked Sendable {
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
         writer.async { [stdinFD] in close(stdinFD) }
-        output(.exited(description: Self.describe(status)))
+        let signal = status & 0x7f
+        output(.exited(description: Self.describe(status), signal: signal == 0 ? nil : signal))
     }
 
     static func describe(_ status: Int32) -> String {

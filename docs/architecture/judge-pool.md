@@ -61,9 +61,16 @@ hook ──XPC──▶ rvd ──XPC (dev.rv.judge)──▶ rv-judge serve (su
   worker to CPU only, and the CPU worker is pinned to CPU whatever its
   history says. A SIGKILL the supervisor sends itself (budget overrun,
   garbage on stdout) is not a Core ML crash: after reaping that worker and
-  before its replacement starts, the supervisor clears its marker (only
-  when no live process holds the marker's lock; otherwise the kill counts,
-  which only moves that worker to CPU). A refusal (disk nearly full, a
+  before its replacement starts, the supervisor clears its marker, but only
+  when the worker had sent `guardStarted` (its guard ran crash recovery, so
+  the previous generation's marker is already counted), the reaped status
+  is SIGKILL (a real abort racing the kill stays a crash), and no live
+  process holds the marker's lock. Otherwise the kill counts, which only
+  moves that worker to CPU. With the pool bound, Core ML runs only in the
+  workers, so their e5rt cache is `~/Library/Caches/rv-judge`; it is a
+  wiring path like rvd's (`RVWiringPaths.coreMLCacheOwners`): agent writes
+  deny in every mode, MCP cages cannot write it, and workspace downloads
+  cannot land there. A refusal (disk nearly full, a
   model it could not verify, a load that failed after the store's retry) is
   a `loadFailed` row, which rvd answers with review.
 - **Spawn.** `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT` (only the two

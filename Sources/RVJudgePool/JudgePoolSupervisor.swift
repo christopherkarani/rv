@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Foundation
 
@@ -6,7 +11,8 @@ public enum WorkerOutput: Sendable, Equatable {
     /// One complete frame body from the worker's stdout.
     case frame(Data)
     /// The process is gone and reaped; `description` is for the log.
-    case exited(description: String)
+    /// `signal` is the signal that ended it, nil for a normal exit.
+    case exited(description: String, signal: Int32? = nil)
 }
 
 /// One running worker process.
@@ -49,6 +55,8 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
     private var nextID: UInt64 = 0
     /// Workers this supervisor SIGKILLed itself, until they are reaped.
     private var killed: Set<Generation> = []
+    /// Workers that reported their Core ML guard started, until reaped.
+    private var guarded: Set<Generation> = []
     private let reapedAfterKill: @Sendable (WorkerSlot, WorkerCompute) -> Void
 
     private struct Generation: Hashable {
@@ -159,6 +167,9 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
                 return
             }
             switch event {
+            case .guardStarted:
+                guarded.insert(Generation(slot: slot, generation: generation))
+                return
             case .ready(let checkpoint):
                 log("worker \(slot.rawValue) ready (\(checkpoint))")
             case .loadFailed(let failure):
@@ -167,13 +178,19 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
                 break
             }
             apply(.worker(slot, generation: generation, event))
-        case .exited(let description):
+        case .exited(let description, let signal):
             log("worker \(slot.rawValue) exited (\(description))")
             if running[slot]?.generation == generation { running[slot] = nil }
             // Our own SIGKILL (budget overrun, garbage on stdout) is not a
             // Core ML crash: let the shell clear the in-flight marker it left
-            // before the replacement starts and reads it.
-            if killed.remove(Generation(slot: slot, generation: generation)) != nil {
+            // before the replacement starts and reads it. Only when the
+            // marker is this worker's (its guard had run crash recovery, so
+            // the previous generation's is already recorded) and SIGKILL is
+            // what ended it (a real abort racing the kill stays a crash).
+            let id = Generation(slot: slot, generation: generation)
+            let killedByUs = killed.remove(id) != nil
+            let ownsMarker = guarded.remove(id) != nil
+            if killedByUs, ownsMarker, signal == SIGKILL {
                 reapedAfterKill(slot, core.policy.compute(for: slot))
             }
             apply(.exited(slot, generation: generation))

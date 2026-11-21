@@ -127,6 +127,11 @@ public struct WorkerRequest: Sendable, Codable, Equatable {
 
 /// Worker → supervisor.
 public enum WorkerEvent: Sendable, Codable, Equatable {
+    /// The worker's Core ML guard has started: crash recovery has read the
+    /// previous generation's in-flight marker, so a marker left from here on
+    /// is this worker's own. Sent once, before the load. The supervisor
+    /// consumes it (`PoolCore` never sees it).
+    case guardStarted
     /// The model loaded; the worker takes requests.
     case ready(checkpoint: String)
     /// The model did not load. The worker exits after sending it.
