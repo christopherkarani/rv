@@ -490,6 +490,25 @@ struct SecretsCommandTests {
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == Data("ghp-12345678".utf8))
     }
 
+    /// An expiry is stored to the whole second at or before the one given,
+    /// never after: the ISO-8601 formatter rounds to the millisecond before
+    /// it drops the fraction, so 46.9995 s used to be written as 47 s.
+    @Test(arguments: [0.9, 0.9995, 0.99999])
+    func aFractionalExpiryIsStoredRoundedDown(fraction: Double) throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let wholeSecond = 1_795_147_246.0
+        let expiry = Date(timeIntervalSince1970: wholeSecond + fraction)
+        #expect(SecretExpiry.text(expiry) == "2026-11-20T04:00:46Z")
+        _ = try SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: fixture.environment(), expires: .some(expiry),
+            now: Date(timeIntervalSince1970: wholeSecond - 86_400)
+        ).get()
+        let stored = try #require(try SecretsRun.configuration(fixture.environment()).get().secret(named: "GH_TOKEN"))
+        #expect(stored.expires == Date(timeIntervalSince1970: wholeSecond))
+    }
+
     /// Removing a definition only removes access, so it goes through (and
     /// the value goes) while the audit log is unwritable.
     @Test func removeWhenTheChangeCannotBeRecordedStillRemoves() throws {

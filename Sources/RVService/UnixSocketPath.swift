@@ -167,6 +167,35 @@ public enum UnixSocketPath {
         try removeStaleSocket(at: socketURL)
     }
 
+    /// The uid-derived runtime directory (`<root>/<uid>`) when rvd would
+    /// bind under it (XDG_RUNTIME_DIR unset), nothing is at that path, and
+    /// `prepareRuntime` could not create it for `uid`: not root, and the
+    /// root missing or not writable by this process. Nil otherwise, so it
+    /// names only a start that cannot succeed. `rv setup` asks before it
+    /// starts rvd itself.
+    public static func uncreatableUserRuntimeDirectory(
+        xdgRuntimeDir: String?,
+        uid: UInt32,
+        userRuntimeRoot: String = userRuntimeRoot
+    ) -> String? {
+        guard xdgRuntimeDir == nil, uid != 0 else { return nil }
+        let directory = "\(userRuntimeRoot)/\(uid)"
+        guard lstatKind(directory) == nil else { return nil }
+        if lstatKind(userRuntimeRoot) != nil, access(userRuntimeRoot, W_OK | X_OK) == 0 { return nil }
+        return directory
+    }
+
+    /// The one-line fix for a missing uid-derived runtime directory, shared
+    /// by rvd's refusal and by `rv setup`'s (install.sh prints the same).
+    /// `install -d -m` sets each mode outright: a `mkdir -p` that also made
+    /// the parent would leave it to root's umask (0750 under 027), which
+    /// the user cannot search.
+    public static func userRuntimeDirectoryFix(directory: String, uid: UInt32) -> String {
+        let parent = URL(fileURLWithPath: directory).deletingLastPathComponent().path
+        return "as root, install -d -m 0755 \(parent) && install -d -m 0700 -o \(uid) \(directory); "
+            + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents"
+    }
+
     /// Creates `/run/user/<uid>` (one level, 0700) when missing; root may
     /// also create a missing `/run/user` (0755). Then the base-directory
     /// rules apply as to any other base.
