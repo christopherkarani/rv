@@ -44,6 +44,9 @@ public enum MCPSandbox {
     }
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]
+    /// Inside a default write root but never writable: rvd's Core ML e5rt
+    /// cache, which Core ML loads the judge's compiled bundle from.
+    static let deniedWrites = ["~/Library/Caches/rvd"]
     /// Paths `profile` allows even when `policy.writable` is empty.
     static let seatbeltWriteRoots = ["/private/tmp", "/private/var/folders", "/dev"]
 
@@ -321,6 +324,10 @@ public enum MCPSandbox {
             lines.append("(deny file-clone file-write-unlink file-write-create file-link " + ancestorFilters(ancestors) + ")")
         }
         lines.append(credentialDeny)
+        // After the write allow, so it wins (last match): a caged server
+        // must not plant a compiled bundle where rvd's judge loads from.
+        lines.append("(deny file-write* file-link file-clone "
+            + paths(deniedWrites.map(expand), denyTargets: true, writable: writable) + ")")
         // `KERN_PROCARGS2` hands a same-uid caller the exec-time arguments and
         // environment of any process that is not a platform binary: rv puts
         // a server's `secrets` there, and serve's own holds the host's

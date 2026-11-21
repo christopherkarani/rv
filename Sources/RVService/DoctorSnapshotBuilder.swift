@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVLaya
 import RVPacks
 import RVPolicy
 
@@ -65,13 +66,15 @@ public enum DoctorSnapshotBuilder {
         switch JudgeRuntime.bundleHealth(home: home) {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
-            let on = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            let base = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            let notes = coreMLNotes(JudgeRuntime.coreMLGuard.status)
+            let on = ([base] + notes).joined(separator: "; ")
             let meanwhile = mode == .observe
                 ? "judged calls run and are logged as a would-be review"
                 : "judged calls go to review"
             switch circuit {
             case .closed:
-                return DoctorCheck(id: .judge, status: .ok, message: on)
+                return DoctorCheck(id: .judge, status: notes.isEmpty ? .ok : .warning, message: on)
             case .open(let retryIn):
                 return DoctorCheck(
                     id: .judge, status: .warning,
@@ -101,6 +104,27 @@ public enum DoctorSnapshotBuilder {
                 message: "no \(engine.rawValue) bundle installed at \(expected?.path ?? engine.rawValue); packs only (guard \(mode.rawValue))"
             )
         }
+    }
+
+    /// Degraded Core ML states doctor names: CPU-only after crashes, a disk
+    /// too full for the judge to load or predict (calls go to review), and
+    /// rvd running without its crash marker.
+    static func coreMLNotes(_ status: CoreMLGuard.Status) -> [String] {
+        var notes: [String] = []
+        if status.units == .cpuOnly {
+            let until = status.cpuOnlyUntil.map { " until \($0.formatted(.iso8601))" } ?? ""
+            notes.append("CPU only\(until) after repeated Core ML crashes")
+        }
+        if status.diskLow {
+            notes.append("disk nearly full; judge disabled until space is freed")
+        }
+        if status.crashMarkerUnavailable {
+            notes.append("Core ML crash marker held by another process or unwritable; no CPU-only fallback after a crash")
+        }
+        if let reason = status.lastRefusal {
+            notes.append("last judge load refused: \(reason)")
+        }
+        return notes
     }
 
     private static var dayOnePacksLoadedMessage: String {

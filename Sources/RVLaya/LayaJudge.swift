@@ -2,6 +2,7 @@ import Foundation
 
 #if canImport(CoreML)
 import CoreML
+import CryptoKit
 #endif
 
 /// The judge's answer for one command: choice probabilities plus the
@@ -106,54 +107,48 @@ public struct LayaQuestions: Sendable {
 }
 
 #if canImport(CoreML)
-/// Loads an .mlpackage through a stable compiled-model cache.
-/// `MLModel.compileModel` returns a temp directory macOS may purge
-/// under a long-lived daemon; copying the .mlmodelc into the user
-/// caches directory (keyed by package path + modification time) keeps
-/// the loaded artifact stable and skips recompilation on reuse.
+/// Core ML binding of `CompiledModelStore`: compile and load with the
+/// compute units `coreML` chooses (CPU only after repeated Core ML crashes),
+/// caching verified copies under the guard's protected `modelRoot`.
 enum CompiledModelCache {
-    static func load(package: URL) throws -> MLModel {
+    static func load(package: URL, coreML: CoreMLGuard) throws -> MLModel {
+        // No model in the bundle (ENOENT only) is absence: packs-only, doctor
+        // names it. Any other lstat error, or Core ML failing on a model that
+        // is there, refuses (review).
+        guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
+            throw LayaError.modelUnavailable("no model at \(package.path)")
+        }
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndGPU
-        let fm = FileManager.default
-        var cached: URL?
-        if let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let stamp = (try? fm.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
-            let key = fnv1a(package.path + "|" + String(stamp?.timeIntervalSince1970 ?? 0))
-            let dir = caches.appendingPathComponent("rv-laya/\(key).mlmodelc", isDirectory: true)
-            if fm.fileExists(atPath: dir.path), let model = try? MLModel(contentsOf: dir, configuration: configuration) {
-                return model
-            }
-            cached = dir
+        switch coreML.computeUnits {
+        case .cpuAndGPU: configuration.computeUnits = .cpuAndGPU
+        case .cpuOnly: configuration.computeUnits = .cpuOnly
         }
-        let compiled: URL
-        do {
-            compiled = try MLModel.compileModel(at: package)
-        } catch {
-            throw LayaError.modelUnavailable("CoreML compile failed for \(package.path)")
-        }
-        var loadURL = compiled
-        if let cached {
-            let parent = cached.deletingLastPathComponent()
-            try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
-            try? fm.removeItem(at: cached)
-            if (try? fm.copyItem(at: compiled, to: cached)) != nil { loadURL = cached }
-        }
-        do {
-            return try MLModel(contentsOf: loadURL, configuration: configuration)
-        } catch {
-            throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
-        }
+        let store = CompiledModelStore<MLModel>(
+            root: coreML.modelRoot,
+            coreML: coreML,
+            version: ProcessInfo.processInfo.operatingSystemVersionString,
+            compile: { package in
+                do { return try MLModel.compileModel(at: package) } catch {
+                    throw LayaError.modelUnavailable("CoreML compile failed for \(package.path)")
+                }
+            },
+            load: { compiled in
+                do { return try MLModel(contentsOf: compiled, configuration: configuration) } catch {
+                    throw LayaError.modelUnavailable("CoreML load failed for \(package.path)")
+                }
+            },
+            digest: sha256Hex
+        )
+        return try store.model(package: package)
     }
 
-    /// Process-stable path key (String.hashValue is per-process seeded).
-    static func fnv1a(_ text: String) -> String {
-        var hash: UInt64 = 0xcbf29ce484222325
-        for byte in text.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 0x100000001b3
-        }
-        return String(hash, radix: 16)
+    /// Streaming SHA-256 of one of this user's regular files, read to EOF
+    /// with plain `read(2)`; nil for a symlink, FIFO, foreign file or read
+    /// error (`OwnedRegularFile`).
+    static func sha256Hex(of url: URL) -> String? {
+        var hasher = SHA256()
+        guard OwnedRegularFile.read(url.path, body: { hasher.update(bufferPointer: $0) }) else { return nil }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -169,10 +164,17 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     let lock = NSLock()
     let questions: LayaQuestions
     let actionLabels: [LayaVerdict.Action]
+    let coreML: CoreMLGuard
 
     /// The question set's action labels are checked here, before any bundle
     /// file is touched, so judging never meets an invalid label set.
-    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+    public init(
+        bundleDir: URL, questions: LayaQuestions = .guardQuestions, coreML: CoreMLGuard = .current
+    ) throws {
+        self.coreML = coreML
+        // Before any bundle work: a nearly full disk refuses (review), whatever
+        // else is wrong with the bundle.
+        try coreML.requireDiskSpace()
         actionLabels = try questions.actionLabels()
         self.questions = questions
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)
@@ -196,7 +198,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         lengths = candidates.isEmpty ? [maxLen] : candidates
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
-        model = try CompiledModelCache.load(package: package)
+        model = try CompiledModelCache.load(package: package, coreML: coreML)
     }
 
     func questionProbabilities(
@@ -242,7 +244,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         ])
         lock.lock()
         defer { lock.unlock() }
-        let out = try model.prediction(from: provider)
+        let out = try coreML.run { try model.prediction(from: provider) }
         guard let logits = out.featureValue(for: "logits")?.multiArrayValue else {
             throw LayaError.predictionFailed("missing logits output")
         }
@@ -310,7 +312,9 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
 /// Linux seam: symmetric with the FineTunedJudge stub. The gate treats
 /// this as unavailable (packs-only); it never invents an allow.
 public struct LayaCoreMLJudge: Sendable {
-    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+    public init(
+        bundleDir: URL, questions: LayaQuestions = .guardQuestions, coreML: CoreMLGuard = .current
+    ) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 
