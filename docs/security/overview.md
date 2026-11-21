@@ -169,7 +169,8 @@ code-signing identity of peers when a protected manifest is installed.
 | Component | Runs as | Trusts | Does not trust | How it authenticates peers |
 | --- | --- | --- | --- | --- |
 | **Host hook shim** (per host: Claude Code, Codex, Cursor, …) | user | its host to call it for every tool call | — | none; it execs `rv hook` |
-| **rv front door** (`Sources/rv-c`) | user | the sibling `rv-cli` and `rvd` next to its own executable, found from `/proc/self/exe` or `_NSGetExecutablePath`, never PATH or argv0 **[C12]** | hook stdin: over 1 MiB, NUL or invalid UTF-8 is denied **[C13]**; `rvd`'s reply until checked | **Linux:** `SO_PEERCRED` uid equals its own, and `/proc/<pid>/exe` resolves to the sibling `rvd` path; no hash **[C14]**. **macOS (source only):** with a root-owned `peer-trust.json`, the reply's sender must match the `.service` entry (hardened runtime, Developer ID anchor or pinned dev cdhash); with no manifest, same euid and a cdhash equal to the on-disk sibling `rvd`; a manifest that exists but fails validation rejects every `rvd` **[C15]**. Replies must carry the request id and the same semver major **[C16]**. |
+| **rv front door** (`Sources/rv-c`) | user | the sibling `rv-cli`, `rvd` and `rv-hook-local` next to its own executable, found from `/proc/self/exe` or `_NSGetExecutablePath`, never PATH or argv0 **[C12]** | hook stdin: over 1 MiB, NUL or invalid UTF-8 is denied **[C13]**; `rvd`'s reply until checked | **Linux:** `SO_PEERCRED` uid equals its own, and `/proc/<pid>/exe` resolves to the sibling `rvd` path; no hash **[C14]**. **macOS (source only):** with a root-owned `peer-trust.json`, the reply's sender must match the `.service` entry (hardened runtime, Developer ID anchor or pinned dev cdhash); with no manifest, same euid and a cdhash equal to the on-disk sibling `rvd`; a manifest that exists but fails validation rejects every `rvd` **[C15]**. Replies must carry the request id and the same semver major **[C16]**. |
+| **Hook-local evaluator** (`rv-hook-local`, run by the front door before it asks `rvd`; `docs/architecture/hook-local-decide.md`) | user, one process per hook call | the passwd home and the policy, packs and config under it, as `rvd` reads them | its environment, cwd and argv beyond `--host` and `--request-id` (the front door passes a fixed passwd-derived environment and cwd `/`); every answer it could only guess, which it escalates to `rvd` | **The front door checks it, before it reads any input.** Darwin spawns it suspended; it must be the sibling `rv-hook-local` path, and with no manifest carry a cdhash equal to the on-disk sibling; with a manifest it must be hardened, Developer ID signed `dev.rv.rv-hook-local` from the team the manifest's production `.service` entry names (a dev-cdhash service entry gets no local door). Linux: `/proc/<pid>/exe` resolves to the sibling path. Its final reply must carry the request id and the same semver major, as `rvd`'s must. Anything else (missing, untrusted, slow past 1 s, crashed, escalated, malformed) sends the call to `rvd` unchanged; a local failure is never an answer and never a fallback class. |
 | **rvd** (policy engine, packs, script gate, judge, policy gate, allow-once) | user; launchd agent on demand (macOS), systemd user unit (Linux) **[C17]** | its packs and policy files; the organization policy after ownership checks | every request until the peer is checked; owner mutations over any generic IPC path **[C18]** | **Linux:** `SO_PEERCRED` uid must equal its own **[C19]**; the socket is 0600 in a 0700 directory under `$XDG_RUNTIME_DIR` or `/run/user/<uid>`, never `/tmp` **[C20]**. **macOS (source only):** per-message code identity from the XPC audit token, bound to its cdhash; component roles come only from the root-owned manifest; no uid comparison on the XPC path **[C21]**. On the Unix socket listeners (both platforms): frames capped at 1 MiB, 64 connections, 30 s receive timeout **[C22]**. |
 | **Judge** (Laya, on-device) | inside rvd | — | — | not a peer; local CoreML model **[C23]** |
 | **rv CLI** | user | `rvd` after the same daemon check as the front door | its own terminal input for owner checks done by `rvd` | as the front door |
@@ -619,7 +620,61 @@ check is a stub that always passes **[C150]**.
 ## 4. Fail-closed behaviour
 
 "Ask" means the host's native confirmation prompt where the host has one
-(Claude Code and Cursor), and the host's deny otherwise **[C151]**.
+(Claude Code and Cursor), and the host's deny otherwise **[C151]**. The
+installed adapters narrow that. Claude Code's adapter forwards the ask
+only when the reason is exactly one of the C hook's three down messages
+(unreachable, timeout, connection dropped) or the whole rv process ran
+past its 15 s budget, and all of these hold: `RV_HOOK_WHEN_DOWN` is not
+`deny`; the hook request's top-level `permission_mode` is `default`,
+`plan`, `acceptEdits` or `auto`; Claude Code reports the session as
+attended (`CLAUDE_CODE_SESSION_ATTENDED=1`; a missing value blocks); and
+the owner has not pinned the block in `~/.config/rv/config.json`, read
+from the passwd home (never `$HOME`) without following a symlink. The
+ask is kept only when that file does not exist, or parses as a JSON
+object whose top-level `hookAskWhenDown` is absent or exactly JSON
+`true`. Any other value (`false`, `"false"`, `0`, `null`, ...) pins the
+block, and so does a file that exists but cannot be used: a symlink,
+unreadable (the file or its directory), not a regular file, over 1 MiB,
+not UTF-8, corrupt JSON, `NaN` or `Infinity`, a byte-order mark, a
+duplicate key or a root that is not an object. A failed passwd lookup
+or a home that is not an absolute path pins it too. Ownership and mode
+are not checked for this switch, since it can only tighten. Otherwise it
+blocks:
+`bypassPermissions`, `dontAsk`, a missing or unknown mode, an ordinary
+`claude -p` run (which sets `CLAUDE_CODE_SESSION_ATTENDED=0`), and any
+other native ask, including one with a non-zero exit or a top-level
+`decision`. The prompt shows the command or path first, on one line with
+line breaks, backslashes, controls, format, separator and non-ASCII space
+characters escaped. The ask is forwarded only when the whole escaped
+command or path fits in 300 characters; a longer one is never cut, since
+any cut could hide part of it, and rv blocks with its reason and a note
+that the call was too long to show for approval. Then comes "rv could not
+check this call (<layer>). An agent can cause this by stopping or
+overloading rvd. Approve only if you expected it." Residuals:
+
+- A hook `ask` is answered by whatever Claude Code routes permission
+  prompts to, not necessarily a person. That includes an SDK `canUseTool`
+  callback, a `--permission-prompt-tool`, a `PermissionRequest` hook and
+  Claude Code mods.
+- The attended check is a heuristic, not a boundary against anything that
+  can start Claude Code. An agent can run `env -u CLAUDE_CODE_CHILD_SESSION
+  -u CLAUDECODE claude -p` and be reported as attended (observed on
+  Claude Code 2.1.329). rv does not verify
+  the values Claude Code sets. Anything able to change Claude Code's
+  settings or environment can change them.
+- A process that can type into the person's terminal can answer the
+  prompt, for example with `tmux send-keys` or `osascript` keystrokes.
+- Choosing "Yes, don't ask again" writes a persistent Claude Code allow
+  rule. rv's deny still wins once `rvd` answers again.
+
+An owner who wants no prompt sets `"hookAskWhenDown": false`, or
+`RV_HOOK_WHEN_DOWN=deny`. The switch is read by the Claude Code adapter
+only: it does not close observe mode's step-aside for an unreachable
+`rvd`, which the C hook answers with allow, so the adapter never sees a
+down reason (`rv.c` `fail_hook`, `hook_fallback.c` `render_observe`); only
+`RV_HOOK_WHEN_DOWN=deny` does. Cursor's adapter always blocks, because Cursor
+gives the hook no signal for auto-run, background agents or
+`cursor-agent --force` **[C151a]**.
 
 | Situation | Enforce mode | Observe mode |
 | --- | --- | --- |
@@ -1034,6 +1089,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C149 | Sources/RVPolicy/ManagedSerialRecord.swift:3-5; Sources/RVPolicy/ManagedSerialRecord.swift:49-71 |
 | C150 | Sources/RVPolicy/ManagedPolicy.swift:523-524 |
 | C151 | Sources/rv-c/hook_fallback.c:104-119; Sources/rv-c/hook_fallback.c:171-177 |
+| C151a | Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:38-80; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:114-117; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:198-359; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:383; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:410-422; Sources/RVHooks/Resources/hosts/rv-guard-claude.py.tmpl:474-487; Sources/RVHooks/Resources/hosts/rv-guard-cursor.py.tmpl:170-175 |
 | C152 | Sources/rv-c/rv.c:594-596; Sources/rv-c/rv.c:985-987 |
 | C153 | Sources/rv-c/hook_fallback.c:30-38; Sources/rv-c/hook_fallback.c:155-178 |
 | C154 | Sources/rv-c/rv.c:337-388; Sources/rv-c/observe_gate.c:48-57; Sources/rv-c/rvd_state.c:20-92 |

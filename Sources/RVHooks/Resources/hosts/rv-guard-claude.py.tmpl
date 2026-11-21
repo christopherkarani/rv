@@ -1,16 +1,33 @@
 """RV destructive-command guard for Claude Bash.
 
-Claude PreToolUse command hook. Step 8B: host dialogs never authorize.
-Approval happens in RVOperatorUI (or `rv allow-once`); the agent retries
-afterwards. Never emit permissionDecision ask (leftover-ask-as-permit:
-host Allow would run the tool with no RV approval). Extra
-hookSpecificOutput keys can fail-open a deny — wrapper-owned deny JSON
-uses documented fields only. Allow is empty stdout exit 0. Deny is always
-a documented Claude permissionDecision deny JSON exit 0 (never passthrough
-rv stdout).
+Claude PreToolUse command hook. Step 8B: host dialogs never authorize an
+rv review. Approval happens in RVOperatorUI (or `rv allow-once`); the
+agent retries afterwards, so rv's policy `ask` blocks (leftover-ask-as-
+permit: host Allow would run the tool with no RV approval).
+
+The one host ask is rv's infrastructure ask: rv could not check the call
+at all (rvd unreachable, slow or dropped — rv's own native ask, with
+exactly the C hook's text — or the whole rv process past
+RV_HOOK_TIMEOUT_S). There is no rv verdict to bypass, so Claude Code's
+permission prompt lets a person decide. It is forwarded only when all of
+these hold, and blocks otherwise:
+- RV_HOOK_WHEN_DOWN is not "deny";
+- the hook request's permission_mode is one of _HUMAN_PROMPT_MODES;
+- Claude Code says the session is attended (_session_attended);
+- the owner has not pinned "block" in config.json (_owner_pinned_block).
+Install problems, unusable rv output and any other native ask block.
+
+Extra hookSpecificOutput keys can fail-open a deny — wrapper-owned JSON
+uses documented fields only. Allow is empty stdout exit 0. Deny and ask
+are documented Claude permissionDecision JSON exit 0 (never passthrough
+rv stdout). A decision that cannot be written exits 2, Claude's blocking
+exit.
 """
 
 import json
+import os
+import pwd
+import stat
 import subprocess
 import sys
 import unicodedata
@@ -18,10 +35,52 @@ import unicodedata
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
+# The owner's config.json; None reads it from the passwd home, never $HOME
+# (hook environment can come from project config an agent writes).
+# `"hookAskWhenDown"` set to anything but true there, or a file rv cannot
+# use, pins "block" (_owner_pinned_block).
+_OWNER_CONFIG_PATH = None
+_OWNER_CONFIG_MAX = 1024 * 1024
+
 # Every block says what broke and what to run; never a bare "rv failed".
 _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
 _BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
 _ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
+_INFRA_ASK_TEXT = (
+    "rv could not check this call (%s). An agent can cause this by stopping or "
+    "overloading rvd. Approve only if you expected it. %s"
+)
+_SUBJECT_MAX = 300
+_TOO_LONG_TO_ASK = (
+    "The command or path is too long to show in full for approval, so rv "
+    "blocked it instead of asking."
+)
+
+# rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
+# Swift twin HookDaemonFallback) words each down class, with the layer the
+# prompt names. A native ask with any other text blocks.
+_DOWN_LAYERS = {
+    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.":
+        "rvd is not reachable",
+    "RV daemon did not answer in time. Retry; if it persists run `rv doctor`.":
+        "rvd did not answer in time",
+    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`.":
+        "the connection to rvd dropped",
+    # Observe mode, but the rvd state marker says rvd ran and was stopped.
+    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal.":
+        "rvd was stopped or crashed",
+}
+
+# Claude Code permission modes that put a hook `ask` to a person: Manual
+# (sent as "default"), plan, acceptEdits, and auto. Hooks reference: "In
+# auto mode, a PreToolUse hook's "ask" normally sends the tool call to the
+# permission prompt, and the classifier doesn't decide it." Probed on
+# Claude Code 2.1.328 (claude -p, nobody to answer): in default, plan,
+# acceptEdits and auto the hook ask was denied and the command did not
+# run, and a `Bash` allow rule did not override it. bypassPermissions
+# skips prompts and dontAsk auto-denies them; any other or missing value
+# is treated like those.
+_HUMAN_PROMPT_MODES = ("default", "plan", "acceptEdits", "auto")
 
 
 def _missing_reason():
@@ -53,6 +112,12 @@ def _reject_duplicate_keys(pairs):
             raise ValueError("duplicate JSON key")
         seen[key] = value
     return seen
+
+
+def _reject_json_constant(name):
+    # NaN, Infinity and -Infinity are not JSON; Python accepts them, other
+    # parsers do not.
+    raise ValueError("non-standard JSON constant %s" % name)
 
 
 def _wire_key(name):
@@ -98,6 +163,9 @@ def main():
         mapped = _guard(raw)
         if mapped["action"] == "allow":
             return
+        if mapped["action"] == "host_ask":
+            _emit_host_ask(mapped)
+            return
         _emit_deny(mapped)
         return
     except Exception:
@@ -125,21 +193,27 @@ def _guard(raw):
     if not _is_pre_tool_event(envelope.get("hook_event_name"), "PreToolUse"):
         return {"action": "allow"}
     tool = _canonical(envelope.get("tool_name"), ("Bash",) + _FILE_TOOLS)
-    if tool in _FILE_TOOLS or not isinstance(tool, str):
-        mapped = _spawn_rv_hook("claude", raw)
-        if mapped["action"] == "allow":
-            return mapped
-        if mapped["action"] == "ask":
-            return {
-                "action": "block",
-                "reason": _blocking_reason(mapped.get("reason")),
-            }
-        return mapped
-    if tool != "Bash":
+    if tool != "Bash" and tool not in _FILE_TOOLS and isinstance(tool, str):
         return {"action": "allow"}
-    mapped = _spawn_rv_hook("claude", raw)
+    return _resolve(_spawn_rv_hook("claude", raw), envelope, tool)
+
+
+def _resolve(mapped, envelope, tool):
     if mapped["action"] == "allow":
         return mapped
+    if mapped["action"] == "unchecked":
+        # rv could not check the call: a person decides in Claude Code's
+        # prompt when one will reach them; otherwise it blocks.
+        reason = _blocking_reason(mapped.get("reason"))
+        if not _forwards_infra_ask(envelope, os.environ):
+            return {"action": "block", "reason": reason}
+        subject = _subject(tool, envelope.get("tool_input"))
+        if subject is None:
+            return {"action": "block", "reason": "%s %s" % (reason, _TOO_LONG_TO_ASK)}
+        return {
+            "action": "host_ask",
+            "reason": "%s\n\n%s" % (subject, _INFRA_ASK_TEXT % (mapped.get("layer"), reason)),
+        }
     # A legacy `ask` decision blocks like a deny: host dialogs never
     # authorize. The human approves in RVOperatorUI and the agent retries.
     if mapped["action"] == "ask":
@@ -148,6 +222,144 @@ def _guard(raw):
             "reason": _blocking_reason(mapped.get("reason")),
         }
     return mapped
+
+
+def _forwards_infra_ask(envelope, environ):
+    # RV_HOOK_WHEN_DOWN may only tighten: "deny" blocks every
+    # infrastructure path, as it does in the C hook.
+    if environ.get("RV_HOOK_WHEN_DOWN") == "deny":
+        return False
+    return (
+        _host_prompts_human(envelope.get("permission_mode"))
+        and _session_attended(environ)
+        and not _owner_pinned_block()
+    )
+
+
+def _owner_pinned_block():
+    # The owner's switch only tightens, so rejecting a bad file would
+    # loosen. The ask stays only when config.json is missing, or is a clean
+    # JSON object whose top-level `hookAskWhenDown` is absent or exactly
+    # true; any other value ("false", 0, null, ...) pins "block".
+    # A file that exists but cannot be used pins "block", as GuardConfig
+    # fails closed on a bad config: a symlink (O_NOFOLLOW), unreadable, not
+    # a regular file (no blocking open on a FIFO), over 1 MiB, not UTF-8,
+    # corrupt, a BOM, a repeated key, NaN or Infinity, or a non-object
+    # root. Who owns the file or may write it does not matter for a
+    # tightening switch.
+    # A failed passwd lookup, or a home that is not an absolute path,
+    # leaves no config rv can trust to be the owner's: that pins too.
+    try:
+        path = _OWNER_CONFIG_PATH or _passwd_config_path()
+    except Exception:
+        return True
+    if path is None:
+        return True
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except Exception:
+        return True
+    try:
+        parsed = json.loads(
+            _read_regular_file(fd),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except Exception:
+        return True
+    finally:
+        os.close(fd)
+    if not isinstance(parsed, dict):
+        return True
+    return parsed.get("hookAskWhenDown", True) is not True
+
+
+def _passwd_config_path():
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    if not isinstance(home, str) or not home.startswith("/"):
+        return None
+    return home + "/.config/rv/config.json"
+
+
+def _read_regular_file(fd):
+    # Bounded: a regular file of at most _OWNER_CONFIG_MAX bytes, read
+    # whole, as UTF-8. Anything else raises.
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _OWNER_CONFIG_MAX:
+        raise ValueError("owner config is not a regular file of at most 1 MiB")
+    chunks = []
+    left = info.st_size
+    while left > 0:
+        chunk = os.read(fd, left)
+        if not chunk:
+            raise ValueError("owner config shrank while read")
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks).decode("utf-8")
+
+
+def _host_prompts_human(mode):
+    # Exact spellings only: the host writes this field, and anything it
+    # does not say plainly is no proof a person will see the prompt.
+    return isinstance(mode, str) and mode in _HUMAN_PROMPT_MODES
+
+
+def _session_attended(environ):
+    # Claude Code computes this for its hooks (`claude -p` sends "0"). It
+    # is undocumented, so anything but a plain "1" blocks, a missing value
+    # included: on older builds a nested `claude -p` inherits an
+    # interactive-looking CLAUDE_CODE_ENTRYPOINT, so that is no proof.
+    # A heuristic, not a boundary: whatever can start Claude Code can make
+    # it report an attended session.
+    return environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "1"
+
+
+def _subject(tool, tool_input):
+    # What the person is approving, first: the command, or the path, on
+    # one escaped line (_one_line), so it cannot forge text of its own or
+    # push rv's warning out of view. None when the escaped command or path
+    # is longer than _SUBJECT_MAX: any cut could hide part of what would be
+    # approved, so the caller blocks instead of asking.
+    name = tool if isinstance(tool, str) else "Unknown tool"
+    keys = ("command",) if tool == "Bash" else ("file_path", "notebook_path", "path", "pattern")
+    value = None
+    if isinstance(tool_input, dict):
+        for key in keys:
+            if isinstance(tool_input.get(key), str) and tool_input.get(key).strip():
+                value = tool_input.get(key)
+                break
+    if value is None:
+        return "%s: (no command or path given)" % _one_line(name)
+    shown = _one_line(value)
+    if len(shown) > _SUBJECT_MAX:
+        return None
+    return "%s: %s" % (_one_line(name), shown)
+
+
+def _one_line(text):
+    # Line breaks, controls, format (bidi, zero-width), separator and
+    # non-ASCII space characters are shown escaped, as rv's
+    # HookDenyJSON.jsonQuoted does, and a typed backslash is doubled so it
+    # cannot pass for an escape; a plain space stays.
+    return "".join(_escaped_char(ch) for ch in text)
+
+
+_SHORT_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _escaped_char(ch):
+    if ch in _SHORT_ESCAPES:
+        return _SHORT_ESCAPES[ch]
+    if ch == " " or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Zs", "Zl", "Zp"):
+        return ch
+    code = ord(ch)
+    if code > 0xFFFF:
+        code -= 0x10000
+        return "\\u%04x\\u%04x" % (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF))
+    return "\\u%04x" % code
 
 
 def _parse(raw):
@@ -172,7 +384,11 @@ def _spawn_rv_hook(host, stdin):
     except FileNotFoundError:
         return {"action": "block", "reason": _missing_reason()}
     except subprocess.TimeoutExpired:
-        return {"action": "block", "reason": _timeout_reason()}
+        return {
+            "action": "unchecked",
+            "layer": "rv did not answer within %gs" % RV_HOOK_TIMEOUT_S,
+            "reason": _timeout_reason(),
+        }
     except OSError as error:
         return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
@@ -193,14 +409,23 @@ def _map_rv_hook_result(stdout, exit_code):
                 "reason": parsed.get("reason") if isinstance(parsed.get("reason"), str) else "",
             }
         hook = parsed.get("hookSpecificOutput")
-        # rv's own native ask (daemon down or slow) blocks like a deny, but
-        # carries rv's message: it says what broke and how to repair it.
+        # rv's own native ask: rvd was unreachable, slow or dropped, so rv
+        # could not check the call. rvd itself never answers a native ask
+        # (Step 8B), so only the C hook's exact down texts count; any other
+        # native ask blocks with its text. The C hook writes it with exit 0
+        # and no top-level decision; anything else is not that reply.
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
+            reason = hook.get("permissionDecisionReason")
+            if (
+                exit_code == 0
+                and "decision" not in parsed
+                and isinstance(reason, str)
+                and reason in _DOWN_LAYERS
+            ):
+                return {"action": "unchecked", "layer": _DOWN_LAYERS[reason], "reason": reason}
             return {
                 "action": "block",
-                "reason": _blocking_reason(
-                    hook.get("permissionDecisionReason") or parsed.get("systemMessage")
-                ),
+                "reason": _blocking_reason(reason or parsed.get("systemMessage")),
             }
         if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
             return {
@@ -229,17 +454,40 @@ def _blocking_reason(reason):
 
 
 def _emit_deny(mapped):
+    _emit_decision("deny", mapped)
+
+
+def _emit_host_ask(mapped):
+    _emit_decision("ask", mapped)
+
+
+def _emit_decision(decision, mapped):
     text = _blocking_reason(mapped.get("reason") if isinstance(mapped, dict) else None)
     payload = {
         "systemMessage": text,
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": decision,
             "permissionDecisionReason": text,
         },
     }
-    sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
-    sys.exit(0)
+    _write_or_block(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n", text)
+
+
+def _write_or_block(line, reason):
+    # Exit 1 after a failed write would be Claude's non-blocking error,
+    # which runs the tool. Exit 2 blocks, with the reason on stderr.
+    data = line.encode("utf-8")
+    try:
+        while data:
+            data = data[os.write(1, data):]
+    except Exception:
+        try:
+            os.write(2, (reason + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        os._exit(2)
+    os._exit(0)
 
 
 if __name__ == "__main__":

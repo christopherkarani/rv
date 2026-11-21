@@ -546,8 +546,7 @@ struct MacOSGuestLaunchTests {
             let app = directory.appendingPathComponent("\(tag)-probe.app")
             let executable = app.appendingPathComponent("Contents/MacOS/probe")
             try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("#!/bin/sh\n/usr/bin/touch '\(marker("open").path)'\n".utf8).write(to: executable)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            try writeExecutableStub("#!/bin/sh\n/usr/bin/touch '\(marker("open").path)'\n", to: executable)
             let info: [String: Any] = [
                 "CFBundleExecutable": "probe", "CFBundleIdentifier": "\(base)-\(tag)-open", "CFBundlePackageType": "APPL",
             ]

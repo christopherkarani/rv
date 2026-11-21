@@ -176,6 +176,10 @@ extension SetupRun {
             throw SetupError.rvdMissing(env.rvdPath)
         }
         if onlyIfStopped, env.serviceAnswersNow() { return }
+        // rvd would exit at once and only its log would say why.
+        if let directory = env.uncreatableRuntimeDirectory() {
+            throw SetupError.userRuntimeDirectoryMissing(directory: directory, uid: env.uid())
+        }
         announceRvdRestart(env)
         env.directRvd.stop(rvdPath: env.rvdPath)
         do {

@@ -46,7 +46,7 @@ clang -Os -arch arm64 -mmacosx-version-min=15.0 -framework Security -framework C
   -DRV_HOOK_MANAGED_POLICY_DIR="\"$MANAGED\"" \
   -o "$HOOK" \
   "$SRC/json_escape.c" "$SRC/json_reply.c" "$SRC/daemon_trust.c" \
-  "$SRC/hook_fallback.c" "$SRC/observe_gate.c" "$SRC/rvd_state.c" "$SRC/rv.c"
+  "$SRC/hook_fallback.c" "$SRC/observe_gate.c" "$SRC/rvd_state.c" "$SRC/local_eval.c" "$SRC/rv.c"
 
 printf '{"guard":{"mode":"observe"}}' > "$CONFIG"
 chmod 600 "$CONFIG"
