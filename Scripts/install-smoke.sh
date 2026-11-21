@@ -167,6 +167,14 @@ fi
 
 SMOKE_HOME="$WORK/home"
 mkdir -p "$SMOKE_HOME" "$WORK/tmp"
+# install.sh stops on Linux when XDG_RUNTIME_DIR is unset and
+# /run/user/<uid> is missing; a runner need not have either, so give the
+# smoke its own (setup is neutered, nothing binds there).
+if [ "$(uname -s)" = "Linux" ] && [ -z "${XDG_RUNTIME_DIR+set}" ]; then
+  mkdir -m 0700 "$WORK/xdg"
+  XDG_RUNTIME_DIR="$WORK/xdg"
+  export XDG_RUNTIME_DIR
+fi
 status=0
 PATH="$SMOKE_PATH" HOME="$SMOKE_HOME" TMPDIR="$WORK/tmp" \
   RV_INSTALL_NO_MODELS=1 RV_INSTALL_VERSION="$smoke_tag" sh "$WORK/install.sh" \

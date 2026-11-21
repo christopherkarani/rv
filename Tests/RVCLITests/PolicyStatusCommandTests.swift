@@ -175,10 +175,12 @@ struct PolicyStatusCommandTests {
 
     @Test func wait_returnsOnceRvdReportsTheSavedHash() async {
         let calls = Counter()
-        // Generous: the wait returns on the third poll, and a starved test
-        // pool (Linux CI) can delay a 10 ms poll sleep by seconds.
+        // The deadline is not under test here, only that the wait polls
+        // until rvd reports the saved hash. A starved test pool (loaded
+        // macOS and Linux CI) has delayed a 10 ms poll sleep past a 60 s
+        // deadline, so the deadline is far beyond any real run.
         let outcome = await PolicyLoadWait.run(
-            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(60), pollInterval: .milliseconds(10),
+            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(3600), pollInterval: .milliseconds(10),
             observe: { _, _ in
                 let hash = calls.next() < 2 ? "old" : "new"
                 return .rvd(PolicyLoadStatus(

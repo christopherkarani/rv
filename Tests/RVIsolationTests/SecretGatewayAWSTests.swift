@@ -620,12 +620,11 @@ struct SecretGatewayAWSTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let script = directory.appendingPathComponent("aws")
-        try Data("""
+        try writeExecutableStub("""
             #!/bin/sh
             printf '%s\\n' "$*" > "$HOME/args"
             printf '%s' '\(Self.credentials(expires: Self.start))'
-            """.utf8).write(to: script)
-        chmod(script.path, 0o755)
+            """, to: script)
         let environment = ["PATH": directory.path, "HOME": directory.path]
         // The fake's directory is user-owned, so only a trusted directory reaches it, never PATH.
         let value = try SecretCommandProviders.$trustedDirectories.withValue([directory.path]) {
