@@ -149,11 +149,17 @@ public enum MCPLaunchPlanner {
                 continue
             }
             if requireSandbox {
+                // Refused alone, before its secrets are resolved or a cage
+                // is made: the other servers still serve.
                 guard let policy = definition.sandbox else {
-                    return .failure(.sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry"))
+                    planned.append(refused(
+                        definition, .sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry")))
+                    continue
                 }
                 if policy.network {
-                    return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
+                    planned.append(refused(
+                        definition, .sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts")))
+                    continue
                 }
             } else if configuration.managed?.mcp.requireSandbox == true {
                 // No cage here (`requireSandbox` is the platform's cage):
@@ -203,7 +209,7 @@ public enum MCPLaunchPlanner {
     ) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> {
         let name = definition.name
         func refuse(_ refusal: MCPPlaceholderRefusal) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> {
-            .success((MCPGatewayCore.Upstream(definition: definition, secretValues: []), .refused(server: name, refusal)))
+            .success(refused(definition, .placeholder(refusal)))
         }
         if let refusal = MCPPlaceholderPlanning.refusal(
             definition, platformSupported: placeholders.platformSupported, cageEnforced: requireSandbox, secrets: secrets)
@@ -267,6 +273,13 @@ public enum MCPLaunchPlanner {
                 MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed),
                 .placeholderBound(caged, MCPPlaceholderBinding(lease: lease))))
         }
+    }
+
+    /// A server planned not to start: no secret values, no launch.
+    static func refused(
+        _ definition: MCPServerDefinition, _ refusal: MCPServerRefusal
+    ) -> (MCPGatewayCore.Upstream, MCPUpstreamConnection) {
+        (MCPGatewayCore.Upstream(definition: definition, secretValues: []), .refused(server: definition.name, refusal))
     }
 
     /// Why leases cannot be bound here, probed the first time a server asks:

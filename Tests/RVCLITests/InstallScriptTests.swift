@@ -22,6 +22,11 @@ private func installScriptURL() -> URL {
 private let shippedTeamID = "5V273URY46"
 private let shippedReleaseSigners =
     "rv-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMFYUW10a2NhO/jbObXtkUBeEVIEtZr41KYMiXExr8D"
+/// install.sh's Developer ID requirement up to the team clause: an Apple
+/// anchor, the Developer ID intermediate, and a Developer ID Application leaf.
+private let developerIDRequirementPrefix =
+    "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+    + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and "
 private let shippedPinLines = [
     "\nsigned_releases=1\n",
     "\nrelease_team_id=\"\(shippedTeamID)\"\n",
@@ -123,15 +128,22 @@ private func writeExecutable(_ url: URL, contents: String) throws {
 /// before a download (`getconf GNU_LIBC_VERSION`, `ldconfig -p`, `ldd
 /// --version`), so a macOS test host reads as a supported glibc system.
 /// `glibc: nil` makes getconf fail (a non-glibc host); `libraries` is what
-/// the loader cache lists.
+/// the loader cache lists. `uid` is what `id -u` prints: the default 0
+/// (root) never meets install.sh's missing-`/run/user/<uid>` stop, so no
+/// test depends on the host's `/run/user`.
 private func writeLinuxShims(
     in shim: URL,
     arch: String = "x86_64",
     glibc: String? = "2.39",
     libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
-    lddBanner: String = "ldd (GNU libc) 2.39"
+    lddBanner: String = "ldd (GNU libc) 2.39",
+    uid: Int = 0
 ) throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
+    try writeExecutable(
+        shim.appendingPathComponent("id"),
+        contents: "#!/bin/sh\nif [ \"$1\" = -u ]; then echo \(uid); exit 0; fi\nexec /usr/bin/id \"$@\"\n"
+    )
     try writeExecutable(
         shim.appendingPathComponent("uname"),
         contents: """
@@ -1473,6 +1485,31 @@ private func writeSignatureShims(in shim: URL) throws {
               echo "$file: invalid signature (code or signature have been modified)" >&2
               exit 1
             fi
+            # -R: the signing team is the certificate's, not the -dvv text.
+            # team-text-only prints the pinned team in -dvv but is signed by
+            # another team, so only a requirement check can catch it.
+            requirement=""
+            prev=""
+            for arg in "$@"; do
+              [ "$prev" = "-R" ] && requirement="$arg"
+              prev="$arg"
+            done
+            if [ -n "$requirement" ]; then
+              team=TEAMRV1234
+              case "$mode" in
+                identifier-team|identifier-newline|team-text-only) team=OTHERTEAM9 ;;
+                adhoc-plus-unpinned-dylib) case "$name" in *.dylib) team=V9AUD2URP3 ;; esac ;;
+                # An ad-hoc signature has no certificate chain, so no
+                # anchor-apple requirement is satisfied, whatever -dvv says.
+                adhoc-forged) case "$name" in *.dylib) team="" ;; esac ;;
+              esac
+              want="certificate leaf[subject.OU] = \\"$team\\""
+              case "$requirement" in
+                "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and $want") exit 0 ;;
+              esac
+              echo "$file: test-requirement: code failed to satisfy specified code requirement(s)" >&2
+              exit 3
+            fi
             exit 0
             ;;
         esac
@@ -1571,8 +1608,7 @@ private func runInstallScript(
         mount -t overlay overlay -o lowerdir=/usr/sbin,upperdir="$upper_sbin",workdir="$work_sbin" /usr/sbin
         exec /bin/sh \(shellQuote(script.path))
         """
-        try Data(body.utf8).write(to: wrapper)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        try writeExecutableScript(at: wrapper, source: body)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unshare")
         process.arguments = ["--user", "--map-root-user", "--mount", wrapper.path]
     } else {
@@ -1679,6 +1715,17 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
             toolLines.contains { $0.hasPrefix("codesign --verify --strict ") && $0.hasSuffix("/\(name)") },
             "\(name) not verified"
         )
+        // The whole requirement, then the path: no clause may follow the team.
+        let requirementCall =
+            "codesign --verify --strict -R =\(developerIDRequirementPrefix)certificate leaf[subject.OU] = \"TEAMRV1234\" "
+        #expect(
+            toolLines.contains {
+                $0.hasPrefix(requirementCall)
+                    && $0.dropFirst(requirementCall.count).hasPrefix("/")
+                    && $0.hasSuffix("/\(name)")
+            },
+            "\(name) not checked against the pinned team's Developer ID requirement"
+        )
     }
     let spctlLines = toolLines.filter { $0.hasPrefix("spctl ") }
     #expect(spctlLines.count == 5)
@@ -1732,6 +1779,22 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
     #expect(run.status == 1)
     #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_pinnedTeamTextWithoutTheTeamsCertificateRefuses() throws {
+    // -dvv prints TeamIdentifier=TEAMRV1234, but the certificate is another
+    // team's: the code requirement, not the text, decides the team.
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "team-text-only", "RV_INSTALL_TEAM_ID": "TEAMRV1234"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.toolLog.contains("codesign --verify --strict -R =\(developerIDRequirementPrefix)"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
 }
@@ -2307,6 +2370,8 @@ private func runChecksumInstall(
     glibc: String? = "2.39",
     libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
     lddBanner: String = "ldd (GNU libc) 2.39",
+    uid: Int = 0,
+    extraShims: [String: String] = [:],
     afterSums: (URL) throws -> Void = { _ in }
 ) throws -> ChecksumRun {
     let root = FileManager.default.temporaryDirectory
@@ -2337,9 +2402,12 @@ private func runChecksumInstall(
     if darwin {
         try writeDarwinShims(in: shim)
     } else {
-        try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner)
+        try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner, uid: uid)
     }
     try writeCurlShim(in: shim, assets: assets, latestTag: "v1.2.3", servedTag: servedTag)
+    for (name, contents) in extraShims {
+        try writeExecutable(shim.appendingPathComponent(name), contents: contents)
+    }
 
     var env = [
         "HOME": home.path,
@@ -2576,6 +2644,82 @@ func installSh_linuxAcceptsGlibcAtOrAboveTheReleaseFloor(_ version: String) thro
     let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
     #expect(result.status == 0, "\(result.stderr)")
     #expect(result.stderr.contains("glibc") == false, "\(result.stderr)")
+}
+
+// MARK: - Linux runtime directory (no login manager)
+
+/// A uid no host has a `/run/user/<uid>` for.
+private let uidWithoutRuntimeDirectory = 3_999_999_917
+
+/// No login manager made `/run/user/<uid>`, XDG_RUNTIME_DIR is unset and the
+/// installer is not root: rvd could never bind its socket, so `rv setup`
+/// would fail after a 10 s wait with the cause only in rvd.log. The
+/// installer says the cause and the root fix before downloading anything.
+@Test(.enabled(if: getuid() != 0, "root can create /run/user/<uid>"))
+func installSh_linuxStopsBeforeDownloadingWhenNoRuntimeDirectory() throws {
+    let uid = uidWithoutRuntimeDirectory
+    let run = try runChecksumInstall(uid: uid)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    let directory = "/run/user/\(uid)"
+    #expect(run.status == 1, "\(run.stderr)")
+    #expect(run.stderr.contains("XDG_RUNTIME_DIR is unset and \(directory) does not exist"), "\(run.stderr)")
+    #expect(
+        run.stderr.contains(
+            "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o \(uid) \(directory)"),
+        "\(run.stderr)")
+    #expect(run.curlLog.isEmpty, "nothing may download: \(run.curlLog)")
+    try expectOldInstallIntact(run)
+}
+
+/// XDG_RUNTIME_DIR names rvd's directory, so `/run/user/<uid>` is not needed.
+@Test func installSh_linuxSetXDGRuntimeDirSkipsTheRuntimeDirectoryStop() throws {
+    let xdg = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-xdg-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: xdg, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: xdg) }
+    let run = try runChecksumInstall(environment: ["XDG_RUNTIME_DIR": xdg.path], uid: uidWithoutRuntimeDirectory)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("XDG_RUNTIME_DIR is unset") == false, "\(run.stderr)")
+}
+
+/// `exec rv setup` replaces the shell, so the EXIT trap never ran and every
+/// download left its `rv-install.*` directory (~156 MB) in TMPDIR.
+@Test(arguments: ["", "observe"])
+func installSh_downloadRemovesItsTempDirectoryBeforeRunningSetup(mode: String) throws {
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-tmpdir-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": tmp.path, "RV_INSTALL_MODE": mode])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv-workspace-host").path))
+    let left = try FileManager.default.contentsOfDirectory(atPath: tmp.path).filter { $0.hasPrefix("rv-install.") }
+    #expect(left.isEmpty, "download directory left behind: \(left)")
+}
+
+/// Removing the download directory is best effort: a failed `rm` must not
+/// stop the install after the binaries are in place but before `rv setup`.
+@Test func installSh_unremovableDownloadDirectoryStillRunsSetup() throws {
+    let rm = """
+        #!/bin/sh
+        for arg in "$@"; do
+          case "$arg" in
+            */rv-install.*/*) ;;
+            */rv-install.*) echo "rm: cannot remove '$arg': Permission denied" >&2; exit 1 ;;
+          esac
+        done
+        exec /bin/rm "$@"
+        """
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-tmpdir-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": tmp.path], extraShims: ["rm": rm])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("Permission denied"), "the shim must have refused: \(run.stderr)")
 }
 
 @Test func releaseWorkflow_glibcFloorMatchesInstallScript() throws {
