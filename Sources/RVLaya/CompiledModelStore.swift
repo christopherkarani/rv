@@ -208,6 +208,11 @@ struct CompiledModelStore<Model> {
         guard Self.isOwnedDirectory(compiled) else {
             throw CompiledModelRefusal(detail: "compile output is not this user's real directory")
         }
+        // Checked before the copy, not only after: off Darwin, FileManager
+        // copies a FIFO by opening it for reading, which blocks forever.
+        guard Self.holdsOnlyFilesAndDirectories(compiled) else {
+            throw CompiledModelRefusal(detail: "compile output holds something other than files and directories")
+        }
         guard (try? fm.copyItem(at: compiled, to: partial)) != nil else {
             throw CompiledModelRefusal(detail: "could not copy the compile output into the cache")
         }
@@ -344,6 +349,24 @@ struct CompiledModelStore<Model> {
             case S_IFREG: guard chmod(url.path, 0o600) == 0 else { return false }
             default: return false
             }
+        }
+        return !walkFailed.value
+    }
+
+    /// Whether every entry under `dir` is a directory or regular file, by
+    /// `lstat` (nothing is opened, so a FIFO cannot block the walk); false
+    /// on anything else or a directory that cannot be walked.
+    static func holdsOnlyFilesAndDirectories(_ dir: URL) -> Bool {
+        let walkFailed = WalkFailure()
+        guard let walker = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: nil, options: [],
+            errorHandler: { _, _ in walkFailed.set(); return false })
+        else { return false }
+        for case let url as URL in walker {
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else { return false }
+            let kind = info.st_mode & S_IFMT
+            guard kind == S_IFDIR || kind == S_IFREG else { return false }
         }
         return !walkFailed.value
     }
