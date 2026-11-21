@@ -22,6 +22,11 @@ private func installScriptURL() -> URL {
 private let shippedTeamID = "5V273URY46"
 private let shippedReleaseSigners =
     "rv-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMFYUW10a2NhO/jbObXtkUBeEVIEtZr41KYMiXExr8D"
+/// install.sh's Developer ID requirement up to the team clause: an Apple
+/// anchor, the Developer ID intermediate, and a Developer ID Application leaf.
+private let developerIDRequirementPrefix =
+    "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+    + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and "
 private let shippedPinLines = [
     "\nsigned_releases=1\n",
     "\nrelease_team_id=\"\(shippedTeamID)\"\n",
@@ -1480,6 +1485,31 @@ private func writeSignatureShims(in shim: URL) throws {
               echo "$file: invalid signature (code or signature have been modified)" >&2
               exit 1
             fi
+            # -R: the signing team is the certificate's, not the -dvv text.
+            # team-text-only prints the pinned team in -dvv but is signed by
+            # another team, so only a requirement check can catch it.
+            requirement=""
+            prev=""
+            for arg in "$@"; do
+              [ "$prev" = "-R" ] && requirement="$arg"
+              prev="$arg"
+            done
+            if [ -n "$requirement" ]; then
+              team=TEAMRV1234
+              case "$mode" in
+                identifier-team|identifier-newline|team-text-only) team=OTHERTEAM9 ;;
+                adhoc-plus-unpinned-dylib) case "$name" in *.dylib) team=V9AUD2URP3 ;; esac ;;
+                # An ad-hoc signature has no certificate chain, so no
+                # anchor-apple requirement is satisfied, whatever -dvv says.
+                adhoc-forged) case "$name" in *.dylib) team="" ;; esac ;;
+              esac
+              want="certificate leaf[subject.OU] = \\"$team\\""
+              case "$requirement" in
+                "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and $want") exit 0 ;;
+              esac
+              echo "$file: test-requirement: code failed to satisfy specified code requirement(s)" >&2
+              exit 3
+            fi
             exit 0
             ;;
         esac
@@ -1578,8 +1608,7 @@ private func runInstallScript(
         mount -t overlay overlay -o lowerdir=/usr/sbin,upperdir="$upper_sbin",workdir="$work_sbin" /usr/sbin
         exec /bin/sh \(shellQuote(script.path))
         """
-        try Data(body.utf8).write(to: wrapper)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        try writeExecutableScript(at: wrapper, source: body)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unshare")
         process.arguments = ["--user", "--map-root-user", "--mount", wrapper.path]
     } else {
@@ -1686,6 +1715,17 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
             toolLines.contains { $0.hasPrefix("codesign --verify --strict ") && $0.hasSuffix("/\(name)") },
             "\(name) not verified"
         )
+        // The whole requirement, then the path: no clause may follow the team.
+        let requirementCall =
+            "codesign --verify --strict -R =\(developerIDRequirementPrefix)certificate leaf[subject.OU] = \"TEAMRV1234\" "
+        #expect(
+            toolLines.contains {
+                $0.hasPrefix(requirementCall)
+                    && $0.dropFirst(requirementCall.count).hasPrefix("/")
+                    && $0.hasSuffix("/\(name)")
+            },
+            "\(name) not checked against the pinned team's Developer ID requirement"
+        )
     }
     let spctlLines = toolLines.filter { $0.hasPrefix("spctl ") }
     #expect(spctlLines.count == 5)
@@ -1739,6 +1779,22 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
     #expect(run.status == 1)
     #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_pinnedTeamTextWithoutTheTeamsCertificateRefuses() throws {
+    // -dvv prints TeamIdentifier=TEAMRV1234, but the certificate is another
+    // team's: the code requirement, not the text, decides the team.
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "team-text-only", "RV_INSTALL_TEAM_ID": "TEAMRV1234"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.toolLog.contains("codesign --verify --strict -R =\(developerIDRequirementPrefix)"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
 }

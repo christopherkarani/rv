@@ -108,6 +108,17 @@ What it does, in order:
    install intact.
 5. Runs `rv setup` (or `rv setup --observe`).
 
+On macOS the installer also checks that rv's executables, the Swift
+runtime dylib and RVApprovals.app carry rv's Developer ID signature, and
+asks Gatekeeper (`spctl`) whether Apple notarized each of them but the
+dylib. (The packs bundle and other downloads are covered by the signed
+`SHA256SUMS`.) A bare binary cannot carry a stapled notarization
+ticket, so Gatekeeper looks the ticket up online: a Mac that cannot reach
+Apple (offline, or behind a proxy that blocks Apple's notarization
+service) is refused with `Gatekeeper does not accept <file> as notarized`.
+`RV_INSTALL_ALLOW_UNSIGNED=1` does not skip this check; install while the
+Mac can reach Apple.
+
 Make sure `~/.local/bin` is on your `PATH`.
 
 ## What `rv setup` does and asks
