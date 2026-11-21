@@ -552,6 +552,9 @@ public struct GatedEvaluate: Sendable {
         // would have re-denied afterwards.
         // The input reads, evaluation and judge steps block (file reads,
         // model load wait, inference): run them off the cooperative pool.
+        // (The hook-local evaluator gathers `inputs` before calling, on its
+        // own thread, to record the guard mode it read; it makes one call
+        // per process, so nothing else waits on that thread.)
         // The Policy gate and every `HookDeadline` check stay here, where
         // the task-local deadline is bound.
         // The effects the offloaded steps ask for (exemption audit, judge
@@ -752,7 +755,8 @@ public struct GatedEvaluate: Sendable {
             let observed = JudgeRuntime.observe(
                 wouldBe: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
+                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+                lateLog: Self.lateJudgeLog(home: home)
             )
             effects.append(.judgeLog(observed.log))
             return .observed(observed.result, wouldBe: observed.wouldBe, floorsWouldBe: observed.floorsWouldBe)
@@ -766,13 +770,22 @@ public struct GatedEvaluate: Sendable {
             let judged = JudgeRuntime.apply(
                 to: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
+                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+                lateLog: Self.lateJudgeLog(home: home)
             )
             if let log = judged.log {
                 effects.append(.judgeLog(log))
             }
             return .enforced(judged.result)
         }
+    }
+
+    /// Where a prediction that answered after its caller gave up is logged:
+    /// straight to the judge log, since the request's effects are long
+    /// performed by then. nil without a home (nothing to log to).
+    private static func lateJudgeLog(home: HomeDirectory?) -> (@Sendable (GatedEffect.JudgeLogRow) -> Void)? {
+        guard let home else { return nil }
+        return { @Sendable row in JudgeRuntime.appendLog(row, home: home) }
     }
 
     private func lifecycleFloor(
@@ -1053,8 +1066,10 @@ public struct GatedEvaluate: Sendable {
                 },
                 policy: policy,
                 // The hook client's deadline (bound by `JudgeOffload`): an
-                // evaluation it has given up on stops pattern search.
-                patternBudget: PatternBudget(hardDeadline: JudgeAdmission.deadline)
+                // evaluation it has given up on stops pattern search. Not
+                // the judge deadline: a non-hook door's judge bound must not
+                // turn its rule verdict indeterminate.
+                patternBudget: PatternBudget(hardDeadline: JudgeOffload.hookDeadline)
             )
         }
         // First pass without resolution: packs and semantics own their
