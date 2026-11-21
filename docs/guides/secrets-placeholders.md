@@ -274,9 +274,9 @@ D-Bus calls, since that keyring has no per-app prompt.
 
 ## Vault addresses
 
+A secret definition with an `address` is refused unless
 `VAULT_ADDR` is set to the same origin: rv never sends your Vault token to a
 server the environment does not name.
-
 
 ## What is protected and what is not
 

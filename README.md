@@ -72,10 +72,10 @@ must exist, owned by you, mode 0700, or `XDG_RUNTIME_DIR` must name such a
 directory: `rvd` keeps its socket there and only root can create it
 (`sudo install -d -m 0755 /run/user && sudo install -d -m 0700 -o $(id -u) /run/user/$(id -u)`).
 `/run` is usually a tmpfs, so make it again after a reboot or container
-restart. The installer checks this before downloading. Linux downloads are
-checked against the release's
-`SHA256SUMS`; until rv's release key is pinned in the installer that file is
-not signature-checked, and the installer says so (see
+restart. The installer checks this before downloading. Every download is
+checked against the release's `SHA256SUMS`, which must carry a valid
+signature from rv's release key (`SHA256SUMS.sig`); on macOS each binary
+must also carry rv's Developer ID signature (see
 [SECURITY.md](SECURITY.md#release-integrity)).
 
 ## How it works
