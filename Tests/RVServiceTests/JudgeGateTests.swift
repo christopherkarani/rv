@@ -156,12 +156,17 @@ struct JudgeContextGatedTests {
         #expect(lines == ["cwd-inside-repo: yes"])
     }
 
-    @Test("cwd outside any repo reports no")
+    // The v2 checkpoint reads `cwd-inside-repo: no` as a block signal, so
+    // a cwd outside any repo must send the bare command.
+    @Test("cwd outside any repo sends no context lines")
     func outsideRepo() throws {
         let dir = try Self.makeDir(withGit: false)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let lines = JudgeRuntime.judgeContextLines(cwd: WorkingDirectory(rawValue: dir.path))
-        #expect(lines == ["cwd-inside-repo: no"])
+        let cwd = WorkingDirectory(rawValue: dir.path)
+        let lines = JudgeRuntime.judgeContextLines(cwd: cwd)
+        #expect(lines == [])
+        #expect(!lines.contains("cwd-inside-repo: no"))
+        #expect(JudgeRuntime.judgeContextPartial(cwd: cwd))
     }
 
     @Test("missing cwd leaves context empty")
