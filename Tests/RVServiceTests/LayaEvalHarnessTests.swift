@@ -68,7 +68,11 @@ struct LayaEvalHarnessTests {
         // Production engine resolution against the owner's real home
         // (read-only). The bundle is reached through a symlink so the
         // compiled-model cache key differs from the live rvd's entry.
-        let realHome = try #require(HomeDirectory(validating: NSHomeDirectory()))
+        // The home comes from RV_LAYA_EVAL_HOME, else $HOME (the repo's
+        // preflight bans the Foundation home lookup in Tests).
+        let env = ProcessInfo.processInfo.environment
+        let homePath = try #require(env["RV_LAYA_EVAL_HOME"] ?? env["HOME"], "set HOME or RV_LAYA_EVAL_HOME")
+        let realHome = try #require(HomeDirectory(validating: homePath))
         let config = GuardConfig.read(home: realHome)
         guard let resolved = JudgeRuntime.resolvedJudge(home: realHome, config: config) else {
             try writeMeta(["error": "no judge bundle resolved for the real home"])

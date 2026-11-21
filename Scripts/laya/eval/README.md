@@ -47,7 +47,7 @@ tests first (`swift build --build-tests`):
 Scripts/laya/eval/drive.sh
 ```
 
-Env: `RV_LAYA_EVAL_OUT_DIR` (default `Scripts/laya/eval/out/`),
+Env: `RV_LAYA_EVAL_HOME` (home whose judge bundle is used; default `$HOME`), `RV_LAYA_EVAL_OUT_DIR` (default `Scripts/laya/eval/out/`),
 `RV_LAYA_EVAL_START` (resume index), `RV_LAYA_EVAL_LIMIT` (row cap).
 `metrics.py [RESULTS] [META]` writes `metrics.md` and `score.json` beside
 `RESULTS`.
