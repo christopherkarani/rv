@@ -162,15 +162,14 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = dir.appendingPathComponent("item")
         let tool = dir.appendingPathComponent("secret-tool")
-        try """
+        try writeExecutableStub("""
         #!/bin/sh
         case "$1" in
           store) cat > \(store.path); printf '%s\\n' "$*" > \(store.path).args ;;
           lookup) [ -f \(store.path) ] || exit 1; cat \(store.path) ;;
           clear) [ -f \(store.path) ] || exit 1; rm -f \(store.path) ;;
         esac
-        """.write(to: tool, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        """, to: tool)
         let availability = SecretServiceTool.Availability.available(tool: tool.path, environment: ["PATH": "/usr/bin:/bin"])
         let value = Data("tok-\(UUID().uuidString)".utf8)
         #expect(SecretServiceTool.store(service: "rv.secrets", account: "K", value: value, availability: availability))

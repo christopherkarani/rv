@@ -86,9 +86,30 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         return Self.decodeLines(data)
     }
 
-    private static func decodeLines(_ data: Data) -> [Record] {
+    /// The decoder `load` uses for each line.
+    public static func lineDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    /// One line produced by `encodeLine`, read back exactly as `load` would
+    /// read it. Encoding is lossy (iso8601 dates keep whole seconds), so a
+    /// caller that caches rows it wrote caches these, never the originals:
+    /// otherwise it hands out values no other reader of the file sees.
+    public static func decodeLine(
+        _ line: String,
+        decoder: JSONDecoder = lineDecoder()
+    ) throws(FileLockedJSONLStoreError) -> Record {
+        do {
+            return try decoder.decode(Record.self, from: Data(line.utf8))
+        } catch {
+            throw FileLockedJSONLStoreError.encodeFailed
+        }
+    }
+
+    private static func decodeLines(_ data: Data) -> [Record] {
+        let decoder = lineDecoder()
         // Split the raw Data on LF bytes (stdlib: identical on Darwin and
         // corelibs) so one invalid byte drops only its own line instead of
         // the whole file: JSONEncoder never escapes U+2028/U+2029/VT/FF/NEL,
