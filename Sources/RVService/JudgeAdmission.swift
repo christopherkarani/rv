@@ -98,8 +98,19 @@ final class JudgeAdmission: Sendable {
     private let stallAge: Duration
     private let state = Mutex(State())
     private let model = DispatchSemaphore(value: 1)
-    private static let inference = DispatchQueue(
-        label: "rv.judge.inference", qos: .userInitiated, attributes: .concurrent)
+
+    /// A queue of its own for each prediction. A private serial queue
+    /// targets the overcommit root queue, so the prediction gets a thread
+    /// even while the constrained pool is full. A shared concurrent queue
+    /// does not: it draws on the same per-QoS thread budget as
+    /// `JudgeOffload`'s queue, whose threads sit blocked in this very
+    /// admission (waiting for the model slot or for a prediction), so on a
+    /// few cores the admitted prediction could not start and every caller,
+    /// healthy judge or not, answered `late` (a circuit failure). The
+    /// model semaphore still runs one prediction at a time.
+    private static func inferenceQueue() -> DispatchQueue {
+        DispatchQueue(label: "rv.judge.inference", qos: .userInitiated)
+    }
 
     /// `stallAge` is a test seam; production uses `JudgeAdmission.stallAge`.
     init(limit: Int, stallAge: Duration = JudgeAdmission.stallAge) {
@@ -156,7 +167,7 @@ final class JudgeAdmission: Sendable {
             return .answered(body())
         }
         let delivery = Delivery<T>()
-        Self.inference.async { [self] in
+        Self.inferenceQueue().async { [self] in
             let value = body()
             let ran = ContinuousClock.now - began
             release(token)
