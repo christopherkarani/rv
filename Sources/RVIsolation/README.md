@@ -52,7 +52,7 @@ one-shot door used by tests and the executor.
 | Peer identity | `WorkspacePeerAuthenticator`, `MacOSPeerAuthenticator`, `AuthenticatedPeer`, `WorkspacePrincipalAuthority`, `DaemonTrustVerdict` | Who is on the other end of a socket. |
 | Agent identity | `AgentInstanceRegistry`, `AgentInstanceJournal`, `AgentTurn` | Per-agent instances and their journal. |
 | Developer home | `WorkspaceDeveloperHome` | The per-workspace `$HOME`, cache and `$TMPDIR` under `~/.config/rv/workspaces/<identity>`, outside the project. Created owner-only before spawn. Seeds only a commit-identity `.gitconfig`; no host dotfiles. |
-| Shared plumbing | `OwnerOnlyFile`, `FileDigest`, `ManagedSerialStore`, `RuntimeSessionLog`, `RuntimeResource*`, `ContainedEnvironmentPolicy`, `DirectHTTP` | Owner-only config files, digests, resource grants, the contained environment. `DirectHTTP` sends one synchronous request with no cookies, cache or redirects, and returns the first status (audit forwarding, OAuth). |
+| Shared plumbing | `FileDigest`, `ManagedSerialStore`, `RuntimeSessionLog`, `RuntimeResource*`, `ContainedEnvironmentPolicy`, `DirectHTTP` | Digests, resource grants, the contained environment. `DirectHTTP` sends one synchronous request with no cookies, cache or redirects, and returns the first status (audit forwarding, OAuth). |
 
 About a quarter of the files are wrapped whole in `#if os(macOS)`: the
 disk image, the Seatbelt spawn, the host server and client, and peer

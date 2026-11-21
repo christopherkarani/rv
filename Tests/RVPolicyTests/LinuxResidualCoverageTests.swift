@@ -107,9 +107,11 @@ struct LinuxResidualCoverageTests {
         let lock = RVPolicyPaths.allowlistLockFile(inConfigDir: root)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
         let store = AllowlistStore(baseDirectory: root)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
         #expect(throws: AllowlistStoreError.lockFailed) {
-            try store.writeAll([])
+            try store.pin(AllowlistEntry(selector: .rule(ruleID), reason: "ok", addedAt: Date()))
         }
+        #expect(FileManager.default.fileExists(atPath: store.fileURL.path) == false)
     }
 
     @Test func allowOnceStore_emptyRobotAndMissingResiduals() async throws {

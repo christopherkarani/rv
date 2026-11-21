@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVIsolation
 
 /// Where the socket custodian keeps each account's key and ledger: a
