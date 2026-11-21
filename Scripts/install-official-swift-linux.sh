@@ -123,15 +123,34 @@ bind_artifact() {
 # A 404 or other HTTP error fails at once: it is not a dropped connection.
 # The GPG check below still covers the reassembled file.
 fetch_resumable() {
-  local url="$1" out="$2" attempt status
+  local url="$1" out="$2" attempt status code size length
   for attempt in 1 2 3 4 5 6 7 8; do
     status=0
-    curl -fL --retry 3 --retry-delay 4 -C - -o "$out" "$url" || status=$?
+    code="$(curl -fL --retry 3 --retry-delay 4 -C - -w '%{http_code}' -o "$out" "$url")" || status=$?
+    if [[ "$code" == "416" && ( "$status" -eq 0 || "$status" -eq 22 ) ]]; then
+      # Range not satisfiable: a resume from the end of a .partial that
+      # already holds the whole file (a run cut off after the last byte,
+      # before the rename). curl 8 exits 0 on it and older curl 22 under
+      # -f, and neither checks the file: one longer than the server's is
+      # "complete" too. Done only if its size is the server's length;
+      # otherwise start over.
+      size="$(wc -c < "$out" | tr -d '[:space:]')"
+      length="$(curl -fsSLI "$url" 2>/dev/null | tr -d '\r' \
+        | awk 'tolower($1) == "content-length:" { n = $2 } END { print n }')" || length=""
+      if [[ -n "$length" && "$size" == "$length" ]]; then
+        log "download already complete ($size bytes)"
+        return 0
+      fi
+      log "cannot resume (HTTP 416, $size of ${length:-unknown} bytes); starting over"
+      rm -f "$out"
+      continue
+    fi
     case "$status" in
       0) return 0 ;;
       33) rm -f "$out" ;;                   # server refused the range: restart
-      # Connection dropped or stalled: resume from what arrived.
-      18|28|52|55|56|92) log "download interrupted (curl $status), resuming (attempt $attempt)" ;;
+      # Connection refused, dropped or stalled, or a broken HTTP/2 or TLS
+      # stream: resume from what arrived.
+      7|16|18|28|35|52|55|56|92) log "download interrupted (curl $status), resuming (attempt $attempt)" ;;
       # Anything else (22 HTTP error such as the 404 for a bare pin, 77 an
       # unreadable CA file, 6 DNS) will not get better by retrying.
       *) return 1 ;;

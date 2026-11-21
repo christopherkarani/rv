@@ -34,8 +34,7 @@ import Testing
             let bin = root.appendingPathComponent("bin-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
             let rv = bin.appendingPathComponent(name)
-            try Data("#!/bin/sh\necho fake-rv \"$@\"\nexit \(status)\n".utf8).write(to: rv)
-            chmod(rv.path, 0o755)
+            try writeExecutableStub("#!/bin/sh\necho fake-rv \"$@\"\nexit \(status)\n", to: rv)
             return rv
         }
 

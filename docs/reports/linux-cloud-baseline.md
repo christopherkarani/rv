@@ -83,15 +83,22 @@ exclusive lock, and also rewrote it unchanged when an ask reused its
 waiting row. Parallel asks queued behind that.
 
 The store now keeps what it last read or wrote, keyed by the file's stamp
-(inode, size, mtime, ctime), as `AllowOnceStore` already did: a repeated
-ask writes nothing, a fresh ask appends one line, and any other change
-re-encodes only the rows that changed. Another writer's save changes the
-stamp and is read on the next call. `PendingApprovalStoreScalingTests`
-pins this (an ask at 236 rows: 16.8 ms before, 1.0 ms after, debug build).
-Rows this instance wrote are cached as read back from their lines, since
-the file keeps whole-second dates and review tokens hash rows across
-processes (the first version cached the originals and broke six egress
-review tests). "After" numbers are from `eb8032c`.
+(inode, size, mtime, ctime), as `AllowOnceStore` already did. While this
+instance wrote the file last, a repeated ask writes nothing, a fresh ask
+appends one line, and any other change re-encodes only the rows that
+changed. Another writer's save (the CLI's approve, a second process)
+changes the stamp: the next call reads the file again, and the next write
+after that re-encodes and rewrites every row, as before the fix, after
+which the cheap paths apply again. `PendingApprovalStoreScalingTests` pins
+the append on the file itself (an ask on a 236-row store keeps the inode
+and adds exactly one line), not on a clock; measured, that ask took
+16.8 ms before and 1.0 ms after (debug build). Rows this instance wrote
+are cached, and returned by the call that wrote them, as read back from
+their lines, since the file keeps whole-second dates and review tokens
+hash rows across processes (the first version cached the originals and
+broke six egress review tests). A rows file that exists but cannot be
+read is a store error, never an empty ledger, and is never cached.
+"After" numbers are from `eb8032c`.
 
 | Run (release) | p99 before | p99 after | Calls/s before | Calls/s after |
 | --- | --- | --- | --- | --- |
