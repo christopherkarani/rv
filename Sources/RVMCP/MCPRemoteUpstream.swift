@@ -43,13 +43,29 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
     }
 }
 
+/// Why one server is not started while the others serve. Nothing is
+/// resolved, leased or caged for it.
+public enum MCPServerRefusal: Sendable, Equatable {
+    case placeholder(MCPPlaceholderRefusal)
+    /// The host cages servers, and this one's entry has no `sandbox` or
+    /// asks for open network without listing hosts.
+    case sandbox(String)
+
+    public var message: String {
+        switch self {
+        case .placeholder(let refusal): refusal.message
+        case .sandbox(let reason): MCPLaunchError.sandbox(reason).message
+        }
+    }
+}
+
 public enum MCPUpstreamConnection: Sendable, Equatable {
     case process(MCPUpstreamLaunch)
     /// Started suspended in its own process group, its lease bound to that
     /// group, then resumed; it holds placeholders, not those secrets' values.
     case placeholderBound(MCPUpstreamLaunch, MCPPlaceholderBinding)
     /// Not started; the reason is logged and the server reported exited.
-    case refused(server: String, MCPPlaceholderRefusal)
+    case refused(server: String, MCPServerRefusal)
     case remote(MCPRemoteLaunch)
 
     public var server: String {

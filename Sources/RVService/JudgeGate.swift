@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVEngine
+import RVFileStore
 import RVHistory
 import RVLaya
 import RVPolicy
@@ -756,12 +757,18 @@ public enum JudgeRuntime {
         )
     }
 
-    private static let logLock = UnfairLock<Bool>(true)
+    /// How long a judge-log append waits for another writer's lock.
+    static let logLockTimeout: Duration = .milliseconds(200)
 
-    /// Appends one row to `<config>/judge-log.jsonl`. Best effort.
-    static func appendLog(_ row: GatedEffect.JudgeLogRow, home: HomeDirectory) {
-        let dir = RVPolicyPaths.configDirectory(home: home)
-        let file = dir.appendingPathComponent("judge-log.jsonl")
+    /// Appends one row to `<config>/judge-log.jsonl`. Best effort: a row
+    /// that does not land is reported through `dropLog`, and the verdict
+    /// stands.
+    static func appendLog(
+        _ row: GatedEffect.JudgeLogRow,
+        home: HomeDirectory,
+        dropLog: AuditDropLog = .shared
+    ) {
+        let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
         var object: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: row.at),
             "guard": row.guardMode.rawValue,
@@ -789,19 +796,14 @@ public enum JudgeRuntime {
             if score.truncated { object["truncated"] = true }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
-        var line = data
-        line.append(0x0A)
-        // Serialized in-process; seek-to-end + single write keeps rows
-        // whole against other daemon writers on the same file.
-        logLock.withLock { _ in
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            if let handle = try? FileHandle(forWritingTo: file) {
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: line)
-            } else {
-                try? line.write(to: file, options: .atomic)
-            }
+        // rvd and the hook-local evaluator both append here: a flocked
+        // O_APPEND write keeps every row whole across processes, and never
+        // replaces a file another writer just created. Best effort, so a
+        // lock another process holds costs at most `logLockTimeout`.
+        do {
+            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+        } catch {
+            dropLog.report(.judgeLog, file: file, consequence: "the verdict stood without its judge-log record")
         }
     }
 }

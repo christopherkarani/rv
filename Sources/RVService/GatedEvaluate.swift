@@ -525,6 +525,9 @@ public struct GatedEvaluate: Sendable {
         // would have re-denied afterwards.
         // The input reads, evaluation and judge steps block (file reads,
         // model load wait, inference): run them off the cooperative pool.
+        // (The hook-local evaluator gathers `inputs` before calling, on its
+        // own thread, to record the guard mode it read; it makes one call
+        // per process, so nothing else waits on that thread.)
         // The Policy gate and every `HookDeadline` check stay here, where
         // the task-local deadline is bound.
         // The effects the offloaded steps ask for (exemption audit, judge
