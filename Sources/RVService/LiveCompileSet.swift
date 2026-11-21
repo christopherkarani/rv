@@ -144,18 +144,29 @@ package final class LiveCompileSet: Sendable {
     /// cover it before the peek runs. `store` nil keeps the world's
     /// default store for that home (allowlist directory only; grants
     /// are authority).
+    ///
+    /// The approval paths (`pendingResolve`, the hook review ceremony) peek
+    /// with no hook deadline, so the judge is bounded by `judgeBudget`
+    /// counted from the offload: a stuck prediction answers `late` (review)
+    /// instead of holding the approver, a model slot, or the circuit's
+    /// half-open trial. Pattern search is not bounded by it. A hook
+    /// deadline the caller has bound still wins.
     package func livePeek(
         store: AllowOnceStore?,
-        grants: EphemeralAllowOnceTable
+        grants: EphemeralAllowOnceTable,
+        judgeBudget: Duration = JudgeOffload.nonHookBudget
     ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         { command, cwd, now in
-            await LiveEvaluateWorld(
+            let world = LiveEvaluateWorld(
                 home: self.home,
                 store: store,
                 grants: grants,
                 gated: self.readyDoor(wanted: EvaluationWorld.walkedPackIDs(home: self.home)),
                 clock: { now }
-            ).peek(command: command, cwd: cwd)
+            )
+            return await JudgeOffload.$judgeBudget.withValue(judgeBudget) {
+                await world.peek(command: command, cwd: cwd)
+            }
         }
     }
 

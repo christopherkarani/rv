@@ -59,17 +59,35 @@ public enum DoctorSnapshotBuilder {
     /// Degraded guard visibility: judge state is reported, never assumed.
     /// Names the resolved engine plus the bundle dir actually in use, a
     /// present-but-invalid bundle as a warning, or where the production
-    /// bundle should be installed.
-    private static func judgeCheck(home: HomeDirectory?) -> DoctorCheck {
+    /// bundle should be installed. A judge on behind an open circuit
+    /// (`JudgeCircuit`) is a warning: judged calls go to review meanwhile.
+    static func judgeCheck(
+        home: HomeDirectory?, circuit: JudgeCircuit.Status = JudgeCircuit.live.status
+    ) -> DoctorCheck {
         let mode = GuardModeResolution.resolve(
             GuardConfig.read(home: home), host: nil, environment: ProcessInfo.processInfo.environment)
         switch JudgeRuntime.bundleHealth(home: home) {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
-            return DoctorCheck(
-                id: .judge, status: .ok,
-                message: "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
-            )
+            let on = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            let meanwhile = mode == .observe
+                ? "judged calls run and are logged as a would-be review"
+                : "judged calls go to review"
+            switch circuit {
+            case .closed:
+                return DoctorCheck(id: .judge, status: .ok, message: on)
+            case .open(let retryIn):
+                return DoctorCheck(
+                    id: .judge, status: .warning,
+                    message: "\(on); rv degraded: judge unavailable (circuit open, retrying in \(JudgeRuntime.retrySeconds(retryIn))s), \(meanwhile)"
+                )
+            case .halfOpen(let trialInFlight):
+                let trial = trialInFlight ? "a trial call is running" : "the next judged call is a trial"
+                return DoctorCheck(
+                    id: .judge, status: .warning,
+                    message: "\(on); rv degraded: judge circuit half-open, \(trial); until it answers, other \(meanwhile)"
+                )
+            }
             #else
             return DoctorCheck(
                 id: .judge, status: .warning,

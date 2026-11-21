@@ -66,6 +66,25 @@ esac
 
 : "${HOME:?HOME is required}"
 
+# Linux: rvd binds $XDG_RUNTIME_DIR/rv/evaluate.sock, or
+# /run/user/<uid>/rv/evaluate.sock when XDG_RUNTIME_DIR is unset. With no
+# login manager (containers, WSL without systemd, su/sudo -u logins) nothing
+# makes /run/user/<uid>, and only root can under a root-owned /run/user, so
+# rv setup could never start rvd. Say so before anything is downloaded.
+# Narrow on purpose: XDG_RUNTIME_DIR unset, not root, nothing at that path,
+# and /run/user not writable by this user.
+if [ "$os" = "Linux" ] && [ -z "${XDG_RUNTIME_DIR+set}" ]; then
+  runtime_uid="$(id -u)"
+  runtime_dir="/run/user/$runtime_uid"
+  if [ "$runtime_uid" != "0" ] && [ ! -e "$runtime_dir" ] && [ ! -L "$runtime_dir" ] && [ ! -w /run/user ]; then
+    echo "rv: refusing to install: XDG_RUNTIME_DIR is unset and $runtime_dir does not exist: no login manager (logind) created it, and only root can" >&2
+    echo "rv: rvd keeps its socket there, so rv setup could not start it; nothing was downloaded or installed" >&2
+    echo "rv: fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o $runtime_uid $runtime_dir; or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents" >&2
+    echo "rv: /run is usually a tmpfs, so $runtime_dir must be made again after a reboot or container restart" >&2
+    exit 1
+  fi
+fi
+
 bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
@@ -1418,6 +1437,13 @@ if [ "$os" = "Darwin" ] && [ -d "$src/RVApprovals.app" ]; then
   rm -rf "$apps_dir/RVApprovals.app"
   mv -f "$tmp_app" "$apps_dir/RVApprovals.app"
 fi
+
+# exec replaces this shell, so the EXIT trap would never run: remove the
+# download directory now. Everything is copied out of $src by here, and
+# every .installing name above is already moved into place and cleared.
+# Best effort: with everything installed, a failed rm must not stop setup.
+cleanup || :
+trap - EXIT
 
 if [ "${RV_INSTALL_MODE:-}" = "observe" ]; then
   RV_FROM_INSTALL=1 exec "$bin/rv" setup --observe
