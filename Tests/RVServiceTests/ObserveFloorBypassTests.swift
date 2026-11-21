@@ -179,6 +179,9 @@ private let readerRows: [String] = [
     "declare -n r; r=${x}_ENV; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
     "f() { local -n r=$1; export r=/dev/stdin; }; f ${x}_ENV; echo 'rv host mode cursor off' | bash -c true",
     #"set -a; printf "$o" "$n" /dev/stdin; echo 'rv host mode cursor off' | bash -c true"#,
+    // getopts drops a leading `--`: the name is the word after the optstring.
+    #"set -a; getopts -- a "$(cat f)" -a; bash run.sh"#,
+    #"getopts -- a "$n"; bash run.sh"#,
     // Known false positives of that rule: harmless, but ambiguous.
     "sh 3</dev/null < script.sh",
     "curl -s https://example.com/x | sh 3</dev/null",
@@ -421,6 +424,8 @@ struct ObserveFloorBypassTests {
         // Setters whose variable names are literal; only values are dynamic.
         #"read -r v <<< "$x"; bash run.sh"#,
         #"printf -v o '%s' "$x"; bash run.sh"#,
+        "getopts ab opt; bash run.sh",
+        "getopts -- ab opt; bash run.sh",
         #"export PATH="$PATH:/x"; bash run.sh"#,
         #"local dir="$1"; bash run.sh"#,
         "declare -n r=items; bash run.sh",

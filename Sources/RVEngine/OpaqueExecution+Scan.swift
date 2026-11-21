@@ -336,9 +336,20 @@ extension OpaqueExecution {
             }
             return false
         case "getopts":
-            // `getopts optstring name`: an unquoted dynamic optstring may
-            // split and move the name.
-            return words.prefix(2).contains { isDynamic($0) }
+            // `getopts [--] optstring name`: bash drops a leading `--`, so
+            // skip it and any option-looking word (fail closed: each one
+            // moves the name later). An unquoted dynamic optstring may
+            // split and move the name, so any dynamic word up to and
+            // including the name position counts.
+            var index = 0
+            while index < words.count {
+                let word = words[index]
+                if isDynamic(word) { return true }
+                guard word.hasPrefix("-") else { break }
+                index += 1
+                if word == "--" { break }
+            }
+            return words.dropFirst(index).prefix(2).contains { isDynamic($0) }
         case "read":
             // Option values differ between shells (zsh `-p` takes none),
             // so every word may be a name.
