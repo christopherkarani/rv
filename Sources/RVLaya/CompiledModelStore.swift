@@ -95,7 +95,12 @@ struct CompiledModelStore<Model> {
             throw refusal
         } catch {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
-            if let entry = try? entry(for: package) { try? exclusively { discard(entry) } }
+            // Our own lease died with the failed attempt. An entry another
+            // loader still holds is kept (as the sweep does): the retry
+            // reloads it, and a second failure refuses.
+            if let entry = try? entry(for: package) {
+                try? exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
+            }
             coreML.purgeCache()
         }
         do {

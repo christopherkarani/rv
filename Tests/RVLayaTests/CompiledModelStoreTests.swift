@@ -541,4 +541,15 @@ struct CompiledModelStoreTests {
         #expect(Set(old).isDisjoint(with: after))
         #expect(after.count == 2)
     }
+
+    @Test("a failed load's retry never deletes an entry another loader holds")
+    func retryKeepsHeldEntry() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let held = try f.store().leasedModel(package: f.package)
+        f.coreML.failNextLoads(1)
+        #expect(try f.store().model(package: f.package) == "model")
+        #expect(f.coreML.compiles == 1, "the held entry was reloaded, not discarded and recompiled")
+        withExtendedLifetime(held) {}
+    }
 }
