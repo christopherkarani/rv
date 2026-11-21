@@ -9,6 +9,9 @@ struct JudgeSelection: Sendable, Equatable {
     /// Nil when the selected engine's bundle is missing: packs-only with an
     /// `engine-missing` note, never fail-closed.
     let bundle: URL?
+    /// True unless `judge.mode` is `live`: the judge is scored and logged
+    /// but never raises an allow (`GatedEvaluate.posture`).
+    var shadow: Bool = false
 }
 
 /// Policy-store state for one (home, workspace). Package-script bodies that
