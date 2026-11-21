@@ -40,7 +40,7 @@ one-shot door used by tests and the executor.
 
 | Area | Files | What it owns |
 |---|---|---|
-| Plans and backends | `IsolationApply` (`IsolationBackendFamily`), `SeatbeltProfile`, `LandlockApply`, `LandlockRuleset`, `landlock_apply.c`, `landlock_confine.c`, `socket_filter.c`, `proxy_connector.c` (the MCP server cage, compiled into `rv-isolation-exec`), `MicroVMLaunch` (`MicroVMGuest`), `MicroVMPlaceholders` (`MicroVMControlLayout`) | Turning an `IsolationPlan` (RVDomain) into OS rules and starting the process. Landlock compiles but Linux launches refuse before exec. |
+| Plans and backends | `IsolationApply` (`IsolationBackendFamily`), `SeatbeltProfile`, `LandlockApply`, `LandlockRuleset`, `landlock_apply.c`, `landlock_confine.c`, `socket_filter.c`, `proxy_connector.c` (the MCP server cage, compiled into `rv-isolation-exec`), `MicroVMLaunch` (`MicroVMGuest`), `MicroVMPlaceholders` (`MicroVMControlLayout`), `ProtectedWorkspacePaths` (the protected workspace path catalog, symlinked into `Packages/rv-microvm`) | Turning an `IsolationPlan` (RVDomain) into OS rules and starting the process. Landlock compiles but Linux launches refuse before exec. |
 | Spawning | `SessionSupervisor` (free functions, not a type), `SpawnPrimitives`, `ProcessGroupRecovery`, `RuntimeTerminal`, `LocalTerminalMode`, `TerminalStream`, `ProcessTable` (`LibprocProcessTable`, `ProcFSProcessTable`, pure `ProcFSParse`) | `posix_spawn` under Seatbelt, process-group cleanup, ptys, the contained environment. Kernel process reads for group recovery and the gateway's peer check: libproc on macOS, `/proc` on Linux. |
 | Workspace session | `WorkspaceSessionSupervisor`, `WorkspaceCloseState`, `WorkspaceSessionLifecycle`, `WorkspaceLifecycleLog`, `WorkspaceOwnerLock`, `PreparedWorkspaceLaunch`, `WorkspaceTerminalSession` | One open workspace: runtimes in it, close, abandon. |
 | Private copy (macOS) | `WorkspaceInodeBoundary`, `WorkspaceBoundaryEstablish`, `WorkspaceTreeCopy`, `WorkspacePublishPlan`, `DiskImage*`, `WorkspaceDisk*`, `WorkspaceMountFacts`, `WorkspaceFilesystemMetadata` | The disk-image volume the agent writes to, and publishing it back. |
@@ -74,13 +74,14 @@ Micro-VM launches refuse host-path grants (`MicroVMLaunch.prepareMicroVM`).
 Update the grants paragraph in `runtime-boundary.md`.
 
 **Protect another workspace path a host tool runs later** (a new agent's
-hook file). Add it to `WorkspaceRunLaterPaths` in `SeatbeltProfile.swift`.
-Add the same entry to `WorkspaceControlLayout.runLaterFiles` or
-`runLaterTrees` (and `runLaterPinnedDirectories` for a new parent folder)
-in `Packages/rv-microvm/Sources/RVMicroVMCore/WorkspaceControlMounts.swift`.
-`WorkspaceControlParityTests` fails until both match. The macOS guest and
-the micro-VM placeholders (`MicroVMControlLayout`) read
-`WorkspaceRunLaterPaths` directly, so they need nothing more.
+hook file). Add it to `runLaterFiles` or `runLaterTrees` (and
+`runLaterPinnedDirectories` for a new parent folder) in
+`ProtectedWorkspacePaths.swift`. That one catalog feeds every backend: the
+Seatbelt rules (also the macOS guest's), the micro-VM placeholders, the
+transfer check and, through a symlink, the Linux guest's mounts in
+`Packages/rv-microvm`. `WorkspaceControlParityTests` (and
+`WorkspaceControlLayoutParityTests` in the guest package) check that each
+backend's form covers every catalog path.
 
 **Add a network rule or denial reason.** Policy is pure: `EgressHostPolicy`
 (RVDomain) and `EgressAdmission.decide`. Parsing is pure too: `EgressWire`.
@@ -107,7 +108,6 @@ These pairs have no shared code. Change both sides in one PR.
 
 | This | Must match | Why |
 |---|---|---|
-| `WorkspaceRunLaterPaths` (`SeatbeltProfile`) and the control lists in `MicroVMControlLayout` (`MicroVMPlaceholders`) | `WorkspaceControlLayout` in `Packages/rv-microvm` (`WorkspaceControlMounts.swift`) | A path the Seatbelt cage protects but the Linux guest does not is a path a VM guest can plant. `WorkspaceControlParityTests` reads the guest lists from source and fails on drift. The macOS guest reuses `workspaceControlDenies` (`macOSGuestSandboxProfile` in `MicroVMLaunch`), so it needs no copy. |
 | `MicroVMLaunchOptions` bounds, `MicroVMHelper.guestProfileVariable`, the forwarded-environment prefix (`MicroVMLaunch`) | `RunOptions`, `MacVMRunner.profileVariable`, `GuestEnvironment.forwardedPrefix` in `Packages/rv-microvm` | The helper is a separate binary; argv and environment are the only contract. |
 | `LandlockAccessFS` bits (`LandlockRuleset`) | `landlock_apply.c` | Swift compiles the ruleset; C applies it. |
 
