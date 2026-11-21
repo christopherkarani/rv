@@ -54,8 +54,13 @@ extension SetupRun {
         let home = layout.home.rawValue
         let configRefusal = purgeRefusal(layout.configDirectory, home: home, files: files)
         let entersConfig = purge == false || configRefusal == nil
-        let dataDirectories = ownedDataDirectories(layout: layout, env: env).map {
-            (path: $0, refusal: purgeRefusal($0, home: home, files: files))
+        let dataDirectories = ownedDataDirectories(layout: layout, env: env).map { path in
+            (
+                path: path,
+                refusal: purgeRefusal(path, home: home, files: files)
+                    ?? (env.runtimeSocketDirectories.contains(path)
+                        ? runtimeDirectoryRefusal(path, files: files) : nil)
+            )
         }
 
         // The definitions are how the stored values are found, so under

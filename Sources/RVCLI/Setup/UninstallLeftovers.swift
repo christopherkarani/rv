@@ -315,6 +315,21 @@ extension SetupRun {
         return nil
     }
 
+    /// A runtime socket directory comes from `XDG_RUNTIME_DIR`, which can
+    /// name any directory (`$HOME`, `~/src`). rvd puts only its socket in
+    /// `<base>/rv`, so one holding anything else is not rvd's to remove.
+    /// Call after `purgeRefusal` accepted the path.
+    static func runtimeDirectoryRefusal(_ path: String, files: FileOps) -> String? {
+        guard ownedPathPresent(path, files: files) else { return nil }
+        guard let entries = try? files.fileManager.contentsOfDirectory(atPath: path) else {
+            return "it could not be listed"
+        }
+        let foreign = entries.filter { $0 != UnixSocketPath.socketFileName }.sorted()
+        guard foreign.isEmpty == false else { return nil }
+        return "it holds files rvd does not put there: "
+            + foreign.map { DisplayedText.field($0) }.joined(separator: ", ")
+    }
+
     /// `realpath(3)`; nil when it does not resolve.
     private static func resolvedPath(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }

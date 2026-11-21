@@ -370,7 +370,8 @@ provider, nor any other Keychain item) and, on macOS, the MCP OAuth
 tokens under `rv.mcp.oauth`, then all of `~/.config/rv`
 including the audit log, its key and the judge weights, rvd's log
 directory, the MCP caches, and on Linux `/run/user/<uid>/rv` (and
-`$XDG_RUNTIME_DIR/rv` when that is set to another directory). A value it
+`$XDG_RUNTIME_DIR/rv` when that is set to another directory; a runtime
+directory holding anything but rvd's `evaluate.sock` is left and named). A value it
 cannot delete (no session bus, a locked keyring) is named on stderr,
 `secrets.json` stays so it can be found, and the command exits non-zero
 after removing everything else; so does a config directory it could not
