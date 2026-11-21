@@ -6,9 +6,19 @@ public let incompleteEvalSentence =
 public let observeUnanalyzableSentence =
     "rv could not see what this command runs, so observe mode sends it to Terminal. Run it in Terminal."
 
+/// Hook voice for `IndeterminateReason.selfProtection`: an agent ran an
+/// `rv`/`rvd` invocation that could weaken rv. Says so, so the refusal does
+/// not read as a crash or a timeout.
+public let selfProtectionSentence =
+    "rv blocks agents from running rv commands that could weaken it (changing, stopping or approving through rv). Run it in your own Terminal."
+
 /// The sentence a person reads for an indeterminate verdict.
 public func indeterminateSentence(_ reason: IndeterminateReason) -> String {
-    reason == .observeUnanalyzable ? observeUnanalyzableSentence : incompleteEvalSentence
+    switch reason {
+    case .observeUnanalyzable: observeUnanalyzableSentence
+    case .selfProtection: selfProtectionSentence
+    default: incompleteEvalSentence
+    }
 }
 
 /// Text a person or a client reads. Control characters stay inside the field,

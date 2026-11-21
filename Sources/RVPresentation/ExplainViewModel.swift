@@ -118,8 +118,8 @@ public func explainViewModel(
     case .deny(let deny, _):
         fact = factSentence(from: deny.reason)
         next = denyNextAction
-    case .indeterminate:
-        fact = incompleteEvalSentence
+    case .indeterminate(let reason):
+        fact = indeterminateSentence(reason)
         next = nil
     }
     let packID = result.outcome.explainPackID

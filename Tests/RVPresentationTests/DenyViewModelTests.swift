@@ -479,3 +479,12 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.rows.allSatisfy { $0.isEnabled })
     #expect(vm.rows.map(\.id) == dayOnePackIDs)
 }
+
+@Test func explainViewModel_selfProtectionSaysSoInsteadOfIncomplete() {
+    let vm = explainViewModel(
+        from: EvaluationResult(outcome: .indeterminate(.selfProtection)),
+        command: resetHard
+    )
+    #expect(vm.fact == selfProtectionSentence)
+    #expect(vm.fact != incompleteEvalSentence)
+}

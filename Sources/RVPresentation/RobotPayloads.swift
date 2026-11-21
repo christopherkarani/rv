@@ -235,13 +235,13 @@ private func baseTestRobotPayload(from result: EvaluationResult) -> TestRobotPay
             ruleID: deny.ruleID.rawValue,
             reason: factSentence(from: deny.reason)
         )
-    case .indeterminate:
+    case .indeterminate(let reason):
         return TestRobotPayload(
             schema: RobotSchema.test,
             decision: "indeterminate",
             packID: nil,
             ruleID: nil,
-            reason: incompleteEvalSentence
+            reason: indeterminateSentence(reason)
         )
     }
 }
