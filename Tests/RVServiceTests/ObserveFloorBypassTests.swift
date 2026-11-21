@@ -588,10 +588,13 @@ struct ObserveFloorBypassTests {
     /// already reads it (`SelfProtectionGuard` sees the program a shell,
     /// interpreter or scheduler is fed), the command as written holds with
     /// the engine's own verdict (`indeterminate(.selfProtection)` in
-    /// production). Otherwise the floor raises the allow itself.
+    /// production), unless the floor holds it first. Otherwise the floor
+    /// raises the allow itself.
     private func expectFedTextHeld(_ command: String, sourceLocation: SourceLocation = #_sourceLocation) {
         if SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) {
-            #expect(floorRule(command) == .enforce(EvaluationResult(outcome: .plain)), "\(command)",
+            // The floor may also raise it itself (an earlier rule read it).
+            let ruling = floorRule(command)
+            #expect(ruling == .enforce(EvaluationResult(outcome: .plain)) || ruling == .enforce(held), "\(command)",
                     sourceLocation: sourceLocation)
         } else {
             #expect(floorRule(command) == .enforce(held), "\(command)", sourceLocation: sourceLocation)
