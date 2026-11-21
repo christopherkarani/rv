@@ -520,15 +520,13 @@ rv is one binary, 25 commands. The rest of the surface:
 
 ## Fleet console
 
-[`dashboard/`](dashboard/README.md) is rv Console, a self-hosted web
-dashboard for teams. Machines push to it with `rv audit forward`, either
-configured per machine or fleet-wide through `audit.forward` in the
-organization policy, and post their posture with `rv report --json`. It
-shows blocks, observe-mode would-be blocks, overrides, MCP and secret
-activity, and compliance across the fleet. It also verifies each machine's
-audit hash chain off the machine, signs people in with OpenID Connect
-single sign-on, and sends alerts to Slack or signed webhooks. To try it:
-`cd dashboard && npm ci && RV_CONSOLE_DEMO=1 npm run dev`.
+rv Console, the fleet dashboard for teams, is developed separately and is
+no longer part of this repository. Machines send it their audit trail with
+`rv audit forward` (per machine, or fleet-wide through `audit.forward` in
+the organization policy) and their posture with `rv report --json`; both
+are documented above and stay open source. The console's earlier source
+remains in this repository's history under Apache 2.0, up to commit
+`eda11f2b`.
 
 ## Platform support
 
