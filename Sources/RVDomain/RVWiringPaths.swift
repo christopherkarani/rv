@@ -59,10 +59,15 @@ public enum RVWiringPaths {
         [".config", "systemd", "user.conf"],
         [".config", "systemd", "user.conf.d"],
         [".config", "systemd", "user", "service.d"],
-        // rvd's Core ML (e5rt) cache: Core ML maps compiled bundles from
-        // here into rvd's judge, so a planted one runs inside rvd.
-        ["Library", "Caches", "rvd"],
-    ]
+    ] + coreMLCacheOwners.map { ["Library", "Caches", $0] }
+
+    /// The processes that run the Laya judge's Core ML model. Each has an
+    /// e5rt compiled-bundle cache at `~/Library/Caches/<name>`, and Core ML
+    /// maps a bundle from there into that process, so a planted one runs as
+    /// the judge: rvd's in-process judge, and the judge pool's `rv-judge`
+    /// workers. Every write guard (file and shell doors, the observe floor,
+    /// the MCP cage, workspace downloads) covers all of them.
+    public static let coreMLCacheOwners = ["rvd", "rv-judge"]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.
     static let serviceDirectories: [[String]] = [
@@ -129,9 +134,9 @@ public enum RVWiringPaths {
     /// that compare a resolved target against a protected file's resolved
     /// location (a dotfiles symlink) or its inode (a hard link).
     public static func fixedFiles(home: String) -> [String] {
-        let units = ["evaluate", "mcp-custodian", "audit-forward"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
+        let units = ["evaluate", "mcp-custodian", "audit-forward", "judge"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
         let extra = [
-            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd",
+            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd", ".local/bin/rv-judge",
             ".config/systemd/user/dev.rv.evaluate.service",
             ".openclaw/extensions/rv-guard/index.js",
             ".hermes/plugins/rv-guard/__init__.py", ".hermes/plugins/rv-guard/plugin.yaml",

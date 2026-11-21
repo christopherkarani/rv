@@ -436,3 +436,67 @@ struct CoreMLCachePurgeTests {
         #expect(CoreMLCachePurge.purge(cachesRoot: caches, processName: "rvd") == true)
     }
 }
+
+@Suite("Judge-pool worker Core ML guard")
+struct CoreMLWorkerGuardTests {
+    @Test("a CPU worker loads CPU only whatever its history; its crash history still counts")
+    func cpuWorkerIsPinned() {
+        let store = FakeCrashStore()
+        store.setInFlight(true)
+        let worker = CoreMLGuard(
+            makeStore: { store }, disk: FakeDisk(free: 100 << 30), cacheVolume: URL(fileURLWithPath: "/tmp"),
+            tracksCrashes: true, cpuOnly: true, purgeCoreMLCache: {}, log: { _ in }, now: { t0 })
+        #expect(worker.computeUnits == .cpuOnly)
+        #expect(store.state.crashes == [t0])
+        #expect(worker.status.units == .cpuAndGPU, "status reports the crash policy, not the pin")
+    }
+
+    @Test("each worker keeps its own marker, apart from rvd's guard/")
+    func markerPerWorker() {
+        let root = URL(fileURLWithPath: "/Users/u/.config/rv/cache/laya", isDirectory: true)
+        let cpu = CoreMLGuard.workerMarkerDirectory(stateRoot: root, worker: "cpu")
+        let accelerated = CoreMLGuard.workerMarkerDirectory(stateRoot: root, worker: "accelerated")
+        #expect(cpu.path == "/Users/u/.config/rv/cache/laya/guard-cpu")
+        #expect(accelerated.path == "/Users/u/.config/rv/cache/laya/guard-accelerated")
+    }
+
+    @Test("a stale marker of a reaped worker is cleared, so the next start counts no crash")
+    func staleMarkerCleared() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        do {
+            let killed = try #require(FileCoreMLCrashStore(directory: dir))
+            killed.setInFlight(true)
+        }
+        #expect(FileCoreMLCrashStore.clearStaleMarker(directory: dir))
+        let next = try #require(FileCoreMLCrashStore(directory: dir))
+        #expect(next.previousRunCrashed() == false)
+    }
+
+    @Test("a marker a live worker holds is left alone")
+    func heldMarkerKept() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let live = try #require(FileCoreMLCrashStore(directory: dir))
+        live.setInFlight(true)
+        #expect(!FileCoreMLCrashStore.clearStaleMarker(directory: dir))
+        #expect(live.previousRunCrashed())
+    }
+
+    @Test("a symlinked marker is never written through")
+    func symlinkedMarkerRefused() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("target")
+        try Data("1".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent(FileCoreMLCrashStore.markerName), withDestinationURL: target)
+        #expect(!FileCoreMLCrashStore.clearStaleMarker(directory: dir))
+        #expect(try String(contentsOf: target, encoding: .utf8) == "1")
+    }
+
+    @Test("the judge-pool workers' e5rt cache may be purged, nothing else new")
+    func purgeOwners() {
+        #expect(CoreMLCachePurge.owners == ["rvd", "rv-judge"])
+    }
+}

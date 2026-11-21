@@ -36,6 +36,7 @@ extension SetupRun {
         let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
         let launchAgentExisted = files.fileExists(servicePath)
         let custodianAgentExisted = files.fileExists(layout.custodianLaunchAgent)
+        let judgeAgentExisted = files.fileExists(layout.judgeLaunchAgent)
         let auditForwardAgentExisted = files.fileExists(layout.auditForwardLaunchAgent)
 
         // Stop the service before deleting anything it runs from: a failed
@@ -44,6 +45,7 @@ extension SetupRun {
         try stopServices(
             env: env,
             custodianAgentExisted: custodianAgentExisted,
+            judgeAgentExisted: judgeAgentExisted,
             auditForwardAgentExisted: auditForwardAgentExisted
         )
 
@@ -95,7 +97,9 @@ extension SetupRun {
         )
         let binariesExisted = binPaths.contains { files.fileExists($0) } || files.fileExists(layout.approvalsApp)
         removedPaths.append(
-            contentsOf: [servicePath, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent]
+            contentsOf: [
+                servicePath, layout.custodianLaunchAgent, layout.judgeLaunchAgent, layout.auditForwardLaunchAgent,
+            ]
         )
         removedPaths.append(contentsOf: binPaths)
         removedPaths.append(layout.approvalsApp)
@@ -198,6 +202,7 @@ extension SetupRun {
     private static func stopServices(
         env: SetupEnvironment,
         custodianAgentExisted: Bool,
+        judgeAgentExisted: Bool,
         auditForwardAgentExisted: Bool
     ) throws(SetupError) {
         if env.supervisor == .launchd, env.touchLaunchd {
@@ -207,6 +212,12 @@ extension SetupRun {
                     domain: LaunchdDomain.user(uid), label: custodianLaunchAgentLabel)
                 try? env.launchctl.bootout(
                     domain: LaunchdDomain.gui(uid), label: custodianLaunchAgentLabel)
+            }
+            if judgeAgentExisted {
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.user(uid), label: judgeLaunchAgentLabel)
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.gui(uid), label: judgeLaunchAgentLabel)
             }
             if auditForwardAgentExisted {
                 try? env.launchctl.bootout(

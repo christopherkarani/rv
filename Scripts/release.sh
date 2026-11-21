@@ -262,7 +262,7 @@ if [[ "$OS" == "Darwin" ]]; then
     fi
     cp "$span_runtime" "$STAGE/libswiftCompatibilitySpan.dylib"
     chmod 755 "$STAGE/libswiftCompatibilitySpan.dylib"
-    for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim"; do
+    for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim" "$STAGE/rv-judge"; do
       if ! otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
         continue
       fi

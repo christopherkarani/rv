@@ -80,6 +80,8 @@ public final class FineTunedJudge: @unchecked Sendable {
     let lengths: [Int]
     let lock = NSLock()
     let coreML: CoreMLGuard
+    /// Keeps the compiled-model cache entry from being swept while loaded.
+    let modelLease: CompiledModelLease
 
     public init(bundleDir: URL, coreML: CoreMLGuard = .current) throws {
         self.coreML = coreML
@@ -148,7 +150,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         // mistokenization — String-keyed vocab tables resolving
         // homoglyph twins — fixed in LayaTokenizer by byte-exact keys,
         // verified 0/348 id mismatches vs HF.)
-        model = try CompiledModelCache.load(package: package, coreML: coreML)
+        (model, modelLease) = try CompiledModelCache.load(package: package, coreML: coreML)
     }
 
     /// Judge one command with pre-rendered context lines (JudgeContext.lines()

@@ -18,7 +18,7 @@ struct WiringPathsDriftTests {
             layout.cursorHooksJSON, layout.antigravityHooksJSON, layout.museSettings, layout.museHooks,
             layout.grokHook, layout.piExtension, layout.openCodePlugin, layout.openCodeTuiPlugin,
             layout.openCodeTuiAskPackage, layout.openCodeConfig, layout.openClawPlugin, layout.hermesPlugin,
-            layout.launchAgent, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent,
+            layout.launchAgent, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent, layout.judgeLaunchAgent,
             layout.custodianAppExecutable, layout.systemdUserUnit,
             layout.localRv, layout.localRvCli, layout.localRvd,
             ClaudeSettingsMerge.adapterPath(settingsPath: layout.claudeSettings),

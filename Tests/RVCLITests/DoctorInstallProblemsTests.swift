@@ -693,7 +693,7 @@ private let pinnedHostElsewhere = DoctorRoleTrust(
     try makeExecutable(URL(fileURLWithPath: paths.localWorkspaceHost))
     try makeExecutable(URL(fileURLWithPath: paths.localRvCli))
     let binaries = RoleTrustProbe.binaries(paths)
-    #expect(binaries.map { $0.role } == [.cli, .workspaceHost, .mcpCustodian])
+    #expect(binaries.map { $0.role } == [.cli, .workspaceHost, .mcpCustodian, .judge])
     let found = RoleTrustProbe.evaluate(binaries: binaries) { role, path in
         role == .cli ? nil : DaemonTrustVerdict(source: .manifest, satisfied: false, reason: "pinned \(path)")
     }

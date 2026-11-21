@@ -166,14 +166,36 @@ enum DoctorRun {
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             ),
             leftovers: environment.leftovers,
-            problems: environment.install.map {
+            problems: (environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
                     + DoctorInstallChecks.adapterRuntime(
                         hosts: snapshot.hosts, paths: paths, fileManager: environment.fileManager, probes: $0)
                     + [DoctorInstallChecks.systemdUserManager(
                         $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
-            } ?? []
+            } ?? []) + judgeProblems(environment: environment, diagnostics: diagnostics, paths: paths)
         )
+    }
+
+    /// The judge rows: why the pool agent is not running, a manifest that
+    /// verifies no supervisor, a config or cache dir another account can
+    /// write, and rvd's own judge warnings.
+    private static func judgeProblems(
+        environment: DoctorEnvironment,
+        diagnostics: ServiceDiagnosticResult,
+        paths: OwnedPaths
+    ) -> [DoctorProblem] {
+        let install: [DoctorProblem] = environment.install.map { probes in
+            [
+                DoctorJudgeChecks.agent(
+                    paths: paths, fileManager: environment.fileManager,
+                    loaded: probes.judgeLoaded, bundleInstalled: probes.judgeBundleInstalled),
+                DoctorJudgeChecks.manifestRole(
+                    lacksJudge: DoctorJudgeChecks.lacksJudge(paths: paths, manifestRoles: probes.manifestRoles)),
+            ].compactMap { $0 }
+        } ?? []
+        return install
+            + [DoctorJudgeChecks.cacheExposure(configDirectory: paths.configDirectory)].compactMap { $0 }
+            + DoctorJudgeChecks.serviceWarnings(diagnostics)
     }
 
     /// One-line repair for a service that is not running cleanly. Hooks have

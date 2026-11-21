@@ -363,7 +363,9 @@ public actor ServiceRuntime {
             case .failure(let error): result = .error(error)
             }
         case .doctorSnapshot:
-            result = .doctorSnapshot(doctorSnapshot())
+            // The pool query blocks on XPC: off the actor.
+            let pool = await JudgeOffload.run { JudgeRuntime.poolProbe() }
+            result = .doctorSnapshot(doctorSnapshot(pool: pool))
         case .policyStatus(let params):
             result = .policyStatus(await policyStatus(params))
         case .pendingList:
@@ -976,12 +978,13 @@ public actor ServiceRuntime {
         )
     }
 
-    private func doctorSnapshot() -> DoctorSnapshotReply {
+    private func doctorSnapshot(pool: JudgePoolProbe) -> DoctorSnapshotReply {
         DoctorSnapshotBuilder.make(
             catalog: compileSet.refreshCatalogFromDisk(),
             corePacksReady: corePacksReady,
             idleExitSeconds: idleExitSeconds,
-            home: configHome
+            home: configHome,
+            judgePool: pool
         )
     }
 

@@ -111,7 +111,9 @@ public struct LayaQuestions: Sendable {
 /// compute units `coreML` chooses (CPU only after repeated Core ML crashes),
 /// caching verified copies under the guard's protected `modelRoot`.
 enum CompiledModelCache {
-    static func load(package: URL, coreML: CoreMLGuard) throws -> MLModel {
+    /// The model and the lease that keeps its cache entry from being swept
+    /// while it is loaded (hold it as long as the model).
+    static func load(package: URL, coreML: CoreMLGuard) throws -> (model: MLModel, lease: CompiledModelLease) {
         // No model in the bundle (ENOENT only) is absence: packs-only, doctor
         // names it. Any other lstat error, or Core ML failing on a model that
         // is there, refuses (review).
@@ -139,7 +141,7 @@ enum CompiledModelCache {
             },
             digest: sha256Hex
         )
-        return try store.model(package: package)
+        return try store.leasedModel(package: package)
     }
 
     /// Streaming SHA-256 of one of this user's regular files, read to EOF
@@ -165,6 +167,8 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     let questions: LayaQuestions
     let actionLabels: [LayaVerdict.Action]
     let coreML: CoreMLGuard
+    /// Keeps the compiled-model cache entry from being swept while loaded.
+    let modelLease: CompiledModelLease
 
     /// The question set's action labels are checked here, before any bundle
     /// file is touched, so judging never meets an invalid label set.
@@ -198,7 +202,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         lengths = candidates.isEmpty ? [maxLen] : candidates
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
-        model = try CompiledModelCache.load(package: package, coreML: coreML)
+        (model, modelLease) = try CompiledModelCache.load(package: package, coreML: coreML)
     }
 
     func questionProbabilities(

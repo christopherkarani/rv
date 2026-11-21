@@ -473,6 +473,34 @@ struct JudgeRaisePinTests {
             return
         }
         #expect(!problems.isEmpty)
+        #expect(!JudgeRuntime.selectsBundle(home: home))
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("packs only"))
+    }
+
+    /// A bundle rvd selects but that fails a check (config labels) cannot
+    /// load in the pool: judged calls go to review, and doctor and setup
+    /// count it as installed.
+    @Test("a selected bundle with bad config labels is installed, and doctor says review")
+    func selectedInvalidBundleMeansReview() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-doctor-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = try #require(HomePath(validating: root.path))
+        let dir = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("tokenizer.json"))
+        try Data(#"{"labels":["allow","review","deny"]}"#.utf8).write(to: dir.appendingPathComponent("config.json"))
+        guard case .invalid = JudgeRuntime.bundleHealth(home: home) else {
+            Issue.record("bad labels must report invalid")
+            return
+        }
+        #expect(JudgeRuntime.selectsBundle(home: home))
+        #if canImport(CoreML)
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("judged calls go to review"))
+        #else
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("packs only"))
+        #endif
     }
 }
 

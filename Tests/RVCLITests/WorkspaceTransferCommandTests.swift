@@ -52,6 +52,7 @@ struct WorkspaceTransferCommandTests {
             #expect(download.contains("\(home.rawValue)/.local/bin"))
             #expect(download.contains("\(home.rawValue)/Library/LaunchAgents"))
             #expect(download.contains("\(home.rawValue)/Library/Caches/rvd"))
+            #expect(download.contains("\(home.rawValue)/Library/Caches/rv-judge"))
         }
     }
 

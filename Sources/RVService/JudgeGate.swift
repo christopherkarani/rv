@@ -115,6 +115,14 @@ public enum JudgeRuntime {
         return (selected.engine, bundle)
     }
 
+    /// True when rvd judges with a bundle: the one it selects is on disk,
+    /// valid or not. A selected bundle that cannot load is a failed judge
+    /// run (review), never packs-only, so doctor and setup count it as
+    /// installed: the judge agent must be there to answer for it.
+    public static func selectsBundle(home: HomeDirectory?) -> Bool {
+        resolvedJudge(home: home, config: GuardConfig.read(home: home)) != nil
+    }
+
     /// Bundle state for doctor: distinguishes absent (packs-only is a
     /// choice) from present-but-invalid (a broken install that would
     /// silently run packs-only).
@@ -408,7 +416,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy, .late, .circuitOpen, .refused:
+        case .failed, .warming, .busy, .late, .unreachable, .circuitOpen, .refused:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -486,14 +494,18 @@ public enum JudgeRuntime {
     /// hook deadline passed while waiting for the model). Review for the
     /// same reason: flooding the judge must not buy an unjudged allow.
     ///
-    /// `late` is a prediction that did not answer before its caller's
-    /// cutoff, or a request turned away behind a stalled one. `circuitOpen`
-    /// is the judge skipped by `JudgeCircuit` after repeated failures. Both
-    /// go to review like `busy`: a failing judge must never buy an allow.
+    /// `late` is a prediction (in-process or in the pool) that did not
+    /// answer before its caller's cutoff, or a request turned away behind a
+    /// stalled one. `circuitOpen` is the judge skipped by `JudgeCircuit`
+    /// after repeated failures. `unreachable` is a pool that gave no
+    /// authenticated answer at all (not running, not verifiable, refused).
+    /// All go to review like `busy`: a failing, killed or impersonated judge
+    /// must never buy an allow.
     ///
     /// `refused` is a judge that would not touch Core ML (cache volume nearly
-    /// full, or a compiled model it could not verify). Review, never
-    /// packs-only: filling the disk must not buy one.
+    /// full, a compiled model it could not verify, a load that failed after
+    /// its retry), in rvd or in a pool worker. Review, never packs-only:
+    /// filling the disk or poisoning a cache must not buy one.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
@@ -502,6 +514,7 @@ public enum JudgeRuntime {
         case busy
         case late
         case circuitOpen(retryIn: Duration)
+        case unreachable
         case refused(String)
     }
 
@@ -511,8 +524,8 @@ public enum JudgeRuntime {
         engine: JudgeEngine,
         bundle: URL,
         wait: Duration? = loadWait,
-        slot: JudgeSlot = slot,
-        onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in }
+        onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in },
+        slot: JudgeSlot = slot
     ) -> JudgeRun {
         #if canImport(CoreML)
         return throughCircuit {
@@ -608,7 +621,7 @@ public enum JudgeRuntime {
     static func circuitOutcome(_ run: JudgeRun) -> JudgeCircuitBreaker.Outcome {
         switch run {
         case .verdict: .success
-        case .late, .failed: .failure
+        case .late, .failed, .unreachable: .failure
         case .warming, .busy, .unavailable, .circuitOpen, .refused: .neutral
         }
     }
@@ -633,15 +646,18 @@ public enum JudgeRuntime {
         case .busy:
             note = "judge-busy"
             reason = "Laya judge queue is full; retry shortly."
-        case .refused(let why):
-            note = "judge-refused"
-            reason = why
         case .late:
             note = "judge-late"
             reason = "rv degraded: judge late (no verdict in time); failing closed to review."
         case .circuitOpen(let retryIn):
             note = "judge-circuit-open"
             reason = "rv degraded: judge unavailable (circuit open, retrying in \(retrySeconds(retryIn))s); failing closed to review."
+        case .unreachable:
+            note = "judge-unreachable"
+            reason = "Laya judge service (dev.rv.judge) is not reachable; failing closed. Run `rv doctor`."
+        case .refused(let why):
+            note = "judge-refused"
+            reason = why
         case .failed, .unavailable, .verdict:
             note = "prediction-failed"
             reason = unavailableReason
@@ -681,6 +697,10 @@ public enum JudgeRuntime {
     /// bundle is installed or the platform has no CoreML. Cheap: resolves
     /// config and bundle paths, then hands the load to a utility queue.
     public static func prewarm(home: HomeDirectory?) {
+        if let client = boundClient {
+            warmPool(client, home: home)
+            return
+        }
         #if canImport(CoreML)
         guard let resolved = resolvedJudge(home: home, config: GuardConfig.read(home: home)) else { return }
         slot.prewarm(engine: resolved.engine, bundleDir: resolved.bundle)
@@ -844,11 +864,19 @@ protocol JudgePort: Sendable {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun
 }
 
-/// Slot-cached CoreML judge (packs-only on platforms without CoreML). Waits
-/// on an in-progress load for the live `loadWait` (rvd binds its bound).
+/// The judge pool when rvd bound one (`JudgeRuntime.bindClient`), with no
+/// in-process fallback; otherwise the slot-cached CoreML judge (packs-only
+/// on platforms without CoreML), which waits on an in-progress load for the
+/// live `loadWait`.
 struct LiveJudgePort: JudgePort {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
-        JudgeRuntime.runJudge(
+        if let client = JudgeRuntime.boundClient {
+            // The same circuit as the in-process judge: a pool that keeps
+            // timing out or is unreachable is skipped (review) without
+            // spending each hook's budget on it.
+            return JudgeRuntime.throughCircuit { JudgeRuntime.runPool(call, client: client) }
+        }
+        return JudgeRuntime.runJudge(
             command: call.command, context: call.context,
             engine: call.engine, bundle: call.bundle, wait: JudgeRuntime.loadWait,
             onLate: call.onLateResult ?? { _, _ in }

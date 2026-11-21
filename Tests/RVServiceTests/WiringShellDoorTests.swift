@@ -72,11 +72,26 @@ struct WiringShellDoorTests {
         "cp x ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/b",
         "echo x > ../Library/Caches/rvd/planted",
         "ln -s /tmp/x ~/Library/Caches/rvd",
+        "cp x ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/b",
+        "echo x > ../Library/Caches/rv-judge/planted",
+        "ln -s /tmp/x ~/Library/Caches/rv-judge",
     ])
     func coreMLCacheWritesDeny(command: String) throws {
         try Self.withRepo { _, home, cwd in
             #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .enforce)), "\(command)")
             #expect(Self.decide("ls ~/Library/Caches/rvd", home: home, cwd: cwd, mode: .enforce).decision == .allow)
+            #expect(Self.decide("ls ~/Library/Caches/rv-judge", home: home, cwd: cwd, mode: .enforce).decision == .allow)
+        }
+    }
+
+    @Test("observe mode still denies a shell write into a Core ML cache", arguments: [
+        "cp x ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/b",
+        "ln -s /tmp/x ~/Library/Caches/rv-judge",
+        "cp x ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/b",
+    ])
+    func coreMLCacheWritesDenyInObserve(command: String) throws {
+        try Self.withRepo { _, home, cwd in
+            #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .observe)), "\(command)")
         }
     }
 

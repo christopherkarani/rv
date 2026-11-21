@@ -13,7 +13,7 @@ import RVDomain
 /// executable is replaced), the `dev.rv.*` LaunchAgent plists, everything
 /// under `~/.config/systemd/user` (rv's unit and any unit or drop-in that
 /// could conflict with it), `~/Applications/RVApprovals.app`, rvd's Core
-/// ML cache (`~/Library/Caches/rvd`), and the Linux socket dir
+/// ML caches (`~/Library/Caches/{rvd,rv-judge}`), and the Linux socket dir
 /// `$XDG_RUNTIME_DIR/rv`. (The macOS socket lives under `~/.config/rv`,
 /// which `core.secrets:home-rv-config` already guards.)
 ///
@@ -182,7 +182,7 @@ private func isDestructiveName(_ word: String) -> Bool {
 /// the binary names, an install directory, or a `which`/`command -v` of rv.
 private func mentionsInstall(_ text: String) -> Bool {
     let folded = text.folding(options: .caseInsensitive, locale: nil)
-    if ["rvd", "dev.rv", ".local/bin/rv", "launchagents/dev.rv", "/rv\"", "/rv'", "which rv",
+    if ["rvd", "rv-judge", "dev.rv", ".local/bin/rv", "launchagents/dev.rv", "/rv\"", "/rv'", "which rv",
         "command -v rv", "-name rv"].contains(where: { folded.contains($0) }) {
         return true
     }
@@ -293,6 +293,9 @@ private struct InstallPathModel {
             [.fixed("system"), .fixed("volumes"), .fixed("data"), .fixed("users"), .anyOne],
         ]
         if let known { homes.insert(known.map(Slot.fixed), at: 0) }
+        let caches: [[Slot]] = RVWiringPaths.coreMLCacheOwners.map {
+            [.fixed("library"), .fixed("caches"), .fixed($0.lowercased())]
+        }
         let tails: [[Slot]] = [
             [.fixed(".local"), .fixed("bin"), .binary],
             [.fixed("library"), .fixed("launchagents"), .rvJob],
@@ -302,10 +305,7 @@ private struct InstallPathModel {
             [.fixed(".config"), .fixed("systemd"), .fixed("user.control"), .rvJob],
             [.fixed(".local"), .fixed("share"), .fixed("systemd"), .fixed("user"), .rvJob],
             [.fixed("applications"), .fixed("rvapprovals.app")],
-            // rvd's Core ML e5rt bundle cache (Core ML loads the judge's
-            // compiled bundle from it).
-            [.fixed("library"), .fixed("caches"), .fixed("rvd")],
-        ]
+        ] + caches // The judge's Core ML e5rt bundle caches (RVWiringPaths.coreMLCacheOwners).
         var sequences = homes.flatMap { home in tails.map { (home + $0, home.count) } }
         sequences.append(([.fixed("run"), .fixed("user"), .anyOne, .fixed("rv")], 3))
         // System and runtime systemd dirs, rv's unit only.
@@ -497,12 +497,14 @@ private func isInstalledBinary(_ name: String) -> Bool {
 }
 
 private let binarySamples = [
-    "rv", "rvd", "rv-cli", "rv-workspace-host", "rv-isolation-exec", "rv-pty-claim", "rv-microvm",
+    "rv", "rvd", "rv-cli", "rv-workspace-host", "rv-isolation-exec", "rv-pty-claim", "rv-judge", "rv-microvm",
     "rv-guest-relay", "rv-macvm", "rv-macvm-agent", ".rvd.installing", "rv_rvpacks.bundle",
     "rv_rvpacks.resources", "libswiftcompatibilityspan.dylib", "libswiftcore.so",
 ]
 
-private let jobSamples = ["dev.rv.evaluate.plist", "dev.rv.mcp-custodian.plist", "dev.rv.audit-forward.plist"]
+private let jobSamples = [
+    "dev.rv.evaluate.plist", "dev.rv.mcp-custodian.plist", "dev.rv.audit-forward.plist", "dev.rv.judge.plist",
+]
 
 private func globMatches(_ pattern: String, _ name: String) -> Bool {
     fnmatch(pattern, name, 0) == 0

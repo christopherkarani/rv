@@ -48,6 +48,9 @@ struct WiringFileDoorTests {
         ".claude/skills/rv/SKILL.md", ".agents/skills/rv/SKILL.md", ".config/opencode/skills/rv/SKILL.md",
         // rvd's Core ML (e5rt) cache: a planted bundle runs in rvd's judge.
         "Library/Caches/rvd/com.apple.e5rt.e5bundlecache/x", "Library/Caches/rvd",
+        // The judge pool workers' e5rt cache: with the pool bound, the judge
+        // loads its compiled bundle from here.
+        "Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/x", "Library/Caches/rv-judge",
     ])
     func wiringWritesDeny(relative: String) throws {
         try Self.withHome { root, home in

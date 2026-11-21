@@ -487,4 +487,69 @@ struct CompiledModelStoreTests {
         #expect(try good.model(package: f.package) == "model")
         #expect(failing.coreML.status.lastRefusal == nil)
     }
+
+    @Test("two loaders at once compile once and both load the verified entry")
+    func concurrentLoadersCompileOnce() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let results = Mutex<[String]>([])
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
+            let loaded = (try? f.store().model(package: f.package)) ?? "refused"
+            results.withLock { $0.append(loaded) }
+        }
+        #expect(results.withLock { $0 } == Array(repeating: "model", count: 4))
+        #expect(f.coreML.compiles == 1)
+        #expect(!(try f.rootEntries()).contains { $0.contains(".partial-") })
+    }
+
+    @Test("the store lock lives beside the root, never inside it")
+    func lockBesideRoot() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.store().model(package: f.package)
+        #expect(!(try f.rootEntries()).contains { $0.hasSuffix(".lock") })
+        let parent = f.root.deletingLastPathComponent()
+        #expect(FileManager.default.fileExists(atPath: parent.appendingPathComponent("rv-laya.lock").path))
+    }
+
+    @Test("a symlinked store lock refuses (review)")
+    func symlinkedLockRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let parent = f.root.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let target = f.base.appendingPathComponent("elsewhere")
+        try Data().write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: parent.appendingPathComponent("rv-laya.lock"), withDestinationURL: target)
+        #expect(throws: CompiledModelRefusal.self) { try f.store().model(package: f.package) }
+        #expect(f.coreML.compiles == 0)
+    }
+
+    @Test("a superseded entry another loader still holds is kept, and swept once released")
+    func heldEntryNotSwept() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        var held: (model: String, lease: CompiledModelLease)? = try f.store(version: "26A428").leasedModel(package: f.package)
+        let old = try f.rootEntries()
+        #expect(held?.model == "model")
+        _ = try f.store(version: "26B100").model(package: f.package)
+        #expect(Set(old).isSubset(of: try f.rootEntries()), "a loaded entry is never removed under its loader")
+        held = nil
+        _ = try f.store(version: "26C200").model(package: f.package)
+        let after = try f.rootEntries()
+        #expect(Set(old).isDisjoint(with: after))
+        #expect(after.count == 2)
+    }
+
+    @Test("a failed load's retry never deletes an entry another loader holds")
+    func retryKeepsHeldEntry() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let held = try f.store().leasedModel(package: f.package)
+        f.coreML.failNextLoads(1)
+        #expect(try f.store().model(package: f.package) == "model")
+        #expect(f.coreML.compiles == 1, "the held entry was reloaded, not discarded and recompiled")
+        withExtendedLifetime(held) {}
+    }
 }

@@ -49,6 +49,15 @@ struct CompiledFileRecord: Codable, Equatable, Sendable {
 ///   retry throws `CoreMLLoadRefusal` (review), never the plain error the
 ///   gate would read as an unavailable judge (packs-only).
 ///
+/// - Shared across processes: rvd, the CLI and both judge-pool workers use
+///   one root. Verify, compile, install, sweep and discard run under an
+///   exclusive `flock` on `<root>.lock` beside the root, so two workers
+///   warming at once compile once and never remove each other's `.partial-`
+///   copy or half-committed entry. A process that loaded an entry holds a
+///   shared `flock` on its manifest (`CompiledModelLease`) for as long as
+///   the model lives; the sweep skips a superseded entry someone still
+///   holds and removes it on a later load.
+///
 /// Every compile and load goes through `coreML` (disk precheck plus the
 /// in-flight crash marker). Generic over the model so tests need no Core ML.
 struct CompiledModelStore<Model> {
@@ -63,24 +72,35 @@ struct CompiledModelStore<Model> {
     /// Records each refusal on the guard (doctor shows the last one) and
     /// clears it on the next good load.
     func model(package: URL) throws -> Model {
+        try leasedModel(package: package).model
+    }
+
+    /// The model and the lease that keeps its entry from being swept; keep
+    /// the lease as long as the model.
+    func leasedModel(package: URL) throws -> (model: Model, lease: CompiledModelLease) {
         do {
-            let model = try loadRetryingOnce(package)
+            let loaded = try loadRetryingOnce(package)
             coreML.noteRefusal(nil)
-            return model
+            return loaded
         } catch let refusal as any CoreMLRefusal {
             coreML.noteRefusal(refusal.reason)
             throw refusal
         }
     }
 
-    private func loadRetryingOnce(_ package: URL) throws -> Model {
+    private func loadRetryingOnce(_ package: URL) throws -> (model: Model, lease: CompiledModelLease) {
         do {
             return try attempt(package)
         } catch let refusal as any CoreMLRefusal {
             throw refusal
         } catch {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
-            if let entry = try? entry(for: package) { discard(entry) }
+            // Our own lease died with the failed attempt. An entry another
+            // loader still holds is kept (as the sweep does): the retry
+            // reloads it, and a second failure refuses.
+            if let entry = try? entry(for: package) {
+                try? exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
+            }
             coreML.purgeCache()
         }
         do {
@@ -98,19 +118,47 @@ struct CompiledModelStore<Model> {
         let pathKey: String
     }
 
-    private func attempt(_ package: URL) throws -> Model {
+    /// Verifies (or compiles and installs) and leases the entry under the
+    /// store lock, then loads outside it: a slow or crashing Core ML load
+    /// never holds up the other processes' verification.
+    private func attempt(_ package: URL) throws -> (model: Model, lease: CompiledModelLease) {
         let entry = try entry(for: package)
-        if isVerified(entry) {
-            return try coreML.run(checkingDisk: true) { try load(entry.dir) }
+        let lease = try exclusively { () throws -> CompiledModelLease in
+            if !isVerified(entry) {
+                if exists(entry) {
+                    coreML.log("rvd: compiled judge model failed verification; recompiling from the bundle")
+                    discard(entry)
+                }
+                let compiled = try coreML.run(checkingDisk: true) { try compile(package) }
+                try install(compiled, as: entry)
+                sweep(keeping: entry)
+            }
+            guard let lease = CompiledModelLease(manifest: entry.manifest) else {
+                throw CompiledModelRefusal(detail: "could not hold the compiled model's manifest")
+            }
+            return lease
         }
-        if exists(entry) {
-            coreML.log("rvd: compiled judge model failed verification; recompiling from the bundle")
-            discard(entry)
+        return (try coreML.run(checkingDisk: true) { try load(entry.dir) }, lease)
+    }
+
+    /// Runs `body` holding the store's exclusive lock, `<root>.lock` in the
+    /// root's parent (outside the root, so the sweep never sees it). The
+    /// lock file must be this user's regular file; anything else refuses.
+    /// Blocks while another process holds it (its compile, at worst).
+    private func exclusively<T>(_ body: () throws -> T) throws -> T {
+        guard let root else { throw CompiledModelRefusal(detail: "no protected model cache directory") }
+        let path = root.deletingLastPathComponent().appendingPathComponent(root.lastPathComponent + ".lock").path
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw CompiledModelRefusal(detail: "could not open the model cache lock") }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else {
+            throw CompiledModelRefusal(detail: "the model cache lock is not this user's regular file")
         }
-        let compiled = try coreML.run(checkingDisk: true) { try compile(package) }
-        try install(compiled, as: entry)
-        sweep(keeping: entry)
-        return try coreML.run(checkingDisk: true) { try load(entry.dir) }
+        while flock(fd, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw CompiledModelRefusal(detail: "could not lock the model cache") }
+        }
+        return try body()
     }
 
     /// Refuses when there is no usable protected root: the compile output
@@ -193,16 +241,20 @@ struct CompiledModelStore<Model> {
         try? FileManager.default.removeItem(at: entry.dir)
     }
 
-    /// Removes this package's superseded entries and stale partial copies.
-    /// Other packages' entries and anything else in the root are kept.
+    /// Removes this package's superseded entries and stale partial copies,
+    /// under the store lock (so every partial copy is a dead process's). A
+    /// superseded entry another process still has loaded (its manifest is
+    /// leased) is kept. Other packages' entries and anything else in the
+    /// root are kept.
     private func sweep(keeping entry: Entry) {
         guard let root, let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return }
         let keep: Set<String> = [entry.dir.lastPathComponent, entry.manifest.lastPathComponent]
         for name in names where !keep.contains(name) {
-            let ours = name.hasPrefix("\(entry.pathKey)-")
-                && (name.hasSuffix(".mlmodelc") || name.hasSuffix(".mlmodelc" + Self.manifestSuffix))
+            let dirName = name.hasSuffix(Self.manifestSuffix) ? String(name.dropLast(Self.manifestSuffix.count)) : name
+            let ours = name.hasPrefix("\(entry.pathKey)-") && dirName.hasSuffix(".mlmodelc")
             let partial = name.hasPrefix(".\(entry.pathKey)-") && name.contains(Self.partialMarker)
             guard ours || partial else { continue }
+            if ours, CompiledModelLease.isHeld(root.appendingPathComponent(dirName + Self.manifestSuffix)) { continue }
             try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
         }
     }
@@ -346,6 +398,41 @@ struct CompiledModelStore<Model> {
             hash &*= 0x100000001b3
         }
         return String(hash, radix: 16)
+    }
+}
+
+/// A shared `flock` on an installed entry's manifest, held for as long as
+/// the model loaded from it lives: the store's sweep skips a superseded
+/// entry while anyone holds one. Taken only under the store lock, so a
+/// sweep never races a new lease.
+final class CompiledModelLease: Sendable {
+    private let fd: Int32
+
+    /// Nil when the manifest cannot be opened as this user's regular file
+    /// or is being swept.
+    init?(manifest: URL) {
+        let fd = open(manifest.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
+              flock(fd, LOCK_SH | LOCK_NB) == 0
+        else {
+            close(fd)
+            return nil
+        }
+        self.fd = fd
+    }
+
+    deinit { close(fd) }
+
+    /// Whether some process (this one included) holds a lease on
+    /// `manifest`. A manifest that cannot be opened is not held.
+    static func isHeld(_ manifest: URL) -> Bool {
+        let fd = open(manifest.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 { return false }
+        return errno == EWOULDBLOCK
     }
 }
 

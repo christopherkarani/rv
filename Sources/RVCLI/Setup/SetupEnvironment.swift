@@ -102,6 +102,10 @@ struct SetupEnvironment {
     /// System files `sudo rv mcp custodian install` writes. Uninstall only
     /// names the ones present. Default none; live Linux: the custodian's.
     var custodianSystemPaths: [String] = []
+    /// Does a valid judge bundle sit where rvd looks? Setup warns only then
+    /// about a missing or unloaded judge pool agent. Default false (tests);
+    /// live: `JudgeRuntime.bundleHealth`.
+    var judgeBundleInstalled: (HomeDirectory) -> Bool = { _ in false }
 
     /// This run loads the real launchd/systemd service, so it can (and
     /// must) prove rvd answers before wiring hooks.

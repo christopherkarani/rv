@@ -225,6 +225,7 @@ extension SetupEnvironment {
         setup.mcpOAuthInKeychain = true
 #endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
+        setup.judgeBundleInstalled = { JudgeRuntime.selectsBundle(home: $0) }
         return setup
     }
 }

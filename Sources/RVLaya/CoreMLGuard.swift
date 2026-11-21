@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import Synchronization
 
 /// Where the Core ML in-flight marker and crash history live.
@@ -145,6 +146,9 @@ public final class CoreMLGuard: Sendable {
     public let stateRoot: URL?
     /// rvd's guard: it is meant to hold the crash marker.
     private let tracksCrashes: Bool
+    /// A CPU worker of the judge pool: loads CPU only whatever its crash
+    /// history says (the history still drives `status`).
+    private let cpuOnly: Bool
     /// Opened on first Core ML use, so an rvd that never loads a judge
     /// never touches the state directory.
     private let makeStore: @Sendable () -> (any CoreMLCrashStore)?
@@ -176,6 +180,7 @@ public final class CoreMLGuard: Sendable {
         cacheVolume: URL?,
         stateRoot: URL? = nil,
         tracksCrashes: Bool = false,
+        cpuOnly: Bool = false,
         purgeCoreMLCache: @escaping @Sendable () -> Void,
         log: @escaping @Sendable (String) -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
@@ -185,6 +190,7 @@ public final class CoreMLGuard: Sendable {
         self.cacheVolume = cacheVolume
         self.stateRoot = stateRoot
         self.tracksCrashes = tracksCrashes
+        self.cpuOnly = cpuOnly
         self.purgeCoreMLCache = purgeCoreMLCache
         self.log = log
         self.now = now
@@ -197,7 +203,8 @@ public final class CoreMLGuard: Sendable {
 
     /// Compute units for the next model load (runs crash recovery once).
     public var computeUnits: JudgeComputeUnits {
-        startedState().units
+        let units = startedState().units
+        return cpuOnly ? .cpuOnly : units
     }
 
     /// For doctor: the units in force, the CPU-only deadline, and whether
@@ -375,6 +382,42 @@ extension CoreMLGuard {
             log: log)
     }
 
+    /// A judge-pool worker's guard (docs/architecture/judge-pool.md): its
+    /// own marker and crash history in `<stateRoot>/guard-<worker>`, so one
+    /// worker's crashes drive only its own compute units, never rvd's or
+    /// the other worker's. `cpuOnly` pins the CPU worker to CPU whatever
+    /// the history says. Compiled models are shared under
+    /// `<stateRoot>/models`. A marker another process holds degrades to
+    /// untracked, logged, as for rvd.
+    public static func worker(
+        stateRoot: URL?, worker: String, cpuOnly: Bool, log: @escaping @Sendable (String) -> Void
+    ) -> CoreMLGuard {
+        let caches = cachesRoot()
+        let processName = ProcessInfo.processInfo.processName
+        return CoreMLGuard(
+            makeStore: {
+                let store = stateRoot.flatMap {
+                    FileCoreMLCrashStore(directory: workerMarkerDirectory(stateRoot: $0, worker: worker), clearOnExit: true)
+                }
+                if store == nil { log("judge worker \(worker): Core ML crash marker unavailable or held by another process; no crash fallback") }
+                return store
+            },
+            disk: StatfsDiskSpace(), cacheVolume: caches, stateRoot: stateRoot, tracksCrashes: true,
+            cpuOnly: cpuOnly,
+            purgeCoreMLCache: {
+                guard let caches else { return }
+                if !CoreMLCachePurge.purge(cachesRoot: caches, processName: processName) {
+                    log("judge worker \(worker): Core ML cache not purged (not rv's own directory)")
+                }
+            },
+            log: log)
+    }
+
+    /// `<stateRoot>/guard-<worker>`: one judge-pool worker's crash marker.
+    public static func workerMarkerDirectory(stateRoot: URL, worker: String) -> URL {
+        stateRoot.appendingPathComponent("guard-\(worker)", isDirectory: true)
+    }
+
     /// `~/Library/Caches` (Linux: `~/.cache`).
     static func cachesRoot() -> URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -486,6 +529,28 @@ public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
         if raw != 0, raw != -1 { signal(signo, previous) }
     }
 
+    /// Clears the in-flight marker in `directory` that a process no longer
+    /// running left set: the judge-pool supervisor calls it after reaping a
+    /// worker it SIGKILLed itself (a budget overrun is not a Core ML crash).
+    /// Only this user's regular marker, never through a symlink, and only
+    /// when no process holds its lock (a replacement worker that already
+    /// started keeps its own state). False when nothing was cleared, which
+    /// counts the kill as a crash: the safe direction (CPU only is slower,
+    /// never weaker).
+    @discardableResult
+    public static func clearStaleMarker(directory: URL) -> Bool {
+        let marker = directory.appendingPathComponent(markerName).path
+        let fd = open(marker, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
+              flock(fd, LOCK_EX | LOCK_NB) == 0
+        else { return false }
+        var zero = UInt8(ascii: "0")
+        return pwrite(fd, &zero, 1, 0) == 1
+    }
+
     public func previousRunCrashed() -> Bool {
         var byte: UInt8 = 0
         return pread(fd, &byte, 1, 0) == 1 && byte == UInt8(ascii: "1")
@@ -537,8 +602,9 @@ public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
 /// full disk leaves half-written bundles ("resources.bin missing",
 /// "Original module missing").
 public enum CoreMLCachePurge {
-    /// Only rvd's own cache is ever removed.
-    static let owners: Set<String> = ["rvd"]
+    /// Only rv's own caches are ever removed: rvd's, and the judge-pool
+    /// workers' (`rv-judge`).
+    static let owners = Set(RVWiringPaths.coreMLCacheOwners)
     static let cacheName = "com.apple.e5rt.e5bundlecache"
 
     /// True when the cache is gone (or was never there). Refuses (false)

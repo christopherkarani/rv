@@ -163,8 +163,8 @@ enum WorkspaceTransferRun {
         guard includingInstall else { return config }
         return config + [
             "\(home)/.local/bin", "\(home)/Library/LaunchAgents", "\(home)/.config/systemd/user",
-            "\(home)/Applications/RVApprovals.app", "\(home)/Library/Caches/rvd",
-        ]
+            "\(home)/Applications/RVApprovals.app",
+        ] + RVWiringPaths.coreMLCacheOwners.map { "\(home)/Library/Caches/\($0)" }
     }
 
     #if os(macOS)
