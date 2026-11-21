@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import Synchronization
 
 /// Where the Core ML in-flight marker and crash history live.
@@ -603,7 +604,7 @@ public final class FileCoreMLCrashStore: CoreMLCrashStore, Sendable {
 public enum CoreMLCachePurge {
     /// Only rv's own caches are ever removed: rvd's, and the judge-pool
     /// workers' (`rv-judge`).
-    static let owners: Set<String> = ["rvd", "rv-judge"]
+    static let owners = Set(RVWiringPaths.coreMLCacheOwners)
     static let cacheName = "com.apple.e5rt.e5bundlecache"
 
     /// True when the cache is gone (or was never there). Refuses (false)

@@ -166,6 +166,15 @@ struct RVInstallPathGuardTests {
         "ln -s /tmp/evil ~/Library/Caches/rvd",
         "echo x > ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/manifest",
         "cd ~/Library/Caches && rm -rf rvd",
+        // The judge pool's workers (`rv-judge`) run Core ML with the pool
+        // bound: their e5rt cache is the one the judge loads from.
+        "rm -rf ~/Library/Caches/rv-judge",
+        "rm -rf ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache",
+        "cp -R /tmp/evil.bundle ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/x",
+        "mv /tmp/x $HOME/Library/Caches/rv-judge/",
+        "ln -s /tmp/evil ~/Library/Caches/rv-judge",
+        "echo x > ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/manifest",
+        "cd ~/Library/Caches && rm -rf rv-judge",
         // the expected false positives
         "rm -rf ~/Library/Caches",
         "rm -rf ~/Library/Caches/*",
@@ -177,6 +186,9 @@ struct RVInstallPathGuardTests {
         "ls ~/Library/Caches/rvd",
         "du -sh ~/Library/Caches/rvd",
         "rm -rf ~/Library/Caches/rvdx",
+        "ls ~/Library/Caches/rv-judge",
+        "du -sh ~/Library/Caches/rv-judge",
+        "rm -rf ~/Library/Caches/rv-judgex",
         "rm -rf ~/Library/Caches/com.apple.Safari",
         // Older builds' model cache: nothing loads from it any more.
         "rm -rf ~/Library/Caches/rv-laya",

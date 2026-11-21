@@ -44,9 +44,10 @@ public enum MCPSandbox {
     }
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]
-    /// Inside a default write root but never writable: rvd's Core ML e5rt
-    /// cache, which Core ML loads the judge's compiled bundle from.
-    static let deniedWrites = ["~/Library/Caches/rvd"]
+    /// Inside a default write root but never writable: the judge's Core ML
+    /// e5rt caches (rvd's and the pool workers'), which Core ML loads the
+    /// judge's compiled bundle from.
+    static let deniedWrites = RVWiringPaths.coreMLCacheOwners.map { "~/Library/Caches/\($0)" }
     /// Paths `profile` allows even when `policy.writable` is empty.
     static let seatbeltWriteRoots = ["/private/tmp", "/private/var/folders", "/dev"]
 
@@ -1120,10 +1121,12 @@ public enum MCPSandbox {
     /// bytes than long ones, so the byte cap is set for the densest shape: at
     /// 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
     /// 4x inside the 8 MB stack `sandbox-exec -p` recompiles on in the child,
-    /// ~8x inside `profileCompileStackBytes` — and compiles in about 0.7 s. A
-    /// letter-heavy home fills about 274 KB (few, long filters, a far smaller
-    /// peak); an everyday profile is about 24 KB.
-    static let maximumProfileBytes = 288 * 1024
+    /// ~8x inside `profileCompileStackBytes` — and compiles in about 0.7 s.
+    /// The cap is 304 KiB (~2160 such rules, still ~20% under the limit and
+    /// about 2 MiB of stack) so a letter-heavy home, which fills about 296 KB
+    /// now that both judge Core ML caches are denied (few, long filters, a
+    /// far smaller peak), still compiles; an everyday profile is about 24 KB.
+    static let maximumProfileBytes = 304 * 1024
 
     /// The compile's own stack. A 128 KB profile of distinct filters
     /// overflowed a 512 KiB thread (SIGBUS in `expand_logical_conditions`),
