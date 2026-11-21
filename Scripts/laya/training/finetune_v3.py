@@ -159,7 +159,9 @@ def main(argv=None):
     train = load_jsonl(work / "train.jsonl")
     val = load_jsonl(work / "validation.jsonl")
     if a.max_train_rows:
-        train = train[:a.max_train_rows]
+        # train.jsonl is label-sorted: sample, don't slice, so a capped
+        # debug run sees every label.
+        train = random.Random(13).sample(train, min(a.max_train_rows, len(train)))
     forb = forbidden_norms()
     for name, rows in (("train", train), ("validation", val)):
         assert_no_overlap({normalize(r["command"]) for r in rows}, forb, name)
