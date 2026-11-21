@@ -200,7 +200,9 @@ extension OpaqueExecution {
         for index in line.commands.indices {
             let command = line.commands[index]
             let feed: () -> Feed = { producers.feed(for: index) }
-            let context = Context(segment: command.tokens, heredoc: command.heredoc, feed: feed, depth: depth)
+            let context = Context(
+                segment: command.tokens, heredoc: command.heredoc, piped: command.stage > 0, feed: feed, depth: depth
+            )
             if segmentRunsOpaque(context, state: &state) { return true }
             for inner in command.substitutions {
                 if scan(inner, depth: depth + 1, inherited: feed, state: &state) { return true }
@@ -285,9 +287,9 @@ extension OpaqueExecution {
             line.opaque = true
         }
         if case .none = commandStart(tokens), tokens.contains(where: { commandName($0.decoded) == "exec" }),
-           tokens.contains(where: { ShellLexer.isRedirectOperator($0) && redirectOperator($0.decoded).hasPrefix("<") })
+           redirectsInput(tokens)
         {
-            // `exec < f`, `exec 0<&3`: later readers read that.
+            // `exec < f`, `exec 0<&3`, `exec 0>&3`: later readers read that.
             line.stdinRedirected = true
         }
     }

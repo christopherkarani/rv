@@ -34,10 +34,12 @@ package func runsOpaqueProgram(_ command: ShellCommand) -> Bool {
 enum OpaqueExecution {
     // MARK: Segments
 
-    /// The command's words, its heredoc, its stdin, the scan depth.
+    /// The command's words, its heredoc, its stdin (`piped`: a pipe feeds
+    /// it), the scan depth.
     struct Context {
         let segment: [CommandToken]
         let heredoc: ShellLexer.Heredoc?
+        let piped: Bool
         let feed: () -> Feed
         let depth: Int
 
@@ -45,8 +47,9 @@ enum OpaqueExecution {
         var stdin: () -> Feed {
             let segment = segment
             let heredoc = heredoc
+            let piped = piped
             let feed = feed
-            return { OpaqueExecution.stdin(segment, heredoc: heredoc, feed: feed) }
+            return { OpaqueExecution.stdin(segment, heredoc: heredoc, piped: piped, feed: feed) }
         }
     }
 
@@ -76,7 +79,7 @@ enum OpaqueExecution {
             return scan(arguments.map(\.decoded).joined(separator: " "), depth: depth + 1, inherited: context.stdin, state: &state)
         }
         if head == "source" || head == "." {
-            return sourcesOpaque(arguments)
+            return sourcesOpaque(arguments, context, state: &state)
         }
         if shells.contains(head) {
             return shellRunsOpaque(arguments, context, state: &state)
@@ -205,12 +208,20 @@ enum OpaqueExecution {
 
     // MARK: Runners
 
-    private static func sourcesOpaque(_ arguments: [CommandToken]) -> Bool {
+    private static func sourcesOpaque(_ arguments: [CommandToken], _ context: Context, state: inout ScanState) -> Bool {
         let operands = droppingRedirects(arguments)
         guard let operand = operands.first(where: { $0.decoded.hasPrefix("-") == false || $0.decoded == "-" }) else {
             return arguments.contains(where: isDynamic)
         }
-        return isDynamic(operand) || readsStdin(operand.decoded)
+        if operand.decoded == "-" { return true }
+        switch scriptOperand(operand, context) {
+        case .opaque: return true
+        case .fileOnly: return false
+        case .readsStdin:
+            let fed = context.stdin()
+            guard fed.literal else { return true }
+            return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+        }
     }
 
     private static func shellRunsOpaque(_ rawArguments: [CommandToken], _ context: Context, state: inout ScanState) -> Bool {
@@ -247,14 +258,36 @@ enum OpaqueExecution {
             return payloadRunsOpaque(arguments[index], context, state: &state)
         }
         let operand = index < arguments.count && stdin == false ? arguments[index] : nil
-        guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            // The program is stdin: readable only when fed literal text,
-            // which is then read like the line itself.
-            let fed = context.stdin()
-            guard fed.literal else { return true }
-            return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+        if let operand {
+            switch scriptOperand(operand, context) {
+            case .opaque: return true
+            case .fileOnly: return false
+            case .readsStdin: break
+            }
         }
-        return isDynamic(operand)
+        // The program is stdin: readable only when fed literal text, which
+        // is then read like the line itself.
+        let fed = context.stdin()
+        guard fed.literal else { return true }
+        return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+    }
+
+    enum ScriptOperand {
+        /// Dynamic, or a descriptor path (`/dev/fd/3`, `/dev/stdin`).
+        case opaque
+        /// A literal file rv does not read, as for `sh x.sh`.
+        case fileOnly
+        /// `-`; or a literal file of a reader whose input is redirected,
+        /// which the file's name may reach (`sh stdin <<< …` in `/dev`,
+        /// `sh x 3<<< …`): stdin is read as the program too.
+        case readsStdin
+    }
+
+    /// What a script operand (`sh x.sh`, `at -f job`, `source f`) runs.
+    static func scriptOperand(_ operand: CommandToken, _ context: Context) -> ScriptOperand {
+        if operand.decoded == "-" { return .readsStdin }
+        if isDynamic(operand) || namesDescriptor(operand.decoded) { return .opaque }
+        return redirectsInput(context.segment) ? .readsStdin : .fileOnly
     }
 
     /// Program text a shell reads from a literal pipe, here-string or
@@ -338,24 +371,28 @@ enum OpaqueExecution {
                     || context.segment.contains { isDynamic($0) && $0.decoded != payload.decoded }
             }
         }
-        guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            // The program is stdin: unreadable unless fed literal text;
-            // then it is judged like inline code, and recorded.
-            let fed = context.stdin()
-            guard fed.literal else { return true }
-            return fed.texts.contains { program in
-                guard program.isEmpty == false else { return false }
-                // Every reader of the text is charged for it, so thousands
-                // of readers of one big feed run out of budget.
-                guard state.charge(work: program.utf8.count) else { return true }
-                _ = state.record(program)
-                // Code read before was clean then, and is the same text now.
-                guard state.firstCodeRead(program) else { return false }
-                recordStrings(program, state: &state)
-                return execsCode(program) && readsUnseen(program)
+        if let operand {
+            switch scriptOperand(operand, context) {
+            case .opaque: return true
+            case .fileOnly: return false
+            case .readsStdin: break
             }
         }
-        return isDynamic(operand)
+        // The program is stdin: unreadable unless fed literal text; then
+        // it is judged like inline code, and recorded.
+        let fed = context.stdin()
+        guard fed.literal else { return true }
+        return fed.texts.contains { program in
+            guard program.isEmpty == false else { return false }
+            // Every reader of the text is charged for it, so thousands of
+            // readers of one big feed run out of budget.
+            guard state.charge(work: program.utf8.count) else { return true }
+            _ = state.record(program)
+            // Code read before was clean then, and is the same text now.
+            guard state.firstCodeRead(program) else { return false }
+            recordStrings(program, state: &state)
+            return execsCode(program) && readsUnseen(program)
+        }
     }
 
     /// The string literals of inline code (`os.system("launchctl …")`):
@@ -637,8 +674,18 @@ enum OpaqueExecution {
         word.hasPrefix("<(") || word.hasPrefix(">(") || word.hasPrefix("=(")
     }
 
+    /// `-`, or a path that names a descriptor.
     static func readsStdin(_ path: String) -> Bool {
-        path == "-" || path == "/dev/stdin" || path.hasPrefix("/dev/fd/") || path.hasPrefix("/proc/self/fd/")
+        path == "-" || namesDescriptor(path)
+    }
+
+    /// `/dev/stdin`, `/dev/fd/N`, `/proc/<pid>/fd/N` and the like, however
+    /// spelled (`//dev/./fd/3`, `/tmp/../dev/fd/3`): any path through
+    /// `/proc`, or through `/dev` and an `fd` or std stream name.
+    static func namesDescriptor(_ path: String) -> Bool {
+        let parts = Set(path.split(separator: "/").map(String.init))
+        if parts.contains("proc") { return true }
+        return parts.contains("dev") && parts.contains { ["fd", "stdin", "stdout", "stderr"].contains($0) }
     }
 
     static func isAssignment(_ word: String) -> Bool {

@@ -160,9 +160,16 @@ The README's "MCP governance" section lists every case.
     well. A crontab line rv cannot split into a schedule and a command,
     a crontab that sets `SHELL`, and `crontab -e` (its editor reads
     stdin) go to Terminal. A job file (`at -f job.sh`, `crontab
-    jobs.txt`) is not read, like `sh job.sh`. Only a redirect of fd 0
-    replaces a reader's stdin, the last one winning (`… | sh
-    3</dev/null` still reads the pipe). In a pipeline the producers are the
+    jobs.txt`) is not read, like `sh job.sh`. rv does not model how a
+    shell combines redirects (zsh joins several inputs; bash 3.2 and dash
+    read `{fd}<` as fd 0): a reader's stdin is read only when it has one
+    source, a pipe or a single literal here-string, heredoc or file on
+    fd 0, and no other input redirect. A second source, a numbered,
+    named or duplicated input redirect (`3<…`, `{fd}<…`, `0>&3`, `<&3`),
+    or a script operand naming a descriptor (`/dev/stdin`, `/dev/fd/3`,
+    `/proc/self/fd/3`) makes it unreadable, so the reader goes to
+    Terminal. A script operand's stdin is read too when the reader
+    redirects it. In a pipeline the producers are the
     stages before the reader; inside a compound command (`if`, `for`,
     `while`, `case`), a `{ …; }`/`( … )` group or a function body they
     are every other command of the text, each of which must print whole
@@ -292,6 +299,12 @@ The README's "MCP governance" section lists every case.
   Editing a crontab through a pipe whose input rv cannot read
   (`(crontab -l; echo '0 3 * * * job') | crontab -`) goes to Terminal
   too, as do `crontab -e` and a literal crontab that sets `SHELL`.
+  A reader with more than one input, or with any numbered, named or
+  duplicated input redirect, goes to Terminal even when every input is
+  harmless (`sh 3</dev/null < script.sh`, `echo ls | sh </dev/null`,
+  `sh <<< ls <<< pwd`), as does a script operand that names a descriptor
+  (`sh /dev/stdin <<< ls`, `awk -f -`), and a here-string handed to a
+  script (`python3 parse.py <<< 'rv …'`) is read like a program.
 - **On an observe host, reading rv's install is observed.** A command
   that names one of rv's hook, service or binary files and is proven to
   only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display

@@ -9,17 +9,26 @@ extension OpaqueExecution {
 
     /// `awk` whose program runs a command: it can build that command from
     /// any text it reads or concatenates, so it is floored whatever feeds
-    /// it. A dynamic program is floored too.
+    /// it. A dynamic program is floored too, and so is a program file that
+    /// is dynamic, stdin or a descriptor (`-f -`, `-f /dev/fd/3`).
     static func awkRunsOpaque(_ rawArguments: [CommandToken]) -> Bool {
         let arguments = droppingRedirects(rawArguments)
+        var programFiles: [CommandToken] = []
         var index = 0
         while index < arguments.count {
             let token = arguments[index]
             let text = token.decoded
             if text == "--" { index += 1; break }
             guard text.hasPrefix("-"), text.count > 1, token.wasQuoted == false else { break }
-            if text == "-f" || text == "--file" { return arguments.dropFirst(index + 1).first.map(isDynamic) ?? false }
+            if let file = programFileOption(text, next: arguments.dropFirst(index + 1).first) {
+                if let value = file.value { programFiles.append(value) }
+                index += file.consumed
+                continue
+            }
             index += awkValueOptions.contains(text) ? 2 : 1
+        }
+        if programFiles.isEmpty == false {
+            return programFiles.contains { isDynamic($0) || readsStdin($0.decoded) }
         }
         guard index < arguments.count else { return false }
         let program = arguments[index]
@@ -29,6 +38,19 @@ extension OpaqueExecution {
     }
 
     private static let awkValueOptions: Set<String> = ["-F", "-v", "-W", "--field-separator", "--assign"]
+
+    /// A program-file option (`-f F`, `-fF`, `--file F`, `--file=F`): its
+    /// value (nil when missing) and how many words it takes.
+    private static func programFileOption(_ text: String, next: CommandToken?) -> (value: CommandToken?, consumed: Int)? {
+        if text == "-f" || text == "--file" { return (next, 2) }
+        if text.hasPrefix("--file=") {
+            return (CommandToken(decoded: String(text.dropFirst("--file=".count)), wasQuoted: false), 1)
+        }
+        if text.hasPrefix("-f"), text.hasPrefix("--") == false {
+            return (CommandToken(decoded: String(text.dropFirst(2)), wasQuoted: false), 1)
+        }
+        return nil
+    }
 
     /// `system(…)`, or a `|` that pipes to or from a command (`print |
     /// "sh"`, `"cmd" | getline`); `||` is logical or.
@@ -69,9 +91,11 @@ extension OpaqueExecution {
                 index += 1
                 continue
             }
-            if token.wasQuoted == false, text == "-f" || text == "--file" || text.hasPrefix("--file=") {
+            if token.wasQuoted == false, let file = programFileOption(text, next: arguments.dropFirst(index + 1).first) {
                 sawScriptFlag = true
-                index += text.contains("=") ? 1 : 2
+                // A script file is unread; stdin or a descriptor is not a file.
+                if let value = file.value, isDynamic(value) || readsStdin(value.decoded) { return true }
+                index += file.consumed
                 continue
             }
             if token.wasQuoted == false, text == "-i",
@@ -266,8 +290,12 @@ extension OpaqueExecution {
             index += skip
         }
         if readsNoJob { return false }
-        if let file, file.decoded != "-", readsStdin(file.decoded) == false {
-            return isDynamic(file)
+        if let file {
+            switch scriptOperand(file, context) {
+            case .opaque: return true
+            case .fileOnly: return false
+            case .readsStdin: break
+            }
         }
         let fed = context.stdin()
         guard fed.literal else { return true }
