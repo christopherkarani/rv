@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVIPC
 import RVPresentation
@@ -34,6 +39,45 @@ enum DoctorJudgeChecks {
                 + "rvd verifies no judge pool, so judged calls go to review",
             fix: "add a judge entry for the installed rv-judge to '\(DoctorInstallChecks.trustManifestPath)'; "
                 + "the file is root-owned, so this needs an administrator (sudo)")
+    }
+
+    /// rv's config dir and the judge's cache below it
+    /// (`cache/laya/models`, the verified compiled models and Core ML crash
+    /// markers) must be this user's and writable by no one else: another
+    /// account that can write there can swap a level for its own and plant
+    /// a model or a crash history. Names every level that is not; missing
+    /// levels are fine (created owner-only on first use). The config dir
+    /// may be a link (dotfile managers), so it is followed; the cache levels
+    /// never are.
+    static func cacheExposure(configDirectory: String) -> DoctorProblem? {
+        let levels = [
+            (configDirectory, true),
+            (configDirectory + "/cache", false),
+            (configDirectory + "/cache/laya", false),
+            (configDirectory + "/cache/laya/models", false),
+        ]
+        let exposed = levels.compactMap { path, follow in exposure(path, follow: follow).map { "\(path) (\($0))" } }
+        guard !exposed.isEmpty else { return nil }
+        return DoctorProblem(
+            id: "judge-cache-exposed", severity: .warn,
+            summary: "writable by another account: \(exposed.joined(separator: "; ")); "
+                + "it could replace the judge's compiled model or crash history",
+            fix: "chown -R \(NSUserName()) '\(configDirectory)' && chmod go-w '\(configDirectory)' "
+                + "'\(configDirectory)/cache' '\(configDirectory)/cache/laya' '\(configDirectory)/cache/laya/models'")
+    }
+
+    /// Why `path` is exposed, or nil when it is missing or a directory of
+    /// this user that no one else can write.
+    static func exposure(_ path: String, follow: Bool) -> String? {
+        var info = stat()
+        let found = follow ? stat(path, &info) : lstat(path, &info)
+        guard found == 0 else { return errno == ENOENT ? nil : "unreadable" }
+        if info.st_mode & S_IFMT == S_IFLNK { return "a symlink" }
+        guard info.st_mode & S_IFMT == S_IFDIR else { return "not a directory" }
+        guard info.st_uid == geteuid() else { return "owned by uid \(info.st_uid)" }
+        let mode = info.st_mode & 0o777
+        guard mode & 0o022 == 0 else { return "mode \(String(mode, radix: 8))" }
+        return nil
     }
 
     /// `rv-judge` is installed and a valid manifest omits the `judge` role.

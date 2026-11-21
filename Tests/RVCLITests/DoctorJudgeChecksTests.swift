@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 import RVIPC
@@ -147,5 +152,43 @@ import RVIsolation
         ])
         #expect(rows.first?.summary.contains("rv-judge") == true)
         #expect(rows.first?.summary.contains("review") == true)
+    }
+
+    @Test("a group- or world-writable config or cache level is named; owner-only levels are not")
+    func cacheExposure() throws {
+        let (root, _) = try paths()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent(".config/rv").path
+        #expect(DoctorJudgeChecks.cacheExposure(configDirectory: config) == nil, "missing levels are fine")
+        let models = config + "/cache/laya/models"
+        try FileManager.default.createDirectory(
+            atPath: models, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        for level in [config, config + "/cache", config + "/cache/laya", models] {
+            #expect(chmod(level, 0o700) == 0)
+        }
+        #expect(DoctorJudgeChecks.cacheExposure(configDirectory: config) == nil)
+
+        #expect(chmod(config + "/cache", 0o777) == 0)
+        #expect(chmod(models, 0o770) == 0)
+        let problem = try #require(DoctorJudgeChecks.cacheExposure(configDirectory: config))
+        #expect(problem.id == "judge-cache-exposed")
+        #expect(problem.summary.contains(config + "/cache (mode 777)"))
+        #expect(problem.summary.contains(models + " (mode 770)"))
+        #expect(!problem.summary.contains(config + "/cache/laya ("))
+    }
+
+    @Test("a symlinked cache level is named, never followed")
+    func cacheLevelSymlink() throws {
+        let (root, _) = try paths()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent(".config/rv").path
+        try FileManager.default.createDirectory(
+            atPath: config, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let elsewhere = root.appendingPathComponent("elsewhere").path
+        try FileManager.default.createDirectory(
+            atPath: elsewhere, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.createSymbolicLink(atPath: config + "/cache", withDestinationPath: elsewhere)
+        let problem = try #require(DoctorJudgeChecks.cacheExposure(configDirectory: config))
+        #expect(problem.summary.contains(config + "/cache (a symlink)"))
     }
 }

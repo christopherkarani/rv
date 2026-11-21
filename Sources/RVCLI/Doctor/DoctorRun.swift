@@ -175,7 +175,8 @@ enum DoctorRun {
     }
 
     /// The judge rows: why the pool agent is not running, a manifest that
-    /// verifies no supervisor, and rvd's own judge warnings.
+    /// verifies no supervisor, a config or cache dir another account can
+    /// write, and rvd's own judge warnings.
     private static func judgeProblems(
         environment: DoctorEnvironment,
         diagnostics: ServiceDiagnosticResult,
@@ -190,7 +191,9 @@ enum DoctorRun {
                     lacksJudge: DoctorJudgeChecks.lacksJudge(paths: paths, manifestRoles: probes.manifestRoles)),
             ].compactMap { $0 }
         } ?? []
-        return install + DoctorJudgeChecks.serviceWarnings(diagnostics)
+        return install
+            + [DoctorJudgeChecks.cacheExposure(configDirectory: paths.configDirectory)].compactMap { $0 }
+            + DoctorJudgeChecks.serviceWarnings(diagnostics)
     }
 
     /// One-line repair for a service that is not running cleanly. Hooks have
