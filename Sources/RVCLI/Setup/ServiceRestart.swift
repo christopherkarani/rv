@@ -79,7 +79,7 @@ enum ServiceRestart {
     ) throws(SetupError) -> SetupOutcome {
         let unreachable = "rv service \(verb): this session (SSH or another non-desktop login) cannot reach "
             + "rvd in \(domain); run rv doctor from the desktop session to check that it answers, "
-            + "or read \(RVDLogFile.path(home: "~"))\n"
+            + "or read \(RVDLogFile.launchdPath(home: "~"))\n"
         switch launchdKeepsRvdRunning(env, domain: domain) {
         case .running(let pid):
             return SetupOutcome(

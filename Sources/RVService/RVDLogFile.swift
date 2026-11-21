@@ -36,10 +36,17 @@ public enum RVDLogFile {
     /// macOS: `~/Library/Logs/rv/rvd.log`. Elsewhere: the XDG state default.
     public static func path(home: String) -> String {
         #if os(macOS)
-        return home + "/Library/Logs/rv/rvd.log"
+        return launchdPath(home: home)
         #else
         return home + "/.local/state/rv/rvd.log"
         #endif
+    }
+
+    /// Where the rvd that launchd runs logs. Text about the launchd job
+    /// names this one on every platform: that job exists only on macOS,
+    /// whatever platform built the text.
+    public static func launchdPath(home: String) -> String {
+        home + "/Library/Logs/rv/rvd.log"
     }
 
     /// Redirects stderr into the log when it is discarded. Returns the log

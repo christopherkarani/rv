@@ -218,7 +218,7 @@ private func setupFailureParts(
         case .launchd:
             detail.append(
                 "fix: rv doctor (run from the logged-in desktop session, not SSH) and "
-                    + "\(RVDLogFile.path(home: "~")) show why rvd is not answering"
+                    + "\(RVDLogFile.launchdPath(home: "~")) show why rvd is not answering"
             )
         case .systemdUser:
             detail.append(

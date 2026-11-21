@@ -19,6 +19,11 @@ struct RVDLogFileTests {
         #endif
     }
 
+    /// Messages about the launchd job name macOS's log on every platform.
+    @Test func launchdPathIsMacOSOnEveryPlatform() {
+        #expect(RVDLogFile.launchdPath(home: "~") == "~/Library/Logs/rv/rvd.log")
+    }
+
     @Test func openCreatesOwnerOnlyDirectoryAndFileAndAppends() throws {
         let root = try scratchDirectory("create")
         defer { try? FileManager.default.removeItem(at: root) }
