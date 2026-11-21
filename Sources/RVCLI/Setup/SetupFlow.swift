@@ -171,14 +171,10 @@ extension SetupEnvironment {
         let supervisor = EvaluateSupervisor.systemdUser
         let touchLaunchd = false
         let touchSystemd = loginHome
-        let companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 #else
         let supervisor = EvaluateSupervisor.launchd
         let touchLaunchd = loginHome
         let touchSystemd = false
-        let companionPresence: any CompanionPresenceDetecting = FilesystemCompanionPresence(
-            home: home.rawValue
-        )
 #endif
         var setup = SetupEnvironment(
             home: home,
@@ -192,7 +188,6 @@ extension SetupEnvironment {
             touchSystemd: touchSystemd,
             supervisor: supervisor,
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment),
-            companionPresence: companionPresence,
             runningExecutable: executable?.path
         )
         setup.daemonTrust = DaemonTrustProbe.live
@@ -200,6 +195,11 @@ extension SetupEnvironment {
         setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
 #if os(Linux)
         setup.directRvd = ProcessDirectRvd()
+        // The directly started rvd inherits this environment.
+        let xdgRuntimeDir = environment["XDG_RUNTIME_DIR"]
+        setup.uncreatableRuntimeDirectory = {
+            UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
+        }
 #endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
         setup.judgeBundleInstalled = { JudgeRuntime.selectsBundle(home: $0) }

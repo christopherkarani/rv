@@ -19,6 +19,11 @@ struct RVDLogFileTests {
         #endif
     }
 
+    /// Messages about the launchd job name macOS's log on every platform.
+    @Test func launchdPathIsMacOSOnEveryPlatform() {
+        #expect(RVDLogFile.launchdPath(home: "~") == "~/Library/Logs/rv/rvd.log")
+    }
+
     @Test func openCreatesOwnerOnlyDirectoryAndFileAndAppends() throws {
         let root = try scratchDirectory("create")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -60,6 +65,43 @@ struct RVDLogFileTests {
         #expect(try String(contentsOfFile: path, encoding: .utf8) == "fresh\n")
         #expect(try String(contentsOfFile: path + ".1", encoding: .utf8) == full)
         #expect(FileManager.default.fileExists(atPath: path + ".2") == false)
+    }
+
+    /// rvd stays up for days: the log it is writing rotates while it runs.
+    @Test func rotateIfFullMovesTheLiveLogAsideAndRepointsTheDescriptor() throws {
+        let root = try scratchDirectory("live-rotate")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("rvd.log").path
+        let fd = try RVDLogFile.open(path: path, maxBytes: 64)
+        defer { close(fd) }
+        let short = Array("short\n".utf8)
+        #expect(write(fd, short, short.count) == short.count)
+        #expect(RVDLogFile.rotateIfFull(fd: fd, path: path, maxBytes: 64) == false)
+
+        let full = Array((String(repeating: "x", count: 63) + "\n").utf8)
+        #expect(write(fd, full, full.count) == full.count)
+        #expect(RVDLogFile.rotateIfFull(fd: fd, path: path, maxBytes: 64))
+        let next = Array("after\n".utf8)
+        #expect(write(fd, next, next.count) == next.count)
+
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == "after\n")
+        #expect(try String(contentsOfFile: path + ".1", encoding: .utf8) == "short\n" + String(decoding: full, as: UTF8.self))
+        #expect(try mode(path) == 0o600)
+    }
+
+    /// stderr kept by a terminal or the journal is not the log file.
+    @Test func rotateIfFullLeavesAnotherFileAlone() throws {
+        let root = try scratchDirectory("live-other")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("rvd.log").path
+        let other = root.appendingPathComponent("other.log").path
+        try Data(String(repeating: "x", count: 100).utf8).write(to: URL(fileURLWithPath: path))
+        try Data(String(repeating: "y", count: 100).utf8).write(to: URL(fileURLWithPath: other))
+        let fd = rawOpen(other, O_WRONLY | O_APPEND)
+        #expect(fd >= 0)
+        defer { close(fd) }
+        #expect(RVDLogFile.rotateIfFull(fd: fd, path: path, maxBytes: 64) == false)
+        #expect(FileManager.default.fileExists(atPath: path + ".1") == false)
     }
 
     @Test func openKeepsAFileBelowTheCap() throws {

@@ -124,6 +124,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/daemon_trust.c" \
   "$SRC/hook_fallback.c" \
   "$SRC/observe_gate.c" \
+  "$SRC/local_eval.c" \
   "$SRC/rv.c"
 
 # Pipe hosts must match the Swift HookHost enum exactly. Invalid hosts exec
@@ -294,6 +295,7 @@ REASON_OVERSIZE="RV could not read this hook request"
 REASON_UNREACHABLE='RV daemon is not reachable'
 REASON_CONNECTION='RV daemon connection failed'
 REASON_REJECTED='RV daemon identity check failed'
+REASON_TIMEOUT='RV daemon did not answer in time'
 
 # Every host denies malformed input directly; an executable CLI sibling must
 # never receive authority-bearing fallback input.
@@ -552,6 +554,26 @@ if [[ "$down_ready" -eq 1 ]]; then
     expect_down stale-foreign claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
     rm -f "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/foreign-runtime/rv/evaluate.sock"
 
+    # rvd in its startup backoff wait: bound and listening, not accepting.
+    # connect succeeds into the backlog, the peer check passes, the reply
+    # times out: TIMEOUT (ask), never UNREACHABLE, so observe (configured
+    # here) must not step aside.
+    "$PROBE/rvd" hold "$OWNER_RUNTIME/rv/evaluate.sock" 20 &
+    hold_pid=$!
+    for _try in $(seq 1 50); do
+      [[ -S "$OWNER_RUNTIME/rv/evaluate.sock" ]] && break
+      sleep 0.1
+    done
+    DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
+    expect_down backoff-hold claude "" 0 '"permissionDecision":"ask"' "$REASON_TIMEOUT"
+    if grep -q 'observe' "$OUT/down-backoff-hold.err"; then
+      printf 'rv-c tests: a bound but not yet accepting rvd must not take the observe path\n' >&2
+      exit 1
+    fi
+    kill "$hold_pid" 2>/dev/null || true
+    wait "$hold_pid" 2>/dev/null || true
+    rm -f "$OWNER_RUNTIME/rv/evaluate.sock"
+
     # Post-send drop: a verified daemon reads the whole request and closes
     # without replying (rvd drains in-flight requests on shutdown, which an
     # agent can trigger). That is never an absent daemon.
@@ -595,5 +617,125 @@ if [[ "$down_ready" -eq 1 ]]; then
   rm -f "$OBSERVE_CONFIG"
   printf 'rv-c daemon-down fallback: observe rendering passed\n'
 fi
+
+# The hook-local door (local_eval.h). Fake evaluators stand in for
+# rv-hook-local; FAKE_LOG records what each was given.
+LOCAL="$OUT/local-door"
+rm -rf "$LOCAL"
+mkdir -p "$LOCAL"
+for mode in final escalate hang crash garbage wrong-id; do
+  clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+    -DFAKE_MODE="\"$mode\"" -DFAKE_LOG="\"$LOCAL/$mode.log\"" \
+    -o "$LOCAL/fake-$mode" "$SRC/tests/fake_evaluator.c"
+done
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
+  -o "$OUT/local_eval_test" \
+  "$SRC/tests/local_eval_test.c" \
+  "$SRC/local_eval.c"
+"$OUT/local_eval_test" "$LOCAL/fake-final" "$LOCAL/fake-escalate" "$LOCAL/fake-hang" \
+  "$LOCAL/fake-crash" "$LOCAL/fake-garbage" "$LOCAL/final.log"
+
+# An rv whose peer trust is pinned to "no manifest" (sibling pinning), so
+# the operator's installed /Library manifest never decides these cases.
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
+  -DRV_HOOK_OBSERVE_CONFIG_PATH="\"$OBSERVE_CONFIG\"" \
+  -DRV_HOOK_MANAGED_POLICY_DIR="\"$OBSERVE_MANAGED\"" \
+  -DRV_HOOK_USER_RUNTIME_ROOT="\"$RUNTIME_ROOT\"" \
+  -DRV_MANIFEST_PATH="\"$LOCAL/no-manifest.json\"" \
+  -o "$LOCAL/rv" \
+  "$SRC/json_escape.c" \
+  "$SRC/json_reply.c" \
+  "$SRC/daemon_trust.c" \
+  "$SRC/hook_fallback.c" \
+  "$SRC/observe_gate.c" \
+  "$SRC/local_eval.c" \
+  "$SRC/rv.c"
+PASSWD_HOME="$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+LOCAL_INPUT='{"tool_name":"Bash","tool_input":{"command":"ls"}}'
+
+# run_local <case> <evaluator binary | script>: a dir holding rv and that
+# evaluator as its sibling, run under a hostile environment the evaluator
+# must never see.
+run_local() {
+  local name="$1" evaluator="$2" dir="$LOCAL/case-$1"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  cp "$LOCAL/rv" "$dir/rv"
+  if [[ "$evaluator" == "script" ]]; then
+    # A well-formed final for this very request: only peer trust stops it.
+    cat > "$dir/rv-hook-local" <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'rv-hook-local/1 final\n{"id":"%s","protocol":"rv.ipc.v1","result":{"hookEvaluate":{"exitCode":0,"serviceSemver":"1.0.0","stdout":"LOCAL-FINAL-MARKER\\n","via":"xpc"}}}' "$4"
+SH
+    chmod 755 "$dir/rv-hook-local"
+  else
+    cp "$evaluator" "$dir/rv-hook-local"
+  fi
+  set +e
+  printf '%s' "$LOCAL_INPUT" \
+    | env -u XDG_RUNTIME_DIR HOME=/rv-evil-home USER=evil RV_GUARD_MODE=observe \
+      RV_EVIL_MARKER=1 RV_HOOK_WHEN_DOWN=deny \
+      "$dir/rv" hook --host claude >"$LOCAL/$name.out" 2>"$LOCAL/$name.err"
+  LOCAL_STATUS=$?
+  set -e
+}
+
+# A local final is delivered as rvd's reply would be, from a sanitized call.
+run_local final "$LOCAL/fake-final"
+if [[ "$LOCAL_STATUS" -ne 0 || "$(cat "$LOCAL/final.out")" != "LOCAL-FINAL-MARKER" ]]; then
+  printf 'rv-c tests: local final must be delivered (exit %s)\n' "$LOCAL_STATUS" >&2
+  cat "$LOCAL/final.out" "$LOCAL/final.err" >&2
+  exit 1
+fi
+python3 - "$LOCAL/final.log" "$PASSWD_HOME" "$(id -un)" "$LOCAL_INPUT" <<'PY'
+import re
+import sys
+
+log, home, user, stdin = sys.argv[1:5]
+lines = open(log, encoding="utf-8").read().split("\n")
+args = [l[4:] for l in lines if l.startswith("arg=")]
+# Darwin's libSystem adds __CF_USER_TEXT_ENCODING to every new process.
+env = sorted(l[4:] for l in lines
+             if l.startswith("env=") and not l.startswith("env=__CF_USER_TEXT_ENCODING="))
+assert len(args) == 4 and args[:3] == ["--host", "claude", "--request-id"], args
+assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", args[3], re.I), args
+want = sorted(["HOME=" + home, "USER=" + user, "LOGNAME=" + user, "PATH=/usr/bin:/bin:/usr/sbin:/sbin"])
+assert env == want, ("evaluator environment must be the passwd identity only", env)
+assert "cwd=/" in lines, lines
+assert ("stdin=" + stdin) in lines, ("evaluator must receive the exact hook stdin", lines)
+PY
+
+# Anything but a valid final reply to this request falls through to rvd's
+# path (here no reachable or trusted daemon, so the RV_HOOK_WHEN_DOWN=deny
+# wire naming the daemon) and never delivers what the evaluator printed.
+# As for the daemon-down cases, a registered dev.rv.evaluate must never be
+# sent a test call: skip there (local_eval_test still covers each cause).
+FALL_THROUGH=(escalate hang crash garbage wrong-id untrusted)
+if [[ "$OS" == "Darwin" && "$down_ready" -ne 1 ]]; then
+  FALL_THROUGH=()
+  printf 'rv-c tests: dev.rv.evaluate is registered; skipping hook-local fall-through cases\n'
+fi
+for name in ${FALL_THROUGH[@]+"${FALL_THROUGH[@]}"}; do
+  if [[ "$name" == "untrusted" ]]; then
+    run_local untrusted script
+  else
+    run_local "$name" "$LOCAL/fake-$name"
+  fi
+  if grep -q 'LOCAL-FINAL-MARKER' "$LOCAL/$name.out"; then
+    printf 'rv-c tests: local %s must not deliver the evaluator output\n' "$name" >&2
+    exit 1
+  fi
+  if ! check_deny claude "$LOCAL/$name.out" "$LOCAL/$name.err" "$LOCAL_STATUS" "$REASON_UNREACHABLE" 2>/dev/null \
+    && ! check_deny claude "$LOCAL/$name.out" "$LOCAL/$name.err" "$LOCAL_STATUS" "$REASON_REJECTED" 2>/dev/null \
+    && ! check_deny claude "$LOCAL/$name.out" "$LOCAL/$name.err" "$LOCAL_STATUS" "$REASON_CONNECTION" 2>/dev/null; then
+    printf 'rv-c tests: local %s must fall through to the rvd path\n' "$name" >&2
+    cat "$LOCAL/$name.out" "$LOCAL/$name.err" >&2
+    exit 1
+  fi
+done
+printf 'rv-c hook-local door: final, sanitized call, and escalate/hang/crash/garbage/wrong-id/untrusted fall-through passed\n'
 
 printf 'rv-c hook fallback boundary: %s host denial cases, no-daemon causes, and oversized input passed\n' "$host_count"

@@ -18,8 +18,6 @@ struct IdleExitTests {
         clock.advance(by: .milliseconds(1))
         await clock.runDetached()
         #expect(watchdog.hasFired)
-        let configuration = try RVDLaunch.parse(arguments: ["rvd"])
-        #expect(configuration.idleExitSeconds == 1800)
     }
 
     /// The one wall-clock test: the production scheduler really fires.
@@ -29,8 +27,51 @@ struct IdleExitTests {
         #expect(await waitUntilIdleFired(watchdog))
     }
 
-    @Test func defaultIdleIsThirtyMinutes() {
-        #expect(IdleWatchdog.defaultSeconds == 1800)
+    /// The supervisor keeps rvd resident (launchd KeepAlive, systemd
+    /// Restart=always): no idle exit unless `--idle-exit-seconds` asks.
+    @Test func defaultIdleExitIsOff() throws {
+        #expect(IdleWatchdog.defaultSeconds == 0)
+        #expect(try RVDLaunch.parse(arguments: ["rvd"]).idleExitSeconds == 0)
+        #expect(try RVDLaunch.parse(arguments: ["rvd", "--idle-exit-seconds", "1800"]).idleExitSeconds == 1800)
+    }
+
+    @Test func idleExitOffNeverFiresWhileIdle() async {
+        let clock = ManualIdleScheduler()
+        let watchdog = IdleWatchdog(interval: .zero, scheduler: clock.scheduler)
+        watchdog.start()
+        clock.advance(by: .seconds(86_400))
+        await clock.runDetached()
+        #expect(watchdog.beginRequest())
+        watchdog.endRequest()
+        clock.advance(by: .seconds(86_400))
+        await clock.runDetached()
+        #expect(watchdog.hasFired == false)
+        #expect(watchdog.beginRequest())
+        watchdog.endRequest()
+    }
+
+    /// Idle exit off still exits once the binary was replaced, so the
+    /// supervisor relaunches the upgraded rvd.
+    @Test func idleExitOffStillExitsOnReplacedBinary() async {
+        let fired = FireCounter()
+        let changed = Mutex(false)
+        let clock = ManualIdleScheduler()
+        let watchdog = IdleWatchdog(
+            interval: .zero,
+            staleCheckInterval: .seconds(5),
+            executableChanged: { changed.withLock { $0 } },
+            onFire: { fired.hit() },
+            scheduler: clock.scheduler
+        )
+        watchdog.start()
+        clock.advance(by: .seconds(60))
+        await clock.runDetached()
+        #expect(watchdog.hasFired == false)
+        changed.withLock { $0 = true }
+        clock.advance(by: .seconds(5))
+        await clock.runDetached()
+        #expect(watchdog.hasFired)
+        #expect(fired.count == 1)
     }
 
     @Test func requestResetsIdleTimer() async {

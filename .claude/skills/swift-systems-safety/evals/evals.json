@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "Review a Swift wrapper that stores an Int32 file descriptor, exposes its pointer-backed buffer, and retries every failed syscall. Find the safety problems.",
+    "expected_output": "Identifies ownership/double-close, pointer lifetime and bounds, alignment/initialization, errno preservation, and syscall-specific EINTR/partial-progress issues.",
+    "assertions": ["requires bounds before pointer access", "does not blindly retry every syscall", "requires a single cleanup owner"]
+  }
+]

@@ -7,6 +7,7 @@
 #include "evaluation_route.h"
 #include "daemon_trust.h"
 #include "hook_fallback.h"
+#include "local_eval.h"
 #include "observe_gate.h"
 
 #include <errno.h>
@@ -59,7 +60,7 @@ extern char **environ;
 #define RV_STDIN_KEY "rv.stdin"
 #define RV_CLIENT_SEMVER "1.0.0"
 #define RV_STDIN_XPC_MAX 1048576
-/* Hello covers a launchd on-demand spawn of rvd; hookEvaluate covers a
+/* Hello covers launchd (re)starting rvd; hookEvaluate covers a
  * cold judge load (the daemon enforces its own shorter deadline). */
 #define RV_HELLO_TIMEOUT_MS 3000
 #define RV_EVALUATE_TIMEOUT_MS 8000
@@ -253,19 +254,20 @@ static int parse_hook_argv(int argc, char **argv, const char **host_out) {
 
 static char g_cli_path[PATH_MAX];
 
-static const char *find_rv_cli(void) {
+/* `<dir of the running executable>/<name>`, when it is executable. */
+static int find_sibling(const char *name, char *out, size_t cap) {
     char executable[PATH_MAX];
     char resolved[PATH_MAX];
     /* argv[0], PATH and HOME are not an authority for locating trusted code. */
 #ifdef __APPLE__
     uint32_t capacity = sizeof executable;
     if (_NSGetExecutablePath(executable, &capacity) != 0) {
-        return NULL;
+        return 0;
     }
 #else
     ssize_t size = readlink("/proc/self/exe", executable, sizeof executable - 1);
     if (size < 0 || size >= (ssize_t)sizeof executable - 1) {
-        return NULL;
+        return 0;
     }
     executable[size] = '\0';
 #endif
@@ -273,13 +275,17 @@ static const char *find_rv_cli(void) {
         char *slash = strrchr(resolved, '/');
         if (slash != NULL) {
             *slash = '\0';
-            int n = snprintf(g_cli_path, sizeof g_cli_path, "%s/rv-cli", resolved);
-            if (n > 0 && n < (int)sizeof g_cli_path && access(g_cli_path, X_OK) == 0) {
-                return g_cli_path;
+            int n = snprintf(out, cap, "%s/%s", resolved, name);
+            if (n > 0 && (size_t)n < cap && access(out, X_OK) == 0) {
+                return 1;
             }
         }
     }
-    return NULL;
+    return 0;
+}
+
+static const char *find_rv_cli(void) {
+    return find_sibling("rv-cli", g_cli_path, sizeof g_cli_path) ? g_cli_path : NULL;
 }
 
 static void exec_same_argv(char **argv) {
@@ -588,7 +594,7 @@ static xpc_object_t xpc_exchange(
     }
     if (xpc_get_type(reply) == XPC_TYPE_ERROR) {
         /* Not registered / launchd refused (INVALID) or rvd exited
-         * mid-exchange (INTERRUPTED, e.g. an idle-exit race). */
+         * mid-exchange (INTERRUPTED, e.g. a crash or a replaced binary). */
         *retryable = reply == XPC_ERROR_CONNECTION_INVALID
             || reply == XPC_ERROR_CONNECTION_INTERRUPTED;
         if (discovery && reply == XPC_ERROR_CONNECTION_INVALID) {
@@ -1048,7 +1054,7 @@ static int unix_hook_evaluate(
 #endif
 
 /* One retry, only for transient failures before the hookEvaluate request
- * left this process (cold launchd spawn, idle-exit race). A daemon that
+ * left this process (launchd (re)starting rvd, an exit race). A daemon that
  * answered the first attempt in any way (untrusted, interrupted, slow) was
  * live, so a retry that then finds none is not proof of absence: the first
  * such failure is reported instead of UNREACHABLE. */
@@ -1086,6 +1092,81 @@ static int hook_evaluate(
         }
     }
     return failure;
+}
+
+/* A reply this hook may deliver: it parses, answers this request id, and
+ * comes from a major-compatible service. 0 on success; on failure *reply
+ * holds nothing. */
+static int accept_reply(
+    const char *json,
+    size_t len,
+    const char *request_id,
+    struct RvHookReply *reply
+) {
+    memset(reply, 0, sizeof *reply);
+    if (rv_parse_hook_reply(json, len, reply) != RV_HOOK_REPLY_OK) {
+        return -1;
+    }
+    if (!reply->has_id || strcasecmp(reply->id, request_id) != 0
+        || rv_should_miss_replay(
+            RV_CLIENT_SEMVER,
+            reply->has_service_semver ? reply->service_semver : NULL))
+    {
+        rv_hook_reply_free(reply);
+        return -1;
+    }
+    return 0;
+}
+
+/* Writes an accepted reply's host wire and exits with its code. */
+static void deliver_reply(const char *host, struct RvHookReply *reply, struct ByteBuf *stdin_buf) {
+    int32_t code;
+    if (write_all(STDOUT_FILENO, reply->stdout_bytes, reply->stdout_len) != 0) {
+        rv_hook_reply_free(reply);
+        buf_free(stdin_buf);
+        /* A verdict the host could not receive must never degrade to
+         * allow-mode silence: the always-deny class keeps the deny exit. */
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
+    }
+    code = reply->exit_code;
+    rv_hook_reply_free(reply);
+    buf_free(stdin_buf);
+    exit((int)code);
+}
+
+/* The hook-local door (local_eval.h, docs/architecture/hook-local-decide.md).
+ * Delivers and exits only when the trusted sibling evaluator returned a
+ * final verdict that is a valid reply to this request. Anything else (no
+ * evaluator, untrusted, slow, crashed, escalated, malformed) returns, and
+ * the caller asks rvd exactly as it does without this door: a local
+ * failure is never an answer, and never a fallback class either. Home and
+ * user come from the passwd entry, never the environment. */
+static void try_local_door(const char *host, const char *request_id, struct ByteBuf *stdin_buf) {
+    char path[PATH_MAX];
+    char reason[64];
+    char *json = NULL;
+    size_t len = 0;
+    struct passwd *pw;
+    struct RvHookReply reply;
+
+    if (!find_sibling(RV_EVALUATOR_NAME, path, sizeof path)) {
+        return;
+    }
+    pw = getpwuid(getuid());
+    if (pw == NULL || pw->pw_dir == NULL || pw->pw_dir[0] != '/' || pw->pw_name == NULL) {
+        return;
+    }
+    if (rv_local_evaluate(path, host, request_id, pw->pw_dir, pw->pw_name,
+            stdin_buf->p, stdin_buf->len, RV_LOCAL_DEADLINE_MS, rv_verify_local_evaluator,
+            &json, &len, reason, sizeof reason) != RV_LOCAL_FINAL) {
+        return;
+    }
+    if (accept_reply(json, len, request_id, &reply) != 0) {
+        free(json);
+        return;
+    }
+    free(json);
+    deliver_reply(host, &reply, stdin_buf);
 }
 
 int main(int argc, char **argv) {
@@ -1137,43 +1218,20 @@ int main(int argc, char **argv) {
         fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
 
+    /* The hook-local door: it exits with a final local verdict, or returns
+     * and rvd decides exactly as it would without the door. */
+    try_local_door(host, request_id, &stdin_buf);
+
     failure = hook_evaluate(request, request_len, &stdin_buf, &reply_json, &reply_len);
     free(request);
     if (failure != 0) {
         fail_hook(host, (enum RvHookFailure)failure);
     }
 
-    memset(&reply, 0, sizeof reply);
-    if (rv_parse_hook_reply(reply_json, reply_len, &reply) != RV_HOOK_REPLY_OK) {
+    if (accept_reply(reply_json, reply_len, request_id, &reply) != 0) {
         free(reply_json);
         fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
     }
     free(reply_json);
-
-    if (!reply.has_id || strcasecmp(reply.id, request_id) != 0) {
-        rv_hook_reply_free(&reply);
-        fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
-    }
-
-    if (rv_should_miss_replay(
-            RV_CLIENT_SEMVER,
-            reply.has_service_semver ? reply.service_semver : NULL))
-    {
-        rv_hook_reply_free(&reply);
-        fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
-    }
-
-    if (write_all(STDOUT_FILENO, reply.stdout_bytes, reply.stdout_len) != 0) {
-        rv_hook_reply_free(&reply);
-        buf_free(&stdin_buf);
-        /* A verdict the host could not receive must never degrade to
-         * allow-mode silence: the always-deny class keeps the deny exit. */
-        fail_hook(host, RV_HOOK_FAIL_INPUT);
-    }
-    {
-        int32_t code = reply.exit_code;
-        rv_hook_reply_free(&reply);
-        buf_free(&stdin_buf);
-        return (int)code;
-    }
+    deliver_reply(host, &reply, &stdin_buf);
 }

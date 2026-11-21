@@ -304,11 +304,16 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "rv-workspace-host",
         dependencies: ["RVDomain", "RVIsolation", "RVEngine", "RVService"]
     ),
+    .executableTarget(
+        name: "rv-hook-local",
+        dependencies: ["RVService"]
+    ),
 ] + macOSOperatorUITargets + macOSCustodianTargets
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
     .executable(name: "rvd", targets: ["rvd"]),
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
+    .executable(name: "rv-hook-local", targets: ["rv-hook-local"]),
 ] + macOSOperatorUIProducts + macOSCustodianProducts
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),

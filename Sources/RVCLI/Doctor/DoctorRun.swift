@@ -186,7 +186,8 @@ enum DoctorRun {
             [
                 DoctorJudgeChecks.agent(
                     paths: paths, fileManager: environment.fileManager,
-                    loaded: probes.judgeLoaded, bundleInstalled: probes.judgeBundleInstalled),
+                    loaded: probes.judgeLoaded, bundleInstalled: probes.judgeBundleInstalled,
+                    loadedInBothDomains: probes.judgeLoadedInBothDomains),
                 DoctorJudgeChecks.manifestRole(
                     lacksJudge: DoctorJudgeChecks.lacksJudge(paths: paths, manifestRoles: probes.manifestRoles)),
             ].compactMap { $0 }

@@ -1,6 +1,7 @@
 #if os(Linux)
 import Foundation
 import Glibc
+import RVService
 import Testing
 @testable import RVCLI
 
@@ -99,6 +100,67 @@ import Testing
         }
     }
 
+    /// No login manager made `/run/user/<uid>` and only root can: setup
+    /// says so and gives the root fix up front, starts no rvd and wires no
+    /// hook, instead of waiting 10 s for rvd and pointing at its log.
+    @Test func setupWithoutAUserRuntimeDirectoryNamesTheRootFixAndStartsNothing() throws {
+        try withTempHome { home, layout, launchctl in
+            try FileManager.default.createDirectory(atPath: layout.claudeDirectory, withIntermediateDirectories: true)
+            let direct = RecordingDirectRvd()
+            var environment = linuxEnv(
+                home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: false), direct: direct)
+            environment.uid = { 4242 }
+            environment.uncreatableRuntimeDirectory = { "/run/user/4242" }
+            environment.serviceAnswers = { false }
+            environment.resolveInterpreter = { "/usr/bin/" + $0 }
+            let outcome = SetupRun.setup(environment)
+            #expect(outcome.exitCode == EX_UNAVAILABLE)
+            #expect(outcome.stderr.hasPrefix(
+                "rv setup failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "
+                    + "no login manager (logind) created it, and only root can"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("no hooks were wired"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(
+                "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
+                    + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"),
+                "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("did not answer") == false, "\(outcome.stderr)")
+            #expect(direct.events.isEmpty)
+            #expect(FileManager.default.fileExists(atPath: layout.claudeSettings) == false)
+        }
+    }
+
+    @Test func serviceStartWithoutAUserRuntimeDirectoryNamesTheRootFixAndStartsNothing() throws {
+        try withTempHome { home, _, launchctl in
+            let direct = RecordingDirectRvd()
+            var environment = linuxEnv(
+                home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: false), direct: direct)
+            environment.uid = { 4242 }
+            environment.uncreatableRuntimeDirectory = { "/run/user/4242" }
+            let outcome = ServiceRestart.run(environment, onlyIfStopped: true)
+            #expect(outcome.exitCode == EX_UNAVAILABLE)
+            #expect(outcome.stderr.hasPrefix(
+                "rv service start failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "),
+                "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(
+                "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242"))
+            #expect(direct.events.isEmpty)
+        }
+    }
+
+    /// A systemd user manager runs rvd with its own XDG_RUNTIME_DIR, so the
+    /// direct-start check never applies there.
+    @Test func setupWithAUserManagerDoesNotAskAboutTheRuntimeDirectory() throws {
+        try withTempHome { home, _, launchctl in
+            let systemctl = RecordingSystemctl(reachable: true)
+            var environment = linuxEnv(
+                home: home, launchctl: launchctl, systemctl: systemctl, direct: RecordingDirectRvd())
+            environment.uncreatableRuntimeDirectory = { "/run/user/4242" }
+            let outcome = SetupRun.setup(environment)
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(systemctl.enabled == [SystemdUserTemplate.unitName])
+        }
+    }
+
     @Test func setupJSONReportsTheDirectService() throws {
         try withTempHome { home, _, launchctl in
             let environment = linuxEnv(
@@ -158,6 +220,32 @@ import Testing
             #expect(down.exitCode == 0)
             #expect(down.stdout == "rv service start: rvd is running\n")
             #expect(stopped.events.count == 2)
+        }
+    }
+
+    /// The backoff record is cleared only when a start or restart happens:
+    /// `rv service start` against an rvd that already answers leaves it.
+    @Test(arguments: [true, false])
+    func startClearsTheBackoffRecordOnlyWhenItStartsRvd(userManager: Bool) throws {
+        try withTempHome { home, _, launchctl in
+            let store = StartupBackoffStore.live(home: home.path)
+            let looping = StartupBackoff.Record(earlyExits: 7, running: true)
+            store.save(looping)
+            let up = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: true),
+                onlyIfStopped: true)
+            #expect(up.stdout == "rv service start: rvd is already running\n")
+            #expect(store.load() == looping)
+
+            let down = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: false),
+                onlyIfStopped: true)
+            #expect(down.exitCode == 0)
+            #expect(store.load() == nil)
         }
     }
 
@@ -222,7 +310,10 @@ import Testing
             "HOME=/home/u", "PATH=/usr/bin:/bin", "LD_PRELOAD=/tmp/x.so", "LD_LIBRARY_PATH=/tmp",
             "LD_AUDIT=/tmp/a.so", "GCONV_PATH=/tmp", "GLIBC_TUNABLES=x", "SWIFT_BACKTRACE=swift-backtrace=/tmp/b",
             "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8", "OLD_LD_PRELOAD=kept", "=odd",
+            "INVOCATION_ID=0123abcd", "XPC_SERVICE_NAME=dev.rv.evaluate",
         ])
+        // Supervisor markers go too: rvd started this way is unsupervised
+        // and must never wait out a startup backoff.
         #expect(kept == [
             "HOME=/home/u", "PATH=/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8",
             "OLD_LD_PRELOAD=kept", "=odd",

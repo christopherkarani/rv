@@ -46,8 +46,7 @@ func env(
     systemctl: any SystemctlApplying = SilentSystemctl(),
     touchSystemd: Bool = false,
     supervisor: EvaluateSupervisor = .launchd,
-    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics(),
-    companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
+    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     var environment = SetupEnvironment(
         home: testHomeDirectory(home.path),
@@ -60,8 +59,7 @@ func env(
         touchLaunchd: touchLaunchd,
         touchSystemd: touchSystemd,
         supervisor: supervisor,
-        installAnalytics: installAnalytics,
-        companionPresence: companionPresence
+        installAnalytics: installAnalytics
     )
     environment.sleep = { _ in }
     return environment
@@ -72,12 +70,7 @@ func env(
 let adapterLauncher = AdapterCommand.launchesThroughEnv ? AdapterCommand.envLauncher + " " : ""
 
 func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
-    try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try contents.write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    try writeExecutableScript(at: url, source: contents)
 }
 
 private func fixtureLoginHome() throws -> URL {
@@ -109,7 +102,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
         #expect(plist.contains(home.appendingPathComponent("rvd").path))
-        try expectLaunchAgentKeepAlive(layout.launchAgent, false)
+        try expectAlwaysOnLaunchAgent(layout.launchAgent, rvdPath: home.appendingPathComponent("rvd").path)
         #expect(launchctl.bootstraps.count == 1)
         let analytics = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -842,8 +835,8 @@ private func fixtureLoginHome() throws -> URL {
 }
 
 @Test func setup_writeLaunchAgentLeavesTheCustodianAlone() throws {
-    // `rv service restart` and the companion-uninstall KeepAlive repair call
-    // writeLaunchAgent; they must reload rvd only, never boot out the
+    // `rv service restart` calls writeLaunchAgent; it must reload rvd
+    // only, never boot out the
     // custodian (that would kill an approval waiting on Touch ID).
     try withTempHome { home, layout, launchctl in
         let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
@@ -854,7 +847,7 @@ private func fixtureLoginHome() throws -> URL {
 
         _ = try SetupRun.writeLaunchAgent(
             env: env(home: home, launchctl: launchctl), layout: layout,
-            files: FileOps(fileManager: .default), keepAlive: false)
+            files: FileOps(fileManager: .default))
 
         #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
         #expect(launchctl.bootouts.contains(SetupRun.custodianLaunchAgentLabel) == false)
@@ -868,8 +861,8 @@ private func fixtureLoginHome() throws -> URL {
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
     let keys = try launchdPlist(plist)
-    #expect(keys["KeepAlive"] as? Bool == false)
-    #expect(keys["RunAtLoad"] as? Bool == false)
+    #expect(keepAlivePathState(keys) == ["/opt/rvd": true])
+    #expect(keys["RunAtLoad"] as? Bool == true)
     #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
     #expect(plist.contains("<string>Aqua</string>"))
     #expect(plist.contains("<string>Background</string>"))
@@ -1195,6 +1188,17 @@ private func fixtureLoginHome() throws -> URL {
                 + "in a terminal to see why; rv doctor shows the cause\n"
         ),
         (
+            .userRuntimeDirectoryMissing(directory: "/run/user/4242", uid: 4242),
+            .serviceStart,
+            EX_UNAVAILABLE,
+            "rv service start failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "
+                + "no login manager (logind) created it, and only root can; "
+                + "rvd keeps its socket there, so rv did not start it\n"
+                + "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
+                + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"
+                + "/run is usually a tmpfs, so /run/user/4242 must be made again after a reboot or container restart\n"
+        ),
+        (
             .serviceDown(.serviceNotAnswering(.systemdUser), alreadyWired: [.claude, .codex]),
             .setup,
             EX_UNAVAILABLE,
@@ -1396,7 +1400,7 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
         #expect(outcome.stdout.isEmpty)
         #expect(outcome.stderr == "rv setup failed: rvd did not answer within 10 seconds of starting the service\n"
             + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
-            + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+            + "fix: rv doctor (run from the logged-in desktop session, not SSH) and ~/Library/Logs/rv/rvd.log show why rvd is not answering\n"
             + "then rerun rv setup to wire agent hooks\n")
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
         #expect(launchctl.bootstraps.isEmpty == false, "the service was started before the probe")

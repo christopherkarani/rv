@@ -20,11 +20,22 @@ import Testing
         #expect(keys["Label"] as? String == "dev.rv.judge")
         #expect(keys["ProgramArguments"] as? [String] == ["/opt/rv/rv-judge", "serve"])
         #expect(keys["RunAtLoad"] as? Bool == true)
-        #expect(keys["KeepAlive"] as? Bool == true)
+        // Always on like rvd, but only while rv-judge exists: a deleted
+        // rv-judge is never respawned.
+        let keepAlive = try #require(keys["KeepAlive"] as? [String: Any])
+        #expect(keepAlive.count == 1)
+        #expect(keepAlive["PathState"] as? [String: Bool] == ["/opt/rv/rv-judge": true])
+        #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try written(plist), rvdPath: "/opt/rv/rv-judge"))
         #expect(keys["ThrottleInterval"] as? Int == 5)
         let services = try #require(keys["MachServices"] as? [String: Bool])
         #expect(services == ["dev.rv.judge": true])
         #expect(keys["LimitLoadToSessionType"] as? [String] == ["Aqua", "Background"])
+    }
+
+    private func written(_ plist: String) throws -> String {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("judge-\(UUID().uuidString).plist").path
+        try plist.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
     }
 
     @Test func setupRegistersTheJudgeOnlyWhenRvJudgeSitsBesideRvd() throws {
@@ -100,7 +111,7 @@ import Testing
             _ = try installJudge(beside: home.appendingPathComponent("rvd"))
             _ = try SetupRun.writeLaunchAgent(
                 env: env(home: home, launchctl: launchctl), layout: layout,
-                files: FileOps(fileManager: .default), keepAlive: false)
+                files: FileOps(fileManager: .default))
             #expect(FileManager.default.fileExists(atPath: layout.judgeLaunchAgent) == false)
             #expect(launchctl.bootouts.contains(SetupRun.judgeLaunchAgentLabel) == false)
         }
