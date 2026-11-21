@@ -86,9 +86,18 @@ enum HostModeRun {
         return (document, modes, installations)
     }
 
-    static func list(_ env: SetupEnvironment, json: Bool) -> SetupOutcome {
+    /// `only`: show one host (`rv host mode claude`); nil shows every host.
+    static func list(_ env: SetupEnvironment, json: Bool, only: HookHost? = nil) -> SetupOutcome {
         do {
-            let (document, modes, installations) = try listState(env)
+            let (listed, modes, installations) = try listState(env)
+            var document = listed
+            if let only {
+                document = ListDocument(
+                    guardMode: document.guardMode,
+                    hosts: document.hosts.filter { $0.host == only.rawValue },
+                    managedEnforce: document.managedEnforce
+                )
+            }
             let rows = document.hosts
             if json {
                 return SetupOutcome(stdout: try RobotJSON.encode(document) + "\n", exitCode: 0)

@@ -7,7 +7,9 @@ struct HostCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "host",
         abstract: "Show or set how rv guards each agent host (block, observe, off).",
-        subcommands: [HostListCommand.self, HostModeCommand.self]
+        subcommands: [HostListCommand.self, HostModeCommand.self],
+        // `rv host` alone answers "what mode is each host in?".
+        defaultSubcommand: HostListCommand.self
     )
 }
 
@@ -35,29 +37,34 @@ struct HostModeCommand: AsyncParsableCommand {
     )
 
     @Argument(help: "Host: grok, pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity, or muse.")
-    var host: String
+    var host: String?
 
     @Argument(help: "block, observe, or off.")
-    var mode: String
+    var mode: String?
 
     @OptionGroup
     var format: FormatFlags
 
     func validate() throws {
-        guard HookHost(rawValue: host) != nil else {
-            throw ValidationError("unknown host \(host)")
+        if let host, HookHost(rawValue: host) == nil {
+            let known = HookHost.allCases.map(\.rawValue).sorted().joined(separator: ", ")
+            throw ValidationError("unknown host \(host); expected one of \(known)")
         }
-        guard HostMode(rawValue: mode) != nil else {
+        if let mode, HostMode(rawValue: mode) == nil {
             throw ValidationError("expected block, observe, or off")
         }
     }
 
     func run() async throws {
-        guard let hookHost = HookHost(rawValue: host), let hostMode = HostMode(rawValue: mode) else {
-            throw ValidationError("expected a host and block, observe, or off")
-        }
         guard let env = SetupEnvironment.live() else {
             try CommandContext.failHomeMissing(command: "host mode")
+        }
+        // Without a mode this is a question, not a change: show the
+        // current modes (every host, or the one named) like rv host list.
+        guard let mode, let hostMode = HostMode(rawValue: mode),
+              let host, let hookHost = HookHost(rawValue: host)
+        else {
+            try CeremonyCLI.emit(HostModeRun.list(env, json: format.json || format.robot, only: host.flatMap(HookHost.init(rawValue:))))
         }
         // Loosening sheds oversight for that host: like `rv uninstall`, a
         // same-user agent must not do it unattended.

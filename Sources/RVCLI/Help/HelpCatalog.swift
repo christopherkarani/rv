@@ -541,7 +541,8 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv host list [--json]"),
+                HelpRow(name: "rv host [list] [--json]"),
+                HelpRow(name: "rv host mode [<host>] [--json]"),
                 HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
             ]),
             HelpSection(heading: "Modes", rows: [
