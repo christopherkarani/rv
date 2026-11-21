@@ -85,7 +85,7 @@ struct LocalHookRecordParityTests {
     @Test func analyticsOptOutSpoolsNoDecision() async throws {
         let fixture = try LocalHookFixture()
         let config = RVPolicyPaths.configDirectory(home: fixture.home)
-        try Data(#"{"analytics":{"enabled":false}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
+        try Data(#"{"judge":{"mode":"live"},"analytics":{"enabled":false}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
         let outcome = await fixture.decider.decide(host: .claude, stdin: claudeBash("ls", cwd: fixture.workspace))
         guard case .final = outcome else {
             Issue.record("ls must be decided locally, got \(outcome)")

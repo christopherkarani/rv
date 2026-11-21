@@ -222,12 +222,13 @@ func guardHome(mode: String?) throws -> HomeDirectory {
         .appendingPathComponent("rv-guard-home-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     let home = try #require(HomeDirectory(validating: url.path))
-    if let mode {
-        let config = RVPolicyPaths.configDirectory(home: home)
-        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
-        try #"{"guard":{"mode":"\#(mode)"}}"#
-            .write(to: config.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
-    }
+    // These tests characterize the judge deciding: `judge.mode` live
+    // (unset is shadow, which never decides).
+    let config = RVPolicyPaths.configDirectory(home: home)
+    try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+    let guardKey = mode.map { #","guard":{"mode":"\#($0)"}"# } ?? ""
+    try #"{"judge":{"mode":"live"}\#(guardKey)}"#
+        .write(to: config.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
     return home
 }
 

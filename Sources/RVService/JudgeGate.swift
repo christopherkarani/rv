@@ -295,6 +295,18 @@ public enum JudgeRuntime {
         lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
         guard case .allow = result.decision else { return (result, nil) }
+        if inputs.judge.shadow {
+            // Shadow judge (`judge.mode` not `live`): scored and logged as
+            // a would-be, exactly as observe does, and the call gets what
+            // enforce gives with no judge (`packsOnlyFloor`): the judge
+            // never raises an allow, and a program only the judge could
+            // read still goes to review.
+            let shadowed = observe(
+                wouldBe: result, command: command, inputs: inputs, judge: judge,
+                provenance: provenance, now: now, cwd: cwd, allowSafeLane: allowSafeLane,
+                isPeek: isPeek, lateLog: lateLog)
+            return (packsOnlyFloor(result, command: command), shadowed.log)
+        }
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge

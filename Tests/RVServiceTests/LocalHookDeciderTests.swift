@@ -126,8 +126,8 @@ struct LocalHookDeciderTests {
 
         var observe: Data {
             switch self {
-            case .fileGlobal, .shellGlobal: Data(#"{"guard":{"mode":"observe"}}"#.utf8)
-            case .shellHost: Data(#"{"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
+            case .fileGlobal, .shellGlobal: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"observe"}}"#.utf8)
+            case .shellHost: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
             }
         }
     }
@@ -151,7 +151,7 @@ struct LocalHookDeciderTests {
 
         let fixture = try LocalHookFixture(guardMode: "enforce")
         let config = RVPolicyPaths.configDirectory(home: fixture.home).appendingPathComponent("config.json")
-        let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
+        let enforce = Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce"}}"#.utf8)
         let observe = flip.observe
         let stop = UnfairLock(false)
         let flipper = Thread {
@@ -264,7 +264,7 @@ struct LocalHookFixture {
         let config = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
         if let guardMode {
-            try Data(#"{"guard":{"mode":"\#(guardMode)"}}"#.utf8)
+            try Data(#"{"judge":{"mode":"live"},"guard":{"mode":"\#(guardMode)"}}"#.utf8)
                 .write(to: config.appendingPathComponent("config.json"))
         }
         if judgeBundle {
