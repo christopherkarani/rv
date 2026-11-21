@@ -614,12 +614,14 @@ enum DoctorInstallChecks {
     /// when it is unset. rvd refuses an empty `XDG_RUNTIME_DIR`, a socket
     /// path too long for `sockaddr_un`, a base that is not a directory (a
     /// symlink included: rvd judges the link itself), one owned by another
-    /// uid or writable by group or others, and a missing uid-derived base,
-    /// which only root can create. A missing base elsewhere is not reported:
-    /// rvd tries to create it with its parents, and doctor does not predict
-    /// whether that works. The rows judge the `XDG_RUNTIME_DIR` this shell
-    /// sees (the directory it and its agents dial); an rvd started by the
-    /// systemd user manager uses `/run/user/<uid>` instead.
+    /// uid or writable by group or others, and a missing uid-derived base
+    /// it cannot create (`uncreatableUserRuntimeDirectory`). A missing base
+    /// elsewhere is not reported: rvd tries to create it with its parents,
+    /// and doctor does not predict whether that works; one that cannot be
+    /// looked up at all (`ENOTDIR`, `EACCES`) is. The rows judge the
+    /// `XDG_RUNTIME_DIR` this shell sees (the directory it and its agents
+    /// dial); an rvd started by the systemd user manager uses
+    /// `/run/user/<uid>` instead.
     static func runtimeDirectory(_ environment: SocketBaseEnvironment?, userID: uid_t) -> DoctorProblem? {
         guard let environment else { return nil }
         let ownerRuntime = "\(environment.userRuntimeRoot)/\(userID)"
@@ -647,12 +649,30 @@ enum DoctorInstallChecks {
         let base = socket.deletingLastPathComponent().deletingLastPathComponent().path
         var info = stat()
         guard lstat(base, &info) == 0 else {
-            guard base == ownerRuntime, userID != 0 else { return nil }
+            let lookupError = errno
+            if base == ownerRuntime {
+                // rvd makes `<root>/<uid>` itself when it can; report only
+                // the case it cannot, with rvd's own fix.
+                guard let missing = UnixSocketPath.uncreatableUserRuntimeDirectory(
+                    xdgRuntimeDir: nil, uid: userID, userRuntimeRoot: environment.userRuntimeRoot
+                ) else { return nil }
+                return DoctorProblem(
+                    id: "runtime-dir",
+                    severity: .fail,
+                    summary: "\(missing) is missing and only root can create it; rvd refuses to start",
+                    fix: UnixSocketPath.userRuntimeDirectoryFix(directory: missing, uid: userID)
+                )
+            }
+            // rvd creates a missing base elsewhere with its parents; one
+            // that cannot even be looked up (an ancestor is a file, or not
+            // searchable) it cannot create either.
+            guard lookupError != ENOENT else { return nil }
             return DoctorProblem(
                 id: "runtime-dir",
                 severity: .fail,
-                summary: "\(base) is missing and only root can create it; rvd refuses to start",
-                fix: "as root, mkdir -p -m 0700 \(base) && chown \(userID) \(base); or \(setRuntimeDirectory)"
+                summary: "\(base) cannot be looked up (\(String(cString: strerror(lookupError)))); "
+                    + "rvd cannot create its socket there, and this shell and its agents dial it",
+                fix: "\(setRuntimeDirectory), or unset it (rvd then uses \(ownerRuntime))"
             )
         }
         return existingRuntimeDirectory(
