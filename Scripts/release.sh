@@ -126,6 +126,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$C_SRC/daemon_trust.c" \
   "$C_SRC/hook_fallback.c" \
   "$C_SRC/observe_gate.c" \
+  "$C_SRC/local_eval.c" \
   "$C_SRC/rv.c"
 chmod 755 "$STAGE/rv"
 if [[ "$OS" == "Darwin" ]]; then

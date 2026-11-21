@@ -72,12 +72,7 @@ func env(
 let adapterLauncher = AdapterCommand.launchesThroughEnv ? AdapterCommand.envLauncher + " " : ""
 
 func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
-    try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try contents.write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    try writeExecutableScript(at: url, source: contents)
 }
 
 private func fixtureLoginHome() throws -> URL {
