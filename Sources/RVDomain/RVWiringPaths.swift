@@ -2,8 +2,8 @@ import Foundation
 
 /// The files that keep rv wired in: agent-host hook registrations,
 /// adapters and the rv agent skill that `rv setup` writes, rv's installed binaries and pack
-/// bundle, and its LaunchAgent / systemd user units. An agent that edits
-/// one of these unhooks or replaces the guard watching it.
+/// bundle, its LaunchAgent / systemd user units, and rvd's Core ML cache.
+/// An agent that edits one of these unhooks or replaces the guard watching it.
 ///
 /// One table for both doors: the file-tool door denies Edit/Write here,
 /// and the shell door classifies these paths as protected, so a write
@@ -59,6 +59,9 @@ public enum RVWiringPaths {
         [".config", "systemd", "user.conf"],
         [".config", "systemd", "user.conf.d"],
         [".config", "systemd", "user", "service.d"],
+        // rvd's Core ML (e5rt) cache: Core ML maps compiled bundles from
+        // here into rvd's judge, so a planted one runs inside rvd.
+        ["Library", "Caches", "rvd"],
     ]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.

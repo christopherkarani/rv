@@ -29,7 +29,7 @@ import RVPolicy
 /// always allows and logs what enforcement would have done. Evidence:
 /// docs/plans/laya-judge-decision-record.md.
 public enum JudgeRuntime {
-    private static let slot = JudgeSlot()
+    static let slot = JudgeSlot()
 
     static let ftBundleName = "laya-ft-v2-coreml"
     static let stockBundleName = "laya-multilingual-coreml"
@@ -300,8 +300,10 @@ public enum JudgeRuntime {
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
         // only when a loaded judge errors mid-prediction (`.failed`).
-        // A bundle that cannot LOAD is unavailable: packs-only plus a
-        // note (doctor surfaces it), never an eternal Ask loop.
+        // A bundle that is invalid or has no model is unavailable:
+        // packs-only plus a note (doctor surfaces it), never an eternal Ask
+        // loop. Core ML failing on a model that is there refuses
+        // (`CoreMLLoadRefusal`, review): an agent can provoke that.
         guard let bundle = selection.bundle else {
             return (packsOnlyFloor(result, command: command), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),
@@ -405,7 +407,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy, .late, .circuitOpen:
+        case .failed, .warming, .busy, .late, .circuitOpen, .refused:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -487,6 +489,10 @@ public enum JudgeRuntime {
     /// cutoff, or a request turned away behind a stalled one. `circuitOpen`
     /// is the judge skipped by `JudgeCircuit` after repeated failures. Both
     /// go to review like `busy`: a failing judge must never buy an allow.
+    ///
+    /// `refused` is a judge that would not touch Core ML (cache volume nearly
+    /// full, or a compiled model it could not verify). Review, never
+    /// packs-only: filling the disk must not buy one.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
@@ -495,6 +501,7 @@ public enum JudgeRuntime {
         case busy
         case late
         case circuitOpen(retryIn: Duration)
+        case refused(String)
     }
 
     static func runJudge(
@@ -503,6 +510,7 @@ public enum JudgeRuntime {
         engine: JudgeEngine,
         bundle: URL,
         wait: Duration? = loadWait,
+        slot: JudgeSlot = slot,
         onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in }
     ) -> JudgeRun {
         #if canImport(CoreML)
@@ -519,17 +527,21 @@ public enum JudgeRuntime {
                     let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
                     return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command)) }
+                        catch let refusal as any CoreMLRefusal { return .refused(refusal.reason) }
                         catch { return .failed }
                     }
                 case .ft:
                     let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
                     return admitted(until: deadline, onLate: onLate) {
                         do { return .verdict(try judge.judge(command, context: context)) }
+                        catch let refusal as any CoreMLRefusal { return .refused(refusal.reason) }
                         catch { return .failed }
                     }
                 }
             } catch JudgeLoadError.warming {
                 return .warming
+            } catch let refusal as any CoreMLRefusal {
+                return .refused(refusal.reason)
             } catch let error as LayaError {
                 switch error {
                 case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
@@ -596,7 +608,7 @@ public enum JudgeRuntime {
         switch run {
         case .verdict: .success
         case .late, .failed: .failure
-        case .warming, .busy, .unavailable, .circuitOpen: .neutral
+        case .warming, .busy, .unavailable, .circuitOpen, .refused: .neutral
         }
     }
 
@@ -620,6 +632,9 @@ public enum JudgeRuntime {
         case .busy:
             note = "judge-busy"
             reason = "Laya judge queue is full; retry shortly."
+        case .refused(let why):
+            note = "judge-refused"
+            reason = why
         case .late:
             note = "judge-late"
             reason = "rv degraded: judge late (no verdict in time); failing closed to review."
@@ -865,6 +880,11 @@ enum JudgeLoadError: Error {
 final class JudgeSlot: Sendable {
     private let stock = SingleFlightLoader<LayaCoreMLJudge>()
     private let ft = SingleFlightLoader<FineTunedJudge>()
+    private let coreML: @Sendable () -> CoreMLGuard
+
+    init(coreML: @escaping @Sendable () -> CoreMLGuard = { JudgeRuntime.coreMLGuard }) {
+        self.coreML = coreML
+    }
 
     private static func stamp(_ bundleDir: URL) -> TimeInterval {
         let package = bundleDir.appendingPathComponent("model.mlpackage")
@@ -874,13 +894,13 @@ final class JudgeSlot: Sendable {
 
     func stockJudge(bundleDir: URL, wait: Duration?) throws -> LayaCoreMLJudge {
         try Self.unwrap(stock.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
-            try LayaCoreMLJudge(bundleDir: bundleDir)
+            try LayaCoreMLJudge(bundleDir: bundleDir, coreML: self.coreML())
         })
     }
 
     func ftJudge(bundleDir: URL, wait: Duration?) throws -> FineTunedJudge {
         try Self.unwrap(ft.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
-            try FineTunedJudge(bundleDir: bundleDir)
+            try FineTunedJudge(bundleDir: bundleDir, coreML: self.coreML())
         })
     }
 
@@ -889,9 +909,9 @@ final class JudgeSlot: Sendable {
         let stamp = Self.stamp(bundleDir)
         switch engine {
         case .laya:
-            stock.prewarm(key: bundleDir, stamp: stamp) { try LayaCoreMLJudge(bundleDir: bundleDir) }
+            stock.prewarm(key: bundleDir, stamp: stamp) { try LayaCoreMLJudge(bundleDir: bundleDir, coreML: self.coreML()) }
         case .ft:
-            ft.prewarm(key: bundleDir, stamp: stamp) { try FineTunedJudge(bundleDir: bundleDir) }
+            ft.prewarm(key: bundleDir, stamp: stamp) { try FineTunedJudge(bundleDir: bundleDir, coreML: self.coreML()) }
         }
     }
 
@@ -899,7 +919,7 @@ final class JudgeSlot: Sendable {
         switch outcome {
         case .ready(let judge): return judge
         case .failed(let error): throw error
-        case .cachedFailure: throw LayaError.modelUnavailable("cached load failure")
+        case .cachedFailure(let error): throw error
         case .warming: throw JudgeLoadError.warming
         }
     }
