@@ -1,6 +1,7 @@
 #if os(Linux)
 import Foundation
 import Glibc
+import RVService
 import Testing
 @testable import RVCLI
 
@@ -222,6 +223,32 @@ import Testing
         }
     }
 
+    /// The backoff record is cleared only when a start or restart happens:
+    /// `rv service start` against an rvd that already answers leaves it.
+    @Test(arguments: [true, false])
+    func startClearsTheBackoffRecordOnlyWhenItStartsRvd(userManager: Bool) throws {
+        try withTempHome { home, _, launchctl in
+            let store = StartupBackoffStore.live(home: home.path)
+            let looping = StartupBackoff.Record(earlyExits: 7, running: true)
+            store.save(looping)
+            let up = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: true),
+                onlyIfStopped: true)
+            #expect(up.stdout == "rv service start: rvd is already running\n")
+            #expect(store.load() == looping)
+
+            let down = ServiceRestart.run(
+                linuxEnv(
+                    home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: userManager),
+                    direct: RecordingDirectRvd(), answersNow: false),
+                onlyIfStopped: true)
+            #expect(down.exitCode == 0)
+            #expect(store.load() == nil)
+        }
+    }
+
     @Test func restartWithAUserManagerUsesSystemctl() throws {
         try withTempHome { home, _, launchctl in
             let systemctl = RecordingSystemctl(reachable: true)
@@ -283,7 +310,10 @@ import Testing
             "HOME=/home/u", "PATH=/usr/bin:/bin", "LD_PRELOAD=/tmp/x.so", "LD_LIBRARY_PATH=/tmp",
             "LD_AUDIT=/tmp/a.so", "GCONV_PATH=/tmp", "GLIBC_TUNABLES=x", "SWIFT_BACKTRACE=swift-backtrace=/tmp/b",
             "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8", "OLD_LD_PRELOAD=kept", "=odd",
+            "INVOCATION_ID=0123abcd", "XPC_SERVICE_NAME=dev.rv.evaluate",
         ])
+        // Supervisor markers go too: rvd started this way is unsupervised
+        // and must never wait out a startup backoff.
         #expect(kept == [
             "HOME=/home/u", "PATH=/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8",
             "OLD_LD_PRELOAD=kept", "=odd",

@@ -59,6 +59,11 @@ public enum RVWiringPaths {
         [".config", "systemd", "user.conf"],
         [".config", "systemd", "user.conf.d"],
         [".config", "systemd", "user", "service.d"],
+        // rvd's startup backoff record (`StartupBackoffStore`) and its
+        // temp files, beside rvd's log on macOS and Linux: a planted record
+        // holds a supervised rvd in its wait for up to five minutes.
+        ["Library", "Logs", "rv", "rvd-backoff"],
+        [".local", "state", "rv", "rvd-backoff"],
     ] + coreMLCacheOwners.map { ["Library", "Caches", $0] }
 
     /// The processes that run the Laya judge's Core ML model. Each has an

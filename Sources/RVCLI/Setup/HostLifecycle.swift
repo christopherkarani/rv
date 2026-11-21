@@ -126,15 +126,13 @@ enum HostLifecycle {
     ) throws(SetupError) -> (direct: Bool, judge: JudgeAgentProblem?) {
         var direct = false
         var judge: JudgeAgentProblem?
+        if env.managesService {
+            SetupRun.clearStartupBackoff(env)
+        }
         switch env.supervisor {
         case .launchd:
             judge = SetupRun.writeJudgeLaunchAgent(env: env, layout: layout, files: files)
-            try SetupRun.writeLaunchAgent(
-                env: env,
-                layout: layout,
-                files: files,
-                keepAlive: env.companionPresence.presence().keepAlive
-            )
+            try SetupRun.writeLaunchAgent(env: env, layout: layout, files: files)
             try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
         case .systemdUser:
             direct = try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files) == .direct

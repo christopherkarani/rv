@@ -31,12 +31,54 @@ protocol LaunchctlApplying {
     func domainExists(_ domain: String) -> Bool
     /// `launchctl kickstart -k <domain>/<label>`: kill and restart the job.
     func kickstart(domain: String, label: String) throws
+    /// Whether this process runs in the Aqua (desktop) session, whose Mach
+    /// namespace reaches jobs in `gui/<uid>`. An SSH login is Background.
+    func sessionIsAqua() -> Bool
+    /// What `launchctl print <domain>/<label>` says about the job's process.
+    /// Works from SSH, where rvd's Mach service is out of reach.
+    func jobProcess(domain: String, label: String) -> LaunchdJobProcess
+}
+
+enum LaunchdJobProcess: Equatable {
+    case running(pid: Int32)
+    case notRunning
+    /// `launchctl print` succeeded but said neither.
+    case unknown
+    /// `launchctl print` could not run or exited non-zero (job not found).
+    case printFailed
+
+    /// Parses `launchctl print` output: the job's own `state` and `pid`
+    /// lines are indented by one tab; nested sections use more.
+    static func parse(_ output: String) -> LaunchdJobProcess {
+        var state: String?
+        var pid: Int32?
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard line.hasPrefix("\t"), line.dropFirst().hasPrefix("\t") == false else { continue }
+            let field = line.dropFirst()
+            if field.hasPrefix("state = ") {
+                state = String(field.dropFirst("state = ".count))
+            } else if field.hasPrefix("pid = ") {
+                pid = Int32(field.dropFirst("pid = ".count))
+            }
+        }
+        switch state {
+        case "running":
+            guard let pid, pid > 0 else { return .unknown }
+            return .running(pid: pid)
+        case .some:
+            return .notRunning
+        case nil:
+            return .unknown
+        }
+    }
 }
 
 extension LaunchctlApplying {
     func isLoaded(domain _: String, label _: String) -> Bool { false }
     func domainExists(_: String) -> Bool { true }
     func kickstart(domain _: String, label _: String) throws {}
+    func sessionIsAqua() -> Bool { true }
+    func jobProcess(domain _: String, label _: String) -> LaunchdJobProcess { .unknown }
 }
 
 enum LaunchctlError: Error, Equatable {
@@ -106,6 +148,37 @@ struct ProcessLaunchctl: LaunchctlApplying {
 
     func kickstart(domain: String, label: String) throws {
         try run(["kickstart", "-k", "\(domain)/\(label)"])
+    }
+
+    /// `launchctl managername` prints `Aqua` in a desktop session and
+    /// `Background` over SSH. Anything else counts as Aqua, so a failed
+    /// probe only keeps the readiness check (and its failure) as before.
+    func sessionIsAqua() -> Bool {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["managername"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? runExecutable(process)) != nil else { return true }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let name = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name != "Background"
+    }
+
+    func jobProcess(domain: String, label: String) -> LaunchdJobProcess {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["print", "\(domain)/\(label)"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? runExecutable(process)) != nil else { return .printFailed }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return .printFailed }
+        return LaunchdJobProcess.parse(String(decoding: data, as: UTF8.self))
     }
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {

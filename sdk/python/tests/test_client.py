@@ -825,6 +825,58 @@ def test_ensure_runtime_missing_binary_raises(monkeypatch):
     assert "PATH" in str(info.value)
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, ["/fake/rvd", "--idle-exit-seconds", "1800"]),
+        ({"idle_exit_seconds": 30}, ["/fake/rvd", "--idle-exit-seconds", "30"]),
+        ({"idle_exit_seconds": None}, ["/fake/rvd"]),
+    ],
+)
+def test_ensure_runtime_spawn_idle_exits_by_default(monkeypatch, kwargs, expected):
+    # Nothing supervises a spawned rvd, so by default it must not stay up forever.
+    monkeypatch.setattr(client_module.shutil, "which", lambda name: None)
+    monkeypatch.setenv("RV_RVD", "/fake/rvd")
+    monkeypatch.setenv("HOME", f"/tmp/rv-eh-{os.getpid()}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", f"/tmp/rv-ex-{os.getpid()}")
+    spawned = []
+
+    def refuse(argv, **_):
+        spawned.append(argv)
+        raise OSError("not spawning in tests")
+
+    monkeypatch.setattr(client_module.subprocess, "Popen", refuse)
+    with pytest.raises(RuntimeNotFound):
+        client_module.ensure_runtime(**kwargs)
+    assert spawned == [expected]
+
+
+def test_ensure_runtime_spawn_drops_supervisor_markers(monkeypatch):
+    # rvd waits out a crash-loop backoff only when launchd or systemd started
+    # it; a spawned rvd must not inherit their markers from this process.
+    monkeypatch.setattr(client_module.shutil, "which", lambda name: None)
+    monkeypatch.setenv("RV_RVD", "/fake/rvd")
+    monkeypatch.setenv("HOME", f"/tmp/rv-eh-{os.getpid()}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", f"/tmp/rv-ex-{os.getpid()}")
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    monkeypatch.setenv("XPC_SERVICE_NAME", "dev.rv.evaluate")
+    envs = []
+
+    def refuse(argv, **kwargs):
+        envs.append(kwargs.get("env"))
+        raise OSError("not spawning in tests")
+
+    monkeypatch.setattr(client_module.subprocess, "Popen", refuse)
+    with pytest.raises(RuntimeNotFound):
+        client_module.ensure_runtime()
+    assert len(envs) == 1
+    env = envs[0]
+    assert env is not None
+    assert "INVOCATION_ID" not in env
+    assert "XPC_SERVICE_NAME" not in env
+    assert env["HOME"] == f"/tmp/rv-eh-{os.getpid()}"
+
+
 def test_ensure_runtime_explicit_path_never_spawns(monkeypatch):
     monkeypatch.setattr(client_module.shutil, "which", lambda name: "/bin/false")
     with pytest.raises(RuntimeNotFound) as info:
