@@ -187,7 +187,7 @@ struct MCPPlaceholderPlannerTests {
             requireSandbox: requireSandbox, placeholders: placeholders).get()
         // The other server still starts.
         #expect(planned.last?.1.process != nil)
-        guard case .refused(let name, let refusal) = planned.first?.1 else { return nil }
+        guard case .refused(let name, .placeholder(let refusal)) = planned.first?.1 else { return nil }
         #expect(name == server.name)
         return refusal
     }
@@ -274,7 +274,7 @@ struct MCPPlaceholderPlannerTests {
         #expect(asked.withLock { $0 } == 1)
         #expect(resolver.count.withLock { $0 } == 0)
         for entry in planned {
-            guard case .refused(_, .capabilityUnavailable) = entry.1 else {
+            guard case .refused(_, .placeholder(.capabilityUnavailable)) = entry.1 else {
                 Issue.record("\(entry.1.server) was not refused")
                 continue
             }
@@ -304,7 +304,7 @@ struct MCPPlaceholderPlannerTests {
             let planned = try plan(
                 [server], secrets: PlaceholderSecretsFixture.definitions(), resolver: resolver.resolver,
                 placeholders: placeholders).get()
-            guard case .refused(_, let refusal) = planned.first?.1 else {
+            guard case .refused(_, .placeholder(let refusal)) = planned.first?.1 else {
                 Issue.record("not refused: \(String(describing: planned.first?.1))")
                 continue
             }
@@ -363,7 +363,7 @@ struct MCPPlaceholderPlannerTests {
             let planned = try plan(
                 [server], secrets: PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
                 placeholders: leasing(broker)).get()
-            guard case .refused(_, let refusal) = planned.first?.1 else {
+            guard case .refused(_, .placeholder(let refusal)) = planned.first?.1 else {
                 Issue.record("bound although it holds the real value: \(server)")
                 continue
             }
@@ -380,7 +380,7 @@ struct MCPPlaceholderPlannerTests {
         let planned = try plan(
             [bound()], secrets: PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
             placeholders: leasing(broker), sandbox: { _, launch, _ in .success(launch) }).get()
-        guard case .refused(_, .uncaged) = planned.first?.1 else {
+        guard case .refused(_, .placeholder(.uncaged)) = planned.first?.1 else {
             Issue.record("an uncaged launch was bound")
             return
         }

@@ -4,6 +4,37 @@ import Synchronization
 import Testing
 @testable import RVService
 
+/// A flag an escaping judge body can set (a `Mutex` cannot be captured there).
+private final class Flag: Sendable {
+    private let value = Mutex(false)
+    func set() { value.withLock { $0 = true } }
+    var isSet: Bool { value.withLock { $0 } }
+}
+
+/// A run time an escaping late-result callback can record.
+private final class RunTime: Sendable {
+    private let value = Mutex<Duration?>(nil)
+    func record(_ ran: Duration) { value.withLock { $0 = ran } }
+    var recorded: Duration? { value.withLock { $0 } }
+}
+
+private extension JudgeAdmission.Outcome {
+    var turnedAway: Bool? {
+        if case .turnedAway(let stalled) = self { return stalled }
+        return nil
+    }
+
+    var answer: T? {
+        if case .answered(let value) = self { return value }
+        return nil
+    }
+
+    var isLate: Bool {
+        if case .late = self { return true }
+        return false
+    }
+}
+
 /// The judge model answers one request at a time. Without a bound, requests
 /// the hook client already gave up on keep queueing behind it and every new
 /// request waits longer than the last (seen live: 10 s → 107 s).
@@ -45,10 +76,10 @@ struct JudgeAdmissionTests {
         }
 
         let begin = ContinuousClock.now
-        let ran = Mutex(false)
-        let third = admission.run(until: nil) { ran.withLock { $0 = true }; return true }
-        #expect(third == nil)
-        #expect(ran.withLock { $0 } == false)
+        let ran = Flag()
+        let third = admission.run(until: nil) { ran.set(); return true }
+        #expect(third.turnedAway == false)
+        #expect(ran.isSet == false)
         #expect(ContinuousClock.now - begin < .seconds(1))
 
         release.signal()
@@ -67,39 +98,98 @@ struct JudgeAdmissionTests {
         defer { release.signal() }
 
         let begin = ContinuousClock.now
-        let ran = Mutex(false)
+        let ran = Flag()
         let deadline = begin.advanced(by: .milliseconds(200) + JudgeAdmission.inferenceHeadroom)
-        let waited = admission.run(until: deadline) {
-            ran.withLock { $0 = true }; return true
-        }
+        let waited = admission.run(until: deadline) { ran.set(); return true }
         let elapsed = ContinuousClock.now - begin
-        #expect(waited == nil)
-        #expect(ran.withLock { $0 } == false)
+        #expect(waited.turnedAway == false)
+        #expect(ran.isSet == false)
         #expect(elapsed >= .milliseconds(150))
         #expect(elapsed < .seconds(2))
     }
 
+    /// A slow prediction holds the model; a hook call behind it waits the
+    /// judge budget, not its whole hook deadline.
+    @Test func aJudgedCallWaitsAtMostTheBudgetForASlot() {
+        let admission = JudgeAdmission(limit: 4)
+        let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
+        occupy(admission, release: release, started: started)
+        defer { release.signal() }
+
+        let begin = ContinuousClock.now
+        let ran = Flag()
+        let waited = admission.run(until: begin.advanced(by: HookDeadline.budget)) { ran.set(); return true }
+        let elapsed = ContinuousClock.now - begin
+        // Behind a prediction younger than `stallAge`: busy, not stalled.
+        #expect(waited.turnedAway == false)
+        #expect(ran.isSet == false)
+        #expect(elapsed >= JudgeAdmission.waitBudget - .milliseconds(50))
+        #expect(elapsed < JudgeAdmission.waitBudget + .seconds(1))
+    }
+
+    @Test func theBudgetBoundsTheSlotWaitNotTheColdLoad() {
+        let since = ContinuousClock.now
+        let deadline = since.advanced(by: HookDeadline.budget)
+        // A far deadline: the budget ends the wait for the model slot.
+        #expect(JudgeAdmission.slotCutoff(until: deadline, since: since)
+            == since.advanced(by: JudgeAdmission.waitBudget))
+        // A near deadline: its headroom ends the wait first.
+        let near = since.advanced(by: .seconds(2))
+        #expect(JudgeAdmission.slotCutoff(until: near, since: since) == near - JudgeAdmission.inferenceHeadroom)
+        // No deadline: no bound (the CLI's in-process path).
+        #expect(JudgeAdmission.slotCutoff(until: nil, since: since) == nil)
+        #expect(JudgeAdmission.waitBudget == .milliseconds(1500))
+        // A cold load keeps the daemon's 5 s, cut only by deadline - headroom,
+        // so a fresh rvd still loads its judge on the first calls.
+        #expect(JudgeAdmission.loadWait(
+            JudgeRuntime.daemonLoadWait, until: deadline - JudgeAdmission.inferenceHeadroom, now: since)
+            == JudgeRuntime.daemonLoadWait)
+    }
+
+    /// A deadline-less holder (one no late-cutoff abandons) that has run past
+    /// `stallAge` stalls the judge: a request turned away behind it is late.
+    @Test func aTurnAwayBehindAnOldPredictionIsStalled() {
+        let admission = JudgeAdmission(limit: 4, stallAge: .milliseconds(50))
+        let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
+        occupy(admission, release: release, started: started)
+        defer { release.signal() }
+        Thread.sleep(forTimeInterval: 0.1)
+        let ran = Flag()
+        // Slot cutoff 0.1 s from now (deadline less headroom).
+        let behind = JudgeRuntime.admitted(
+            through: admission,
+            until: ContinuousClock.now.advanced(by: JudgeAdmission.inferenceHeadroom + .milliseconds(100))
+        ) { ran.set(); return .failed }
+        guard case .late = behind else {
+            Issue.record("a turn-away behind a stalled prediction must answer late, got \(behind)")
+            return
+        }
+        #expect(ran.isSet == false)
+    }
+
     @Test func aDeadlineInsideTheHeadroomNeverRunsTheModel() {
         let admission = JudgeAdmission(limit: 4)
-        let ran = Mutex(false)
+        let ran = Flag()
         let begin = ContinuousClock.now
         let tight = admission.run(
             until: begin.advanced(by: JudgeAdmission.inferenceHeadroom / 2)
-        ) { ran.withLock { $0 = true }; return true }
-        #expect(tight == nil)
-        #expect(ran.withLock { $0 } == false)
+        ) { ran.set(); return true }
+        #expect(tight.turnedAway == false)
+        #expect(ran.isSet == false)
         #expect(ContinuousClock.now - begin < .milliseconds(200))
         #expect(admission.admitted == 0)
     }
 
     @Test func aSpentDeadlineNeverRunsTheModel() {
         let admission = JudgeAdmission(limit: 4)
-        let ran = Mutex(false)
+        let ran = Flag()
         let late = admission.run(until: ContinuousClock.now.advanced(by: .milliseconds(-1))) {
-            ran.withLock { $0 = true }; return true
+            ran.set(); return true
         }
-        #expect(late == nil)
-        #expect(ran.withLock { $0 } == false)
+        #expect(late.turnedAway == false)
+        #expect(ran.isSet == false)
         #expect(admission.admitted == 0)
     }
 
@@ -111,7 +201,66 @@ struct JudgeAdmissionTests {
         DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .milliseconds(200)) {
             release.signal()
         }
-        #expect(admission.run(until: nil) { 42 } == 42)
+        #expect(admission.run(until: nil) { 42 }.answer == 42)
+    }
+
+    @Test func aPredictionThatAnswersInTimeIsAnswered() {
+        let admission = JudgeAdmission(limit: 4)
+        let answered = admission.run(until: ContinuousClock.now.advanced(by: HookDeadline.budget)) { 7 }
+        #expect(answered.answer == 7)
+        #expect(admission.admitted == 0)
+    }
+
+    /// A prediction cannot be cancelled: its caller stops waiting before its
+    /// deadline (`late`), the prediction reports itself when it returns, and
+    /// a request turned away behind the abandoned prediction is `late` too.
+    @Test func aPredictionPastItsCutoffIsLateAndReportsItselfWhenDone() {
+        let admission = JudgeAdmission(limit: 4)
+        let reported = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let ranFor = RunTime()
+        let begin = ContinuousClock.now
+        // Slot cutoff begin+0.4 s; the caller stops waiting at
+        // deadline - replyMargin. The prediction only returns once released,
+        // so the ordering holds however starved the machine is.
+        let deadline = begin.advanced(by: JudgeAdmission.inferenceHeadroom + .milliseconds(400))
+        let first = JudgeRuntime.admitted(
+            through: admission, until: deadline, since: begin,
+            onLate: { _, ran in
+                ranFor.record(ran)
+                reported.signal()
+            }
+        ) {
+            release.wait()
+            return .failed
+        }
+        defer { release.signal() }
+        let waited = ContinuousClock.now - begin
+        guard case .late = first else {
+            Issue.record("a prediction past its cutoff must answer late, got \(first)")
+            return
+        }
+        #expect(waited >= deadline - JudgeAdmission.replyMargin - begin)
+        #expect(ranFor.recorded == nil, "the caller returns before the prediction reports")
+
+        // The abandoned prediction still holds the model: the next caller is
+        // turned away behind a stalled judge, which counts as late.
+        let ran = Flag()
+        let behind = JudgeRuntime.admitted(
+            through: admission, until: ContinuousClock.now.advanced(by: .milliseconds(1200))
+        ) { ran.set(); return .failed }
+        guard case .late = behind else {
+            Issue.record("a turn-away behind a stalled prediction must answer late, got \(behind)")
+            return
+        }
+        #expect(ran.isSet == false)
+
+        release.signal()
+        #expect(reported.wait(timeout: .now() + 10) == .success)
+        // It reports its own run time, which outlasted its caller's wait.
+        #expect((ranFor.recorded ?? .zero) > .zero)
+        // The model is free again.
+        #expect(admission.run(until: ContinuousClock.now.advanced(by: HookDeadline.budget)) { 1 }.answer == 1)
     }
 
     @Test func theOffloadCarriesTheHookDeadlineToTheJudge() async {
@@ -122,6 +271,43 @@ struct JudgeAdmissionTests {
         #expect(seen == deadline.expiresAt)
         // Outside a hookEvaluate there is no deadline to carry.
         #expect(await JudgeOffload.run { JudgeAdmission.deadline } == nil)
+    }
+
+    /// rvd's non-hook doors (SDK evaluate, explain, classify, the agent
+    /// bridge, approval peeks) bind a judge budget of one hook budget. The
+    /// offload turns it into the judge's deadline when its body starts, so
+    /// time spent waiting for a thread is not charged to the judge, and it
+    /// never becomes the hook deadline that pattern search reads.
+    @Test func theOffloadAnchorsANonHookJudgeBudgetWhenItsBodyStarts() async throws {
+        #expect(JudgeOffload.nonHookBudget == HookDeadline.budget)
+        let (queued, judge, hook, started) = try await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
+            // Time the caller spends before the offload runs is not the judge's.
+            try await Task.sleep(for: .milliseconds(200))
+            let queued = ContinuousClock.now
+            let seen = await JudgeOffload.run {
+                (JudgeAdmission.deadline, JudgeOffload.hookDeadline, ContinuousClock.now)
+            }
+            return (queued, seen.0, seen.1, seen.2)
+        }
+        let bound = try #require(judge)
+        // Counted from inside the offload: after the caller queued it, and
+        // no later than the body's first instruction.
+        #expect(bound >= queued.advanced(by: JudgeOffload.nonHookBudget))
+        #expect(bound <= started.advanced(by: JudgeOffload.nonHookBudget))
+        #expect(hook == nil, "a non-hook judge budget must not bound pattern search")
+    }
+
+    /// A hook deadline wins over a judge budget, and is the one deadline
+    /// the offloaded pattern search sees.
+    @Test func aHookDeadlineWinsOverANonHookJudgeBudget() async {
+        let hook = HookDeadline()
+        let seen = await HookDeadline.$current.withValue(hook) {
+            await JudgeOffload.$judgeBudget.withValue(.zero) {
+                await JudgeOffload.run { (JudgeAdmission.deadline, JudgeOffload.hookDeadline) }
+            }
+        }
+        #expect(seen.0 == hook.expiresAt)
+        #expect(seen.1 == hook.expiresAt)
     }
 
     @Test func aModelLoadWaitNeverOutlastsTheHookDeadline() {
@@ -139,10 +325,22 @@ struct JudgeAdmissionTests {
         #expect(JudgeAdmission.loadWait(.seconds(5), until: spent, now: now) == .zero)
     }
 
+    /// A call that gets the model at its slot cutoff still has a real
+    /// inference window (p50 0.3 s) before it stops waiting at
+    /// `deadline - replyMargin`; otherwise a healthy judge would answer
+    /// `late` there and count as a circuit failure.
+    @Test func aSlotTakenAtItsCutoffLeavesASecondToInfer() {
+        #expect(JudgeAdmission.inferenceHeadroom - JudgeAdmission.replyMargin >= .seconds(1))
+        // A near deadline, where the headroom (not the wait budget) ends the slot wait.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let cutoff = JudgeAdmission.slotCutoff(until: deadline, since: .now)
+        #expect(cutoff.map { (deadline - JudgeAdmission.replyMargin) - $0 >= .seconds(1) } == true)
+    }
+
     @Test func aFullLiveQueueClearsInsideOneHookBudget() {
-        // Nominal inference per request; the last admitted one must still
-        // finish before the daemon's budget runs out.
-        let nominalInference: Duration = .milliseconds(500)
+        // Nominal inference per request (p50 0.3 s); the last admitted one
+        // must still finish before the daemon's budget runs out.
+        let nominalInference: Duration = .milliseconds(400)
         #expect(
             nominalInference * JudgeAdmission.liveLimit + JudgeAdmission.inferenceHeadroom
                 <= HookDeadline.budget)
@@ -155,27 +353,27 @@ struct JudgeAdmissionTests {
         let started = DispatchSemaphore(value: 0)
         occupy(full, release: release, started: started)
         defer { release.signal() }
-        let ran = Mutex(false)
+        let ran = Flag()
         let refused = JudgeRuntime.admitted(through: full, until: nil) {
-            ran.withLock { $0 = true }
+            ran.set()
             return .failed
         }
         guard case .busy = refused else {
             Issue.record("a full admission must answer busy, got \(refused)")
             return
         }
-        #expect(ran.withLock { $0 } == false)
+        #expect(ran.isSet == false)
 
         // A deadline inside the headroom is busy too, even when free.
         let free = JudgeAdmission(limit: 1)
         let late = JudgeRuntime.admitted(
             through: free, until: ContinuousClock.now.advanced(by: .milliseconds(10))
-        ) { ran.withLock { $0 = true }; return .failed }
+        ) { ran.set(); return .failed }
         guard case .busy = late else {
             Issue.record("a spent budget must answer busy, got \(late)")
             return
         }
-        #expect(ran.withLock { $0 } == false)
+        #expect(ran.isSet == false)
 
         // A free admission returns the inference's own result.
         let answered = JudgeRuntime.admitted(through: free, until: nil) { .warming }

@@ -66,7 +66,14 @@ OpenClaw, Antigravity, and Muse**. Hooks are only written for hosts already
 on your machine. Requires macOS 15+ (Apple Silicon) or Linux
 (aarch64/x86_64) with glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+,
 RHEL 10+), libcurl and libsqlite3; the installer checks these first. musl
-(Alpine) is not supported. Linux downloads are checked against the release's
+(Alpine) is not supported. On a Linux host with no login manager
+(containers, WSL without systemd, `su`/`sudo -u` logins), `/run/user/<uid>`
+must exist, owned by you, mode 0700, or `XDG_RUNTIME_DIR` must name such a
+directory: `rvd` keeps its socket there and only root can create it
+(`sudo install -d -m 0755 /run/user && sudo install -d -m 0700 -o $(id -u) /run/user/$(id -u)`).
+`/run` is usually a tmpfs, so make it again after a reboot or container
+restart. The installer checks this before downloading. Linux downloads are
+checked against the release's
 `SHA256SUMS`; until rv's release key is pinned in the installer that file is
 not signature-checked, and the installer says so (see
 [SECURITY.md](SECURITY.md#release-integrity)).
@@ -116,7 +123,12 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   hooks under observe let the call run unchecked and
   unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
   daemon that fails its identity check, or a malformed reply still asks or
-  denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+  denies (an "ask" is Claude Code's own prompt only in a session Claude
+  Code reports as attended, in a prompting permission mode, a block
+  everywhere else). Only `RV_HOOK_WHEN_DOWN=deny` closes the step-aside
+  and keeps denying an absent `rvd`; `"hookAskWhenDown": false` in
+  `config.json` only turns Claude Code's prompt into a block and does not
+  stop the observe step-aside. "Absent" is
   platform-specific: on **macOS**, rv's launchd service is not registered
   (discovery XPC returns INVALID) — the job stays registered while launchd
   restarts `rvd`, so a restarting `rvd` is *not* absent; on **Linux**, the connect to
@@ -194,6 +206,8 @@ quietly allowed. The block message says which of these it was:
 | `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
 | `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
 | `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
+| `rv degraded: judge late` | the judge did not answer this command in time | Retry; if it keeps happening, `rv doctor` |
+| `rv degraded: judge unavailable (circuit open, retrying in Ns)` | the judge failed several times in a row, so rv skips it for a minute and sends what it would have scored to review | Retry after N seconds; `rv doctor` shows the circuit |
 | `Laya judge unavailable; failing closed` | the judge couldn't score this command | `rv doctor` |
 
 Run these from your own terminal, not through the agent:

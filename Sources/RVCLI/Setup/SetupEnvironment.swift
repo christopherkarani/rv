@@ -70,6 +70,12 @@ struct SetupEnvironment {
     /// Starts and stops an unsupervised rvd when Linux has no systemd user
     /// manager. Default touches no process; live: `ProcessDirectRvd`.
     var directRvd: any DirectRvdLaunching = SilentDirectRvd()
+    /// Linux, no systemd user manager: the runtime directory a directly
+    /// started rvd would bind under (`/run/user/<uid>`, XDG_RUNTIME_DIR
+    /// unset) when it is missing and only root can create it. Nil when rvd
+    /// can use or create it. Default nil; live:
+    /// `UnixSocketPath.uncreatableUserRuntimeDirectory`.
+    var uncreatableRuntimeDirectory: () -> String? = { nil }
     /// The absolute path of a runnable interpreter (`python3`), baked into
     /// the hook command; nil when none runs. Setup will not wire a host
     /// whose hook command needs one that does not. Default

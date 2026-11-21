@@ -1193,6 +1193,17 @@ private func fixtureLoginHome() throws -> URL {
                 + "in a terminal to see why; rv doctor shows the cause\n"
         ),
         (
+            .userRuntimeDirectoryMissing(directory: "/run/user/4242", uid: 4242),
+            .serviceStart,
+            EX_UNAVAILABLE,
+            "rv service start failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "
+                + "no login manager (logind) created it, and only root can; "
+                + "rvd keeps its socket there, so rv did not start it\n"
+                + "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
+                + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"
+                + "/run is usually a tmpfs, so /run/user/4242 must be made again after a reboot or container restart\n"
+        ),
+        (
             .serviceDown(.serviceNotAnswering(.systemdUser), alreadyWired: [.claude, .codex]),
             .setup,
             EX_UNAVAILABLE,

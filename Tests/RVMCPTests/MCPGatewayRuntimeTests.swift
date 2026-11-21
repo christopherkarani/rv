@@ -282,18 +282,21 @@ struct MCPGatewayRuntimeTests {
             MCPServerDefinition(name: "bare", command: "b"),
             MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
         ])
-        func plan(_ name: String, requireSandbox: Bool) -> MCPLaunchError? {
-            if case .failure(let error) = MCPLaunchPlanner.plan(
+        /// Why `name` does not start: the plan's failure, or its refusal.
+        func plan(_ name: String, requireSandbox: Bool) -> String? {
+            switch MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
                 resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
                 requireSandbox: requireSandbox)
             {
-                return error
+            case .failure(let error): return error.message
+            case .success(let planned):
+                if case .refused(_, let refusal)? = planned.first?.1 { return refusal.message }
+                return nil
             }
-            return nil
         }
-        #expect(plan("bare", requireSandbox: true)?.message.contains("needs a sandbox") == true)
-        #expect(plan("open", requireSandbox: true)?.message.contains("stays off the network") == true)
+        #expect(plan("bare", requireSandbox: true)?.contains("needs a sandbox") == true)
+        #expect(plan("open", requireSandbox: true)?.contains("stays off the network") == true)
         // A host without a cage: bare servers serve, and serve (not the
         // planner) still refuses sandboxed ones there.
         #expect(plan("bare", requireSandbox: false) == nil)
@@ -303,9 +306,10 @@ struct MCPGatewayRuntimeTests {
     @Test func plannerSandboxDefaultFollowsThePlatformCage() {
         let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "bare", command: "b")])
         let refused: Bool
-        if case .failure = MCPLaunchPlanner.plan(
+        if case .success(let planned) = MCPLaunchPlanner.plan(
             servers: ["bare"], configuration: configuration, secrets: SecretsConfiguration(),
-            resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:])
+            resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:]),
+            case .refused(_, _)? = planned.first?.1
         {
             refused = true
         } else {
