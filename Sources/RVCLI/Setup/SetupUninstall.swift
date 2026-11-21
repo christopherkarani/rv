@@ -3,6 +3,8 @@ import RVAnalytics
 import RVDomain
 import RVHistory
 import RVHooks
+import RVIsolation
+import RVMCP
 import RVPolicy
 import RVPresentation
 
@@ -10,11 +12,14 @@ extension SetupRun {
     static func uninstallPerform(
         _ env: SetupEnvironment,
         removeModels: Bool = false,
+        purge: Bool = false,
         appearance: CLIAppearance,
         clock: any SetupCeremonyClock,
         animate: Bool,
         write: ((String) -> Void)?
-    ) throws(SetupError) -> (text: String, emitted: Bool) {
+    ) throws(SetupError) -> (
+        text: String, emitted: Bool, leftovers: UninstallLeftovers, ownedPathStillExists: Bool
+    ) {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
@@ -31,6 +36,7 @@ extension SetupRun {
         let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
         let launchAgentExisted = files.fileExists(servicePath)
         let custodianAgentExisted = files.fileExists(layout.custodianLaunchAgent)
+        let judgeAgentExisted = files.fileExists(layout.judgeLaunchAgent)
         let auditForwardAgentExisted = files.fileExists(layout.auditForwardLaunchAgent)
 
         // Stop the service before deleting anything it runs from: a failed
@@ -39,8 +45,50 @@ extension SetupRun {
         try stopServices(
             env: env,
             custodianAgentExisted: custodianAgentExisted,
+            judgeAgentExisted: judgeAgentExisted,
             auditForwardAgentExisted: auditForwardAgentExisted
         )
+
+        // --purge decides on every directory it would enter before touching
+        // anything (`purgeRefusal`). A config dir it refuses is not entered,
+        // and the values its secrets.json names are not deleted. A plain
+        // uninstall removes its listed config files as it always has.
+        let home = layout.home.rawValue
+        let configRefusal = purgeRefusal(layout.configDirectory, home: home, files: files)
+        let entersConfig = purge == false || configRefusal == nil
+        let dataDirectories = ownedDataDirectories(layout: layout, env: env).map { path in
+            (
+                path: path,
+                refusal: purgeRefusal(path, home: home, files: files)
+                    ?? (env.runtimeSocketDirectories.contains(path)
+                        ? runtimeDirectoryRefusal(path, files: files) : nil)
+            )
+        }
+
+        // The definitions are how the stored values are found, so under
+        // --purge the values go before secrets.json does. A value that
+        // cannot be deleted is reported and fails the command once the rest
+        // is done; it never stops hooks, service and binaries going.
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        let deletesSecrets = purge && configRefusal == nil
+        var storedSecrets: [String] = []
+        var secretsUnreadable: String?
+        switch SecretsConfiguration.load(configDirectory: configDir) {
+        case .success(let configuration):
+            let names = rvStoredSecretNames(configuration)
+            storedSecrets = deletesSecrets ? purgeStoredSecrets(names, keychain: env.secretKeychain) : names
+        case .failure(let error):
+            secretsUnreadable = error.message
+        }
+        // macOS: OAuth tokens `rv mcp connect` kept in the Keychain. The
+        // lock files that name them stay while a token could not be deleted.
+        let oauthServers = env.mcpOAuthInKeychain
+            ? oauthKeychainServers(configDirectory: layout.configDirectory, files: files) : []
+        let storedOAuthServers = deletesSecrets
+            ? purgeOAuthTokens(oauthServers, keychain: env.secretKeychain) : oauthServers
+        let purgedData = purge
+            && ((configRefusal == nil && keptConfigEntries(layout: layout, files: files).isEmpty == false)
+                || dataDirectories.contains { $0.refusal == nil && ownedPathPresent($0.path, files: files) })
 
         let bin = layout.localBinDirectory
         let binPaths = InstallManifest.ownedBinPaths(
@@ -49,21 +97,29 @@ extension SetupRun {
         )
         let binariesExisted = binPaths.contains { files.fileExists($0) } || files.fileExists(layout.approvalsApp)
         removedPaths.append(
-            contentsOf: [servicePath, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent]
+            contentsOf: [
+                servicePath, layout.custodianLaunchAgent, layout.judgeLaunchAgent, layout.auditForwardLaunchAgent,
+            ]
         )
         removedPaths.append(contentsOf: binPaths)
         removedPaths.append(layout.approvalsApp)
-        if removeModels {
+        if entersConfig {
+            // Hooks are detached and rvd is stopped: with rv gone, "rvd never
+            // ran here" is true again, so a reinstall starts like a fresh one.
+            removedPaths.append(layout.rvdStateMarker)
+        }
+        if (removeModels || purge) && entersConfig {
             removedPaths.append(layout.modelsDirectory)
         }
 
-        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
-        let analytics = AnalyticsPaths(configDirectory: configDir)
-        let configArtifacts =
-            analytics.uninstallArtifacts
-            + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
-            + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
-            + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
+        var configArtifacts: [URL] = []
+        if entersConfig {
+            configArtifacts =
+                AnalyticsPaths(configDirectory: configDir).uninstallArtifacts
+                + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+                + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
+                + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
+        }
         let configExisted = configArtifacts.contains { files.fileExists($0.path) }
         for artifact in configArtifacts {
             removedPaths.append(artifact.path)
@@ -72,10 +128,59 @@ extension SetupRun {
         for path in removedPaths {
             files.removeFile(atPath: path)
         }
-        files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
+        if purge {
+            if configRefusal == nil {
+                // secrets.json stays while it names a value still stored.
+                var keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
+                    ? [] : [SecretsConfiguration.fileName]
+                if storedOAuthServers.isEmpty == false {
+                    keep.insert(MCPOAuthTokenStore.directoryName)
+                }
+                purgeConfigDirectory(layout.configDirectory, keeping: keep, files: files)
+            }
+            for directory in dataDirectories where directory.refusal == nil {
+                removeOwnedPath(directory.path, files: files)
+            }
+        }
+        if entersConfig {
+            files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
+        }
 
+        // Plain uninstall still removes its listed config files through a
+        // link (as before --purge existed); the note only says --purge
+        // would not.
+        var refusedPaths: [UninstallLeftovers.RefusedPath] = []
+        if let configRefusal {
+            refusedPaths.append(.init(path: layout.configDirectory, reason: configRefusal))
+        }
+        for directory in dataDirectories {
+            if let refusal = directory.refusal {
+                refusedPaths.append(.init(path: directory.path, reason: refusal))
+            }
+        }
+        let configEntries = entersConfig ? keptConfigEntries(layout: layout, files: files) : []
+        // --purge: a config dir still there with nothing listed in it could
+        // not be listed or removed; it is left, not purged.
+        let configLeft = purge && entersConfig && configEntries.isEmpty
+            && ownedPathPresent(layout.configDirectory, files: files)
+        let leftovers = UninstallLeftovers(
+            configDirectory: layout.configDirectory,
+            configEntries: configEntries,
+            otherPaths: (configLeft ? [layout.configDirectory] : [])
+                + dataDirectories
+                .filter { $0.refusal == nil && ownedPathPresent($0.path, files: files) }
+                .map { $0.path },
+            storedSecrets: storedSecrets,
+            storedOAuthServers: storedOAuthServers,
+            secretDeletesAttempted: deletesSecrets,
+            secretsUnreadable: secretsUnreadable,
+            refusedPaths: refusedPaths,
+            custodianSystemPaths: env.custodianSystemPaths.filter { ownedPathPresent($0, files: files) },
+            purged: purge
+        )
+        // The failure still carries the note: it names values not deleted.
         if removedPaths.contains(where: { files.fileExists($0) }) {
-            throw SetupError.ownedPathStillExists
+            return ("", false, leftovers, true)
         }
 
         let report = UninstallReport(
@@ -83,15 +188,17 @@ extension SetupRun {
             occupiedHosts: occupiedHosts,
             removedLaunchAgent: launchAgentExisted,
             removedBinaries: binariesExisted,
-            removedConfigArtifacts: configExisted
+            removedConfigArtifacts: configExisted || purgedData,
+            incomplete: leftovers.purgeFailed
         )
-        return SetupFormat.uninstallStdout(
+        let formatted = SetupFormat.uninstallStdout(
             report: report,
             appearance: appearance,
             clock: clock,
             animate: animate,
             write: write
         )
+        return (formatted.text, formatted.emitted, leftovers, false)
     }
 
     /// Boots out every rv job this HOME's real supervisor runs. Only the
@@ -100,6 +207,7 @@ extension SetupRun {
     private static func stopServices(
         env: SetupEnvironment,
         custodianAgentExisted: Bool,
+        judgeAgentExisted: Bool,
         auditForwardAgentExisted: Bool
     ) throws(SetupError) {
         if env.supervisor == .launchd, env.touchLaunchd {
@@ -109,6 +217,12 @@ extension SetupRun {
                     domain: LaunchdDomain.user(uid), label: custodianLaunchAgentLabel)
                 try? env.launchctl.bootout(
                     domain: LaunchdDomain.gui(uid), label: custodianLaunchAgentLabel)
+            }
+            if judgeAgentExisted {
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.user(uid), label: judgeLaunchAgentLabel)
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.gui(uid), label: judgeLaunchAgentLabel)
             }
             if auditForwardAgentExisted {
                 try? env.launchctl.bootout(

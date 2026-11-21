@@ -108,38 +108,6 @@ struct HTTPEgressTests {
         }
     }
 
-    @Test func addressClassesRejectLocalAndPrivateRanges() {
-        #expect(classify("127.0.0.1") == .loopback)
-        #expect(classify("0.0.0.0") == .unspecified)
-        #expect(classify("10.1.2.3") == .privateUnicast)
-        #expect(classify("172.16.0.1") == .privateUnicast)
-        #expect(classify("192.168.1.1") == .privateUnicast)
-        #expect(classify("100.64.0.1") == .sharedCGNAT)
-        #expect(classify("169.254.169.254") == .linkLocal)
-        #expect(classify("192.0.2.1") == .documentation)
-        #expect(classify("198.51.100.1") == .documentation)
-        #expect(classify("203.0.113.1") == .documentation)
-        #expect(classify("224.0.0.1") == .multicast)
-        #expect(classify("255.255.255.255") == .broadcast)
-        #expect(classify("240.0.0.1") == .reserved)
-        #expect(classify("1.1.1.1") == .publicGlobal)
-        #expect(classify("8.8.8.8") == .publicGlobal)
-        #expect(classify6("::1") == .loopback)
-        #expect(classify6("::") == .unspecified)
-        #expect(classify6("::ffff:127.0.0.1") == .mapped)
-        #expect(classify6("::ffff:1.1.1.1") == .mapped)
-        #expect(classify6("fe80::1") == .linkLocal)
-        #expect(classify6("fc00::1") == .uniqueLocal)
-        #expect(classify6("fd12:3456:789a::1") == .uniqueLocal)
-        #expect(classify6("ff02::1") == .multicast)
-        #expect(classify6("2001:db8::1") == .documentation)
-        #expect(classify6("2001:4860:4860::8888") == .publicGlobal)
-        #expect(classify6("2002:a9fe:a9fe::") == .reserved)
-        #expect(classify6("2002:7f00:1::") == .reserved)
-        #expect(classify6("2001:0:4136:e378:8000:63bf:3fff:fdd2") == .reserved)
-        #expect(classify6("2001:10::") == .reserved)
-    }
-
     @Test func embeddedIPv4TunnelsAreDenied() throws {
         let tunnel = try httpAction(url: "https://[2002:a9fe:a9fe::]/")
         guard case .denied = AgentAuthorization.decide(action: .http(tunnel), policy: .empty) else {
@@ -187,6 +155,17 @@ struct HTTPEgressTests {
         let public6 = try #require(parseIPv6("2001:4860:4860::8888"))
         #expect(selectHTTPAddresses([public4, loopback]) == .forbidden(loopback))
         #expect(selectHTTPAddresses([public6, public4]) == .pinned(public4))
+    }
+
+    /// The admission GET refuses what the egress proxy refuses: a platform
+    /// endpoint in public space, the 6to4 relay anycast, and the IPv6
+    /// documentation and IETF-assignment blocks.
+    @Test(arguments: ["168.63.129.16", "192.88.99.1", "3fff::1", "2001:20::1"])
+    func admissionRefusesWhatTheEgressProxyRefuses(_ text: String) throws {
+        let address = try #require(parseIPv4(text) ?? parseIPv6(text))
+        #expect(address.isPublicGlobal == false)
+        let public4 = try #require(HTTPIPAddress(ipv4: [1, 1, 1, 1]))
+        #expect(selectHTTPAddresses([public4, address]) == .forbidden(address))
     }
 
     @Test func publicGETIsAllowedAndUnsafeTargetsAreDenied() throws {
@@ -554,14 +533,6 @@ struct HTTPEgressTests {
         #expect(seen.contains("Cookie") == false)
     }
     #endif
-}
-
-private func classify(_ text: String) -> HTTPAddressClass? {
-    parseIPv4(text)?.addressClass
-}
-
-private func classify6(_ text: String) -> HTTPAddressClass? {
-    parseIPv6(text)?.addressClass
 }
 
 private func httpSubject() throws -> RuntimeAdmissionSubject {

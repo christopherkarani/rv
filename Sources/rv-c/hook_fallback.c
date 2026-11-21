@@ -19,6 +19,9 @@ static const char kUntrustedMessage[] =
 static const char kProtocolMessage[] =
     "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 
+static const char kStoppedMessage[] =
+    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal.";
+
 static const char kObserveMessage[] =
     "RV observe mode: daemon unavailable, so this call was allowed without being checked or logged. Run `rv doctor`.";
 
@@ -51,6 +54,8 @@ const char *rv_hook_failure_message(enum RvHookFailure failure) {
         return kProtocolMessage;
     case RV_HOOK_FAIL_CONNECTION:
         return kConnectionMessage;
+    case RV_HOOK_FAIL_STOPPED:
+        return kStoppedMessage;
     }
     return kProtocolMessage;
 }
@@ -156,7 +161,7 @@ int rv_hook_fallback_render(
      * input, a daemon that fails identity verification (possible
      * impersonation) and a malformed reply always deny. */
     if (failure != RV_HOOK_FAIL_UNREACHABLE && failure != RV_HOOK_FAIL_TIMEOUT
-        && failure != RV_HOOK_FAIL_CONNECTION) {
+        && failure != RV_HOOK_FAIL_CONNECTION && failure != RV_HOOK_FAIL_STOPPED) {
         return render_deny(host, msg, out);
     }
     /* Observe steps aside only for a daemon positively absent before the

@@ -123,7 +123,11 @@ struct ExecutorLifecycleRegressionTests {
         defer { tree.tearDown() }
         let started = tree.workspaceURL.appendingPathComponent("started")
         let pidFile = tree.workspaceURL.appendingPathComponent("sleep.pid")
-        let script = "printf started > \"$1\"; /bin/sleep 20 & printf '%s\\n' \"$!\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"; wait"
+        // The sleep outlives the poll deadline, so the child is still alive
+        // whenever the poll first sees its pid. A child that exits on its own
+        // inside the window turns a late poll into "pid did not appear".
+        let pollSeconds: TimeInterval = 90
+        let script = "printf started > \"$1\"; /bin/sleep 150 & printf '%s\\n' \"$!\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"; wait"
         let executable = try lifecycleExecutable(
             plan: try tree.containedPlan(),
             marker: started,
@@ -141,20 +145,31 @@ struct ExecutorLifecycleRegressionTests {
         // that wait: Process.waitUntilExit ignored the task, so this test hung
         // until the runner timed it out. A missing pid is still a failed launch,
         // but cancellation itself has to return.
-        let deadline = Date().addingTimeInterval(90)
-        var sleepPID: Int32?
-        while Date() < deadline {
-            if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let pid = Int32(trimmed), pid > 1, kill(pid, 0) == 0 {
-                    sleepPID = pid
-                    break
+        //
+        // The poll and the cancel run on their own queue too, and block it
+        // with `usleep`. On the cooperative pool (and through `Task.sleep`,
+        // whose timer resumes via the global executor) each 20 ms tick waits
+        // for a pool thread, and blocking sync tests have held all of them
+        // for 30-57 s on a 3-core runner, so the poll woke after the child
+        // was gone.
+        let pollExecutor = DedicatedTaskExecutor(label: "rv.test.cancel-poll")
+        let poll = Task(executorPreference: pollExecutor) { () -> (Int32?, Date) in
+            let deadline = Date().addingTimeInterval(pollSeconds)
+            var sleepPID: Int32?
+            while Date() < deadline {
+                if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let pid = Int32(trimmed), pid > 1, kill(pid, 0) == 0 {
+                        sleepPID = pid
+                        break
+                    }
                 }
+                usleep(20_000)
             }
-            try await Task.sleep(nanoseconds: 20_000_000)
+            task.cancel()
+            return (sleepPID, Date())
         }
-        task.cancel()
-        let cancelledAt = Date()
+        let (sleepPID, cancelledAt) = await poll.value
         // Stamped where `run` returns, on the dedicated executor. Resuming
         // this test function needs a cooperative thread, and sync tests in
         // other suites can hold all of them past the bound.

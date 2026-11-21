@@ -3,6 +3,15 @@ import RVPresentation
 import RVTUI
 import RVTheme
 
+/// Why setup left `dev.rv.judge` not running. rvd is installed either way:
+/// its judged calls then go to review.
+enum JudgeAgentProblem: Equatable, Sendable {
+    /// `rv-judge` is not installed beside rvd (at this path).
+    case missing(String)
+    /// The plist could not be written or launchd refused it.
+    case notLoaded
+}
+
 struct SetupReport: Equatable, Sendable {
     var slots: SetupSlotSnapshot
     /// Set when the service step was skipped because `rvd` is missing at
@@ -17,6 +26,8 @@ struct SetupReport: Equatable, Sendable {
     /// Agent skills setup kept (not rv's copy) or could not write. The
     /// hooks are still wired.
     var agentSkillNotes: [AgentSkillNote] = []
+    /// macOS: why the judge pool agent is not running, when it is not.
+    var judgeAgent: JudgeAgentProblem?
 
     init(
         grok: SetupSlotKind,
@@ -65,6 +76,9 @@ struct UninstallReport: Equatable, Sendable {
     var removedLaunchAgent: Bool
     var removedBinaries: Bool
     var removedConfigArtifacts: Bool
+    /// `--purge` left some of rv's data behind (named on stderr); the
+    /// command exits non-zero, so the robot line must not say complete.
+    var incomplete = false
 
     /// Terminal outcome; single owner of the removed-vs-clean decision.
     var closer: UninstallCloser {
@@ -115,7 +129,17 @@ enum SetupFormat {
         case .robot:
             return (uninstallRobot(report), false)
         case .pretty(let palette):
-            let frames = uninstallCeremonyFrames(report.closer)
+            var frames = uninstallCeremonyFrames(report.closer)
+            if report.incomplete {
+                // The closer would say complete (or clean); stderr says what is left.
+                frames = frames.map { frame in
+                    var frame = frame
+                    if frame.closerLines.isEmpty == false {
+                        frame.closerLines = ["Uninstall incomplete; see below"]
+                    }
+                    return frame
+                }
+            }
             return playCeremony(
                 frames: frames,
                 palette: palette,
@@ -167,7 +191,10 @@ enum SetupFormat {
     }
 
     private static func uninstallRobot(_ report: UninstallReport) -> String {
-        switch report.closer {
+        if report.incomplete {
+            return "Uninstall incomplete; see stderr.\n"
+        }
+        return switch report.closer {
         case .removed:
             uninstallRobotCompleteLine + "\n"
         case .alreadyClean:

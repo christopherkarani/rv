@@ -11,7 +11,7 @@ usage() {
 Usage: Scripts/release-assets.sh <stage-dir> <out-dir> <target>
 
   <target> is darwin-arm64, linux-aarch64, or linux-x86_64.
-  Copies rv, rv-cli, rvd, rv-workspace-host (plus rv-pty-claim,
+  Copies rv, rv-cli, rvd, rv-workspace-host (plus rv-pty-claim, rv-judge,
   rv-isolation-exec, rv-mcp-custodian, rv-microvm, rv-guest-relay, rv-macvm and
   rv-macvm-agent when staged) to
   <out-dir>/<name>-<target>, copies
@@ -56,7 +56,7 @@ for name in rv rv-cli rvd rv-workspace-host; do
   chmod 755 "$OUT/$name-$TARGET"
 done
 
-for name in rv-pty-claim rv-isolation-exec rv-mcp-custodian rv-microvm rv-guest-relay rv-macvm rv-macvm-agent; do
+for name in rv-pty-claim rv-judge rv-isolation-exec rv-mcp-custodian rv-microvm rv-guest-relay rv-macvm rv-macvm-agent; do
   if [[ -x "$STAGE/$name" ]]; then
     cp "$STAGE/$name" "$OUT/$name-$TARGET"
     chmod 755 "$OUT/$name-$TARGET"

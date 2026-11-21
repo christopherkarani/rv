@@ -12,6 +12,7 @@ export const metadata = { title: "Detections" };
 
 const CODE_LABEL: Record<string, string> = {
   "rv.command.denied-rule": "Pack rule", "rv.command.denied-secret-path": "Secret path", "rv.command.denied-judge": "Laya judge",
+  "rv.command.denied-indeterminate": "Could not evaluate",
   "rv.command.observed-deny": "Observed: would deny", "rv.command.observed-ask": "Observed: would ask",
 };
 

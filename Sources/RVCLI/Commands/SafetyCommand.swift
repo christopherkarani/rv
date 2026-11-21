@@ -43,7 +43,7 @@ struct Safety: AsyncParsableCommand {
                 throw refusal
             } catch let unrecorded as ConfigChangeUnrecorded {
                 try ConfigChangeRefusal.fail(command: "safety", unrecorded)
-            } catch MachineConfigJSONError.unreadableConfig {
+            } catch OwnerConfigWriteError.unreadable {
                 try CommandContext.fail(
                     ConfigUnreadableRefusal.message(prefix: "rv safety"), exitCode: ConfigUnreadableRefusal.exitCode)
             } catch {

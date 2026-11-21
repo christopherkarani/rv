@@ -430,6 +430,26 @@ struct JudgePortThresholdTests {
         #expect(observeRow["note"] as? String == "judge-warming; context: partial")
     }
 
+    @Test("a judge refused for disk space fails closed to review, never packs-only")
+    func refusedFailsClosedToReview() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let door = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .refused("disk nearly full")))
+        let enforced = await door.gated(
+            .apply, request(judged), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) },
+            host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
+        )
+        guard case .deny(let deny) = enforced.decision else {
+            Issue.record("refused judge must fail closed on apply, got \(enforced.decision)")
+            return
+        }
+        #expect(deny.ruleID == RuleID(pack: .coreJudge, pattern: "laya-review"))
+        #expect(deny.reason == "disk nearly full")
+        #expect(try judgeLog(home).last?["note"] as? String == "judge-refused; context: partial")
+    }
+
     @Test("a busy judge fails closed to review at once, never packs-only")
     func busyFailsClosedToReview() async throws {
         let home = try guardHome(mode: nil)

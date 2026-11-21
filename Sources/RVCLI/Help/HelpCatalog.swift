@@ -2,6 +2,8 @@ import RVPolicy
 import RVPresentation
 
 /// Static help copy for every CLI surface that can show `--help` / `rv help`.
+/// Usage rows a command declares itself (`CommandUsage`) are read from the
+/// command; the rest of a page is prose kept here.
 ///
 /// Leaf pages omit title/blurb (the typed command is enough) and omit Next unless
 /// it marks a real workflow beat (`After setup` / `After uninstall`). Root keeps both.
@@ -79,7 +81,7 @@ enum HelpCatalog {
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
-                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and the rvd service"),
+                HelpRow(name: "uninstall", description: "Remove rv's hooks, rvd and binaries; --purge also its data"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
                 HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
                 HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
@@ -174,31 +176,8 @@ enum HelpCatalog {
         title: "",
         blurb: "",
         sections: [
-            HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv workspace start [--workspace <absolute-path>]", description: "Mount or recovery can take up to 90 s (15 s when rv workspace tui reconnects); a host that publishes its endpoint always gets a further 15 s to answer. On failure says why and stops the host it launched, unless that host is still mounting or recovering: it keeps running"),
-                HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace close [--workspace <absolute-path>]", description: "If connecting is refused by peer trust or reports a stale endpoint, and the endpoint names the host rv launched for this project, stops that host (only while its pid still runs rv's rv-workspace-host as your own session leader); a busy, disconnected or older-protocol host is left running; the volume and saved changes are kept"),
-                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] [--timeout <duration>] -- <absolute-executable> [args...]"),
-                HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
-                HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
-                HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
-                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
-                HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
-                HelpRow(name: "rv workspace vms [--json] [--limit N]", description: "List micro-VM runtime sessions, newest first"),
-                HelpRow(name: "rv workspace upload [--workspace <absolute-path>] [--no-gitignore] <host-path> [<workspace-path>]", description: "Copy host files into the live workspace; .gitignore-aware, never follows symlinks (asks for owner authentication)"),
-                HelpRow(name: "rv workspace download [--workspace <absolute-path>] [--no-gitignore] <workspace-path> <new-host-path>", description: "Copy workspace files to a new host path; refuses symlinks, special files and rv's own dirs (asks for owner authentication)"),
-            ]),
-            HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
-                HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
-                HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
-                HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
-                HelpRow(name: "--microvm", description: "Run inside a network-less Linux micro-VM booted from this OCI image (macOS 26+, Apple silicon); the executable is a path inside the guest"),
-                HelpRow(name: "--macvm", description: "Run inside a network-less macOS VM cloned from an image built with rv-macvm prepare (macOS 27); the executable is a path inside the guest"),
-                HelpRow(name: "--cpus / --memory-mib", description: "VM size, with --microvm or --macvm"),
-                HelpRow(name: "--timeout", description: "Kill the runtime's process group after N, Ns, Nm or Nh, even if the workspace host dies; capped by limits.timeoutSeconds in runtime-resources.json (Seatbelt only)"),
-            ]),
+            HelpSection(heading: "Usage", rows: UsageRows.under(Workspace.self)),
+            HelpSection(heading: "Flags", rows: Workspace.flags),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
             ]),
@@ -414,7 +393,11 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv uninstall"),
+                HelpRow(name: "rv uninstall [--remove-models] [--purge]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--remove-models", description: "Also delete the judge weights in ~/.config/rv/models"),
+                HelpRow(name: "--purge", description: "Also delete rv's data and the secret values it stored"),
             ]),
         ],
         nextHeading: "After uninstall",
@@ -998,19 +981,7 @@ enum HelpCatalog {
         title: "",
         blurb: "",
         sections: [
-            HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv policy show [--base] [--effective]"),
-                HelpRow(name: "rv policy show --revision <n> [--repo]"),
-                HelpRow(name: "rv policy list [--repo]"),
-                HelpRow(name: "rv policy draft --english <text> [--save [--wait]]"),
-                HelpRow(name: "rv policy validate"),
-                HelpRow(name: "rv policy export"),
-                HelpRow(name: "rv policy apply"),
-                HelpRow(name: "rv policy rollback <revision> [--repo] [--save [--wait]] [--json]"),
-                HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
-                HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
-                HelpRow(name: "rv policy status [--json]"),
-            ]),
+            HelpSection(heading: "Usage", rows: UsageRows.under(Policy.self)),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "draft",
@@ -1018,7 +989,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "apply",
-                    description: "rv policy apply <policy.toml> [--repo] [--save [--wait]]: previews a shared policy.toml merged into the machine (or --repo) layer; --save writes it after owner approval."
+                    description: "Previews a shared policy.toml merged into the machine (or --repo) layer; --save writes it after owner approval."
                 ),
                 HelpRow(
                     name: "rollback",
@@ -1048,8 +1019,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv allowlist list"),
-                HelpRow(name: "rv allowlist add <rule>"),
-                HelpRow(name: "rv allowlist add-command <command>"),
+                HelpRow(name: "rv allowlist add <rule> --reason <reason>"),
+                HelpRow(name: "rv allowlist add-command <command> --reason <reason>"),
                 HelpRow(name: "rv allowlist remove <rule>"),
                 HelpRow(name: "rv allowlist validate"),
             ]),

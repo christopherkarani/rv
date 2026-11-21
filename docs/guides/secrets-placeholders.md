@@ -94,7 +94,9 @@ The flags that shape a gateway secret:
 `--allow`, `--surface` and the delivery apply only when the secret is
 first defined. To change them later, edit `secrets.json`. Running
 `rv secrets set NAME` again for an existing secret stores a new value,
-which running gateway sessions use from their next request.
+which running gateway sessions use from their next request. So does
+running the command that defined it again with the same flags; with
+different flags it is refused.
 
 Values can also come from 1Password, Vault, AWS Secrets Manager, GCP,
 Azure, Infisical or Bitwarden, or an OAuth token minted by rv: write the
@@ -103,7 +105,7 @@ kinds). On Linux the Keychain-backed sources (`rv secrets set`,
 `rv login connect`) need `secret-tool`; without it:
 
 ```text
-rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring)
+rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but the value you gave was not stored: once the Secret Service keyring is available, run this command again or `rv secrets set OPENAI_API_KEY` to store it
 ```
 
 Check what you have:
@@ -257,6 +259,26 @@ Rules, from the source:
 - A placeholder server is started suspended, bound, then resumed; only
   it and its live descendants can spend the placeholders, through
   serve's own gateway.
+
+## App logins, once
+
+`rv login connect vercel` imports the Vercel or
+GitHub login you already have (CLI auth file, token variable, or
+`gh auth token`; paste as fallback) into the Keychain as a gateway
+secret, so agents use it through rv instead of logging in again.
+On Linux rv keeps stored values in the Secret Service keyring (GNOME
+Keyring, KWallet, KeePassXC) through `secret-tool` (package
+`libsecret-tools`), which needs a session bus and an unlocked keyring;
+the hook guard refuses an agent's own `secret-tool` and Secret Service
+D-Bus calls, since that keyring has no per-app prompt.
+`rv login list` / `check` report status and fingerprints, never values;
+`rv login logout <app>` removes it.
+
+## Vault addresses
+
+A secret definition with an `address` is refused unless
+`VAULT_ADDR` is set to the same origin: rv never sends your Vault token to a
+server the environment does not name.
 
 ## What is protected and what is not
 

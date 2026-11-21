@@ -138,10 +138,18 @@ struct GatedEffectTests {
         let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("x")))
         let apply = await Self.decide(.apply, inline, mode: .enforce, door: door, bundle: Self.fakeBundle)
         #expect(apply.result.decision == .indeterminate(.inlineProgramNeedsJudge))
-        #expect(apply.effects == [.judgeLog(GatedEffect.JudgeLogRow(
-            at: Self.now, guardMode: .enforce, engine: .ft, hash: Self.hash(apply.result),
-            subject: .live(.allow), note: "judge-unavailable: x; context: partial", isPeek: false, score: nil
-        ))])
+        // The refusal is chained as a marked deny (F6); never on the ledger.
+        let indeterminate = RuleID(pack: PackID(rawValue: "rv.indeterminate"), pattern: "inlineProgramNeedsJudge")
+        #expect(apply.effects == [
+            .judgeLog(GatedEffect.JudgeLogRow(
+                at: Self.now, guardMode: .enforce, engine: .ft, hash: Self.hash(apply.result),
+                subject: .live(.allow), note: "judge-unavailable: x; context: partial", isPeek: false, score: nil
+            )),
+            .denialRow(GatedEffect.DenialRow(
+                at: Self.now, host: .hook(.claude), tool: .bash, ruleID: indeterminate,
+                category: .pack(indeterminate.pack), path: "", indeterminate: .inlineProgramNeedsJudge
+            )),
+        ])
     }
 
     @Test("decide writes nothing; the audit precedes the judge log and denial row; peek keeps the audit")
@@ -260,6 +268,22 @@ struct GatedEffectTests {
             Issue.record("plain ls must allow, got \(result.decision)")
             return
         }
+        #expect(stale.hasTripped)
+    }
+
+    /// As for a deny: past the hook deadline an indeterminate refusal asks
+    /// for no denial row (`HookDoor` answers with the timeout deny).
+    @Test("enforce: a late indeterminate apply asks for no denial row")
+    func lateIndeterminateApplyEmitsNoDenialRow() async throws {
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        let decided = await HookDeadline.$current.withValue(stale) {
+            await Self.decide(.apply, ShellCommand(rawValue: "rv host mode claude off"), mode: .enforce)
+        }
+        guard case .indeterminate = decided.result.decision else {
+            Issue.record("rv administration from the agent must be indeterminate, got \(decided.result.decision)")
+            return
+        }
+        #expect(!decided.effects.contains { if case .denialRow = $0 { true } else { false } })
         #expect(stale.hasTripped)
     }
 

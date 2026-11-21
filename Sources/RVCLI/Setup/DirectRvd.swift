@@ -29,8 +29,11 @@ enum DirectRvd {
 
     /// What a direct start means for the user, and how to start rvd again.
     /// `rvPath` is the installed front door (`~/.local/bin/rv`).
-    static func notice(command: String, rvPath: String, rvdPath: String, observing: Bool) -> String {
-        let effect = observing ? "tool calls run unchecked" : "hooks ask about or deny tool calls"
+    /// `observing` no longer changes the effect: once rvd has run, the rvd
+    /// state marker keeps observe-mode hooks from stepping aside after it
+    /// stops (`RVDStateMarker`), so they ask or deny like enforce.
+    static func notice(command: String, rvPath: String, rvdPath: String, observing _: Bool) -> String {
+        let effect = "hooks ask about or deny tool calls"
         return """
             rv \(command): no systemd user manager is running (systemctl --user cannot reach one), so rv started rvd directly
             rvd will not survive logout or reboot, and nothing restarts it if it exits; while it is not running, \(effect)

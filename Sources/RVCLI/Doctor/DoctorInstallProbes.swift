@@ -5,8 +5,8 @@ import Glibc
 #endif
 import Foundation
 import RVPolicy
-import RVService
 import RVPresentation
+import RVService
 #if os(macOS)
 import RVIsolation
 #endif
@@ -25,6 +25,15 @@ enum TrustManifestState: Equatable, Sendable {
     /// Present but rejected: hooks and doctor fail closed.
     case invalid
     case notApplicable
+}
+
+/// Linux: the environment rvd resolves its socket base from
+/// (`UnixSocketPath.serverSocket`).
+struct SocketBaseEnvironment: Equatable, Sendable {
+    /// `XDG_RUNTIME_DIR` as doctor sees it; nil when unset.
+    var xdgRuntimeDir: String?
+    /// Parent of the uid-derived base used when `XDG_RUNTIME_DIR` is unset.
+    var userRuntimeRoot: String = UnixSocketPath.userRuntimeRoot
 }
 
 /// Install facts doctor cannot read from `rvd` itself.
@@ -53,10 +62,22 @@ struct DoctorInstallProbes {
     /// Linux: does a systemd user manager answer `systemctl --user`? Nil
     /// off Linux or when not evaluated (tests).
     var systemdUserManagerReachable: Bool? = nil
+    /// Linux: what picks rvd's socket base directory. Nil off Linux or
+    /// when not evaluated (tests).
+    var socketBase: SocketBaseEnvironment? = nil
+    /// macOS: is `dev.rv.judge` loaded in either domain? Nil when launchd
+    /// was not observed (Linux, tests).
+    var judgeLoaded: Bool? = nil
+    /// Does a valid judge bundle sit where rvd looks? Default false (tests).
+    var judgeBundleInstalled: Bool = false
+    /// The roles an installed manifest names; nil without a valid manifest
+    /// (sibling pin, invalid, Linux, tests).
+    var manifestRoles: Set<String>? = nil
 
     static func live(
         home: HomeDirectory,
         pathEntries: [String] = [],
+        xdgRuntimeDir: String?,
         userID: uid_t = getuid(),
         launchctl: any LaunchctlApplying = ProcessLaunchctl()
     ) -> DoctorInstallProbes {
@@ -75,9 +96,17 @@ struct DoctorInstallProbes {
                 OwnedPaths(home: home), source: ProtectedPeerTrustConfiguration.hookTrustSource()
             )
         )
+        let judge = LaunchAgentProbe.observe(
+            label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
+        probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
+        probes.judgeBundleInstalled = JudgeRuntime.selectsBundle(home: home)
+        probes.manifestRoles = ProtectedPeerTrustConfiguration.hookTrustSource().manifestRoles.map {
+            Set($0.map(\.rawValue))
+        }
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
         probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
+        probes.socketBase = SocketBaseEnvironment(xdgRuntimeDir: xdgRuntimeDir)
 #endif
         probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
         probes.interpreterReplaceable = { AdapterRuntime.isReplaceableInterpreter($0) }
@@ -194,6 +223,7 @@ enum RoleTrustProbe {
             (.cli, paths.localRvCli),
             (.workspaceHost, paths.localWorkspaceHost),
             (.mcpCustodian, paths.custodianAppExecutable),
+            (.judge, SetupRun.judgeExecutable(rvdPath: paths.localRvd)),
         ]
     }
 
@@ -241,7 +271,7 @@ enum DoctorInstallChecks {
             launchAgentOnDemand(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
             launchdDuplicate(probes.launchd, paths: paths, userID: probes.userID),
-            configDirectory(paths: paths, userID: probes.userID),
+            socketBaseDirectory(paths: paths, probes: probes),
             workspaceRoles(probes.workspaceRoles),
             startupBackoff(paths: paths),
         ].compactMap { $0 } + roleTrust(probes.roleTrust)
@@ -488,6 +518,9 @@ enum DoctorInstallChecks {
         case "mcpCustodian":
             "the peer-trust manifest pins the approvals custodian to a different build; "
                 + "MCP approvals will fail"
+        case "judge":
+            "the peer-trust manifest pins rv-judge to a different build; "
+                + "rvd refuses the judge pool, so judged calls go to review"
         default:
             "the peer-trust manifest pins \(role) to a different build"
         }
@@ -620,8 +653,18 @@ enum DoctorInstallChecks {
         )
     }
 
-    /// Mirrors rvd's socket base-directory rule: `~/.config` must be a
-    /// directory owned by this user and not group/world-writable.
+    /// The directory rvd's socket sits under: `~/.config` on macOS, the
+    /// runtime directory on Linux (`UnixSocketPath.production`).
+    static func socketBaseDirectory(paths: OwnedPaths, probes: DoctorInstallProbes) -> DoctorProblem? {
+#if os(Linux)
+        runtimeDirectory(probes.socketBase, userID: probes.userID)
+#else
+        configDirectory(paths: paths, userID: probes.userID)
+#endif
+    }
+
+    /// Mirrors rvd's socket base-directory rule on macOS: `~/.config` must be
+    /// a directory owned by this user and not group/world-writable.
     static func configDirectory(paths: OwnedPaths, userID: uid_t) -> DoctorProblem? {
         let config = paths.home.rawValue + "/.config"
         var info = stat()
@@ -649,6 +692,120 @@ enum DoctorInstallChecks {
                 severity: .fail,
                 summary: "\(config) is group/world-writable (mode \(String(mode, radix: 8))); rvd refuses to start",
                 fix: "chmod go-w '\(config)'"
+            )
+        }
+        return nil
+    }
+
+    /// Linux: mirrors what `UnixSocketPath.prepareRuntime` refuses, without
+    /// its side effects. The base is `$XDG_RUNTIME_DIR`, or `/run/user/<uid>`
+    /// when it is unset. rvd refuses an empty `XDG_RUNTIME_DIR`, a socket
+    /// path too long for `sockaddr_un`, a base that is not a directory (a
+    /// symlink included: rvd judges the link itself), one owned by another
+    /// uid or writable by group or others, and a missing uid-derived base
+    /// it cannot create (`uncreatableUserRuntimeDirectory`). A missing base
+    /// elsewhere is not reported: rvd tries to create it with its parents,
+    /// and doctor does not predict whether that works; one that cannot be
+    /// looked up at all (`ENOTDIR`, `EACCES`) is. The rows judge the
+    /// `XDG_RUNTIME_DIR` this shell sees (the directory it and its agents
+    /// dial); an rvd started by the systemd user manager uses
+    /// `/run/user/<uid>` instead.
+    static func runtimeDirectory(_ environment: SocketBaseEnvironment?, userID: uid_t) -> DoctorProblem? {
+        guard let environment else { return nil }
+        let ownerRuntime = "\(environment.userRuntimeRoot)/\(userID)"
+        let setRuntimeDirectory = "set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents"
+        let socket: URL
+        do {
+            socket = try UnixSocketPath.resolve(xdgRuntimeDir: environment.xdgRuntimeDir ?? ownerRuntime)
+        } catch UnixSocketPathError.runtimeDirectoryMissing {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "XDG_RUNTIME_DIR is set but empty; rvd refuses it, "
+                    + "and this shell and its agents cannot dial rvd",
+                fix: "unset it (rvd then uses \(ownerRuntime)) or set it to a directory only you can access"
+            )
+        } catch {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "rvd's socket path under \(environment.xdgRuntimeDir ?? ownerRuntime) is too long "
+                    + "for a Unix socket; rvd refuses it, and this shell and its agents cannot dial rvd",
+                fix: "\(setRuntimeDirectory), with a shorter path, or unset it (rvd then uses \(ownerRuntime))"
+            )
+        }
+        let base = socket.deletingLastPathComponent().deletingLastPathComponent().path
+        var info = stat()
+        guard lstat(base, &info) == 0 else {
+            let lookupError = errno
+            if base == ownerRuntime {
+                // rvd makes `<root>/<uid>` itself when it can; report only
+                // the case it cannot, with rvd's own fix.
+                guard let missing = UnixSocketPath.uncreatableUserRuntimeDirectory(
+                    xdgRuntimeDir: nil, uid: userID, userRuntimeRoot: environment.userRuntimeRoot
+                ) else { return nil }
+                return DoctorProblem(
+                    id: "runtime-dir",
+                    severity: .fail,
+                    summary: "\(missing) is missing and only root can create it; rvd refuses to start",
+                    fix: UnixSocketPath.userRuntimeDirectoryFix(directory: missing, uid: userID)
+                )
+            }
+            // rvd creates a missing base elsewhere with its parents; one
+            // that cannot even be looked up (an ancestor is a file, or not
+            // searchable) it cannot create either.
+            guard lookupError != ENOENT else { return nil }
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) cannot be looked up (\(String(cString: strerror(lookupError)))); "
+                    + "rvd cannot create its socket there, and this shell and its agents dial it",
+                fix: "\(setRuntimeDirectory), or unset it (rvd then uses \(ownerRuntime))"
+            )
+        }
+        return existingRuntimeDirectory(
+            base, info: info, userID: userID,
+            // Only this user's own uid-derived directory is repaired in
+            // place; anything else (`/tmp`, another user's runtime
+            // directory under `sudo -E`) is left alone.
+            elsewhere: base == ownerRuntime
+                ? nil : "\(setRuntimeDirectory), or unset it (rvd then uses \(ownerRuntime))"
+        )
+    }
+
+    /// The rule rvd applies to a base that exists. `elsewhere` is the fix
+    /// for a base that is not this user's uid-derived directory, nil for
+    /// that directory itself.
+    private static func existingRuntimeDirectory(
+        _ base: String, info: stat, userID: uid_t, elsewhere: String?
+    ) -> DoctorProblem? {
+        let refuses = elsewhere == nil
+            ? "rvd refuses this directory"
+            : "rvd refuses this directory (XDG_RUNTIME_DIR here: the directory this shell and its agents dial)"
+        if (info.st_mode & S_IFMT) != S_IFDIR {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is not a directory; \(refuses)",
+                fix: elsewhere
+                    ?? "as root, mv '\(base)' '\(base).bak' && mkdir -m 0700 \(base) && chown \(userID) \(base)"
+            )
+        }
+        if info.st_uid != userID {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is owned by uid \(info.st_uid), not uid \(userID); \(refuses)",
+                fix: elsewhere ?? "sudo chown \(userID) '\(base)'"
+            )
+        }
+        let mode = Int(info.st_mode) & 0o777
+        if mode & 0o022 != 0 {
+            return DoctorProblem(
+                id: "runtime-dir",
+                severity: .fail,
+                summary: "\(base) is group/world-writable (mode \(String(mode, radix: 8))); \(refuses)",
+                fix: elsewhere ?? "chmod go-w '\(base)'"
             )
         }
         return nil

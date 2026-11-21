@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVFileStore
 import RVIsolation
 
 /// `rv mcp import`: host entries → mcp.json definitions. Literal credentials

@@ -15,34 +15,93 @@ import RVDomain
 /// so the reader is floored. A literal feed is not trusted blind: its text
 /// is scanned like the line and read by the stop floor.
 extension OpaqueExecution {
-    /// What `segment`'s command reads on stdin: its own redirect (a
-    /// here-string, a heredoc, a file, a descriptor), else `feed`.
-    static func stdin(_ segment: [CommandToken], heredoc: ShellLexer.Heredoc?, feed: () -> Feed) -> Feed {
-        for (index, token) in segment.enumerated() where ShellLexer.isRedirectOperator(token) {
-            let target = segment.dropFirst(index + 1).first
-            switch redirectOperator(token.decoded) {
-            case "<<<":
-                guard let target, target.wasAnsiC == false, isDynamic(target) == false else { return .unreadable }
-                return Feed(literal: true, text: target.decoded + "\n")
-            case "<<", "<<-":
-                guard let heredoc else { return .unreadable }
-                return Feed(literal: heredoc.literal, text: heredoc.literal ? heredoc.body + "\n" : "")
-            case "<&":
-                return .unreadable
-            case "<", "<>":
-                guard let target, isDynamic(target) == false else { return .unreadable }
-                // A literal file: a script rv does not read.
-                return readsStdin(target.decoded) ? feed() : .empty
-            default:
-                continue
-            }
+    /// What `segment`'s command reads on stdin. rv models no shell's way
+    /// of combining redirects (zsh MULTIOS joins every input and the
+    /// pipe; bash 3.2 and dash read `{fd}<` as a word and fd 0), so stdin
+    /// is read only from one unambiguous source and is unreadable
+    /// otherwise, never "the last one" and never empty:
+    /// - no input redirect at all: `feed` (the pipe, or the text's own
+    ///   stdin);
+    /// - else, with no pipe, exactly one input redirect, of fd 0
+    ///   (unnumbered or `0`): a literal here-string or heredoc is read; a
+    ///   literal file (`< script.sh`) is a script rv does not read, as for
+    ///   `sh script.sh`.
+    /// A pipe beside a redirect, a second input redirect, a numbered or
+    /// named one (`3<…`, `{fd}<…`), a duplicate or redirect of fd 0 (`<&3`,
+    /// `0>&3`), `<>` and a descriptor path (`< /dev/stdin`) are unreadable.
+    static func stdin(_ segment: [CommandToken], heredoc: ShellLexer.Heredoc?, piped: Bool, feed: () -> Feed) -> Feed {
+        let inputs = segment.indices.filter { touchesInput(segment, at: $0) }
+        guard let only = inputs.first else { return feed() }
+        guard inputs.count == 1, piped == false else { return .unreadable }
+        let word = segment[only].decoded
+        let fd = redirectFD(word)
+        guard fd.allSatisfy({ $0 == "0" }) else { return .unreadable }
+        guard let target = segment.dropFirst(only + 1).first, ShellLexer.isRedirectOperator(target) == false else {
+            return .unreadable
         }
-        return feed()
+        switch redirectOperator(word) {
+        case "<<<":
+            guard target.wasAnsiC == false, isDynamic(target) == false else { return .unreadable }
+            return Feed(literal: true, text: target.decoded + "\n")
+        case "<<", "<<-":
+            guard let heredoc else { return .unreadable }
+            return Feed(literal: heredoc.literal, text: heredoc.literal ? heredoc.body + "\n" : "")
+        case "<":
+            guard isDynamic(target) == false, isProcessSubstitution(target.decoded) == false,
+                  readsStdin(target.decoded) == false
+            else { return .unreadable }
+            // A literal file: a script rv does not read.
+            return .empty
+        default:
+            return .unreadable
+        }
     }
 
-    /// The redirect operator part of a word: `0<&` → `<&`.
+    /// Whether the command redirects any input: see `touchesInput`.
+    static func redirectsInput(_ segment: [CommandToken]) -> Bool {
+        segment.indices.contains { touchesInput(segment, at: $0) }
+    }
+
+    /// A redirect on the input side, or one that involves fd 0: any `<`
+    /// operator (`<`, `<<`, `<<<`, `<&`, `<>`, numbered or not), any
+    /// named one (`{fd}>…`), any of fd 0 by number (`0>&3`) and a
+    /// duplicate of fd 0 (`2>&0`).
+    private static func touchesInput(_ segment: [CommandToken], at index: Int) -> Bool {
+        let token = segment[index]
+        guard ShellLexer.isRedirectOperator(token) else { return false }
+        let fd = redirectFD(token.decoded)
+        let op = redirectOperator(token.decoded)
+        if op.hasPrefix("<") || fd.first == "{" { return true }
+        if fd.isEmpty == false, fd.allSatisfy({ $0 == "0" }) { return true }
+        if op == ">&", let target = segment.dropFirst(index + 1).first?.decoded {
+            return target.isEmpty == false && target.allSatisfy { $0 == "0" }
+        }
+        return false
+    }
+
+    /// The redirect operator part of a word: `0<&` → `<&`, `{fd}<` → `<`.
     static func redirectOperator(_ word: String) -> Substring {
-        word.drop(while: { $0.isASCII && $0.isNumber })
+        word.dropFirst(redirectFD(word).count)
+    }
+
+    /// The fd a redirect word names: its digits (`2>`), or a `{name}`
+    /// (bash 4.1+ and zsh open a new fd; bash 3.2 and dash read a word and
+    /// fd 0, so a named redirect only ever makes stdin unreadable); empty
+    /// for none. Split out so a leading `{fd}<f` is never read as the
+    /// command word.
+    static func redirectFD(_ word: String) -> Substring {
+        if word.first == "{", let close = word.firstIndex(of: "}"),
+           isFDName(word[word.index(after: word.startIndex)..<close])
+        {
+            return word[...close]
+        }
+        return word.prefix(while: { $0.isASCII && $0.isNumber })
+    }
+
+    /// A shell variable name, as `{name}` takes.
+    static func isFDName(_ name: Substring) -> Bool {
+        guard let first = name.first, first.isASCII, first.isLetter || first == "_" else { return false }
+        return name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
     }
 
     // MARK: Producers
@@ -56,17 +115,17 @@ extension OpaqueExecution {
         case .opaque:
             return nil
         case .none:
-            let input = stdin(command.tokens, heredoc: command.heredoc, feed: { .empty })
+            let input = stdin(command.tokens, heredoc: command.heredoc, piped: command.stage > 0, feed: { .empty })
             return input.literal ? input.text : nil
         case .at(let index):
-            return literalOutput(Array(command.tokens[index...]), heredoc: command.heredoc)
+            return literalOutput(Array(command.tokens[index...]), heredoc: command.heredoc, piped: command.stage > 0)
         }
     }
 
     /// What a literal producer emits: `echo` with no backslash, `printf`
     /// with no `%` and no escape but `\n`, `cat` of literal paths (its text
     /// is unread, so ""), `cat` of a literal heredoc or here-string.
-    static func literalOutput(_ tokens: [CommandToken], heredoc: ShellLexer.Heredoc?) -> String? {
+    static func literalOutput(_ tokens: [CommandToken], heredoc: ShellLexer.Heredoc?, piped: Bool) -> String? {
         guard let head = tokens.first else { return nil }
         let arguments = droppingRedirects(Array(tokens.dropFirst()))
         switch commandName(head.decoded) {
@@ -85,7 +144,7 @@ extension OpaqueExecution {
         case "cat":
             let files = arguments.filter { $0.decoded.hasPrefix("-") == false || $0.decoded == "-" }
             if files.isEmpty {
-                let input = stdin(tokens, heredoc: heredoc, feed: { .unreadable })
+                let input = stdin(tokens, heredoc: heredoc, piped: piped, feed: { .unreadable })
                 return input.literal ? input.text : nil
             }
             return files.contains(where: { readsStdin($0.decoded) }) ? nil : ""

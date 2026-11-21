@@ -11,60 +11,25 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["help", "help"]) == .help)
 }
 
-@Test func helpTopic_subcommands() {
-    #expect(HelpDispatch.topic(arguments: ["help", "test"]) == .test)
-    #expect(HelpDispatch.topic(arguments: ["test", "--help"]) == .test)
-    #expect(HelpDispatch.topic(arguments: ["test", "-h"]) == .test)
-    #expect(HelpDispatch.topic(arguments: ["test", "--explain", "--help"]) == .test)
-    #expect(HelpDispatch.topic(arguments: ["explain", "--help"]) == .explain)
-    #expect(HelpDispatch.topic(arguments: ["service", "--help"]) == .service)
+// Which flags and positionals each command takes is not listed here:
+// HelpGrammarTests derives `--help` after every one of them from the parser.
+
+@Test func helpTopic_nestedCommandsShowTheirOwnPage() {
     #expect(HelpDispatch.topic(arguments: ["help", "service", "status"]) == .serviceStatus)
     #expect(HelpDispatch.topic(arguments: ["service", "status", "--help"]) == .serviceStatus)
-    #expect(HelpDispatch.topic(arguments: ["hook", "--help"]) == .hook)
-    #expect(HelpDispatch.topic(arguments: ["hook", "--host", "pi", "--help"]) == .hook)
-    #expect(HelpDispatch.topic(arguments: ["setup", "--help"]) == .setup)
-    #expect(HelpDispatch.topic(arguments: ["setup", "--force", "--help"]) == .setup)
-    #expect(HelpDispatch.topic(arguments: ["uninstall", "-h"]) == .uninstall)
-    #expect(HelpDispatch.topic(arguments: ["uninstall", "--robot", "--help"]) == .uninstall)
-    #expect(HelpDispatch.topic(arguments: ["doctor", "--help"]) == .doctor)
-    #expect(HelpDispatch.topic(arguments: ["allow-once", "--help"]) == .allowOnce)
-    #expect(HelpDispatch.topic(arguments: ["help", "allow-once"]) == .allowOnce)
-    #expect(HelpDispatch.topic(arguments: ["packs", "--help"]) == .packs)
+    #expect(HelpDispatch.topic(arguments: ["service", "start", "--help"]) == .serviceRestart)
     #expect(HelpDispatch.topic(arguments: ["help", "packs", "enable"]) == .packs)
-    #expect(HelpDispatch.topic(arguments: ["scan", "--help"]) == .scan)
-    #expect(HelpDispatch.topic(arguments: ["scan", "sessions", "-h"]) == .scan)
-    #expect(HelpDispatch.topic(arguments: ["policy", "--help"]) == .policy)
-    #expect(HelpDispatch.topic(arguments: ["help", "policy", "draft"]) == .policy)
-    #expect(HelpDispatch.topic(arguments: ["allowlist", "--help"]) == .allowlist)
-    #expect(HelpDispatch.topic(arguments: ["safety", "--help"]) == .safety)
-    #expect(HelpDispatch.topic(arguments: ["help", "safety"]) == .safety)
-    #expect(HelpDispatch.topic(arguments: ["safety", "strict", "--help"]) == .safety)
-    #expect(HelpDispatch.topic(arguments: ["blocks", "--help"]) == .blocks)
-    #expect(HelpDispatch.topic(arguments: ["help", "blocks"]) == .blocks)
-    #expect(HelpDispatch.topic(arguments: ["blocks", "--json", "--help"]) == .blocks)
+    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "abandon"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--microvm", "alpine:3.20", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "upload", "src", "--help"]) == .workspace)
 }
 
-@Test func helpTopic_workspaceAndOpenCodePaths() {
-    #expect(HelpDispatch.topic(arguments: ["workspace", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "tui", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "abandon", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "abandon"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--hook", "opencode", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--resource-profile=x", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--timeout", "10m", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--timeout=10m", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "agent", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "agent"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "custom"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--expected-content-digest-sha256", String(repeating: "a", count: 64), "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--expected-content-digest-sha256=x", "--help"]) == .workspace)
-    #expect(HelpDispatch.topic(arguments: ["opencode", "--resource-profile", "x", "--help"]) == .opencode)
+@Test func helpTopic_passthroughBoundaryKeepsTheCommandsHelp() {
     // A bare `--` is a passthrough boundary: `--help` past it belongs to
     // the executable, never to help dispatch.
     #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--", "--help"]) == nil)
     #expect(HelpDispatch.topic(arguments: ["opencode", "--", "--help"]) == nil)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--rows", "5", "--", "x", "--help"]) == nil)
 }
 
 @Test func helpTopic_doesNotStealCommandArgs() {
@@ -75,10 +40,15 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["setup"]) == nil)
 }
 
-@Test func helpTopic_forceIsSetupOnly() {
-    #expect(HelpDispatch.topic(arguments: ["setup", "--force", "--help"]) == .setup)
-    #expect(HelpDispatch.topic(arguments: ["doctor", "--force", "--help"]) == nil)
+@Test func helpTopic_unknownOptionFollowsTheParser() {
+    // ArgumentParser answers an unknown option before --help with its own
+    // help, so rv answers with its page; on a passthrough command the
+    // unknown option starts the captured command, --help included.
+    #expect(HelpDispatch.topic(arguments: ["doctor", "--force", "--help"]) == .doctor)
     #expect(HelpDispatch.topic(arguments: ["explain", "--force", "--help"]) == nil)
+    // An option still waiting for its value: the parser reports the
+    // missing value, so the help flag is not rv's.
+    #expect(HelpDispatch.topic(arguments: ["hook", "--host", "--help"]) == nil)
 }
 
 @Test func helpTopic_unknownHelpPathFallsBackToRoot() {

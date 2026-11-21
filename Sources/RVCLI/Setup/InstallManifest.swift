@@ -5,9 +5,9 @@ import Foundation
 /// parses install.sh and fails when it installs a name missing here.
 enum InstallManifest {
     /// Regular files install.sh writes into the bin dir (`~/.local/bin`).
-    /// `rv-judge` and `rv-mcp-custodian` are not installed there today
-    /// (the custodian ships inside RVApprovals.app) but carry rv's name and
-    /// were staged there by earlier dev installs; nothing else uses them.
+    /// `rv-judge` is the judge pool (`dev.rv.judge`, macOS). `rv-mcp-custodian`
+    /// is not installed there on macOS (it ships inside RVApprovals.app) but
+    /// carries rv's name and was staged there by earlier dev installs.
     static let binFiles: [String] = [
         "rv", "rv-cli", "rvd", "rv-workspace-host",
         "rv-pty-claim", "rv-microvm", "rv-guest-relay", "rv-macvm", "rv-macvm-agent",

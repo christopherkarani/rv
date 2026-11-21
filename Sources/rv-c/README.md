@@ -26,14 +26,15 @@ distinct, actionable message. Nothing ever replays to `rv-cli`.
 | Class | Cause | Rendering |
 |---|---|---|
 | `input` | stdin unreadable, over 1 MiB, NUL, invalid UTF-8, request build failure | host deny, always |
-| `unreachable` | rvd positively absent before anything was sent: Darwin discovery connection invalid (service not registered); Linux `ENOENT`/`ECONNREFUSED` on the uid-derived socket (`/run/user/<uid>/rv/evaluate.sock`, i.e. `XDG_RUNTIME_DIR` unset or exactly that dir) | per `RV_HOOK_WHEN_DOWN`; the owner's observe mode (config.json) steps aside unless it is `deny` |
+| `unreachable` | rvd positively absent before anything was sent: Darwin discovery connection invalid (service not registered); Linux `ENOENT`/`ECONNREFUSED` on the uid-derived socket (`/run/user/<uid>/rv/evaluate.sock`, i.e. `XDG_RUNTIME_DIR` unset or exactly that dir) | per `RV_HOOK_WHEN_DOWN`; the owner's observe mode (config.json) steps aside unless it is `deny`, and only while the rvd state marker (`rvd_state.h`) is absent or announces a restart; otherwise `stopped` |
 | `timeout` | an exchange exceeded its budget | per `RV_HOOK_WHEN_DOWN` |
 | `connection` | any other connection failure: dropped after send or after rvd was verified, interrupted discovery, a miss under any other `XDG_RUNTIME_DIR` (agents can set it), empty or over-long `XDG_RUNTIME_DIR`, other errnos; also a retry that finds no daemon after the first attempt reached one | per `RV_HOOK_WHEN_DOWN` |
 | `untrusted` | daemon identity check failed, HelloAck not ok / skew (retried once before send: a stale rvd exits after answering) | host deny, always |
 | `protocol` | bad reply JSON, id mismatch, version skew | host deny, always |
+| `stopped` | `unreachable` under owner observe mode, but the rvd state marker (`~/.config/rv/rvd-state`) says rvd ran and was stopped or crashed: `armed`, an expired or far-future `restarting`, or a file that fails the ownership, mode, size or no-symlink checks | per `RV_HOOK_WHEN_DOWN`, never the observe step-aside |
 
 `RV_HOOK_WHEN_DOWN` (read from the hook's environment; applies only to
-`unreachable`, `timeout` and `connection`):
+`unreachable`, `timeout`, `connection` and `stopped`):
 
 - `ask` (default; also any unrecognized value): Claude and Cursor get their
   native ask wire (exit 0) so the human decides in the host; hosts without

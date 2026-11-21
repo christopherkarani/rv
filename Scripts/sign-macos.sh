@@ -9,7 +9,7 @@ Usage: Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE
 
   codesign (hardened runtime, secure timestamp, identifier dev.rv.<name>)
     libswiftCompatibilitySpan.dylib (when staged), rv, rv-cli, rvd,
-    rv-workspace-host, rv-pty-claim, rv-microvm and rv-macvm (when staged,
+    rv-workspace-host, rv-pty-claim, rv-judge (when staged), rv-microvm and rv-macvm (when staged,
     with their virtualization entitlement) and rv-macvm-agent (when
     staged); codesign --verify --strict each;
   notarytool submit --wait (App Store Connect API key) a zip of them;
@@ -86,6 +86,11 @@ if [[ -e "$stage/libswiftCompatibilitySpan.dylib" || -L "$stage/libswiftCompatib
   binaries+=(libswiftCompatibilitySpan.dylib)
 fi
 binaries+=(rv rv-cli rvd rv-workspace-host rv-pty-claim)
+# The judge pool supervisor/worker; rvd pins it by CDHash, so it must be
+# signed by the same identity as rvd.
+if [[ -e "$stage/rv-judge" || -L "$stage/rv-judge" ]]; then
+  binaries+=(rv-judge)
+fi
 # Micro-VM backend: Virtualization.framework refuses a binary without the
 # entitlement, and re-signing drops whatever entitlements were there.
 for vm_helper in rv-microvm rv-macvm rv-macvm-agent; do

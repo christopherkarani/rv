@@ -240,3 +240,39 @@ private func grokHookFixture(_ name: String) throws -> String {
         .appendingPathComponent("RVHooksTests/Fixtures/grok/\(name)")
     return try String(contentsOf: url, encoding: .utf8)
 }
+
+/// rvd's idle and replaced-binary exits call `exit(0)`, which would drop
+/// decision counts still waiting for the coordinator's deferred write.
+struct RVDExitAnalyticsTests {
+    @Test func anOrderlyExitWritesPendingCounts() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-service-analytics-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AnalyticsPaths(configDirectory: root)
+        let coordinator = AnalyticsCoordinator(
+            paths: paths,
+            preferences: .enabledByDefault,
+            identity: AnalyticsIdentity(distinctID: "user-1"),
+            sink: RecordingAnalyticsSink(),
+            productVersion: "1.0.0",
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354"),
+            persistDelay: .seconds(600)
+        )
+        await coordinator.recordDecision(.deny)
+        await coordinator.recordDecision(.allow)
+        #expect(FileManager.default.fileExists(atPath: paths.countersFile.path) == false)
+
+        // Blocks its thread as the exit closure does; keep that off the
+        // test's own executor.
+        await Task.detached { RVDLifecycle.persistAnalytics(coordinator, wait: .seconds(30)) }.value
+
+        let text = try String(contentsOf: paths.countersFile, encoding: .utf8)
+        #expect(text.contains(#""denyCount":1"#))
+        #expect(text.contains(#""allowCount":1"#))
+    }
+
+    @Test func noAnalyticsIsANoOp() {
+        RVDLifecycle.persistAnalytics(nil)
+    }
+}
