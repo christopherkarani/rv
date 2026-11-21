@@ -108,7 +108,7 @@ public enum ActionPolicyEngine: Sendable {
 
         public static let outsideRepository = Deny(
             ruleID: BuiltinRule.outOfRepoWrite.ruleID,
-            reason: "Writing outside the repository is a built-in hard deny."
+            reason: "This changes files outside the current repository (system, home or other paths), which agents may not do."
         )
 
         public static let outsideRepositoryRead = BuiltinRule.outOfRepoRead.ruleID
@@ -138,7 +138,7 @@ public enum ActionPolicyEngine: Sendable {
 
         public static let unwrapLimited = Deny(
             ruleID: BuiltinRule.unwrapLimited.ruleID,
-            reason: "Wrapper or interpreter nesting could not be analyzed safely."
+            reason: "This runs code rv cannot inspect (a download piped into a shell, an inline script, or wrappers nested too deep)."
         )
 
         public static let publicHTTPSGet = BuiltinRule.publicHTTPSGet.ruleID
