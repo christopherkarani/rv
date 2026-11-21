@@ -7,24 +7,29 @@ import RVPolicy
 @testable import RVService
 
 /// A judge whose prediction goes through a real admission (bounded by the
-/// judge deadline the offload binds) and never answers until released. A
-/// watchdog releases it after 30 s, so a missing bound fails the test
-/// (`releasedByWatchdog`) instead of hanging it.
+/// judge deadline the offload binds) and never answers until released.
+///
+/// Whether the wait was bounded is read from the run itself: the call came
+/// back `late` while the prediction was still stuck (`boundedWhileStuck`).
+/// A watchdog, armed when the prediction is asked for, releases it after
+/// 30 s so a missing bound fails the test instead of hanging it. The
+/// watchdog only breaks a hang; it never decides the verdict, so time a
+/// loaded runner spends before the judge, or resuming the test after it,
+/// cannot fail a wait the bound did end.
 private final class StuckJudge: JudgePort, Sendable {
     private let admission = JudgeAdmission(limit: 4)
     private let release = DispatchSemaphore(value: 0)
     private let delivered = DispatchSemaphore(value: 0)
-    private let state = Mutex((released: false, byWatchdog: false, late: false))
+    private let state = Mutex((released: false, late: false, lateWhileStuck: false))
 
-    init() {
-        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(30)) { [weak self] in
-            self?.free(byWatchdog: true)
-        }
-    }
-
-    var releasedByWatchdog: Bool { state.withLock { $0.byWatchdog } }
+    /// The judge call returned `late` before anything released the
+    /// prediction: the judge bound, not a release, ended the wait.
+    var boundedWhileStuck: Bool { state.withLock { $0.lateWhileStuck } }
 
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(30)) { [weak self] in
+            self?.free()
+        }
         let release = self.release
         let logger = call.onLateResult ?? { _, _ in }
         let run = JudgeRuntime.admitted(
@@ -37,24 +42,28 @@ private final class StuckJudge: JudgePort, Sendable {
             release.wait()
             return .failed
         }
-        if case .late = run { state.withLock { $0.late = true } }
+        if case .late = run {
+            state.withLock { state in
+                state.late = true
+                state.lateWhileStuck = state.released == false
+            }
+        }
         return run
     }
 
     /// Releases the prediction and, when it went late, waits for its late
     /// row so nothing writes into a home the test is about to remove.
     func finish() {
-        free(byWatchdog: false)
+        free()
         if state.withLock({ $0.late }) {
             _ = delivered.wait(timeout: .now() + 10)
         }
     }
 
-    private func free(byWatchdog: Bool) {
+    private func free() {
         let first = state.withLock { state in
             guard state.released == false else { return false }
             state.released = true
-            state.byWatchdog = byWatchdog
             return true
         }
         if first { release.signal() }
@@ -78,14 +87,17 @@ private func homeWithBundle() throws -> HomeDirectory {
 }
 
 private func expectLateReview(_ result: EvaluationResult, home: HomeDirectory, judge: StuckJudge) throws {
-    #expect(judge.releasedByWatchdog == false, "the judge wait was not bounded")
+    #expect(judge.boundedWhileStuck, "the judge wait was not bounded")
     guard case .deny(let deny) = result.decision else {
         Issue.record("a late judge must go to review, got \(result.decision)")
         return
     }
     #expect(deny.ruleID == RuleID(pack: .coreJudge, pattern: "laya-review"))
     #expect(deny.reason.contains("rv degraded: judge late"))
-    let row = try #require(try judgeLog(home).first)
+    // The door's own row. The released prediction logs a `lateOf` row of
+    // its own, which lands first if the watchdog frees it before the door
+    // writes (a starved runner resuming the test late).
+    let row = try #require(try judgeLog(home).first { $0["lateOf"] == nil })
     #expect(row["note"] as? String == "judge-late; context: partial")
 }
 

@@ -110,11 +110,7 @@ private func writeStubRV(at path: URL, executable: Bool) throws {
     printf '%s' "$RV_STUB_STDOUT"
     exit "${RV_STUB_EXIT:-0}"
     """
-    try script.write(to: path, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes(
-        [.posixPermissions: executable ? 0o755 : 0o644],
-        ofItemAtPath: path.path
-    )
+    try writeExecutableStub(script, toFile: path.path, mode: executable ? 0o755 : 0o644)
 }
 
 private func runFailingAdapter(
