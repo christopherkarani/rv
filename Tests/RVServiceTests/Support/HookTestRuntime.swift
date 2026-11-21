@@ -27,7 +27,8 @@ func hookTestRuntime(
     clock: @escaping @Sendable () -> Date = { Date() },
     pendingApprovals: PendingApprovalsBinding = .automatic,
     ownerPresence: OwnerPresence = OwnerPresence(),
-    hookBudget: Duration = testHookBudget
+    hookBudget: Duration = testHookBudget,
+    judge: any JudgePort = LiveJudgePort()
 ) -> ServiceRuntime {
     ServiceRuntime(
         snapshots: snapshots,
@@ -43,6 +44,7 @@ func hookTestRuntime(
         pendingApprovals: pendingApprovals,
         ceremonies: WorkspaceOperatorCeremonyService(),
         ownerPresence: ownerPresence,
-        hookBudget: hookBudget
+        hookBudget: hookBudget,
+        judge: judge
     )
 }

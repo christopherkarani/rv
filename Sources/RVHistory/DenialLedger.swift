@@ -42,6 +42,28 @@ public struct DenialLedger: Sendable {
         }
     }
 
+    /// The bounded form, for a process that has to answer within a deadline
+    /// (the hook-local evaluator): a lock another writer holds is retried,
+    /// non-blocking, until `wait` passes, and then the record is dropped.
+    /// Returns whether the record landed.
+    package func append(_ record: DenialLedgerRecord, now: Date, wait: AuditLog.LockWait) -> Bool {
+        let landed = wait.retrying { () -> Bool? in
+            do {
+                try store.withLock(nonBlocking: true) {
+                    var records = store.load()
+                    records.append(record)
+                    try store.save(pruned(records, now: now))
+                }
+                return true
+            } catch FileLockedJSONLStoreError.lockFailed {
+                return nil
+            } catch {
+                return false
+            }
+        }
+        return landed ?? false
+    }
+
     /// Returns denial records as of `now`, newest-first after cap.
     ///
     /// - Note: Reads the JSONL file (O(n) in file length). A missing file is empty.

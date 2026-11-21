@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 import RVHistory
 
 /// `~/.config/rv/config.json`: a lenient reader and the file's writes.
@@ -8,7 +9,7 @@ import RVHistory
 /// so `flock` excludes in-process callers too).
 enum MachineConfigJSON {
     static func load(from file: URL) -> [String: JSONValue] {
-        guard let data = try? Data(contentsOf: file) else { return [:] }
+        guard let data = readRegularFile(file) else { return [:] }
         return (try? JSONDecoder().decode(JSONValue.self, from: data))?.asObject ?? [:]
     }
 
