@@ -66,8 +66,16 @@ STATE = {"sessions": {}, "legacy": {}, "lock": threading.Lock(),
          "clients": {}, "codes": {}, "access": set(), "refresh": set()}
 
 
+LOG_LOCK = threading.Lock()
+
+
 def log(text):
-    print(text, file=sys.stderr, flush=True)
+    # One write per line, under a lock. print() writes the text and the
+    # newline separately, so two request threads could interleave into
+    # "REQ ...REQ ...\n\n" and a test counting lines would see one request.
+    with LOG_LOCK:
+        sys.stderr.write(text + "\n")
+        sys.stderr.flush()
 
 
 def answer(msg, headers):

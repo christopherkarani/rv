@@ -192,11 +192,7 @@ private func runHermesAdapter(
         fi
         exit "${RV_STUB_EXIT:-0}"
         """
-        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: rvPath
-        )
+        try writeExecutableStub(script, toFile: rvPath)
     }
 
     let source = try adapterSource(for: .hermes, rvPath: rvPath)
