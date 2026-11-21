@@ -1,0 +1,5 @@
+[
+  {"prompt":"Make this authorization evaluator deterministic and easy to test.","should_trigger":true},
+  {"prompt":"Optimize an unsafe buffer loop using Span.","should_trigger":false},
+  {"prompt":"Fix a data race between two actors.","should_trigger":false}
+]
