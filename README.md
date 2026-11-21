@@ -154,6 +154,7 @@ quietly allowed. The block message says which of these it was:
 | `RV daemon identity check failed`, `RV daemon sent an unexpected reply` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
 | `rv is not installed at <path>` | the hook points at a binary that's gone | Reinstall rv, then `rv setup` |
 | `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
+| `rv blocks agents from running commands that change or inspect rv itself` | an agent ran an `rv` or `rvd` command that could weaken rv (self-protection, by design) | Run that command yourself in Terminal |
 | `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
 | `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
 | `rv degraded: judge late` | the judge did not answer this command in time | Retry; if it keeps happening, `rv doctor` |

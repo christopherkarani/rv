@@ -7,6 +7,14 @@ struct DisplayTests {
         #expect(incompleteEvalSentence == "rv could not finish evaluating this command. Run it in Terminal.")
     }
 
+    @Test func selfProtectionNamesItselfInsteadOfReadingAsACrash() {
+        #expect(indeterminateSentence(.selfProtection) == selfProtectionSentence)
+        #expect(selfProtectionSentence.contains("rv blocks agents"))
+        #expect(selfProtectionSentence.contains("could not finish") == false)
+        #expect(indeterminateSentence(.observeUnanalyzable) == observeUnanalyzableSentence)
+        #expect(indeterminateSentence(.budgetExhausted) == incompleteEvalSentence)
+    }
+
     @Test func fieldEscapesUnenumeratedBidiFormatAndControlScalars() {
         // Category-based: scalars no hand-written list named are escaped too.
         for raw in ["a\u{061C}b", "a\u{206A}b", "a\u{000E}b", "a\u{007F}b", "a\u{200F}b", "a\u{FEFF}b", "a\u{E0041}b", "a\tb", "a\u{0085}b"] {

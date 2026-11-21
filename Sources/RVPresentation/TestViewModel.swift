@@ -164,10 +164,10 @@ private func baseTestViewModel(
             columns: columns,
             deny: deny
         )
-    case .indeterminate:
+    case .indeterminate(let reason):
         return TestViewModel(
             command: command,
-            reason: incompleteEvalSentence,
+            reason: indeterminateSentence(reason),
             resultWord: resultWord,
             resultTone: tone,
             columns: columns
