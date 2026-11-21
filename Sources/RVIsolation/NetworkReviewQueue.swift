@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 import RVPolicy
 
 /// Phase 4 review queue: blocked CONNECTs become scoped proposals on the

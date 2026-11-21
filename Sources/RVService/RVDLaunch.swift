@@ -15,7 +15,12 @@ public enum RVDLaunchError: Error, Sendable, Equatable {
 }
 
 public enum RVDLaunch {
+    #if RV_TEST_OWNER_PRESENCE
+    /// A test-owner-presence build says so wherever rvd names its version.
+    public static let versionLine = ProductVersion.semver + " (\(TestOwnerPresence.marker) build)"
+    #else
     public static let versionLine = ProductVersion.semver
+    #endif
 
     /// rvd serves only with a home: without one it would gate with none of
     /// the owner's policy and could record no override or approval. macOS

@@ -76,6 +76,18 @@ import Testing
         }
     }
 
+    @Test func setupJSONCarriesTheJudgeWarning() throws {
+        try withTempHome { home, _, launchctl in
+            var environment = env(home: home, launchctl: launchctl)
+            environment.judgeBundleInstalled = { _ in true }
+            let outcome = SetupRun.setup(environment, json: true)
+            #expect(outcome.stdout.contains(#""judge_agent":"rv_judge_missing""#), "\(outcome.stdout)")
+            environment.judgeBundleInstalled = { _ in false }
+            let quiet = SetupRun.setup(environment, json: true)
+            #expect(!quiet.stdout.contains("judge_agent"), "\(quiet.stdout)")
+        }
+    }
+
     @Test func noJudgeWarningWithoutABundle() throws {
         try withTempHome { home, _, launchctl in
             let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))

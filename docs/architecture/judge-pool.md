@@ -41,17 +41,38 @@ hook ──XPC──▶ rvd ──XPC (dev.rv.judge)──▶ rv-judge serve (su
   malformed frame kills that worker. A worker runs one throwaway prediction
   before it reports ready: the first prediction after a load is 0.3–0.5 s
   slower than the rest, and no real request should pay it.
-- **Compiled-model cache (interim).** Workers compile into a directory the
-  supervisor creates at startup and removes on exit (`atexit`, and SIGTERM
-  through a dispatch source): `<per-user temp dir>/rv-judge-<128 random
-  bits>`, 0700, checked to be a directory the user owns and not a link. The
-  per-user temp dir comes from `confstr(_CS_DARWIN_USER_TEMP_DIR)`, not the
-  environment. A supervisor sweeps earlier supervisors' `rv-judge-*`
-  entries it owns (links are removed, never followed). Workers get the path
-  as a required `--cache` and never use the shared `rv-laya` cache an agent
-  could plant; the cache key includes the compute units. When #625's
-  verified store (`~/.config/rv/cache/laya`, SHA-256 manifest) lands, the
-  workers load only through it and this directory goes away.
+- **Compiled models and Core ML guard.** Workers load only through the
+  verified compiled-model store (`CompiledModelStore`,
+  `~/.config/rv/cache/laya/models`, under the passwd home from `getpwuid`,
+  never `$HOME` or argv; `core.secrets:home-rv-config` keeps agents out of
+  `~/.config/rv`). The store copies Core ML's compile output out of the
+  per-user temp dir, hashes every file into a manifest, and verifies the
+  manifest before every load; anything it cannot verify refuses
+  (`CoreMLRefusal`). rvd, the CLI and both workers share one store, so it
+  is safe across processes: verify, compile, install, sweep and discard run
+  under an exclusive `flock` on `models.lock` beside the root (two workers
+  warming at once compile once and never remove each other's partial copy
+  or half-committed entry), and a process that loaded an entry holds a
+  shared `flock` on its manifest for as long as the model lives, so the
+  sweep of superseded entries (an updated bundle or OS) skips one another
+  worker still has loaded. Each worker binds its own `CoreMLGuard` with its
+  own in-flight marker and crash history (`guard-cpu`, `guard-accelerated`
+  next to rvd's `guard`): one worker's Core ML crashes switch only that
+  worker to CPU only, and the CPU worker is pinned to CPU whatever its
+  history says. A SIGKILL the supervisor sends itself (budget overrun,
+  garbage on stdout) is not a Core ML crash: after reaping that worker and
+  before its replacement starts, the supervisor clears its marker, but only
+  when the worker had sent `guardStarted` (its guard ran crash recovery, so
+  the previous generation's marker is already counted), the reaped status
+  is SIGKILL (a real abort racing the kill stays a crash), and no live
+  process holds the marker's lock. Otherwise the kill counts, which only
+  moves that worker to CPU. With the pool bound, Core ML runs only in the
+  workers, so their e5rt cache is `~/Library/Caches/rv-judge`; it is a
+  wiring path like rvd's (`RVWiringPaths.coreMLCacheOwners`): agent writes
+  deny in every mode, MCP cages cannot write it, and workspace downloads
+  cannot land there. A refusal (disk nearly full, a
+  model it could not verify, a load that failed after the store's retry) is
+  a `loadFailed` row, which rvd answers with review.
 - **Spawn.** `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT` (only the two
   pipe ends and stderr are inherited), SIGPIPE reset to default in the child,
   a fixed environment (HOME, USER, LOGNAME, TMPDIR, a fixed PATH). A worker
@@ -145,7 +166,7 @@ an answer. The pool keeps both workers loaded.
 | `late` | `.late` | review (`judge-late`) |
 | `warming` | `.warming` | review (`judge-warming`) |
 | `failed` | `.failed` | review |
-| `loadFailed` (a worker could not load the bundle) | `.failed` | review |
+| `loadFailed` (a worker could not load the bundle, or its guard refused) | `.refused` | review (`judge-refused`) |
 | no authenticated answer (not running, refused, unverifiable, past the deadline) | `.unreachable` | review (`judge-unreachable`) |
 
 Every row but a verdict is review. A missing bundle never reaches the pool:
@@ -270,14 +291,7 @@ directory, load includes the warm-up, load average 13–59):
 
 ## Not done here
 
-- Two open PRs land separately and are folded in on rebase:
-  - #623 (budget breaker): its `JudgeAdmission` budget and circuit breaker
-    wrap this client; pool `busy`/`late` map to its outcomes.
-  - #625 (`.cpuOnly` fallback, `CoreMLGuard`, versioned compiled-model
-    store): workers load only through its verified store, replacing the
-    interim private cache; the guard binds per worker process with a
-    per-slot marker, so one worker's crash history drives only its compute
-    units; a SIGKILL the supervisor sends on a budget overrun must not count
-    as a Core ML crash (the supervisor clears that slot's marker after its
-    own kill); and the store's sweep must not remove the entry the other
-    worker has loaded.
+- #623 (budget breaker) and #625 (Core ML guard, verified store) are folded
+  in: pool runs go through the same `JudgeCircuit` as the in-process judge
+  (`unreachable` and `late` count against it, `refused` is neutral), and
+  workers load through #625's store as described above.

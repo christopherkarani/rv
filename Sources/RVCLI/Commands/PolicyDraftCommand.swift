@@ -3,12 +3,17 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVPresentation
 
-struct PolicyDraftCommand: AsyncParsableCommand {
+struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "draft",
         abstract: "Compile English into a typed rule preview."
     )
+
+    static let usage = [
+        HelpRow(name: "rv policy draft --english <text> [--repo] [--save [--wait [--wait-timeout <seconds>]]]"),
+    ]
 
     @Option(name: .customLong("english"), help: "English to compile into a typed rule.")
     var english: String

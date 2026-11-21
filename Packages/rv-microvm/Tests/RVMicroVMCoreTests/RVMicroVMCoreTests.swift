@@ -373,8 +373,8 @@ struct WorkspaceControlMountTests {
     @Test("every run-later path is covered by a mount when its parents exist")
     func layoutCoversEveryPath() throws {
         var kinds: [String: WorkspaceControlMounts.Kind] = [:]
-        let all = WorkspaceControlLayout.controlFiles + WorkspaceControlLayout.runLaterFiles
-        let trees = WorkspaceControlLayout.controlTrees + WorkspaceControlLayout.runLaterTrees
+        let all = ProtectedWorkspacePaths.controlFiles + ProtectedWorkspacePaths.runLaterFiles
+        let trees = ProtectedWorkspacePaths.trees
         for path in all { kinds[path] = .file }
         for path in trees { kinds[path] = .directory }
         for path in all + trees {
@@ -389,6 +389,54 @@ struct WorkspaceControlMountTests {
         for path in all + trees {
             #expect(readOnly.contains("/w/\(path)"), "\(path) has no read-only mount")
         }
+        let writable = Set(mounts.filter { $0.readOnly == false }.map(\.path))
+        for directory in ProtectedWorkspacePaths.controlPinned + ProtectedWorkspacePaths.runLaterPinned {
+            #expect(writable.contains("/w/\(directory)"), "\(directory) is not pinned by a mount")
+        }
+    }
+}
+
+/// `ProtectedWorkspacePaths` is the catalog RVIsolation's Seatbelt rules,
+/// placeholders and transfer check derive from; this package compiles the
+/// same file through a symlink. The guest's mount tree must hold every
+/// catalog path and pin every catalog directory. Matching is by exact name:
+/// a mount covers only the spelling that exists.
+@Suite("WorkspaceControlLayout parity")
+struct WorkspaceControlLayoutParityTests {
+    private static func flatten(_ nodes: [WorkspaceControlLayout.Node], under prefix: String = "")
+        -> (protected: Set<String>, pinned: Set<String>) {
+        var protected = Set<String>(), pinned = Set<String>()
+        for node in nodes {
+            let path = prefix.isEmpty ? node.name : "\(prefix)/\(node.name)"
+            switch node {
+            case .protected: protected.insert(path)
+            case .pinned(_, let children):
+                pinned.insert(path)
+                let inner = flatten(children, under: path)
+                protected.formUnion(inner.protected)
+                pinned.formUnion(inner.pinned)
+            }
+        }
+        return (protected, pinned)
+    }
+
+    @Test("the mount tree holds every catalog path and pins every catalog directory")
+    func coversCatalog() {
+        let tree = Self.flatten(WorkspaceControlLayout.roots)
+        #expect(tree.protected == Set(ProtectedWorkspacePaths.paths))
+        #expect(tree.pinned == Set(ProtectedWorkspacePaths.controlPinned + ProtectedWorkspacePaths.runLaterPinned))
+    }
+
+    @Test("roots keep their mount order: control paths, agent directories, then root files")
+    func order() {
+        #expect(WorkspaceControlLayout.roots.map(\.name) == [
+            ".git", ".rv", ".config", ".claude", ".codex", ".cursor", ".gemini", ".vscode",
+            ".mcp.json", "opencode.json", "opencode.jsonc", ".envrc",
+        ])
+        #expect(WorkspaceControlLayout.roots.first == .pinned(".git", [.protected("hooks"), .protected("config")]))
+        #expect(WorkspaceControlLayout.roots.contains(
+            .pinned(".gemini", [.protected("settings.json"), .pinned("config", [.protected("hooks.json")])])
+        ))
     }
 }
 

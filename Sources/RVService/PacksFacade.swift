@@ -218,6 +218,8 @@ public enum PacksFacade {
             try PacksConfigStore.save(config, home: home)
         } catch let unrecorded as ConfigChangeUnrecorded {
             throw unrecorded
+        } catch OwnerConfigWriteError.unreadable {
+            throw PacksCommandError.configUnreadable
         } catch {
             throw PacksCommandError.configUnwritable
         }

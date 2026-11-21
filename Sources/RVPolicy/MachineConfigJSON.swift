@@ -3,42 +3,15 @@ import RVDomain
 import RVFileStore
 import RVHistory
 
-/// Shared read/update for `~/.config/rv/config.json` object keys.
-/// `update` is the only writer; it serializes load-mutate-write under
-/// `ExclusiveFileLock` on `lockURL(for:)` (cross-process and cross-thread:
-/// each call opens its own descriptor, so `flock` excludes in-process callers too).
-public enum MachineConfigJSONError: Error, Sendable, Equatable {
-    /// `config.json` exists but rv will not rewrite it: `JSONDuplicateKeys`
-    /// rejects its text (a repeated key, a key holding U+FEFF, nesting past
-    /// `maxNestingDepth`, or text that is not UTF-8), or, for
-    /// `updateExistingObject`, it does not decode as a JSON object.
-    case unreadableConfig
-}
-
+/// `~/.config/rv/config.json`: a lenient reader and the file's writes.
+/// Every write goes through `OwnerConfigFile` under `lockURL(for:)`
+/// (cross-process and cross-thread: each write opens its own descriptor,
+/// so `flock` excludes in-process callers too).
 enum MachineConfigJSON {
     static func load(from file: URL) -> [String: JSONValue] {
+        // Never `Data(contentsOf:)`: a FIFO planted at the path would block the read.
         guard let data = readRegularFile(file) else { return [:] }
-        return object(in: data) ?? [:]
-    }
-
-    private static func object(in data: Data) -> [String: JSONValue]? {
-        (try? JSONDecoder().decode(JSONValue.self, from: data))?.asObject
-    }
-
-    /// Throws `unreadableConfig` for text `JSONDuplicateKeys` rejects, the
-    /// text `GuardConfig(jsonData:)` reads as enforce: `JSONDecoder` keeps
-    /// the first copy of a repeated key, so rewriting it could store the
-    /// copy that reads as observe.
-    private static func requireRewritable(_ data: Data) throws(MachineConfigJSONError) {
-        guard JSONDuplicateKeys.allObjectKeysDistinct(data) else { throw .unreadableConfig }
-    }
-
-    /// `update`'s prior object: `load`'s reading, except that text
-    /// `requireRewritable` rejects throws.
-    private static func loadRewritable(from file: URL) throws -> [String: JSONValue] {
-        guard let data = try? Data(contentsOf: file) else { return [:] }
-        try requireRewritable(data)
-        return object(in: data) ?? [:]
+        return (try? JSONDecoder().decode(JSONValue.self, from: data))?.asObject ?? [:]
     }
 
     /// Lock sibling shared by every `config.json` writer: `<file>.lock`.
@@ -46,91 +19,90 @@ enum MachineConfigJSON {
         file.appendingPathExtension("lock")
     }
 
-    /// The audit event for a write, from the object before and after
-    /// `mutate`; nil when nothing the audit trail tracks changed.
-    typealias ChangeEvent = (_ before: [String: JSONValue], _ after: [String: JSONValue]) -> AuditEvent?
-
-    /// A file that does not decode as an object is replaced by `{}` plus
-    /// `mutate`; text `JSONDuplicateKeys` rejects throws `unreadableConfig`
-    /// and nothing is written.
-    static func update(
-        file: URL, audit: ChangeEvent? = nil, mutate: (inout [String: JSONValue]) -> Void
-    ) throws {
-        try prepareDirectory(of: file)
-        try ExclusiveFileLock.withLock(at: lockURL(for: file)) {
-            let before = try loadRewritable(from: file)
-            var root = before
-            mutate(&root)
-            try write(root, to: file, audit: audit?(before, root))
-        }
+    /// `config.json` as an owner config file. The prior file must decode as
+    /// a JSON object whose text `JSONDuplicateKeys` accepts, or the write is
+    /// refused (`OwnerConfigWriteError.unreadable`): that rejects a repeated
+    /// key, a key holding U+FEFF, nesting past `maxNestingDepth`, and text
+    /// that is not UTF-8, the text `GuardConfig(jsonData:)` reads as
+    /// enforce. `JSONDecoder` keeps the first copy of a repeated key, so
+    /// rewriting such text could store the copy that reads as observe.
+    static func file(_ url: URL) -> OwnerConfigFile<[String: JSONValue]> {
+        OwnerConfigFile(url: url, lockURL: lockURL(for: url), empty: [:], parse: rewritableObject, render: render)
     }
 
-    /// `update` for writers that must not drop keys they cannot read: the
-    /// existing file (a missing one is `{}`) must decode as a JSON object
-    /// that `JSONDuplicateKeys` accepts, checked under the lock, or
-    /// `unreadableConfig` is thrown and nothing is written. `mutate` may throw; nothing is written then either.
-    ///
-    /// `beforeWrite` runs after the audit event is recorded and before the
-    /// file moves, for a side effect that must not happen unrecorded.
-    static func updateExistingObject(
-        file: URL,
-        audit: ChangeEvent? = nil,
-        beforeWrite: () throws -> Void = {},
-        mutate: (inout [String: JSONValue]) throws -> Void
-    ) throws {
-        try prepareDirectory(of: file)
-        try ExclusiveFileLock.withLock(at: lockURL(for: file)) {
-            let before = try loadObject(from: file)
-            var root = before
-            try mutate(&root)
-            try write(root, to: file, audit: audit?(before, root), beforeWrite: beforeWrite)
-        }
+    private static func rewritableObject(_ data: Data) -> [String: JSONValue]? {
+        guard JSONDuplicateKeys.allObjectKeysDistinct(data) else { return nil }
+        return (try? JSONDecoder().decode(JSONValue.self, from: data))?.asObject
     }
 
-    private static func loadObject(from file: URL) throws -> [String: JSONValue] {
-        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
-        let data = try Data(contentsOf: file)
-        try requireRewritable(data)
-        guard let root = object(in: data) else { throw MachineConfigJSONError.unreadableConfig }
-        return root
-    }
-
-    /// Writes `root`; with an `audit` event, write-ahead through
-    /// `ConfigChangeAudit.commit`, so a change the log cannot hold is not
-    /// written. The caller holds the lock, so prior and new are exact.
-    private static func write(
-        _ root: [String: JSONValue], to file: URL, audit: AuditEvent?, beforeWrite: () throws -> Void = {}
-    ) throws {
+    private static func render(_ root: [String: JSONValue]) -> Data? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        guard let data = try? encoder.encode(JSONValue.object(root)) else {
-            throw SafetyStoreError.invalidFile
-        }
-        func apply() throws {
-            try beforeWrite()
-            try replace(file, with: data)
-        }
-        guard let audit else { return try apply() }
-        try ConfigChangeAudit.commit(audit, configDirectory: file.deletingLastPathComponent(), apply)
+        return try? encoder.encode(JSONValue.object(root))
     }
 
-    private static func replace(_ file: URL, with data: Data) throws {
-        try data.write(to: file, options: .atomic)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: file.path
-        )
+    /// One value a store writes in `config.json`, and how its changes read
+    /// in the audit trail.
+    struct Setting: Sendable {
+        /// Object keys from the root, e.g. `["guard", "hosts", "claude"]`;
+        /// joined with `.` they are the audited setting name.
+        var keyPath: [String]
+        /// How a stored value reads as the event's `prior` and `new`; nil is
+        /// a missing key. Equal readings record no event.
+        var describe: @Sendable (JSONValue?) -> String
+        /// Which way replacing the stored value (nil when missing) with the
+        /// new one moves the gate.
+        var direction: @Sendable (_ prior: JSONValue?, _ new: JSONValue) -> ConfigChangeAudit.Direction
+
+        var name: String { keyPath.joined(separator: ".") }
     }
 
-    private static func prepareDirectory(of file: URL) throws {
-        let directory = file.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: directory.path
-        )
+    /// Stores `value` at `setting.keyPath`; every other key is kept. Each
+    /// key on the way must hold an object or nothing (an object is then
+    /// created): any other value is refused (`unreadable`), since replacing
+    /// it would drop what the owner keeps there. Records `config.changed`
+    /// (`setting.name`) write-ahead when the described value changes.
+    /// `beforeWrite` runs after that record and before the file moves.
+    static func set(
+        _ value: JSONValue, for setting: Setting, in url: URL, beforeWrite: () throws -> Void = {}
+    ) throws {
+        guard setting.keyPath.isEmpty == false else { throw OwnerConfigWriteError.unwritable }
+        try file(url).update(
+            audit: { before, _ in
+                let stored = storedValue(at: setting.keyPath, in: before)
+                let prior = setting.describe(stored)
+                let new = setting.describe(value)
+                guard prior != new else { return nil }
+                return ConfigChangeAudit.setting(
+                    setting.name, from: prior, to: new, direction: setting.direction(stored, value))
+            },
+            beforeWrite: beforeWrite,
+            mutate: { root in try store(value, at: setting.keyPath[...], in: &root) })
+    }
+
+    private static func storedValue(at keyPath: [String], in root: [String: JSONValue]) -> JSONValue? {
+        var current: JSONValue? = .object(root)
+        for key in keyPath {
+            current = current?[key]
+        }
+        return current
+    }
+
+    private static func store(
+        _ value: JSONValue, at keyPath: ArraySlice<String>, in object: inout [String: JSONValue]
+    ) throws(OwnerConfigWriteError) {
+        guard let key = keyPath.first else { return }
+        let rest = keyPath.dropFirst()
+        guard rest.isEmpty == false else {
+            object[key] = value
+            return
+        }
+        var child: [String: JSONValue] = [:]
+        if let existing = object[key] {
+            guard let existingObject = existing.asObject else { throw .unreadable }
+            child = existingObject
+        }
+        try store(value, at: rest, in: &child)
+        object[key] = .object(child)
     }
 }

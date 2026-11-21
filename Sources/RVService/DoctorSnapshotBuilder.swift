@@ -2,6 +2,7 @@ import Foundation
 import RVDomain
 import RVIPC
 import RVJudgePool
+import RVLaya
 import RVPacks
 import RVPolicy
 
@@ -74,19 +75,23 @@ public enum DoctorSnapshotBuilder {
             let meanwhile = mode == .observe
                 ? "judged calls run and are logged as a would-be review"
                 : "judged calls go to review"
+            // rvd's own Core ML guard only matters when rvd loads the model
+            // itself; with the pool bound, `judgePool` reports the workers.
+            let notes = JudgeRuntime.boundClient == nil ? coreMLNotes(JudgeRuntime.coreMLGuard.status) : []
+            let base = ([on] + notes).joined(separator: "; ")
             switch circuit {
             case .closed:
-                return DoctorCheck(id: .judge, status: .ok, message: on)
+                return DoctorCheck(id: .judge, status: notes.isEmpty ? .ok : .warning, message: base)
             case .open(let retryIn):
                 return DoctorCheck(
                     id: .judge, status: .warning,
-                    message: "\(on); rv degraded: judge unavailable (circuit open, retrying in \(JudgeRuntime.retrySeconds(retryIn))s), \(meanwhile)"
+                    message: "\(base); rv degraded: judge unavailable (circuit open, retrying in \(JudgeRuntime.retrySeconds(retryIn))s), \(meanwhile)"
                 )
             case .halfOpen(let trialInFlight):
                 let trial = trialInFlight ? "a trial call is running" : "the next judged call is a trial"
                 return DoctorCheck(
                     id: .judge, status: .warning,
-                    message: "\(on); rv degraded: judge circuit half-open, \(trial); until it answers, other \(meanwhile)"
+                    message: "\(base); rv degraded: judge circuit half-open, \(trial); until it answers, other \(meanwhile)"
                 )
             }
             #else
@@ -96,9 +101,17 @@ public enum DoctorSnapshotBuilder {
             )
             #endif
         case .invalid(let engine, let dir, let problems):
+            // rvd still selects a bundle that is on disk but fails a check
+            // (config labels): the pool cannot load it, and judged calls go
+            // to review. One it does not select leaves it packs-only.
+            #if canImport(CoreML)
+            let effect = JudgeRuntime.selectsBundle(home: home) ? "judged calls go to review" : "packs only"
+            #else
+            let effect = "packs only"
+            #endif
             return DoctorCheck(
                 id: .judge, status: .warning,
-                message: "laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); packs only (guard \(mode.rawValue))"
+                message: "laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); \(effect) (guard \(mode.rawValue))"
             )
         case .missing(let engine, let expected):
             return DoctorCheck(
@@ -134,6 +147,27 @@ public enum DoctorSnapshotBuilder {
         let message = "workers \(workers.joined(separator: "; ")); routing \(status.routing); "
             + "served \(status.served), hedged \(status.hedged), killed \(status.killed), late \(status.late), busy \(status.refusedBusy)"
         return DoctorCheck(id: .judgePool, status: unhealthy ? .warning : .ok, message: message)
+    }
+
+    /// Degraded Core ML states doctor names: CPU-only after crashes, a disk
+    /// too full for the judge to load or predict (calls go to review), and
+    /// rvd running without its crash marker.
+    static func coreMLNotes(_ status: CoreMLGuard.Status) -> [String] {
+        var notes: [String] = []
+        if status.units == .cpuOnly {
+            let until = status.cpuOnlyUntil.map { " until \($0.formatted(.iso8601))" } ?? ""
+            notes.append("CPU only\(until) after repeated Core ML crashes")
+        }
+        if status.diskLow {
+            notes.append("disk nearly full; judge disabled until space is freed")
+        }
+        if status.crashMarkerUnavailable {
+            notes.append("Core ML crash marker held by another process or unwritable; no CPU-only fallback after a crash")
+        }
+        if let reason = status.lastRefusal {
+            notes.append("last judge load refused: \(reason)")
+        }
+        return notes
     }
 
     private static var dayOnePacksLoadedMessage: String {

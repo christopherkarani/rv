@@ -152,8 +152,12 @@ struct RVDLogFileTests {
         defer { close(pair[0]); close(pair[1]) }
         #expect(RVDLogFile.isDiscarded(pair[1]) == false)
 
-        let closed = rawOpen("/dev/null", O_WRONLY)
-        close(closed)
+        // A descriptor number nothing has open. Closing a fresh one and
+        // reusing its number races other suites, which can open a file
+        // under that number in between: take the highest free number.
+        var closed = Int32(getdtablesize()) - 1
+        while closed > 2, fcntl(closed, F_GETFD) != -1 { closed -= 1 }
+        #expect(closed > 2)
         #expect(RVDLogFile.isDiscarded(closed))
     }
 

@@ -66,6 +66,9 @@ _DOWN_LAYERS = {
         "rvd did not answer in time",
     "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`.":
         "the connection to rvd dropped",
+    # Observe mode, but the rvd state marker says rvd ran and was stopped.
+    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal.":
+        "rvd was stopped or crashed",
 }
 
 # Claude Code permission modes that put a hook `ask` to a person: Manual

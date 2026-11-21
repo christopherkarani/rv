@@ -10,6 +10,8 @@ import Synchronization
 public enum WorkerSpawnError: Error, Sendable, Equatable {
     case pipe(Int32)
     case spawn(Int32)
+    /// The executable changed on disk; the supervisor is exiting.
+    case upgraded
 }
 
 /// Spawns workers with `posix_spawn`: stdin and stdout are pipes to the
@@ -33,9 +35,9 @@ public struct PosixWorkerSpawner: WorkerSpawning {
 
     /// The worker arguments for `rv-judge --worker`.
     public static func judgeWorkerArguments(
-        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, cache: String
+        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey
     ) -> [String] {
-        ["--worker", "--compute", compute.rawValue, "--engine", key.engine, "--bundle", key.bundle, "--cache", cache]
+        ["--worker", "--compute", compute.rawValue, "--engine", key.engine, "--bundle", key.bundle]
     }
 
     public func spawn(
@@ -108,16 +110,14 @@ public struct PosixWorkerSpawner: WorkerSpawning {
         }
         var pid: pid_t = 0
         let result = (argv + [nil]).withUnsafeBufferPointer { argvBuffer in
-            (envp + [nil]).withUnsafeBufferPointer { envpBuffer in
-                // Both arrays end in nil, so neither buffer is empty; Glibc's
-                // posix_spawn takes non-optional argv/envp pointers.
-                guard let argvBase = argvBuffer.baseAddress, let envpBase = envpBuffer.baseAddress else {
-                    return EINVAL
-                }
+            (envp + [nil]).withUnsafeBufferPointer { envpBuffer -> Int32 in
+                // Never nil (each array holds at least the terminator);
+                // Glibc's posix_spawn takes non-optional argv/envp.
+                guard let argv = argvBuffer.baseAddress, let envp = envpBuffer.baseAddress else { return EINVAL }
                 return posix_spawn(
                     &pid, executable, &actions, &attributes,
-                    UnsafeMutablePointer(mutating: argvBase),
-                    UnsafeMutablePointer(mutating: envpBase))
+                    UnsafeMutablePointer(mutating: argv),
+                    UnsafeMutablePointer(mutating: envp))
             }
         }
         guard result == 0 else { throw WorkerSpawnError.spawn(result) }
@@ -238,7 +238,8 @@ final class PosixWorkerProcess: WorkerProcess, @unchecked Sendable {
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
         writer.async { [stdinFD] in close(stdinFD) }
-        output(.exited(description: Self.describe(status)))
+        let signal = status & 0x7f
+        output(.exited(description: Self.describe(status), signal: signal == 0 ? nil : signal))
     }
 
     static func describe(_ status: Int32) -> String {

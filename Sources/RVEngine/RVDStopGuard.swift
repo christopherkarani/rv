@@ -29,7 +29,9 @@ import RVDomain
 /// a variable or file cannot be resolved and is not flagged.
 ///
 /// This is the one rvd-stop detector. `ObserveFloor` applies it on observe
-/// hosts only: in enforce a stopped rvd fails closed on its own.
+/// hosts only: in enforce a stopped rvd fails closed on its own. It reads
+/// the one text it is given; the floor hands it every text of the command
+/// (`ObserveTexts`: fed program text and guard readings included).
 public enum RVDStopGuard {
     /// No process table: a literal-pid `kill` is not judged.
     public static func stopsRVD(_ raw: String) -> Bool {
@@ -38,10 +40,13 @@ public enum RVDStopGuard {
 
     /// `rvdPIDs` names rvd's running pids, read only when a literal-pid
     /// `kill` is judged. nil (the table could not be read) flags any
-    /// literal pid: fail closed.
-    public static func stopsRVD(_ raw: String, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
-        stopsRVD(raw, depth: 0, rvdPIDs: rvdPIDs)
-            || ShellLexer.guardReadings(raw).contains { stopsRVD($0, depth: 1, rvdPIDs: rvdPIDs) }
+    /// literal pid: fail closed. The table is read at most once per call.
+    /// `reading`: `raw` is a guard reading of a text
+    /// (`ObserveTexts.Origin.reading`), read one level down.
+    public static func stopsRVD(
+        _ raw: String, reading: Bool = false, rvdPIDs: @escaping () -> Set<Int32>?
+    ) -> Bool {
+        stopsRVD(raw, depth: reading ? 1 : 0, rvdPIDs: readingOnce(rvdPIDs))
     }
 
     private static func stopsRVD(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
@@ -49,7 +54,9 @@ public enum RVDStopGuard {
         let launched = launchedCommandHeads(raw)
         let context = StopContext(raw: raw, launched: launched, depth: depth, rvdPIDs: rvdPIDs)
         if launched.contains(where: { stops($0, context) }) { return true }
-        if speculativeTails(raw).contains(where: { stops(argv: $0, context) }) { return true }
+        // Over the tail budget nothing is judged: fail closed.
+        guard let tails = speculativeTails(raw) else { return true }
+        if tails.contains(where: { stops(argv: Array($0), context) }) { return true }
         return echoFedShellStops(raw, depth: depth, rvdPIDs: rvdPIDs)
     }
 
@@ -61,6 +68,19 @@ public enum RVDStopGuard {
 
     fileprivate static func nestedText(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
         stopsRVD(raw, depth: depth + 1, rvdPIDs: rvdPIDs)
+    }
+}
+
+/// `read`, run at most once: later calls return its first answer (nil
+/// included). A `kill` with thousands of literal pids, or many fed texts,
+/// once read the process table for each.
+package func readingOnce(_ read: @escaping () -> Set<Int32>?) -> () -> Set<Int32>? {
+    var answer: Set<Int32>??
+    return {
+        if let answer { return answer }
+        let first = read()
+        answer = .some(first)
+        return first
     }
 }
 
@@ -220,20 +240,35 @@ private func stops(argv: [String], _ context: StopContext) -> Bool {
 /// `xargs <program> [args]` runs `program` with the words from stdin
 /// appended. The program is judged with the inline args it carries (the
 /// stdin words make an operand-less stop still stop). `xargs` options and
-/// their values are skipped first.
+/// their values are skipped first. Nested `xargs` are walked in a loop;
+/// past `maxNestedXargs` the command fails closed (600 nested once
+/// recursed past rvd's 512 KB stack).
 private func xargsStops(_ args: [String], _ context: StopContext) -> Bool {
+    var args = args
+    for _ in 0...maxNestedXargs {
+        let rest = droppingXargsOptions(args)
+        guard let head = rest.first else { return false }
+        guard isXargsName(head) else { return stops(argv: Array(rest), context) }
+        // As `stops(argv:)` would read the nested xargs's own arguments.
+        args = rest.dropFirst().map(unescapeBackslashPairs)
+    }
+    return true
+}
+
+private let xargsValuedOptions: Set<String> = [
+    "-I", "-i", "-n", "-L", "-P", "-s", "-E", "-e", "-d", "-a", "--max-args",
+    "--max-procs", "--max-lines", "--replace", "--delimiter", "--arg-file",
+]
+
+private func droppingXargsOptions(_ args: [String]) -> ArraySlice<String> {
     var index = 0
-    let valued: Set<String> = ["-I", "-i", "-n", "-L", "-P", "-s", "-E", "-e", "-d", "-a", "--max-args",
-                               "--max-procs", "--max-lines", "--replace", "--delimiter", "--arg-file"]
     while index < args.count {
         let word = args[index]
         guard word.hasPrefix("-") else { break }
         // `-I {}` / `-n 1` take the next word; `-I{}` / `-n1` carry it attached.
-        index += valued.contains(word) ? 2 : 1
+        index += xargsValuedOptions.contains(word) ? 2 : 1
     }
-    let rest = Array(args[index...])
-    guard rest.isEmpty == false else { return false }
-    return stops(argv: rest, context)
+    return args[min(index, args.count)...]
 }
 
 /// `$X`, backticks, globs and braces: the word's runtime value is unknown.
@@ -523,6 +558,14 @@ private func patternMatchesRVD(_ pattern: String, fullCommandLine: Bool) -> Bool
 /// short, fixed subjects.
 func boundedRegexMatches(_ pattern: String, subjects: [String]) -> Bool {
     if pattern.count > maxPatternLength || isCatastrophicPattern(pattern) { return true }
+    // A plain ASCII word is a literal: a case-insensitive substring test
+    // gives the regex's answer without compiling one per operand (a fed
+    // script of dynamic-head lines judged each word as a `pkill` pattern).
+    if pattern.isEmpty == false, pattern.utf8.allSatisfy({ $0 < 0x80 && regexMetaBytes.contains($0) == false }),
+       subjects.allSatisfy({ $0.utf8.allSatisfy { $0 < 0x80 } }) {
+        let needle = pattern.lowercased()
+        return subjects.contains { $0.lowercased().contains(needle) }
+    }
     guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return true }
     return subjects.contains { subject in
         regex.firstMatch(in: subject, range: NSRange(subject.startIndex..., in: subject)) != nil
@@ -530,6 +573,9 @@ func boundedRegexMatches(_ pattern: String, subjects: [String]) -> Bool {
 }
 
 private let maxPatternLength = 128
+
+/// ICU regex syntax characters; a pattern with none of them is literal.
+private let regexMetaBytes = Set(#"\^$.|?*+()[]{}#"#.utf8)
 
 /// A pattern whose backtracking could blow up: a quantifier on a group, an
 /// alternation inside a group, or a backreference. Conservative: any of
@@ -605,17 +651,31 @@ private func killStops(_ args: [String], _ context: StopContext) -> Bool {
 /// runs one is still judged. Quotes split words; shell punctuation splits
 /// segments. A segment led by a program that only prints or searches
 /// (`echo`, `grep`) is text, not a command.
-private func speculativeTails(_ raw: String) -> [[String]] {
-    var tails: [[String]] = []
-    for segment in rawSegments(raw) where segment.isEmpty == false {
+///
+/// Each tail runs to the end of its segment, so `pkill pkill pkill …`
+/// made the judging quadratic. Nil once the tails hold more words than
+/// the command plus `extraTailWords`, so the work stays linear: the
+/// caller fails closed. One long tail (`kill` and its pids) fits.
+private func speculativeTails(_ raw: String) -> [ArraySlice<String>]? {
+    let segments = rawSegments(raw)
+    let budget = segments.reduce(extraTailWords) { $0 + $1.count }
+    var tails: [ArraySlice<String>] = []
+    var words = 0
+    for segment in segments where segment.isEmpty == false {
         let inert = textHeads.contains(commandName(segment[0]))
         for (index, word) in segment.enumerated() where lifecyclePrograms.contains(commandName(word)) {
             if inert && index > 0 { continue }
-            tails.append(Array(segment[index...]))
+            words += segment.count - index
+            if words > budget { return nil }
+            tails.append(segment[index...])
         }
     }
     return tails
 }
+
+/// Overlap allowed past one tail per word: far more than any real
+/// command line (a few `kill`s or `pkill`s in one segment) needs.
+private let extraTailWords = 4096
 
 private let textHeads: Set<String> = [
     "echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack", "cat", "ls", "head", "tail",

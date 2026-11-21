@@ -79,8 +79,15 @@ public final class FineTunedJudge: @unchecked Sendable {
     let maxLen: Int
     let lengths: [Int]
     let lock = NSLock()
+    let coreML: CoreMLGuard
+    /// Keeps the compiled-model cache entry from being swept while loaded.
+    let modelLease: CompiledModelLease
 
-    public init(bundleDir: URL, computeUnits: JudgeComputeUnits = .accelerated, compiledCacheRoot: URL? = nil) throws {
+    public init(bundleDir: URL, coreML: CoreMLGuard = .current) throws {
+        self.coreML = coreML
+        // Before any bundle work: a nearly full disk refuses (review), whatever
+        // else is wrong with the bundle.
+        try coreML.requireDiskSpace()
         let fm = FileManager.default
         let directTok = bundleDir.appendingPathComponent("tokenizer.json")
         let nestedTok = bundleDir.appendingPathComponent("tokenizer/tokenizer.json")
@@ -132,15 +139,18 @@ public final class FineTunedJudge: @unchecked Sendable {
         self.checkpoint = checkpoint
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
-        guard fm.fileExists(atPath: package.path) else {
+        // ENOENT only is a missing model (packs-only); any other lstat error
+        // refuses (review).
+        guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
             throw LayaError.badBundle("model.mlpackage missing in \(bundleDir.path)")
         }
-        // Via CompiledModelCache (cpuAndGPU). (An earlier cpuOnly pin
+        // Via CompiledModelCache (cpuAndGPU unless `coreML` saw repeated
+        // Core ML crashes). (An earlier cpuOnly pin
         // here was a misdiagnosis: the per-process flips then were
         // mistokenization — String-keyed vocab tables resolving
         // homoglyph twins — fixed in LayaTokenizer by byte-exact keys,
         // verified 0/348 id mismatches vs HF.)
-        model = try CompiledModelCache.load(package: package, computeUnits: computeUnits, root: compiledCacheRoot)
+        (model, modelLease) = try CompiledModelCache.load(package: package, coreML: coreML)
     }
 
     /// Judge one command with pre-rendered context lines (JudgeContext.lines()
@@ -177,7 +187,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         ])
         lock.lock()
         defer { lock.unlock() }
-        let out = try model.prediction(from: provider)
+        let out = try coreML.run { try model.prediction(from: provider) }
         guard let logits = out.featureValue(for: "logits")?.multiArrayValue,
               logits.count == labels.count else {
             throw LayaError.predictionFailed("missing logits output")
@@ -224,7 +234,7 @@ public final class FineTunedJudge: @unchecked Sendable {
 /// Linux seam: CoreML is unavailable, so the fine-tuned judge cannot run.
 /// The gate treats this as unavailable; it never invents an allow.
 public struct FineTunedJudge: Sendable {
-    public init(bundleDir: URL, computeUnits: JudgeComputeUnits = .accelerated, compiledCacheRoot: URL? = nil) throws {
+    public init(bundleDir: URL, coreML: CoreMLGuard = .current) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 

@@ -79,6 +79,14 @@ struct JudgePoolPortTests {
         #expect(reading.action == .review)
     }
 
+    @Test("an unreachable pool counts against the circuit; a refusal does not")
+    func circuitOutcomes() {
+        #expect(JudgeRuntime.circuitOutcome(.unreachable) == .failure)
+        #expect(JudgeRuntime.circuitOutcome(.late) == .failure)
+        #expect(JudgeRuntime.circuitOutcome(.refused("disk")) == .neutral)
+        #expect(JudgeRuntime.circuitOutcome(.circuitOpen(retryIn: .seconds(1))) == .neutral)
+    }
+
     @Test("the fail-closed notes name the pool outcome")
     func notes() {
         let allow = EvaluationResult(outcome: .plain, matchingView: "x", analysis: .unknown)
@@ -96,7 +104,12 @@ struct JudgePoolPortTests {
         // fails (a full disk, a corrupt cache) can be induced, and the
         // packs-only floor would turn it into an unjudged allow.
         let run = JudgeRuntime.read(.loadFailed(failure))
-        if case .unavailable = run { Issue.record("load failure must not reach the packs-only floor") }
+        guard case .refused(let why) = run else {
+            Issue.record("load failure must be a refusal, never the packs-only floor")
+            return
+        }
+        #expect(why.contains(failure.message))
+        #expect(JudgeRuntime.failClosed(run, over: EvaluationResult(outcome: .plain, matchingView: "x", analysis: .unknown)).note == "judge-refused")
         let allow = EvaluationResult(outcome: .plain, matchingView: "x", analysis: .unknown)
         let reading = JudgeRuntime.read(run, over: allow, provenance: .userTyped)
         guard case .deny = reading.outcome.decision else {

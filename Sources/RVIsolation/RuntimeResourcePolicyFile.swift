@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 import RVPolicy
 
 /// Encodes and atomically replaces the operator's machine policy.

@@ -7,7 +7,7 @@ import Foundation
 import RVJudgePool
 import RVLaya
 
-/// `rv-judge --worker --compute accelerated|cpu --engine ft|laya --bundle DIR --cache DIR`
+/// `rv-judge --worker --compute accelerated|cpu --engine ft|laya --bundle DIR`
 ///
 /// One judge worker of the pool (docs/architecture/judge-pool.md). Spawned
 /// only by `rv-judge serve`: stdin carries length-prefixed `WorkerRequest`
@@ -15,40 +15,36 @@ import RVLaya
 /// stdout. Loads the model once, answers one request at a time, and exits
 /// when stdin closes (the supervisor is gone). A worker that hangs or
 /// aborts costs only itself: the supervisor kills and respawns it.
+///
+/// Every load goes through the worker's own `CoreMLGuard`
+/// (`guard-<compute>` under the account's `~/.config/rv/cache/laya`): its
+/// crash history drives only its own compute units, and its compiled model
+/// comes from the shared verified store. A refusal (disk nearly full, a
+/// model it could not verify) is reported as a load failure, which rvd
+/// answers with review.
 enum JudgeWorker {
-    struct Options: Equatable {
-        var compute: JudgeComputeUnits
-        var engine: String
-        var bundle: String
-        /// The supervisor-owned compiled-model cache (never the shared one).
-        var cache: String
+    /// `<passwd home>/.config/rv/cache/laya`: never from `$HOME` or argv.
+    static func stateRoot() -> URL? {
+        JudgePoolServe.passwdHome().map {
+            CoreMLGuard.stateRoot(configDirectory: URL(fileURLWithPath: $0, isDirectory: true)
+                .appendingPathComponent(".config", isDirectory: true)
+                .appendingPathComponent("rv", isDirectory: true))
+        }
     }
 
-    static func parse(_ arguments: [String]) -> Options? {
-        var compute: JudgeComputeUnits?
-        var engine: String?
-        var bundle: String?
-        var cache: String?
-        var index = 0
-        while index + 1 < arguments.count {
-            let value = arguments[index + 1]
-            switch arguments[index] {
-            case "--compute": compute = JudgeComputeUnits(rawValue: value)
-            case "--engine": engine = ["ft", "laya"].contains(value) ? value : nil
-            case "--bundle": bundle = value.hasPrefix("/") ? value : nil
-            case "--cache": cache = value.hasPrefix("/") ? value : nil
-            default: return nil
-            }
-            index += 2
-        }
-        guard index == arguments.count, let compute, let engine, let bundle, let cache else { return nil }
-        return Options(compute: compute, engine: engine, bundle: bundle, cache: cache)
+    /// The supervisor's `reapedAfterKill`: a worker it SIGKILLed after the
+    /// worker's guard started did not crash inside Core ML, so its in-flight
+    /// marker is cleared before the replacement reads it.
+    static func clearMarker(after compute: WorkerCompute) {
+        guard let root = stateRoot() else { return }
+        FileCoreMLCrashStore.clearStaleMarker(
+            directory: CoreMLGuard.workerMarkerDirectory(stateRoot: root, worker: compute.rawValue))
     }
 
     static func main(_ arguments: [String]) -> Never {
         // A dead supervisor turns writes into EPIPE, and the loop exits.
         signal(SIGPIPE, SIG_IGN)
-        guard let options = parse(arguments) else {
+        guard let options = WorkerOptions.parse(arguments) else {
             FileHandle.standardError.write(Data("rv-judge --worker: bad arguments\n".utf8))
             exit(2)
         }
@@ -61,21 +57,31 @@ enum JudgeWorker {
     }
 
     #if canImport(CoreML)
-    private static func run(_ options: Options) -> Never {
+    private static func run(_ options: WorkerOptions) -> Never {
+        let coreML = CoreMLGuard.worker(
+            stateRoot: stateRoot(), worker: options.compute.rawValue, cpuOnly: options.compute == .cpu,
+            log: JudgePoolLog.line)
+        // Crash recovery first (it reads the previous generation's marker),
+        // then tell the supervisor: from here a marker is this worker's own,
+        // so the supervisor's SIGKILL may clear it.
+        _ = coreML.computeUnits
+        emit(.guardStarted)
         let bundle = URL(fileURLWithPath: options.bundle, isDirectory: true)
-        let cache = URL(fileURLWithPath: options.cache, isDirectory: true)
         let judge: (JudgeInput) throws -> LayaVerdict
         let checkpoint: String
         do {
             if options.engine == "ft" {
-                let model = try FineTunedJudge(bundleDir: bundle, computeUnits: options.compute, compiledCacheRoot: cache)
+                let model = try FineTunedJudge(bundleDir: bundle, coreML: coreML)
                 checkpoint = model.checkpoint
                 judge = { try model.judge($0.command, contextLines: $0.contextLines) }
             } else {
-                let model = try LayaCoreMLJudge(bundleDir: bundle, computeUnits: options.compute, compiledCacheRoot: cache)
+                let model = try LayaCoreMLJudge(bundleDir: bundle, coreML: coreML)
                 checkpoint = model.checkpoint
                 judge = { try model.judge($0.command) }
             }
+        } catch let refusal as any CoreMLRefusal {
+            emit(.loadFailed(LoadFailure(kind: .modelUnavailable, message: refusal.reason)))
+            exit(0)
         } catch let error as LayaError {
             emit(.loadFailed(loadFailure(error)))
             exit(0)

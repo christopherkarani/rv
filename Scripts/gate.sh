@@ -154,6 +154,15 @@ infer_filters() {
           Sources/*/*|Tests/*/*) ;;
           *) continue ;;
         esac
+        # Compiled into Packages/rv-microvm too, through a symlink. That
+        # package imports Darwin, so it only builds on macOS.
+        if [[ "$f" == Sources/RVIsolation/ProtectedWorkspacePaths.swift ]]; then
+          if [[ "$(uname -s)" == Darwin ]]; then
+            RUN_MICROVM_PACKAGE=1
+          elif [[ "$QUIET" -eq 0 ]]; then
+            printf "gate: skipping Packages/rv-microvm tests for %s (macOS only)\n" "$f" >&2
+          fi
+        fi
         base="${f#Sources/}"
         base="${base#Tests/}"
         m="${base%%/*}"

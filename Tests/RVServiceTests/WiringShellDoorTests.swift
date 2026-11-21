@@ -67,4 +67,52 @@ struct WiringShellDoorTests {
             #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .observe)), "\(command)")
         }
     }
+
+    @Test("enforce mode denies a shell write into rvd's Core ML cache; listing it stays allowed", arguments: [
+        "cp x ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/b",
+        "echo x > ../Library/Caches/rvd/planted",
+        "ln -s /tmp/x ~/Library/Caches/rvd",
+        "cp x ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/b",
+        "echo x > ../Library/Caches/rv-judge/planted",
+        "ln -s /tmp/x ~/Library/Caches/rv-judge",
+    ])
+    func coreMLCacheWritesDeny(command: String) throws {
+        try Self.withRepo { _, home, cwd in
+            #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .enforce)), "\(command)")
+            #expect(Self.decide("ls ~/Library/Caches/rvd", home: home, cwd: cwd, mode: .enforce).decision == .allow)
+            #expect(Self.decide("ls ~/Library/Caches/rv-judge", home: home, cwd: cwd, mode: .enforce).decision == .allow)
+        }
+    }
+
+    @Test("observe mode still denies a shell write into a Core ML cache", arguments: [
+        "cp x ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/b",
+        "ln -s /tmp/x ~/Library/Caches/rv-judge",
+        "cp x ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/b",
+    ])
+    func coreMLCacheWritesDenyInObserve(command: String) throws {
+        try Self.withRepo { _, home, cwd in
+            #expect(Self.isDeny(Self.decide(command, home: home, cwd: cwd, mode: .observe)), "\(command)")
+        }
+    }
+
+    /// `~/Library/Caches` is now a proper ancestor of a wiring entry, so a
+    /// mutation of the directory itself is a protected-path mutation even in
+    /// observe mode; a sibling entry is not. (In enforce, out-of-repo writes
+    /// already deny on other rules; `mv` and `rm -rf` of home paths are
+    /// core.filesystem's either way.)
+    @Test("~/Library/Caches itself is a protected ancestor; its other entries are not")
+    func cachesAncestorIsProtected() throws {
+        let mutation = RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "protected-path-mutation")
+        try Self.withRepo { _, home, cwd in
+            let ancestor = Self.decide("chmod 777 ~/Library/Caches", home: home, cwd: cwd, mode: .observe).decision
+            guard case .deny(let deny) = ancestor else {
+                Issue.record("chmod of ~/Library/Caches: \(ancestor)")
+                return
+            }
+            #expect(deny.ruleID == mutation)
+            #expect(Self.isDeny(Self.decide("mv ~/Library/Caches /tmp/c", home: home, cwd: cwd, mode: .observe)))
+            let sibling = Self.decide("chmod 700 ~/Library/Caches/rvdx", home: home, cwd: cwd, mode: .observe).decision
+            if case .deny(let deny) = sibling { #expect(deny.ruleID != mutation, "\(deny.ruleID)") }
+        }
+    }
 }

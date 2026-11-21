@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVPolicy
 
 /// Where a secret's real value lives. rv reads it host-side and never stores it.

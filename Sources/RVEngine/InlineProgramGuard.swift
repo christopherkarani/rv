@@ -109,7 +109,7 @@ private func sedScripts(_ args: [String]) -> [String] {
 }
 
 /// GNU sed runs a shell for the `e` command and the `s///e` flag.
-private func sedExecutes(_ script: String) -> Bool {
+func sedExecutes(_ script: String) -> Bool {
     let chars = Array(script)
     for (index, char) in chars.enumerated() where char == "e" {
         let before = index == 0 ? nil : chars[index - 1]

@@ -89,19 +89,6 @@ struct LayaVerdictTests {
     }
 
     #if canImport(CoreML)
-    /// Each compute-unit configuration has its own compiled-model entry, and
-    /// a given root (the judge pool's private directory) is the only place
-    /// an entry is looked for.
-    @Test func compiledCacheEntryIsPerComputeUnitsUnderTheGivenRoot() {
-        let package = URL(fileURLWithPath: "/models/laya-ft-v2-coreml/model.mlpackage")
-        let root = URL(fileURLWithPath: "/private/var/folders/x/T/rv-judge-0123", isDirectory: true)
-        let cpu = CompiledModelCache.entry(package: package, computeUnits: .cpu, root: root)
-        let accelerated = CompiledModelCache.entry(package: package, computeUnits: .accelerated, root: root)
-        #expect(cpu != accelerated)
-        #expect(cpu.deletingLastPathComponent().path == root.path)
-        #expect(accelerated.deletingLastPathComponent().path == root.path)
-    }
-
     /// AC-004 end to end: the bundle's config labels are checked at load,
     /// before any model file is touched.
     @Test func fineTunedBundleWithUnknownLabelFailsLoading() throws {

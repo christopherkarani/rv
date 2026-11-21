@@ -34,6 +34,18 @@ public actor AnalyticsCoordinator {
     private let platform: PlatformSnapshot
     private var state: AnalyticsCounterState
     private var installSent: Bool
+    private let persistDelay: Duration
+    /// The deferred counters write, while it is scheduled and has not run.
+    private var pendingPersist: Task<Void, Never>?
+    /// Tells a deferred write that woke late (after `persistPendingNow`
+    /// took its place) that it is no longer the pending one.
+    private var pendingPersistGeneration: UInt64 = 0
+
+    /// How long decision counts may sit in memory before the counters file
+    /// is rewritten. rvd records every decision, and writing the file (an
+    /// atomic replace with fsync, ~2 ms on Linux) per decision kept the disk
+    /// busy and queued work on this actor at a few hundred decisions a second.
+    public static let defaultPersistDelay: Duration = .seconds(1)
 
     public init(
         paths: AnalyticsPaths,
@@ -41,9 +53,11 @@ public actor AnalyticsCoordinator {
         identity: AnalyticsIdentity,
         sink: any AnalyticsSink,
         productVersion: String,
-        platform: PlatformSnapshot
+        platform: PlatformSnapshot,
+        persistDelay: Duration = AnalyticsCoordinator.defaultPersistDelay
     ) {
         self.paths = paths
+        self.persistDelay = persistDelay
         self.preferences = preferences
         self.identity = identity
         self.sink = sink
@@ -65,7 +79,7 @@ public actor AnalyticsCoordinator {
         case .deny: state.denyCount += 1
         case .indeterminate: state.indeterminateCount += 1
         }
-        persistState()
+        schedulePersist()
     }
 
     /// Adds decisions counted elsewhere (the hook-local evaluator's spool)
@@ -88,7 +102,10 @@ public actor AnalyticsCoordinator {
     ///   stays `[String]` to keep the analytics boundary free of domain types.
     public func noteEnabledPacks(_ packIDs: [String]) {
         guard preferences.isEnabled else { return }
-        state.enabledPackIDs = packIDs.sorted()
+        let sorted = packIDs.sorted()
+        // rvd notes the packs after every decision; they rarely change.
+        guard sorted != state.enabledPackIDs else { return }
+        state.enabledPackIDs = sorted
         persistState()
     }
 
@@ -159,6 +176,58 @@ public actor AnalyticsCoordinator {
             distinctID: identity.distinctID,
             properties: properties
         )
+    }
+
+    /// Writes decision counts still waiting for the deferred write now, and
+    /// cancels that write. rvd calls this before an orderly exit (idle, or
+    /// its binary replaced on disk). No-op when nothing is pending.
+    public func persistPendingNow() {
+        guard let pending = pendingPersist else { return }
+        pending.cancel()
+        pendingPersist = nil
+        pendingPersistGeneration &+= 1
+        persistPendingState()
+    }
+
+    /// Coalesces decision-count writes: at most one per `persistDelay`. A
+    /// crash or kill (including SIGTERM, which rvd does not handle) loses at
+    /// most that long's counts, the same kind of loss the best-effort writes
+    /// (`try?`) and rvd's detached per-decision task already accept. The
+    /// daily flush and every other change write at once.
+    private func schedulePersist() {
+        guard persistDelay > .zero else {
+            persistState()
+            return
+        }
+        guard pendingPersist == nil else { return }
+        pendingPersistGeneration &+= 1
+        let generation = pendingPersistGeneration
+        let delay = persistDelay
+        pendingPersist = Task {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            self.runScheduledPersist(generation: generation)
+        }
+    }
+
+    private func runScheduledPersist(generation: UInt64) {
+        guard pendingPersist != nil, generation == pendingPersistGeneration else { return }
+        pendingPersist = nil
+        persistPendingState()
+    }
+
+    /// A deferred write never creates the config directory: if it is gone
+    /// (removed while rvd ran, or a test's temporary root), the counts stay
+    /// in memory for the next write that does.
+    private func persistPendingState() {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: paths.configDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return }
+        persistState()
     }
 
     private func persistState() {

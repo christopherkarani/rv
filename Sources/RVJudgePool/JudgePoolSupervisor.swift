@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Foundation
 
@@ -6,7 +11,8 @@ public enum WorkerOutput: Sendable, Equatable {
     /// One complete frame body from the worker's stdout.
     case frame(Data)
     /// The process is gone and reaped; `description` is for the log.
-    case exited(description: String)
+    /// `signal` is the signal that ended it, nil for a normal exit.
+    case exited(description: String, signal: Int32? = nil)
 }
 
 /// One running worker process.
@@ -47,17 +53,29 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
     private var completions: [String: @Sendable (PoolOutcome) -> Void] = [:]
     private var timer: DispatchSourceTimer?
     private var nextID: UInt64 = 0
+    /// Workers this supervisor SIGKILLed itself, until they are reaped.
+    private var killed: Set<Generation> = []
+    /// Workers that reported their Core ML guard started, until reaped.
+    private var guarded: Set<Generation> = []
+    private let reapedAfterKill: @Sendable (WorkerSlot, WorkerCompute) -> Void
+
+    private struct Generation: Hashable {
+        let slot: WorkerSlot
+        let generation: UInt64
+    }
 
     public init(
         policy: PoolPolicy = .live,
         spawner: any WorkerSpawning,
         clock: @escaping @Sendable () -> Instant = { ContinuousClock.now },
-        log: @escaping @Sendable (String) -> Void = { _ in }
+        log: @escaping @Sendable (String) -> Void = { _ in },
+        reapedAfterKill: @escaping @Sendable (WorkerSlot, WorkerCompute) -> Void = { _, _ in }
     ) {
         self.core = PoolCore(policy: policy)
         self.spawner = spawner
         self.clock = clock
         self.log = log
+        self.reapedAfterKill = reapedAfterKill
     }
 
     /// Judges `input` with the model `key`; `completion` runs exactly once,
@@ -130,6 +148,7 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .kill(let slot, let generation):
             guard let entry = running[slot], entry.generation == generation else { return }
             log("worker \(slot.rawValue) killed")
+            killed.insert(Generation(slot: slot, generation: generation))
             entry.process.kill()
         case .reply(let id, let outcome):
             completions.removeValue(forKey: id)?(outcome)
@@ -141,10 +160,16 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .frame(let body):
             guard let event = JudgePoolJSON.decode(WorkerEvent.self, from: body) else {
                 log("worker \(slot.rawValue) sent an unreadable frame; killing it")
-                if let entry = running[slot], entry.generation == generation { entry.process.kill() }
+                if let entry = running[slot], entry.generation == generation {
+                    killed.insert(Generation(slot: slot, generation: generation))
+                    entry.process.kill()
+                }
                 return
             }
             switch event {
+            case .guardStarted:
+                guarded.insert(Generation(slot: slot, generation: generation))
+                return
             case .ready(let checkpoint):
                 log("worker \(slot.rawValue) ready (\(checkpoint))")
             case .loadFailed(let failure):
@@ -153,9 +178,21 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
                 break
             }
             apply(.worker(slot, generation: generation, event))
-        case .exited(let description):
+        case .exited(let description, let signal):
             log("worker \(slot.rawValue) exited (\(description))")
             if running[slot]?.generation == generation { running[slot] = nil }
+            // Our own SIGKILL (budget overrun, garbage on stdout) is not a
+            // Core ML crash: let the shell clear the in-flight marker it left
+            // before the replacement starts and reads it. Only when the
+            // marker is this worker's (its guard had run crash recovery, so
+            // the previous generation's is already recorded) and SIGKILL is
+            // what ended it (a real abort racing the kill stays a crash).
+            let id = Generation(slot: slot, generation: generation)
+            let killedByUs = killed.remove(id) != nil
+            let ownsMarker = guarded.remove(id) != nil
+            if killedByUs, ownsMarker, signal == SIGKILL {
+                reapedAfterKill(slot, core.policy.compute(for: slot))
+            }
             apply(.exited(slot, generation: generation))
         }
     }

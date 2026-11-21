@@ -8,7 +8,7 @@ import RVLaya
 // flags or environment below.
 if CommandLine.arguments.count > 1 {
     switch CommandLine.arguments[1] {
-    case "serve": JudgePoolServe.run()
+    case "serve": JudgePoolServe.run(reapedAfterKill: JudgeWorker.clearMarker(after:))
     case "--worker": JudgeWorker.main(Array(CommandLine.arguments.dropFirst(2)))
     default: break
     }

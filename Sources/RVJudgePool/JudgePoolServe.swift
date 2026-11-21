@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+import Synchronization
 
 /// The supervisor's diagnostic log, `~/Library/Logs/rv/judge.log`.
 ///
@@ -98,7 +99,7 @@ public enum JudgePoolLog {
 }
 
 /// Refuses to spawn from an executable that changed under the supervisor:
-/// exits instead, for launchd to restart the supervisor on the new bytes.
+/// never spawns it, and exits instead (`onUpgrade`), for launchd to restart the supervisor on the new bytes.
 /// "Changed" is a different file identity, or (Darwin) on-disk code whose
 /// CDHash is not the running supervisor's.
 struct UpgradeGuardedSpawner: WorkerSpawning {
@@ -111,8 +112,20 @@ struct UpgradeGuardedSpawner: WorkerSpawning {
     func spawn(
         slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, output: @escaping @Sendable (WorkerOutput) -> Void
     ) throws -> any WorkerProcess {
-        if ExecutableIdentity(path: executable) != identity || !codeMatches() { onUpgrade() }
+        if ExecutableIdentity(path: executable) != identity || !codeMatches() {
+            onUpgrade()
+            throw WorkerSpawnError.upgraded
+        }
         return try base.spawn(slot: slot, compute: compute, key: key, output: output)
+    }
+}
+
+/// Lets exactly one caller through.
+final class ExitOnce: Sendable {
+    private let claimed = Atomic(false)
+
+    func claim() -> Bool {
+        !claimed.exchange(true, ordering: .acquiringAndReleasing)
     }
 }
 
@@ -130,6 +143,22 @@ public enum JudgePoolServe {
         return out
     }
 
+    private static let leaving = ExitOnce()
+
+    /// The account home from the password database; never `$HOME`.
+    public static func passwdHome() -> String? {
+        guard let entry = getpwuid(geteuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        return home.hasPrefix("/") ? home : nil
+    }
+
+    /// `exit` from one thread only: SIGTERM and an upgrade can race, and a
+    /// second concurrent `exit` would run the atexit cleanup twice.
+    static func leave(_ status: Int32) -> Never {
+        if leaving.claim() { exit(status) }
+        while true { pause() }
+    }
+
     /// The canonical path of the running executable.
     public static func runningExecutable() -> String? {
         #if canImport(Darwin)
@@ -145,7 +174,11 @@ public enum JudgePoolServe {
         return String(cString: resolved)
     }
 
-    public static func run() -> Never {
+    /// `reapedAfterKill` runs on the supervisor's queue after a worker the
+    /// supervisor SIGKILLed itself is reaped, before its replacement spawns
+    /// (rv-judge clears that worker's Core ML in-flight marker); only for a
+    /// worker that reported its guard started and that SIGKILL ended.
+    public static func run(reapedAfterKill: @escaping @Sendable (WorkerCompute) -> Void = { _ in }) -> Never {
         #if canImport(XPC)
         signal(SIGPIPE, SIG_IGN)
         let environment = ProcessInfo.processInfo.environment
@@ -161,17 +194,13 @@ public enum JudgePoolServe {
         let identity = ExecutableIdentity(path: executable)
         let upgraded: @Sendable () -> Void = {
             JudgePoolLog.line("executable changed on disk; exiting for launchd to restart the new one")
-            exit(0)
+            leave(0)
         }
-        guard let cache = JudgePoolCacheDirectory.prepare() else {
-            JudgePoolLog.line("cannot create a private model cache directory; exiting")
-            exit(1)
-        }
-        // launchd stops the agent with SIGTERM: leave through exit() so the
-        // private cache is removed.
+        // launchd stops the agent with SIGTERM: leave through `leave`, one
+        // exit for SIGTERM and an upgrade racing it.
         signal(SIGTERM, SIG_IGN)
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminate.setEventHandler { exit(0) }
+        terminate.setEventHandler { leave(0) }
         terminate.resume()
         let running = JudgePoolTrust.runningCodeHash()
         if running == nil { JudgePoolLog.line("own code hash unreadable; workers are checked by file identity only") }
@@ -180,12 +209,13 @@ public enum JudgePoolServe {
                 executable: executable,
                 environment: workerEnvironment(environment),
                 arguments: { slot, compute, key in
-                    PosixWorkerSpawner.judgeWorkerArguments(slot: slot, compute: compute, key: key, cache: cache)
+                    PosixWorkerSpawner.judgeWorkerArguments(slot: slot, compute: compute, key: key)
                 }),
             executable: executable, identity: identity,
             codeMatches: { running.map { JudgePoolTrust.siblingHashes.hash(ofPath: executable) == $0 } ?? true },
             onUpgrade: upgraded)
-        let supervisor = JudgePoolSupervisor(spawner: spawner, log: JudgePoolLog.line)
+        let supervisor = JudgePoolSupervisor(
+            spawner: spawner, log: JudgePoolLog.line, reapedAfterKill: { _, compute in reapedAfterKill(compute) })
         let directory = (executable as NSString).deletingLastPathComponent as NSString
         let siblingClient = directory.appendingPathComponent("rvd")
         let siblingEvaluator = directory.appendingPathComponent("rv-hook-local")

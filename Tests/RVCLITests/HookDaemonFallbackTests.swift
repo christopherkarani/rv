@@ -162,6 +162,46 @@ struct HookDaemonFallbackTests {
         #expect(protocolMiss == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .deny))
     }
 
+    /// Twin of the rvd state marker cases in rv-c/tests/run.sh: under owner
+    /// observe mode a miss steps aside only when the marker allows it;
+    /// otherwise it renders `.stopped` through the normal ask/deny fallback.
+    @Test func clientFailsClosedWhenTheMarkerSaysRvdWasStopped() async throws {
+        let observes: @Sendable (HookHost) -> Bool = { _ in true }
+        let absent = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .connectFailed
+        )
+        let client = try isolatedClient(transport: absent)
+        for host in [HookHost.claude, .cursor, .codex, .opencode] {
+            let stopped = await client.hookEvaluate(
+                host: host, stdin: "{}", whenDown: .ask, ownerObserves: observes,
+                rvdStateAllowsObserve: { false })
+            #expect(stopped == HookDaemonFallback.wire(host: host, failure: .stopped, mode: .ask))
+            #expect(stopped.stdout.contains(HookDaemonFallback.message(for: .stopped)))
+            #expect(stopped.stderr.contains("allowed without being checked") == false)
+
+            let restarting = await client.hookEvaluate(
+                host: host, stdin: "{}", whenDown: .ask, ownerObserves: observes,
+                rvdStateAllowsObserve: { true })
+            #expect(restarting == HookDaemonFallback.wire(
+                host: host, failure: .unreachable, mode: .ask, ownerObserves: true))
+        }
+        // An explicit deny still wins, and outside observe mode the marker is
+        // never consulted: the unreachable message stays.
+        let denied = await client.hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes,
+            rvdStateAllowsObserve: { false })
+        #expect(denied == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
+        let enforce = await client.hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: { _ in false },
+            rvdStateAllowsObserve: {
+                Issue.record("marker read outside observe mode")
+                return false
+            })
+        #expect(enforce == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask))
+        #expect(HookDaemonFallback.message(for: .stopped).contains("rv service restart"))
+    }
+
     /// `.unreachable` is the only class observe mode allows on, so it is
     /// reserved for a connect that failed before anything was sent. Every
     /// other failure, including errors this classifier does not recognize,

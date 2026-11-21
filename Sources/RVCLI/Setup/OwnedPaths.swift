@@ -12,6 +12,8 @@ struct OwnedPaths: Equatable, Sendable {
     var home: HomeDirectory
 
     var configDirectory: String { home.rawValue + "/.config/rv" }
+    /// `RVDStateMarker`: whether rvd ran here and whether a restart is due.
+    var rvdStateMarker: String { home.rawValue + "/.config/rv/rvd-state" }
     var grokDirectory: String { home.rawValue + "/.grok" }
     var grokHook: String { home.rawValue + "/.grok/hooks/rv.json" }
     var piDirectory: String { home.rawValue + "/.pi" }

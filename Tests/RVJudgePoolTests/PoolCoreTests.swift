@@ -158,6 +158,22 @@ struct PoolCoreTests {
         #expect(pool.core.status().served == 1)
     }
 
+    @Test("a request running past hedgeAfter gets the idle hedge before a queued one")
+    func hedgeBeforeDispatch() {
+        var pool = PoolHarness()
+        pool.warmBoth()
+        #expect(pool.submit("a").sends == [.primary: "a"])
+        pool.at(100)
+        #expect(pool.submit("b").sends.isEmpty, "b waits primaryBusyWait for the busy primary")
+        // One pump where a is past hedgeAfter and b is past primaryBusyWait.
+        pool.at(200)
+        #expect(pool.tick().sends == [.hedge: "a"])
+        #expect(pool.core.status().hedged == 1)
+        // b runs when a worker frees.
+        pool.at(250)
+        #expect(pool.verdict(.hedge, "a").sends == [.hedge: "b"])
+    }
+
     @Test("no answer after hedgeAfter: the hedge gets it too and the first verdict wins")
     func hedges() {
         var pool = PoolHarness()
@@ -290,8 +306,9 @@ struct PoolCoreTests {
         #expect(pool.submit("d").reply("d") == nil)
         #expect(pool.submit("e").reply("e") == .busy)
         #expect(pool.core.status().refusedBusy == 1)
-        // The primary frees up: the head of the queue runs next, in order.
-        pool.at(200)
+        // The primary frees up before b is due a hedge: the head of the
+        // queue runs next, in order. (Past hedgeAfter, b would take it.)
+        pool.at(100)
         #expect(pool.verdict(.primary, "a").sends == [.primary: "c"])
     }
 

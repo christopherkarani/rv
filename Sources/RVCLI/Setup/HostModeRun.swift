@@ -162,7 +162,7 @@ enum HostModeRun {
                 }
             } catch let error as SetupError {
                 return failure(error, command: .hostMode)
-            } catch HostModeStoreError.unreadableConfig {
+            } catch OwnerConfigWriteError.unreadable {
                 return SetupOutcome(
                     stdout: "", stderr: ConfigUnreadableRefusal.message(prefix: "rv host mode failed"),
                     exitCode: ConfigUnreadableRefusal.exitCode)

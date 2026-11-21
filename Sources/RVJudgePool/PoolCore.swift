@@ -356,8 +356,10 @@ public struct PoolCore: Sendable {
             queue.removeAll()
         }
         spawn(now: now)
-        dispatch(now: now)
+        // A request already running past hedgeAfter has waited longest for
+        // an answer: it gets an idle worker before a queued one does.
         hedge(now: now)
+        dispatch(now: now)
     }
 
     private mutating func restoreDegraded(now: Instant) {
@@ -480,7 +482,8 @@ public struct PoolCore: Sendable {
     }
 
     private mutating func hedge(now: Instant) {
-        for (id, request) in pending {
+        let oldestFirst = pending.sorted { ($0.value.queuedAt, $0.key) < ($1.value.queuedAt, $1.key) }
+        for (id, request) in oldestFirst {
             guard request.active.count == 1, let (slot, sentAt) = request.active.first,
                   sentAt + policy.hedgeAfter <= now else { continue }
             let other = slot.other

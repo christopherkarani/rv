@@ -742,18 +742,18 @@ What it does not:
   that clones whole package
   directories out of a cache elsewhere (bun's `clonefile` backend, with
   its cache in `~/.bun/install/cache`) gets "Operation not permitted":
-  add that cache to `sandbox.writable`. A profile over 288 KiB is refused
+  add that cache to `sandbox.writable`. A profile over 304 KiB is refused
   before launch rather than compiled (an everyday one is about 24 KB; a
-  letter-heavy home fills about 274 KB, and a home under the temporary
+  letter-heavy home fills about 296 KB, and a home under the temporary
   directory, spelled through `/var`, can pass the cap). The cap is set for
   libsandbox's real limit, which is on filter count, not bytes: measured on
   macOS 27 it refuses about 2700 deny rules as "profile too large", cleanly,
   on both the compile thread and under `sandbox-exec`, and the stack it
   recurses on grows with that count. Dense short filters reach the limit at
   fewer bytes than long ones, so the byte cap is set for the densest shape:
-  at 288 KiB such a profile is ~2050 rules with a ~1.9 MiB peak stack — over
-  4x inside the 8 MB stack `sandbox-exec` recompiles the text on in the
-  child, ~8x inside the compile thread — and compiles in about 0.7 s. A credential reached through a symlink (the credential itself or
+  at 304 KiB such a profile is ~2160 rules (about 20% under that limit)
+  with a ~2 MiB peak stack — about 4x inside the 8 MB stack `sandbox-exec`
+  recompiles the text on in the child, ~8x inside the compile thread. A credential reached through a symlink (the credential itself or
   a directory above it) is denied at the link and at the target it
   resolves to when the server starts; if a process outside the cage
   retargets that link while the server runs, the new target stays

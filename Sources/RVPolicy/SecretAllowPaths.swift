@@ -80,6 +80,8 @@ public enum SecretAllowPaths {
         )
     }
 
+    /// `secret.allow_paths` in `config.json`. rv never writes it (nor
+    /// `secret.bless_paths`); only the owner edits them.
     public static func loadMachineConfig(from file: URL) -> [String] {
         let root = MachineConfigJSON.load(from: file)
         guard let values = root["secret"]?["allow_paths"]?.asArray else {
@@ -90,14 +92,6 @@ public enum SecretAllowPaths {
             return []
         }
         return paths
-    }
-
-    public static func saveMachineConfig(_ paths: [String], to file: URL) throws {
-        try MachineConfigJSON.update(file: file) { root in
-            var secret = root["secret"]?.asObject ?? [:]
-            secret["allow_paths"] = .array(paths.map(JSONValue.string))
-            root["secret"] = .object(secret)
-        }
     }
 
     /// Machine-level bless gate. Missing, mistyped, or partially non-string
@@ -112,14 +106,6 @@ public enum SecretAllowPaths {
             return []
         }
         return paths
-    }
-
-    public static func saveBlessPaths(_ paths: [String], to file: URL) throws {
-        try MachineConfigJSON.update(file: file) { root in
-            var secret = root["secret"]?.asObject ?? [:]
-            secret["bless_paths"] = .array(paths.map(JSONValue.string))
-            root["secret"] = .object(secret)
-        }
     }
 
     public static func loadEffectiveDetailed(
