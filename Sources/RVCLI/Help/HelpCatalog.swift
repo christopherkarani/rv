@@ -79,7 +79,7 @@ enum HelpCatalog {
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
-                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and the rvd service"),
+                HelpRow(name: "uninstall", description: "Remove rv's hooks, rvd and binaries; --purge also its data"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
                 HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
                 HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
@@ -414,7 +414,11 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv uninstall"),
+                HelpRow(name: "rv uninstall [--remove-models] [--purge]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--remove-models", description: "Also delete the judge weights in ~/.config/rv/models"),
+                HelpRow(name: "--purge", description: "Also delete rv's data and the secret values it stored"),
             ]),
         ],
         nextHeading: "After uninstall",
