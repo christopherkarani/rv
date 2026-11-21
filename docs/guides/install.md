@@ -345,15 +345,18 @@ instead.
 It keeps your own data, so a reinstall picks it up: secret definitions
 (`secrets.json`) and the values rv stored in the Keychain or the Secret
 Service keyring under the service `rv.secrets`, `mcp.json` and its trust,
-pin, review and approval files, the audit log and `audit.key`, the judge
-weights, rvd's log (`~/.local/state/rv`, or `~/Library/Logs/rv` on macOS)
+pin, review and approval files, on macOS the OAuth tokens `rv mcp connect`
+stored in the Keychain (service `rv.mcp.oauth`, one item per server), the
+audit log and `audit.key`, the judge weights, rvd's log (`~/.local/state/rv`, or `~/Library/Logs/rv` on macOS)
 and the MCP server caches. It prints each kept path, the number of stored
 secret values and where they are, and the commands that remove them by
 hand, because no `rv` is left to do it: first the stored values, with
-`secret-tool clear service rv.secrets` on Linux (it deletes every item in
-`rv.secrets`, including any that no definition names) or one `security
-delete-generic-password -s rv.secrets -a NAME` per value on macOS, then
-`rm -rf` of the kept directories.
+one `secret-tool clear service rv.secrets account NAME` per value on Linux
+or one `security delete-generic-password -s rv.secrets -a NAME` per value
+on macOS, plus on macOS one `security delete-generic-password -s
+rv.mcp.oauth -a SERVER` per MCP server's OAuth tokens, then `rm -rf` of
+the kept directories. Only when `secrets.json` cannot be read is the
+secret command service-wide, deleting every item in `rv.secrets`.
 
 ```bash
 rv uninstall --remove-models   # also delete the judge weights in ~/.config/rv/models
@@ -363,12 +366,15 @@ rv uninstall --purge           # also delete all of rv's data and the values it 
 `--purge` deletes the secret values rv stored (only a definition whose
 source is the `rv.secrets` item named after the secret itself, the one
 `rv secrets set` writes; never a value kept by 1Password, Vault or another
-provider, nor any other Keychain item), then all of `~/.config/rv`
+provider, nor any other Keychain item) and, on macOS, the MCP OAuth
+tokens under `rv.mcp.oauth`, then all of `~/.config/rv`
 including the audit log, its key and the judge weights, rvd's log
-directory, the MCP caches, and on Linux `/run/user/<uid>/rv`. A value it
+directory, the MCP caches, and on Linux `/run/user/<uid>/rv` (and
+`$XDG_RUNTIME_DIR/rv` when that is set to another directory). A value it
 cannot delete (no session bus, a locked keyring) is named on stderr,
 `secrets.json` stays so it can be found, and the command exits non-zero
-after removing everything else. It enters none of those directories
+after removing everything else; so does a config directory it could not
+list or remove. It enters none of those directories
 through a symlink: one that is a symlink, or whose parent resolves
 somewhere other than its place under your home, is left as it is and
 named, and the command exits non-zero. When `~/.config/rv` itself is such

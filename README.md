@@ -565,7 +565,8 @@ file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`,
 plus `config.json` and the policy, allowlist, analytics and denial files in
 `~/.config/rv`. It keeps your own data so a reinstall picks it up: secret
 definitions and the values rv stored in the Keychain or Secret Service
-(service `rv.secrets`), MCP config and its trust, pin and approval state,
+(service `rv.secrets`), MCP config and its trust, pin and approval state
+(on macOS also the MCP OAuth tokens under `rv.mcp.oauth`),
 the audit log and its key, the judge weights, rvd's log and MCP caches. It
 prints each kept path, how many secret values it kept and where, and the
 commands that remove them once rv is gone. `rv uninstall --purge` removes

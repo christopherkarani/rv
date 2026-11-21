@@ -88,10 +88,17 @@ struct SetupEnvironment {
     /// `SecretKeychain.service` through this. Default deletes nothing and
     /// reports every delete as failed; live: `SecretKeychainWriter.live`.
     var secretKeychain = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
-    /// Linux: rvd's runtime socket directory, `/run/user/<uid>/rv`. Nil on
-    /// macOS (the socket sits in the config dir), for a HOME that is not
-    /// the login home, and in tests.
-    var runtimeSocketDirectory: String? = nil
+    /// Linux: rvd's runtime socket directories: `/run/user/<uid>/rv`
+    /// (systemd's rvd) and `$XDG_RUNTIME_DIR/rv` when this environment sets
+    /// another one (a directly started rvd inherits it). Empty on macOS (the
+    /// socket sits in the config dir), for a HOME that is not the login
+    /// home, and in tests.
+    var runtimeSocketDirectories: [String] = []
+    /// macOS: `rv mcp connect` keeps OAuth tokens in the Keychain
+    /// (`MCPOAuthTokenStore.keychainService`, account = server name), so
+    /// uninstall names them and `--purge` deletes them through
+    /// `secretKeychain`. Elsewhere they are files in the config dir.
+    var mcpOAuthInKeychain = false
     /// System files `sudo rv mcp custodian install` writes. Uninstall only
     /// names the ones present. Default none; live Linux: the custodian's.
     var custodianSystemPaths: [String] = []

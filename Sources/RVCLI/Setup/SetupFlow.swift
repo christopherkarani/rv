@@ -209,15 +209,21 @@ extension SetupEnvironment {
         setup.uncreatableRuntimeDirectory = {
             UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
         }
-        setup.runtimeSocketDirectory = loginHome
-            ? "\(UnixSocketPath.userRuntimeRoot)/\(setup.uid())/\(UnixSocketPath.directoryName)"
-            : nil
+        if loginHome {
+            let owner = "\(UnixSocketPath.userRuntimeRoot)/\(setup.uid())/\(UnixSocketPath.directoryName)"
+            let inherited = UnixSocketPath.clientSocket(xdgRuntimeDir: xdgRuntimeDir, uid: setup.uid())?
+                .url.deletingLastPathComponent().path
+            setup.runtimeSocketDirectories = [owner] + (inherited.map { $0 == owner ? [] : [$0] } ?? [])
+        }
         setup.custodianSystemPaths = [
             MCPCustodianSetup.keyUnit, MCPCustodianSetup.presenceUnit, MCPCustodianSetup.pamFile,
             MCPCustodianSetup.directory, MCPCustodianSetup.state,
         ]
 #endif
         setup.secretKeychain = .live
+#if os(macOS)
+        setup.mcpOAuthInKeychain = true
+#endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
         return setup
     }

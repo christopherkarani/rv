@@ -4,6 +4,7 @@ import RVDomain
 import RVHistory
 import RVHooks
 import RVIsolation
+import RVMCP
 import RVPolicy
 import RVPresentation
 
@@ -72,6 +73,12 @@ extension SetupRun {
         case .failure(let error):
             secretsUnreadable = error.message
         }
+        // macOS: OAuth tokens `rv mcp connect` kept in the Keychain. The
+        // lock files that name them stay while a token could not be deleted.
+        let oauthServers = env.mcpOAuthInKeychain
+            ? oauthKeychainServers(configDirectory: layout.configDirectory, files: files) : []
+        let storedOAuthServers = deletesSecrets
+            ? purgeOAuthTokens(oauthServers, keychain: env.secretKeychain) : oauthServers
         let purgedData = purge
             && ((configRefusal == nil && keptConfigEntries(layout: layout, files: files).isEmpty == false)
                 || dataDirectories.contains { $0.refusal == nil && ownedPathPresent($0.path, files: files) })
@@ -110,8 +117,11 @@ extension SetupRun {
         if purge {
             if configRefusal == nil {
                 // secrets.json stays while it names a value still stored.
-                let keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
+                var keep: Set<String> = storedSecrets.isEmpty && secretsUnreadable == nil
                     ? [] : [SecretsConfiguration.fileName]
+                if storedOAuthServers.isEmpty == false {
+                    keep.insert(MCPOAuthTokenStore.directoryName)
+                }
                 purgeConfigDirectory(layout.configDirectory, keeping: keep, files: files)
             }
             for directory in dataDirectories where directory.refusal == nil {
@@ -134,13 +144,20 @@ extension SetupRun {
                 refusedPaths.append(.init(path: directory.path, reason: refusal))
             }
         }
+        let configEntries = entersConfig ? keptConfigEntries(layout: layout, files: files) : []
+        // --purge: a config dir still there with nothing listed in it could
+        // not be listed or removed; it is left, not purged.
+        let configLeft = purge && entersConfig && configEntries.isEmpty
+            && ownedPathPresent(layout.configDirectory, files: files)
         let leftovers = UninstallLeftovers(
             configDirectory: layout.configDirectory,
-            configEntries: entersConfig ? keptConfigEntries(layout: layout, files: files) : [],
-            otherPaths: dataDirectories
+            configEntries: configEntries,
+            otherPaths: (configLeft ? [layout.configDirectory] : [])
+                + dataDirectories
                 .filter { $0.refusal == nil && ownedPathPresent($0.path, files: files) }
                 .map { $0.path },
             storedSecrets: storedSecrets,
+            storedOAuthServers: storedOAuthServers,
             secretDeletesAttempted: deletesSecrets,
             secretsUnreadable: secretsUnreadable,
             refusedPaths: refusedPaths,

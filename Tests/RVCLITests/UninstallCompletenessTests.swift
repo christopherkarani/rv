@@ -167,7 +167,8 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
             #expect(note.contains("security delete-generic-password -s rv.secrets -a GH_TOKEN"), "\(note)")
             #expect(note.contains("security delete-generic-password -s rv.secrets -a NPM_TOKEN"), "\(note)")
             #else
-            #expect(note.contains("secret-tool clear service rv.secrets"), "\(note)")
+            #expect(note.contains("secret-tool clear service rv.secrets account GH_TOKEN"), "\(note)")
+            #expect(note.contains("secret-tool clear service rv.secrets account NPM_TOKEN"), "\(note)")
             #endif
         }
     }
@@ -192,7 +193,7 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
             let store = RecordingSecretStore()
             var environment = env(home: home, launchctl: launchctl)
             environment.secretKeychain = store.writer
-            environment.runtimeSocketDirectory = runtime
+            environment.runtimeSocketDirectories = [runtime]
 
             let outcome = SetupRun.uninstall(environment, purge: true)
 
@@ -576,6 +577,104 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         }
     }
 
+    /// macOS keeps `rv mcp connect`'s OAuth tokens in the Keychain under
+    /// `rv.mcp.oauth`; each server's lock file in `mcp-oauth/` names one.
+    @Test func purgeDeletesTheMCPOAuthTokensRvStoredInTheKeychain() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeUserData(layout)
+            try writeOAuthLocks(layout, servers: ["github", "linear"])
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+            environment.mcpOAuthInKeychain = true
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.isEmpty, "\(outcome.stderr)")
+            #expect(
+                store.deleted.withLock { $0 }.sorted() == [
+                    "rv.mcp.oauth/github", "rv.mcp.oauth/linear", "rv.secrets/GH_TOKEN", "rv.secrets/NPM_TOKEN",
+                ])
+            #expect(exists(layout.configDirectory) == false)
+        }
+    }
+
+    @Test func purgeNamesMCPOAuthTokensItCouldNotDeleteAndFails() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeOAuthLocks(layout, servers: ["github", "linear"])
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore(failing: ["github"]).writer
+            environment.mcpOAuthInKeychain = true
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0)
+            #expect(outcome.stderr.contains("could not delete 1 MCP server's OAuth tokens"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("security delete-generic-password -s rv.mcp.oauth -a github"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("linear") == false, "\(outcome.stderr)")
+            // The lock files name the tokens still stored.
+            #expect(exists(layout.configDirectory + "/mcp-oauth/.github.lock"))
+        }
+    }
+
+    @Test func plainUninstallNamesTheMCPOAuthTokensItKept() throws {
+        try withTempHome { home, layout, launchctl in
+            try writeOAuthLocks(layout, servers: ["github"])
+            let store = RecordingSecretStore()
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = store.writer
+            environment.mcpOAuthInKeychain = true
+
+            let outcome = SetupRun.uninstall(environment)
+
+            #expect(outcome.exitCode == 0, "\(outcome.stderr)")
+            #expect(store.deleted.withLock { $0 }.isEmpty)
+            #expect(outcome.stderr.contains("1 MCP server's OAuth tokens"), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("security delete-generic-password -s rv.mcp.oauth -a github"), "\(outcome.stderr)")
+        }
+    }
+
+    /// A config dir purge cannot list is left whole: the command must not
+    /// report a clean purge.
+    @Test(.enabled(if: geteuid() != 0, "root ignores directory modes"))
+    func purgeFailsWhenTheConfigDirCannotBeListed() throws {
+        try withTempHome { home, layout, launchctl in
+            try touch(layout.configDirectory + "/mcp.json", "{}")
+            try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: layout.configDirectory)
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: layout.configDirectory)
+            }
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore().writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            #expect(outcome.stderr.contains(layout.configDirectory), "\(outcome.stderr)")
+        }
+    }
+
+    /// The config dir's own removal failing (its parent is read-only) is
+    /// reported, not taken for a clean purge.
+    @Test(.enabled(if: geteuid() != 0, "root ignores directory modes"))
+    func purgeFailsWhenTheConfigDirItselfCannotBeRemoved() throws {
+        try withTempHome { home, layout, launchctl in
+            try touch(layout.configDirectory + "/mcp.json", "{}")
+            let parent = (layout.configDirectory as NSString).deletingLastPathComponent
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: parent)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent) }
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore().writer
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            #expect(exists(layout.configDirectory + "/mcp.json") == false)
+            #expect(outcome.stderr.contains(layout.configDirectory), "\(outcome.stderr)")
+        }
+    }
+
     @Test func uninstallWithNothingKeptPrintsNoKeptNote() throws {
         try withTempHome { home, layout, launchctl in
             try touch(layout.localRv)
@@ -640,6 +739,13 @@ private final class RecordingSecretStore: Sendable {
                 self.deleted.withLock { $0.append("\(service)/\(account)") }
                 return self.failing.contains(account) == false
             })
+    }
+}
+
+/// The lock file `rv mcp connect` holds while it saves each server's tokens.
+private func writeOAuthLocks(_ layout: OwnedPaths, servers: [String]) throws {
+    for server in servers {
+        try touch(layout.configDirectory + "/mcp-oauth/.\(server).lock", "")
     }
 }
 

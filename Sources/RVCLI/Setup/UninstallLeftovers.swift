@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVDomain
 import RVIsolation
+import RVMCP
 import RVService
 
 /// What `rv uninstall` leaves of rv's own data, and how to remove it.
@@ -25,6 +26,10 @@ struct UninstallLeftovers: Equatable, Sendable {
     /// `--purge` when it refused the config dir; those a delete failed for
     /// otherwise.
     var storedSecrets: [String] = []
+    /// macOS: MCP servers whose OAuth tokens `rv mcp connect` stored in the
+    /// Keychain (`MCPOAuthTokenStore.keychainService`) and that are still
+    /// there, with the same plain/`--purge` meaning as `storedSecrets`.
+    var storedOAuthServers: [String] = []
     /// `--purge` tried the deletes, so `storedSecrets` are the failures.
     /// False when it did not try (secrets.json is behind a config dir it
     /// refused).
@@ -86,6 +91,14 @@ struct UninstallLeftovers: Equatable, Sendable {
                 lead + " rv stored in \(Self.store): "
                     + storedSecrets.map { DisplayedText.field($0) }.joined(separator: ", "))
         }
+        if storedOAuthServers.isEmpty == false {
+            let count = storedOAuthServers.count == 1
+                ? "1 MCP server's OAuth tokens" : "\(storedOAuthServers.count) MCP servers' OAuth tokens"
+            let lead = purged ? (secretDeletesAttempted ? "could not delete " : "did not delete ") + count : count
+            lines.append(
+                lead + " rv stored in the Keychain (service \(MCPOAuthTokenStore.keychainService)): "
+                    + storedOAuthServers.map { DisplayedText.field($0) }.joined(separator: ", "))
+        }
         if let secretsUnreadable {
             lines.append(
                 "the secret values rv stored in \(Self.store); secrets.json, which names them, "
@@ -140,6 +153,9 @@ struct UninstallLeftovers: Equatable, Sendable {
         if storedSecrets.isEmpty == false || secretsUnreadable != nil {
             commands += secretRemovalCommands
         }
+        commands += storedOAuthServers.map {
+            "security delete-generic-password -s \(MCPOAuthTokenStore.keychainService) -a \(Self.shellQuoted($0))"
+        }
         // No `rm -rf` through a link: a refused config dir is named, not removed.
         let paths = (configEntries.isEmpty || configRefused ? [] : [configDirectory]) + otherPaths
         if paths.isEmpty == false {
@@ -148,9 +164,12 @@ struct UninstallLeftovers: Equatable, Sendable {
         return commands
     }
 
-    /// Linux: `secret-tool clear` deletes every item carrying the attribute.
-    /// macOS: `security delete-generic-password` deletes one item per run,
-    /// so one line per value.
+    /// One line per value rv stored, scoped to its account, so the commands
+    /// delete what `--purge` would and nothing else in the service. Only
+    /// when secrets.json cannot be read (the names are unknown) is the
+    /// command service-wide. macOS: `security delete-generic-password`
+    /// deletes one item per run; Linux: `secret-tool clear` deletes every
+    /// item carrying the attributes given.
     private var secretRemovalCommands: [String] {
         #if canImport(Security)
         guard secretsUnreadable == nil else {
@@ -161,10 +180,13 @@ struct UninstallLeftovers: Equatable, Sendable {
         }
         return storedSecrets.map { "security delete-generic-password -s \(SecretKeychain.service) -a \($0)" }
         #else
-        return [
-            "secret-tool clear service \(SecretKeychain.service)"
-                + "  # deletes every item in \(SecretKeychain.service), also any no definition names",
-        ]
+        guard secretsUnreadable == nil else {
+            return [
+                "secret-tool clear service \(SecretKeychain.service)"
+                    + "  # deletes every item in \(SecretKeychain.service), also any no definition names",
+            ]
+        }
+        return storedSecrets.map { "secret-tool clear service \(SecretKeychain.service) account \($0)" }
         #endif
     }
 
@@ -194,6 +216,24 @@ extension SetupRun {
         names.filter { keychain.delete(SecretKeychain.service, $0) == false }
     }
 
+    /// macOS: the servers `rv mcp connect` stored OAuth tokens for. Every
+    /// save holds the server's lock file, `mcp-oauth/.<server>.lock` in the
+    /// config dir, so those files name them.
+    static func oauthKeychainServers(configDirectory: String, files: FileOps) -> [String] {
+        let directory = configDirectory + "/" + MCPOAuthTokenStore.directoryName
+        guard let entries = try? files.fileManager.contentsOfDirectory(atPath: directory) else { return [] }
+        return entries.compactMap { entry -> String? in
+            guard entry.hasPrefix("."), entry.hasSuffix(".lock"), entry.count > ".lock".count + 1 else { return nil }
+            return String(entry.dropFirst().dropLast(".lock".count))
+        }.sorted()
+    }
+
+    /// `--purge`: deletes each server's OAuth tokens from the Keychain.
+    /// Returns the servers whose tokens may still be there.
+    static func purgeOAuthTokens(_ servers: [String], keychain: SecretKeychainWriter) -> [String] {
+        servers.filter { keychain.delete(MCPOAuthTokenStore.keychainService, $0) == false }
+    }
+
     /// rv's directories outside the config dir: rvd's log directory, the MCP
     /// server scratch caches and, on Linux, rvd's runtime socket directory.
     static func ownedDataDirectories(layout: OwnedPaths, env: SetupEnvironment) -> [String] {
@@ -208,9 +248,7 @@ extension SetupRun {
         #else
         paths.append(home + "/.cache/rv-mcp")
         #endif
-        if let runtime = env.runtimeSocketDirectory {
-            paths.append(runtime)
-        }
+        paths += env.runtimeSocketDirectories
         return paths
     }
 
