@@ -387,6 +387,33 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
+    /// Wire-path `apply` plus, under observe, the verdict enforce would
+    /// return (ServiceRuntime evaluate, for SDK callers).
+    func applyVerdict(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
+        grants: EphemeralAllowOnceTable,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
+    ) async -> GatedVerdict {
+        await gatedVerdict(
+            .apply,
+            request,
+            cwd: cwd,
+            home: home,
+            grants: grants,
+            now: now,
+            allowlist: allowlist,
+            host: host,
+            tool: tool,
+            previewsWouldBe: true,
+            inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
+        )
+    }
+
     /// The shell read: process env once, then config and stores once.
     private static func liveInputs(
         home: HomeDirectory?, cwd: WorkingDirectory?, host: LedgerHost = .tty

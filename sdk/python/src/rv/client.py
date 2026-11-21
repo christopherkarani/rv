@@ -15,7 +15,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from . import approvals, models, protocol, transports, versions
@@ -143,7 +143,11 @@ class Client:
         via = payload.get("via")
         if via != "xpc":
             raise DecodeError(f"evaluate reply has unexpected via: {via!r}")
-        return models.Evaluation.from_wire(payload.get("result"))
+        result = models.Evaluation.from_wire(payload.get("result"))
+        would_be = payload.get("wouldBe")
+        if would_be is None:
+            return result
+        return replace(result, would_be=models.Evaluation.from_wire(would_be))
 
     def explain(
         self,
