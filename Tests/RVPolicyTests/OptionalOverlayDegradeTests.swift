@@ -94,8 +94,8 @@ struct OptionalOverlayDegradeTests {
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let configDir = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveMachineConfig(
-            ["/tmp/machine.env"],
+        try SecretConfigFixture.write(
+            allowPaths: ["/tmp/machine.env"],
             to: configDir.appendingPathComponent("config.json")
         )
         let workspace = try writeRepoPolicy(

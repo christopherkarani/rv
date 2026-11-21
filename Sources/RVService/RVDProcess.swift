@@ -4,6 +4,8 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVIPC
+import RVJudgePool
+import RVLaya
 import RVPolicy
 import Synchronization
 
@@ -32,9 +34,15 @@ public enum RVDProcess {
             actionCeremonies: actionCeremonies
         )
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
+        RVDLifecycle.bindCoreMLGuard()
+        // Core ML runs in the dev.rv.judge worker pool, never in rvd: a
+        // worker abort or hang costs one prediction, not the daemon.
+        // Unreachable pool = review (docs/architecture/judge-pool.md).
+        JudgeRuntime.bindClient(XPCJudgeClient())
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listeners?.stop()
+            RVDLifecycle.persistAnalytics(analytics)
             Darwin.exit(0)
         }
         let listeners = ListenerPair(
@@ -62,6 +70,7 @@ public enum RVDProcess {
         listeners.unix.startAccepting()
         listeners.xpc.start()
         watchdog.start()
+        RVDLifecycle.armStateMarker()
         RVDLifecycle.serving(backoff)
         RunLoop.main.run()
     }
@@ -90,6 +99,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVIPC
+import RVLaya
 import RVPolicy
 import Synchronization
 
@@ -119,6 +129,7 @@ public enum RVDProcess {
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listener?.stop()
+            RVDLifecycle.persistAnalytics(analytics)
             Foundation.exit(0)
         }
         let listener = UnixEvaluateListener(
@@ -135,6 +146,7 @@ public enum RVDProcess {
         if backoff.delay > .zero { listener.dropQueued() }
         listener.startAccepting()
         watchdog.start()
+        RVDLifecycle.armStateMarker()
         RVDLifecycle.serving(backoff)
         RunLoop.main.run()
     }
@@ -161,12 +173,33 @@ enum RVDLifecycle {
         exit: @escaping @Sendable () -> Void
     ) -> IdleWatchdog {
         let executable = ExecutableChangeProbe.running()
+        let announced = OnceFlag()
         return IdleWatchdog(
             seconds: configuration.idleExitSeconds,
             hasLiveGrants: { await runtime.hasLiveAllowOnceGrants() },
-            executableChanged: { executable?.hasChanged() ?? false },
+            executableChanged: {
+                guard executable?.hasChanged() ?? false else { return false }
+                // An upgrade replaced rvd: it drains and exits, and the
+                // supervisor starts the new binary. Announce that restart
+                // once, so observe-mode hooks do not fail closed meanwhile.
+                if announced.claim(), let marker = stateMarkerPath() {
+                    RVDStateMarker.writeRestarting(path: marker)
+                }
+                return true
+            },
             onFire: exit
         )
+    }
+
+    /// Binds the crash-aware Core ML guard before any judge can load: the
+    /// previous run's in-flight marker is read on first use, so nothing may
+    /// touch Core ML before this. Its lines go to stderr (rvd.log).
+    static func bindCoreMLGuard() {
+        #if canImport(CoreML)
+        CoreMLGuard.bind(.daemon(stateRoot: JudgeRuntime.coreMLStateRoot()) { message in
+            try? FileHandle.standardError.write(contentsOf: Data(RVDLogFile.line(message).utf8))
+        })
+        #endif
     }
 
     /// Records this start (`StartupBackoff`) and returns the plan. Only a
@@ -232,6 +265,52 @@ enum RVDLifecycle {
         try? FileHandle.standardError.write(contentsOf: Data(RVDLogFile.line(message).utf8))
     }
 
+    /// The owner's marker, only when rvd runs with the owner's own HOME
+    /// (launchd and systemd set it so); a test HOME never touches it.
+    static func stateMarkerPath() -> String? {
+        guard let home = ProcessInfo.processInfo.environment["HOME"] else { return nil }
+        return RVDStateMarker.passwdPath(ifHomeIs: home)
+    }
+
+    /// rvd serves: arm the marker now, then re-arm on a tick so deleting it
+    /// in one command and stopping rvd in a later one still fails closed.
+    /// The tick leaves a pending restart (`rv setup`, an upgrade) alone.
+    static func armStateMarker() {
+        guard let marker = stateMarkerPath() else { return }
+        RVDStateMarker.writeArmed(path: marker)
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(
+            deadline: .now() + RVDStateMarker.rearmInterval,
+            repeating: RVDStateMarker.rearmInterval,
+            leeway: .seconds(1)
+        )
+        timer.setEventHandler { _ = RVDStateMarker.rearm(path: marker) }
+        timer.resume()
+        stateMarkerTimer.keep(timer)
+    }
+
+    /// Keeps the re-arm timer alive for the process lifetime.
+    private static let stateMarkerTimer = TimerSlot()
+
+    /// Before an orderly exit (idle, or the binary replaced on disk): write
+    /// the decision counts still waiting for the coordinator's deferred
+    /// write, which `exit` would drop. Waits at most `wait`, so analytics can
+    /// never hold the daemon up. SIGTERM (stop, restart, upgrade by the
+    /// service manager) is not handled and still loses up to
+    /// `AnalyticsCoordinator.defaultPersistDelay` of counts.
+    static func persistAnalytics(
+        _ analytics: AnalyticsCoordinator?,
+        wait: DispatchTimeInterval = .seconds(2)
+    ) {
+        guard let analytics else { return }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await analytics.persistPendingNow()
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + wait)
+    }
+
     /// Loads the judge off the main path after the listeners are up: the
     /// first Hello is never delayed, and the first judged request joins the
     /// in-progress load (bounded by `JudgeRuntime.daemonLoadWait`).
@@ -239,5 +318,25 @@ enum RVDLifecycle {
         DispatchQueue.global(qos: .utility).async {
             JudgeRuntime.prewarm(home: HomeDirectory.process())
         }
+    }
+}
+
+/// True for the first `claim()` only.
+final class OnceFlag: Sendable {
+    private let flag = Atomic<Bool>(false)
+
+    func claim() -> Bool {
+        flag.exchange(true, ordering: .relaxed) == false
+    }
+}
+
+private final class TimerSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+
+    func keep(_ timer: DispatchSourceTimer) {
+        lock.lock()
+        self.timer = timer
+        lock.unlock()
     }
 }

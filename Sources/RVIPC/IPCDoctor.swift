@@ -23,7 +23,7 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
 }
 
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
-    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode, judge
+    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode, judge, judgePool
     /// From a newer daemon; unknown check IDs must not lose the snapshot.
     case unknown
 

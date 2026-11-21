@@ -152,6 +152,58 @@ struct RVInstallPathGuardTests {
         "code ~/.local/bin",
     ]
 
+    // rvd's Core ML caches: a planted e5rt bundle would be what Core ML runs
+    // as the judge. Expected false positives (held for review, never
+    // allowed): clearing all of `~/Library/Caches` (`rm -rf
+    // ~/Library/Caches`, `~/Library/Caches/*`, `rv*` globs there) and
+    // `mv`/`cp` of the whole Caches dir, and copying out of rvd's cache
+    // (any operand of a destructive program counts, as for `~/.local/bin`).
+    static let touchingCoreMLCaches: [String] = [
+        "rm -rf ~/Library/Caches/rvd",
+        "rm -rf ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache",
+        "cp -R /tmp/evil.bundle ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/x",
+        "mv /tmp/x $HOME/Library/Caches/rvd/",
+        "ln -s /tmp/evil ~/Library/Caches/rvd",
+        "echo x > ~/Library/Caches/rvd/com.apple.e5rt.e5bundlecache/manifest",
+        "cd ~/Library/Caches && rm -rf rvd",
+        // The judge pool's workers (`rv-judge`) run Core ML with the pool
+        // bound: their e5rt cache is the one the judge loads from.
+        "rm -rf ~/Library/Caches/rv-judge",
+        "rm -rf ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache",
+        "cp -R /tmp/evil.bundle ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/x",
+        "mv /tmp/x $HOME/Library/Caches/rv-judge/",
+        "ln -s /tmp/evil ~/Library/Caches/rv-judge",
+        "echo x > ~/Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/manifest",
+        "cd ~/Library/Caches && rm -rf rv-judge",
+        // the expected false positives
+        "rm -rf ~/Library/Caches",
+        "rm -rf ~/Library/Caches/*",
+        "rm -rf ~/Library/Caches/rv*",
+        "cp -R ~/Library/Caches/rvd /tmp/rvd-cache-copy",
+    ]
+
+    static let notTouchingCoreMLCaches: [String] = [
+        "ls ~/Library/Caches/rvd",
+        "du -sh ~/Library/Caches/rvd",
+        "rm -rf ~/Library/Caches/rvdx",
+        "ls ~/Library/Caches/rv-judge",
+        "du -sh ~/Library/Caches/rv-judge",
+        "rm -rf ~/Library/Caches/rv-judgex",
+        "rm -rf ~/Library/Caches/com.apple.Safari",
+        // Older builds' model cache: nothing loads from it any more.
+        "rm -rf ~/Library/Caches/rv-laya",
+    ]
+
+    @Test("rvd's Core ML caches are guarded", arguments: touchingCoreMLCaches)
+    func coreMLCachesFlagged(command: String) {
+        #expect(Self.touches(command), "\(command)")
+    }
+
+    @Test("reads and neighbours of rvd's Core ML caches are not", arguments: notTouchingCoreMLCaches)
+    func coreMLCacheNeighboursPass(command: String) {
+        #expect(Self.touches(command) == false, "\(command)")
+    }
+
     @Test("writes, moves and removes of rv's install are flagged", arguments: touching + touchingR2)
     func touchingFlagged(command: String) {
         #expect(Self.touches(command), "\(command)")

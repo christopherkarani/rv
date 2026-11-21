@@ -56,6 +56,38 @@ extension SetupRun {
         }
     }
 
+    /// The judge pool supervisor, `rv-judge` beside rvd (rvd pins it there).
+    static func judgeExecutable(rvdPath: String) -> String {
+        (rvdPath as NSString).deletingLastPathComponent + "/rv-judge"
+    }
+
+    /// Registers `dev.rv.judge` when `rv-judge` is installed beside rvd,
+    /// before rvd, so rvd's first judged call finds the pool. Never fatal:
+    /// without the pool rvd's judged calls go to review, so a problem is
+    /// returned for setup to warn about (and doctor reports), and every
+    /// other setup step goes ahead.
+    static func writeJudgeLaunchAgent(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) -> JudgeAgentProblem? {
+        let judge = judgeExecutable(rvdPath: env.rvdPath)
+        guard env.fileManager.isExecutableFile(atPath: judge) else { return .missing(judge) }
+        do {
+            let body = try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+            try files.write(body, to: layout.judgeLaunchAgent)
+            if env.touchLaunchd {
+                try loadLaunchAgent(
+                    env: env,
+                    plist: URL(fileURLWithPath: layout.judgeLaunchAgent),
+                    label: judgeLaunchAgentLabel)
+            }
+        } catch {
+            return .notLoaded
+        }
+        return nil
+    }
+
     /// An operator start (setup, `rv service restart|start`) is not a crash
     /// loop: forget rvd's early exits so the new rvd starts without waiting
     /// out `StartupBackoff`.
@@ -80,6 +112,9 @@ extension SetupRun {
         env: SetupEnvironment, plist: URL, label: String = launchAgentLabel
     ) throws(SetupError) -> String {
         let uid = env.uid()
+        if label == launchAgentLabel {
+            announceRvdRestart(env)
+        }
         for domain in LaunchdDomain.bootoutOrder(uid: uid) {
             try? env.launchctl.bootout(domain: domain, label: label)
         }
@@ -183,12 +218,21 @@ extension SetupRun {
         if let directory = env.uncreatableRuntimeDirectory() {
             throw SetupError.userRuntimeDirectoryMissing(directory: directory, uid: env.uid())
         }
+        announceRvdRestart(env)
         env.directRvd.stop(rvdPath: env.rvdPath)
         do {
             try env.directRvd.start(rvdPath: env.rvdPath)
         } catch {
             throw SetupError.directStartFailed(rvdPath: env.rvdPath)
         }
+    }
+
+    /// About to stop rvd on purpose (bootout + bootstrap, kickstart, a
+    /// restart): write `restarting` to the rvd state marker so observe-mode
+    /// hooks keep stepping aside until the new rvd re-arms it. Only callers
+    /// that touch the real supervisor (HOME is the login home) reach here.
+    static func announceRvdRestart(_ env: SetupEnvironment) {
+        RVDStateMarker.writeRestarting(path: OwnedPaths(home: env.home).rvdStateMarker)
     }
 
     static func evaluateServicePath(layout: OwnedPaths, supervisor: EvaluateSupervisor) -> String {

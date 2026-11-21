@@ -38,12 +38,9 @@ struct SecretAllowPathsTests {
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let configDir = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveMachineConfig(
-            ["/tmp/machine.env"],
-            to: configDir.appendingPathComponent("config.json")
-        )
-        try SecretAllowPaths.saveBlessPaths(
-            [".env"],
+        try SecretConfigFixture.write(
+            allowPaths: ["/tmp/machine.env"],
+            blessPaths: [".env"],
             to: configDir.appendingPathComponent("config.json")
         )
         try TypedRuleStore(baseDirectory: configDir).saveMachine(
@@ -86,8 +83,8 @@ struct SecretAllowPathsTests {
         let workspace = try writeRepoPolicy(home: home, allowPaths: [".env"])
         let configDir = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveBlessPaths(
-            [".env"],
+        try SecretConfigFixture.write(
+            blessPaths: [".env"],
             to: configDir.appendingPathComponent("config.json")
         )
         let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
@@ -122,8 +119,8 @@ struct SecretAllowPathsTests {
         )
         let configDir = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        try SecretAllowPaths.saveMachineConfig(
-            ["/tmp/machine.env"],
+        try SecretConfigFixture.write(
+            allowPaths: ["/tmp/machine.env"],
             to: configDir.appendingPathComponent("config.json")
         )
         try TypedRuleStore(baseDirectory: configDir).saveMachine(

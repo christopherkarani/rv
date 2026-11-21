@@ -50,11 +50,20 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
     /// Additive `rv.ipc.v1` field. Replies without it cannot prove major
     /// compatibility, so clients reject them and fall back in-process.
     public var serviceSemver: String?
+    /// Additive `rv.ipc.v1` field. Under observe, the verdict enforce would
+    /// have returned when it differs from the observed `result`; absent in
+    /// enforce mode and when observe changed nothing.
+    public var wouldBe: EvaluationResult?
 
-    public init(result: EvaluationResult, serviceSemver: String? = ProtocolVersion.serviceSemver) {
+    public init(
+        result: EvaluationResult,
+        serviceSemver: String? = ProtocolVersion.serviceSemver,
+        wouldBe: EvaluationResult? = nil
+    ) {
         self.result = result
         self.via = .service
         self.serviceSemver = serviceSemver
+        self.wouldBe = wouldBe
     }
 
     public init(from decoder: Decoder) throws {
@@ -70,6 +79,7 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
         }
         via = decodedVia
         serviceSemver = try container.decodeIfPresent(String.self, forKey: .serviceSemver)
+        wouldBe = try container.decodeIfPresent(EvaluationResult.self, forKey: .wouldBe)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -77,11 +87,13 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
         try container.encode(result, forKey: .result)
         try container.encode(via, forKey: .via)
         try container.encodeIfPresent(serviceSemver, forKey: .serviceSemver)
+        try container.encodeIfPresent(wouldBe, forKey: .wouldBe)
     }
 
     private enum CodingKeys: String, CodingKey {
         case result
         case via
         case serviceSemver
+        case wouldBe
     }
 }

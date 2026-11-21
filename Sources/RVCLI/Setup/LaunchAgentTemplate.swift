@@ -3,6 +3,7 @@ import Foundation
 enum LaunchAgentTemplate {
     static let rvdPlaceholder = "@RVD_PATH@"
     static let custodianPlaceholder = "@CUSTODIAN_PATH@"
+    static let judgePlaceholder = "@JUDGE_PATH@"
 
     static func rendered(rvdPath: String) throws(SetupError) -> String {
         try render(try raw(), placeholder: rvdPlaceholder, with: rvdPath)
@@ -13,6 +14,16 @@ enum LaunchAgentTemplate {
             try decode(PackageResources.dev_rv_mcp_custodian_plist),
             placeholder: custodianPlaceholder,
             with: custodianPath
+        )
+    }
+
+    /// `dev.rv.judge`: `rv-judge serve`, the judge worker pool rvd routes
+    /// every judged call through (docs/architecture/judge-pool.md).
+    static func renderedJudge(judgePath: String) throws(SetupError) -> String {
+        try render(
+            try decode(PackageResources.dev_rv_judge_plist),
+            placeholder: judgePlaceholder,
+            with: judgePath
         )
     }
 

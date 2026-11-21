@@ -150,6 +150,9 @@ enum ServiceRestart {
         } else {
             target = nil
         }
+        if let target {
+            SetupRun.announceRvdRestart(env)
+        }
         if let target, (try? env.launchctl.kickstart(domain: target, label: label)) != nil {
             return .kickstarted(domain: target)
         }
@@ -191,6 +194,9 @@ enum ServiceRestart {
         SetupRun.clearStartupBackoff(env)
         do throws(SetupError) {
             if env.systemctl.userManagerReachable() {
+                if onlyIfStopped == false {
+                    SetupRun.announceRvdRestart(env)
+                }
                 do {
                     try env.systemctl.restart(unit: SystemdUserTemplate.unitName, onlyIfStopped: onlyIfStopped)
                 } catch {

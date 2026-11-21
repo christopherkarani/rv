@@ -46,6 +46,11 @@ struct WiringFileDoorTests {
         ".gemini/config/hooks.json", ".local/bin/rvd", ".local/bin/rv-cli", ".local/bin/rv",
         "Library/LaunchAgents/dev.rv.evaluate.plist", ".config/systemd/user/dev.rv.evaluate.service",
         ".claude/skills/rv/SKILL.md", ".agents/skills/rv/SKILL.md", ".config/opencode/skills/rv/SKILL.md",
+        // rvd's Core ML (e5rt) cache: a planted bundle runs in rvd's judge.
+        "Library/Caches/rvd/com.apple.e5rt.e5bundlecache/x", "Library/Caches/rvd",
+        // The judge pool workers' e5rt cache: with the pool bound, the judge
+        // loads its compiled bundle from here.
+        "Library/Caches/rv-judge/com.apple.e5rt.e5bundlecache/x", "Library/Caches/rv-judge",
     ])
     func wiringWritesDeny(relative: String) throws {
         try Self.withHome { root, home in
@@ -133,7 +138,7 @@ struct WiringFileDoorTests {
     func ordinaryAllowed() throws {
         try Self.withHome { root, home in
             for path in ["/src/app/main.swift", "/.claude/CLAUDE.md", "/.local/bin/node",
-                         "/Library/LaunchAgents/com.example.plist"] {
+                         "/Library/LaunchAgents/com.example.plist", "/Library/Caches/com.example/x"] {
                 #expect(Self.decide(.write, root.path + path, home: home).decision == .allow, "\(path)")
             }
         }

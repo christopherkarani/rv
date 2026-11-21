@@ -450,3 +450,108 @@ rv mcp check
 ```bash
 rv audit --kind mcp.call --since 24h
 ```
+
+## Full behaviour reference
+
+The complete rules for how `rv mcp serve` starts, times out, restarts and
+stops servers, moved here from the project README.
+
+`rv mcp serve` puts every MCP server behind one
+gateway with per-tool allow/ask/deny, human approval for `ask`, and
+a full audit trail. `rv mcp check` fails if any server bypasses rv.
+A server that does not answer `initialize` within its
+`"startTimeoutSeconds"` in mcp.json (1 to 600, default 60), or answers it
+with an error, is stopped and fails for the session; until every server
+has settled, every `tools/list` and `tools/call` waits, so one slow
+server's start limit holds back every tool. When a server leaves a
+`tools/list` page unanswered for 30 s (not configurable), the listing
+ends with the pages it already returned; a `tools/call` unanswered for the server's
+`"callTimeoutSeconds"` in mcp.json (1 to 86400, default 300; each
+progress notification for the call restarts it) fails with an error
+and is never sent again: rv asks the server to cancel and stops
+waiting; it cannot make the server stop. Progress cannot
+keep a call open past 10 times its `"callTimeoutSeconds"` in all
+(50 minutes by default); a tool that legitimately runs longer needs a
+larger `"callTimeoutSeconds"`. These limits run on a clock that stops
+while the machine sleeps and ignores changes to the time of day.
+Stopping a local server sends SIGTERM, then SIGKILL 2 s later if it is
+still running. Each local server runs as the leader of its own process
+group and both go to the whole group, while its leader is not yet
+reaped, so what it started in a session of its own (`setsid`), or
+outside rv (the container of a `docker run` server), is not stopped by
+them. A terminal's Ctrl-C or a host's process-group kill reaches
+serve, not the servers: every `rv mcp serve` catches SIGINT, SIGTERM
+and SIGHUP and stops its servers itself (a second signal kills them at
+once). A server starts with every signal at its default, even one rv
+inherited ignored; it cannot `setsid()` itself (its children can); and
+a launcher that starts the real server and exits counts as the server
+exiting. On Linux a server inherits only descriptors 0, 1 and 2.
+A server that was ready and then goes away (it exits, ends its
+session, loses its connection, stops reading its input, or does not
+answer rv's `ping` within 10 s after a call timed out, which a server
+that handles one request at a time cannot do while busy with a slow
+call, so whatever it was running is cut off) is started again after 1,
+2, 4, 8, then 16 s, at most 5 times in any 10 minutes, then stays
+failed. The 10 minutes slide: a server that goes away every two minutes
+or so is restarted for as long as serve runs, its secrets resolved
+again each time. One that was never ready is not restarted. A restart
+must start and answer `initialize` within its `"startTimeoutSeconds"`
+(counted once rv has reaped its last process), or it counts toward
+that cap. It is started from the mcp.json serve verified at start and
+listed again before any call reaches it: a changed tool asks, an
+approval for the old definition does not carry over, and only tools
+that server lists again can be called (others are refused and
+audited). The client is told its tools changed. A call in flight is
+never sent again: it fails saying it may have run, and a call made
+while the server is coming back is refused at once; a prompt accepted
+then, or one the client cancels, is audited as declined. An answer a
+server wrote just before it exited that rv has not read 1 s later is
+dropped, and its call counts as may have run. On Linux each POST to a
+remote server goes on a connection of its own, since libcurl would
+send a request again when a kept-alive connection drops before its
+answer. A remote server is never slowed down: once more than 128 MiB
+of what it sent waits for the gateway, rv stops it (and restarts it as
+above). Each remote server has at most 64 calls, and about 160
+requests of any kind, in flight (a retry or a legacy stream's first
+messages can pass it briefly); past that a request is not sent (a call
+ends not run, and an approved call's approval is used up), though rv's
+own ping always goes out. A signal
+while serve plans its servers (a secret provider's
+unlock prompt, say) ends serve at once. A client that takes nothing rv
+writes for 30 s ends `rv mcp serve` with exit status 1 (on a blocking
+pipe a client must take at least 1 MiB per 30 s, about 35 KiB/s).
+Each `rv mcp serve` process also warns once at start, on stderr and in
+the audit log, when host configs bypass the gateway, run a server
+mcp.json blocks, or hold unreviewed servers (a host set up by
+`rv mcp setup` runs one serve per server).
+Tool definitions are pinned only by `rv mcp trust`, which shows every
+field it pins: a tool that is new or changed since you trusted it
+always asks and reaches the agent as its name, rv's marker saying it
+is not trusted and an empty object schema, nothing else.
+A tool whose name is longer than 64 bytes or uses any character
+outside `A-Z a-z 0-9 _ . -` (a `/` or `:`, say) is hidden and cannot be
+called, pinned or not; `rv mcp serve` names one such tool per server
+on stderr. Start
+your MCP host once so `rv mcp serve` queues the tools, run
+`rv mcp trust`, then restart the host (a running serve keeps the pins
+it started with). Tool result text is forwarded byte for byte;
+rendering it safely is the MCP host's job. Keys that differ only by
+Unicode normalization (NFC/NFD) count as duplicates, so such a message
+is dropped.
+*Platform support:* gateway trust and approvals need a key custodian
+the agent cannot read. On macOS that is RVApprovals.app. On Linux it is
+a system service you install once with `sudo rv mcp custodian install`,
+run from a copy of rv that only root can write (systemd and PAM; see
+[the custodian's threat model](../security/mcp-linux-custodian.md)):
+signing then asks for your login password at your terminal. Without a
+custodian rv's signing key is a file any process running as you can
+read: mcp.json is never trusted, `rv mcp serve` launches no servers,
+and `rv mcp trust` and `rv mcp approve` refuse. The MCP server sandbox
+is Seatbelt on macOS and, on Linux 6.7 or later, Landlock with a
+seccomp socket filter
+([what it closes and what it leaves](../security/mcp-linux-sandbox.md)).
+Where a host has a sandbox every local server needs a `sandbox` entry
+and runs in it. Where it has none (an older Linux kernel), servers that
+ask for one, or that an organization policy with `requireSandbox`
+covers, are refused rather than run uncaged; a server with no `sandbox`
+entry runs uncaged with a warning.

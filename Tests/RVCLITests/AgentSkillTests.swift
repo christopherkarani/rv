@@ -329,18 +329,12 @@ struct AgentSkillLifecycleTests {
     }
 }
 
-/// The skill text must stay true: every `rv …` command it names is a real
-/// subcommand, the agent is only told to run commands the guard lets it
-/// run, and the "never" list names commands the guard really refuses.
+/// The skill text must stay true: every `rv …` command it names parses
+/// with the real parser, the agent is only told to run commands the guard
+/// lets it run, and the "never" list names commands the guard really
+/// refuses.
 @Suite("Agent skill content")
 struct AgentSkillContentTests {
-    private static let topics: [HelpTopic] = [
-        .root, .help, .test, .explain, .service, .serviceStatus, .serviceRestart, .hook, .setup,
-        .initialize, .uninstall, .doctor, .allowOnce, .packs, .scan, .policy, .allowlist, .safety,
-        .blocks, .host, .audit, .secrets, .mcp, .managed, .report, .opencode, .workspace, .`operator`,
-        .egress, .login,
-    ]
-
     private enum Bucket { case agent, human, never }
 
     private struct NamedCommand {
@@ -369,43 +363,6 @@ struct AgentSkillContentTests {
         return found
     }
 
-    /// `rv …` usage rows from every help page.
-    private static var usages: [String] {
-        topics.flatMap { HelpCatalog.page($0).sections.flatMap(\.rows).map(\.name) }
-            .filter { $0.hasPrefix("rv ") }
-    }
-
-    /// Whether `command` is spelled by `usage`: same words in order, an
-    /// optional `[--flag]` may be given, `<x>` takes a `<y>` placeholder,
-    /// and `<a|b>` takes one of its words.
-    static func matches(_ command: String, usage: String) -> Bool {
-        var optionalFlags: Set<String> = []
-        var required = ""
-        var depth = 0
-        var group = ""
-        for character in usage {
-            if character == "[" { depth += 1; continue }
-            if character == "]" {
-                depth -= 1
-                if depth == 0 {
-                    optionalFlags.formUnion(group.split(separator: " ").map(String.init).filter { $0.hasPrefix("--") })
-                    group = ""
-                }
-                continue
-            }
-            if depth > 0 { group.append(character) } else { required.append(character) }
-        }
-        let wanted = required.split(separator: " ").map(String.init)
-        let given = command.split(separator: " ").map(String.init).filter { optionalFlags.contains($0) == false }
-        guard wanted.count == given.count else { return false }
-        return zip(wanted, given).allSatisfy { want, word in
-            guard want.hasPrefix("<"), want.hasSuffix(">") else { return want == word }
-            let choices = want.dropFirst().dropLast().split(separator: "|").map(String.init)
-            if choices.count > 1 { return choices.contains(word) }
-            return word.hasPrefix("<") && word.hasSuffix(">")
-        }
-    }
-
     /// Placeholders filled with plausible values so the guard parses a
     /// real command line (a bare `<x>` is a shell redirect).
     private static func concrete(_ command: String) -> String {
@@ -419,6 +376,8 @@ struct AgentSkillContentTests {
             .replacingOccurrences(of: "<pack>", with: "core.git")
             .replacingOccurrences(of: "<rule>", with: "core.git:reset-hard")
             .replacingOccurrences(of: "<command>", with: "ls")
+            .replacingOccurrences(of: "<policy.toml>", with: "policy.toml")
+            .replacingOccurrences(of: "<reason>", with: "reviewed")
     }
 
     @Test("the skill is short and starts with skill frontmatter")
@@ -431,23 +390,15 @@ struct AgentSkillContentTests {
         #expect(text.contains("next_step"))
     }
 
-    @Test("the matcher accepts real spellings and rejects invented ones")
-    func matcherSanity() {
-        #expect(Self.matches("rv egress denials", usage: "rv egress denials [--limit N] [--json]"))
-        #expect(Self.matches("rv setup --observe", usage: "rv setup [--force] [--observe] [--json]"))
-        #expect(Self.matches("rv host mode <host> off", usage: "rv host mode <host> <block|observe|off> [--json]"))
-        #expect(Self.matches("rv egress grant <id>", usage: "rv egress approve <id>") == false)
-        #expect(Self.matches("rv setup --yolo", usage: "rv setup [--force] [--observe]") == false)
-        #expect(Self.matches("rv host mode <host> maybe", usage: "rv host mode <host> <block|observe|off>") == false)
-    }
-
-    @Test("every rv command the skill names is a real subcommand")
-    func commandsExist() {
+    @Test("every rv command the skill names parses with the real parser")
+    func commandsParse() {
         let named = Self.commands(in: AgentSkill.text)
         #expect(named.count >= 8)
-        let usages = Self.usages
         for command in named {
-            #expect(usages.contains { Self.matches(command.text, usage: $0) }, "not a real command: \(command.text)")
+            let argv = UsageRow.argv(command.text, mode: .bare)
+            #expect(throws: Never.self, "not a real command: \(command.text)") {
+                _ = try RV.parseAsRoot(argv)
+            }
         }
     }
 

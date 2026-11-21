@@ -95,6 +95,17 @@ let terminalProbeTargets: [Target] = [
 let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-signal-probe"] + mcpTestHelperDependencies
 #endif
 
+// Test owner presence (docs/security/test-owner-presence.md): rvd checks
+// the owner against a password from its environment instead of
+// unix_chkpwd, so automated tests can approve owner actions with no person
+// present. Compiled in only for a debug build made with
+// RV_TEST_OWNER_PRESENCE=1 in the build's environment. A release build
+// (-c release) never contains it, whatever the environment;
+// Scripts/check-no-test-owner-presence.sh checks the staged binaries.
+let testOwnerPresence: [SwiftSetting] = Context.environment["RV_TEST_OWNER_PRESENCE"] == "1"
+    ? [.define("RV_TEST_OWNER_PRESENCE", .when(configuration: .debug))]
+    : []
+
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
     .target(name: "RVFileStore"),
@@ -147,7 +158,11 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVXPC", dependencies: ["RVIPC", "RVIsolation"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
-    .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation", "RVPolicy"]),
+    .target(name: "RVMCP", dependencies: ["RVDomain", "RVFileStore", "RVHistory", "RVIsolation", "RVPolicy"]),
+    // The Laya judge worker pool (docs/architecture/judge-pool.md): wire,
+    // supervisor state machine, worker spawner, XPC listener and client.
+    // Model-agnostic: it must never depend on RVLaya / Core ML.
+    .target(name: "RVJudgePool", dependencies: ["RVIPC", "RVIsolation"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVDomain", "RVTheme", "RVPresentation"]),
     .target(
@@ -181,6 +196,7 @@ let coreProducts: [Product] = [
     .library(name: "RVHistory", targets: ["RVHistory"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
     .library(name: "RVMCP", targets: ["RVMCP"]),
+    .library(name: "RVJudgePool", targets: ["RVJudgePool"]),
 ]
 
 let coreTestTargets: [Target] = [
@@ -206,6 +222,7 @@ let coreTestTargets: [Target] = [
         exclude: ["Fixtures"]
     ),
     .testTarget(name: "RVLayaTests", dependencies: ["RVLaya"]),
+    .testTarget(name: "RVJudgePoolTests", dependencies: ["RVJudgePool"]),
     .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
     .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
     .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
@@ -263,7 +280,7 @@ let macOSOperatorUITestTargets: [Target] = []
 let macOSCustodianTargets: [Target] = [
     .target(
         name: "RVMCPCustodianCore",
-        dependencies: ["RVMCP", "RVIPC", "RVIsolation", "RVDomain", "RVPolicy"]
+        dependencies: ["RVMCP", "RVIPC", "RVIsolation", "RVDomain", "RVFileStore", "RVPolicy"]
     ),
     .executableTarget(
         name: "rv-mcp-custodian",
@@ -287,8 +304,9 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC",
-        ]
+            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC", "RVJudgePool",
+        ],
+        swiftSettings: testOwnerPresence
     ),
     .executableTarget(
         name: "rvd",
@@ -310,7 +328,8 @@ let serviceProducts: [Product] = [
     .executable(name: "rv-hook-local", targets: ["rv-hook-local"]),
 ] + macOSOperatorUIProducts + macOSCustodianProducts
 let serviceTestTargets: [Target] = [
-    .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
+    .testTarget(
+        name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"], swiftSettings: testOwnerPresence),
 ] + macOSOperatorUITestTargets + macOSCustodianTestTargets
 
 let cliTargets: [Target] = [
@@ -319,14 +338,15 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVMCP",
+            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [
             .embedInCode("Resources/launchd"),
             .embedInCode("Resources/systemd"),
             .embedInCode("Resources/skills"),
-        ]
+        ],
+        swiftSettings: testOwnerPresence
     ),
     .executableTarget(
         name: "rv",
@@ -337,7 +357,7 @@ let cliTargets: [Target] = [
     ),
     .executableTarget(
         name: "rv-judge",
-        dependencies: ["RVLaya"]
+        dependencies: ["RVLaya", "RVJudgePool"]
     ),
 ]
 let cliProducts: [Product] = [
@@ -349,6 +369,7 @@ let cliTestTargets: [Target] = [
     .testTarget(
         name: "RVCLITests",
         dependencies: cliTestDependencies,
+        swiftSettings: testOwnerPresence,
         linkerSettings: scanLinkerSettings
     ),
 ]

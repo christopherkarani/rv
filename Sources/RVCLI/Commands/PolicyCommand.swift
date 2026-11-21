@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVPresentation
 
 struct Policy: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -15,11 +16,16 @@ struct Policy: AsyncParsableCommand {
         defaultSubcommand: Show.self
     )
 
-    struct Show: AsyncParsableCommand {
+    struct Show: AsyncParsableCommand, CommandUsage {
         static let configuration = CommandConfiguration(
             commandName: "show",
             abstract: "List built-in, machine, and repo typed rules."
         )
+
+        static let usage = [
+            HelpRow(name: "rv policy show [--base] [--effective]"),
+            HelpRow(name: "rv policy show --revision <n> [--repo]"),
+        ]
 
         @OptionGroup
         var format: FormatFlags
@@ -111,11 +117,15 @@ struct Policy: AsyncParsableCommand {
         }
     }
 
-    struct List: AsyncParsableCommand {
+    struct List: AsyncParsableCommand, CommandUsage {
         static let configuration = CommandConfiguration(
             commandName: "list",
             abstract: "List policy revisions for one layer, oldest first."
         )
+
+        static let usage = [
+            HelpRow(name: "rv policy list [--repo]"),
+        ]
 
         @Flag(name: .customLong("repo"), help: "List the repo layer.")
         var repo = false
@@ -150,11 +160,15 @@ struct Policy: AsyncParsableCommand {
         }
     }
 
-    struct Validate: AsyncParsableCommand {
+    struct Validate: AsyncParsableCommand, CommandUsage {
         static let configuration = CommandConfiguration(
             commandName: "validate",
             abstract: "Validate a policy document."
         )
+
+        static let usage = [
+            HelpRow(name: "rv policy validate"),
+        ]
 
         @Argument(help: "Path to policy.toml. Defaults to the machine file.")
         var path: String?
@@ -192,11 +206,15 @@ struct Policy: AsyncParsableCommand {
         }
     }
 
-    struct Export: AsyncParsableCommand {
+    struct Export: AsyncParsableCommand, CommandUsage {
         static let configuration = CommandConfiguration(
             commandName: "export",
             abstract: "Write one origin as policy.toml."
         )
+
+        static let usage = [
+            HelpRow(name: "rv policy export [--repo] [--output <path>]"),
+        ]
 
         @Flag(name: .customLong("repo"), help: "Export the repo layer.")
         var repo = false
@@ -234,11 +252,15 @@ struct Policy: AsyncParsableCommand {
         }
     }
 
-    struct Apply: AsyncParsableCommand {
+    struct Apply: AsyncParsableCommand, CommandUsage {
         static let configuration = CommandConfiguration(
             commandName: "apply",
             abstract: "Preview or merge a shared policy document."
         )
+
+        static let usage = [
+            HelpRow(name: "rv policy apply <policy.toml> [--repo] [--save [--wait [--wait-timeout <seconds>]]]"),
+        ]
 
         @Argument(help: "Path to a policy.toml file.")
         var path: String

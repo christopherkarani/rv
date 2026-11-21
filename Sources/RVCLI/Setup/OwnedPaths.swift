@@ -12,6 +12,8 @@ struct OwnedPaths: Equatable, Sendable {
     var home: HomeDirectory
 
     var configDirectory: String { home.rawValue + "/.config/rv" }
+    /// `RVDStateMarker`: whether rvd ran here and whether a restart is due.
+    var rvdStateMarker: String { home.rawValue + "/.config/rv/rvd-state" }
     var grokDirectory: String { home.rawValue + "/.grok" }
     var grokHook: String { home.rawValue + "/.grok/hooks/rv.json" }
     var piDirectory: String { home.rawValue + "/.pi" }
@@ -46,6 +48,7 @@ struct OwnedPaths: Equatable, Sendable {
     var openCodeAgentSkill: String { home.rawValue + "/.config/opencode/skills/rv/SKILL.md" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
+    var judgeLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.judge.plist" }
     /// Written by `rv audit forward --install` (`AuditForwardInstall.label`).
     var auditForwardLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.audit-forward.plist" }
     var custodianAppExecutable: String {

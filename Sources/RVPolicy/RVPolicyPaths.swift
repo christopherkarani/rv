@@ -155,7 +155,7 @@ public enum RVPolicyPaths: Sendable {
             .map { configDir.appendingPathComponent($0, isDirectory: false) }
     }
 
-    /// Writer lock for `config.json`, owned by `MachineConfigJSON.update`.
+    /// Writer lock for `config.json`, taken by every `MachineConfigJSON` write.
     public static func machineConfigLockFile(inConfigDir configDir: URL) -> URL {
         MachineConfigJSON.lockURL(
             for: configDir.appendingPathComponent("config.json", isDirectory: false)

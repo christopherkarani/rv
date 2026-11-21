@@ -1,0 +1,205 @@
+import Foundation
+import Testing
+import RVDomain
+import RVEngine
+import RVPolicy
+@testable import RVService
+
+/// Observe-floor inputs under 64 KB that crashed rvd or blew the hook's
+/// 8 s budget. Either leaves rvd unreachable, and an observe hook then
+/// allows every later call unchecked. Each must finish fast or fail
+/// closed (never an allow).
+@Suite("Observe floor bounds")
+struct ObserveFloorBoundsTests {
+    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
+    /// Loose so a starved CI pool does not flake; in a debug build the
+    /// regressions ran 49 s to 292 s, the fixed code under 4 s.
+    private static let wallClockBound = Duration.seconds(20)
+    private static let allow = EvaluationResult(outcome: .plain)
+
+    /// End to end, the way rvd serves it: a detached task on the
+    /// cooperative pool. The chain once overflowed the stack and killed
+    /// rvd, so the trailing `pkill rvd` ran unchecked.
+    @Test("observe host: a deep xargs chain is held, not a crash")
+    func deepXargsChainHeldOnObserveHost() async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let command = String(repeating: "xargs ", count: 600) + "true; pkill rvd"
+        let result = await Task.detached {
+            await GatedEvaluate().apply(
+                command: ShellCommand(rawValue: command), cwd: nil, home: home,
+                grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { .empty }, host: .hook(.claude)
+            )
+        }.value
+        #expect(result.decision != .allow)
+    }
+
+    /// Bounding the nested xargs check must not limit a peel main
+    /// completed: `xargs` words as data, as option values or inside a
+    /// script once hid the inner git config from alias analysis.
+    @Test("observe host: git config behind xargs with xargs words as data is held", arguments: [
+        "echo . | xargs git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
+        "echo . | xargs -n1 sudo git -c core.fsmonitor='./x.sh' status xargs xargs xargs xargs xargs",
+        "bash -c \"xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs\"",
+        "env -u xargs -u xargs -u xargs -u xargs -u xargs xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs",
+        "echo . | xargs -E -x git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs",
+        "python3 -c \"import os; os.system('xargs git -c core.fsmonitor=./x.sh status xargs xargs xargs xargs xargs')\"",
+        "echo . | xargs xargs xargs git -c alias.s='!pkill rvd' s",
+    ])
+    func gitConfigBehindXargsHeld(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision != .allow, "\(command)")
+    }
+
+    /// Thousands of `xargs` words as data, some inside quoted scripts, cost
+    /// about what the same line of ordinary words costs. Measured against
+    /// that line, not a fixed bound: evaluating a line this long takes tens
+    /// of seconds in a debug build on a loaded runner (44 s on macOS CI)
+    /// whatever its words are, while a per-word rescan of the `xargs` words
+    /// ran 49 s to 292 s against under 4 s.
+    @Test("observe host: a long line of xargs words is read in bounded time")
+    func longLimitedXargsLineBounded() async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        func line(_ word: String) -> String {
+            "echo . | xargs rm "
+                + Array(repeating: "\(word) 'a b' \"\(word) 'c d'\"", count: 3000).joined(separator: " ")
+        }
+        func elapsed(_ command: String) async -> Duration {
+            let clock = ContinuousClock()
+            let start = clock.now
+            _ = await GatedEvaluate().apply(
+                command: ShellCommand(rawValue: command), cwd: nil, home: home,
+                grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { .empty }, host: .hook(.claude)
+            )
+            return clock.now - start
+        }
+        let ordinary = await elapsed(line("yargs"))
+        let xargs = await elapsed(line("xargs"))
+        #expect(xargs < ordinary * 4 + .seconds(10), "xargs words: \(xargs); ordinary words: \(ordinary)")
+    }
+
+    @Test("observe host: an everyday xargs write is still recorded, not held", arguments: [
+        "find . -name '*.o' | xargs rm",
+        "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
+        "echo a b | xargs git add",
+    ])
+    func everydayLimitedXargsAllowed(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .allow, "\(command)")
+    }
+
+    @Test("floor: a deep xargs chain fails closed")
+    func deepXargsChainFailsClosed() {
+        let command = ShellCommand(rawValue: String(repeating: "xargs ", count: 600) + "true")
+        let ruling = floorRule(command, home: nil, cwd: nil)
+        guard case .enforce(let result) = ruling else {
+            Issue.record("a deep xargs chain must be enforced: \(ruling)")
+            return
+        }
+        #expect(result.decision != .allow)
+    }
+
+    @Test("floor: each oversized repro finishes fast or fails closed", arguments: [
+        "pkill-words", "kill-operands", "rm-words", "python-heredoc",
+    ])
+    func oversizedReprosAreBounded(name: String) throws {
+        let command = ShellCommand(rawValue: repro(name))
+        #expect(command.rawValue.utf8.count <= 65536, "\(name): \(command.rawValue.utf8.count) bytes")
+        let home = try #require(HomeDirectory(validating: "/Users/agent"))
+        let cwd = try #require(WorkingDirectory(rawValue: "/Users/agent/project"))
+        let clock = ContinuousClock()
+        var ruling: ObserveFloor.Ruling?
+        let elapsed = clock.measure {
+            ruling = floorRule(command, home: home, cwd: cwd)
+        }
+        if case .enforce(let result) = ruling {
+            #expect(result.decision != .allow, "\(name)")
+        }
+        #expect(elapsed < Self.wallClockBound, "\(name): \(elapsed)")
+    }
+
+    /// Past the floor's wall-time budget nothing more is read: an allow
+    /// becomes "run it in Terminal", a deny or hold is kept.
+    @Test("floor: an exhausted budget never allows")
+    func exhaustedBudgetFailsClosed() {
+        let command = ShellCommand(rawValue: "echo hi")
+        let spent = floorRule(command, home: nil, cwd: nil, budget: .zero)
+        #expect(spent == .enforce(EvaluationResult(outcome: .indeterminate(.observeUnanalyzable))))
+        #expect(floorRule(command, home: nil, cwd: nil) == .observed)
+    }
+
+    /// Many texts with a literal-pid `kill` (the command, fed program
+    /// text, guard readings) read the process table once per command, not
+    /// once per text or per operand.
+    @Test("floor: literal-pid kills across texts read the process table once")
+    func floorReadsProcessTableOnce() {
+        let pids = Array(repeating: "1", count: 50).joined(separator: " ")
+        let command = ShellCommand(
+            rawValue: "kill \(pids); sh <<'EOF'\nkill \(pids)\nEOF\nbash -c 'kill \(pids)'"
+        )
+        let reads = ReadCount()
+        let ruling = floorRule(command, home: nil, cwd: nil, rvdPIDs: {
+            reads.value += 1
+            return [4242]
+        })
+        #expect(reads.value == 1, "\(ruling)")
+    }
+
+    private func floorRule(
+        _ command: ShellCommand,
+        home: HomeDirectory?,
+        cwd: WorkingDirectory?,
+        rvdPIDs: @escaping () -> Set<Int32>? = { [] },
+        budget: Duration = ObserveFloor.lifecycleBudget
+    ) -> ObserveFloor.Ruling {
+        ObserveFloor.rule(
+            Self.allow,
+            door: .shell(command, store: .gather(home: home, cwd: cwd)),
+            context: ObserveFloor.Context(home: home, cwd: cwd, rvdPIDs: rvdPIDs, budget: budget)
+        )
+    }
+
+    private func repro(_ name: String) -> String {
+        switch name {
+        case "pkill-words":
+            String(repeating: "pkill ", count: 2000)
+        case "kill-operands":
+            "kill " + Array(repeating: "1", count: 32000).joined(separator: " ")
+        case "rm-words":
+            "rm " + Array(repeating: "x", count: 32000).joined(separator: " ")
+        default:
+            "python3 - <<'EOF'\n"
+                + (0..<2700).map { "d['k\($0)'] = 'v\($0)'" }.joined(separator: "\n")
+                + "\nEOF"
+        }
+    }
+}
+
+private func observeHome() throws -> HomeDirectory {
+    let home = try guardHome(mode: nil)
+    let directory = RVPolicyPaths.configDirectory(home: home)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try #"{"guard":{"hosts":{"claude":"observe"}}}"#
+        .write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+    return home
+}
+
+/// Counts process-table reads.
+private final class ReadCount {
+    var value = 0
+}

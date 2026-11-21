@@ -25,7 +25,7 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 
 **Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`, `block` included, so an explicit `block` outranks a global `guard.mode: observe`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `rv host list` reports each host's effective mode: a host with no entry reads as the global mode. A host set `off` before an organization gate arrived stays unwired (wiring `absent-file`, `managed_enforce: true`) until `rv setup` restores it. `HostMode`, `HostModeStore`.
 
-**Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. `ObserveFloor`.
+**Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. On a shell door every floor rule reads the same texts: the command, program text it feeds a shell, interpreter or scheduler, and their re-readings (`ObserveTexts`). `ObserveFloor`.
 
 **Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked. `"would_be"` says whether the enforced hook would have denied or asked for human approval (`HookAuthorization.project`).
 
@@ -53,4 +53,12 @@ Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all sto
 
 **Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission` against `EgressHostPolicy`. `EgressProxy`, `EgressWire`.
 
+**Dial-address table** — the one range table that says whether an IP address may be dialed: public unicast, listable private (an owner's `allowed_ips` may open it) or never. The egress proxy, the admission GET and the `allowed_ips` parser all ask it; the proxy judges an IPv6 form that embeds an IPv4 address by that IPv4, the other two read it literally. `DialAddress`, `DialJudgment`.
+
 **Egress audit mode** — an owner-signed MCP `sandbox.enforcement: audit`: the egress proxy lets a host outside `sandbox.hosts` through once its would-be block is an `egress.observed` audit event, and denies if that event cannot be written or the server's per-minute budget is spent. The event means "admitted past the host list" (written after SNI, before the dial); a later `egress.denied` means the request still failed. Only the host list relaxes; every other refusal and the dial filter still deny. Needs a verified mcp.json signature; off under an organization policy. Not observe mode, which is per hook host. `EgressAuditMode`.
+
+## CLI
+
+**Command grammar** — the subcommands, options, flags and positionals rv's parser accepts, as ArgumentParser itself describes them. The `@Option` / `@Flag` / `@Argument` declarations are the only place a flag is spelled; help dispatch (is this `--help` rv's, and for which page?) and the help tests read the grammar. `CommandGrammar`.
+
+**Usage row** — one `rv …` line on a help page, declared in the command it describes, beside its parser properties. Tests parse every row with the real parser and check that a command's rows name every option it has. `CommandUsage`, `UsageRows`.

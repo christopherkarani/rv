@@ -40,7 +40,7 @@ struct SocketPeerEvidenceTests {
         switch peer.componentRole {
         case nil:
             break
-        case .cli, .service, .workspaceHost, .operatorUI, .mcpCustodian:
+        case .cli, .service, .workspaceHost, .operatorUI, .mcpCustodian, .judge:
             Issue.record("socket peer must never carry a component role")
         }
     }

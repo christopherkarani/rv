@@ -47,19 +47,42 @@ public enum OwnerOnlyFile {
         return .success(Data(bytes.prefix(count)))
     }
 
+    /// How far `replace` got.
+    public enum Replacement: Sendable, Equatable {
+        /// The file holds the new bytes and the rename is durable.
+        case replaced
+        /// The file holds the new bytes, but the directory could not be
+        /// synced, so a crash could still bring back the previous file.
+        case replacedDirectoryNotSynced
+        /// The file was left as it was.
+        case notReplaced
+    }
+
     /// Temp file (0600) + fsync + rename in the same directory, which is
-    /// created 0700 when missing.
+    /// created 0700 when missing. True only when the replacement is durable
+    /// (`replace` returned `.replaced`).
     public static func write(_ data: Data, to url: URL) -> Bool {
+        replace(data, at: url) == .replaced
+    }
+
+    /// `write`, saying whether the file was replaced when the directory sync
+    /// after the rename fails.
+    public static func replace(_ data: Data, at url: URL) -> Replacement {
+        replace(data, at: url, syncDirectory: syncDirectory)
+    }
+
+    /// `syncDirectory` is a seam for tests.
+    static func replace(_ data: Data, at url: URL, syncDirectory: (URL) -> Bool) -> Replacement {
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         } catch {
-            return false
+            return .notReplaced
         }
         let temporary = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
         let fd = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return false }
+        guard fd >= 0 else { return .notReplaced }
         var written = 0
         while written < data.count {
             let n = data.withUnsafeBytes { raw -> Int in
@@ -74,11 +97,15 @@ public enum OwnerOnlyFile {
         close(fd)
         guard written == data.count, synced, rename(temporary.path, url.path) == 0 else {
             unlink(temporary.path)
-            return false
+            return .notReplaced
         }
         // The rename itself is only durable once the directory is synced;
         // without it a crash can resurrect the previous file (for the serial
         // watermark, that re-opens the rollback window).
+        return syncDirectory(directory) ? .replaced : .replacedDirectoryNotSynced
+    }
+
+    private static func syncDirectory(_ directory: URL) -> Bool {
         let directoryFD = open(directory.path, O_RDONLY | O_CLOEXEC)
         guard directoryFD >= 0 else { return false }
         let directorySynced = fsync(directoryFD) == 0

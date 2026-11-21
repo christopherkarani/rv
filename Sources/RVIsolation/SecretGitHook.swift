@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 
 /// The block `rv secrets hook install` adds to the git pre-commit hook. It
 /// scans the index, not the worktree, and leaves the rest of the hook alone.

@@ -360,7 +360,8 @@ struct AnalyticsCoordinatorTests {
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354"),
+            persistDelay: .zero
         )
         await coordinator.captureInstall(hosts: ["grok": "wired"])
         #expect(FileManager.default.fileExists(atPath: paths.installSentFile.path) == false)
@@ -372,7 +373,8 @@ struct AnalyticsCoordinatorTests {
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354"),
+            persistDelay: .zero
         )
         await retry.captureInstall(hosts: ["grok": "wired"])
         let events = await okSink.events
@@ -382,6 +384,8 @@ struct AnalyticsCoordinatorTests {
 
     @Test func failedFlushKeepsCounters() async throws {
         let root = try temporaryConfigRoot()
+        // Two coordinators share this directory: write each count at once, so
+        // no deferred write from the first can land after the second starts.
         let paths = AnalyticsPaths(configDirectory: root)
         let sink = FailingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
@@ -390,7 +394,8 @@ struct AnalyticsCoordinatorTests {
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354"),
+            persistDelay: .zero
         )
         await coordinator.recordDecision(.allow)
         await coordinator.recordDecision(.deny)
@@ -403,7 +408,8 @@ struct AnalyticsCoordinatorTests {
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354"),
+            persistDelay: .zero
         )
         await next.flushDailyIfNeeded(now: day(2026, 8, 21))
         let events = await okSink.events

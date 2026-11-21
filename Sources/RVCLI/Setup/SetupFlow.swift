@@ -1,4 +1,5 @@
 import Foundation
+import RVIsolation
 import RVPolicy
 import RVPresentation
 import RVService
@@ -27,6 +28,8 @@ struct SetupIntent {
     var ceremonyKind: SetupCeremonyKind = .setup
     /// Uninstall only: also delete the downloaded judge weights.
     var removeModels: Bool = false
+    /// Uninstall only: also delete rv's data and the secret values it stored.
+    var purge: Bool = false
     /// `rv setup --observe`: store `guard.mode: observe` before wiring.
     var observe: Bool = false
     /// Explicit `--json` / `--robot`: stdout is one `rv.setup.v1` document.
@@ -148,6 +151,7 @@ struct SetupFlow {
             return SetupRun.uninstall(
                 env,
                 removeModels: intent.removeModels,
+                purge: intent.purge,
                 appearance: intent.appearance,
                 clock: clock,
                 animate: intent.animate,
@@ -200,8 +204,23 @@ extension SetupEnvironment {
         setup.uncreatableRuntimeDirectory = {
             UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
         }
+        if loginHome {
+            let owner = "\(UnixSocketPath.userRuntimeRoot)/\(setup.uid())/\(UnixSocketPath.directoryName)"
+            let inherited = UnixSocketPath.clientSocket(xdgRuntimeDir: xdgRuntimeDir, uid: setup.uid())?
+                .url.deletingLastPathComponent().path
+            setup.runtimeSocketDirectories = [owner] + (inherited.map { $0 == owner ? [] : [$0] } ?? [])
+        }
+        setup.custodianSystemPaths = [
+            MCPCustodianSetup.keyUnit, MCPCustodianSetup.presenceUnit, MCPCustodianSetup.pamFile,
+            MCPCustodianSetup.directory, MCPCustodianSetup.state,
+        ]
+#endif
+        setup.secretKeychain = .live
+#if os(macOS)
+        setup.mcpOAuthInKeychain = true
 #endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
+        setup.judgeBundleInstalled = { JudgeRuntime.selectsBundle(home: $0) }
         return setup
     }
 }

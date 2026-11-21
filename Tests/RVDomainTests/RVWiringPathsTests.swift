@@ -60,6 +60,9 @@ struct RVWiringPathsTests {
         "/Users/me/Library/Logs/rv/rvd-backoff/rvd-starts.json.Ab12Cd.tmp",
         "/Users/me/.local/state/rv/rvd-backoff/rvd-starts.json",
         "/Users/me/.local/state/rv/rvd-backoff/rvd-starts.json.Ab12Cd.tmp",
+        // The rvd state marker: forging it re-opens the observe step-aside.
+        "/Users/me/.config/rv/rvd-state",
+        "~/.config/rv/rvd-state",
     ])
     func wiring(path: String) {
         #expect(RVWiringPaths.matches(path, home: Self.home), "\(path)")
@@ -82,6 +85,9 @@ struct RVWiringPathsTests {
         "/Users/me/.agents/skills/other/SKILL.md",
         "/Users/me/.cursor/mcp.json",
         "/Users/me/.local/bin/node",
+        // Only the marker in rv's config directory is wiring.
+        "/Users/me/.config/rv/rvd-state.bak",
+        "/Users/me/.config/rv/workspaces/p/home/.config/rv/x",
         "/Users/me/.local/bin/rvm",
         "/Users/me/Library/LaunchAgents/com.example.agent.plist",
         "/Users/me/.config/systemd/user/syncthing.service",
@@ -117,6 +123,7 @@ struct RVWiringPathsTests {
         "/Users/me/.config/opencode/skills",
         // Hold rvd-backoff/: moving them would move the backoff record.
         "/Users/me/Library/Logs", "/Users/me/Library/Logs/rv", "/Users/me/.local/state", "/Users/me/.local/state/rv",
+        "/Users/me/.config/rv",
     ])
     func ancestors(path: String) {
         #expect(RVWiringPaths.matchesAncestor(path, home: Self.home), "\(path)")

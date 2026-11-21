@@ -139,6 +139,76 @@ struct UnixSocketPathTests {
         #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
+    /// rvd's refusal names the actual problem, and a fix that works for it
+    /// (`mkdir -p` would leave an existing directory's owner and mode alone).
+    @Test func userRuntimeDirectoryProblemNamesWhatIsWrongAndAFixForIt() throws {
+        let root = shortRuntimeDir("p")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = getuid()
+        let owner = root.appendingPathComponent("\(me)").path
+        let make = "as root, install -d -m 0700 -o \(me) \(owner)"
+
+        let noRoot = UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+        #expect(noRoot.reason.hasPrefix("\(root.path) does not exist (no login manager made it"))
+        // The root directory with its mode spelled out: root's umask could
+        // otherwise leave it 0700, which no other account can search.
+        #expect(noRoot.fix == "as root, install -d -m 0755 \(root.path) && install -d -m 0700 -o \(me) \(owner)")
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) does not exist and this account cannot create it in \(root.path)", fix: make))
+
+        try FileManager.default.createDirectory(atPath: owner, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: owner)
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) has mode 0770, which group or others can write", fix: make))
+
+        let other: UInt32 = me == 4242 ? 4243 : 4242
+        let foreign = UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: other)
+        #expect(foreign.reason == "\(owner) belongs to uid \(me), not to this account (uid \(other))")
+        #expect(foreign.fix == "as root, remove \(owner), then install -d -m 0700 -o \(other) \(owner)")
+
+        try FileManager.default.removeItem(atPath: owner)
+        try FileManager.default.createSymbolicLink(atPath: owner, withDestinationPath: "/")
+        #expect(UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+            == .init(reason: "\(owner) is a symbolic link", fix: "as root, remove \(owner), then install -d -m 0700 -o \(me) \(owner)"))
+    }
+
+    /// A runtime directory rvd cannot reach because a directory above it is
+    /// not searchable is not "missing": making it would change nothing.
+    @Test func userRuntimeDirectoryProblemNamesAnUnsearchableParent() {
+        let owner = "/run/user/4242"
+        let problem = UnixSocketPath.unexaminableUserRuntimeDirectoryProblem(
+            owner, userRuntimeRoot: "/run/user", uid: 4242, error: EACCES)
+        #expect(problem.reason.hasSuffix("is not searchable by this account (uid 4242), so rvd cannot reach \(owner)"))
+        #expect(problem.reason.contains("does not exist") == false)
+        #expect(problem.fix.hasPrefix("as root, chmod go+x /"))
+        #expect(problem.fix.hasSuffix(", then, if \(owner) does not exist, install -d -m 0700 -o 4242 \(owner)"))
+
+        let other = UnixSocketPath.unexaminableUserRuntimeDirectoryProblem(
+            owner, userRuntimeRoot: "/run/user", uid: 4242, error: ELOOP)
+        #expect(other.reason.hasPrefix("\(owner) cannot be examined ("))
+    }
+
+    /// The same through the file system, where the kernel says EACCES: only
+    /// an account without CAP_DAC_READ_SEARCH can see it, so not as root.
+    @Test(.enabled(if: getuid() != 0, "root can search any directory"))
+    func userRuntimeDirectoryProblemFindsTheUnsearchableDirectory() throws {
+        let root = shortRuntimeDir("q")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let me = getuid()
+        let owner = root.appendingPathComponent("\(me)").path
+        try FileManager.default.createDirectory(atPath: owner, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: root.path)
+        let problem = UnixSocketPath.userRuntimeDirectoryProblem(owner, userRuntimeRoot: root.path, uid: me)
+        #expect(problem == .init(
+            reason: "\(root.path) is not searchable by this account (uid \(me)), so rvd cannot reach \(owner)",
+            fix: "as root, chmod go+x \(root.path), then, if \(owner) does not exist, install -d -m 0700 -o \(me) \(owner)"))
+    }
+
     /// Setup's up-front check names only a start `prepareRuntime` cannot
     /// make work: XDG unset, not root, nothing at `<root>/<uid>`, and a root
     /// this process cannot write.
