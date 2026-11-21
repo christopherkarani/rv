@@ -71,7 +71,8 @@ public enum DoctorSnapshotBuilder {
         switch JudgeRuntime.bundleHealth(home: home) {
         case .ok(let engine, let bundle):
             #if canImport(CoreML)
-            let on = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            var on = "laya-\(engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(bundle.path)"
+            if engine == .ft, let note = JudgeRuntime.calibrationNote(bundle: bundle) { on += ", \(note)" }
             let meanwhile = mode == .observe
                 ? "judged calls run and are logged as a would-be review"
                 : "judged calls go to review"

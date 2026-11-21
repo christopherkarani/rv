@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVHistory
+import RVLaya
 import RVPolicy
 
 /// One side-effect write a gated evaluation asks for. The decision part of
@@ -57,6 +58,9 @@ enum GatedEffect: Sendable, Equatable {
             let checkpoint: String
             let milliseconds: Double
             let truncated: Bool
+            /// The bundle operating point `action` was read at; nil for
+            /// the fixed runtime thresholds.
+            var thresholds: LayaThresholds? = nil
         }
 
         let at: Date

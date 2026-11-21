@@ -568,8 +568,15 @@ def main(argv=None):
     if CALIBRATION is not None:
         cal = json.loads(Path(CALIBRATION).read_text())
         cfg["temperature"] = float(cal["temperature"])
-        cfg["thresholds"] = {"block": float(cal["block_threshold"]),
-                             "review": float(cal["review_threshold"])}
+        tb, tr = float(cal["block_threshold"]), float(cal["review_threshold"])
+        # Swift (LayaThresholds) refuses anything but 0 < review < block <= 1,
+        # and a refused bundle sends every judged call to review. Fail here
+        # instead of shipping an unusable bundle.
+        if not (0.0 < tr < tb <= 1.0):
+            raise SystemExit(f"calibration thresholds unusable by the runtime: "
+                             f"block={tb} review={tr} (need 0 < review < block <= 1); "
+                             f"see calibration notes: {cal.get('notes')}")
+        cfg["thresholds"] = {"block": tb, "review": tr}
         cfg["source"]["calibration_sha256_prefix"] = sha_prefix(Path(CALIBRATION))
     (COREML_DIR / "config.json").write_text(json.dumps(cfg, indent=1) + "\n")
 

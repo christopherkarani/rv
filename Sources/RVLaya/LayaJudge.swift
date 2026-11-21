@@ -18,6 +18,10 @@ public struct LayaVerdict: Sendable, Equatable, Codable {
     /// The model never saw the input tail. Callers must not bind an
     /// allow on a truncated view.
     public var truncated: Bool = false
+    /// The calibrated operating point of the bundle that scored this
+    /// verdict (v3 fine-tuned bundles); nil means the runtime's fixed
+    /// thresholds apply. Omitted from the wire when nil.
+    public var bundleThresholds: LayaThresholds? = nil
 
     public enum Action: String, Sendable, Codable, CodingKeyRepresentable {
         case allow
@@ -52,10 +56,11 @@ public struct LayaVerdict: Sendable, Equatable, Codable {
 extension LayaVerdict {
     private enum CodingKeys: String, CodingKey {
         case choice, probabilities, riskScore, malicious, risk, checkpoint, latencyMilliseconds, truncated
+        case bundleThresholds
     }
 
     /// Tolerant decode: verdicts written before `truncated` existed
-    /// default it to false.
+    /// default it to false; before `bundleThresholds`, to nil.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         choice = try c.decode(Action.self, forKey: .choice)
@@ -66,6 +71,8 @@ extension LayaVerdict {
         checkpoint = try c.decode(String.self, forKey: .checkpoint)
         latencyMilliseconds = try c.decode(Double.self, forKey: .latencyMilliseconds)
         truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        // Thresholds that fail `LayaThresholds` fail the whole decode.
+        bundleThresholds = try c.decodeIfPresent(LayaThresholds.self, forKey: .bundleThresholds)
     }
 }
 

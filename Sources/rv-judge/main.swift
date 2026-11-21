@@ -102,10 +102,17 @@ do {
     for command in commands {
         do {
             let verdict = try runJudge(command)
+            // A calibrated (v3) bundle's own operating point (trusted input).
+            let action: LayaVerdict.Action
+            if let t = verdict.bundleThresholds {
+                action = verdict.action(blockThreshold: t.block, reviewThreshold: t.review)
+            } else {
+                action = verdict.action()
+            }
             var row: [String: Any] = [
                 "command": command,
                 "choice": verdict.choice.rawValue,
-                "action": verdict.action().rawValue,
+                "action": action.rawValue,
                 "risk": (verdict.risk * 1000).rounded() / 1000,
                 "malicious": (verdict.malicious * 10000).rounded() / 10000,
                 "risk_score": (verdict.riskScore * 10000).rounded() / 10000,
@@ -113,6 +120,7 @@ do {
                 "checkpoint": verdict.checkpoint,
             ]
             if verdict.truncated { row["truncated"] = true }
+            if let t = verdict.bundleThresholds { row["thresholds"] = ["block": t.block, "review": t.review] }
             row["probabilities"] = Dictionary(uniqueKeysWithValues: verdict.probabilities.map { ($0.key.rawValue, ($0.value * 10000).rounded() / 10000) })
             let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))
