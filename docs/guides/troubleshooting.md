@@ -156,14 +156,20 @@ and run `rv setup`.
 | `mcp.json defines no servers; see `rv mcp import`` | Add servers, or `rv mcp onboard --host <host>` |
 | `mcp.json is invalid: …` | The rest of the line names the key; see [mcp.json](mcp-gateway.md#mcpjson-by-example) |
 | `mcp.json is unsafe (…); it must be a regular file only you can write` | `chmod 600 ~/.config/rv/mcp.json`; no symlink |
-| `<name> needs a sandbox; add "sandbox" to its mcp.json entry` | This host cages servers; add `"sandbox": {"network": false}` |
-| `<name> stays off the network; list the hosts it needs in sandbox.hosts` | `"sandbox": {}` defaults to network on, which is refused; set `"network": false` or `"hosts"` |
 | `<name> asks for a sandbox, but the MCP server sandbox is unavailable on this host (…); `rv mcp serve` will not run it uncaged` | Linux older than 6.7, or no Landlock or seccomp: run on a newer kernel, or remove the `sandbox` entry knowing it then runs uncaged |
 | `organization policy requires a sandbox for <name>, but …` | Same, and the organization requires the cage |
 | `<server> uses secret <name>, which secrets.json does not define` | `rv secrets set <name> …` |
 | `<server> could not read secret <name>: …` | `rv secrets check <name>`; unlock the provider |
 | `mcp.json changed while it was being checked; not launching MCP servers` | Start the host again |
 | `rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; not serving` | Linux only: rv could not set up how it hears signals (it needs one pipe, so usually rv is out of file descriptors). Close what holds them or raise the limit, then start the host again. Signals the parent left blocked are not the cause: serve unblocks the ones it handles |
+
+**`rv mcp: not starting MCP server <name>: sandbox: <name> needs a sandbox; add "sandbox" to its mcp.json entry`**
+(or `… stays off the network; list the hosts it needs in sandbox.hosts`)
+This host cages servers, and that server's entry has no `sandbox`, or
+`"sandbox": {}` (which defaults to network on). rv does not start that
+server; the others serve. Add `"sandbox": {"network": false}`, or list
+the hosts it needs in `"hosts"`, then `rv mcp trust` and restart the MCP
+host. `rv mcp check` names it too.
 
 **The agent sees `MCP server <name> did not answer tool <tool> within 300 s; rv stopped waiting. The call may still have run, so check before calling it again.`**
 The tool took longer than its server's `callTimeoutSeconds`. If the tool
