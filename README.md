@@ -21,8 +21,20 @@
 rv is a fail-closed policy gate for AI coding agents. It sits on your
 agent's pre-tool hook and blocks destructive shell commands, and reads or
 edits of secret files, *before* the host runs them. One gate, three
-verdicts: **allow · deny · indeterminate**. It never asks the agent; only
-you can override, with a one-time code.
+verdicts: **allow · deny · indeterminate**. The agent can never approve
+itself: only you can let a denied command through, once, with a one-time
+code (or in the RV app on macOS).
+
+Words rv uses:
+
+| Word | Meaning |
+| --- | --- |
+| allow | The command runs. |
+| deny / block | The command is stopped before it runs. |
+| ask | A deny you can approve: the block message carries an `rv allow-once` code. |
+| pinned | A deny you cannot approve once; run the command yourself in Terminal. |
+| indeterminate | rv could not finish checking the command, so it is stopped (fail closed). |
+| observe | rv logs what it would deny and lets the command run (`rv blocks` shows WOULD BLOCK / WOULD ASK). |
 
 ```sh
 $ rv test 'git reset --hard'

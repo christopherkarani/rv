@@ -42,7 +42,7 @@ public let cursorAgentStopLine =
 /// code redeemed in Terminal is the only way a human approves there.
 #if os(macOS)
 public let approvalPendingLine =
-    "This action requires human approval: open RV to approve it, then retry the exact command."
+    "This action needs your approval: approve it in the RV app or with its rv allow-once code, then retry the exact command."
 #else
 public let approvalPendingLine =
     "This action requires human approval: the owner redeems its rv allow-once code, then retry the exact command."
