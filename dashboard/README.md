@@ -59,12 +59,14 @@ rv forwards over https only, except to localhost.
 | `RV_CONSOLE_SECRET` | Session HMAC key, 32+ characters. **Required in production** |
 | `RV_CONSOLE_DATA_DIR` | SQLite directory (`/data` in the image). Back it up |
 | `RV_CONSOLE_RETENTION_DAYS` | Days of events to keep (default 90) |
-| `RV_CONSOLE_PUBLIC_URL` | Base URL used in onboarding snippets |
+| `RV_CONSOLE_PUBLIC_URL` | Base URL used in onboarding snippets, including any base path (`https://rykanv.com/console`) |
 | `RV_CONSOLE_ADMIN_EMAIL`, `RV_CONSOLE_ADMIN_PASSWORD` | Seed the first admin |
 | `RV_CONSOLE_DEMO` | `1` seeds and streams a demo fleet (never in production) |
 | `RV_CONSOLE_INSECURE_COOKIES` | `1` allows session cookies over plain http (lab only) |
 | `RV_CONSOLE_OIDC_*`, `RV_CONSOLE_SSO_ENFORCE` | Single sign-on; see below |
 | `RV_CONSOLE_ALLOW_HTTP_WEBHOOKS` | `1` allows alert webhooks over plain http (lab only) |
+| `RV_CONSOLE_THEME` | `rykan` matches rykanv.com: the site's white and zinc palette, the Rykan V logo, a site-style header with tab navigation, light by default |
+| `RV_CONSOLE_BASE_PATH` | Serve under a path, such as `/console`, so a site can proxy `/console/*` to the console. **Build time**: set it for `npm run build` / `docker build` |
 
 ## Connect machines
 
