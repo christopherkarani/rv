@@ -239,12 +239,24 @@ public enum JudgeRuntime {
     /// resolves the branch only; EvaluateSession computes no file counts).
     /// `agentTouched` stays empty — no session file-tracking exists yet,
     /// and v1 must not invent touched files from command text.
+    ///
+    /// Only `cwd-inside-repo: yes` is ever sent. Outside a repository the
+    /// judge gets the bare command, never `cwd-inside-repo: no`: the v2
+    /// checkpoint learned that line as a block signal. Measured on the
+    /// Nov 19 eval, `rv --version` scores 0.001 bare, 0.003 with `yes` and
+    /// 0.998 with `no`; model-only benign block rate is 18.4% bare, 10.0%
+    /// in-repo and 70.1% with `no`, while dangerous recall is 91.5% bare
+    /// and 92.2% in-repo, so the line buys nothing but false blocks. See
+    /// docs/plans/laya-judge-decision-record.md. The context stays partial
+    /// (`cwdInsideRepo` is nil), so judge-log rows still say so.
     static func judgeContext(cwd: WorkingDirectory?) -> JudgeContext {
         guard let raw = cwd?.rawValue, resolveExistingDirectory(raw) != nil else {
             return JudgeContext()
         }
-        let inside = FilesystemLiveProbe.discoverRepositoryRoot(from: raw) != nil
-        return JudgeContext(cwdInsideRepo: inside)
+        guard FilesystemLiveProbe.discoverRepositoryRoot(from: raw) != nil else {
+            return JudgeContext()
+        }
+        return JudgeContext(cwdInsideRepo: true)
     }
 
     /// String seam over `judgeContext` for RVServiceTests.

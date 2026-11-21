@@ -1,0 +1,12 @@
+{
+  "bundle" : "laya-ft-v2-coreml",
+  "checkpoint" : "laya-ft-v2-fp16",
+  "engine" : "ft",
+  "loadMs" : 21840.716375,
+  "provenance" : "unknown",
+  "rows" : 1160,
+  "thresholds" : {
+    "block" : 0.80000000000000004,
+    "review" : 0.45000000000000001
+  }
+}

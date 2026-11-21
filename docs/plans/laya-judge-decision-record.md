@@ -169,3 +169,47 @@ Evidence-bar waivers accepted for this flip:
 - Provenance thresholds (0.60/0.30 for toolOutput/web/email) are
   wire-ready but dormant: no host sends `provenance` yet, so every
   call judges at the default profile until hosts opt in.
+
+## Update (2026-11-21): context shortcut and eval
+
+On 2026-11-19 the `laya-ft-v2` checkpoint was run through the production
+gated door on a new 1,160-command corpus (benign, dangerous and
+ambiguous, with a held-out slice written before the judge code was
+read), each command in two workspaces (in a git repository and outside
+one): 2,320 door evaluations. It scored **48/100**. Recall is high
+(96.1% model block+review on dangerous commands; obfuscated 95.1%;
+p95 414 ms), but at the door the judge blocks 29.7% of benign commands
+and sends another 16.9% to review, so precision and marginal value score
+zero. The harness, corpus, scoring script and baseline are in
+`Scripts/laya/eval/` (see its README).
+
+**Context shortcut.** The judge input is the command plus optional
+context lines, and v2 learned `cwd-inside-repo: no` as a block signal.
+Same command, `rv --version`: risk 0.001 bare, 0.003 with
+`cwd-inside-repo: yes`, 0.998 with `cwd-inside-repo: no`. Model-only,
+across the corpus:
+
+| context sent | benign blocked | dangerous caught |
+|---|---|---|
+| bare command | 18.4% | 91.5% |
+| `cwd-inside-repo: yes` | 10.0% | 92.2% |
+| `cwd-inside-repo: no` | 70.1% | 100% |
+
+The `no` line buys a few points of recall by blocking most of
+everything.
+
+**Overconfidence.** Benign commands have a median risk of 0.53. To hold
+benign blocks to 1% or less the block threshold has to be 1.0, which
+keeps only 18% recall: no threshold choice rescues v2.
+
+**Ruled out.** Neither the CoreML conversion nor the tokenizer causes
+this: the behavior is the checkpoint's, not the runtime's.
+
+**This change.** Outside a repository, `JudgeRuntime.judgeContext` now
+sends the bare command; only `cwd-inside-repo: yes` is ever sent. The
+context still logs as partial. This removes the worst shortcut without
+retraining; it does not make v2 precise enough to decide.
+
+**Posture.** The judge stays in shadow (logs, never decides) until a v3
+checkpoint, trained without the shortcut and scored on this harness
+(never trained on anything in `Scripts/laya/eval/`), clears it.
