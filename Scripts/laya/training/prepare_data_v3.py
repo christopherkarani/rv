@@ -26,12 +26,15 @@ in this order (identical order to v2 and Swift JudgeContext.serialize):
     git: untracked <n>, modified <n>, staged <n>
 
 - `cwd-inside-repo: no` does not exist in v3. The runtime sends the `yes`
-  line inside a repo and nothing otherwise. Training assigns the `yes` line
-  to exactly P_CWD = 0.5 of each label's base rows (stratified random, so
-  INDEPENDENT of label by construction), regardless of source: v1.1's
-  gitRemote was a label shortcut (empty gitRemote rows were 97.9% deny).
-- `git:` counts are random plausible counts (each 0 w.p. 0.45) on exactly
-  P_GIT = 0.35 of each label's base rows, independent of label. Source
+  line inside a repo and nothing otherwise. v1.1's gitRemote was a label
+  shortcut (empty gitRemote rows were 97.9% deny), so the `yes` and `git:`
+  lines are independent of label and source on the EXPANDED rows the model
+  trains on: flags are stratified per (label, has-agent-touched) group
+  (context_flags). Untouched rows get `yes` on exactly P_CWD = 0.5 and
+  `git:` on P_GIT = 0.35 of base rows; touched rows (which always get a
+  context variant) get counts giving the same expanded share, ~29.9% `yes`
+  and ~20.9% `git:` for every label.
+- `git:` counts are random plausible counts (each 0 w.p. 0.45). Source
   gitStatus counts are discarded: every v1.1 POSIX row has gitStatus and
   all-empty lists were 83% deny, so source counts were a shortcut too.
 - `agent-touched:` is kept only from true source context (v1.1
@@ -376,32 +379,50 @@ def draw_git(rng):
     return (one(14), one(22), one(9))
 
 
-def stratified_flags(base, rate, rng):
-    """Exactly round(rate * n_label) rows per label get True (order-free):
-    the flag is independent of label by construction, not just in expectation."""
-    by = defaultdict(list)
+def context_flags(base, ctx_only, rng):
+    """cwd / git flags stratified per (label, has-agent-touched) group so their
+    share of the EXPANDED rows is the same for every label.
+
+    Untouched rows keep P_CWD / P_GIT of base rows (exact counts, exact
+    expected overlap), giving expanded shares S = P / (2 - (1-P_CWD)(1-P_GIT)).
+    Touched rows always have a context variant (and context-only allows have
+    no bare row), so their expanded row count is fixed at 2n - q and the
+    counts are set to hit the same S. agent-touched itself stays as in the
+    source (label-correlated by design)."""
+    denom = 2 - (1 - P_CWD) * (1 - P_GIT)
+    s_cwd, s_git = P_CWD / denom, P_GIT / denom
+    groups = defaultdict(list)
     for i, r in enumerate(base):
-        by[r["label"]].append(i)
-    flags = [False] * len(base)
-    for lab in sorted(by):
-        idx = by[lab][:]
+        groups[(r["label"], bool(r["touched"]))].append(i)
+    cwd_f, git_f = [False] * len(base), [False] * len(base)
+    for key in sorted(groups):
+        idx = groups[key][:]
         rng.shuffle(idx)
-        for i in idx[:int(round(rate * len(idx)))]:
-            flags[i] = True
-    return flags
+        n = len(idx)
+        if key[1]:
+            rows = 2 * n - sum(ctx_only[i] for i in idx)
+            n_c, n_g = min(n, round(s_cwd * rows)), min(n, round(s_git * rows))
+        else:
+            n_c, n_g = round(P_CWD * n), round(P_GIT * n)
+        n_both = max(round(n_c * n_g / n), n_c + n_g - n) if n else 0
+        for i in idx[:n_c]:
+            cwd_f[i] = True
+        for i in idx[:n_both] + idx[n_c:n_c + n_g - n_both]:
+            git_f[i] = True
+    return cwd_f, git_f
 
 
 def expand(base, rng):
     """Context dropout: bare + one context variant (same label)."""
     out = []
-    cwd_f = stratified_flags(base, P_CWD, rng)
-    git_f = stratified_flags(base, P_GIT, rng)
-    for r, cwd, has_git in zip(base, cwd_f, git_f):
+    ctx_only_f = [bool(r["touched"]) and r["label"] == "allow"
+                  and target_touched(r["command"], r["touched"]) for r in base]
+    cwd_f, git_f = context_flags(base, ctx_only_f, rng)
+    for r, cwd, has_git, ctx_only in zip(base, cwd_f, git_f, ctx_only_f):
         git = draw_git(rng) if has_git else None
         touched = r["touched"]
         ctx_text = serialize_v3(r["command"], cwd, touched, git)
         has_ctx = ctx_text != r["command"]
-        ctx_only = bool(touched) and r["label"] == "allow" and target_touched(r["command"], touched)
         shape = {"cwd": cwd, "git": git is not None, "git_zero": git == (0, 0, 0),
                  "touched": bool(touched)}
         if not ctx_only:
@@ -552,6 +573,11 @@ def main(argv=None):
         "base_rows": {"train": len(train), "validation": len(val), "dev": len(dev)},
         "class_balance": {s: balance(rows) for s, rows in splits.items()},
         "context_shape_by_label_pct": shapes,
+        "agent_touched_share_by_label_pct": {
+            s: {"base": {lab: 100.0 * sum(bool(r["touched"]) for r in rows if r["label"] == lab)
+                         / max(1, sum(r["label"] == lab for r in rows)) for lab in LABELS},
+                "expanded": {lab: shapes[s][lab]["touched"] for lab in LABELS}}
+            for s, rows in (("train", train), ("validation", val), ("dev", dev))},
         "context_shape_spread_train_pts": spread,
         "chi2_shape_x_label": chi,
         "rows_by_source": src_counts,

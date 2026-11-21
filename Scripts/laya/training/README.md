@@ -441,11 +441,12 @@ git: untracked <n>, modified <n>, staged <n>
 ```
 
 - There is no `cwd-inside-repo: no` line. The runtime sends `yes` inside a
-  repo and nothing otherwise; training puts `yes` on exactly 50% of each
-  label's rows (stratified random, independent of label and source).
-- `git:` counts are synthetic (each count 0 with p 0.45, else uniform) on
-  exactly 35% of each label's rows. Source gitStatus counts are discarded
-  (shortcut).
+  repo and nothing otherwise. The `yes` and `git:` lines are independent
+  of label and source on the expanded training rows: flags are stratified
+  per (label, has-agent-touched) group, so every label gets ~29.9% `yes`
+  and ~20.9% `git:` rows (untouched base rows: exactly 50% / 35%).
+- `git:` counts are synthetic (each count 0 with p 0.45, else uniform).
+  Source gitStatus counts are discarded (shortcut).
 - `agent-touched:` only from true v1.1 source context, never synthesized.
 - Context dropout: each base row appears bare plus once with its drawn
   context, same label. Exception: an allow that targets an agent-touched
