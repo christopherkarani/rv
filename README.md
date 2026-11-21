@@ -132,7 +132,7 @@ rv allow-once a1b2c3    # next matching call in this directory runs once
 
 Redeeming needs owner authentication: Touch ID or your password on
 macOS, your login password on Linux. The same check guards every command
-that loosens the gate: `rv allowlist add`, `rv packs enable`,
+that changes the gate: `rv allowlist add`, `rv packs enable`,
 `rv safety strict|normal`, `rv policy draft --save`, `rv egress approve`,
 `rv workspace abandon`. Typed rules live in `~/.config/rv/policy.toml`
 (`rv policy show`).
