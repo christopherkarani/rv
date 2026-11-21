@@ -180,6 +180,10 @@ public final class SecretGateway: @unchecked Sendable {
     /// connection is accepted and before its socket is set up, given the
     /// accepted socket.
     var afterAccept: (@Sendable (Int32) -> Void)?
+    /// Test seam, nil in production. Runs on the connection's thread right
+    /// after a refusal's response has been written to the client: the moment
+    /// the client can exit and `rv run` can stop the gateway.
+    var afterRefusalSent: (@Sendable () -> Void)?
     /// Test seam: how long a request waits for a refresh. Set before serving.
     var refreshWaitLimit = SecretGateway.refreshWaitLimit
     /// Seconds a write to a client may block before its connection is cut,
@@ -903,6 +907,7 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(
             client,
             GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
+        afterRefusalSent?()
         let record = SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
