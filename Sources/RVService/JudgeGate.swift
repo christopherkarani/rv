@@ -282,7 +282,8 @@ public enum JudgeRuntime {
         now: Date,
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
-        isPeek: Bool
+        isPeek: Bool,
+        lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
         guard case .allow = result.decision else { return (result, nil) }
         let context = judgeContext(cwd: cwd)
@@ -309,7 +310,12 @@ public enum JudgeRuntime {
         }
         let run = judge.judge(JudgeCall(
             command: command.rawValue, context: context,
-            engine: selection.engine, bundle: bundle
+            engine: selection.engine, bundle: bundle,
+            onLateResult: lateLog.map { log in
+                lateResultLogger(
+                    over: result, observing: false, provenance: provenance, guardMode: inputs.guardMode,
+                    engine: selection.engine, contextPartial: partial, isPeek: isPeek, log: log)
+            }
         ))
         let reading = read(run, over: result, provenance: provenance)
         let row = logRow(
@@ -337,7 +343,8 @@ public enum JudgeRuntime {
         now: Date,
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
-        isPeek: Bool
+        isPeek: Bool,
+        lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> (result: EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
@@ -356,7 +363,12 @@ public enum JudgeRuntime {
             if let bundle = selection.bundle {
                 let run = judge.judge(JudgeCall(
                     command: command.rawValue, context: context,
-                    engine: selection.engine, bundle: bundle
+                    engine: selection.engine, bundle: bundle,
+                    onLateResult: lateLog.map { log in
+                        lateResultLogger(
+                            over: result, observing: true, provenance: provenance, guardMode: inputs.guardMode,
+                            engine: selection.engine, contextPartial: partial, isPeek: isPeek, log: log)
+                    }
                 ))
                 reading = read(run, over: result, provenance: provenance)
                 if case .unavailable = run { floorsWouldBe = true }
@@ -392,7 +404,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy:
+        case .failed, .warming, .busy, .late, .circuitOpen:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -405,6 +417,42 @@ public enum JudgeRuntime {
                 outcome: action == .allow ? result : raise(result, verdict: verdict, action: action),
                 verdict: verdict, action: action, note: verdict.truncated ? "truncated" : nil
             )
+        }
+    }
+
+    /// Logs a prediction that answered after its caller gave up (`late`),
+    /// note `late-result`, so a judge outage shows its real latency in the
+    /// judge log. The row describes what the caller got (`late` failed
+    /// closed over `result`) and scores the late verdict with its own ms;
+    /// a late run without a verdict names its outcome and run time in the
+    /// note. Nothing here changes a verdict.
+    static func lateResultLogger(
+        over result: EvaluationResult,
+        observing: Bool,
+        provenance: ActionProvenance,
+        guardMode: GuardMode,
+        engine: JudgeEngine,
+        contextPartial: Bool,
+        isPeek: Bool,
+        log: @escaping @Sendable (GatedEffect.JudgeLogRow) -> Void
+    ) -> @Sendable (JudgeRun, Duration) -> Void {
+        { run, ran in
+            let returned = failClosed(.late, over: result).result
+            let reading = read(run, over: result, provenance: provenance)
+            let note: String
+            if reading.verdict != nil {
+                note = "late-result"
+            } else {
+                let ms = Int64((Double(ran.components.seconds) + Double(ran.components.attoseconds) / 1e18) * 1000)
+                note = "late-result: \(reading.note ?? "no verdict") after \(ms) ms"
+            }
+            var row = logRow(
+                guardMode: guardMode, subject: observing ? .wouldBe(returned) : .live(returned),
+                verdict: reading.verdict, action: reading.action, engine: engine,
+                note: noteFor(note, contextPartial: contextPartial), now: Date(), isPeek: isPeek
+            )
+            row.isLateResult = true
+            log(row)
         }
     }
 
@@ -433,12 +481,19 @@ public enum JudgeRuntime {
     /// `busy` is a request `JudgeAdmission` turned away (queue full, or its
     /// hook deadline passed while waiting for the model). Review for the
     /// same reason: flooding the judge must not buy an unjudged allow.
+    ///
+    /// `late` is a prediction that did not answer before its caller's
+    /// cutoff, or a request turned away behind a stalled one. `circuitOpen`
+    /// is the judge skipped by `JudgeCircuit` after repeated failures. Both
+    /// go to review like `busy`: a failing judge must never buy an allow.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
         case warming
         case busy
+        case late
+        case circuitOpen(retryIn: Duration)
     }
 
     static func runJudge(
@@ -446,34 +501,42 @@ public enum JudgeRuntime {
         context: JudgeContext,
         engine: JudgeEngine,
         bundle: URL,
-        wait: Duration? = loadWait
+        wait: Duration? = loadWait,
+        onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in }
     ) -> JudgeRun {
         #if canImport(CoreML)
-        let wait = JudgeAdmission.loadWait(wait, until: JudgeAdmission.deadline)
-        do {
-            switch engine {
-            case .laya:
-                let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
-                return admitted {
-                    do { return .verdict(try judge.judge(command)) }
-                    catch { return .failed }
+        return throughCircuit {
+            // A cold load keeps its own bound (`loadWait`), cut to the hook
+            // deadline less headroom; only the wait for the model slot after
+            // it is held to `JudgeAdmission.waitBudget`.
+            let deadline = JudgeAdmission.deadline
+            let wait = JudgeAdmission.loadWait(
+                wait, until: deadline.map { $0 - JudgeAdmission.inferenceHeadroom })
+            do {
+                switch engine {
+                case .laya:
+                    let judge = try HookTiming.measure(.judgeLoad) { try slot.stockJudge(bundleDir: bundle, wait: wait) }
+                    return admitted(until: deadline, onLate: onLate) {
+                        do { return .verdict(try judge.judge(command)) }
+                        catch { return .failed }
+                    }
+                case .ft:
+                    let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
+                    return admitted(until: deadline, onLate: onLate) {
+                        do { return .verdict(try judge.judge(command, context: context)) }
+                        catch { return .failed }
+                    }
                 }
-            case .ft:
-                let judge = try HookTiming.measure(.judgeLoad) { try slot.ftJudge(bundleDir: bundle, wait: wait) }
-                return admitted {
-                    do { return .verdict(try judge.judge(command, context: context)) }
-                    catch { return .failed }
+            } catch JudgeLoadError.warming {
+                return .warming
+            } catch let error as LayaError {
+                switch error {
+                case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
+                case .predictionFailed: return .failed
                 }
+            } catch {
+                return .unavailable("load failed")
             }
-        } catch JudgeLoadError.warming {
-            return .warming
-        } catch let error as LayaError {
-            switch error {
-            case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
-            case .predictionFailed: return .failed
-            }
-        } catch {
-            return .unavailable("load failed")
         }
         #else
         return .unavailable("CoreML unavailable on this platform")
@@ -482,21 +545,64 @@ public enum JudgeRuntime {
 
     /// Inference through the live admission, bounded by this request's hook
     /// deadline. The model load is not admitted: it is single-flight and
-    /// has its own bounded wait (`loadWait`).
+    /// has its own bounded wait (`loadWait`). A turn-away behind a stalled
+    /// prediction is `late`, not `busy`: the judge is failing, not full.
     static func admitted(
         through admission: JudgeAdmission = .live,
         until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
-        _ inference: () -> JudgeRun
+        since: ContinuousClock.Instant = .now,
+        onLate: @escaping @Sendable (JudgeRun, Duration) -> Void = { _, _ in },
+        _ inference: @escaping @Sendable () -> JudgeRun
     ) -> JudgeRun {
         // Admission wait and inference are timed apart for `HookTiming`.
+        // Inference runs on the admission's own thread, where the
+        // task-local timing is not bound: capture it here.
+        let timing = HookTiming.current
         let entered = ContinuousClock.now
-        var predicting: ContinuousClock.Instant?
-        let run = admission.run(until: deadline) {
-            predicting = ContinuousClock.now
-            return HookTiming.measure(.judgePredict, inference)
+        let outcome = admission.run(until: deadline, since: since, onLate: onLate) {
+            let predicting = ContinuousClock.now
+            timing?.add(.judgeAdmission, predicting - entered)
+            defer { timing?.add(.judgePredict, ContinuousClock.now - predicting) }
+            return inference()
         }
-        HookTiming.current?.add(.judgeAdmission, (predicting ?? ContinuousClock.now) - entered)
-        return run ?? .busy
+        switch outcome {
+        case .answered(let run): return run
+        case .turnedAway(let stalled):
+            timing?.add(.judgeAdmission, ContinuousClock.now - entered)
+            return stalled ? .late : .busy
+        case .late: return .late
+        }
+    }
+
+    /// Runs `attempt` unless the circuit is open, and feeds its outcome
+    /// back. An open circuit answers `circuitOpen` without touching the
+    /// model, its load or its admission.
+    static func throughCircuit(
+        _ circuit: JudgeCircuit = .live, _ attempt: () -> JudgeRun
+    ) -> JudgeRun {
+        switch circuit.admit() {
+        case .skip(let retryIn):
+            return .circuitOpen(retryIn: retryIn)
+        case .proceed(let trial):
+            let run = attempt()
+            circuit.record(circuitOutcome(run), trial: trial)
+            return run
+        }
+    }
+
+    /// Which judge runs count against it (see `JudgeCircuitBreaker`).
+    static func circuitOutcome(_ run: JudgeRun) -> JudgeCircuitBreaker.Outcome {
+        switch run {
+        case .verdict: .success
+        case .late, .failed: .failure
+        case .warming, .busy, .unavailable, .circuitOpen: .neutral
+        }
+    }
+
+    /// Whole seconds until the circuit retries, rounded up, at least 1.
+    static func retrySeconds(_ retryIn: Duration) -> Int64 {
+        let (seconds, attoseconds) = retryIn.components
+        return max(1, seconds + (attoseconds > 0 ? 1 : 0))
     }
 
     /// A judge that cannot answer this request (prediction failed, still
@@ -513,6 +619,12 @@ public enum JudgeRuntime {
         case .busy:
             note = "judge-busy"
             reason = "Laya judge queue is full; retry shortly."
+        case .late:
+            note = "judge-late"
+            reason = "rv degraded: judge late (no verdict in time); failing closed to review."
+        case .circuitOpen(let retryIn):
+            note = "judge-circuit-open"
+            reason = "rv degraded: judge unavailable (circuit open, retrying in \(retrySeconds(retryIn))s); failing closed to review."
         case .failed, .unavailable, .verdict:
             note = "prediction-failed"
             reason = unavailableReason
@@ -529,8 +641,11 @@ public enum JudgeRuntime {
         return (raised.result, raised.note)
     }
 
-    /// The daemon's bound on waiting for an in-progress judge load. Past it
-    /// the request goes to review (`judge-warming`); the load keeps going.
+    /// The daemon's bound on waiting for an in-progress judge load, cut to
+    /// the hook deadline less `JudgeAdmission.inferenceHeadroom` when one is
+    /// bound. Past it the request goes to review (`judge-warming`); the load
+    /// keeps going. Not part of `JudgeAdmission.waitBudget`, which bounds
+    /// only the wait for the model slot after the load.
     public static let daemonLoadWait: Duration = .seconds(5)
 
     private static let loadWaitBox = UnfairLock<Duration?>(nil)
@@ -663,6 +778,7 @@ public enum JudgeRuntime {
         }
         if let note = row.note { object["note"] = note }
         if row.isPeek { object["peek"] = true }
+        if row.isLateResult { object["lateOf"] = true }
         if let score = row.score {
             object["choice"] = score.choice
             object["action"] = score.action
@@ -697,6 +813,10 @@ struct JudgeCall: Sendable {
     let context: JudgeContext
     let engine: JudgeEngine
     let bundle: URL
+    /// Called, off the caller, when a prediction answers after the caller
+    /// stopped waiting (`late`): its run and how long it ran. Logging only;
+    /// the verdict already returned stands.
+    var onLateResult: (@Sendable (JudgeRuntime.JudgeRun, Duration) -> Void)? = nil
 }
 
 /// The one judge call the gated door makes. Production runs the CoreML
@@ -712,7 +832,8 @@ struct LiveJudgePort: JudgePort {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
         JudgeRuntime.runJudge(
             command: call.command, context: call.context,
-            engine: call.engine, bundle: call.bundle, wait: JudgeRuntime.loadWait
+            engine: call.engine, bundle: call.bundle, wait: JudgeRuntime.loadWait,
+            onLate: call.onLateResult ?? { _, _ in }
         )
     }
 }

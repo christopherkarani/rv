@@ -10,10 +10,60 @@ produced by a run on Linux.
 
 ## Agent tool calls are blocked
 
-When rv cannot decide, the hook blocks the call. It never quietly allows
-it (unless the host is in observe mode, see below).
+When rv cannot decide, the hook blocks the call or, in one Claude Code
+case below, asks you through Claude Code's own prompt. It never quietly
+allows it (unless the host is in observe mode, see below).
 
-**`rv failed`**
+In Claude Code, when rv could not check a call at all (rvd not reachable,
+slow, or dropped the connection, or the rv process ran past 15 s), you
+may get Claude Code's own permission prompt instead of a block. It shows
+the command (or the file path) first, on one line, with line breaks and
+invisible or direction-changing characters shown escaped (`\n`, or `\u`
+and four hex digits) and a typed backslash shown doubled. You are asked
+only when the whole command (or path), escaped, fits in 300 characters.
+A longer one is blocked instead, with the daemon message and **`The command or path is too long to show in full for approval, so rv blocked it instead of asking.`**
+After the command, the prompt shows
+**`rv could not check this call (<layer>). An agent can cause this by stopping or overloading rvd. Approve only if you expected it.`**
+followed by one of the daemon messages below. Claude Code answers this
+prompt the way it answers any permission prompt. That is you, or whatever
+the session hands prompts to: an SDK `canUseTool` callback, a
+`--permission-prompt-tool`, a `PermissionRequest` hook or a mod. Anything
+that can type into your terminal (`tmux send-keys`, `osascript`
+keystrokes) can answer it too. Choosing "Yes, don't ask again" writes a
+persistent Claude Code allow rule; rv's deny still wins once `rvd`
+answers again.
+
+To never get this prompt, add `"hookAskWhenDown": false` at the top level
+of `~/.config/rv/config.json`, or set `RV_HOOK_WHEN_DOWN=deny`. rv reads
+that file from your passwd home. Only a missing file, or a JSON object
+without the key or with `"hookAskWhenDown": true`, keeps the prompt.
+Any other value (`"false"`, `0`, `null` and so on) blocks, and so does a
+file rv cannot use (a symlink, unreadable, not a regular file, over
+1 MiB, `NaN` or `Infinity`, or not one valid JSON object without
+duplicate keys). `"hookAskWhenDown"` affects only this Claude Code prompt. In
+observe mode it does not stop an unreachable `rvd` from letting calls
+run unchecked; only `RV_HOOK_WHEN_DOWN=deny` does that.
+
+The call is blocked instead, with the daemon message, when any of these
+holds:
+
+- `RV_HOOK_WHEN_DOWN=deny` is set, or `config.json` sets
+  `"hookAskWhenDown"` to anything but `true`, or exists but cannot be
+  used;
+- the command or path, escaped, is longer than 300 characters;
+- the permission mode is `bypassPermissions` or `dontAsk`, or the hook
+  request names no mode or one rv does not know;
+- Claude Code does not report the session as attended
+  (`CLAUDE_CODE_SESSION_ATTENDED` is not `1`, as in an ordinary
+  `claude -p` run). This is a heuristic, not a boundary against anything
+  that can start Claude Code: an agent can start `claude -p` so that it
+  reports an attended session;
+- rv's reply is anything other than one of the three daemon messages
+  (unreachable, did not answer in time, connection dropped), written
+  with exit 0;
+- the host is Cursor or any host other than Claude Code.
+
+**`rv blocked this action without giving a reason. Run `rv doctor`.`**
 The host got a block with no reason; rv puts this text in when a reason
 is empty. Run `rv doctor` and look at the Problems section.
 
@@ -106,14 +156,20 @@ and run `rv setup`.
 | `mcp.json defines no servers; see `rv mcp import`` | Add servers, or `rv mcp onboard --host <host>` |
 | `mcp.json is invalid: …` | The rest of the line names the key; see [mcp.json](mcp-gateway.md#mcpjson-by-example) |
 | `mcp.json is unsafe (…); it must be a regular file only you can write` | `chmod 600 ~/.config/rv/mcp.json`; no symlink |
-| `<name> needs a sandbox; add "sandbox" to its mcp.json entry` | This host cages servers; add `"sandbox": {"network": false}` |
-| `<name> stays off the network; list the hosts it needs in sandbox.hosts` | `"sandbox": {}` defaults to network on, which is refused; set `"network": false` or `"hosts"` |
 | `<name> asks for a sandbox, but the MCP server sandbox is unavailable on this host (…); `rv mcp serve` will not run it uncaged` | Linux older than 6.7, or no Landlock or seccomp: run on a newer kernel, or remove the `sandbox` entry knowing it then runs uncaged |
 | `organization policy requires a sandbox for <name>, but …` | Same, and the organization requires the cage |
 | `<server> uses secret <name>, which secrets.json does not define` | `rv secrets set <name> …` |
 | `<server> could not read secret <name>: …` | `rv secrets check <name>`; unlock the provider |
 | `mcp.json changed while it was being checked; not launching MCP servers` | Start the host again |
 | `rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; not serving` | Linux only: rv could not set up how it hears signals (it needs one pipe, so usually rv is out of file descriptors). Close what holds them or raise the limit, then start the host again. Signals the parent left blocked are not the cause: serve unblocks the ones it handles |
+
+**`rv mcp: not starting MCP server <name>: sandbox: <name> needs a sandbox; add "sandbox" to its mcp.json entry`**
+(or `… stays off the network; list the hosts it needs in sandbox.hosts`)
+This host cages servers, and that server's entry has no `sandbox`, or
+`"sandbox": {}` (which defaults to network on). rv does not start that
+server; the others serve. Add `"sandbox": {"network": false}`, or list
+the hosts it needs in `"hosts"`, then `rv mcp trust` and restart the MCP
+host. `rv mcp check` names it too.
 
 **The agent sees `MCP server <name> did not answer tool <tool> within 300 s; rv stopped waiting. The call may still have run, so check before calling it again.`**
 The tool took longer than its server's `callTimeoutSeconds`. If the tool

@@ -12,15 +12,37 @@ import Dispatch
 /// gets its own threads; the awaiting task suspends and frees its pool
 /// thread (or its actor) meanwhile.
 ///
-/// The calling task's hook deadline is carried into `body` as
-/// `JudgeAdmission.deadline`, so the judge stops waiting for the model once
-/// the client has given up.
+/// Two deadlines go into `body`, and they differ on purpose:
+/// - `JudgeAdmission.deadline` bounds the judge only: the calling task's
+///   hook deadline, or else `judgeBudget` counted from when `body` starts
+///   (rvd's non-hook doors). Anchoring at body start keeps time the task
+///   spent waiting for the pool or this queue out of the judge's budget.
+/// - `hookDeadline` is the hook deadline alone. Pattern search reads it, so
+///   only an evaluation whose hook client has given up stops searching; a
+///   non-hook evaluation keeps `PatternBudget`'s own ceiling.
 enum JudgeOffload {
     private static let queue = DispatchQueue(
         label: "rv.judge", qos: .userInitiated, attributes: .concurrent)
 
+    /// The judge budget rvd's non-hook doors bind (SDK evaluate, explain,
+    /// classify, the agent bridge, approval-path peeks): one hook budget,
+    /// so a stuck prediction answers `late` (review) at about
+    /// `nonHookBudget - JudgeAdmission.replyMargin` instead of holding the
+    /// caller, a model slot, or the circuit's half-open trial.
+    static let nonHookBudget: Duration = HookDeadline.budget
+
+    /// A judge budget for a caller with no hook deadline. Read only by
+    /// `run`; a hook deadline wins over it.
+    @TaskLocal static var judgeBudget: Duration?
+
+    /// The hook deadline of the request `body` serves, if any. `run` binds
+    /// it on the Dispatch thread, where `HookDeadline.current` is not
+    /// visible. Never a non-hook judge budget.
+    @TaskLocal static var hookDeadline: ContinuousClock.Instant?
+
     static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-        let deadline = HookDeadline.current?.expiresAt
+        let hook = HookDeadline.current?.expiresAt
+        let budget = judgeBudget
         // `HookTiming` is task-local too: rebind it on the queue thread and
         // count the wait for that thread.
         let timing = HookTiming.current
@@ -28,10 +50,13 @@ enum JudgeOffload {
         return await withCheckedContinuation { continuation in
             queue.async {
                 timing?.add(.offloadWait, ContinuousClock.now - enqueued)
-                let result = HookTiming.$current.withValue(timing) {
-                    JudgeAdmission.$deadline.withValue(deadline) { body() }
+                let judge = hook ?? budget.map { ContinuousClock.now.advanced(by: $0) }
+                let value = HookTiming.$current.withValue(timing) {
+                    $hookDeadline.withValue(hook) {
+                        JudgeAdmission.$deadline.withValue(judge) { body() }
+                    }
                 }
-                continuation.resume(returning: result)
+                continuation.resume(returning: value)
             }
         }
     }
