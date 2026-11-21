@@ -708,7 +708,7 @@ as_owner rv service restart > "$WORK/svc.log" 2>&1
 r1=$?; as_owner rv service status | grep -q 'state=running'
 check install "rv service restart restarts rvd" $(( r1 | $? ))
 pkill -TERM -u "$OWNER" -x rvd; for _ in $(seq 30); do pgrep -u "$OWNER" -x rvd >/dev/null || break; sleep 0.2; done
-as_owner rv service status | grep -q 'state=down'
+( as_owner rv service status || true ) | grep -q 'state=down'
 check install "stopping rvd (no 'rv service stop' exists: kill it) shows state=down" $?
 STOPPED_FOR_GATE=1
 
@@ -803,8 +803,8 @@ check gate "observe: rv host list shows claude observe" $?
 g1="$(hook 'git reset --hard' | decision)"; g2="$(hook 'cat .env' | decision)"; g3="$(hook 'pkill rvd' | decision)"
 [[ "$g1" == "allow" && "$g2" == "allow" ]]; check gate "observe: would-be denies run" $? "reset=$g1 env=$g2"
 [[ "$g3" == "deny" ]]; check gate "observe: rv's self-protection (pkill rvd) still blocks" $? "$g3"
-as_owner rv blocks | grep -q 'observed ask'
-check gate "observe: rv blocks marks what enforce would have done (observed ask/deny)" $?
+as_owner rv blocks | grep -q 'WOULD ASK'
+check gate "observe: rv blocks marks what enforce would have done (WOULD ASK/WOULD BLOCK)" $?
 pkill -TERM -u "$OWNER" -x rvd; for _ in $(seq 30); do pgrep -u "$OWNER" -x rvd >/dev/null || break; sleep 0.2; done
 out="$(hook 'git reset --hard' 2>&1)"
 [[ "$out" == *"allowed without being checked"* ]]

@@ -286,9 +286,11 @@ It is the safe way to learn what rv will refuse in your team's workflow.
    ```
 
    Observed rows carry `"observed": true` and `"would_be": "deny"` or
-   `"ask"` in `rv blocks --json` (an `observed` column in text), and
-   `"session"`, the agent session id, when the host sent one (a
-   `session=` column in text). In the audit log they are
+   `"ask"` in `rv blocks --json` (WOULD BLOCK or WOULD ASK in the text
+   DECISION column; BLOCKED means rv stopped the agent), and `"session"`,
+   the agent session id, when the host sent one (`session=` in the text
+   TARGET column). Text shows the newest 20; `--all`, `--rule` and
+   `--host` widen or narrow it. In the audit log they are
    `command.observed` records.
 4. Ask why any one of them would block:
 
