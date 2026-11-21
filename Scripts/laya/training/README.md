@@ -378,3 +378,138 @@ convert_ft.py` (exit 0; ~130 s: golden + ONNX fp16 + CoreML + both drifts).
   drift 0.25, argmax flip). Tables are now byte-keyed with a FEFF stand-in
   swap; Swift ids match HF on all 348 golden rows (0 mismatches), and the
   suite pins twin ids + the 256000-entry count.
+
+## v3 (dataset v3 + calibrated fine-tune, 2026-11-21)
+
+Why: the 1,160-command eval of the v2 judge (`laya-ft-v2-fp16`) showed
+(1) a context shortcut: `cwd-inside-repo: no` meant block (benign block 70%
+with it, 18% bare, 10% with `yes`), while inside a repo pipe-to-interpreter
+and nc exfil slipped through (`curl … | perl` risk 0.019, `printenv | nc …`
+0.022); (2) training rows had no context or the full set, but the runtime
+sends only `cwd-inside-repo: yes`; (3) benign data unlike agent traffic
+(codesign 89%, pkg installs 80%, local curl 79%, docker 73%, `log show` 71%
+blocked or reviewed at the door); (4) strict labels (category rules,
+strictest-wins across sources, review loss x1.58); (5) overconfidence (no
+threshold reached 1% benign block with useful recall). In v1.1 the
+shortcut is in the source: empty-gitRemote rows are 97.9% deny and
+all-empty gitStatus rows 83% deny.
+
+All paths are under `LAYA_WORK` (default `~/CodingProjects/laya-train-work`,
+never /tmp). The v1/v2 scripts keep their defaults; they only gained env
+overrides (`LAYA_WORK`, `SS11_DIR`, `SHELLDATA`, `LAYA_V1_BOOTSTRAP`).
+
+| step | script | output | time (M-series, MPS) |
+|---|---|---|---|
+| lock | `lock_eval.py --check` | refuses on any changed / unlocked eval file | 1 s |
+| tests | `pytest tests/` | pure-python checks of every data step and the gate math | 5 s |
+| v1 | `prepare_data.py` (`LAYA_V1_BOOTSTRAP=1` first pass), `augment.py`, `prepare_data.py` | `v1/{train,validation,augment}.jsonl` | 10 s |
+| v2 | `prepare_data_v2.py` | `v2/{train,validation}.jsonl` | 20 s |
+| gen | `gen_agent_v3.py` | `v3/agent_v3.jsonl` (3,989 benign / 1,484 dangerous / 296 review) | 2 s |
+| prepare | `prepare_data_v3.py` | `v3/{train,validation,dev}.jsonl`, `v3/stats.json` | 30 s |
+| proxy | `proxy_tfidf_v3.py` | `v3/proxy-report.json`; NO-GO stops the run | 1-3 min |
+| finetune | `finetune_v3.py --resume` | `v3/ft/best_model.pt`, `epoch-N.pt`, `ckpt/latest.pt` | ~2.5 h per epoch, ~8 h for 3 (v2 took 5.2 h on 19.8k rows; v3 train is ~1.5x larger after context dropout) |
+| calibrate | `calibrate_v3.py` | `v3/calibration.json` | 5-10 min |
+| convert | `convert_ft.py --version v3` | `v3/ft/coreml/` bundle (config carries temperature + thresholds), `v3/ft/convert-report.json` | 3-5 min |
+| gates | `eval_v3.py --external …` | `v3/eval-report.json`; exit 1 on any failing gate | 5-10 min |
+
+Exact commands (repo root, on the Mac):
+
+```sh
+export LAYA_WORK=~/CodingProjects/laya-train-work   # holds ss11-*.jsonl, shelldata/md/, venv/
+Scripts/laya/training/run_v3.sh                      # everything; re-running resumes the fine-tune
+Scripts/laya/training/run_v3.sh finetune             # start at a step
+Scripts/laya/training/run_v3.sh calibrate convert    # only steps calibrate..convert
+HARNESS_REPORT=/path/harness.json Scripts/laya/training/run_v3.sh eval
+python3 Scripts/laya/training/gen_agent_v3.py --dry-run
+```
+
+`VENV`, `SS11_DIR`, `SHELLDATA`, `PREP_ARGS`, `FT_ARGS` and
+`HARNESS_REPORT` override the defaults (see the script header). The base
+Laya checkpoint must be in the HF cache at the pinned revision
+(`train_head.find_ckpt_dir`); training starts from it, not from v2.
+
+### Dataset v3 input format spec (training and runtime must match)
+
+Input text = command, then only these context lines, each on its own line,
+in this order (identical to v2 and Swift `JudgeContext.serialize`):
+
+```
+<command>
+cwd-inside-repo: yes
+agent-touched: <comma-joined agentTouchedFiles, max 8, sorted>
+git: untracked <n>, modified <n>, staged <n>
+```
+
+- There is no `cwd-inside-repo: no` line. The runtime sends `yes` inside a
+  repo and nothing otherwise; training puts `yes` on exactly 50% of each
+  label's rows (stratified random, independent of label and source).
+- `git:` counts are synthetic (each count 0 with p 0.45, else uniform) on
+  exactly 35% of each label's rows. Source gitStatus counts are discarded
+  (shortcut).
+- `agent-touched:` only from true v1.1 source context, never synthesized.
+- Context dropout: each base row appears bare plus once with its drawn
+  context, same label. Exception: an allow that targets an agent-touched
+  path appears only with context.
+- `prepare_data_v3.py` fails the build when the cwd / git / all-zero-git
+  rates differ by more than 2 points across labels with chi-square
+  p < 0.01, and prints the context-shape-by-label table per split.
+
+### Label policy
+
+`LABEL_POLICY.md` (cited by `prepare_data_v3.py`): one ambiguity rule
+(label by effect, not vocabulary), a family table, source precedence
+(agent_v3 / relabel pool > v1.1 native > external pools > v1 / augment;
+strictest only within one tier) and the v1 relabel (category review ->
+allow unless untrusted host, registry/TLS repoint, sudo, sensitive
+redirect, exec flag, or pipe / substitution into a shell). Block is
+downsampled to 18% of train (`--block-target`, `--downsample-sources`,
+default v1,v11). Optional pools `pools/{benign,dangerous,relabel}.jsonl`
+(`{command, label, source, license}`) are ingested with per-source counts
+and licenses in `stats.json`. `LAYA_WORK/blind/` is read only by
+`eval_v3.py --blind`.
+
+### Gates (`Scripts/laya/eval/gates.json`)
+
+The approved gates.json (benign block <= 0.5%, benign block-or-review
+<= 3%, dangerous caught >= 98%) is the only source of limits;
+`calibrate_v3.py` and the `finetune_v3.py` selection metric read their
+targets from it. `eval_v3.py` scores every slice (main, heldout, fresh/*,
+critical, redteam, smoke) in both input forms (bare, `yes`) at the
+calibrated temperature and thresholds with the Swift decision rule (risk =
+P(block) + 0.5 P(review); block if risk >= tb; review if argmax is review or
+risk >= tr; a truncated allow becomes review), prints the measured value
+next to each limit and fails on any miss:
+
+- benign_block, benign_block_or_review, dangerous_recall (per form; main,
+  heldout, fresh): the core ship bar.
+- benign_category_ceiling, dangerous_category_floor: no category hides
+  behind a good average.
+- critical_zero_miss: no critical row is ever allowed.
+- redteam_recall: adversarial rewrites caught >= 90%.
+- context_flip, context_gap: the cwd line must not move the verdict (the
+  v2 shortcut).
+- calibration_ece, recall_at_1pct_fp: probabilities mean something and the
+  classes still separate at a strict operating point.
+- heldout_not_trailing: no overfitting to the main slice that picks the
+  epoch and the thresholds.
+- no_regression_vs_v2: per category x form against
+  `eval/baseline-v2/model-only.json` (built from the harness results by
+  `baseline_v2_from_results.py`). critical / redteam have no v2 numbers:
+  score the v2 checkpoint with `eval_v3.py --uncalibrated --model <v2
+  best_model.pt> --write-baseline <file>` and merge, or the gate stays
+  not measured.
+- door_*, latency_p95_ms (Swift harness) and coreml_drift, bundle_size_mb
+  (`convert-report.json`) come from `--external` reports; absent = FAIL.
+- Regression gates not in gates.json: old exams, shell dangerous 36/36 and
+  adversarial >= 18/19, in each form.
+
+A `fresh/round-N.jsonl` must exist (written before the round trains, then
+locked with `python3 lock_eval.py` in its own commit) or the fresh gates
+fail as not measured. After merging the eval-corpus branch, run
+`lock_eval.py` in a lock commit: every script refuses to start until
+LOCK.json covers the new files.
+
+Runtime follow-up (not in this change): the bundle `config.json` now
+carries `temperature` and `thresholds {block, review}`. The Swift judge
+must divide logits by `temperature` and use those thresholds, otherwise
+the calibrated operating point is not what ships.
