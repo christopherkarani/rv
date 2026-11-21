@@ -26,7 +26,7 @@ struct Packs: AsyncParsableCommand {
         @Flag(name: .customLong("enabled"), help: "Only enabled packs.")
         var enabledOnly = false
 
-        @Flag(name: .customLong("all"), help: "List all packs grouped by category. (Default: all)")
+        @Flag(name: .customLong("all"), help: "List every pack grouped by category, with descriptions.")
         var all = false
 
         @Flag(name: .customLong("verbose"), help: "Show descriptions and pattern counts.")
@@ -88,8 +88,10 @@ struct Packs: AsyncParsableCommand {
                 return
             }
 
-            // `rv packs` defaults to the complete grouped catalog; filters narrow that view.
-            // Collapsed quiet path removed; use --enabled/--category/--search to narrow.
+            // Bare `rv packs` shows what is on (each category's enabled packs,
+            // then a count of the rest), not the ~250-line catalog. --all,
+            // --verbose, --category and --search show the full tree.
+            let collapsedView = !all && !verbose && category == nil && search == nil
             let verboseFlag = verbose
             let expandFlag = expand
             let maxPat = max(1, maxPatterns)
@@ -113,8 +115,13 @@ struct Packs: AsyncParsableCommand {
                 totalCount: filtered.totalCount
             )
 
-            let text = PacksListFormat.prettyGrouped(model, appearance: ctx.appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
+            let text = PacksListFormat.prettyGrouped(model, appearance: ctx.appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: collapsedView)
             ctx.writeStdout(text)
+            if collapsedView {
+                ctx.writeStdout(
+                    "\n\(filtered.enabledCount) of \(filtered.totalCount) packs on. "
+                        + "rv packs --all lists every pack; rv packs info <id> shows one.\n")
+            }
         }
     }
 
