@@ -60,10 +60,15 @@ func hookBlockStderr(reason: String) -> String {
     hookBlockReason(reason) + "\n"
 }
 
-/// Trimmed non-empty block reason. Missing / whitespace is `rv failed`, never `""`.
+/// Text for a block that arrived without a reason; same as the host
+/// adapters' `_NO_REASON`.
+let hookBlankReasonFallback = "rv blocked this action without giving a reason. Run `rv doctor`."
+
+/// Trimmed non-empty block reason. Missing / whitespace says so and names
+/// the repair, never `""` or a bare "rv failed".
 func hookBlockReason(_ reason: String) -> String {
     let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "rv failed" : trimmed
+    return trimmed.isEmpty ? hookBlankReasonFallback : trimmed
 }
 
 func jsonQuoted(_ value: String) -> String {
