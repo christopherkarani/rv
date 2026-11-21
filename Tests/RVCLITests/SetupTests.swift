@@ -72,12 +72,7 @@ func env(
 let adapterLauncher = AdapterCommand.launchesThroughEnv ? AdapterCommand.envLauncher + " " : ""
 
 func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
-    try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try contents.write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    try writeExecutableScript(at: url, source: contents)
 }
 
 private func fixtureLoginHome() throws -> URL {
@@ -1193,6 +1188,17 @@ private func fixtureLoginHome() throws -> URL {
                 + "(no systemd user manager is running, so rv starts rvd itself)\n"
                 + "fix: read /h/.local/state/rv/rvd.log, or run /h/.local/bin/rvd --socket --idle-exit-seconds=31536000 "
                 + "in a terminal to see why; rv doctor shows the cause\n"
+        ),
+        (
+            .userRuntimeDirectoryMissing(directory: "/run/user/4242", uid: 4242),
+            .serviceStart,
+            EX_UNAVAILABLE,
+            "rv service start failed: XDG_RUNTIME_DIR is unset and /run/user/4242 does not exist: "
+                + "no login manager (logind) created it, and only root can; "
+                + "rvd keeps its socket there, so rv did not start it\n"
+                + "fix: as root, install -d -m 0755 /run/user && install -d -m 0700 -o 4242 /run/user/4242; "
+                + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"
+                + "/run is usually a tmpfs, so /run/user/4242 must be made again after a reboot or container restart\n"
         ),
         (
             .serviceDown(.serviceNotAnswering(.systemdUser), alreadyWired: [.claude, .codex]),
