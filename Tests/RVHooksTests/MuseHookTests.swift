@@ -140,10 +140,10 @@ func museDecode_extractsBashCommand(_ file: String, expected: String) throws {
 }
 
 @Test(arguments: ["", "\n", " \n", "\n\n", "   ", "\t"])
-func museEncodeDeny_blankReasonFallsBackToRvFailed(_ blank: String) throws {
+func museEncodeDeny_blankReasonFallsBackToGuidance(_ blank: String) throws {
     // The wire requires a non-empty reason; blank input must never emit "".
     let wire = codec.encodeDeny(reason: blank)
-    try assertMuseHonorPath(wire, reason: "rv failed")
+    try assertMuseHonorPath(wire, reason: "rv blocked this action without giving a reason. Run `rv doctor`.")
 }
 
 @Test func museHonorPath_codexBlockExitTwoIsNotMuse() throws {
