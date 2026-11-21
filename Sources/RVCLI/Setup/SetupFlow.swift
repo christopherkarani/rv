@@ -200,6 +200,11 @@ extension SetupEnvironment {
         setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
 #if os(Linux)
         setup.directRvd = ProcessDirectRvd()
+        // The directly started rvd inherits this environment.
+        let xdgRuntimeDir = environment["XDG_RUNTIME_DIR"]
+        setup.uncreatableRuntimeDirectory = {
+            UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
+        }
 #endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
         setup.judgeBundleInstalled = { JudgeRuntime.selectsBundle(home: $0) }

@@ -416,7 +416,7 @@ check_no_main_in_library() {
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
@@ -432,7 +432,7 @@ check_no_main_in_library() {
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
