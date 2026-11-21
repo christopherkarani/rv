@@ -30,13 +30,13 @@ import RVDomain
 /// entirely in a variable (`rm "$f"`) is not resolvable and is not flagged
 /// unless the command assigns it. Reads (`ls`, `cat`, `stat`, `rg`, `open`,
 /// `git`, running `~/.local/bin/rv`) stay allowed.
+///
+/// It reads the one text it is given; `ObserveFloor` hands it every text
+/// of the command (`ObserveTexts`: fed program text and guard readings
+/// included).
 public enum RVInstallPathGuard {
     public static func touchesInstall(_ command: ShellCommand, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
-        touchesInstall(raw: command.rawValue, home: home, cwd: cwd)
-            || ShellLexer.guardReadings(command.rawValue).contains { touchesInstall(raw: $0, home: home, cwd: cwd) }
-    }
-
-    private static func touchesInstall(raw: String, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
+        let raw = command.rawValue
         let model = InstallPathModel(home: home)
         let launched = launchedCommandHeads(raw).filter { $0.truncated == false }
         let bases = trackedBases(launched, raw: raw, cwd: cwd, model: model)

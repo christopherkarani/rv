@@ -145,7 +145,7 @@ struct ObservePeekVerdictTests {
     }
 
     /// A shell reading stdin from a producer rv cannot see is floored
-    /// (`ObserveFloor.unanalyzableFloor`), so the engine's deny is
+    /// (`ObserveFloor.rule`, `observe.floor:unanalyzable`), so the engine's deny is
     /// enforced, not observed.
     @Test("observe floor: a fetched script piped to a shell keeps the engine's deny, enforced")
     func observeFloorEnforcesPipedFetch() async throws {

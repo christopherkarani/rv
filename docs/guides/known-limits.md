@@ -149,8 +149,28 @@ The README's "MCP governance" section lists every case.
     `python3 -c "print(…)" | sh`, `… | base64 -d | sh` and
     `printf '\x6c…' | sh` go to Terminal whatever the producer is. A
     literal feed is read, not trusted: its text is scanned like the line
-    and read by the stop and install floors (`echo 'echo … | base64 -d |
-    sh' | sh` goes to Terminal). In a pipeline the producers are the
+    and read by every observe floor rule (`echo 'echo … | base64 -d |
+    sh' | sh` goes to Terminal, and so does an rv admin command, a
+    `secret-tool` call or an rvd stop fed to a shell). A scheduler that
+    reads its job from stdin (`at`, `batch`, `crontab` with no job file)
+    is a reader too: `… | base64 -d | at now` goes to Terminal, and a
+    literal job is read like a shell's (a crontab's commands without
+    their schedule fields, `%` read as a newline), so `echo 'rv host mode
+    cursor off' | at now` and `echo '* * * * * rv …' | crontab -` do as
+    well. A crontab line rv cannot split into a schedule and a command,
+    a crontab that sets `SHELL`, and `crontab -e` (its editor reads
+    stdin) go to Terminal. A job file (`at -f job.sh`, `crontab
+    jobs.txt`) is not read, like `sh job.sh`. rv does not model how a
+    shell combines redirects (zsh joins several inputs; bash 3.2 and dash
+    read `{fd}<` as fd 0): a reader's stdin is read only when it has one
+    source, a pipe or a single literal here-string, heredoc or file on
+    fd 0, and no other input redirect. A second source, a numbered,
+    named or duplicated input redirect (`3<…`, `{fd}<…`, `0>&3`, `<&3`),
+    or a script operand naming a descriptor (`/dev/stdin`, `/dev/fd/3`,
+    `/proc/self/fd/3`, in any case, or a glob or brace pattern that may
+    expand to one) makes it unreadable, so the reader goes to
+    Terminal. A script operand's stdin is read too when the reader
+    redirects it. In a pipeline the producers are the
     stages before the reader; inside a compound command (`if`, `for`,
     `while`, `case`), a `{ …; }`/`( … )` group or a function body they
     are every other command of the text, each of which must print whole
@@ -165,6 +185,10 @@ The README's "MCP governance" section lists every case.
   - a shell or interpreter running `<(…)` or zsh's `=(…)`, a dynamic
     here-string or heredoc, `source /dev/stdin` or a dynamic script
     operand (`bash "$SCRIPT"`);
+  - a shell on a line that names `BASH_ENV` or `ENV` (a startup file
+    the shell reads first), or that sets a variable whose name is
+    dynamic (`export "$(cat vars)"`) or declares a nameref whose target
+    is not a literal name (`declare -n r="$v"`, `declare -n r`);
   - a same-line definition that changes what a name runs: a function or
     alias named like a command the floor reads (`echo(){ …; }`, `alias
     cat=…`), a function whose body is not a group, `coproc`, `>&p`, and
@@ -195,8 +219,8 @@ The README's "MCP governance" section lists every case.
     input), and `parallel` with no verb.
 
   What the lexical floors read is the command line itself: the words of
-  each command (which the observe stop and install floors, not enforce,
-  also re-read with heredoc bodies removed and one command at a time),
+  each command (which the observe floors, not enforce, also re-read with
+  heredoc bodies removed and one command at a time),
   the inline `-c` script of a shell, the text a shell or
   interpreter is fed from a literal pipe, here-string or heredoc, and the
   string literals of inline interpreter code. They do not read files. So
@@ -271,7 +295,26 @@ The README's "MCP governance" section lists every case.
   defines a function named like a command rv reads (`cd() { …; }`) or
   has a `}` argument inside a group. rv also cannot see what a git alias or
   extension runs, so observe sends an unknown git subcommand (`git st`,
-  `git lg`) to Terminal even when `core.git` is off.
+  `git lg`) to Terminal even when `core.git` is off. Every string
+  literal of inline interpreter code is read as a command it may run,
+  so code that only prints an rv admin command or names `secret-tool`
+  goes to Terminal (`python3 -c 'print("rv host mode cursor off")'`,
+  `python3 -c 'print("secret-tool")'`, `node -e 'console.log("rv
+  allowlist add rm")'`), as one that prints an rvd stop already did.
+  Editing a crontab through a pipe whose input rv cannot read
+  (`(crontab -l; echo '0 3 * * * job') | crontab -`) goes to Terminal
+  too, as do `crontab -e` and a literal crontab that sets `SHELL`.
+  A reader with more than one input, or with any numbered, named or
+  duplicated input redirect, goes to Terminal even when every input is
+  harmless (`sh 3</dev/null < script.sh`, `echo ls | sh </dev/null`,
+  `sh <<< ls <<< pwd`), as does a script operand that names a descriptor
+  (`sh /dev/stdin <<< ls`, `awk -f -`), and a here-string handed to a
+  script (`python3 parse.py <<< 'rv …'`) is read like a program. A
+  script operand, `-f` file or input redirect whose name holds glob or
+  brace characters (`*`, `?`, `[`, `{`, `(`, `^`, `#`, a later `~`) goes to
+  Terminal even when it names a plain file, quoted or not (`sh
+  'build[1].sh'`), and so does a shell on a line that mentions `BASH_ENV`
+  or `ENV` for any reason (`ENV=prod bash deploy.sh`).
 - **On an observe host, reading rv's install is observed.** A command
   that names one of rv's hook, service or binary files and is proven to
   only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display

@@ -29,7 +29,9 @@ import RVDomain
 /// a variable or file cannot be resolved and is not flagged.
 ///
 /// This is the one rvd-stop detector. `ObserveFloor` applies it on observe
-/// hosts only: in enforce a stopped rvd fails closed on its own.
+/// hosts only: in enforce a stopped rvd fails closed on its own. It reads
+/// the one text it is given; the floor hands it every text of the command
+/// (`ObserveTexts`: fed program text and guard readings included).
 public enum RVDStopGuard {
     /// No process table: a literal-pid `kill` is not judged.
     public static func stopsRVD(_ raw: String) -> Bool {
@@ -38,10 +40,12 @@ public enum RVDStopGuard {
 
     /// `rvdPIDs` names rvd's running pids, read only when a literal-pid
     /// `kill` is judged. nil (the table could not be read) flags any
-    /// literal pid: fail closed.
-    public static func stopsRVD(_ raw: String, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
-        stopsRVD(raw, depth: 0, rvdPIDs: rvdPIDs)
-            || ShellLexer.guardReadings(raw).contains { stopsRVD($0, depth: 1, rvdPIDs: rvdPIDs) }
+    /// literal pid: fail closed. `reading`: `raw` is a guard reading of a
+    /// text (`ObserveTexts.Origin.reading`), read one level down.
+    public static func stopsRVD(
+        _ raw: String, reading: Bool = false, rvdPIDs: @escaping () -> Set<Int32>?
+    ) -> Bool {
+        stopsRVD(raw, depth: reading ? 1 : 0, rvdPIDs: rvdPIDs)
     }
 
     private static func stopsRVD(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
