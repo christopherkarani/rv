@@ -103,6 +103,11 @@ extension SetupRun {
         )
         removedPaths.append(contentsOf: binPaths)
         removedPaths.append(layout.approvalsApp)
+        if entersConfig {
+            // Hooks are detached and rvd is stopped: with rv gone, "rvd never
+            // ran here" is true again, so a reinstall starts like a fresh one.
+            removedPaths.append(layout.rvdStateMarker)
+        }
         if (removeModels || purge) && entersConfig {
             removedPaths.append(layout.modelsDirectory)
         }

@@ -385,26 +385,38 @@ public struct ServiceClient: Sendable {
             host: host,
             stdin: stdin,
             whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey]),
-            ownerObserves: HookObserveFallback.live
+            ownerObserves: HookObserveFallback.live,
+            rvdStateAllowsObserve: HookObserveFallback.rvdStateAllowsObserve
         )
     }
 
     /// Authority-bearing hooks never retry through the local evaluation door,
     /// and the request is never resent. A daemon miss is classified and
     /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
-    /// consulted only on an unreachable daemon, and only in `.ask` mode.
+    /// consulted only on an unreachable daemon, and only in `.ask` mode; then
+    /// `rvdStateAllowsObserve` (live: the rvd state marker) decides between
+    /// stepping aside and `.stopped`. Its test default (`true`) keeps the
+    /// pre-marker behaviour; production always passes the live reader.
     /// A missing transport (Linux: XDG_RUNTIME_DIR set but empty or too long)
     /// never reached rvd, so it is `.connection`, not `.unreachable`.
     public func hookEvaluate(
         host: HookHost,
         stdin: String,
         whenDown: HookWhenDown,
-        ownerObserves: @Sendable (HookHost) -> Bool = { _ in false }
+        ownerObserves: @Sendable (HookHost) -> Bool = { _ in false },
+        rvdStateAllowsObserve: @Sendable () -> Bool = { true }
     ) async -> HookWire {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
             // Only an absent daemon; an explicit RV_HOOK_WHEN_DOWN=deny wins.
-            let observes = whenDown == .ask && failure == .unreachable && ownerObserves(host)
-            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
+            guard whenDown == .ask, failure == .unreachable, ownerObserves(host) else {
+                return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
+            }
+            // ... and only when rvd never ran here or announced its restart:
+            // a stopped or crashed rvd keeps the ask/deny fallback.
+            guard rvdStateAllowsObserve() else {
+                return HookDaemonFallback.wire(host: host, failure: .stopped, mode: whenDown)
+            }
+            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: true)
         }
         guard let transport else {
             return unavailable(.connection)
