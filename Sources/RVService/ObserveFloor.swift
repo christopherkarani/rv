@@ -10,15 +10,124 @@ import RVPolicy
 /// config dir (`core.secrets:home-rv-config`, the only catalog rule that
 /// guards rv's own state), of rv's Linux secret store
 /// (`core.secrets:secret-service`) or of rv's wiring files (`RVWiringPaths`)
-/// stays enforced. `GatedEvaluate.posture` is the
-/// only caller; it then runs the enforce branch, so the verdict is exactly
-/// what an enforced host would get.
+/// stays enforced.
 ///
 /// Observe alone also floors stopping or retuning rvd (`RVDStopGuard`) and writing
 /// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
 /// allows every later call unchecked. In enforce a stopped rvd fails
 /// closed, so those floors would only add false positives there.
+///
+/// `rule` is the whole interface: given the door, the verdict and the
+/// context, it answers "observed" or "enforce with this result".
+/// `GatedEvaluate.posture` is the only caller; on `.enforce` it runs the
+/// enforce branch with that result. On a shell door the command's texts
+/// are built once under one budget (`ObserveTexts`: the command, program
+/// text it feeds a shell or interpreter, and their guard readings), and
+/// every detector reads every text.
 enum ObserveFloor {
+    /// Which door is asking.
+    enum Door {
+        case file(FileToolAction)
+        case shell(ShellCommand, store: PolicyStoreInputs)
+    }
+
+    /// Where the command runs, and how to read rvd's running pids
+    /// (`runningRVDaemonPIDs` in rvd; tests substitute a table). nil from
+    /// `rvdPIDs`: the process table could not be read, so a literal-pid
+    /// `kill` fails closed. `provesRead` is `ObserveReadProof.proves`;
+    /// tests substitute one that counts its calls. `budget` is the wall
+    /// time the shell rule may spend reading the command's texts (rvd must
+    /// answer inside the hook's timeout, or the hook allows unchecked);
+    /// past it the command fails closed as unanalyzable.
+    struct Context {
+        let home: HomeDirectory?
+        let cwd: WorkingDirectory?
+        let rvdPIDs: () -> Set<Int32>?
+        let provesRead: (ShellCommand, SemanticAnalysis) -> Bool
+        let budget: Duration
+
+        init(
+            home: HomeDirectory?,
+            cwd: WorkingDirectory?,
+            rvdPIDs: @escaping () -> Set<Int32>? = runningRVDaemonPIDs,
+            provesRead: @escaping (ShellCommand, SemanticAnalysis) -> Bool = { ObserveReadProof.proves($0, analysis: $1) },
+            budget: Duration = ObserveFloor.lifecycleBudget
+        ) {
+            self.home = home
+            self.cwd = cwd
+            self.rvdPIDs = rvdPIDs
+            self.provesRead = provesRead
+            self.budget = budget
+        }
+    }
+
+    /// Wall time the shell rule may spend reading one command's texts, a
+    /// quarter of the hook's 8 s timeout.
+    static let lifecycleBudget = Duration.seconds(2)
+
+    enum Ruling: Equatable {
+        /// Nothing holds: the door observes the verdict.
+        case observed
+        /// The door enforces this result: the verdict, or a floor over it.
+        /// A floor never weakens: an allow (or an unanalyzable
+        /// indeterminate) is raised to "run it in Terminal"; a deny or any
+        /// other indeterminate is kept, with its row, rule id, allow-once
+        /// path and judge log.
+        case enforce(EvaluationResult)
+    }
+
+    /// In order, first match wins:
+    /// 1. the texts run out of budget: `observe.floor:unanalyzable`, read
+    ///    nothing (so does reading them past `Context.budget`, at 2 or 4);
+    /// 2. any text stops rvd or writes rv's install: "run it in Terminal";
+    /// 3. the verdict, or the command as written, touches rv's own
+    ///    protection: the verdict, enforced;
+    /// 4. any other text (program text the command feeds a shell or
+    ///    interpreter, a guard reading) does: "run it in Terminal", since
+    ///    the engine never read that text;
+    /// 5. the command runs a program rv cannot see:
+    ///    `observe.floor:unanalyzable`.
+    /// The file door reads one path: 2 and 3 only.
+    static func rule(_ result: EvaluationResult, door: Door, context: Context) -> Ruling {
+        switch door {
+        case .file(let action):
+            if writesInstall(action, context: context) { return .enforce(floored(result)) }
+            return holds(result) ? .enforce(result) : .observed
+        case .shell(let command, let store):
+            return rule(result, command: command, store: store, context: context)
+        }
+    }
+
+    private static func rule(
+        _ result: EvaluationResult, command: ShellCommand, store: PolicyStoreInputs, context: Context
+    ) -> Ruling {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: context.budget)
+        let set = observeTexts(command)
+        guard set.exhausted == false else { return .enforce(unanalyzable(result)) }
+        // The process table is read at most once per command, however many
+        // texts hold a literal-pid `kill`.
+        let rvdPIDs = readingOnce(context.rvdPIDs)
+        for text in set.texts {
+            guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
+            if stopsOrInstalls(text, rvdPIDs: rvdPIDs, context: context) { return .enforce(floored(result)) }
+        }
+        var protection = OwnProtection(result: result, command: command, store: store, context: context)
+        if holds(result) || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
+            return .enforce(result)
+        }
+        for text in set.texts where text.origin != .command {
+            guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
+            if protection.touched(by: text.raw) { return .enforce(floored(result)) }
+        }
+        if invocationIsOpaque(command) || set.opaque || isUnanalyzable(result) {
+            return .enforce(unanalyzable(result))
+        }
+        return .observed
+    }
+
+    // MARK: The verdict
+
     static let ruleIDs: Set<RuleID> = [
         RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID, SecretServiceGuard.ruleID,
     ]
@@ -27,8 +136,8 @@ enum ObserveFloor {
         rules: SecretPathCatalog.dayOne.rules.filter { ruleIDs.contains(SecretPathMatch($0).ruleID) }
     )
 
-    /// File door: the one path's verdict says it.
-    static func holds(_ result: EvaluationResult) -> Bool {
+    /// The verdict alone says it (all the file door has).
+    private static func holds(_ result: EvaluationResult) -> Bool {
         switch result.decision {
         case .indeterminate(.selfProtection), .indeterminate(.observeUnanalyzable):
             true
@@ -48,117 +157,129 @@ enum ObserveFloor {
         }
     }
 
-    /// Shell doors: the verdict, then the command itself. A pack deny is
-    /// terminal, so `git reset --hard; rv host mode cursor off` reports only
-    /// the git rule, and `echo x > ~/.config/rv/config.json` only a redirect
-    /// rule; observing that deny would run the rest too. So every word of
-    /// the command (raw and normalized, split at shell punctuation) is also
-    /// checked as an rv-config path, with the door's exemptions and alias
-    /// resolution.
-    static func holds(
-        _ result: EvaluationResult,
-        command: ShellCommand,
-        store: PolicyStoreInputs,
-        home: HomeDirectory?,
-        cwd: WorkingDirectory?
+    // MARK: rvd and rv's install
+
+    private static func stopsOrInstalls(
+        _ text: ObserveTexts.Text, rvdPIDs: @escaping () -> Set<Int32>?, context: Context
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command)
-            || SecretServiceGuard.touchesSecretService(command)
-        {
-            return true
+        RVDStopGuard.stopsRVD(text.raw, reading: text.origin == .reading, rvdPIDs: rvdPIDs)
+            || RVInstallPathGuard.touchesInstall(ShellCommand(rawValue: text.raw), home: context.home, cwd: context.cwd)
+    }
+
+    /// File door: a write or edit of rv's install, typed or resolved.
+    private static func writesInstall(_ action: FileToolAction, context: Context) -> Bool {
+        guard action.kind != .read else { return false }
+        let resolution = SecretPathCandidateResolver.resolution(home: context.home, cwd: context.cwd)
+        return RVInstallPathGuard.writesInstall(action.path.rawValue, resolution: resolution, home: context.home)
+    }
+
+    // MARK: rv's own protection
+
+    /// Whether a text weakens rv, touches its secret store, or names its
+    /// config or wiring. A pack deny is terminal, so `git reset --hard; rv
+    /// host mode cursor off` reports only the git rule, and `echo x >
+    /// ~/.config/rv/config.json` only a redirect rule; observing that deny
+    /// would run the rest too. So every word of a text (raw and with
+    /// quotes removed, and for the command its normalized view, split at
+    /// shell punctuation) is also checked as an rv-config path, with the
+    /// door's exemptions and alias resolution.
+    private struct OwnProtection {
+        let rvConfig: SecretPathDecider
+        let home: HomeDirectory?
+        let cwd: WorkingDirectory?
+        let command: ShellCommand
+        let analysis: SemanticAnalysis
+        let provesRead: (ShellCommand, SemanticAnalysis) -> Bool
+        /// `ObserveReadProof` of the command, run at most once: it is
+        /// O(command), and every text that names a wiring file asks.
+        private var provenRead: Bool?
+
+        init(result: EvaluationResult, command: ShellCommand, store: PolicyStoreInputs, context: Context) {
+            rvConfig = SecretPathDecider(
+                catalog: ObserveFloor.catalog,
+                safety: store.safety,
+                allowPaths: store.allowPaths.effective,
+                home: context.home,
+                resolution: SecretPathCandidateResolver.resolution(home: context.home, cwd: context.cwd)
+            )
+            home = context.home
+            cwd = context.cwd
+            self.command = command
+            analysis = result.analysis
+            provesRead = context.provesRead
         }
-        let rvConfig = SecretPathDecider(
-            catalog: catalog,
-            safety: store.safety,
-            allowPaths: store.allowPaths.effective,
-            home: home,
-            resolution: SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
-        )
-        // Also the command with quotes removed, so `"$HOME"/.claude/x`
-        // reads as one word.
-        let unquoted = command.rawValue.filter { $0 != "'" && $0 != "\"" }
-        let words = Set([command.rawValue, unquoted, result.matchingView.rawValue].flatMap { text in
-            text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
-        })
-        // rv's config is secret: any word naming it holds, read or not.
-        if words.contains(where: { rvConfig.filePathHit($0) != nil }) { return true }
-        // Wiring files hold no secret, and an observe host already allows
-        // these verbs unchecked everywhere else: only a write there holds.
-        if ObserveReadProof.proves(command, analysis: result.analysis) { return false }
-        return words.contains { namesWiring($0, home: home, cwd: cwd) }
-    }
 
-    /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
-    /// door enforces writes there, so an observe host must too. The enforce
-    /// branch also runs the judge, so a command proven to only read
-    /// (`ObserveReadProof`) is not escalated for naming one.
-    /// The word is normalised first (`~`/`$HOME`/`~user` expanded, joined
-    /// to the cwd, `.`/`..` collapsed). Host settings files at any scope
-    /// count: a project one can disable hooks for every host.
-    private static func namesWiring(_ word: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
-        if RVWiringPaths.isHostSettingsFile(word) { return true }
-        guard let home else { return false }
-        let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
-        return RVWiringPaths.matches(path, home: home.rawValue)
-    }
-
-    /// Observe only: nil unless the command stops rvd or writes rv's
-    /// install, in its own text or in program text a shell or interpreter
-    /// is fed from a literal pipe, here-string or heredoc (`echo
-    /// 'launchctl bootout …' | sh`). Then an allow becomes "run it in
-    /// Terminal"; anything else (a deny, an indeterminate) is kept, so the
-    /// floor never weakens. A scan out of budget, texts needing more than
-    /// `readingCap` readings, or reading them past `budget` (rvd must answer
-    /// inside the hook's timeout, or the hook allows unchecked) fail closed
-    /// the way `unanalyzableFloor` does.
-    static func lifecycleFloor(
-        _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?,
-        budget: Duration = lifecycleBudget
-    ) -> EvaluationResult? {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: budget)
-        let scan = scanOpaqueProgram(command)
-        let inner = scan.innerTexts.filter { sameBytes($0, command.rawValue) == false }
-        guard scan.exhausted == false,
-              lifecycleReadingCount([command.rawValue] + inner, cap: readingCap) <= readingCap
-        else {
-            return unanalyzable(result)
+        mutating func touched(by text: String, matchingView: String? = nil) -> Bool {
+            let shell = ShellCommand(rawValue: text)
+            if SelfProtectionGuard.weakensPolicy(shell) || SecretServiceGuard.touchesSecretService(shell) {
+                return true
+            }
+            // Also the text with quotes removed, so `"$HOME"/.claude/x`
+            // reads as one word.
+            let unquoted = text.filter { $0 != "'" && $0 != "\"" }
+            let views = [text, unquoted] + (matchingView.map { [$0] } ?? [])
+            let words = Set(views.flatMap { view in
+                view.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
+            })
+            // rv's config is secret: any word naming it holds, read or not.
+            if words.contains(where: { rvConfig.filePathHit($0) != nil }) { return true }
+            // Wiring files hold no secret, and an observe host already
+            // allows these verbs unchecked everywhere else: only a write
+            // there holds. A command proven to only read (`ObserveReadProof`)
+            // feeds no shell or interpreter, so the proof covers its texts.
+            guard words.contains(where: { namesWiring($0) }) else { return false }
+            return provesCommandOnlyReads() == false
         }
-        let rvdPIDs = readingOnce(runningRVDaemonPIDs)
-        let texts = [command] + inner.map { ShellCommand(rawValue: $0) }
-        for text in texts {
-            guard clock.now < deadline else { return unanalyzable(result) }
-            if RVDStopGuard.stopsRVD(text.rawValue, rvdPIDs: rvdPIDs) { return floored(result) }
-            guard clock.now < deadline else { return unanalyzable(result) }
-            if RVInstallPathGuard.touchesInstall(text, home: home, cwd: cwd) { return floored(result) }
+
+        private mutating func provesCommandOnlyReads() -> Bool {
+            if let provenRead { return provenRead }
+            let proven = provesRead(command, analysis)
+            provenRead = proven
+            return proven
         }
-        // Everything was read: a late answer is still the answer.
-        return nil
+
+        /// A word naming one of rv's wiring files (`RVWiringPaths`): the
+        /// shell door enforces writes there, so an observe host must too.
+        /// The enforce branch also runs the judge, so a command proven to
+        /// only read is not escalated for naming one. The word is
+        /// normalised first (`~`/`$HOME`/`~user` expanded, joined to the
+        /// cwd, `.`/`..` collapsed). Host settings files at any scope
+        /// count: a project one can disable hooks for every host.
+        private func namesWiring(_ word: String) -> Bool {
+            if RVWiringPaths.isHostSettingsFile(word) { return true }
+            guard let home else { return false }
+            let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
+            return RVWiringPaths.matches(path, home: home.rawValue)
+        }
     }
 
-    /// Wall time the lifecycle floor may spend reading one command, a
-    /// quarter of the hook's 8 s timeout.
-    static let lifecycleBudget = Duration.seconds(2)
+    // MARK: Programs rv cannot see
 
-    /// Observe only, after the other floors: a command that runs a program
-    /// rv cannot see (`runsUnanalyzable`) is enforced. An allow, or an
-    /// "unanalyzable" indeterminate, becomes "run it in Terminal" under
-    /// its own rule id; it never becomes a hard deny. Any other verdict (a
-    /// deny, a self-protection hold) is kept as is, with its row, rule id,
-    /// allow-once path and judge log, like `floored`.
-    static func unanalyzableFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult? {
-        guard runsUnanalyzable(result, command: command) else { return nil }
-        return unanalyzable(result)
+    /// The stop and install floors read the command's texts, so an encoded
+    /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
+    /// passes them, stops rvd, and leaves every later call unchecked. So a
+    /// command holds when what rv cannot read can take a command position
+    /// (`ObserveTexts.opaque`: a dynamic command word, a shell or
+    /// interpreter reading stdin that is not from literal producers, a
+    /// runner whose verb is a shell or a lifecycle verb), when its program
+    /// or git subcommand is unresolved (`invocationIsOpaque`: a dynamic
+    /// `eval`, a variable head, a git alias or extension), or when it is
+    /// too large or too costly to analyze. A literal verb with dynamic
+    /// arguments (`xargs rm`) is not floored here; the lexical floors read
+    /// its words, though not its operands' values. The program checks read
+    /// the command, not the verdict, because an earlier pack deny hides
+    /// them: `$(echo <b64> | base64 -d)` reports only an out-of-repo write.
+    private static func isUnanalyzable(_ result: EvaluationResult) -> Bool {
+        if case .indeterminate(let reason) = result.decision { return unanalyzableReasons.contains(reason) }
+        return false
     }
 
-    /// Readings the lifecycle floor makes of a command and its fed texts
-    /// (each text, then each of its list commands; an interpreter's string
-    /// literals are texts too): a 1500-line python script with two strings
-    /// a line takes about 6000. The texts' total size is already bounded
-    /// by the scan's work budget; this bounds the per-reading overhead.
-    /// Past it nothing is read: it fails closed.
-    static let readingCap = 8192
+    private static let unanalyzableReasons: Set<IndeterminateReason> = [
+        .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
+    ]
 
+    /// An allow, or an "unanalyzable" indeterminate, becomes "run it in
+    /// Terminal" under its own rule id; it never becomes a hard deny.
     private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
         switch result.decision {
         case .allow:
@@ -171,42 +292,7 @@ enum ObserveFloor {
         return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
     }
 
-    /// The stop and install floors read the command's text, so an encoded
-    /// program (`eval "$(echo <b64> | base64 -d)"`, `… | base64 -d | sh`)
-    /// passes them, stops rvd, and leaves every later call unchecked. So a
-    /// command holds when what rv cannot read can take a command position
-    /// (`runsOpaqueProgram`: a dynamic command word, a shell or interpreter
-    /// reading stdin that is not from literal producers, a runner whose
-    /// verb is a shell or a lifecycle verb), when its program or git
-    /// subcommand is unresolved (`invocationIsOpaque`: a dynamic `eval`, a
-    /// variable head, a git alias or extension), or when it is too large or
-    /// too costly to analyze. A literal verb with dynamic arguments (`xargs
-    /// rm`) is not floored here; the lexical floors above read its words,
-    /// though not its operands' values. The program checks read the
-    /// command again because an earlier pack deny hides them:
-    /// `$(echo <b64> | base64 -d)` reports only an out-of-repo write.
-    static func runsUnanalyzable(_ result: EvaluationResult, command: ShellCommand) -> Bool {
-        if invocationIsOpaque(command) || runsOpaqueProgram(command) { return true }
-        if case .indeterminate(let reason) = result.decision { return unanalyzableReasons.contains(reason) }
-        return false
-    }
-
-    private static let unanalyzableReasons: Set<IndeterminateReason> = [
-        .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
-    ]
-
-    /// File door: a write or edit of rv's install, typed or resolved.
-    static func lifecycleFloor(
-        _ result: EvaluationResult, action: FileToolAction, home: HomeDirectory?, cwd: WorkingDirectory?
-    ) -> EvaluationResult? {
-        guard action.kind != .read else { return nil }
-        let resolution = SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
-        guard RVInstallPathGuard.writesInstall(action.path.rawValue, resolution: resolution, home: home) else {
-            return nil
-        }
-        return floored(result)
-    }
-
+    /// An allow becomes "run it in Terminal"; anything else is kept.
     private static func floored(_ result: EvaluationResult) -> EvaluationResult {
         guard result.decision == .allow else { return result }
         return EvaluationResult(outcome: .indeterminate(.selfProtection), matchingView: result.matchingView)

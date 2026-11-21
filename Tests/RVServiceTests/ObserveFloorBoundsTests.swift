@@ -103,15 +103,18 @@ struct ObserveFloorBoundsTests {
         #expect(result.decision == .allow, "\(command)")
     }
 
-    @Test("lifecycle floor: a deep xargs chain fails closed")
+    @Test("floor: a deep xargs chain fails closed")
     func deepXargsChainFailsClosed() {
         let command = ShellCommand(rawValue: String(repeating: "xargs ", count: 600) + "true")
-        let result = ObserveFloor.lifecycleFloor(Self.allow, command: command, home: nil, cwd: nil)
-        #expect(result != nil)
-        #expect(result?.decision != .allow)
+        let ruling = floorRule(command, home: nil, cwd: nil)
+        guard case .enforce(let result) = ruling else {
+            Issue.record("a deep xargs chain must be enforced: \(ruling)")
+            return
+        }
+        #expect(result.decision != .allow)
     }
 
-    @Test("lifecycle floor: each oversized repro finishes fast or fails closed", arguments: [
+    @Test("floor: each oversized repro finishes fast or fails closed", arguments: [
         "pkill-words", "kill-operands", "rm-words", "python-heredoc",
     ])
     func oversizedReprosAreBounded(name: String) throws {
@@ -120,22 +123,55 @@ struct ObserveFloorBoundsTests {
         let home = try #require(HomeDirectory(validating: "/Users/agent"))
         let cwd = try #require(WorkingDirectory(rawValue: "/Users/agent/project"))
         let clock = ContinuousClock()
-        var result: EvaluationResult?
+        var ruling: ObserveFloor.Ruling?
         let elapsed = clock.measure {
-            result = ObserveFloor.lifecycleFloor(Self.allow, command: command, home: home, cwd: cwd)
+            ruling = floorRule(command, home: home, cwd: cwd)
         }
-        #expect(result?.decision != .allow, "\(name)")
+        if case .enforce(let result) = ruling {
+            #expect(result.decision != .allow, "\(name)")
+        }
         #expect(elapsed < Self.wallClockBound, "\(name): \(elapsed)")
     }
 
-    /// Past the floor's work budget nothing more is read: an allow becomes
-    /// "run it in Terminal", a deny or hold is kept.
-    @Test("lifecycle floor: an exhausted budget never allows")
+    /// Past the floor's wall-time budget nothing more is read: an allow
+    /// becomes "run it in Terminal", a deny or hold is kept.
+    @Test("floor: an exhausted budget never allows")
     func exhaustedBudgetFailsClosed() {
         let command = ShellCommand(rawValue: "echo hi")
-        let spent = ObserveFloor.lifecycleFloor(Self.allow, command: command, home: nil, cwd: nil, budget: .zero)
-        #expect(spent?.decision == .indeterminate(.observeUnanalyzable))
-        #expect(ObserveFloor.lifecycleFloor(Self.allow, command: command, home: nil, cwd: nil) == nil)
+        let spent = floorRule(command, home: nil, cwd: nil, budget: .zero)
+        #expect(spent == .enforce(EvaluationResult(outcome: .indeterminate(.observeUnanalyzable))))
+        #expect(floorRule(command, home: nil, cwd: nil) == .observed)
+    }
+
+    /// Many texts with a literal-pid `kill` (the command, fed program
+    /// text, guard readings) read the process table once per command, not
+    /// once per text or per operand.
+    @Test("floor: literal-pid kills across texts read the process table once")
+    func floorReadsProcessTableOnce() {
+        let pids = Array(repeating: "1", count: 50).joined(separator: " ")
+        let command = ShellCommand(
+            rawValue: "kill \(pids); sh <<'EOF'\nkill \(pids)\nEOF\nbash -c 'kill \(pids)'"
+        )
+        let reads = ReadCount()
+        let ruling = floorRule(command, home: nil, cwd: nil, rvdPIDs: {
+            reads.value += 1
+            return [4242]
+        })
+        #expect(reads.value == 1, "\(ruling)")
+    }
+
+    private func floorRule(
+        _ command: ShellCommand,
+        home: HomeDirectory?,
+        cwd: WorkingDirectory?,
+        rvdPIDs: @escaping () -> Set<Int32>? = { [] },
+        budget: Duration = ObserveFloor.lifecycleBudget
+    ) -> ObserveFloor.Ruling {
+        ObserveFloor.rule(
+            Self.allow,
+            door: .shell(command, store: .gather(home: home, cwd: cwd)),
+            context: ObserveFloor.Context(home: home, cwd: cwd, rvdPIDs: rvdPIDs, budget: budget)
+        )
     }
 
     private func repro(_ name: String) -> String {
@@ -161,4 +197,9 @@ private func observeHome() throws -> HomeDirectory {
     try #"{"guard":{"hosts":{"claude":"observe"}}}"#
         .write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
     return home
+}
+
+/// Counts process-table reads.
+private final class ReadCount {
+    var value = 0
 }
