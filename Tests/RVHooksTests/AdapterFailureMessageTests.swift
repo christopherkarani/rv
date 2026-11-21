@@ -67,7 +67,8 @@ struct AdapterFailureMessageTests {
         #expect(reason == daemonUnreachableMessage, "\(host): \(reason)")
     }
 
-    @Test func claudeNativeAsk_withoutReasonStillFailsClosedWithGuidance() async throws {
+    /// No permission_mode in the request: no proof a human will be asked.
+    @Test func claudeNativeAsk_withoutReasonOrModeFailsClosedWithGuidance() async throws {
         let wire = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n"
         let run = try await runPythonAdapter(host: .claude, stub: .stdout(wire, exit: 0))
         let reason = try expectFailClosed(host: .claude, run: run)
@@ -126,11 +127,11 @@ struct AdapterFailureMessageTests {
 }
 
 /// `kUnreachableMessage` in Sources/rv-c/hook_fallback.c.
-private let daemonUnreachableMessage =
+let daemonUnreachableMessage =
     "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
 
 /// Mirrors `rv_hook_fallback_render` for `.unreachable` in the default ask mode.
-private func daemonDownWire(_ host: HookHost) -> AdapterStub {
+func daemonDownWire(_ host: HookHost) -> AdapterStub {
     let msg = daemonUnreachableMessage
     switch host {
     case .claude:
@@ -149,27 +150,52 @@ private func daemonDownWire(_ host: HookHost) -> AdapterStub {
     }
 }
 
-private enum AdapterStub {
+enum AdapterStub {
     case missing
     case notExecutable
     case stdout(String, exit: Int32)
     case sleep(seconds: Int)
 }
 
-private struct PythonAdapterRun {
+struct PythonAdapterRun {
     var stdout: String
     var stderr: String
     var exitCode: Int32
     var rvPath: String
+    /// Every path the adapter opened, recorded only under `.passwdHome`.
+    var openedPaths: [String] = []
 }
 
-private func wireObject(_ stdout: String) throws -> [String: Any] {
+/// Where the Claude adapter looks for the owner config.
+enum OwnerConfigLookup {
+    /// `_OWNER_CONFIG_PATH` points at the test's file.
+    case seam
+    /// The adapter's own passwd-home lookup, with the `pw_dir` expression
+    /// replaced when `pwDir` is given. The run records every path opened.
+    case passwdHome(pwDir: String? = nil)
+}
+
+/// Runs the adapter as `__main__` under an audit hook that writes each
+/// opened path to stderr, prefixed with `openedPathMarker`.
+private let openedPathMarker = "rv-test-opened: "
+private let auditedRunner = #"""
+import runpy, sys
+def _audit(event, args):
+    if event == "open" and isinstance(args[0], str):
+        sys.stderr.write("rv-test-opened: " + args[0] + "\n")
+sys.addaudithook(_audit)
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(script, run_name="__main__")
+"""#
+
+func wireObject(_ stdout: String) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
 }
 
 /// Asserts the host's documented fail-closed wire and returns the text the
 /// human sees.
-private func expectFailClosed(host: HookHost, run: PythonAdapterRun) throws -> String {
+func expectFailClosed(host: HookHost, run: PythonAdapterRun) throws -> String {
     let json = try wireObject(run.stdout)
     switch host {
     case .claude:
@@ -244,8 +270,17 @@ private func writeStub(_ stub: AdapterStub, in root: URL) throws -> String {
     return rvPath
 }
 
+/// The test process's environment without what the Claude adapter reads
+/// to decide whether a person is asked: a test run inside a Claude Code
+/// session must not inherit that session's answer.
+func adapterTestEnvironment() -> [String: String] {
+    ProcessInfo.processInfo.environment.filter { key, _ in
+        !key.hasPrefix("CLAUDE_CODE_") && key != "CLAUDECODE" && key != "RV_HOOK_WHEN_DOWN"
+    }
+}
+
 private func stubEnvironment(_ stub: AdapterStub, root: URL) -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
+    var environment = adapterTestEnvironment()
     environment["HOME"] = root.path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     switch stub {
@@ -260,8 +295,29 @@ private func stubEnvironment(_ stub: AdapterStub, root: URL) -> [String: String]
     return environment
 }
 
-private func renderedAdapter(host: HookHost, rvPath: String, timeoutSeconds: String?) throws -> String {
+/// The Claude adapter reads the owner's config from the passwd home. Tests
+/// point it at `ownerConfig` instead (never the real home), the way rv.c
+/// takes `RV_HOOK_OBSERVE_CONFIG_PATH` at build time.
+func pointingOwnerConfig(_ source: String, at ownerConfig: URL) throws -> String {
+    let original = "_OWNER_CONFIG_PATH = None\n"
+    try #require(source.components(separatedBy: original).count == 2, "owner-config seam missing")
+    return source.replacingOccurrences(of: original, with: "_OWNER_CONFIG_PATH = \"\(ownerConfig.path)\"\n")
+}
+
+private func renderedAdapter(
+    host: HookHost, rvPath: String, timeoutSeconds: String?, ownerConfig: URL, lookup: OwnerConfigLookup
+) throws -> String {
     var source = try HostAdapterResources.load(for: host).rendered(rvPath: rvPath)
+    switch (host, lookup) {
+    case (.claude, .seam):
+        source = try pointingOwnerConfig(source, at: ownerConfig)
+    case (.claude, .passwdHome(let pwDir?)):
+        let original = "pwd.getpwuid(os.getuid()).pw_dir"
+        try #require(source.components(separatedBy: original).count == 2, "passwd lookup missing")
+        source = source.replacingOccurrences(of: original, with: pwDir)
+    default:
+        break
+    }
     if let timeoutSeconds {
         let original = "RV_HOOK_TIMEOUT_S = 15\n"
         #expect(source.contains(original))
@@ -270,11 +326,16 @@ private func renderedAdapter(host: HookHost, rvPath: String, timeoutSeconds: Str
     return source
 }
 
-private func runPythonAdapter(
+func runPythonAdapter(
     host: HookHost,
     stub: AdapterStub,
     timeoutSeconds: String? = nil,
-    rawEvent: String? = nil
+    rawEvent: String? = nil,
+    eventFields: [String: Any] = [:],
+    environment extra: [String: String] = [:],
+    stdoutUnwritable: Bool = false,
+    ownerConfig prepareOwnerConfig: ((URL) throws -> URL)? = nil,
+    ownerConfigLookup lookup: OwnerConfigLookup = .seam
 ) async throws -> PythonAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-failmsg-\(UUID().uuidString)", isDirectory: true)
@@ -282,41 +343,65 @@ private func runPythonAdapter(
     defer { try? FileManager.default.removeItem(at: root) }
 
     let rvPath = try writeStub(stub, in: root)
+    // The closure prepares the owner config and returns the path the
+    // adapter reads (default: a file under `root` that does not exist).
+    let defaultOwnerConfig = root.appendingPathComponent("owner-config.json")
+    let ownerConfig = try prepareOwnerConfig?(defaultOwnerConfig) ?? defaultOwnerConfig
+    // Restore permissions so the cleanup can remove what a test locked.
+    defer {
+        for locked in [ownerConfig.deletingLastPathComponent(), ownerConfig] {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        }
+    }
     let adapter = root.appendingPathComponent("rv-guard.py")
-    try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds)
+    try renderedAdapter(host: host, rvPath: rvPath, timeoutSeconds: timeoutSeconds, ownerConfig: ownerConfig, lookup: lookup)
         .write(to: adapter, atomically: true, encoding: .utf8)
 
     let eventText: String
     if let rawEvent {
         eventText = rawEvent
     } else {
-        let data = try JSONSerialization.data(withJSONObject: stdinEvent(for: host))
+        let event = stdinEvent(for: host).merging(eventFields) { _, field in field }
+        let data = try JSONSerialization.data(withJSONObject: event)
         eventText = try #require(String(data: data, encoding: .utf8))
     }
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["python3", adapter.path]
-    process.environment = stubEnvironment(stub, root: root)
+    if case .passwdHome = lookup {
+        process.arguments = ["python3", "-c", auditedRunner, adapter.path]
+    } else {
+        process.arguments = ["python3", adapter.path]
+    }
+    process.environment = stubEnvironment(stub, root: root).merging(extra) { _, value in value }
     process.currentDirectoryURL = root
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
     process.standardInput = stdin
-    process.standardOutput = stdout
+    // A read-only descriptor: every write to stdout fails (EBADF).
+    let readOnlyStdout = stdoutUnwritable ? FileHandle(forReadingAtPath: "/dev/null") : nil
+    if let readOnlyStdout {
+        process.standardOutput = readOnlyStdout
+    } else {
+        process.standardOutput = stdout
+    }
     process.standardError = stderr
     try process.run()
     stdin.fileHandleForWriting.write(Data(eventText.utf8))
     try stdin.fileHandleForWriting.close()
-    let out = stdout.fileHandleForReading.readDataToEndOfFile()
+    let out = readOnlyStdout == nil ? stdout.fileHandleForReading.readDataToEndOfFile() : Data()
     let err = stderr.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
 
+    let errLines = String(decoding: err, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+    let opened = errLines.filter { $0.hasPrefix(openedPathMarker) }
     return PythonAdapterRun(
         stdout: String(decoding: out, as: UTF8.self),
-        stderr: String(decoding: err, as: UTF8.self),
+        stderr: errLines.filter { !$0.hasPrefix(openedPathMarker) }.joined(separator: "\n"),
         exitCode: process.terminationStatus,
-        rvPath: rvPath
+        rvPath: rvPath,
+        openedPaths: opened.map { String($0.dropFirst(openedPathMarker.count)) }
     )
 }
 
@@ -334,7 +419,9 @@ private func runHermesAdapter(stub: AdapterStub, timeoutSeconds: String? = nil) 
 
     let rvPath = try writeStub(stub, in: root)
     let adapter = root.appendingPathComponent("rv_guard_hermes.py")
-    try renderedAdapter(host: .hermes, rvPath: rvPath, timeoutSeconds: timeoutSeconds)
+    try renderedAdapter(
+        host: .hermes, rvPath: rvPath, timeoutSeconds: timeoutSeconds,
+        ownerConfig: root.appendingPathComponent("owner-config.json"), lookup: .seam)
         .write(to: adapter, atomically: true, encoding: .utf8)
     let harness = root.appendingPathComponent("harness.py")
     try """

@@ -61,8 +61,7 @@ enum RVD {
             // logins without logind) and rvd could not make it either.
             let message = "rvd: XDG_RUNTIME_DIR is unset and \(directory) is missing, could not be created, "
                 + "or is not a directory only you can access (yours, mode 0700)\n"
-                + "rvd: fix: as root, mkdir -p -m 0700 \(directory) && chown \(getuid()) \(directory); "
-                + "or set XDG_RUNTIME_DIR to a directory only you can access, for rvd and for your agents\n"
+                + "rvd: fix: \(UnixSocketPath.userRuntimeDirectoryFix(directory: directory, uid: getuid()))\n"
             try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
             Foundation.exit(1)
         } catch UnixSocketPathError.permission {
