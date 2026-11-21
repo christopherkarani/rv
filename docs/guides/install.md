@@ -36,6 +36,7 @@ the judge weights) were taken from the source and have not been run.
 | --- | --- | --- |
 | OS | macOS 15 or later | x86_64 or aarch64 with **glibc 2.35 or later** (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL/Rocky/Alma 10+). musl (Alpine) is refused. |
 | Hardware | Apple Silicon (arm64) only | x86_64 or aarch64 |
+| Runtime directory | none | `rvd` keeps its socket in `$XDG_RUNTIME_DIR`, or `/run/user/<uid>` when that is unset. A login manager (logind) makes `/run/user/<uid>`. On a host with none (containers, WSL without systemd, `su`/`sudo -u` logins) it must exist, owned by you, mode 0700, or `XDG_RUNTIME_DIR` must name such a directory, for `rvd` and for your agents. Only root can create it: `sudo install -d -m 0755 /run/user && sudo install -d -m 0700 -o $(id -u) /run/user/$(id -u)`. `/run` is usually a tmpfs, so make it again after a reboot or container restart. |
 | Libraries | none extra | libcurl and libsqlite3 (the installer names the package for your distribution) |
 | Storing secret values | the login Keychain | `secret-tool` (package `libsecret-tools`), a D-Bus session bus and an unlocked keyring (GNOME Keyring, KWallet, KeePassXC) |
 | `rv run` | as shipped | kernel 5.9 or later, and `rv-isolation-exec` beside `rv` (the installer puts it there) |
@@ -92,7 +93,10 @@ What it does, in order:
 
 1. Refuses anything but macOS 15+ on arm64 or Linux on x86_64/aarch64
    (`rv: macOS 15 Apple Silicon, or Linux aarch64/x86_64`).
-2. On Linux, refuses musl, glibc older than 2.35, or a missing libcurl or
+2. On Linux, stops when `XDG_RUNTIME_DIR` is unset, it is not run as
+   root, `/run/user/<uid>` does not exist, and you cannot write to
+   `/run/user` (so `rvd` could not create it either), and prints the root
+   command that makes it. It refuses musl, glibc older than 2.35, or a missing libcurl or
    libsqlite3, before downloading anything, and prints the package
    command for Debian/Ubuntu, Fedora/RHEL, openSUSE and Arch.
 3. Downloads the release's files and checks each against `SHA256SUMS`.
@@ -103,6 +107,17 @@ What it does, in order:
    weights. Files are staged first, so a failed copy leaves the previous
    install intact.
 5. Runs `rv setup` (or `rv setup --observe`).
+
+On macOS the installer also checks that rv's executables, the Swift
+runtime dylib and RVApprovals.app carry rv's Developer ID signature, and
+asks Gatekeeper (`spctl`) whether Apple notarized each of them but the
+dylib. (The packs bundle and other downloads are covered by the signed
+`SHA256SUMS`.) A bare binary cannot carry a stapled notarization
+ticket, so Gatekeeper looks the ticket up online: a Mac that cannot reach
+Apple (offline, or behind a proxy that blocks Apple's notarization
+service) is refused with `Gatekeeper does not accept <file> as notarized`.
+`RV_INSTALL_ALLOW_UNSIGNED=1` does not skip this check; install while the
+Mac can reach Apple.
 
 Make sure `~/.local/bin` is on your `PATH`.
 
@@ -126,7 +141,9 @@ Plain `rv setup` asks you nothing. It:
   - Linux without one (WSL without systemd, containers, OpenRC/runit):
     it starts `rvd` directly and tells you it will not survive logout or
     reboot, and what to add to your shell profile
-    (`rv service start >/dev/null`);
+    (`rv service start >/dev/null`). When `XDG_RUNTIME_DIR` is unset and
+    `/run/user/<uid>` is missing and only root can create it, it starts nothing, wires no hook, and
+    prints the root command that makes the directory;
 - **macOS only:** registers RVApprovals.app as the LaunchAgent
   `dev.rv.mcp-custodian` when the app is in `~/Applications`.
 
