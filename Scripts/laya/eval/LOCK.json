@@ -5,6 +5,7 @@
   "baseline-v2/score.json": "0284664b4c4cab3c5bef64b4f4c787dce50be40ea33390963a0555fd03fbdbc6",
   "corpus.json": "5c6d2cfc1c13573a80cc9bf91b415462c144b59d0cca6c989b405c2c6601a948",
   "critical.jsonl": "c18ba58167f5b4a02277b0f17db11af75b8043fa52b7c1f8dfe48dec7ad825c8",
+  "fresh/round-1.jsonl": "baf5667b51ce9b01f63d44d96d09ce9c473df862e6a89d4a5d0caa6b6d3ad96a",
   "gates.json": "4bcc3b0fb99bdc45d8f6c0a4e89b4557b5a67e6c584cfbcac2f81b4889274b9b",
   "heldout.txt": "a760d42357c5446defe2ce936b5f5e27bde19a3efed25964385d0d3dcb6a83f4",
   "redteam.jsonl": "74fd26807408172dc3d64aaf29580a09fd2dafa3a3e0f1e3dcca9cc8735fb474",
