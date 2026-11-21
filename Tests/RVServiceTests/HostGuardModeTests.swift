@@ -219,6 +219,13 @@ struct HostGuardModeTests {
         // rv's Linux secret store (core.secrets:secret-service).
         "secret-tool lookup service rv.secrets account OPENAI_API_KEY",
         "git reset --hard; secret-tool lookup service rv.secrets account K",
+        // rv run by an interpreter, a runner, find, or a stdin shell.
+        #"python3 -c 'import os; os.system("rv uninstall")'"#,
+        #"perl -e 'system("rv uninstall")'"#,
+        "su root -c 'rv uninstall'",
+        #"find . -exec rv uninstall \;"#,
+        "echo 'rv policy ceiling set c.toml' | sh",
+        "sh <<< 'rv host mode cursor off'",
     ])
     func observeHostShellKeepsSelfProtection(command: String) async throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
