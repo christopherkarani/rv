@@ -255,7 +255,8 @@ public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPay
         decision: robotDecision(model.decision),
         packID: model.packID?.rawValue,
         ruleID: model.ruleID?.rawValue,
-        reason: model.fact,
+        // An allow has no reason to give (`fact` is the word "allow").
+        reason: model.decision == .allow ? nil : model.fact,
         explanation: model.explanation,
         nextAction: model.nextAction,
         mode: observed ? observeRobotMode : nil,

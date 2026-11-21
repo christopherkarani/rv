@@ -238,6 +238,10 @@ enum HelpCatalog {
             HelpSection(heading: "Observe mode", rows: [
                 HelpRow(name: "guard.mode observe", description: "Explains the verdict enforce would reach and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
             ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Allowed"),
+                HelpRow(name: "1", description: "Denied, or rv could not finish evaluating it (same as rv test; under observe, a would-be deny also exits 1)"),
+            ]),
         ],
         examples: [
             "rv explain 'git reset --hard'",

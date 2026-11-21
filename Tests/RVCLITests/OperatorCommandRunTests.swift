@@ -24,7 +24,7 @@ struct OperatorCommandRunTests {
             await #expect(throws: ExitCode(0)) {
                 try await Test.parse(["--explain", "--plain", "echo", "ok"]).run()
             }
-            await #expect(throws: ExitCode(0)) {
+            await #expect(throws: ExitCode(1)) {
                 try await Explain.parse(["--json", "git", "reset", "--hard"]).run()
             }
             await #expect(throws: ExitCode(0)) {

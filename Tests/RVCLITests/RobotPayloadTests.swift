@@ -57,7 +57,7 @@ private func object(from stdout: String) throws -> [String: Any] {
     )
     let json = try object(from: rendered.stdout)
 
-    #expect(rendered.exitCode == 0)
+    #expect(rendered.exitCode == 1)
     #expect(json["schema"] as? String == "rv.explain.v1")
     #expect(json["schema"] as? String != "rv.test.v1")
     #expect(json["decision"] as? String == "deny")

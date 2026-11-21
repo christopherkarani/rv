@@ -27,7 +27,7 @@ struct ExplainGitSemanticsTests {
             probe: prettyProbe(),
             requested: .automatic
         )
-        #expect(result.exitCode == 0)
+        #expect(result.exitCode == 1)
         #expect(result.stdout.contains("Decision: DENY"))
         #expect(result.stdout.contains("working-tree overwrite/discard"))
         #expect(result.stdout.contains("file.swift"))

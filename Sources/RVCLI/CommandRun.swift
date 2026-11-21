@@ -11,7 +11,6 @@ public enum CLIKind: Equatable, Sendable {
     case testExplain
     case explain
 
-    var exitsZeroOnDeny: Bool { self == .explain }
     var usesExplainFrame: Bool { self != .test }
 }
 
@@ -209,7 +208,9 @@ public enum CommandRun {
         let authorization = observed ? verdict.wouldBe?.authorization : nil
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
-        let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
+        // Every kind exits like `rv test`: 0 allow, 1 deny or incomplete, so
+        // `rv explain cmd && …` and scripts read the verdict from the code.
+        let exitCode: Int32 = result.decision == .allow ? 0 : 1
 
         if mode == .robot {
             return try robotResult(

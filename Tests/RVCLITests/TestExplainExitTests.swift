@@ -75,14 +75,14 @@ private func robotProbe() -> ThemeProbe {
     #expect(!result.stdout.contains("denied"))
 }
 
-@Test func explain_prettyDeny_exit0() async throws {
+@Test func explain_prettyDeny_exitsOneLikeTest() async throws {
     let result = try await cliRun(
         kind: .explain,
         command: "git reset --hard",
         probe: prettyProbe(plain: true),
         requested: .automatic
     )
-    #expect(result.exitCode == 0)
+    #expect(result.exitCode == 1)
     #expect(trimOneNewline(result.stdout) == (try loadSnapshot("pretty-explain-git-reset-hard.txt")))
 }
 

@@ -98,6 +98,7 @@ private let readyService = DoctorServiceView(
     )
     #expect(allow["decision"] as? String == "allow")
     #expect(allow["next_action"] == nil)
+    #expect(allow["reason"] == nil, "an allow has no reason; it used to say \"allow\"")
 
     let incomplete = try object(
         from: explainRobotPayload(

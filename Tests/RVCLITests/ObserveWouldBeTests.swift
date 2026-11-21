@@ -90,7 +90,7 @@ struct ObserveWouldBeTests {
     @Test("rv explain shows the would-be trace and the observe note")
     func explainShowsWouldBe() async throws {
         let observe = try await Self.run(.explain, "git reset --hard", observe: true)
-        #expect(observe.exitCode == 0)
+        #expect(observe.exitCode == 1)
         #expect(observe.stdout.contains("Decision: DENY"))
         #expect(observe.stdout.contains("Rule         core.git/reset-hard"))
         #expect(observe.stdout.contains("destructive  core.git/reset-hard"))
@@ -134,7 +134,7 @@ struct ObserveWouldBeTests {
     @Test("rv explain --json carries the would-be deny, mode and effective")
     func explainRobot() async throws {
         let observe = try await Self.run(.explain, "git reset --hard", observe: true, robot: true)
-        #expect(observe.exitCode == 0)
+        #expect(observe.exitCode == 1)
         let object = try Self.json(observe.stdout)
         #expect(object["schema"] as? String == "rv.explain.v1")
         #expect(object["decision"] as? String == "deny")
