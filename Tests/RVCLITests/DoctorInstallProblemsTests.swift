@@ -6,13 +6,11 @@ import RVDomain
 import RVIPC
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTheme
 import Synchronization
 import Testing
 @testable import RVCLI
-#if canImport(XPC)
-import RVService
-#endif
 #if os(macOS)
 import RVIsolation
 #endif
@@ -264,17 +262,54 @@ private func elsewhereFix(_ userID: uid_t) -> String {
 }
 
 /// XDG_RUNTIME_DIR unset and no login manager made `/run/user/<uid>`:
-/// rvd cannot create it without root, so doctor gives rvd's root fix.
-@Test func doctorInstall_linuxMissingUserRuntimeDirectory_givesRootFix() throws {
+/// rvd cannot create it without root (the root is not writable to it,
+/// `UnixSocketPath.uncreatableUserRuntimeDirectory`), so doctor gives
+/// rvd's own root fix (`UnixSocketPath.userRuntimeDirectoryFix`).
+@Test(.enabled(if: getuid() != 0, "root can create /run/user/<uid>"))
+func doctorInstall_linuxMissingUserRuntimeDirectory_givesRootFix() throws {
+    try withInstallHome(userID: 4242) { fixture in
+        try stageHealthyInstall(fixture)
+        let root = fixture.root.path + "/run-user"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root) }
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: nil, userRuntimeRoot: root)
+        let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
+        #expect(problem.severity == .fail)
+        #expect(problem.summary == "\(root)/4242 is missing and only root can create it; rvd refuses to start")
+        #expect(problem.fix == UnixSocketPath.userRuntimeDirectoryFix(directory: "\(root)/4242", uid: 4242))
+        #expect(problem.fix.contains("mkdir -p") == false)
+    }
+}
+
+/// rvd creates a missing `/run/user/<uid>` itself when it can write the
+/// root, so doctor stays silent then.
+@Test func doctorInstall_linuxMissingUserRuntimeDirectoryUnderWritableRoot_addsNoProblem() throws {
     try withInstallHome(userID: 4242) { fixture in
         try stageHealthyInstall(fixture)
         let root = fixture.root.path + "/run-user"
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: nil, userRuntimeRoot: root)
+        #expect(problems(fixture).isEmpty)
+    }
+}
+
+/// A custom `XDG_RUNTIME_DIR` that cannot even be looked up (an ancestor
+/// is a file, or not searchable) is a base rvd cannot create: doctor says
+/// so instead of passing the install.
+@Test func doctorInstall_linuxUnreachableRuntimeDirectory_failsNamingIt() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let file = fixture.root.path + "/not-a-dir"
+        try Data("x".utf8).write(to: URL(fileURLWithPath: file))
+        let base = file + "/runtime"
+        fixture.environment.install?.socketBase = SocketBaseEnvironment(xdgRuntimeDir: base)
         let problem = try #require(problems(fixture).first { $0.id == "runtime-dir" })
         #expect(problem.severity == .fail)
-        #expect(problem.summary == "\(root)/4242 is missing and only root can create it; rvd refuses to start")
-        #expect(problem.fix.hasPrefix("as root, mkdir -p -m 0700 \(root)/4242 && chown 4242 \(root)/4242; "))
+        #expect(problem.summary.hasPrefix("\(base) cannot be looked up ("))
+        #expect(problem.summary.hasSuffix("); rvd cannot create its socket there, and this shell and its agents dial it"))
+        #expect(problem.fix == elsewhereFix(getuid()))
+        #expect(doctorPretty(fixture).exitCode == 1)
     }
 }
 
