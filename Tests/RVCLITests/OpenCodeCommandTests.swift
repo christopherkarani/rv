@@ -229,10 +229,7 @@ struct OpenCodeFrontendTests {
         let bin = fixture.root.appendingPathComponent("bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let executable = bin.appendingPathComponent("opencode")
-        try "#!/bin/sh\nprintf installed > marker\n".write(
-            to: executable, atomically: true, encoding: .utf8
-        )
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try writeExecutableScript(at: executable, source: "#!/bin/sh\nprintf installed > marker\n")
         var environment = fixture.environment
         environment["PATH"] = "relative:\(bin.path)"
         let launched = try runRV(
