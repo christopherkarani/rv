@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "Extract a deterministic policy evaluator from a service that currently reads the environment, logs, and calls the filesystem directly.",
+    "expected_output": "A pure input-to-decision core with explicit domain outcomes and an effectful shell that supplies facts and performs effects.",
+    "assertions": ["separates facts, decisions, and effects", "models outcomes explicitly", "does not hide I/O in the core"]
+  }
+]

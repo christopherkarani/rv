@@ -11,14 +11,15 @@ public enum DoctorSnapshotBuilder {
         corePacksReady: Bool,
         idleExitSeconds: Int,
         lastError: String? = nil,
-        keepAlive: Bool = false,
         home: HomeDirectory? = nil,
         judgePool: JudgePoolProbe = .unbound
     ) -> DoctorSnapshotReply {
+        // The installed template's supervisor: the LaunchAgent is KeepAlive
+        // on macOS; Linux's systemd unit is Restart=always, not KeepAlive.
 #if os(Linux)
         let reportedKeepAlive = false
 #else
-        let reportedKeepAlive = keepAlive
+        let reportedKeepAlive = true
 #endif
         var checks: [DoctorCheck] = [
             DoctorCheck(id: .xpc, status: .ok, message: "mach service \(RVService.machServiceName)"),
@@ -152,13 +153,8 @@ public enum DoctorSnapshotBuilder {
         idleExitSeconds: Int
     ) -> String {
         let label = RVService.machServiceName
-        if keepAlive {
-            return "template \(label) KeepAlive true"
-        }
-#if os(Linux)
-        return "template \(label) Restart=always idle-exit \(idleExitSeconds)s"
-#else
-        return "template \(label) KeepAlive false idle-exit \(idleExitSeconds)s"
-#endif
+        let idleExit = idleExitSeconds > 0 ? "idle-exit \(idleExitSeconds)s" : "idle-exit off"
+        let supervisor = keepAlive ? "KeepAlive true" : "Restart=always"
+        return "template \(label) \(supervisor) \(idleExit)"
     }
 }

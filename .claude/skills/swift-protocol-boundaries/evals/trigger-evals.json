@@ -1,0 +1,5 @@
+[
+  {"prompt":"Add version negotiation and malformed-frame handling to this XPC protocol.","should_trigger":true},
+  {"prompt":"Fix a value-semantic aliasing bug in a local struct.","should_trigger":false},
+  {"prompt":"Choose a mutex for a short critical section.","should_trigger":false}
+]

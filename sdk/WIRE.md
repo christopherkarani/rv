@@ -229,7 +229,9 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 
 `Sources/RVIPC/IPCDoctor.swift`. `DoctorSnapshotReply{protocol, serviceSemver,
 label, state, keepAlive, idleExitSeconds, packsEnabled[], lastError?, checks[]}`.
-`state` ∈ `running|idleExitArmed|down|skew` (closed). `DoctorCheck{id, status,
+`state` ∈ `running|idleExitArmed|down|skew` (closed). `idleExitSeconds` 0
+means idle exit is off, the default (rvd stays up until stopped; supervised
+installs keep it running). `DoctorCheck{id, status,
 message}`: `status` ∈ `ok|warning|error|skipped` (closed); `id` is an open
 extension point — decoders must tolerate unknown check ids (preserve raw,
 degrade gracefully), because new checks are additive.
@@ -384,9 +386,10 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
   `Sources/RVCLI/Service/XPCClient.swift`). Hello uses the 200 ms connect budget.
 - Unix-socket SDKs mirror this: 200 ms connect, 700 ms default per-call budget,
   both configurable. Timeouts are transport errors, never verdicts.
-- Idle exit: `rvd` exits after 300 s without a ping (`IdleWatchdog.defaultSeconds`,
-  `Sources/RVService/IdleExit.swift`); launchd/systemd supervise on demand.
-  Short RPCs compose with this; clients hold no persistent connections.
+- Idle exit: off by default (`IdleWatchdog.defaultSeconds` is 0,
+  `Sources/RVService/IdleExit.swift`); launchd (KeepAlive) and systemd
+  (Restart=always) keep `rvd` resident and relaunch it after any exit.
+  `--idle-exit-seconds N` opts in. Clients hold no persistent connections.
 - `rvd --version` prints the product semver line (`Sources/rvd/main.swift`,
   `RVDLaunch.versionLine`) and is the product-version probe.
 

@@ -10,9 +10,7 @@ import RVTheme
 import Synchronization
 import Testing
 @testable import RVCLI
-#if canImport(XPC)
 import RVService
-#endif
 #if os(macOS)
 import RVIsolation
 #endif
@@ -128,6 +126,96 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
         #expect(problem.fix.contains("\(fixture.paths.localRv) setup"))
         #expect(doctorPretty(fixture).exitCode == 1)
     }
+}
+
+/// Two always-on copies: launchd keeps both alive and they race for the
+/// Unix socket and the judge.
+@Test func doctorInstall_jobLoadedInBothDomains_warnsWithSetupFix() throws {
+    try withInstallHome(
+        launchd: LaunchdObservation(guiDomainExists: true, loadedInGui: true, loadedInUser: true)
+    ) { fixture in
+        try stageHealthyInstall(fixture)
+        let problem = try #require(problems(fixture).first { $0.id == "launchd-domain-duplicate" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("gui/"))
+        #expect(problem.summary.contains("user/"))
+        #expect(problem.fix == "run \(fixture.paths.localRv) setup")
+        #expect(problems(fixture).contains { $0.id == "launchd-domain" } == false)
+    }
+}
+
+/// A plist an earlier rv wrote (on demand, KeepAlive false) leaves rvd down
+/// after a crash until the next hook call.
+@Test func doctorInstall_onDemandPlistFromAnEarlierRv_warnsToRerunSetup() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let onDemand = try LaunchAgentTemplate.rendered(rvdPath: fixture.paths.localRvd)
+            .replacingOccurrences(of: "<key>RunAtLoad</key>\n\t<true/>", with: "<key>RunAtLoad</key>\n\t<false/>")
+        let keepAliveStart = try #require(onDemand.range(of: "<key>KeepAlive</key>"))
+        let keepAliveEnd = try #require(onDemand.range(of: "</dict>\n\t</dict>", range: keepAliveStart.upperBound..<onDemand.endIndex))
+        let stale = onDemand.replacingCharacters(
+            in: keepAliveStart.lowerBound..<keepAliveEnd.upperBound, with: "<key>KeepAlive</key>\n\t<false/>")
+        try stale.write(toFile: fixture.paths.launchAgent, atomically: true, encoding: .utf8)
+        #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: fixture.paths.launchAgent, rvdPath: fixture.paths.localRvd) == false)
+
+        let problem = try #require(problems(fixture).first { $0.id == "launch-agent-on-demand" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("KeepAlive"))
+        #expect(problem.fix == "run \(fixture.paths.localRv) setup")
+    }
+}
+
+/// rvd's crash-loop record: a down rvd that is waiting out its backoff is
+/// named as such, with the log to read and the restart that skips it.
+@Test func doctorInstall_rvdInStartupBackoff_warnsWithTheLogAndRestart() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let store = StartupBackoffStore.live(home: fixture.paths.home.rawValue)
+        store.save(StartupBackoff.Record(earlyExits: 1, running: true))
+        #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false)
+
+        store.save(StartupBackoff.Record(earlyExits: 3, running: true))
+        let problem = try #require(problems(fixture).first { $0.id == "rvd-startup-backoff" })
+        #expect(problem.severity == .warn)
+        #expect(problem.summary.contains("3 times in a row"))
+        #expect(problem.summary.contains("up to 10 s"))
+        #expect(problem.summary.contains(RVDLogFile.path(home: fixture.paths.home.rawValue)))
+        #expect(problem.fix.contains("rv service restart"))
+
+        store.save(.survived)
+        #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false)
+    }
+}
+
+/// A forged record (negative or `Int.min` count) neither traps doctor nor
+/// shows a row.
+@Test func doctorInstall_forgedStartupBackoffRecord_isIgnored() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let store = StartupBackoffStore.live(home: fixture.paths.home.rawValue)
+        for forged in [Int.min, -5, 0] {
+            store.save(StartupBackoff.Record(earlyExits: forged, running: true))
+            #expect(problems(fixture).contains { $0.id == "rvd-startup-backoff" } == false, "\(forged)")
+        }
+    }
+}
+
+@Test func doctorInstall_alwaysOnShapes_areRecognised() throws {
+    let rvd = "/h/.local/bin/rvd"
+    func plist(_ keepAlive: Any, runAtLoad: Bool = true) throws -> String {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("rv-ka-\(UUID().uuidString).plist").path
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["Label": "dev.rv.evaluate", "ProgramArguments": [rvd], "RunAtLoad": runAtLoad, "KeepAlive": keepAlive],
+            format: .xml, options: 0)
+        try data.write(to: URL(fileURLWithPath: path))
+        return path
+    }
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(["PathState": [rvd: true]]), rvdPath: rvd))
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(true), rvdPath: rvd))
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(false), rvdPath: rvd) == false)
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(["PathState": ["/elsewhere": true]]), rvdPath: rvd) == false)
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(["SuccessfulExit": false]), rvdPath: rvd) == false)
+    #expect(DoctorInstallChecks.launchAgentKeepsRvdUp(at: try plist(true, runAtLoad: false), rvdPath: rvd) == false)
 }
 
 @Test func doctorInstall_jobInUserDomainWithoutAqua_isFine() throws {

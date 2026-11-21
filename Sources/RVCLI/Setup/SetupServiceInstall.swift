@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVService
 
 extension SetupRun {
     /// Renders the plist and, when this HOME owns the real launchd session,
@@ -12,10 +13,9 @@ extension SetupRun {
     static func writeLaunchAgent(
         env: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps,
-        keepAlive: Bool
+        files: FileOps
     ) throws(SetupError) -> String? {
-        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath, keepAlive: keepAlive)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.launchAgent)
         } catch {
@@ -29,8 +29,8 @@ extension SetupRun {
         return domain
     }
 
-    // Wired by setup alone, never by `writeLaunchAgent`: restart and the
-    // KeepAlive repair reload rvd only, and booting out the custodian would
+    // Wired by setup alone, never by `writeLaunchAgent`: restart reloads
+    // rvd only, and booting out the custodian would
     // kill an approval waiting on Touch ID.
     // The approvals custodian ships separately (RVApprovals.app). Register it
     // only when the bundle executable is installed; without it MCP approvals
@@ -86,6 +86,13 @@ extension SetupRun {
             return .notLoaded
         }
         return nil
+    }
+
+    /// An operator start (setup, `rv service restart|start`) is not a crash
+    /// loop: forget rvd's early exits so the new rvd starts without waiting
+    /// out `StartupBackoff`.
+    static func clearStartupBackoff(_ env: SetupEnvironment) {
+        StartupBackoffStore.live(home: env.home.rawValue).reset()
     }
 
     /// Polling cadence and ceiling for the job to leave launchd after bootout.
