@@ -424,7 +424,7 @@ struct SecretGatewayTests {
         #expect(records.map(\.activity) == [.refused, .refused, .blocked])
     }
 
-    /// The client reacts to a 403 at once, and `rv run` then stops the
+    /// The client reacts to a refusal at once, and `rv run` then stops the
     /// gateway, dropping every placeholder. The misuse finding must already
     /// be decided and recorded by the time the response leaves.
     @Test func aMisuseRefusalIsRecordedAsBlockedEvenIfThePlaceholderGoesOnceTheResponseIsSent() throws {
@@ -442,7 +442,8 @@ struct SecretGatewayTests {
         defer { gateway.stop() }
 
         let response = try gatewayExchange(port: port, "TRACE /s/OPENAI_API_KEY/x HTTP/1.1\r\n\r\n")
-        #expect(response.status == 403)
+        // An echo method is refused as 405 Method Not Allowed.
+        #expect(response.status == 405)
         #expect(gateway.liveCount == 0)
         let records = audit.items.withLock { $0 }
         #expect(records.map(\.refusal?.code) == ["echoMethod"])
