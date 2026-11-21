@@ -283,16 +283,18 @@ enum PolicyLoadWait {
         case timedOut(PolicyStatusObservation?)
     }
 
-    static func run(
+    /// `clock` measures the deadline and paces polls; tests pass one that
+    /// moves only when the wait sleeps.
+    static func run<C: Clock<Duration>>(
         layer: PolicyDocumentLayer,
         hash: String,
         cwd: WorkingDirectory?,
         timeout: Duration,
         pollInterval: Duration = .milliseconds(200),
         callTimeout: Duration = PolicyStatusRun.callTimeout,
+        clock: C = ContinuousClock(),
         observe: PolicyStatusSource
     ) async -> Outcome {
-        let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         var last: PolicyStatusObservation?
         while true {
