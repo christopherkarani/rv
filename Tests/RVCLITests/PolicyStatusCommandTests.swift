@@ -176,12 +176,14 @@ struct PolicyStatusCommandTests {
         #expect(clock.now - started >= .milliseconds(300))
     }
 
+    /// Polls, not wall time, decide this outcome: on a loaded runner a
+    /// 10 ms poll sleep resumed past a 60 s wall-clock deadline (macOS CI).
     @Test func wait_returnsOnceRvdReportsTheSavedHash() async {
         let calls = Counter()
-        // Generous: the wait returns on the third poll, and a starved test
-        // pool (Linux CI) can delay a 10 ms poll sleep by seconds.
+        let clock = PollClock()
         let outcome = await PolicyLoadWait.run(
-            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(60), pollInterval: .milliseconds(10),
+            layer: .repo, hash: "new", cwd: nil, timeout: .seconds(5), pollInterval: .milliseconds(10),
+            clock: clock,
             observe: { _, _ in
                 let hash = calls.next() < 2 ? "old" : "new"
                 return .rvd(PolicyLoadStatus(
@@ -189,6 +191,8 @@ struct PolicyStatusCommandTests {
             })
         #expect(outcome == .loaded)
         #expect(calls.value == 3)
+        // Two poll sleeps between the three answers, nothing else.
+        #expect(clock.elapsed == .milliseconds(20))
     }
 
     @Test func wait_failsFastWhenRvdCannotLoad() async {
@@ -330,6 +334,27 @@ private final class Recorder<Value: Sendable>: Sendable {
     private let state = Mutex<[Value]>([])
     var values: [Value] { state.withLock { $0 } }
     func append(_ value: Value) { state.withLock { $0.append(value) } }
+}
+
+/// A clock whose time moves only when the code under test sleeps on it,
+/// so a deadline passes after a number of polls, never because a starved
+/// test pool resumed a sleep late.
+private final class PollClock: Clock, Sendable {
+    struct Instant: InstantProtocol {
+        let offset: Duration
+        func advanced(by duration: Duration) -> Instant { Instant(offset: offset + duration) }
+        func duration(to other: Instant) -> Duration { other.offset - offset }
+        static func < (lhs: Instant, rhs: Instant) -> Bool { lhs.offset < rhs.offset }
+    }
+
+    private let current = Mutex(Instant(offset: .zero))
+    var now: Instant { current.withLock { $0 } }
+    var minimumResolution: Duration { .zero }
+    var elapsed: Duration { now.offset }
+
+    func sleep(until deadline: Instant, tolerance: Duration?) async throws {
+        current.withLock { $0 = Swift.max($0, deadline) }
+    }
 }
 
 private final class Counter: Sendable {
