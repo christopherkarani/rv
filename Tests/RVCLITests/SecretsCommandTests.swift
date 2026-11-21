@@ -628,7 +628,7 @@ struct SecretsCommandTests {
         }
         #expect(failure.message
             == "could not store ACME_KEY \(SecretKeychainWriter.storeFailureSuffix); its definition was saved to "
-                + "secrets.json, but no value is stored: once \(SecretKeychain.storeName) is available, run this "
+                + "secrets.json, but the value you gave was not stored: once \(SecretKeychain.storeName) is available, run this "
                 + "command again or `rv secrets set ACME_KEY` to store it")
     }
 
