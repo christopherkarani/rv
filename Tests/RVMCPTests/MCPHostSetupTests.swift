@@ -220,10 +220,10 @@ struct MCPImportTests {
 
         var plain = definition
         plain.sandbox = nil
-        guard case .failure(.sandbox) = MCPLaunchPlanner.plan(
+        guard case .success(let refused) = MCPLaunchPlanner.plan(
             servers: ["s"], configuration: MCPConfiguration(servers: [plain]), secrets: secrets, resolver: resolver,
             baseEnvironment: base, requireSandbox: true
-        ) else {
+        ), case .refused(_, .sandbox(_))? = refused.first?.1 else {
             Issue.record("launch without a sandbox must be refused where the cage is enforced")
             return
         }
