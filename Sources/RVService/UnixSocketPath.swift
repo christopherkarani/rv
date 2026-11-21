@@ -202,12 +202,100 @@ public enum UnixSocketPath {
     private static func prepareUserRuntimeDirectory(_ url: URL, root: String, uid: UInt32) throws {
         if lstatKind(url.path) == nil {
             if lstatKind(root) == nil, uid == 0 {
-                guard mkdir(root, 0o755) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
+                if mkdir(root, 0o755) == 0 {
+                    // mkdir's mode passes through the umask: root's 077
+                    // would leave /run/user 0700, which no other account
+                    // could search for its own directory.
+                    guard chmod(root, 0o755) == 0 else { throw UnixSocketPathError.permission }
+                } else {
+                    guard errno == EEXIST else { throw UnixSocketPathError.permission }
+                }
             }
             guard mkdir(url.path, 0o700) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
         }
         guard lstatKind(url.path) == UInt32(S_IFDIR) else { throw UnixSocketPathError.permission }
         try prepareBaseDirectory(url)
+    }
+
+    /// Why rvd cannot use the uid-derived runtime directory
+    /// (`userRuntimeDirectoryUnavailable`), and what root runs to fix
+    /// it. Read from the file system after the failure; it decides
+    /// nothing.
+    public struct UserRuntimeDirectoryProblem: Sendable, Equatable {
+        public let reason: String
+        public let fix: String
+    }
+
+    public static func userRuntimeDirectoryProblem(
+        _ directory: String, userRuntimeRoot root: String = userRuntimeRoot, uid: UInt32 = getuid()
+    ) -> UserRuntimeDirectoryProblem {
+        let make = "install -d -m 0700 -o \(uid) \(directory)"
+        var status = stat()
+        guard lstat(directory, &status) == 0 else {
+            return unexaminableUserRuntimeDirectoryProblem(directory, userRuntimeRoot: root, uid: uid, error: errno)
+        }
+        let kind = UInt32(status.st_mode) & UInt32(S_IFMT)
+        guard kind == UInt32(S_IFDIR) else {
+            let what = kind == UInt32(S_IFLNK) ? "a symbolic link" : "not a directory"
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) is \(what)", fix: "as root, remove \(directory), then \(make)")
+        }
+        guard UInt32(status.st_uid) == uid else {
+            // Not chown in place: whatever the other account put inside
+            // would stay, and stay its own.
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) belongs to uid \(status.st_uid), not to this account (uid \(uid))",
+                fix: "as root, remove \(directory), then \(make)")
+        }
+        let fix = "as root, \(make)"
+        let mode = UInt32(status.st_mode) & 0o7777
+        guard mode & 0o022 == 0 else {
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) has mode 0\(String(mode, radix: 8)), which group or others can write", fix: fix)
+        }
+        return UserRuntimeDirectoryProblem(reason: "\(directory) could not be prepared", fix: fix)
+    }
+
+    /// `lstat(directory)` failed with `error`. Only a missing directory is
+    /// "does not exist": EACCES means a directory on the way is not
+    /// searchable by this account, and making the runtime directory would
+    /// change nothing until it is.
+    static func unexaminableUserRuntimeDirectoryProblem(
+        _ directory: String, userRuntimeRoot root: String, uid: UInt32, error: Int32
+    ) -> UserRuntimeDirectoryProblem {
+        let make = "install -d -m 0700 -o \(uid) \(directory)"
+        switch error {
+        case ENOENT where lstatKind(root) == nil:
+            // `install -d -m 0755`, not `mkdir`: root's umask could leave
+            // /run/user 0700, which no other account can search.
+            return UserRuntimeDirectoryProblem(
+                reason: "\(root) does not exist (no login manager made it\(uid == 0 ? ", and rvd could not" : ""))",
+                fix: "as root, install -d -m 0755 \(root) && \(make)")
+        case ENOENT:
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) does not exist and this account cannot create it in \(root)",
+                fix: "as root, \(make)")
+        case EACCES:
+            let blocked = firstUnsearchableAncestor(of: directory) ?? root
+            return UserRuntimeDirectoryProblem(
+                reason: "\(blocked) is not searchable by this account (uid \(uid)), so rvd cannot reach \(directory)",
+                fix: "as root, chmod go+x \(blocked), then, if \(directory) does not exist, \(make)")
+        default:
+            return UserRuntimeDirectoryProblem(
+                reason: "\(directory) cannot be examined (\(String(cString: strerror(error))))",
+                fix: "as root, \(make)")
+        }
+    }
+
+    /// The first directory from `/` down to `path`'s parent that this
+    /// process may not search, or nil when every one is searchable.
+    private static func firstUnsearchableAncestor(of path: String) -> String? {
+        var prefix = ""
+        for component in path.split(separator: "/").dropLast() {
+            prefix += "/\(component)"
+            if access(prefix, X_OK) != 0 { return prefix }
+        }
+        return nil
     }
 
     private static func lstatKind(_ path: String) -> UInt32? {
