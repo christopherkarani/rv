@@ -94,7 +94,9 @@ The flags that shape a gateway secret:
 `--allow`, `--surface` and the delivery apply only when the secret is
 first defined. To change them later, edit `secrets.json`. Running
 `rv secrets set NAME` again for an existing secret stores a new value,
-which running gateway sessions use from their next request.
+which running gateway sessions use from their next request. So does
+running the command that defined it again with the same flags; with
+different flags it is refused.
 
 Values can also come from 1Password, Vault, AWS Secrets Manager, GCP,
 Azure, Infisical or Bitwarden, or an OAuth token minted by rv: write the
@@ -103,7 +105,7 @@ kinds). On Linux the Keychain-backed sources (`rv secrets set`,
 `rv login connect`) need `secret-tool`; without it:
 
 ```text
-rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring)
+rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but the value you gave was not stored: once the Secret Service keyring is available, run this command again or `rv secrets set OPENAI_API_KEY` to store it
 ```
 
 Check what you have:
