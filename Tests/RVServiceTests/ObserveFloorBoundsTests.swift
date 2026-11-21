@@ -58,22 +58,33 @@ struct ObserveFloorBoundsTests {
         #expect(result.decision != .allow, "\(command)")
     }
 
-    /// Thousands of `xargs` words as data, some inside quoted scripts.
+    /// Thousands of `xargs` words as data, some inside quoted scripts, cost
+    /// about what the same line of ordinary words costs. Measured against
+    /// that line, not a fixed bound: evaluating a line this long takes tens
+    /// of seconds in a debug build on a loaded runner (44 s on macOS CI)
+    /// whatever its words are, while a per-word rescan of the `xargs` words
+    /// ran 49 s to 292 s against under 4 s.
     @Test("observe host: a long line of xargs words is read in bounded time")
     func longLimitedXargsLineBounded() async throws {
         let home = try observeHome()
         defer { remove(home) }
-        let words = Array(repeating: "xargs 'a b' \"xargs 'c d'\"", count: 3000).joined(separator: " ")
-        let command = "echo . | xargs rm " + words
-        let clock = ContinuousClock()
-        let start = clock.now
-        _ = await GatedEvaluate().apply(
-            command: ShellCommand(rawValue: command), cwd: nil, home: home,
-            grants: EphemeralAllowOnceTable(), now: Self.now,
-            allowlist: { .empty }, host: .hook(.claude)
-        )
-        let elapsed = clock.now - start
-        #expect(elapsed < Self.wallClockBound, "\(elapsed)")
+        func line(_ word: String) -> String {
+            "echo . | xargs rm "
+                + Array(repeating: "\(word) 'a b' \"\(word) 'c d'\"", count: 3000).joined(separator: " ")
+        }
+        func elapsed(_ command: String) async -> Duration {
+            let clock = ContinuousClock()
+            let start = clock.now
+            _ = await GatedEvaluate().apply(
+                command: ShellCommand(rawValue: command), cwd: nil, home: home,
+                grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { .empty }, host: .hook(.claude)
+            )
+            return clock.now - start
+        }
+        let ordinary = await elapsed(line("yargs"))
+        let xargs = await elapsed(line("xargs"))
+        #expect(xargs < ordinary * 4 + .seconds(10), "xargs words: \(xargs); ordinary words: \(ordinary)")
     }
 
     @Test("observe host: an everyday xargs write is still recorded, not held", arguments: [
