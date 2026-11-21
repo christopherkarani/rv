@@ -8,9 +8,9 @@ import Glibc
 ///
 /// IPv4-mapped IPv6 (`::ffff:a.b.c.d`) folds to the IPv4 address it names,
 /// so one list judges both spellings of the same host and a mapped
-/// loopback or metadata address meets the IPv4 forbidden ranges. No other
+/// loopback or metadata address meets the IPv4 `never` ranges. No other
 /// IPv6 form folds: NAT64, 6to4, Teredo, compatible and translated
-/// addresses stay IPv6 and sit inside forbidden ranges instead.
+/// addresses stay IPv6 and sit inside `never` ranges (`DialAddress`) instead.
 public struct EgressIPAddress: Sendable, Hashable, Comparable, CustomStringConvertible {
     public enum Family: Int, Sendable, Hashable {
         case ipv4 = 4
@@ -176,9 +176,13 @@ public struct EgressCIDR: Sendable, Hashable, Comparable, CustomStringConvertibl
 /// The proxy relays public unicast only. An endpoint that lists
 /// `allowed_ips` may also reach non-public addresses, but only when every
 /// address its name resolves to is covered by the list (a mixed answer
-/// with one uncovered address is refused whole). The ranges below never
-/// open: an entry that touches one is refused at parse time, and
-/// `covers` checks the resolved address against them again at dial time.
+/// with one uncovered address is refused whole). The dial-address table's
+/// `never` ranges (`DialAddress`) never open: an entry that touches one is
+/// refused at parse time, and `covers` checks the resolved address against
+/// them again at dial time. The IPv6 forms that embed an IPv4 peer are
+/// `never`, so the owner lists the IPv4 network instead; a mapped entry
+/// folds to IPv4 here, and a wider IPv6 network that spans the mapped
+/// block meets the table's mapped row rather than sitting silently inert.
 /// The only way to build a list is `init(parsing:)`, so a list never holds
 /// a forbidden or malformed entry.
 public struct EgressAllowedIPs: Sendable, Hashable {
@@ -193,92 +197,28 @@ public struct EgressAllowedIPs: Sendable, Hashable {
         var parsed = Set<EgressCIDR>()
         for entry in entries {
             let cidr = try EgressCIDR(parsing: entry)
-            if let blocked = Self.forbiddenRanges.first(where: { $0.network.overlaps(cidr) }) {
-                throw .forbidden(entry: entry, range: blocked.network.description, reason: blocked.reason)
-            }
-            if Self.spansMappedBlock(cidr) {
-                throw .forbidden(entry: entry, range: "::ffff:0:0/96", reason: "IPv4-mapped; list the IPv4 network")
+            if let blocked = DialAddress.neverRange(overlapping: cidr.network.bytes, prefixLength: cidr.prefixLength) {
+                throw .forbidden(entry: entry, range: blocked.description, reason: blocked.reason)
             }
             parsed.insert(cidr)
         }
         networks = parsed.sorted()
     }
 
+    /// Skips the parse-time refusal, so tests can show `covers` refuses a
+    /// `never` address on its own. Internal: nothing outside tests uses it.
+    init(unvalidated networks: [EgressCIDR]) {
+        self.networks = networks.sorted()
+    }
+
     /// Canonical spellings, for listings, reviews and risk reports.
     public var entries: [String] { networks.map(\.description) }
 
-    /// True when `address` is inside the list and outside every forbidden
+    /// True when `address` is inside the list and outside every `never`
     /// range (the runtime half of the parse-time refusal).
     public func covers(_ address: EgressIPAddress) -> Bool {
-        guard Self.isForbidden(address) == false else { return false }
+        guard DialAddress.judgment(of: address.bytes) != .never else { return false }
         return networks.contains { $0.contains(address) }
-    }
-
-    public static func isForbidden(_ address: EgressIPAddress) -> Bool {
-        forbiddenRanges.contains { $0.network.contains(address) }
-    }
-
-    /// An IPv6 network of /96 or wider whose prefix matches `::ffff:0:0/96`.
-    /// (Narrower mapped networks already folded to IPv4 in `EgressCIDR`.)
-    static func spansMappedBlock(_ cidr: EgressCIDR) -> Bool {
-        guard cidr.network.family == .ipv6, cidr.prefixLength <= 96 else { return false }
-        let mapped: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0]
-        return egressMask(cidr.network.bytes, prefix: cidr.prefixLength) == egressMask(mapped, prefix: cidr.prefixLength)
-    }
-
-    struct ForbiddenRange: Sendable {
-        var network: EgressCIDR
-        var reason: String
-    }
-
-    /// Never relayed, listed or not. The IPv6 transition forms (compatible,
-    /// translated, NAT64, Teredo, 6to4) embed an IPv4 peer the host may
-    /// dial, so they are refused whole; list the IPv4 network instead.
-    /// Mapped addresses fold to IPv4 and meet the IPv4 ranges. The mapped
-    /// block cannot be listed here (`EgressCIDR` folds it to 0.0.0.0/0), so
-    /// `spansMappedBlock` refuses a wider IPv6 network that covers it,
-    /// which would otherwise sit silently inert.
-    ///
-    /// The IPv4 blocks `EgressWire.isPublicIPv4` refuses as never a LAN
-    /// service are here too: 192.0.0.0/24 (IETF protocol assignments, and
-    /// Oracle's legacy metadata 192.0.0.192), the 6to4 relay anycast,
-    /// documentation and benchmarking; so are the IPv6 documentation and
-    /// IETF-assignment blocks. Not every block `isPublicIPv6` refuses is
-    /// listed: unallocated space such as 4000::/2, the 100::/64 discard
-    /// prefix and 5f00::/16 SRv6 SIDs stay listable, which is harmless
-    /// (nothing answers there). AWS's IPv6 platform hosts (metadata, DNS,
-    /// time) are refused one by one, so the rest of ULA stays listable.
-    static let forbiddenRanges: [ForbiddenRange] = ([
-        ("0.0.0.0/8", "unspecified"),
-        ("127.0.0.0/8", "loopback"),
-        ("169.254.0.0/16", "link-local and cloud metadata"),
-        ("100.100.100.200/32", "cloud metadata"),
-        ("168.63.129.16/32", "cloud platform endpoint"),
-        ("192.0.0.0/24", "IETF protocol assignments and cloud metadata"),
-        ("192.88.99.0/24", "6to4 relay anycast"),
-        ("192.0.2.0/24", "documentation"),
-        ("198.51.100.0/24", "documentation"),
-        ("203.0.113.0/24", "documentation"),
-        ("198.18.0.0/15", "benchmarking"),
-        ("224.0.0.0/4", "multicast"),
-        ("240.0.0.0/4", "reserved and broadcast"),
-        ("::/96", "unspecified, loopback and IPv4-compatible"),
-        ("::ffff:0:0:0/96", "IPv4-translated"),
-        ("64:ff9b::/32", "NAT64"),
-        ("2001::/32", "Teredo"),
-        ("2001::/23", "IETF protocol assignments and benchmarking"),
-        ("2001:db8::/32", "documentation"),
-        ("3fff::/20", "documentation"),
-        ("2002::/16", "6to4"),
-        ("fe80::/10", "link-local"),
-        ("fec0::/10", "site-local"),
-        ("ff00::/8", "multicast"),
-        ("fd00:ec2::254/128", "cloud metadata"),
-        ("fd00:ec2::253/128", "cloud DNS resolver"),
-        ("fd00:ec2::123/128", "cloud time service"),
-        ("fd20:ce::254/128", "cloud metadata"),
-    ] as [(String, String)]).compactMap { text, reason in
-        (try? EgressCIDR(parsing: text)).map { ForbiddenRange(network: $0, reason: reason) }
     }
 }
 
@@ -331,7 +271,7 @@ private func egressStrictIPv6(_ text: String) -> [UInt8]? {
 /// RFC 5952 text, the same on every platform (`inet_ntop` spells embedded
 /// IPv4 forms differently on Darwin and glibc): lowercase hex groups, the
 /// first longest run of two or more zero groups as `::`, no dotted tail.
-private func egressPresentIPv6(_ bytes: [UInt8]) -> String {
+func egressPresentIPv6(_ bytes: [UInt8]) -> String {
     let groups = stride(from: 0, to: 16, by: 2).map { UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1]) }
     var best = (start: -1, length: 0)
     var index = 0

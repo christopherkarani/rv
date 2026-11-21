@@ -33,37 +33,34 @@ public enum HTTPIPFamily: String, Sendable, Equatable, Codable {
     case ipv6
 }
 
-/// Why an address is not a public HTTPS peer.
+/// Whether the admission GET may dial a destination.
 ///
-/// `publicGlobal` is the only class the executor may dial.
+/// `publicGlobal` is the only class the executor may dial. An address is
+/// judged by the dial-address table (`DialAddress`) read literally, so the
+/// IPv6 forms that embed an IPv4 address are never dialed here: the
+/// admission GET dials exactly the address it judged.
 public enum HTTPAddressClass: String, Sendable, Equatable, Codable {
     case publicGlobal
-    case loopback
-    case unspecified
-    case privateUnicast
-    case linkLocal
-    case uniqueLocal
-    case multicast
-    case broadcast
-    case documentation
-    case sharedCGNAT
-    case mapped
+    /// Inside a range of the dial-address table.
+    case nonPublic
+    /// A name refused before lookup.
     case localName
-    case reserved
+    /// No address to judge.
+    case unresolved
 }
 
-/// One IP address, classified from its bytes.
+/// One IP address, judged from its bytes.
 ///
-/// Presentation and class are derived. A decoded value cannot claim a
-/// different class than those bytes.
+/// Presentation and judgment are derived. A decoded value cannot claim a
+/// different judgment than those bytes.
 public struct HTTPIPAddress: Hashable, Sendable, Equatable {
     public let family: HTTPIPFamily
     public let presentation: String
     public let bytes: [UInt8]
-    package let addressClass: HTTPAddressClass
+    package let judgment: DialJudgment
 
     public var isPublicGlobal: Bool {
-        addressClass == .publicGlobal
+        judgment == .publicUnicast
     }
 
     public init?(ipv4 bytes: [UInt8]) {
@@ -71,7 +68,7 @@ public struct HTTPIPAddress: Hashable, Sendable, Equatable {
         self.family = .ipv4
         self.bytes = bytes
         self.presentation = "\(bytes[0]).\(bytes[1]).\(bytes[2]).\(bytes[3])"
-        self.addressClass = HTTPAddressClass.classify(ipv4: bytes)
+        self.judgment = DialAddress.judgment(of: bytes)
     }
 
     public init?(ipv6 bytes: [UInt8]) {
@@ -79,7 +76,7 @@ public struct HTTPIPAddress: Hashable, Sendable, Equatable {
         self.family = .ipv6
         self.bytes = bytes
         self.presentation = HTTPAddressClass.present(ipv6: bytes)
-        self.addressClass = HTTPAddressClass.classify(ipv6: bytes)
+        self.judgment = DialAddress.judgment(of: bytes)
     }
 }
 
@@ -138,52 +135,6 @@ package func selectHTTPAddresses(_ addresses: [HTTPIPAddress]) -> HTTPAddressSel
 }
 
 extension HTTPAddressClass {
-    static func classify(ipv4 bytes: [UInt8]) -> HTTPAddressClass {
-        let value = (UInt32(bytes[0]) << 24) | (UInt32(bytes[1]) << 16)
-            | (UInt32(bytes[2]) << 8) | UInt32(bytes[3])
-        if value == 0xffff_ffff { return .broadcast }
-        if value == 0 { return .unspecified }
-        if inNetwork(value, 0x0000_0000, 8) { return .unspecified }
-        if inNetwork(value, 0x7f00_0000, 8) { return .loopback }
-        if inNetwork(value, 0x0a00_0000, 8) { return .privateUnicast }
-        if inNetwork(value, 0x6440_0000, 10) { return .sharedCGNAT }
-        if inNetwork(value, 0xa9fe_0000, 16) { return .linkLocal }
-        if inNetwork(value, 0xac10_0000, 12) { return .privateUnicast }
-        if inNetwork(value, 0xc000_0000, 24) { return .reserved }
-        if inNetwork(value, 0xc000_0200, 24) { return .documentation }
-        if inNetwork(value, 0xc0a8_0000, 16) { return .privateUnicast }
-        if inNetwork(value, 0xc612_0000, 15) { return .reserved }
-        if inNetwork(value, 0xc633_6400, 24) { return .documentation }
-        if inNetwork(value, 0xcb00_7100, 24) { return .documentation }
-        if inNetwork(value, 0xe000_0000, 4) { return .multicast }
-        if inNetwork(value, 0xf000_0000, 4) { return .reserved }
-        return .publicGlobal
-    }
-
-    static func classify(ipv6 bytes: [UInt8]) -> HTTPAddressClass {
-        if bytes.allSatisfy({ $0 == 0 }) { return .unspecified }
-        if bytes.dropLast().allSatisfy({ $0 == 0 }) && bytes[15] == 1 { return .loopback }
-        if bytes.prefix(10).allSatisfy({ $0 == 0 }) && bytes[10] == 0xff && bytes[11] == 0xff {
-            return .mapped
-        }
-        if bytes.prefix(12) == [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0] {
-            return .reserved
-        }
-        if bytes.prefix(8) == [0x01, 0, 0, 0, 0, 0, 0, 0] { return .reserved }
-        if prefixMatch(bytes, [0x20, 0x01, 0x0d, 0xb8], 32) { return .documentation }
-        if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x10], 28) { return .reserved }
-        if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x02, 0x00, 0x00], 48) { return .reserved }
-        // Teredo (2001::/32) and 6to4 (2002::/16) embed an IPv4 address.
-        if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x00], 32) { return .reserved }
-        if prefixMatch(bytes, [0x20, 0x02], 16) { return .reserved }
-        if bytes[0] & 0xfe == 0xfc { return .uniqueLocal }
-        if bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80 { return .linkLocal }
-        if bytes[0] == 0xfe && bytes[1] & 0xc0 == 0xc0 { return .uniqueLocal }
-        if bytes[0] == 0xff { return .multicast }
-        if bytes[0] & 0xe0 == 0x20 { return .publicGlobal }
-        return .reserved
-    }
-
     static func present(ipv6 bytes: [UInt8]) -> String {
         if bytes.prefix(10).allSatisfy({ $0 == 0 }) && bytes[10] == 0xff && bytes[11] == 0xff {
             return "::ffff:\(bytes[12]).\(bytes[13]).\(bytes[14]).\(bytes[15])"
@@ -229,22 +180,6 @@ extension HTTPAddressClass {
             index += 1
         }
         return text.isEmpty ? "::" : text
-    }
-
-    private static func inNetwork(_ value: UInt32, _ prefix: UInt32, _ bits: Int) -> Bool {
-        let mask: UInt32 = bits == 0 ? 0 : UInt32.max << (32 - bits)
-        return (value & mask) == (prefix & mask)
-    }
-
-    private static func prefixMatch(_ bytes: [UInt8], _ prefix: [UInt8], _ bits: Int) -> Bool {
-        let whole = bits / 8
-        if Array(bytes.prefix(whole)) != Array(prefix.prefix(whole)) {
-            return false
-        }
-        let rest = bits % 8
-        if rest == 0 { return true }
-        let mask = UInt8(0xff) << (8 - rest)
-        return bytes[whole] & mask == prefix[whole] & mask
     }
 }
 
