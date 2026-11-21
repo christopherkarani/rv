@@ -18,7 +18,22 @@
  *
  * Every failure returns 0; callers never consume the reply and report the
  * `untrusted` failure class (hook_fallback.h).
+ *
+ * The hook-local evaluator (local_eval.h) is pinned the same way, as a
+ * child the hook spawned rather than a peer: it must run from the
+ * canonical sibling path, and on Darwin its live code must be the exact
+ * on-disk sibling bytes (no manifest), or the Developer ID signed
+ * `dev.rv.rv-hook-local` of the team the manifest pins rvd to.
  */
+
+#include <sys/types.h>
+
+#define RV_EVALUATOR_NAME "rv-hook-local"
+#define RV_EVALUATOR_IDENTIFIER "dev.rv.rv-hook-local"
+
+/* 1 when the running, unreaped child `pid`, spawned from `path`, is the
+ * trusted sibling `rv-hook-local`, else 0. */
+int rv_verify_local_evaluator(pid_t pid, const char *path);
 
 #ifdef __APPLE__
 #include <xpc/xpc.h>
