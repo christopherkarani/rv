@@ -57,6 +57,12 @@ int main(void) {
     /* Baseline: known roles only. */
     expect_valid("service_only", "[" ENTRY("service", "dev.rv.rvd") "]", 1);
     expect_valid("empty", "[]", 0);
+    /* `judge` (dev.rv.judge supervisor) is a known role: validated, not skipped. */
+    expect_valid("service_and_judge",
+                 "[" ENTRY("service", "dev.rv.rvd") "," ENTRY("judge", "dev.rv.judge") "]", 1);
+    expect_invalid("judge_bad_requirement",
+                   "[" ENTRY("service", "dev.rv.rvd") ","
+                   "{\"role\":\"judge\",\"requirement\":\"nonsense\"}]");
 
     /* Forward compatibility: a role from a newer build is skipped, not
      * fatal, so an older client keeps verifying the service. */

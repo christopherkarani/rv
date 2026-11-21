@@ -114,6 +114,10 @@ struct SetupRobotPayload: Equatable, Sendable, Encodable {
     var service: String?
     /// Interpreter → hosts left unwired because it does not run.
     var unwiredMissingInterpreter: [String: [String]]?
+    /// With a judge bundle installed, why the judge pool will not answer
+    /// (judged calls go to review): `rv_judge_missing` or `not_loaded`.
+    /// Nil when there is nothing to warn about.
+    var judgeAgent: String? = nil
     var error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -124,6 +128,7 @@ struct SetupRobotPayload: Equatable, Sendable, Encodable {
         case wrote
         case service
         case unwiredMissingInterpreter = "unwired_missing_interpreter"
+        case judgeAgent = "judge_agent"
         case error
     }
 

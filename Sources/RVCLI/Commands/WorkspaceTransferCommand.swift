@@ -155,7 +155,7 @@ enum WorkspaceTransferRun {
         return config + [
             "\(home)/.local/bin", "\(home)/Library/LaunchAgents", "\(home)/.config/systemd/user",
             "\(home)/Applications/RVApprovals.app",
-        ]
+        ] + RVWiringPaths.coreMLCacheOwners.map { "\(home)/Library/Caches/\($0)" }
     }
 
     #if os(macOS)

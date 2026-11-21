@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.rv.judge</string>
+	<key>MachServices</key>
+	<dict>
+		<key>dev.rv.judge</key>
+		<true/>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@JUDGE_PATH@</string>
+		<string>serve</string>
+	</array>
+	<!-- Always on, like dev.rv.evaluate: rvd is always on and every judged
+	     call needs the pool, so the supervisor starts at load and is
+	     relaunched after any exit (a crash, or the clean exit once rv-judge
+	     was replaced), but only while rv-judge exists: a deleted rv-judge is
+	     never respawned. On demand, the first judged call after a crash
+	     would pay the supervisor and model load and go to review. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>PathState</key>
+		<dict>
+			<key>@JUDGE_PATH@</key>
+			<true/>
+		</dict>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>Background</string>
+	</array>
+</dict>
+</plist>

@@ -7,6 +7,7 @@ import Foundation
 import RVPolicy
 import RVService
 import RVPresentation
+import RVService
 #if os(macOS)
 import RVIsolation
 #endif
@@ -53,6 +54,16 @@ struct DoctorInstallProbes {
     /// Linux: does a systemd user manager answer `systemctl --user`? Nil
     /// off Linux or when not evaluated (tests).
     var systemdUserManagerReachable: Bool? = nil
+    /// macOS: is `dev.rv.judge` loaded in either domain? Nil when launchd
+    /// was not observed (Linux, tests).
+    var judgeLoaded: Bool? = nil
+    /// macOS: is `dev.rv.judge` loaded in both gui and user domains?
+    var judgeLoadedInBothDomains: Bool = false
+    /// Does a valid judge bundle sit where rvd looks? Default false (tests).
+    var judgeBundleInstalled: Bool = false
+    /// The roles an installed manifest names; nil without a valid manifest
+    /// (sibling pin, invalid, Linux, tests).
+    var manifestRoles: Set<String>? = nil
 
     static func live(
         home: HomeDirectory,
@@ -75,6 +86,14 @@ struct DoctorInstallProbes {
                 OwnedPaths(home: home), source: ProtectedPeerTrustConfiguration.hookTrustSource()
             )
         )
+        let judge = LaunchAgentProbe.observe(
+            label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
+        probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
+        probes.judgeLoadedInBothDomains = judge.loadedInGui && judge.loadedInUser
+        probes.judgeBundleInstalled = JudgeRuntime.selectsBundle(home: home)
+        probes.manifestRoles = ProtectedPeerTrustConfiguration.hookTrustSource().manifestRoles.map {
+            Set($0.map(\.rawValue))
+        }
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
         probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
@@ -194,6 +213,7 @@ enum RoleTrustProbe {
             (.cli, paths.localRvCli),
             (.workspaceHost, paths.localWorkspaceHost),
             (.mcpCustodian, paths.custodianAppExecutable),
+            (.judge, SetupRun.judgeExecutable(rvdPath: paths.localRvd)),
         ]
     }
 
@@ -488,6 +508,9 @@ enum DoctorInstallChecks {
         case "mcpCustodian":
             "the peer-trust manifest pins the approvals custodian to a different build; "
                 + "MCP approvals will fail"
+        case "judge":
+            "the peer-trust manifest pins rv-judge to a different build; "
+                + "rvd refuses the judge pool, so judged calls go to review"
         default:
             "the peer-trust manifest pins \(role) to a different build"
         }

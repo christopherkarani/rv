@@ -676,5 +676,59 @@ struct MCPCageCredentialLiveTests {
         #expect(after.hasSuffix(" home=yes"), "\(after)")
         #expect(sibling.isRunning)
     }
+
+    /// rvd's and the judge workers' Core ML caches sit inside the
+    /// `~/Library/Caches` write root: a caged server can read one but cannot
+    /// write, link, create, or swap a symlink in there (a planted e5rt bundle
+    /// would run as the judge). The rest of `~/Library/Caches` stays writable.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false], ["rvd", "rv-judge"])
+    func rvdsCoreMLCacheIsNotWritable(cacheExists: Bool, owner: String) throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-rvdcache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let rvd = caches.appendingPathComponent(owner)
+        let bundle = rvd.appendingPathComponent("com.apple.e5rt.e5bundlecache")
+        if cacheExists {
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+            try Data("original".utf8).write(to: bundle.appendingPathComponent("manifest"))
+        } else {
+            try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        }
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = caches.appendingPathComponent("rv-mcp/server", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            c="$1/\(owner)"; s="$2"
+            /bin/cat "$c/com.apple.e5rt.e5bundlecache/manifest" 2>/dev/null && echo READ_OK
+            printf evil > "$c/com.apple.e5rt.e5bundlecache/manifest" 2>/dev/null && echo WRITE_OK
+            printf evil > "$c/planted" 2>/dev/null && echo CREATE_OK
+            /bin/mkdir -p "$c/x" 2>/dev/null && echo MKDIR_OK
+            /bin/mkdir "$s/evil" && printf evil > "$s/evil/manifest"
+            /bin/ln "$s/evil/manifest" "$c/linked" 2>/dev/null && echo LINK_OK
+            replace "$s/evil" "$c" && echo SWAP_OK
+            /bin/ln -s "$s/evil" "$c" 2>/dev/null && echo SYMLINK_OK
+            printf ok > "$1/other-cache" && echo OTHER_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [caches.path, scratch.path], in: scratch.path))
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("READ_OK") == cacheExists, "\(output)")
+        for refused in ["WRITE_OK", "CREATE_OK", "MKDIR_OK", "LINK_OK", "SWAP_OK", "SYMLINK_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(output.contains("OTHER_OK"), "\(output)")
+        if cacheExists {
+            #expect(try String(contentsOf: bundle.appendingPathComponent("manifest"), encoding: .utf8) == "original")
+        } else {
+            #expect(FileManager.default.fileExists(atPath: rvd.path) == false)
+        }
+    }
 }
 #endif

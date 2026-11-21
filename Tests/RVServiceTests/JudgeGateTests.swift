@@ -384,6 +384,29 @@ struct JudgeFailClosedReasonTests {
         #expect(note == "prediction-failed")
     }
 
+    @Test("refused (disk nearly full) fails closed with its own reason")
+    func refusedReason() throws {
+        let why = CoreMLDiskSpaceError(availableBytes: 1 << 30, requiredBytes: 2 << 30).reason
+        let (deny, note) = Self.failClosedDeny(.refused(why))
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("disk nearly full"))
+        #expect(reason.contains("judge disabled until space is freed"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-refused")
+    }
+
+    @Test("a refused run reads as review, never as an unscored allow")
+    func refusedReadsAsReview() {
+        let allow = EvaluationResult(
+            outcome: .plain, matchingView: "npm install left-pad", analysis: .unknown)
+        let reading = JudgeRuntime.read(.refused("disk"), over: allow, provenance: .unknown)
+        #expect(reading.action == .review)
+        guard case .deny = reading.outcome.decision else {
+            Issue.record("refused must raise to review, got \(reading.outcome.decision)")
+            return
+        }
+    }
+
     @Test("the three reasons are distinct")
     func reasonsDistinct() {
         let reasons = [JudgeRuntime.JudgeRun.warming, .busy, .failed].map {
@@ -450,6 +473,34 @@ struct JudgeRaisePinTests {
             return
         }
         #expect(!problems.isEmpty)
+        #expect(!JudgeRuntime.selectsBundle(home: home))
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("packs only"))
+    }
+
+    /// A bundle rvd selects but that fails a check (config labels) cannot
+    /// load in the pool: judged calls go to review, and doctor and setup
+    /// count it as installed.
+    @Test("a selected bundle with bad config labels is installed, and doctor says review")
+    func selectedInvalidBundleMeansReview() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-doctor-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = try #require(HomePath(validating: root.path))
+        let dir = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("tokenizer.json"))
+        try Data(#"{"labels":["allow","review","deny"]}"#.utf8).write(to: dir.appendingPathComponent("config.json"))
+        guard case .invalid = JudgeRuntime.bundleHealth(home: home) else {
+            Issue.record("bad labels must report invalid")
+            return
+        }
+        #expect(JudgeRuntime.selectsBundle(home: home))
+        #if canImport(CoreML)
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("judged calls go to review"))
+        #else
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("packs only"))
+        #endif
     }
 }
 
@@ -533,6 +584,138 @@ struct JudgeInvalidLabelsTests {
         let run = JudgeRuntime.runJudge(
             command: "ls", context: JudgeContext(), engine: .ft, bundle: dir, wait: nil)
         guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
+    }
+
+    /// A compiled model that cannot be placed in or verified from rv's
+    /// protected cache refuses to review. It must never become
+    /// `.unavailable` (the packs-only floor, which allows).
+    @Test func unverifiableModelCacheIsRefusedNotUnavailable() throws {
+        struct Roomy: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 100 << 30 }
+        }
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-unverified-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let state = base.appendingPathComponent("state", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: state.appendingPathComponent("models"), withDestinationURL: elsewhere)
+        let bundle = base.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent("tokenizer.json"))
+        let guardian = CoreMLGuard(
+            store: nil, disk: Roomy(), cacheVolume: nil, stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
+        let slot = JudgeSlot(coreML: { guardian })
+        for attempt in ["load", "cached failure"] {
+            let run = JudgeRuntime.runJudge(
+                command: "ls", context: JudgeContext(), engine: .ft, bundle: bundle, wait: nil, slot: slot)
+            guard case .refused(let why) = run else {
+                Issue.record("\(attempt): expected .refused, got \(run)")
+                continue
+            }
+            #expect(why.contains("compiled model not verified"), "\(attempt)")
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+    }
+
+    /// Core ML failing to compile or load the model (after the store's one
+    /// retry) refuses to review: a failure an agent can provoke must never
+    /// buy the packs-only allow.
+    @Test func coreMLCompileFailureIsRefusedNotUnavailable() throws {
+        let (base, bundle) = try Self.fakeBundle(package: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let run = Self.runFakeBundle(bundle, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .refused(let why) = run else {
+            Issue.record("expected .refused, got \(run)")
+            return
+        }
+        #expect(why.contains("Core ML could not compile or load the judge model"))
+    }
+
+    /// The stock engine reaches `CompiledModelCache.load`'s presence check
+    /// (the FT engine checks for the package earlier): a missing package is
+    /// absence (packs-only), a present one Core ML cannot compile refuses.
+    @Test func stockEngineMissingModelIsUnavailableBrokenModelIsRefused() throws {
+        for package in [false, true] {
+            let (base, bundle) = try Self.fakeBundle(package: package, engine: .laya)
+            defer { try? FileManager.default.removeItem(at: base) }
+            let run = Self.runFakeBundle(
+                bundle, state: base.appendingPathComponent("state", isDirectory: true), engine: .laya)
+            switch (package, run) {
+            case (false, .unavailable), (true, .refused): break
+            default: Issue.record("package present \(package): \(run)")
+            }
+        }
+    }
+
+    /// A bundle without its model is absence, not failure: packs-only, as
+    /// before (doctor names it).
+    @Test func missingModelPackageStaysUnavailable() throws {
+        let (base, bundle) = try Self.fakeBundle(package: false)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let run = Self.runFakeBundle(bundle, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .unavailable = run else {
+            Issue.record("expected .unavailable, got \(run)")
+            return
+        }
+    }
+
+    static func fakeBundle(package: Bool, engine: JudgeEngine = .ft) throws -> (base: URL, bundle: URL) {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-fake-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let bundle = base.appendingPathComponent("bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        if package {
+            try FileManager.default.createDirectory(
+                at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        }
+        let tokenizer = engine == .laya ? "tokenizer/tokenizer.json" : "tokenizer.json"
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent(tokenizer).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8).write(to: bundle.appendingPathComponent(tokenizer))
+        return (base, bundle)
+    }
+
+    static func runFakeBundle(_ bundle: URL, state: URL, engine: JudgeEngine = .ft) -> JudgeRuntime.JudgeRun {
+        struct Roomy: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 100 << 30 }
+        }
+        let guardian = CoreMLGuard(
+            store: nil, disk: Roomy(), cacheVolume: nil, stateRoot: state, purgeCoreMLCache: {}, log: { _ in })
+        return JudgeRuntime.runJudge(
+            command: "ls", context: JudgeContext(), engine: engine, bundle: bundle, wait: nil,
+            slot: JudgeSlot(coreML: { guardian }))
+    }
+
+    /// End to end through the real slot: a nearly full disk refuses the
+    /// load (review, never the packs-only allow), and the slot's cached
+    /// failure keeps refusing on the next request.
+    @Test(arguments: [JudgeEngine.ft, .laya])
+    func lowDiskLoadIsRefusedThenCachedRefused(engine: JudgeEngine) throws {
+        struct NearlyFull: DiskSpaceProbe {
+            func availableBytes(at url: URL) -> Int64? { 1 << 20 }
+        }
+        let guardian = CoreMLGuard(
+            store: nil, disk: NearlyFull(), cacheVolume: URL(fileURLWithPath: "/"),
+            purgeCoreMLCache: {}, log: { _ in })
+        let slot = JudgeSlot(coreML: { guardian })
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-judge-disk-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for attempt in ["load", "cached failure"] {
+            let run = JudgeRuntime.runJudge(
+                command: "ls", context: JudgeContext(), engine: engine, bundle: dir, wait: nil, slot: slot)
+            guard case .refused(let why) = run else {
+                Issue.record("\(attempt): expected .refused, got \(run)")
+                continue
+            }
+            #expect(why.contains("disk nearly full"), "\(attempt)")
+        }
     }
 }
 #endif

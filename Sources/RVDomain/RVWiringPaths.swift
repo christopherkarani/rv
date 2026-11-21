@@ -2,8 +2,8 @@ import Foundation
 
 /// The files that keep rv wired in: agent-host hook registrations,
 /// adapters and the rv agent skill that `rv setup` writes, rv's installed binaries and pack
-/// bundle, and its LaunchAgent / systemd user units. An agent that edits
-/// one of these unhooks or replaces the guard watching it.
+/// bundle, its LaunchAgent / systemd user units, and rvd's Core ML cache.
+/// An agent that edits one of these unhooks or replaces the guard watching it.
 ///
 /// One table for both doors: the file-tool door denies Edit/Write here,
 /// and the shell door classifies these paths as protected, so a write
@@ -64,7 +64,15 @@ public enum RVWiringPaths {
         // holds a supervised rvd in its wait for up to five minutes.
         ["Library", "Logs", "rv", "rvd-backoff"],
         [".local", "state", "rv", "rvd-backoff"],
-    ]
+    ] + coreMLCacheOwners.map { ["Library", "Caches", $0] }
+
+    /// The processes that run the Laya judge's Core ML model. Each has an
+    /// e5rt compiled-bundle cache at `~/Library/Caches/<name>`, and Core ML
+    /// maps a bundle from there into that process, so a planted one runs as
+    /// the judge: rvd's in-process judge, and the judge pool's `rv-judge`
+    /// workers. Every write guard (file and shell doors, the observe floor,
+    /// the MCP cage, workspace downloads) covers all of them.
+    public static let coreMLCacheOwners = ["rvd", "rv-judge"]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.
     static let serviceDirectories: [[String]] = [
@@ -131,9 +139,9 @@ public enum RVWiringPaths {
     /// that compare a resolved target against a protected file's resolved
     /// location (a dotfiles symlink) or its inode (a hard link).
     public static func fixedFiles(home: String) -> [String] {
-        let units = ["evaluate", "mcp-custodian", "audit-forward"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
+        let units = ["evaluate", "mcp-custodian", "audit-forward", "judge"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
         let extra = [
-            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd",
+            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd", ".local/bin/rv-judge",
             ".config/systemd/user/dev.rv.evaluate.service",
             ".openclaw/extensions/rv-guard/index.js",
             ".hermes/plugins/rv-guard/__init__.py", ".hermes/plugins/rv-guard/plugin.yaml",

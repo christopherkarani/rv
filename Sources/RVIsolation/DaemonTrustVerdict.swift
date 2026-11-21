@@ -74,6 +74,7 @@ extension TrustedRVComponentRole {
         case .workspaceHost: "rv-workspace-host"
         case .operatorUI: "rv-operator-ui"
         case .mcpCustodian: "rv-mcp-custodian"
+        case .judge: "rv-judge"
         }
     }
 }
