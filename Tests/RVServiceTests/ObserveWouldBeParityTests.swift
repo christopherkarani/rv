@@ -51,11 +51,11 @@ struct ObserveWouldBeParityTests {
         let enforce = await door.gated(
             .peek, request, cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { allowlist }, host: .hook(.claude), tool: .bash, inputs: enforceInputs
-        )
-        let observe = await door.gatedVerdict(
+        ).result
+        let observe = await door.gated(
             .peek, request, cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { allowlist }, host: .hook(.claude), tool: .bash,
-            previewsWouldBe: true, inputs: observeInputs
+            showsWouldBe: true, inputs: observeInputs
         )
         return (enforce, observe)
     }

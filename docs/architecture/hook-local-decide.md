@@ -28,7 +28,7 @@ host ─stdin─▶ rv (C)
 ## What is decided locally
 
 `LocalHookDecider` runs rvd's own hook door (`hookWire` over the decision
-half of `GatedEvaluate`, `decideVerdict` / `decideFile`) over the same
+half of `GatedEvaluate`, `decide` / `decideFile`) over the same
 packs, policy, config and organization policy, read from the passwd home.
 In place of what only rvd holds it installs probe ports, and any probe
 that fires escalates:

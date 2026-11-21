@@ -27,7 +27,7 @@ final class HookTiming: Sendable {
         case inputs
         /// Pack evaluation (`evaluateWithSemantics`).
         case policy
-        /// Script check and judge (`posture`); includes the `judge_*` phases.
+        /// Script check and judge (`shellPosture`); includes the `judge_*` phases.
         case screen
         /// Waiting for the judge model to finish loading.
         case judgeLoad = "judge_load"

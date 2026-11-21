@@ -29,7 +29,7 @@ struct GateAuditTests {
         allowlist: AllowlistSnapshot = .empty,
         command: ShellCommand = Self.resetHard,
         guardMode: GuardMode = .enforce
-    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+    ) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
         await GatedEvaluate().decide(
             intent, EvaluationRequest(command: command, enabledPacks: dayOnePackIDs),
             cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
@@ -126,7 +126,7 @@ struct GateAuditTests {
                 judge: JudgeSelection(engine: .ft, bundle: nil),
                 store: .gather(home: nil, cwd: nil)
             )
-        )
+        ).result
         guard case .deny(let kept) = result.decision else {
             Issue.record("an unrecorded override must stay a deny, got \(result.decision)")
             return
@@ -267,7 +267,7 @@ struct GateAuditTests {
         defer { try? FileManager.default.removeItem(at: pkg) }
         let cwd = WorkingDirectory(rawValue: pkg.path)
         let request = EvaluationRequest(command: ShellCommand(rawValue: #"cd "$D" && npm test"#), enabledPacks: dayOnePackIDs)
-        func decideScript(_ mode: GuardMode) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+        func decideScript(_ mode: GuardMode) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
             await GatedEvaluate().decide(
                 .apply, request, cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
                 allowlist: { .empty }, host: .hook(.claude), tool: .bash,
@@ -391,7 +391,7 @@ struct GateAuditTests {
                     judge: JudgeSelection(engine: .ft, bundle: nil),
                     store: .gather(home: nil, cwd: nil)
                 )
-            )
+            ).result
             #expect(gated.decision == expected, "\(label)")
             if case .indeterminate = expected {
                 #expect(HookAuthorization.project(result: gated, cwd: wd("/tmp/ws")) == .denyPinned, "\(label)")

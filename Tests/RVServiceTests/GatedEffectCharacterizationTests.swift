@@ -101,7 +101,7 @@ struct GatedEffectCharacterizationTests {
                 judge: JudgeSelection(engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle")),
                 store: .gather(home: home, cwd: WorkingDirectory(validating: repo.path))
             )
-        )
+        ).result
         guard case .deny = result.decision else {
             Issue.record("judge review must deny, got \(result.decision)")
             return
