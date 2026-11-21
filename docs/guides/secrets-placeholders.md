@@ -260,6 +260,26 @@ Rules, from the source:
   it and its live descendants can spend the placeholders, through
   serve's own gateway.
 
+## App logins, once
+
+`rv login connect vercel` imports the Vercel or
+GitHub login you already have (CLI auth file, token variable, or
+`gh auth token`; paste as fallback) into the Keychain as a gateway
+secret, so agents use it through rv instead of logging in again.
+On Linux rv keeps stored values in the Secret Service keyring (GNOME
+Keyring, KWallet, KeePassXC) through `secret-tool` (package
+`libsecret-tools`), which needs a session bus and an unlocked keyring;
+the hook guard refuses an agent's own `secret-tool` and Secret Service
+D-Bus calls, since that keyring has no per-app prompt.
+`rv login list` / `check` report status and fingerprints, never values;
+`rv login logout <app>` removes it.
+
+## Vault addresses
+
+A secret definition with an `address` is refused unless
+`VAULT_ADDR` is set to the same origin: rv never sends your Vault token to a
+server the environment does not name.
+
 ## What is protected and what is not
 
 Protected:
