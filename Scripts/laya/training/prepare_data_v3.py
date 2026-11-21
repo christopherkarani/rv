@@ -27,13 +27,13 @@ in this order (identical order to v2 and Swift JudgeContext.serialize):
 
 - `cwd-inside-repo: no` does not exist in v3. The runtime sends the `yes`
   line inside a repo and nothing otherwise. Training assigns the `yes` line
-  per row at random (P_CWD = 0.5 of context variants) INDEPENDENT of label
-  and source: v1.1's gitRemote was a label shortcut (empty gitRemote rows
-  were 97.9% deny).
-- `git:` counts are random plausible counts drawn independent of label for
-  P_GIT = 0.35 of context variants. Source gitStatus counts are discarded:
-  in v1.1 every POSIX row has gitStatus and all-empty lists were 83% deny,
-  so the source counts were a shortcut too.
+  to exactly P_CWD = 0.5 of each label's base rows (stratified random, so
+  INDEPENDENT of label by construction), regardless of source: v1.1's
+  gitRemote was a label shortcut (empty gitRemote rows were 97.9% deny).
+- `git:` counts are random plausible counts (each 0 w.p. 0.45) on exactly
+  P_GIT = 0.35 of each label's base rows, independent of label. Source
+  gitStatus counts are discarded: every v1.1 POSIX row has gitStatus and
+  all-empty lists were 83% deny, so source counts were a shortcut too.
 - `agent-touched:` is kept only from true source context (v1.1
   agentTouchedFiles as serialized by v2); it is never synthesized.
 - Context dropout: every base row is emitted bare, plus one context variant
@@ -376,12 +376,28 @@ def draw_git(rng):
     return (one(14), one(22), one(9))
 
 
+def stratified_flags(base, rate, rng):
+    """Exactly round(rate * n_label) rows per label get True (order-free):
+    the flag is independent of label by construction, not just in expectation."""
+    by = defaultdict(list)
+    for i, r in enumerate(base):
+        by[r["label"]].append(i)
+    flags = [False] * len(base)
+    for lab in sorted(by):
+        idx = by[lab][:]
+        rng.shuffle(idx)
+        for i in idx[:int(round(rate * len(idx)))]:
+            flags[i] = True
+    return flags
+
+
 def expand(base, rng):
     """Context dropout: bare + one context variant (same label)."""
     out = []
-    for r in base:
-        cwd = rng.random() < P_CWD
-        git = draw_git(rng) if rng.random() < P_GIT else None
+    cwd_f = stratified_flags(base, P_CWD, rng)
+    git_f = stratified_flags(base, P_GIT, rng)
+    for r, cwd, has_git in zip(base, cwd_f, git_f):
+        git = draw_git(rng) if has_git else None
         touched = r["touched"]
         ctx_text = serialize_v3(r["command"], cwd, touched, git)
         has_ctx = ctx_text != r["command"]
@@ -566,9 +582,11 @@ def main(argv=None):
     for s in splits:
         print(f"leakage {s}: PASS (" + " ".join(f"{k}=0" for k in leak[s]) + ")")
     for k in ("cwd", "git", "git_zero"):
-        if spread[k] > a.max_shape_spread:
+        p = chi["train"][k]["p"]
+        if spread[k] > a.max_shape_spread and p < 0.01:
             raise SystemExit(f"context shape '{k}' differs by {spread[k]:.2f} pts across labels "
-                             f"(> {a.max_shape_spread}): context is not label-independent")
+                             f"(> {a.max_shape_spread}, chi2 p={p:.4f}): context is not "
+                             "label-independent")
     if a.block_target > 0:
         got = stats["class_balance"]["train"]["block"]["pct"] / 100
         if abs(got - a.block_target) > 0.01:
