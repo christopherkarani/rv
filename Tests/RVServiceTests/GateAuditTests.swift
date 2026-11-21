@@ -297,6 +297,27 @@ struct GateAuditTests {
         #expect(AuditChain.verify(Data((lines.joined(separator: "\n") + "\n").utf8)).isIntact)
     }
 
+    /// With no judge to score it, enforce refuses an inline program the packs
+    /// let through (the packs-only floor). Observe records that refusal as
+    /// it records every other one enforce would make: chained as observed.
+    @Test func observeChainsAnUnscoredInlineProgramAsEnforceWouldRefuseIt() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let inline = ShellCommand(rawValue: #"python3 -c 'print(shred)'"#)
+        let enforced = await decide(.apply, home: home, command: inline)
+        #expect(enforced.result.decision == .indeterminate(.inlineProgramNeedsJudge))
+        let observed = await decide(.apply, home: home, command: inline, guardMode: .observe)
+        #expect(observed.result.decision == .allow)
+        GatedEvaluate.perform(observed.effects, home: home)
+        let events = try chained(home)
+        #expect(events.count == 1)
+        let event = try #require(events.first)
+        #expect(event.kind == .commandObserved)
+        #expect(event.subject == "rv.indeterminate:inlineProgramNeedsJudge")
+        #expect(event.detail["verdict"] == "indeterminate")
+        #expect(event.detail["would_be"] == "deny")
+    }
+
     /// The file door: observe floors a write of rv's install (a systemd user
     /// unit that is not rv's own wiring file) to "run it in Terminal". That
     /// refusal is chained; a log that cannot be written changes nothing.
