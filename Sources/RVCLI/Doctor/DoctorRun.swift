@@ -164,14 +164,31 @@ enum DoctorRun {
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             ),
             leftovers: environment.leftovers,
-            problems: environment.install.map {
+            problems: (environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
                     + DoctorInstallChecks.adapterRuntime(
                         hosts: snapshot.hosts, paths: paths, fileManager: environment.fileManager, probes: $0)
                     + [DoctorInstallChecks.systemdUserManager(
                         $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
-            } ?? []
+            } ?? []) + judgeProblems(environment: environment, diagnostics: diagnostics, paths: paths)
         )
+    }
+
+    /// The pool agent row, when there is one, already explains rvd's
+    /// unreachable-pool warning: report the cause once.
+    private static func judgeProblems(
+        environment: DoctorEnvironment,
+        diagnostics: ServiceDiagnosticResult,
+        paths: OwnedPaths
+    ) -> [DoctorProblem] {
+        let agent = environment.install.flatMap {
+            DoctorJudgeChecks.agent(
+                paths: paths, fileManager: environment.fileManager,
+                loaded: $0.judgeLoaded, bundleInstalled: $0.judgeBundleInstalled)
+        }
+        let service = DoctorJudgeChecks.serviceWarnings(diagnostics)
+        guard let agent else { return service }
+        return [agent] + service.filter { $0.id != "judge-pool" }
     }
 
     /// One-line repair for a service that is not running cleanly. Hooks have

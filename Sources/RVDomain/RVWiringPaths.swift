@@ -131,9 +131,9 @@ public enum RVWiringPaths {
     /// that compare a resolved target against a protected file's resolved
     /// location (a dotfiles symlink) or its inode (a hard link).
     public static func fixedFiles(home: String) -> [String] {
-        let units = ["evaluate", "mcp-custodian", "audit-forward"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
+        let units = ["evaluate", "mcp-custodian", "audit-forward", "judge"].map { "Library/LaunchAgents/dev.rv.\($0).plist" }
         let extra = [
-            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd",
+            ".local/bin/rv", ".local/bin/rv-cli", ".local/bin/rvd", ".local/bin/rv-judge",
             ".config/systemd/user/dev.rv.evaluate.service",
             ".openclaw/extensions/rv-guard/index.js",
             ".hermes/plugins/rv-guard/__init__.py", ".hermes/plugins/rv-guard/plugin.yaml",

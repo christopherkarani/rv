@@ -40,7 +40,7 @@ public struct DenylistStore: Sendable {
         if lstat(url.path, &info) != 0 {
             return errno == ENOENT ? .missing : .invalid
         }
-        guard let data = try? Data(contentsOf: url),
+        guard let data = readRegularFile(url),
               let text = String(data: data, encoding: .utf8)
         else {
             return .invalid

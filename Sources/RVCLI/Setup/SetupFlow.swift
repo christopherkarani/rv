@@ -202,6 +202,9 @@ extension SetupEnvironment {
         }
 #endif
         setup.resolveInterpreter = { AdapterRuntime.chooseRunnable($0, pathEntries: pathEntries) }
+        setup.judgeBundleInstalled = { home in
+            if case .ok = JudgeRuntime.bundleHealth(home: home) { true } else { false }
+        }
         return setup
     }
 }

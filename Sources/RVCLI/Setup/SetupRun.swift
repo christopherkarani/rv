@@ -24,6 +24,7 @@ enum SetupGuardRequest: Equatable {
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
     static let custodianLaunchAgentLabel = "dev.rv.mcp-custodian"
+    static let judgeLaunchAgentLabel = "dev.rv.judge"
     /// One-line repair when installed binaries (rvd, pack bundle) are missing.
     static let reinstallHint = "reinstall rv (curl -fsSL https://rykanv.com/install | sh)"
 
@@ -62,6 +63,7 @@ enum SetupRun {
                     + serviceWarning(report, observing: observing)
                     + direct
                     + agentSkillWarning(report)
+                    + judgeWarning(report, env: env)
                     + refusals.joined(),
                 exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: json ? false : formatted.emitted
@@ -141,6 +143,27 @@ enum SetupRun {
                     """
             }
         }.joined()
+    }
+
+    /// With a judge bundle installed, a judge pool that is not running sends
+    /// every judged call to review; say so. Silent without a bundle: then
+    /// nothing is judged.
+    static func judgeWarning(_ report: SetupReport, env: SetupEnvironment) -> String {
+        guard let problem = report.judgeAgent, env.judgeBundleInstalled(env.home) else { return "" }
+        switch problem {
+        case .missing(let path):
+            return """
+                rv setup: a judge bundle is installed but rv-judge is missing at \(path); judged calls will go to review
+                fix: \(reinstallHint)
+
+                """
+        case .notLoaded:
+            return """
+                rv setup: \(judgeLaunchAgentLabel) could not be registered with launchd; judged calls will go to review
+                fix: run rv setup again; rv doctor shows the judge pool's state
+
+                """
+        }
     }
 
     /// Hooks wired with no service behind them deny every tool call (under

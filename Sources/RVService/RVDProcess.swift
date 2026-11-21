@@ -4,6 +4,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVIPC
+import RVJudgePool
 import RVPolicy
 import Synchronization
 
@@ -31,7 +32,12 @@ public enum RVDProcess {
             ceremonies: ceremonies,
             actionCeremonies: actionCeremonies
         )
+        runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
+        // Core ML runs in the dev.rv.judge worker pool, never in rvd: a
+        // worker abort or hang costs one prediction, not the daemon.
+        // Unreachable pool = review (docs/architecture/judge-pool.md).
+        JudgeRuntime.bindClient(XPCJudgeClient())
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listeners?.stop()
@@ -115,6 +121,7 @@ public enum RVDProcess {
             ceremonies: ceremonies,
             actionCeremonies: actionCeremonies
         )
+        runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {

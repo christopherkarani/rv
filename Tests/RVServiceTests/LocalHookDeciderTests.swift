@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
+import RVJudgePool
 import RVPolicy
 @testable import RVService
 
@@ -243,8 +244,12 @@ struct LocalHookFixture {
     let home: HomeDirectory
     let workspace: String
     let decider: LocalHookDecider
+    /// The judge pool both the evaluator and rvd ask; nil: no pool.
+    let judge: (any JudgeClient)?
 
-    init(judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true) throws {
+    init(
+        judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true, judge: (any JudgeClient)? = nil
+    ) throws {
         let root = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: root.path))
         let workspace = root.appendingPathComponent("work", isDirectory: true)
@@ -271,13 +276,15 @@ struct LocalHookFixture {
         }
         self.home = home
         self.workspace = workspace.path
-        self.decider = LocalHookDecider(home: home)
+        self.decider = LocalHookDecider(home: home, judge: judge)
+        self.judge = judge
     }
 
     /// rvd's reply for the same call, from a fresh runtime over this home.
     func rvdReply(host: HookHost, stdin: String) async throws -> HookEvaluateReply {
         let runtime = hookTestRuntime(
-            home: home, allowOnceDirectory: try isolatedAllowOnceDirectory())
+            home: home, allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            judge: judge.map { PoolJudgePort(client: $0) } ?? LiveJudgePort())
         let response = await runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: host, stdin: stdin))),
             context: peerHookContext()

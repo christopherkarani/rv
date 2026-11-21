@@ -405,7 +405,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming, .busy, .late, .circuitOpen:
+        case .failed, .warming, .busy, .late, .unreachable, .circuitOpen:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -483,10 +483,13 @@ public enum JudgeRuntime {
     /// hook deadline passed while waiting for the model). Review for the
     /// same reason: flooding the judge must not buy an unjudged allow.
     ///
-    /// `late` is a prediction that did not answer before its caller's
-    /// cutoff, or a request turned away behind a stalled one. `circuitOpen`
-    /// is the judge skipped by `JudgeCircuit` after repeated failures. Both
-    /// go to review like `busy`: a failing judge must never buy an allow.
+    /// `late` is a prediction or pool request that did not answer before
+    /// its caller's cutoff (or hook deadline), or a request turned away
+    /// behind a stalled one. `unreachable` is a pool that gave no
+    /// authenticated answer at all (not running, not verifiable, refused).
+    /// `circuitOpen` is the judge skipped by `JudgeCircuit` after repeated
+    /// failures. All go to review like `busy`: killing, impersonating or
+    /// failing the judge must never buy an unjudged allow.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
@@ -494,6 +497,7 @@ public enum JudgeRuntime {
         case warming
         case busy
         case late
+        case unreachable
         case circuitOpen(retryIn: Duration)
     }
 
@@ -595,7 +599,7 @@ public enum JudgeRuntime {
     static func circuitOutcome(_ run: JudgeRun) -> JudgeCircuitBreaker.Outcome {
         switch run {
         case .verdict: .success
-        case .late, .failed: .failure
+        case .late, .failed, .unreachable: .failure
         case .warming, .busy, .unavailable, .circuitOpen: .neutral
         }
     }
@@ -623,6 +627,9 @@ public enum JudgeRuntime {
         case .late:
             note = "judge-late"
             reason = "rv degraded: judge late (no verdict in time); failing closed to review."
+        case .unreachable:
+            note = "judge-unreachable"
+            reason = "Laya judge service (dev.rv.judge) is not reachable; failing closed. Run `rv doctor`."
         case .circuitOpen(let retryIn):
             note = "judge-circuit-open"
             reason = "rv degraded: judge unavailable (circuit open, retrying in \(retrySeconds(retryIn))s); failing closed to review."
@@ -665,6 +672,10 @@ public enum JudgeRuntime {
     /// bundle is installed or the platform has no CoreML. Cheap: resolves
     /// config and bundle paths, then hands the load to a utility queue.
     public static func prewarm(home: HomeDirectory?) {
+        if let client = boundClient {
+            warmPool(client, home: home)
+            return
+        }
         #if canImport(CoreML)
         guard let resolved = resolvedJudge(home: home, config: GuardConfig.read(home: home)) else { return }
         slot.prewarm(engine: resolved.engine, bundleDir: resolved.bundle)
@@ -762,12 +773,14 @@ public enum JudgeRuntime {
 
     /// Appends one row to `<config>/judge-log.jsonl`. Best effort: a row
     /// that does not land is reported through `dropLog`, and the verdict
-    /// stands.
+    /// stands. Returns whether the row landed.
+    @discardableResult
     static func appendLog(
         _ row: GatedEffect.JudgeLogRow,
         home: HomeDirectory,
+        lockTimeout: Duration = logLockTimeout,
         dropLog: AuditDropLog = .shared
-    ) {
+    ) -> Bool {
         let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
         var object: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: row.at),
@@ -795,15 +808,17 @@ public enum JudgeRuntime {
             object["ms"] = score.milliseconds
             if score.truncated { object["truncated"] = true }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return false }
         // rvd and the hook-local evaluator both append here: a flocked
         // O_APPEND write keeps every row whole across processes, and never
         // replaces a file another writer just created. Best effort, so a
         // lock another process holds costs at most `logLockTimeout`.
         do {
-            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: lockTimeout)
+            return true
         } catch {
             dropLog.report(.judgeLog, file: file, consequence: "the verdict stood without its judge-log record")
+            return false
         }
     }
 }
@@ -828,11 +843,16 @@ protocol JudgePort: Sendable {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun
 }
 
-/// Slot-cached CoreML judge (packs-only on platforms without CoreML). Waits
-/// on an in-progress load for the live `loadWait` (rvd binds its bound).
+/// The judge pool when rvd bound one (`JudgeRuntime.bindClient`), with no
+/// in-process fallback; otherwise the slot-cached CoreML judge (packs-only
+/// on platforms without CoreML), which waits on an in-progress load for the
+/// live `loadWait`.
 struct LiveJudgePort: JudgePort {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
-        JudgeRuntime.runJudge(
+        if let client = JudgeRuntime.boundClient {
+            return JudgeRuntime.runPool(call, client: client)
+        }
+        return JudgeRuntime.runJudge(
             command: call.command, context: call.context,
             engine: call.engine, bundle: call.bundle, wait: JudgeRuntime.loadWait,
             onLate: call.onLateResult ?? { _, _ in }
