@@ -45,15 +45,23 @@ STRICTNESS = {"allow": 0, "review": 1, "block": 2}
 LABELS = ("allow", "review", "block")
 LABEL_MAP = {"allow": "allow", "ask": "review", "deny": "block"}
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Path overrides (unset = the historical /tmp defaults, identical output):
+#   SS11_DIR=<dir>   holds ss11-{train,validation,test}.jsonl
+#   LAYA_WORK=<dir>  reads v1 rows from <dir>/v1, writes <dir>/v2
+_SS11_DIR = os.path.expanduser(os.environ.get("SS11_DIR", "/tmp"))
 V11_FILES = {
-    "train": "/tmp/ss11-train.jsonl",
-    "validation": "/tmp/ss11-validation.jsonl",
-    "test": "/tmp/ss11-test.jsonl",
+    "train": os.path.join(_SS11_DIR, "ss11-train.jsonl"),
+    "validation": os.path.join(_SS11_DIR, "ss11-validation.jsonl"),
+    "test": os.path.join(_SS11_DIR, "ss11-test.jsonl"),
 }
-V1_TRAIN = "/tmp/laya-train/train.jsonl"
-V1_VALIDATION = "/tmp/laya-train/validation.jsonl"
-AUGMENT = "/tmp/laya-train/augment.jsonl"
-OUTDIR = "/tmp/laya-train/v2"
+_LAYA_WORK = os.environ.get("LAYA_WORK")
+_V1_DIR = (os.path.join(os.path.expanduser(_LAYA_WORK), "v1") if _LAYA_WORK
+           else "/tmp/laya-train")
+V1_TRAIN = os.path.join(_V1_DIR, "train.jsonl")
+V1_VALIDATION = os.path.join(_V1_DIR, "validation.jsonl")
+AUGMENT = os.path.join(_V1_DIR, "augment.jsonl")
+OUTDIR = (os.path.join(os.path.expanduser(_LAYA_WORK), "v2") if _LAYA_WORK
+          else "/tmp/laya-train/v2")
 HELDOUT_FILES = [
     ("testset_shell", os.path.join(HERE, "..", "testset_shell.jsonl")),
     ("testset_incidents", os.path.join(HERE, "..", "testset_incidents.jsonl")),
