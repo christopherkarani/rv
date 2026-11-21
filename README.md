@@ -219,7 +219,7 @@ rv service restart        # restart rvd
 rv setup                  # repair the rvd service and host hooks
 rv host list              # each host's mode and hook wiring
 rv host mode claude off   # stop guarding one host (asks for owner authentication)
-rv uninstall              # remove rv's hooks, config, and rvd (asks for owner authentication)
+rv uninstall              # remove rv's hooks, rvd and binaries; keeps your secrets and audit log (owner-auth)
 ```
 
 `rv host mode <host> block` turns guarding back on.
@@ -555,15 +555,27 @@ rv workspace vms            # micro-VM runtime sessions, newest first
 rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health
-rv uninstall                # remove everything rv owns (owner-auth)
+rv uninstall                # remove rv's hooks, rvd and binaries (owner-auth)
 rv uninstall --remove-models  # ...and the judge weights in ~/.config/rv/models
+rv uninstall --purge        # ...and all of rv's data, including stored secret values
 ```
 
 `rv uninstall` removes rv's hooks, stops the service, then deletes every
-file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`.
-If rvd is not running, you confirm at the terminal with your login password
-(or Touch ID) instead; without a local owner check it refuses and says how
-to start rvd.
+file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`,
+plus `config.json` and the policy, allowlist, analytics and denial files in
+`~/.config/rv`. It keeps your own data so a reinstall picks it up: secret
+definitions and the values rv stored in the Keychain or Secret Service
+(service `rv.secrets`), MCP config and its trust, pin and approval state
+(on macOS also the MCP OAuth tokens under `rv.mcp.oauth`),
+the audit log and its key, the judge weights, rvd's log and MCP caches. It
+prints each kept path, how many secret values it kept and where, and the
+commands that remove them once rv is gone. `rv uninstall --purge` removes
+all of that too, deleting only the secret values rv itself stored; a value
+it cannot delete (no session bus, locked keyring) is named and the command
+exits non-zero after removing the rest. The Linux custodian's system files
+stay for `sudo rv mcp custodian uninstall`. If rvd is not running, you
+confirm at the terminal with your login password (or Touch ID) instead;
+without a local owner check it refuses and says how to start rvd.
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with

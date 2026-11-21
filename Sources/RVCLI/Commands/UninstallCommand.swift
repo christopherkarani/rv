@@ -5,7 +5,7 @@ import RVTheme
 struct Uninstall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "uninstall",
-        abstract: "Remove rv-owned hook files, config, and the rvd service (LaunchAgent or systemd user unit)."
+        abstract: "Remove rv's hooks, the rvd service and rv's binaries. Your secrets, MCP state and audit log stay unless --purge."
     )
 
     @Flag(name: .customLong("json"), help: "One line, no circles (same as --robot).")
@@ -23,6 +23,12 @@ struct Uninstall: AsyncParsableCommand {
     @Flag(name: .customLong("remove-models"), help: "Also delete the downloaded judge weights (~/.config/rv/models).")
     var removeModels = false
 
+    @Flag(
+        name: .customLong("purge"),
+        help: "Also delete rv's data: the secret values it stored, ~/.config/rv (secrets, MCP state, audit log, judge weights), its logs and caches."
+    )
+    var purge = false
+
     func run() async throws {
         // Uninstall sheds oversight (hooks, config, LaunchAgent): a
         // same-user agent must not run it unattended. One fresh
@@ -31,7 +37,9 @@ struct Uninstall: AsyncParsableCommand {
         // never locked out of removing rv (DaemonDownOwnerConfirmation).
         do {
             try await CLIOwnerAuth.requireAuthenticatedOrLocalWhenDaemonDown(
-                reason: "Authenticate to uninstall rv (removes its hooks, config and background service).",
+                reason: purge
+                    ? "Authenticate to uninstall rv and delete its data and the secret values it stored."
+                    : "Authenticate to uninstall rv (removes its hooks, config and background service).",
                 action: .uninstall)
         } catch {
             let output = setupFailureOutput(.ownerAuthenticationRequired, command: .uninstall)
@@ -49,7 +57,8 @@ struct Uninstall: AsyncParsableCommand {
                 kind: .uninstall,
                 appearance: resolved.appearance,
                 animate: resolved.animate,
-                removeModels: removeModels
+                removeModels: removeModels,
+                purge: purge
             ),
             clock: LiveSetupCeremonyClock(),
             write: CeremonyCLI.stdoutWriter()
