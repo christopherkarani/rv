@@ -164,6 +164,7 @@ quietly allowed. The block message says which of these it was:
 Run these from your own terminal, not through the agent:
 
 ```sh
+rv status                 # one-screen summary: rvd, each host's mode, last denial
 rv doctor                 # what's broken and how to fix it
 rv service status         # is rvd running, down, or skewed?
 rv service restart        # restart rvd

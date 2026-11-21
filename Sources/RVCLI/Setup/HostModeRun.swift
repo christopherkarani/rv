@@ -50,32 +50,46 @@ enum HostModeRun {
         return guardMode == .observe ? .observe : .block
     }
 
+    /// Every host's effective mode and wiring, as `rv host list` and
+    /// `rv status` show it.
+    static func listDocument(_ env: SetupEnvironment) throws -> ListDocument {
+        try listState(env).document
+    }
+
+    private static func listState(
+        _ env: SetupEnvironment
+    ) throws -> (document: ListDocument, modes: [HookHost: HostMode], installations: HostAdapterInstallationSnapshot) {
+        let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
+        // An unreadable config shows every host under the global mode,
+        // as a host with no entry would.
+        let modes: [HookHost: HostMode]
+        switch store(env).read() {
+        case .entries(let entries): modes = entries
+        case .unreadable: modes = [:]
+        }
+        let guardMode = GuardModeResolution.resolve(
+            GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
+        let rows = HookHost.allCases
+            .sorted { $0.rawValue < $1.rawValue }
+            .map { host in
+                Row(
+                    host: host.rawValue,
+                    mode: effectiveMode(stored: modes[host], guardMode: guardMode).rawValue,
+                    wiring: installations.state(for: host).rawValue
+                )
+            }
+        let document = ListDocument(
+            guardMode: guardMode.rawValue,
+            hosts: rows,
+            managedEnforce: env.managedEnforce(env.home)
+        )
+        return (document, modes, installations)
+    }
+
     static func list(_ env: SetupEnvironment, json: Bool) -> SetupOutcome {
         do {
-            let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
-            // An unreadable config shows every host under the global mode,
-            // as a host with no entry would.
-            let modes: [HookHost: HostMode]
-            switch store(env).read() {
-            case .entries(let entries): modes = entries
-            case .unreadable: modes = [:]
-            }
-            let guardMode = GuardModeResolution.resolve(
-                GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
-            let rows = HookHost.allCases
-                .sorted { $0.rawValue < $1.rawValue }
-                .map { host in
-                    Row(
-                        host: host.rawValue,
-                        mode: effectiveMode(stored: modes[host], guardMode: guardMode).rawValue,
-                        wiring: installations.state(for: host).rawValue
-                    )
-                }
-            let document = ListDocument(
-                guardMode: guardMode.rawValue,
-                hosts: rows,
-                managedEnforce: env.managedEnforce(env.home)
-            )
+            let (document, modes, installations) = try listState(env)
+            let rows = document.hosts
             if json {
                 return SetupOutcome(stdout: try RobotJSON.encode(document) + "\n", exitCode: 0)
             }

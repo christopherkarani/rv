@@ -22,6 +22,8 @@ enum HelpCatalog {
         case .initialize: initialize
         case .uninstall: uninstall
         case .doctor: doctor
+        case .status: status
+        case .version: version
         case .allowOnce: allowOnce
         case .packs: packs
         case .scan: scan
@@ -58,7 +60,9 @@ enum HelpCatalog {
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
+                    HelpRow(name: "status", description: "Is rv protecting this machine? rvd, host modes, last denial"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
+                    HelpRow(name: "version", description: "Print rv's version (also --version, -V)"),
                 ],
                 accentNames: true
             ),
@@ -424,6 +428,46 @@ enum HelpCatalog {
         examples: [
             "rv doctor",
             "rv doctor --json",
+        ]
+    )
+
+    static let status = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv status [--json] [--robot] [--plain] [--no-color]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--json", description: "rv.status.v1 JSON on stdout"),
+                HelpRow(name: "--robot", description: "rv.status.v1 JSON on stdout"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
+                HelpRow(name: "--no-color", description: "Disable color"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "exit",
+                    description: "0 when rvd answers and no host hook is broken; 1 otherwise"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv status",
+            "rv status --json",
+        ]
+    )
+
+    static let version = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv version"),
+            ]),
+        ],
+        examples: [
+            "rv version",
+            "rv --version",
         ]
     )
 

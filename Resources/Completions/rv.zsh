@@ -19,6 +19,8 @@ _rv() {
     'init:Generate a runtime resource profile'
     'uninstall:Remove rv-owned files'
     'doctor:Read-only health'
+    'status:Is rv protecting this machine'
+    'version:Print the version'
     'safety:Show or set normal or strict'
     'blocks:List recent denials'
     'host:Per-host mode: block, observe, or off'

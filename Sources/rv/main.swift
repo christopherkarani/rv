@@ -8,7 +8,11 @@ import RVCLI
 @main
 enum RVEntry {
     static func main() async {
-        let args = Array(CommandLine.arguments.dropFirst())
+        var args = Array(CommandLine.arguments.dropFirst())
+        // `-V` is the other common spelling of `--version`.
+        if args == ["-V"] {
+            args = ["--version"]
+        }
         if args.isEmpty {
             await RV.main(["workspace", "tui"])
             return
@@ -20,6 +24,6 @@ enum RVEntry {
             await HookDispatch.run(arguments: Array(args.dropFirst()))
             return
         }
-        await RV.main()
+        await RV.main(args)
     }
 }
