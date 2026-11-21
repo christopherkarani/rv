@@ -105,7 +105,7 @@ kinds). On Linux the Keychain-backed sources (`rv secrets set`,
 `rv login connect`) need `secret-tool`; without it:
 
 ```text
-rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but no value is stored: once the Secret Service keyring is available, run this command again or `rv secrets set OPENAI_API_KEY` to store it
+rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but the value you gave was not stored: once the Secret Service keyring is available, run this command again or `rv secrets set OPENAI_API_KEY` to store it
 ```
 
 Check what you have:

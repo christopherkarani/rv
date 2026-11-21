@@ -426,7 +426,7 @@ enum SecretsRun {
             }
             guard environment.keychain.store(SecretKeychain.service, name, value) else {
                 return .failure(CommandFailure(
-                    "\(storeFailure.message); its definition was saved to secrets.json, but no value is stored: "
+                    "\(storeFailure.message); its definition was saved to secrets.json, but the value you gave was not stored: "
                         + "once \(SecretKeychain.storeName) is available, run this command again or "
                         + "`rv secrets set \(DisplayedText.field(name))` to store it"))
             }
