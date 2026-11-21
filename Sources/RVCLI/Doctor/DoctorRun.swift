@@ -25,7 +25,9 @@ struct DoctorEnvironment {
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let install = DoctorInstallProbes.live(home: home, pathEntries: pathEntries)
+        let install = DoctorInstallProbes.live(
+            home: home, pathEntries: pathEntries, xdgRuntimeDir: environment["XDG_RUNTIME_DIR"]
+        )
         return DoctorEnvironment(
             home: home,
             pathEntries: pathEntries,
