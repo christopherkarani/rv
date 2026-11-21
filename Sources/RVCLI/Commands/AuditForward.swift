@@ -122,6 +122,38 @@ enum AuditForwardRun {
         return .success("forward cursor for \(options.url.absoluteString) set to now; older events will not be sent\n")
     }
 
+    /// `rv audit forward --status`: where events go, when they last went,
+    /// how many wait, and whether a schedule runs it. Reads only; sends nothing.
+    static func status(url: URL, configDirectory: URL, scheduleURL: URL?) -> Result<String, CommandFailure> {
+        let cursorFile = cursorURL(configDirectory, destination: url)
+        let cursor: AuditCursor?
+        switch loadCursor(cursorFile) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): cursor = loaded
+        }
+        let cap = 10_000
+        let pending = AuditLedger(configDirectory: configDirectory).events(after: cursor ?? AuditCursor(), limit: cap + 1).events.count
+        let pendingText = pending > cap ? "more than \(cap)" : String(pending)
+        // The cursor moves on a 2xx send and on --from-now, so its time is
+        // when forwarding last advanced, not necessarily a send.
+        var lastSent = "none yet (the next run sends the whole history; --from-now skips it)"
+        if cursor != nil {
+            let modified = (try? FileManager.default.attributesOfItem(atPath: cursorFile.path))?[.modificationDate] as? Date
+            lastSent = "moved " + (modified.map { ISO8601DateFormatter().string(from: $0) } ?? "at an unknown time")
+                + " (by a send or --from-now)"
+        }
+        var lines = [
+            "target     \(url.absoluteString)",
+            "cursor     \(lastSent)",
+            "pending    \(pendingText) event\(pending == 1 ? "" : "s")",
+        ]
+        if let scheduleURL {
+            let scheduled = FileManager.default.fileExists(atPath: scheduleURL.path)
+            lines.append("schedule   " + (scheduled ? "LaunchAgent \(AuditForwardInstall.label) (every 5 min)" : "none (rv audit forward --install adds one)"))
+        }
+        return .success(lines.joined(separator: "\n") + "\n")
+    }
+
     /// One pass: send everything after the cursor in batches, committing the
     /// cursor after each 2xx. At-least-once: a crash between POST and commit resends.
     static func forward(
@@ -310,6 +342,14 @@ struct AuditForward: AsyncParsableCommand {
     @Flag(help: "Start from the current end of the audit trail instead of sending history.") var fromNow = false
     @Flag(help: "Write a user LaunchAgent that runs this forward every 5 minutes, and print a LaunchDaemon template.")
     var install = false
+    @Flag(help: "Show the target, cursor, pending events and schedule without sending anything.")
+    var status = false
+
+    func validate() throws {
+        if status && (install || fromNow) {
+            throw ValidationError("--status only reads; it cannot be combined with --install or --from-now")
+        }
+    }
 
     /// These options again, for the scheduled run.
     var scheduledArguments: [String] {
@@ -339,6 +379,18 @@ struct AuditForward: AsyncParsableCommand {
         switch AuditForwardRun.destination(target) {
         case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
         case .success(let parsed): url = parsed
+        }
+        if status {
+            #if os(macOS)
+            let schedule: URL? = URL(fileURLWithPath: OwnedPaths(home: home).auditForwardLaunchAgent)
+            #else
+            let schedule: URL? = nil
+            #endif
+            switch AuditForwardRun.status(url: url, configDirectory: configDirectory, scheduleURL: schedule) {
+            case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
+            case .success(let text): ctx.writeStdout(text)
+            }
+            return
         }
         var options = AuditForwardRun.Options(url: url, format: format, batchSize: batchSize)
         if install {

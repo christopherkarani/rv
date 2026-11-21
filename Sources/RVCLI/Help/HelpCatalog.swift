@@ -583,15 +583,18 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv audit [tail] [-n <count>] [--since <duration>] [--kind <kind>]... [--json]"),
                 HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]... [--format rv|ocsf]"),
-                HelpRow(name: "rv audit forward [--to <url>] [--header NAME=VALUE]... [--format ocsf|rv] [--from-now]"),
+                HelpRow(name: "rv audit forward [--to <url>] [--header NAME=VALUE]... [--format ocsf|rv] [--batch-size <n>] [--from-now]"),
+                HelpRow(name: "rv audit forward --status [--to <url>]"),
                 HelpRow(name: "rv audit forward --install [--to <url>] [--header NAME=${secret:X}]..."),
                 HelpRow(name: "rv audit verify [--json]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
                 HelpRow(name: "--since", description: "Only events newer than 30m, 24h, 7d"),
-                HelpRow(name: "--kind", description: "Kind or prefix: egress, admission, runtime, workspace, agent, policy, config"),
+                HelpRow(name: "--kind", description: "Kind or prefix: command, egress, admission, runtime, secret, mcp, policy, config, owner, workspace, agent"),
                 HelpRow(name: "--json", description: "JSON array on stdout"),
+                HelpRow(name: "--batch-size", description: "forward: events per POST, 1-5000 (default 500)"),
+                HelpRow(name: "--status", description: "forward: show target, cursor, pending events and schedule; sends nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -613,6 +616,7 @@ enum HelpCatalog {
             "rv audit export --since 7d > rv-audit.jsonl",
             "rv audit forward --to https://siem.example.com/rv --header 'Authorization=Bearer ${secret:SIEM_TOKEN}'",
             "rv audit forward --install",
+            "rv audit forward --status",
             "rv audit verify",
         ]
     )

@@ -29,7 +29,33 @@ enum AuditRun {
             }
             start = now.addingTimeInterval(-seconds)
         }
+        try validateKinds(kinds)
         return AuditFilter(since: start, kinds: kinds, limit: limit)
+    }
+
+    /// The kind families `--kind` can name. `workspace.*` and `agent.*` take
+    /// any phase, so only their family is checked.
+    static let kindFamilies = ["command", "egress", "admission", "runtime", "secret", "mcp", "policy", "config", "owner", "workspace", "agent"]
+
+    /// A `--kind` that matches no event would print nothing, which reads as
+    /// "nothing happened". Refuse it and list what does exist.
+    static func validateKinds(_ kinds: [String]) throws {
+        for kind in kinds where knownKind(kind) == false {
+            throw ValidationError(
+                "--kind \(DisplayedText.field(kind)) matches no audit event kind; use one of: \(kindFamilies.joined(separator: ", ")) (or a full kind such as secret.use)")
+        }
+    }
+
+    static func knownKind(_ kind: String) -> Bool {
+        for family in ["workspace", "agent"] where kind == family || kind.hasPrefix(family + ".") {
+            return kind.hasSuffix(".") == false
+        }
+        return AuditEventKind.allCases.contains { $0.matches(kind) }
+    }
+
+    /// What `rv audit tail` prints when there is nothing to show.
+    static func emptyMessage(filtered: Bool) -> String {
+        filtered ? "No audit events match these filters.\n" : "No audit events yet.\n"
     }
 
     static func pretty(_ events: [AuditEvent]) -> String {
@@ -149,8 +175,13 @@ struct AuditTail: AsyncParsableCommand {
         let home = try ctx.requireHome()
         let filter = try AuditRun.filter(since: since, kinds: kind, limit: max(0, limit), now: Date())
         let events = AuditRun.events(home: home, filter: filter)
-        ctx.writeStdout(
-            ctx.explicitRobot ? try AuditRun.jsonArray(events) : AuditRun.pretty(events))
+        if ctx.explicitRobot {
+            ctx.writeStdout(try AuditRun.jsonArray(events))
+        } else if events.isEmpty {
+            ctx.writeStdout(AuditRun.emptyMessage(filtered: since != nil || kind.isEmpty == false || limit <= 0))
+        } else {
+            ctx.writeStdout(AuditRun.pretty(events))
+        }
     }
 }
 

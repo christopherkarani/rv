@@ -206,3 +206,29 @@ struct AuditVerifyTests {
         #expect(AuditVerifyRun.text(empty, path: "/x") == "no audit lines yet (/x)\n")
     }
 }
+
+struct AuditKindValidationTests {
+    @Test(arguments: [
+        "command", "command.denied", "egress", "secret.use", "mcp", "mcp.tool", "owner",
+        "workspace", "workspace.started", "agent", "agent.launch", "policy", "config.changed",
+    ])
+    func knownKindsAndPrefixesPass(kind: String) throws {
+        _ = try AuditRun.filter(since: nil, kinds: [kind], limit: nil, now: Date())
+    }
+
+    @Test(arguments: ["egres", "secrets", "commands.denied", "workspace.", "denied", ""])
+    func unknownKindsAreRefusedWithTheFamilies(kind: String) {
+        #expect(AuditRun.knownKind(kind) == false)
+        do {
+            _ = try AuditRun.filter(since: nil, kinds: [kind], limit: nil, now: Date())
+            Issue.record("expected --kind \(kind) to be refused")
+        } catch {
+            #expect("\(error)".contains("egress, admission"))
+        }
+    }
+
+    @Test func emptyTailSaysWhy() {
+        #expect(AuditRun.emptyMessage(filtered: false) == "No audit events yet.\n")
+        #expect(AuditRun.emptyMessage(filtered: true) == "No audit events match these filters.\n")
+    }
+}

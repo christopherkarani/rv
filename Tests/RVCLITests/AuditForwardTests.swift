@@ -147,6 +147,39 @@ struct AuditForwardTests {
         }
     }
 
+    @Test func statusReportsPendingLastSendAndScheduleWithoutSending() throws {
+        let config = Config()
+        config.record(3)
+        let url = try options().url
+        let missing = config.directory.appendingPathComponent("no-such.plist")
+        let before = try AuditForwardRun.status(url: url, configDirectory: config.directory, scheduleURL: missing).get()
+        #expect(before.contains("target     https://siem.example.com/rv"))
+        #expect(before.contains("cursor     none yet"))
+        #expect(before.contains("pending    3 events"))
+        #expect(before.contains("schedule   none"))
+
+        let receiver = Receiver()
+        _ = try AuditForwardRun.forward(
+            options: options(), configDirectory: config.directory, hostName: "h", transport: receiver.transport).get()
+        config.record(1, from: 3)
+        let plist = config.directory.appendingPathComponent("agent.plist")
+        try Data().write(to: plist)
+        let after = try AuditForwardRun.status(url: url, configDirectory: config.directory, scheduleURL: plist).get()
+        #expect(after.contains("cursor     moved "))
+        #expect(after.contains("pending    1 event\n"))
+        #expect(after.contains("LaunchAgent dev.rv.audit-forward"))
+        #expect(receiver.received == 3)
+
+        let linux = try AuditForwardRun.status(url: url, configDirectory: config.directory, scheduleURL: nil).get()
+        #expect(linux.contains("schedule") == false)
+    }
+
+    @Test func statusCannotBeCombinedWithWrites() {
+        #expect(throws: (any Error).self) { try AuditForward.parse(["--status", "--install"]) }
+        #expect(throws: (any Error).self) { try AuditForward.parse(["--status", "--from-now"]) }
+        #expect((try? AuditForward.parse(["--status", "--to", "https://siem.example.com"])) != nil)
+    }
+
     @Test func destinationsHeadersAndSecretHeaders() throws {
         #expect((try? AuditForwardRun.destination("https://siem.example.com").get()) != nil)
         #expect((try? AuditForwardRun.destination("http://127.0.0.1:9000/x").get()) != nil)
