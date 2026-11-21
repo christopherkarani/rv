@@ -28,8 +28,7 @@ struct OnePasswordBatchTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-op-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let op = directory.appendingPathComponent("op")
-        try Data(fakeOp.utf8).write(to: op)
-        chmod(op.path, 0o755)
+        try writeExecutableStub(fakeOp, to: op)
         return ["PATH": "\(directory.path):/usr/bin:/bin", "HOME": directory.path]
     }
 

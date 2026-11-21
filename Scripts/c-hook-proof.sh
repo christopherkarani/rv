@@ -54,6 +54,7 @@ clang_c_hook() {
     "$ROOT/Sources/rv-c/daemon_trust.c" \
     "$ROOT/Sources/rv-c/hook_fallback.c" \
     "$ROOT/Sources/rv-c/observe_gate.c" \
+    "$ROOT/Sources/rv-c/local_eval.c" \
     "$ROOT/Sources/rv-c/rv.c"
   chmod 755 "$dest"
 }
