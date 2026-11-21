@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVHistory
 
 /// Persisted `[packs]` section under `$HOME/.config/rv/config.toml`.
