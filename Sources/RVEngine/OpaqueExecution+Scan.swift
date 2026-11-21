@@ -265,6 +265,12 @@ extension OpaqueExecution {
         {
             index += 1
         }
+        if tokens.contains(where: { mentionsName($0.decoded, "BASH_ENV") || mentionsName($0.decoded, "ENV") }) {
+            // `BASH_ENV=/dev/stdin bash -c true`, `set -a; ENV=…; sh -i`: a
+            // shell reads that file first. Checked for every command,
+            // assignment-only ones included.
+            state.setsShellStartup = true
+        }
         guard index < tokens.count else { return }
         let first = tokens[index]
         let word = first.wasQuoted ? "" : first.decoded
@@ -285,11 +291,11 @@ extension OpaqueExecution {
                 flatten(String(argument.decoded[argument.decoded.index(after: equals)...]), into: &line, nesting: nesting + 1, state: &state)
             }
         }
-        if tokens.contains(where: { mentionsName($0.decoded, "BASH_ENV") || mentionsName($0.decoded, "ENV") })
-            || variableSetters.contains(name) && setsDynamicName(Array(tokens.dropFirst(index + 1)), printf: name == "printf")
+        if variableSetters.contains(name),
+           setsDynamicName(name, droppingRedirects(Array(tokens.dropFirst(index + 1))).map(\.decoded))
         {
-            // `BASH_ENV=/dev/stdin bash -c true`, `export ENV=…; sh -i`,
-            // `export "$(cat vars)"`: a shell reads that file first.
+            // `export "$(cat vars)"`, `declare -n r=$v`: the variable it
+            // sets may be `BASH_ENV` or `ENV`.
             state.setsShellStartup = true
         }
         if name == "hash", tokens.dropFirst(index + 1).contains(where: { $0.decoded == "-p" || $0.decoded.contains("=") }) {
@@ -308,14 +314,59 @@ extension OpaqueExecution {
         "export", "declare", "typeset", "local", "readonly", "read", "printf", "getopts",
     ]
 
-    /// A setter argument whose variable name rv cannot read (`export
-    /// "$x=…"`, `read "$v"`, `printf -v "$v"`).
-    private static func setsDynamicName(_ arguments: [CommandToken], printf: Bool) -> Bool {
-        if printf, arguments.contains(where: { $0.decoded.hasPrefix("-v") }) == false { return false }
-        return arguments.contains { argument in
-            let name = argument.decoded.prefix { $0 != "=" }
-            return name.contains("$") || name.contains("`")
+    /// A setter whose variable name rv cannot read (`export "$x=…"`,
+    /// `read "$v"`, `printf -v "$v"`), or a nameref whose target is not a
+    /// literal name other than `BASH_ENV`/`ENV` (`declare -n r=${x}_ENV`,
+    /// `declare -n r`, which takes its target later). Only name positions
+    /// count: a dynamic value names nothing, except a nameref's.
+    private static func setsDynamicName(_ command: String, _ words: [String]) -> Bool {
+        switch command {
+        case "printf":
+            // Options up to the format; a dynamic one may be `-v`.
+            var index = 0
+            while index < words.count {
+                let word = words[index]
+                if isDynamic(word) { return true }
+                guard word != "--", word.hasPrefix("-") else { return false }
+                if word == "-v" {
+                    index += 1
+                    if index < words.count, isDynamic(words[index]) { return true }
+                }
+                index += 1
+            }
+            return false
+        case "getopts":
+            // `getopts optstring name`: an unquoted dynamic optstring may
+            // split and move the name.
+            return words.prefix(2).contains { isDynamic($0) }
+        case "read":
+            // Option values differ between shells (zsh `-p` takes none),
+            // so every word may be a name.
+            return words.contains { isDynamic($0) }
+        default:
+            let nameref = words.contains { $0.hasPrefix("-") && $0.dropFirst().contains("n") }
+            for word in words {
+                if word.hasPrefix("-") || word.hasPrefix("+") {
+                    if isDynamic(word) { return true }
+                    continue
+                }
+                if isDynamic(word.prefix { $0 != "=" }) { return true }
+                guard nameref else { continue }
+                guard let equals = word.firstIndex(of: "=") else { return true }
+                let target = word[word.index(after: equals)...]
+                if isLiteralName(target) == false || target == "BASH_ENV" || target == "ENV" { return true }
+            }
+            return false
         }
+    }
+
+    private static func isDynamic(_ word: some StringProtocol) -> Bool {
+        word.contains("$") || word.contains("`")
+    }
+
+    private static func isLiteralName(_ word: Substring) -> Bool {
+        guard let first = word.first, first == "_" || first.isASCII && first.isLetter else { return false }
+        return word.allSatisfy { $0 == "_" || $0.isASCII && ($0.isLetter || $0.isNumber) }
     }
 
     /// `name() …`, `name () …`, `function name …`: the names defined.

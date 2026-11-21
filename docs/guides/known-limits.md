@@ -187,7 +187,8 @@ The README's "MCP governance" section lists every case.
     operand (`bash "$SCRIPT"`);
   - a shell on a line that names `BASH_ENV` or `ENV` (a startup file
     the shell reads first), or that sets a variable whose name is
-    dynamic (`export "$(cat vars)"`);
+    dynamic (`export "$(cat vars)"`) or declares a nameref whose target
+    is not a literal name (`declare -n r="$v"`, `declare -n r`);
   - a same-line definition that changes what a name runs: a function or
     alias named like a command the floor reads (`echo(){ …; }`, `alias
     cat=…`), a function whose body is not a group, `coproc`, `>&p`, and

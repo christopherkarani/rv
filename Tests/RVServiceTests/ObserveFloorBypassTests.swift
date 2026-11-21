@@ -168,6 +168,17 @@ private let readerRows: [String] = [
     "echo 'rv host mode cursor off' | ENV=/dev/stdin sh -i",
     "export ENV=/dev/stdin; echo 'rv host mode cursor off' | sh -i",
     #"export "$(cat vars)"; echo 'rv host mode cursor off' | bash -c true"#,
+    // An assignment-only command, and a nameref whose target is not a
+    // literal name other than `BASH_ENV`/`ENV`.
+    "set -a; BASH_ENV=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    "set -a; ENV=/dev/stdin; echo 'rv host mode cursor off' | sh -i",
+    "x=BASH; declare -n r=${x}_ENV; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    #"declare -n r="$n"; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true"#,
+    "x=BASH; declare -gn r=${x}_ENV; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    "x=BASH; typeset -n r=`echo ${x}_ENV`; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    "declare -n r; r=${x}_ENV; export r=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    "f() { local -n r=$1; export r=/dev/stdin; }; f ${x}_ENV; echo 'rv host mode cursor off' | bash -c true",
+    #"set -a; printf "$o" "$n" /dev/stdin; echo 'rv host mode cursor off' | bash -c true"#,
     // Known false positives of that rule: harmless, but ambiguous.
     "sh 3</dev/null < script.sh",
     "curl -s https://example.com/x | sh 3</dev/null",
@@ -407,6 +418,14 @@ struct ObserveFloorBypassTests {
         "echo ls | sh 2>/dev/null",
         "sh 0<<<'ls -la' 2>&1",
         "sh <<<'ls' >out.txt 2>/dev/null",
+        // Setters whose variable names are literal; only values are dynamic.
+        #"read -r v <<< "$x"; bash run.sh"#,
+        #"printf -v o '%s' "$x"; bash run.sh"#,
+        #"export PATH="$PATH:/x"; bash run.sh"#,
+        #"local dir="$1"; bash run.sh"#,
+        "declare -n r=items; bash run.sh",
+        "env FOO=1 bash build.sh",
+        "NODE_ENV=test bash scripts/build.sh",
     ])
     func detectorPasses(command: String) {
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)) == false, "\(command)")
