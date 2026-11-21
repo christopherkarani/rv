@@ -103,7 +103,7 @@ public enum JudgeRuntime {
             case .laya: return bundleDir(home: home)
             }
         }
-        return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle)
+        return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle, shadow: config.judgeDecides == false)
     }
 
     /// The engine that will actually run, with its validated bundle dir.

@@ -938,6 +938,32 @@ struct ObserveFloorBypassTests {
         #expect(result.decision != .allow, "\(command)")
     }
 
+    /// A shadow judge (`judge.mode` unset or `shadow`) is scored and logged
+    /// but never decides: under enforce, a judge block on a pack-allowed
+    /// command leaves it allowed, while pack denies stand.
+    @Test("enforce host, shadow judge: a judge block does not decide", arguments: [
+        "stat ~/.local/bin/rvd",
+        "brew list",
+        "curl -s localhost:3100/api/health",
+    ])
+    func shadowJudgeNeverDecides(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await blockingJudgeApply(command, home: home, mode: .enforce, shadow: true)
+        #expect(result.decision == .allow, "\(command)")
+    }
+
+    @Test("enforce host, shadow judge: pack denies stand", arguments: [
+        "rm -rf ~",
+        "git push --force origin main",
+    ])
+    func shadowJudgeKeepsPackDenies(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await blockingJudgeApply(command, home: home, mode: .enforce, shadow: true)
+        #expect(result.decision != .allow, "\(command)")
+    }
+
     /// The observe verdict is the enforce verdict, judge included. (Some
     /// `ls` rows are in the judge's safe lane, so both allow those.)
     @Test("observe host: anything short of a proven read stays enforced", arguments: [
@@ -1012,7 +1038,7 @@ struct ObserveFloorBypassTests {
     }
 
     private func blockingJudgeApply(
-        _ command: String, home: HomeDirectory, mode: GuardMode
+        _ command: String, home: HomeDirectory, mode: GuardMode, shadow: Bool = false
     ) async -> EvaluationResult {
         let block: JudgeRuntime.JudgeRun
         do {
@@ -1024,7 +1050,8 @@ struct ObserveFloorBypassTests {
         let inputs = EvaluationInputs(
             guardMode: mode,
             judge: JudgeSelection(
-                engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+                engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true),
+                shadow: shadow
             ),
             store: .gather(home: home, cwd: nil)
         )
