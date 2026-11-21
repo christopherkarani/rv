@@ -391,7 +391,9 @@ struct ObserveFloorBypassTests {
     /// A long fed script of dynamic-head lines (`d['k'] = 'v'`) is read in
     /// linear time: the stop guard's rvd lookup is computed once per text,
     /// not once per `kill`-shaped command. The verdict must come from
-    /// reading it, not from running out of budget.
+    /// reading it, not from running out of budget. A debug build under a
+    /// parallel run can pass the 2 s production deadline, so the deadline
+    /// here is the wall-clock bound.
     @Test("floors: a long fed script of dynamic-head lines reads fast")
     func floorsReadDynamicHeadScriptsLinearly() {
         let body = (0..<1500).map { "d['key\($0)'] = 'value\($0)'" }.joined(separator: "\n")
@@ -401,7 +403,9 @@ struct ObserveFloorBypassTests {
         var lifecycle: EvaluationResult?
         var unanalyzable: EvaluationResult?
         let lifecycleTime = clock.measure {
-            lifecycle = ObserveFloor.lifecycleFloor(allow, command: command, home: nil, cwd: nil)
+            lifecycle = ObserveFloor.lifecycleFloor(
+                allow, command: command, home: nil, cwd: nil, budget: Self.wallClockBound
+            )
         }
         let unanalyzableTime = clock.measure {
             unanalyzable = ObserveFloor.unanalyzableFloor(allow, command: command)
