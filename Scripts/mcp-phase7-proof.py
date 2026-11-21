@@ -443,7 +443,7 @@ step("7.4 an unlisted tool is denied", "rv policy denies web tool delete_all" in
 g.close()
 if sys.platform == "darwin":
     r = rv("mcp", "serve", "--server", "bare")
-    step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "bare needs a sandbox" in r.stderr,
+    step("7.4 a local server without a sandbox is refused", "not starting MCP server bare: sandbox: bare needs a sandbox" in r.stderr,
          r.stderr.strip()[:140])
 else:
     try:
@@ -456,7 +456,8 @@ else:
         step("7.4 a local server without a sandbox serves on Linux (uncaged until the cage lands)", False, str(error)[:100])
 r = rv("mcp", "serve", "--server", "open")
 if sys.platform == "darwin":
-    step("7.4 open network is refused", r.returncode != 0 and "open stays off the network" in r.stderr, r.stderr.strip()[:140])
+    step("7.4 open network is refused", "not starting MCP server open: sandbox: open stays off the network" in r.stderr,
+         r.stderr.strip()[:140])
 else:
     step("7.4 a sandboxed server is refused on Linux (the cage is macOS)", r.returncode != 0 and "only on macOS" in r.stderr,
          r.stderr.strip()[:140])
