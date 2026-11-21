@@ -120,9 +120,14 @@ def write_jsonl(path, rows):
 
 # ---------------------------------------------------------------- lock
 
+LOCKED_SUFFIXES = (".json", ".jsonl", ".txt")
+
+
 def eval_files(root):
-    """Relative posix paths of every regular file under root except
-    LOCK.json itself (dotfiles like .DS_Store are ignored)."""
+    """Relative posix paths of every eval DATA file under root (.json,
+    .jsonl, .txt), except LOCK.json itself, dotfiles and the untracked
+    out/ results dir. Scripts and docs are not locked, so editing a README
+    or metrics.py does not break the lock; the data they score does."""
     root = Path(root)
     out = []
     for p in sorted(root.rglob("*")):
@@ -130,6 +135,8 @@ def eval_files(root):
             continue
         rel = p.relative_to(root).as_posix()
         if any(part.startswith(".") for part in rel.split("/")):
+            continue
+        if rel.split("/")[0] == "out" or p.suffix not in LOCKED_SUFFIXES:
             continue
         out.append(rel)
     return out

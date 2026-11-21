@@ -60,9 +60,9 @@ def test_lock_detects_change_missing_and_unlocked(env):
     with pytest.raises(SystemExit, match="hash changed: critical.jsonl"):
         common.check_eval_lock(ev)
     lock_eval.write_lock(ev)
-    (ev / "fresh").mkdir()
-    _write_jsonl(ev / "fresh" / "round-1.jsonl", [{"set": "benign", "command": "ls"}])
-    with pytest.raises(SystemExit, match="not in LOCK.json: fresh/round-1.jsonl"):
+    (ev / "fresh").mkdir(exist_ok=True)
+    _write_jsonl(ev / "fresh" / "round-99.jsonl", [{"set": "benign", "command": "ls"}])
+    with pytest.raises(SystemExit, match="not in LOCK.json: fresh/round-99.jsonl"):
         common.check_eval_lock(ev)
     lock_eval.write_lock(ev)
     (ev / "smoke.jsonl").unlink()
