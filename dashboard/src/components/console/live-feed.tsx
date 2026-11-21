@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Pause, Play } from "lucide-react";
@@ -26,7 +27,7 @@ export function LiveFeed({ initial, limit = 14, query = "" }: { initial: EventRo
     const tick = async () => {
       if (document.visibilityState === "visible") {
         try {
-          const res = await fetch(`/api/v1/events?after=${head.current}&limit=${limit}${query}`, { cache: "no-store" });
+          const res = await fetch(withBase(`/api/v1/events?after=${head.current}&limit=${limit}${query}`), { cache: "no-store" });
           if (res.ok) {
             const { rows } = (await res.json()) as { rows: EventRow[] };
             if (rows.length && !stopped) {

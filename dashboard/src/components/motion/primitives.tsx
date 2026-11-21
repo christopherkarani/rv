@@ -3,6 +3,10 @@
 import * as React from "react";
 import { animate, motion, useMotionTemplate, useMotionValue, useReducedMotion, type HTMLMotionProps } from "motion/react";
 import { cn } from "@/lib/utils";
+import { useBrand } from "@/components/brand";
+
+/** The rykanv.com theme keeps motion to what carries meaning: no typing, counting, blur or cursor glow. */
+const useQuiet = () => useBrand().name === "rykan";
 
 /** The console's one spring: quick, no bounce, editor-snappy. */
 export const SPRING = { type: "spring", stiffness: 420, damping: 38, mass: 0.8 } as const;
@@ -24,10 +28,14 @@ export function Stagger({ className, children, delay = 0, ...props }: HTMLMotion
 }
 
 export function StaggerItem({ className, ...props }: HTMLMotionProps<"div">) {
+  const quiet = useQuiet();
   return (
     <motion.div
       className={className}
-      variants={{
+      variants={quiet ? {
+        hidden: { opacity: 0 },
+        show: { opacity: 1, transition: { duration: 0.2, ease: EASE_OUT } },
+      } : {
         hidden: { opacity: 0, y: 8, filter: "blur(4px)" },
         show: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.42, ease: EASE_OUT } },
       }}
@@ -50,7 +58,9 @@ export function CountUp({ value, compact: useCompact = false, className }: {
   const format = useCompact ? compact : plain;
   const ref = React.useRef<HTMLSpanElement>(null);
   const from = React.useRef(0);
-  const reduce = useReducedMotion();
+  const reducedMotion = useReducedMotion();
+  const quiet = useQuiet();
+  const reduce = reducedMotion || quiet;
   React.useEffect(() => {
     const node = ref.current;
     if (!node) return;
@@ -67,7 +77,7 @@ export function CountUp({ value, compact: useCompact = false, className }: {
     from.current = value;
     return () => controls.stop();
   }, [value, format, reduce]);
-  return <span ref={ref} className={cn("tabular-nums", className)}>{format(0)}</span>;
+  return <span ref={ref} className={cn("tabular-nums", className)}>{format(reduce ? value : 0)}</span>;
 }
 
 /**
@@ -75,10 +85,18 @@ export function CountUp({ value, compact: useCompact = false, className }: {
  * brightens near it. The "cursor" feel of the console.
  */
 export function SpotlightPanel({ className, children, ...props }: React.ComponentProps<"div">) {
+  const quiet = useQuiet();
   const x = useMotionValue(-400);
   const y = useMotionValue(-400);
   const background = useMotionTemplate`radial-gradient(420px circle at ${x}px ${y}px, var(--spotlight), transparent 70%)`;
   const border = useMotionTemplate`radial-gradient(260px circle at ${x}px ${y}px, color-mix(in oklab, var(--brand) 45%, transparent), transparent 75%)`;
+  if (quiet) {
+    return (
+      <div className={cn("relative rounded-xl border bg-panel", className)} {...props}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div
       onPointerMove={(e) => {
@@ -114,7 +132,9 @@ export function Caret({ className }: { className?: string }) {
 
 /** Text typed out once on mount, then a resting caret. */
 export function TypeIn({ text, className, speed = 22 }: { text: string; className?: string; speed?: number }) {
-  const reduce = useReducedMotion();
+  const quiet = useQuiet();
+  const reducedMotion = useReducedMotion();
+  const reduce = reducedMotion || quiet;
   const [typed, setShown] = React.useState(0);
   React.useEffect(() => {
     if (reduce) return;
@@ -131,17 +151,18 @@ export function TypeIn({ text, className, speed = 22 }: { text: string; classNam
     <span className={className}>
       <span className="sr-only">{text}</span>
       <span aria-hidden>{text.slice(0, shown)}</span>
-      <Caret />
+      {!quiet && <Caret />}
     </span>
   );
 }
 
 export function LiveDot({ live = true, className }: { live?: boolean; className?: string }) {
+  const quiet = useQuiet();
   return (
     <span
       className={cn(
         "inline-block size-1.5 rounded-full",
-        live ? "bg-status-good animate-pulse-dot" : "bg-muted-foreground/50",
+        live ? cn("bg-status-good", !quiet && "animate-pulse-dot") : "bg-muted-foreground/50",
         className,
       )}
     />

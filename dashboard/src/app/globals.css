@@ -174,6 +174,88 @@
   color-scheme: dark;
 }
 
+/* rykanv.com theme (RV_CONSOLE_THEME=rykan). Light copies the site's tokens:
+   white canvas, zinc-200 hairlines, near-black type and CTAs. Dark copies the
+   site's "product-dark" panels (zinc-950 canvas, zinc-800 borders). Chart and
+   status colors keep the validated palette above, since the site's own
+   accents are only ALLOW green and DENY red; just the brand accent goes neutral. */
+[data-brand="rykan"] {
+  --radius: 0.5rem;
+  --background: #ffffff;
+  --chrome: #fafafa;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --hover: rgb(9 9 11 / 4%);
+  --faint: rgb(9 9 11 / 2.5%);
+  --foreground: #0a0a0a;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #0a0a0a;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #0a0a0a;
+  --destructive: #e11d48;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #0a0a0a;
+  --brand: #0a0a0a;
+  --grid: #f4f4f5;
+  --axis: #d4d4d8;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #0a0a0a;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: rgb(9 9 11 / 5%);
+  --sidebar-accent-foreground: #0a0a0a;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #0a0a0a;
+  --spotlight: rgb(9 9 11 / 3%);
+}
+
+/* .product-dark: the site's dark product panels, reused for the terminal on the sign-in page. */
+[data-brand="rykan"].dark,
+[data-brand="rykan"] .product-dark {
+  --background: #09090b;
+  --chrome: #09090b;
+  --panel: #111113;
+  --card: #111113;
+  --hover: rgb(250 250 250 / 5%);
+  --faint: rgb(250 250 250 / 2.5%);
+  --foreground: #fafafa;
+  --card-foreground: #fafafa;
+  --popover: #111113;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #09090b;
+  --secondary: #18181b;
+  --secondary-foreground: #fafafa;
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: #fb7185;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #fafafa;
+  --brand: #fafafa;
+  --grid: #1c1c1f;
+  --axis: #3f3f46;
+  --sidebar: #09090b;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: rgb(250 250 250 / 6%);
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #27272a;
+  --sidebar-ring: #fafafa;
+  --spotlight: rgb(250 250 250 / 4%);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -214,4 +296,20 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* rykanv.com theme overrides. Unlayered on purpose, so they win over the
+   utility classes the shared components carry. */
+[data-brand="rykan"] body { letter-spacing: -0.011em; }
+[data-brand="rykan"] .label-caps { font-size: 13px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+[data-brand="rykan"] .page-header { margin-bottom: 2rem; }
+[data-brand="rykan"] .page-title { font-size: 32px; line-height: 1.15; letter-spacing: -0.04em; }
+[data-brand="rykan"] .page-description { margin-top: 0.5rem; font-size: 14px; line-height: 1.6; }
+[data-brand="rykan"] .panel-title { font-size: 14px; font-weight: 600; }
+[data-brand="rykan"] .kpi-icon { display: none; }
+[data-brand="rykan"] .user-avatar { background: var(--foreground); color: var(--background); }
+[data-brand="rykan"] .product-dark { color: var(--foreground); }
+[data-brand="rykan"] .auth-glow { display: none; }
+@media (max-width: 639px) {
+  [data-brand="rykan"] .page-title { font-size: 28px; }
 }

@@ -1,14 +1,17 @@
 "use client";
 
+import { BASE_PATH } from "@/lib/base-path";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { EASE_OUT } from "@/components/motion/primitives";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useBrand } from "@/components/brand";
 import { CommandPalette } from "./command-palette";
 import { EditorTabs } from "./editor-tabs";
 import { Explorer } from "./explorer";
 import { NAV_ITEMS } from "./nav";
+import { SiteShell } from "./site-shell";
 import { StatusBar } from "./status-bar";
 import { TitleBar } from "./title-bar";
 import { useRange } from "./use-range";
@@ -29,6 +32,7 @@ export function AppShell({ user, organization, initialStatus, devices, version, 
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const brand = useBrand();
   const { withRange } = useRange();
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -38,7 +42,7 @@ export function AppShell({ user, organization, initialStatus, devices, version, 
 
   const toggleSidebar = useCallback(() => {
     setCollapsed((c) => {
-      document.cookie = `${SIDEBAR_COOKIE}=${c ? "0" : "1"}; path=/; max-age=31536000; samesite=lax`;
+      document.cookie = `${SIDEBAR_COOKIE}=${c ? "0" : "1"}; path=${BASE_PATH || "/"}; max-age=31536000; samesite=lax`;
       return !c;
     });
   }, []);
@@ -63,6 +67,19 @@ export function AppShell({ user, organization, initialStatus, devices, version, 
   }, [router, toggleSidebar, withRange]);
 
   const alerts: Record<string, number> = status.brokenChains > 0 ? { "/integrity": status.brokenChains } : {};
+
+  if (brand.name === "rykan") {
+    return (
+      <>
+        <SiteShell user={user} organization={organization} status={status} version={version} alerts={alerts} onOpenPalette={() => setPaletteOpen(true)}>
+          <motion.div key={pathname} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.2, ease: EASE_OUT }}>
+            {children}
+          </motion.div>
+        </SiteShell>
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} devices={devices} />
+      </>
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">

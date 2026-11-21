@@ -31,7 +31,7 @@ export function KpiCard({ label, value, previous, icon: Icon, tone, spark, href,
           {tone && <span className="size-2 rounded-[3px]" style={{ background: TONE_VAR[tone] }} />}
           {label}
         </span>
-        <Icon className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
+        <Icon className="kpi-icon size-3.5 text-muted-foreground" strokeWidth={1.75} />
       </div>
       <div className="mt-2.5 flex items-end justify-between gap-2">
         <div className="text-[28px] leading-none font-semibold tracking-tight">

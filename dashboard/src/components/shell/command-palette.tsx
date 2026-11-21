@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useState } from "react";
@@ -71,14 +72,14 @@ export function CommandPalette({ open, onOpenChange, devices }: {
         <CommandGroup heading="Actions">
           <CommandItem value="export events csv" onSelect={() => run(() => {
             const a = document.createElement("a");
-            a.href = "/api/v1/export?format=csv";
+            a.href = withBase("/api/v1/export?format=csv");
             a.download = "";
             a.click();
           })}>
             <Download /> Export events as CSV
           </CommandItem>
           <CommandItem value="copy ingest url" onSelect={() => run(() => {
-            void navigator.clipboard.writeText(`${window.location.origin}/api/v1/ingest`);
+            void navigator.clipboard.writeText(`${window.location.origin}${withBase("/api/v1/ingest")}`);
             toast.success("Ingest URL copied");
           })}>
             <Copy /> Copy ingest URL

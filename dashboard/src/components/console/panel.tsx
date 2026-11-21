@@ -17,7 +17,7 @@ export function Panel({ title, description, action, className, bodyClassName, ch
         {(title || action) && (
           <div className="flex items-start justify-between gap-3 px-4 pt-3.5 pb-1">
             <div className="min-w-0">
-              {title && <h2 className="text-[13px] font-medium">{title}</h2>}
+              {title && <h2 className="panel-title text-[13px] font-medium">{title}</h2>}
               {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
             </div>
             {action}

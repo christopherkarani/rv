@@ -22,7 +22,7 @@ export function UserMenu({ user }: { user: ShellUser }) {
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="Account"
-        className="grid size-7 place-items-center rounded-full bg-gradient-to-br from-brand/80 to-series-override/80 font-mono text-[10.5px] font-semibold text-white outline-none ring-1 ring-border transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring"
+        className="user-avatar grid size-7 place-items-center rounded-full bg-gradient-to-br from-brand/80 to-series-override/80 font-mono text-[10.5px] font-semibold text-white outline-none ring-1 ring-border transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring"
       >
         {initials}
       </DropdownMenuTrigger>

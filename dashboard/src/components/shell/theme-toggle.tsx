@@ -4,7 +4,7 @@ import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/** Dark is the default; one click flips to light and back. The icon is chosen in CSS, so it never flashes. */
+/** Dark is the default (light under the rykan theme); one click flips to light and back. The icon is chosen in CSS, so it never flashes. */
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
   return (

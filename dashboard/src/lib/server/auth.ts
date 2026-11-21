@@ -1,4 +1,5 @@
 import "server-only";
+import { BASE_PATH } from "@/lib/base-path";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
@@ -131,7 +132,7 @@ function sessionCookie(row: UserRow): SessionCookie {
   return {
     name: SESSION_COOKIE,
     value: encodeSession(row),
-    options: { httpOnly: true, sameSite: "lax", secure: config.secureCookies, path: "/", maxAge: SESSION_TTL_MS / 1000 },
+    options: { httpOnly: true, sameSite: "lax", secure: config.secureCookies, path: BASE_PATH || "/", maxAge: SESSION_TTL_MS / 1000 },
   };
 }
 

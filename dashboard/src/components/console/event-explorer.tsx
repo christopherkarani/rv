@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -116,7 +117,7 @@ export function EventExplorer({ initialRows, total, facets }: { initialRows: Eve
       const head = rows.reduce((m, r) => Math.max(m, r.seq), 0);
       if (document.visibilityState === "visible") {
         try {
-          const res = await fetch(`/api/v1/events?after=${head}&limit=100${filterQS ? `&${filterQS}` : ""}`, { cache: "no-store" });
+          const res = await fetch(withBase(`/api/v1/events?after=${head}&limit=100${filterQS ? `&${filterQS}` : ""}`), { cache: "no-store" });
           if (res.ok && !stopped) {
             const data = (await res.json()) as { rows: EventRow[] };
             if (data.rows.length) {
@@ -138,7 +139,7 @@ export function EventExplorer({ initialRows, total, facets }: { initialRows: Eve
     if (!last) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/v1/events?before=${last.time}:${last.seq}&limit=100${filterQS ? `&${filterQS}` : ""}`, { cache: "no-store" });
+      const res = await fetch(withBase(`/api/v1/events?before=${last.time}:${last.seq}&limit=100${filterQS ? `&${filterQS}` : ""}`), { cache: "no-store" });
       if (res.ok) {
         const data = (await res.json()) as { rows: EventRow[] };
         setRows((prev) => [...prev, ...data.rows]);
@@ -183,10 +184,10 @@ export function EventExplorer({ initialRows, total, facets }: { initialRows: Eve
             <LiveDot live={live} className="ml-0.5" />
           </Button>
           <Button variant="outline" size="sm" asChild>
-            <a href={`/api/v1/export?format=csv${filterQS ? `&${filterQS}` : ""}`}><Download /> CSV</a>
+            <a href={withBase(`/api/v1/export?format=csv${filterQS ? `&${filterQS}` : ""}`)}><Download /> CSV</a>
           </Button>
           <Button variant="outline" size="sm" asChild>
-            <a href={`/api/v1/export?format=jsonl${filterQS ? `&${filterQS}` : ""}`}><Download /> JSONL</a>
+            <a href={withBase(`/api/v1/export?format=jsonl${filterQS ? `&${filterQS}` : ""}`)}><Download /> JSONL</a>
           </Button>
         </div>
       </div>

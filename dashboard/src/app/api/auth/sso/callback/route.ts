@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { withBase } from "@/lib/base-path";
 import { ssoSignIn } from "@/lib/server/auth";
 import { logConsoleAction } from "@/lib/server/db";
 import { oidc, oidcConfiguration, publicOrigin, ssoSettings } from "@/lib/server/sso";
@@ -14,11 +15,12 @@ export async function GET(request: NextRequest) {
   try {
     origin = publicOrigin(request);
   } catch {
-    return NextResponse.redirect(new URL("/login?error=sso-unavailable", request.url), 303);
+    return NextResponse.redirect(new URL(withBase("/login?error=sso-unavailable"), request.url), 303);
   }
   const done = (path: string) => {
-    const response = NextResponse.redirect(new URL(path, origin), 303);
-    response.cookies.set(SSO_FLOW_COOKIE, "", { path: "/api/auth/sso", maxAge: 0 });
+    // `origin` already carries the base path; `path` is console-relative.
+    const response = NextResponse.redirect(new URL(`${origin}${path}`), 303);
+    response.cookies.set(SSO_FLOW_COOKIE, "", { path: withBase("/api/auth/sso"), maxAge: 0 });
     return response;
   };
   if (!settings) return done("/login?error=sso-unavailable");

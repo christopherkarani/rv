@@ -1,4 +1,5 @@
 import "server-only";
+import { BASE_PATH } from "@/lib/base-path";
 import * as oidc from "openid-client";
 import { config } from "./config";
 import type { SsoPolicy } from "../sso-policy";
@@ -33,14 +34,15 @@ export const ssoSettings = (() => {
 export type SsoSettings = NonNullable<typeof ssoSettings>;
 
 /**
- * The console's public origin. The redirect URI is registered with the IdP,
- * so production must name it (RV_CONSOLE_PUBLIC_URL) instead of trusting
- * the request's Host header.
+ * The console's public URL: origin plus any base path, no trailing slash.
+ * The redirect URI is registered with the IdP, so production must name it
+ * (RV_CONSOLE_PUBLIC_URL, including the base path) instead of trusting the
+ * request's Host header.
  */
 export function publicOrigin(request: Request): string {
   if (config.publicUrl) return config.publicUrl;
   if (config.production) throw new Error("RV_CONSOLE_PUBLIC_URL is required for single sign-on in production");
-  return new URL(request.url).origin;
+  return new URL(request.url).origin + BASE_PATH;
 }
 
 export const redirectUri = (origin: string) => `${origin}/api/auth/sso/callback`;

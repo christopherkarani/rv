@@ -2,7 +2,7 @@
 
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
-import { RvMark } from "@/components/brand";
+import { ConsoleLogo } from "@/components/brand";
 import { Caret, EASE_OUT } from "@/components/motion/primitives";
 
 const SCRIPT: { prompt?: string; out?: string; tone?: "deny" | "allow" | "dim" }[] = [
@@ -58,11 +58,7 @@ export function AuthFrame({ title, subtitle, children }: { title: string; subtit
   return (
     <div className="relative grid min-h-dvh lg:grid-cols-[minmax(420px,1fr)_1.15fr]">
       <div className="relative z-10 flex flex-col justify-between px-6 py-8 sm:px-12">
-        <div className="flex items-center gap-2 text-sm">
-          <RvMark className="size-6" />
-          <span className="font-semibold tracking-tight">rv</span>
-          <span className="text-muted-foreground">Console</span>
-        </div>
+        <ConsoleLogo size={24} className="text-sm [&>svg]:size-6" />
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -87,7 +83,7 @@ export function AuthFrame({ title, subtitle, children }: { title: string; subtit
         />
         <motion.div
           aria-hidden
-          className="absolute -top-40 right-0 size-[520px] rounded-full blur-3xl"
+          className="auth-glow absolute -top-40 right-0 size-[520px] rounded-full blur-3xl"
           style={{ background: "radial-gradient(circle, color-mix(in oklab, var(--brand) 22%, transparent), transparent 65%)" }}
           animate={{ x: [0, -40, 0], y: [0, 30, 0] }}
           transition={{ duration: 16, repeat: Infinity, ease: "easeInOut" }}
@@ -96,7 +92,7 @@ export function AuthFrame({ title, subtitle, children }: { title: string; subtit
           initial={{ opacity: 0, y: 24, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.7, delay: 0.15, ease: EASE_OUT }}
-          className="absolute top-1/2 left-1/2 w-[min(560px,80%)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-panel shadow-2xl shadow-black/30"
+          className="product-dark absolute top-1/2 left-1/2 w-[min(560px,80%)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-panel shadow-2xl shadow-black/30"
         >
           <div className="flex h-9 items-center gap-1.5 border-b bg-chrome px-3">
             <span className="size-2.5 rounded-full bg-foreground/15" />

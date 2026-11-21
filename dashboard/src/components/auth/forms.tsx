@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useActionState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, KeyRound, Loader2 } from "lucide-react";
@@ -73,7 +74,7 @@ export function SetupForm() {
 export function SsoButton({ name, next }: { name: string; next: string }) {
   return (
     <Button variant="outline" size="lg" className="h-10 w-full bg-faint" asChild>
-      <a href={`/api/auth/sso/start?next=${encodeURIComponent(next)}`}>
+      <a href={withBase(`/api/auth/sso/start?next=${encodeURIComponent(next)}`)}>
         <KeyRound /> Continue with {name}
       </a>
     </Button>

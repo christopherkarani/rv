@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, PanelLeft, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { RvMark } from "@/components/brand";
+import { ConsoleLogo, useBrand } from "@/components/brand";
 import { navFor } from "./nav";
 import { RangePicker } from "./range-picker";
 import { UserMenu, type ShellUser } from "./user-menu";
@@ -19,6 +19,7 @@ export function TitleBar({ user, organization, onToggleSidebar, onOpenPalette }:
   const pathname = usePathname();
   const page = navFor(pathname);
   const detail = pathname.split("/").filter(Boolean)[1];
+  const brand = useBrand();
   return (
     <header className="relative flex h-11 shrink-0 items-center gap-2 border-b bg-chrome px-2.5">
       <Tooltip>
@@ -30,9 +31,7 @@ export function TitleBar({ user, organization, onToggleSidebar, onOpenPalette }:
         <TooltipContent>Toggle sidebar <span className="kbd ml-1">⌘B</span></TooltipContent>
       </Tooltip>
       <div className="flex min-w-0 items-center gap-1.5 text-[13px]">
-        <RvMark className="size-5" />
-        <span className="font-semibold tracking-tight">rv</span>
-        <span className="hidden text-muted-foreground sm:inline">Console</span>
+        <ConsoleLogo size={20} className="[&>svg]:size-5" />
         {organization && (
           <span className="hidden items-center gap-1.5 sm:flex">
             <ChevronRight className="size-3.5 text-muted-foreground/60" />
@@ -74,6 +73,11 @@ export function TitleBar({ user, organization, onToggleSidebar, onOpenPalette }:
         <button type="button" onClick={onOpenPalette} aria-label="Search" className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover lg:hidden">
           <Search className="size-4" />
         </button>
+        {brand.siteUrl && (
+          <a href={`${brand.siteUrl}/docs/introduction`} target="_blank" rel="noopener noreferrer" className="hidden px-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground md:inline">
+            Docs
+          </a>
+        )}
         <RangePicker className="hidden sm:flex" />
         <ThemeToggle />
         <UserMenu user={user} />

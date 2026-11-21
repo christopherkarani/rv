@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { BASE_PATH } from "@/lib/base-path";
 import { Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/console/page-header";
 import { Panel } from "@/components/console/panel";
@@ -21,7 +22,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const isAdmin = user.role === "admin";
   const { welcome } = await searchParams;
   const h = await headers();
-  const origin = config.publicUrl ?? `${h.get("x-forwarded-proto") ?? "http"}://${h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000"}`;
+  const origin = config.publicUrl ?? `${h.get("x-forwarded-proto") ?? "http"}://${h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000"}${BASE_PATH}`;
   const tokens = listTokens();
   const users = isAdmin ? listUsers() : [];
   const log = isAdmin ? consoleLog(30) : [];

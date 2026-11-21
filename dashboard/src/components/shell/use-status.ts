@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useState } from "react";
 
 export interface StatusSnapshot {
@@ -19,7 +20,7 @@ export function useStatus(initial: StatusSnapshot, intervalMs = 5000) {
     const tick = async () => {
       if (document.visibilityState === "visible") {
         try {
-          const res = await fetch("/api/v1/status", { cache: "no-store" });
+          const res = await fetch(withBase("/api/v1/status"), { cache: "no-store" });
           if (res.ok && !stopped) setStatus(await res.json());
         } catch { /* offline: keep the last snapshot */ }
       }
