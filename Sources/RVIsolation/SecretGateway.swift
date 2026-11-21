@@ -900,14 +900,15 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     /// `outsider`: the record is bounded by `outsiderAudit`.
+    ///
+    /// The record is decided and appended before the response is written.
+    /// The client reacts to the refusal at once and `rv run` may then stop
+    /// the gateway, which drops every placeholder; deciding afterwards would
+    /// log a misuse as a plain refusal and lose the `secret.misuse` finding.
     private func refuse(
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
         runtime: String? = nil, outsider: Bool = false, started: DispatchTime
     ) {
-        GatewaySocket.writeAll(
-            client,
-            GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
-        afterRefusalSent?()
         let record = SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
@@ -915,11 +916,15 @@ public final class SecretGateway: @unchecked Sendable {
             refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         )
-        guard outsider else {
+        if outsider {
+            if let admitted = outsiderAudit.admit(record) { _ = audit(admitted) }
+        } else {
             _ = audit(record)
-            return
         }
-        if let admitted = outsiderAudit.admit(record) { _ = audit(admitted) }
+        GatewaySocket.writeAll(
+            client,
+            GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
+        afterRefusalSent?()
     }
 }
 
