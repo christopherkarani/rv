@@ -23,6 +23,8 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case initialize
     case uninstall
     case doctor
+    case status
+    case version
     case allowOnce
     case packs
     case scan
@@ -162,6 +164,8 @@ extension HelpTopic {
         case .initialize: [Init.self]
         case .uninstall: [Uninstall.self]
         case .doctor: [Doctor.self]
+        case .status: [Overview.self]
+        case .version: [VersionCommand.self]
         case .allowOnce: [AllowOnceCommand.self]
         case .packs: [Packs.self]
         case .scan: [Scan.self]
