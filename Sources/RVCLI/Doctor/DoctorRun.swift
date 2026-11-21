@@ -140,7 +140,7 @@ enum DoctorRun {
         var service = snapshot.health.service
         service.fix = serviceFix(snapshot.health, paths: paths)
         service.trust = environment.install?.daemonTrust
-        return DoctorViewModel(
+        var model = DoctorViewModel(
             service: service,
             packs: packsView(
                 snapshot.packs,
@@ -174,6 +174,11 @@ enum DoctorRun {
                         $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
             } ?? []) + judgeProblems(environment: environment, diagnostics: diagnostics, paths: paths)
         )
+        model.guardMode = GuardModeResolution.resolve(
+            GuardConfig.read(home: environment.home), host: nil,
+            environment: ProcessInfo.processInfo.environment
+        ).rawValue
+        return model
     }
 
     /// The judge rows: why the pool agent is not running, a manifest that
