@@ -8,9 +8,11 @@ import Synchronization
 
 /// One hardened append primitive for the append-only JSONL ledgers.
 ///
-/// Guarantees: a `<name>.lock` sidecar taken under a process-wide mutex
-/// (macOS `flock` does not exclude threads of one process) with an EINTR
-/// retry; the target opens only after exclusion is held, with
+/// Guarantees: a `<name>.lock` sidecar `flock`ed with an EINTR retry, under
+/// an in-process lock for that sidecar file (for filesystems that count
+/// `flock` per process, where threads would not exclude each other, and so
+/// this process's writers queue on one deadline; one log's writers never
+/// wait for another's); the target opens only after exclusion is held, with
 /// `O_APPEND | O_CLOEXEC | O_NOFOLLOW`, so a symlink at the ledger path is
 /// refused and a compaction rename cannot strand an append on a replaced
 /// inode; the opened file must be regular; new files are 0600 and a created
@@ -35,11 +37,76 @@ public enum JSONLAppendLog {
         case sync(errno: Int32)
     }
 
-    private static let processLock = Mutex<Void>(())
+    /// A lock sidecar by file identity, so every path to one log shares
+    /// one in-process lock.
+    private struct Sidecar: Hashable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
+    /// The sidecars a writer in this process holds. Held only to insert or
+    /// remove one, never across a wait.
+    private static let heldSidecars = Mutex<Set<Sidecar>>([])
+
+    /// Takes `sidecar`'s in-process lock, retrying until `deadline` (nil:
+    /// until it is free). A deadline already passed is one attempt.
+    private static func hold(_ sidecar: Sidecar, until deadline: ContinuousClock.Instant?) -> Bool {
+        while true {
+            if heldSidecars.withLock({ $0.insert(sidecar).inserted }) {
+                return true
+            }
+            if let deadline, ContinuousClock.now >= deadline {
+                return false
+            }
+            usleep(1_000)
+        }
+    }
+
+    private static func release(_ sidecar: Sidecar) {
+        heldSidecars.withLock { _ = $0.remove(sidecar) }
+    }
+
+    /// Opens (creating) `url`'s `<name>.lock` sidecar and reads its identity.
+    private static func openSidecar(_ url: URL) -> Result<(fd: Int32, sidecar: Sidecar), AppendError> {
+        let fd = url.appendingPathExtension("lock").path.withCString { path in
+            open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        }
+        guard fd >= 0 else {
+            return .failure(.lock(errno: errno))
+        }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            let code = errno
+            close(fd)
+            return .failure(.lock(errno: code))
+        }
+        return .success((fd, Sidecar(
+            device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino))))
+    }
+
+    /// Runs `body` holding `url`'s in-process writer lock, as a contending
+    /// writer would (tests). The sidecar's directory must exist.
+    static func holdingProcessLock(at url: URL, _ body: () -> Void) {
+        guard case .success(let opened) = openSidecar(url) else { return }
+        _ = hold(opened.sidecar, until: nil)
+        defer {
+            close(opened.fd)
+            release(opened.sidecar)
+        }
+        body()
+    }
 
     /// Appends `line` (a newline is added when absent) as one whole record.
-    public static func append(_ line: Data, to url: URL, sync: Bool = true) throws(AppendError) {
-        try exclusively(at: url) { locked in
+    /// `lockTimeout` bounds the whole wait, for this process's writers and
+    /// another process's lock alike (non-blocking attempts against one
+    /// deadline, then `.lock(errno: EWOULDBLOCK)`); nil waits.
+    public static func append(
+        _ line: Data,
+        to url: URL,
+        sync: Bool = true,
+        lockTimeout: Duration? = nil
+    ) throws(AppendError) {
+        try exclusively(at: url, lockTimeout: lockTimeout) { locked in
             appendLocked(line, to: locked, sync: sync)
         }.get()
     }
@@ -60,6 +127,7 @@ public enum JSONLAppendLog {
 
     private static func exclusively<T: Sendable>(
         at url: URL,
+        lockTimeout: Duration? = nil,
         body: (URL) -> Result<T, AppendError>
     ) -> Result<T, AppendError> {
         let directory = url.deletingLastPathComponent()
@@ -72,26 +140,40 @@ public enum JSONLAppendLog {
         } catch {
             return .failure(.directory)
         }
-        let lockURL = url.appendingPathExtension("lock")
-        var openError: Int32 = 0
-        let fd = lockURL.path.withCString { path -> Int32 in
-            let opened = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
-            if opened < 0 {
-                openError = errno
-            }
-            return opened
+        let fd: Int32
+        let sidecar: Sidecar
+        switch openSidecar(url) {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success(let opened):
+            (fd, sidecar) = opened
         }
-        guard fd >= 0 else {
-            return .failure(.lock(errno: openError))
-        }
-        defer { close(fd) }
-        return processLock.withLock { _ in
-            if let failure = lock(fd) {
+        func locked(until deadline: ContinuousClock.Instant?) -> Result<T, AppendError> {
+            if let failure = lock(fd, until: deadline) {
                 return .failure(failure)
             }
             defer { _ = flock(fd, LOCK_UN) }
             return body(url)
         }
+        // One deadline for both locks, so contention in this process does
+        // not stack a fresh timeout per waiting writer. A zero timeout is
+        // one non-blocking attempt at each.
+        let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
+        guard hold(sidecar, until: deadline) else {
+            // Never entered: this descriptor took no lock. Closing it is
+            // harmless where each open has its own `flock` (local Darwin
+            // and Linux filesystems). Where locks are counted per process
+            // (some network filesystems) it can drop the holder's lock, as
+            // in AuditLog: a waiter only gets here by timing out.
+            close(fd)
+            return .failure(.lock(errno: EWOULDBLOCK))
+        }
+        defer { release(sidecar) }
+        // Closed before the entry is given up: where `flock` is counted
+        // per process, closing a descriptor that held the lock drops it for
+        // every thread, the next one to take it included.
+        defer { close(fd) }
+        return locked(until: deadline)
     }
 
     /// Runs under `exclusively`.
@@ -120,10 +202,25 @@ public enum JSONLAppendLog {
         return .success(())
     }
 
-    /// Excludes other processes. Callers already hold `processLock`. Returns
+    /// Excludes other processes. Callers already hold the path's in-process lock. Returns
     /// nil once the lock is held, else the failure with `errno` captured
     /// immediately at the failing `flock`.
-    private static func lock(_ fd: Int32) -> AppendError? {
+    private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> AppendError? {
+        if let deadline {
+            while true {
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+                    return nil
+                }
+                let code = errno
+                guard code == EWOULDBLOCK || code == EINTR else {
+                    return .lock(errno: code)
+                }
+                guard ContinuousClock.now < deadline else {
+                    return .lock(errno: EWOULDBLOCK)
+                }
+                usleep(1_000)
+            }
+        }
         var code: Int32 = EINTR
         for _ in 0..<16 {
             if flock(fd, LOCK_EX) == 0 {

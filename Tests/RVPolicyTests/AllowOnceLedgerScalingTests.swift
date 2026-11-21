@@ -83,4 +83,78 @@ struct AllowOnceLedgerScalingTests {
             matchingView: "git push --force", cwd: cwd, ruleID: nil, now: Self.now) == .earlierPending)
         #expect(await second.list(now: Self.now).count == 12)
     }
+
+    /// The file keeps whole-second dates. `rv allow-once list` and redeem
+    /// read it in another process, so the instance that wrote a row (rvd)
+    /// must see the same values they do, not the sub-second dates it held
+    /// before saving: after a full rewrite, an append, a projection and a
+    /// redeem flip.
+    @Test func theWriterSeesTheSameRowsAsAFreshReader() async throws {
+        let writer = try store(seeded: 2)
+        let root = writer.baseDirectory
+        let cwd = WorkingDirectory(validating: "/tmp/ws")!
+        let fractional = Date(timeIntervalSince1970: 1_700_000_000.123_456)
+        func agree(_ note: Comment) async {
+            let fresh = AllowOnceStore(baseDirectory: root)
+            #expect(await writer.list(now: fractional) == fresh.list(now: fractional), note)
+        }
+        let first = await writer.mintFromDeny(
+            matchingView: "git push --force", cwd: cwd, ruleID: nil, now: fractional)
+        await agree("after a full rewrite")
+        _ = await writer.mintFromDeny(
+            matchingView: "git clean -fdx", cwd: cwd, ruleID: nil, now: fractional.addingTimeInterval(0.5))
+        await agree("after an append")
+        await writer.project(
+            lifecycle: .consumed(at: fractional.addingTimeInterval(0.25)), matchingView: "make deploy",
+            cwd: cwd, codeHash: String(repeating: "c", count: 64), now: fractional.addingTimeInterval(0.25))
+        await agree("after a projection")
+        let code = try #require(first?.code)
+        let flipped = try await writer.redeem(
+            code: code.rawValue, tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+            now: fractional.addingTimeInterval(0.75))
+        await agree("after a redeem flip")
+        let readBack = await AllowOnceStore(baseDirectory: root).list(now: fractional)
+        #expect(readBack.contains(flipped), "redeem returns the row as saved")
+    }
+
+    /// Expiry is decided on the file's whole-second dates. rvd mints a deny
+    /// code at a sub-second instant; the CLI redeems in another process.
+    /// Near the end of the code's life both must agree on whether it is
+    /// live: rvd must not hand the code out again (or vouch for it) after
+    /// redeem already calls it expired, nor drop it while redeem still
+    /// accepts it.
+    @Test func theWriterAndAFreshReaderAgreeWhenACodeExpires() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-allow-once-expiry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let writer = AllowOnceStore(baseDirectory: root)
+        let cwd = WorkingDirectory(validating: "/tmp/ws")!
+        let ttl: TimeInterval = 15 * 60
+        let minted = Date(timeIntervalSince1970: 1_700_000_000.7)
+        let code = try #require(await writer.mintFromDeny(
+            matchingView: "git push --force", cwd: cwd, ruleID: nil, now: minted, ttl: ttl)?.code)
+        let saved = try #require(await AllowOnceStore(baseDirectory: root).list(now: minted).first).expiresAt
+        let held = minted.addingTimeInterval(ttl)
+        try #require(saved != held, "the file keeps whole seconds")
+        // An instant between the two expiries.
+        let between = Date(timeIntervalSince1970: (saved.timeIntervalSince1970 + held.timeIntervalSince1970) / 2)
+        let freshSeesLive = await AllowOnceStore(baseDirectory: root)
+            .validatePending(code: code.rawValue, now: between) != nil
+        #expect(await (writer.validatePending(code: code.rawValue, now: between) != nil) == freshSeesLive)
+        #expect(await (writer.issued(codeHash: sha256Hex(code.rawValue), now: between) != nil) == freshSeesLive)
+        // A repeated deny reuses the saved row (reprinting the code) only
+        // while redeem still accepts it; otherwise it mints a new row. Judge
+        // by the row a fresh reader sees, not by the printed code, which a
+        // new random mint could repeat.
+        let again = try #require(await writer.mintFromDeny(
+            matchingView: "git push --force", cwd: cwd, ruleID: nil, now: between, ttl: ttl))
+        let rows = await AllowOnceStore(baseDirectory: root).list(now: between)
+        let live = try #require(rows.count == 1 ? rows.first : nil, "one live row: \(rows)")
+        #expect((live.expiresAt == saved) == freshSeesLive, "deny reuses the row only while redeem accepts it")
+        if freshSeesLive {
+            #expect(again == .code(code), "a reused row reprints its code")
+        } else {
+            #expect(again.code != nil, "an expired row is replaced by a fresh code")
+        }
+    }
 }

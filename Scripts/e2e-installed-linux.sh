@@ -643,6 +643,32 @@ as_owner sh -c 'umask 077; mkdir -p ~/.claude ~/.ssh ~/.aws ~/.cursor ~/.config/
   echo "{\"mcpServers\":{}}" > ~/.claude.json; echo "{\"mcpServers\":{}}" > ~/.cursor/mcp.json; echo "{\"fake\":true}" > ~/.claude/.credentials.json
   echo "{\"analytics\": {\"enabled\": false}}" > ~/.config/rv/config.json'
 
+# No logind session, so nothing made /run/user/<uid>: install.sh must stop
+# before downloading, name the cause and the root command, and stage nothing.
+runtime_dir="/run/user/$OWNER_UID"
+want_fix="install -d -m 0755 /run/user && install -d -m 0700 -o $OWNER_UID $runtime_dir"
+runtime_was_missing=1; [[ -e "$runtime_dir" ]] && runtime_was_missing=0
+served_before="$(wc -l < "$WORK/assets-http.log")"
+as_owner env PATH="$WORK/shim:/usr/local/bin:/usr/bin:/bin" RV_INSTALL_VERSION=e2e sh "$WORK/install.sh" > "$WORK/install-stop.log" 2>&1
+stop_status=$?
+served_after="$(wc -l < "$WORK/assets-http.log")"
+note "install.sh with no $runtime_dir: exit $stop_status: $(head -3 "$WORK/install-stop.log" | tr '\n' ' ')"
+stopped=1
+if [[ "$runtime_was_missing" == "1" && "$stop_status" != "0" && "$served_after" == "$served_before" ]] \
+  && grep -q "XDG_RUNTIME_DIR is unset and $runtime_dir does not exist" "$WORK/install-stop.log" \
+  && grep -qF "rv: fix: as root, $want_fix; " "$WORK/install-stop.log" \
+  && [[ ! -e "$BIN/rv" && ! -e "$BIN/rv-cli" && ! -e "$BIN/rvd" ]] \
+  && [[ -z "$(find /tmp -maxdepth 1 -name 'rv-install.*' -user "$OWNER" 2>/dev/null)" ]]; then
+  stopped=0
+fi
+check install "install.sh stops before downloading when /run/user/<uid> is missing, naming the cause and the root command" $stopped \
+  "missing before: $runtime_was_missing; exit $stop_status; requests $served_before -> $served_after; $(head -4 "$WORK/install-stop.log" | tr '\n' ' ')"
+
+# The root command the message names, then the install again.
+sh -c "$want_fix"
+[[ "$(stat -c '%a %u' /run/user)" == "755 0" && "$(stat -c '%a %u' "$runtime_dir")" == "700 $OWNER_UID" ]]
+check install "the named root command makes /run/user 0755 and /run/user/<uid> 0700, owned by the user" $? \
+  "$(stat -c '%n %a %U' /run/user "$runtime_dir" 2>&1 | tr '\n' ' ')"
 as_owner env PATH="$WORK/shim:/usr/local/bin:/usr/bin:/bin" RV_INSTALL_VERSION=e2e sh "$WORK/install.sh" > "$WORK/install.log" 2>&1
 install_status=$?
 note "install.sh exit $install_status: $(tail -4 "$WORK/install.log" | tr '\n' ' ')"
@@ -651,20 +677,13 @@ for b in rv rv-cli rvd rv-workspace-host rv-isolation-exec rv-mcp-custodian; do 
 [[ -f "$BIN/.rv-swiftlibs" && -d "$BIN/rv_RVPacks.bundle" ]] || staged=1
 check install "install.sh downloads, checks SHA256SUMS and stages binaries, Swift libs and packs into ~/.local/bin" $staged
 leaked="$(find /tmp -maxdepth 1 -name 'rv-install.*' -user "$OWNER" 2>/dev/null | tr '\n' ' ')"
-[[ -z "$leaked" ]]
-check install "install.sh removes its download directory" $? "left $leaked($(du -sch $leaked 2>/dev/null | tail -1 | cut -f1)): the final exec rv setup skips the EXIT trap"
+[[ "$staged" == "0" && -z "$leaked" ]]
+check install "install.sh removes its download directory" $? "staged: $staged; left $leaked($(du -sch $leaked 2>/dev/null | tail -1 | cut -f1))"
 grep -q "release signatures are not verified on Linux" "$WORK/install.log"
 check install "install.sh with the release key unpinned warns that Linux release signatures are not verified" $?
-if [[ "$install_status" == "0" ]]; then
-  record install PASS "install.sh's own rv setup completes on a host with no logind session"
-else
-  record install FAIL "install.sh's own rv setup completes on a host with no logind session" \
-    "exit $install_status: $(grep -m1 'rv setup failed' "$WORK/install.log"); cause only in rvd.log: $(grep -m1 'XDG_RUNTIME_DIR' "$OWNER_HOME/.local/state/rv/rvd.log" 2>/dev/null)"
-  # The fix rvd.log names.
-  mkdir -p -m 0700 "/run/user/$OWNER_UID"; chown "$OWNER:$OWNER" "/run/user/$OWNER_UID"
-  as_owner rv setup > "$WORK/setup.log" 2>&1
-  check install "rv setup succeeds once /run/user/<uid> exists (the fix rvd.log names)" $? "$(tail -3 "$WORK/setup.log")"
-fi
+[[ "$install_status" == "0" ]]
+check install "install.sh's own rv setup completes once /run/user/<uid> exists" $? \
+  "exit $install_status: $(grep -m1 'rv setup failed' "$WORK/install.log"); rvd.log: $(grep -m1 'XDG_RUNTIME_DIR' "$OWNER_HOME/.local/state/rv/rvd.log" 2>/dev/null)"
 grep -q "rv-guard.py" "$OWNER_HOME/.claude/settings.json" 2>/dev/null
 check install "setup wires Claude Code's PreToolUse hooks in ~/.claude/settings.json" $?
 

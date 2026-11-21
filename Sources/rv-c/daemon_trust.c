@@ -23,7 +23,11 @@
 #include <mach-o/dyld.h>
 #include <sys/acl.h>
 
+/* Test builds may pin a fixture path at compile time; release builds never
+ * do, and it is never read from the environment. */
+#ifndef RV_MANIFEST_PATH
 #define RV_MANIFEST_PATH "/Library/Application Support/RV/peer-trust.json"
+#endif
 #define RV_MANIFEST_MAX 65536
 
 /* Lexically canonical absolute path: no empty, "." or ".." components. */
@@ -816,7 +820,8 @@ static int has_service_role(SecCodeRef code, const struct PeerIdentity *id) {
     return code_satisfies(code, e->requirement);
 }
 
-static int sibling_daemon_path(char *out, size_t cap) {
+/* `<dir of this executable>/<name>`, the executable resolved by realpath. */
+static int sibling_path(const char *name, char *out, size_t cap) {
     char executable[PATH_MAX];
     char resolved[PATH_MAX];
     uint32_t capacity = sizeof executable;
@@ -833,12 +838,12 @@ static int sibling_daemon_path(char *out, size_t cap) {
         return 0;
     }
     *slash = '\0';
-    n = snprintf(out, cap, "%s/rvd", resolved);
+    n = snprintf(out, cap, "%s/%s", resolved, name);
     return n > 0 && (size_t)n < cap;
 }
 
 /* Sibling-pin check: live peer must be the exact on-disk sibling bytes. */
-static int matches_sibling(const struct PeerIdentity *peer) {
+static int matches_sibling(const struct PeerIdentity *peer, const char *name) {
     char sibling[PATH_MAX];
     char peer_real[PATH_MAX];
     char sibling_real[PATH_MAX];
@@ -847,7 +852,7 @@ static int matches_sibling(const struct PeerIdentity *peer) {
     struct PeerIdentity on_disk;
     int ok = 0;
 
-    if (peer->cdhash_len == 0 || !sibling_daemon_path(sibling, sizeof sibling)) {
+    if (peer->cdhash_len == 0 || !sibling_path(name, sibling, sizeof sibling)) {
         return 0;
     }
     if (realpath(peer->exe_path, peer_real) == NULL
@@ -890,7 +895,119 @@ int rv_verify_daemon_reply(xpc_object_t reply) {
         xpc_connection_t remote = xpc_dictionary_get_remote_connection(reply);
         ok = remote != NULL
             && xpc_connection_get_euid(remote) == geteuid()
-            && matches_sibling(&identity);
+            && matches_sibling(&identity, "rvd");
+    }
+    CFRelease(code);
+    return ok;
+}
+
+/* The live code of our own child `pid`, rebound to its CDHash like
+ * `capture_peer`. The child is unreaped, so its pid cannot be reused. */
+static int capture_child(pid_t pid, SecCodeRef *code_out, struct PeerIdentity *out) {
+    CFNumberRef number;
+    CFDictionaryRef attributes;
+    const void *keys[1];
+    const void *values[1];
+    SecCodeRef code = NULL;
+    SecStaticCodeRef static_code = NULL;
+    char hash_text[65];
+    char requirement[80];
+    int value = (int)pid;
+    int ok = 0;
+
+    number = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &value);
+    if (number == NULL) {
+        return 0;
+    }
+    keys[0] = kSecGuestAttributePid;
+    values[0] = number;
+    attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(number);
+    if (attributes == NULL) {
+        return 0;
+    }
+    if (SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &code) != errSecSuccess
+        || code == NULL) {
+        CFRelease(attributes);
+        return 0;
+    }
+    CFRelease(attributes);
+    if (SecCodeCheckValidity(code, kSecCSDefaultFlags, NULL) != errSecSuccess) {
+        goto out;
+    }
+    if (SecCodeCopyStaticCode(code, kSecCSDefaultFlags, &static_code) != errSecSuccess
+        || static_code == NULL) {
+        goto out;
+    }
+    if (!identity_from_static(static_code, out)) {
+        goto out;
+    }
+    hex_encode(out->cdhash, out->cdhash_len, hash_text);
+    snprintf(requirement, sizeof requirement, "cdhash H\"%s\"", hash_text);
+    if (!code_satisfies(code, requirement)) {
+        goto out;
+    }
+    *code_out = code;
+    code = NULL;
+    ok = 1;
+out:
+    if (static_code != NULL) {
+        CFRelease(static_code);
+    }
+    if (code != NULL) {
+        CFRelease(code);
+    }
+    return ok;
+}
+
+/* Manifest installs: the evaluator is the release-signed `rv-hook-local`
+ * from the same Developer ID team the manifest pins rvd to. A development
+ * (CDHash-pinned) service entry has no team to derive this from, and gets
+ * no local door. */
+static int has_evaluator_identity(SecCodeRef code, const struct PeerIdentity *id) {
+    char production[512];
+    const struct ManifestEntry *e = &g_service;
+    if (!g_has_service || e->dev_cdhash != NULL || e->required_team == NULL
+        || !id->hardened || id->has_injection || id->is_adhoc || !id->has_team
+        || strcmp(id->identifier, RV_EVALUATOR_IDENTIFIER) != 0
+        || strcmp(id->team, e->required_team) != 0) {
+        return 0;
+    }
+    snprintf(production, sizeof production,
+        "anchor apple generic and identifier \"%s\" and certificate leaf[subject.OU] = \"%s\"",
+        RV_EVALUATOR_IDENTIFIER, e->required_team);
+    return code_satisfies(code, production);
+}
+
+int rv_verify_local_evaluator(pid_t pid, const char *path) {
+    char sibling[PATH_MAX];
+    char sibling_real[PATH_MAX];
+    char path_real[PATH_MAX];
+    char peer_real[PATH_MAX];
+    SecCodeRef code = NULL;
+    struct PeerIdentity identity;
+    enum TrustSource source;
+    int ok = 0;
+
+    if (pid <= 0 || path == NULL
+        || !sibling_path(RV_EVALUATOR_NAME, sibling, sizeof sibling)
+        || realpath(sibling, sibling_real) == NULL
+        || realpath(path, path_real) == NULL
+        || strcmp(path_real, sibling_real) != 0) {
+        return 0;
+    }
+    if (!capture_child(pid, &code, &identity)) {
+        return 0;
+    }
+    if (realpath(identity.exe_path, peer_real) != NULL
+        && strcmp(peer_real, sibling_real) == 0) {
+        source = trust_source();
+        if (source == TRUST_SIBLING) {
+            ok = matches_sibling(&identity, RV_EVALUATOR_NAME);
+        } else if (source == TRUST_MANIFEST) {
+            ok = has_evaluator_identity(code, &identity);
+        }
     }
     CFRelease(code);
     return ok;
@@ -949,6 +1066,52 @@ int rv_verify_unix_daemon(int fd) {
         return 0;
     }
     return strcmp(peer_real, sibling_real) == 0;
+}
+
+/* `<dir of this executable>/<name>`, resolved. */
+static int sibling_real_path(const char *name, char *out) {
+    char self_exe[PATH_MAX];
+    char sibling[PATH_MAX];
+    char *slash;
+    ssize_t n = readlink("/proc/self/exe", self_exe, sizeof self_exe - 1);
+    if (n < 0 || n >= (ssize_t)sizeof self_exe - 1) {
+        return 0;
+    }
+    self_exe[n] = '\0';
+    if (realpath(self_exe, sibling) == NULL) {
+        return 0;
+    }
+    slash = strrchr(sibling, '/');
+    if (slash == NULL || (size_t)(slash - sibling) + 1 + strlen(name) + 1 > sizeof sibling) {
+        return 0;
+    }
+    strcpy(slash + 1, name);
+    return realpath(sibling, out) != NULL;
+}
+
+int rv_verify_local_evaluator(pid_t pid, const char *path) {
+    char link_path[64];
+    char peer_exe[PATH_MAX];
+    char peer_real[PATH_MAX];
+    char path_real[PATH_MAX];
+    char sibling_real[PATH_MAX];
+    ssize_t n;
+    int written;
+
+    if (pid <= 0 || path == NULL || !sibling_real_path(RV_EVALUATOR_NAME, sibling_real)
+        || realpath(path, path_real) == NULL || strcmp(path_real, sibling_real) != 0) {
+        return 0;
+    }
+    written = snprintf(link_path, sizeof link_path, "/proc/%d/exe", (int)pid);
+    if (written <= 0 || (size_t)written >= sizeof link_path) {
+        return 0;
+    }
+    n = readlink(link_path, peer_exe, sizeof peer_exe - 1);
+    if (n < 0 || n >= (ssize_t)sizeof peer_exe - 1) {
+        return 0;
+    }
+    peer_exe[n] = '\0';
+    return realpath(peer_exe, peer_real) != NULL && strcmp(peer_real, sibling_real) == 0;
 }
 
 #endif
