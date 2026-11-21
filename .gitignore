@@ -26,3 +26,5 @@ sdk/python/build/
 sdk/python/dist/
 **/__pycache__/
 **/*.pyc
+# Laya judge harness output (Scripts/laya/eval/README.md)
+Scripts/laya/eval/out/
