@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- The secret gateway decides and appends a refusal's audit record before it sends the 403. It used to decide after the send whether a misuse refusal was `blocked`, by checking that the secret still had a live placeholder; the client could exit and `rv run` stop the gateway (dropping every placeholder) in between, so a real misuse near teardown was logged as a plain refused `secret.use` with no `secret.misuse` finding. The response on the wire is unchanged.
 - `rv packs list` lists packs, as `rv packs` does, with the same flags; it failed with "Unexpected argument 'list'". The `rv packs` footer names `rv packs enable <id>` and `rv packs disable <id>` instead of telling users to edit a config file.
 - On a host with an MCP server sandbox, a local server whose `mcp.json` entry has no `sandbox` (or asks for open network without `sandbox.hosts`) no longer stops `rv mcp serve` for every server: that server alone is refused, as the docs say, with the same reason on stderr, and the others serve. It is still never started and its secrets are never read.
 - A program piped to an interpreter is judged again when an option's value names stdin (`node -r /dev/stdin app.js`, `ruby -r /dev/fd/0 main.rb`, `-`, `/proc/self/fd/0`). 0.2.2 skipped the value as an option's argument and took the next word for a script file, so the piped program was not sent to the judge. `curl ... | ruby -E UTF-8` is now read as Ruby running stdin too; `ruby -E 'code'` asks as before.

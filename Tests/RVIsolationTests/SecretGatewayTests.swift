@@ -424,6 +424,32 @@ struct SecretGatewayTests {
         #expect(records.map(\.activity) == [.refused, .refused, .blocked])
     }
 
+    /// The client reacts to a refusal at once, and `rv run` then stops the
+    /// gateway, dropping every placeholder. The misuse finding must already
+    /// be decided and recorded by the time the response leaves.
+    @Test func aMisuseRefusalIsRecordedAsBlockedEvenIfThePlaceholderGoesOnceTheResponseIsSent() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let gateway = SecretGateway(transport: upstream.transport, peers: .fixed(.member), audit: audit.record)
+        let placeholder = SecretPlaceholder.mint(prefix: "sk-")
+        gateway.register(placeholder, entry: SecretGateway.Entry(
+            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
+            surfaces: [.header], rules: [], processGroup: testProcessGroup))
+        // What teardown does to the placeholder once the client has its answer.
+        gateway.afterRefusalSent = { [unowned gateway] in gateway.revoke([placeholder]) }
+        let port = try gateway.start().get()
+        defer { gateway.stop() }
+
+        let response = try gatewayExchange(port: port, "TRACE /s/OPENAI_API_KEY/x HTTP/1.1\r\n\r\n")
+        // An echo method is refused as 405 Method Not Allowed.
+        #expect(response.status == 405)
+        #expect(gateway.liveCount == 0)
+        let records = audit.items.withLock { $0 }
+        #expect(records.map(\.refusal?.code) == ["echoMethod"])
+        #expect(records.map(\.activity) == [.blocked])
+    }
+
     @Test func policyRefusalsAreBlockedOtherRefusalsRefusedAndFailedExchangesErrors() throws {
         let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
         let audit = AuditRecords()
