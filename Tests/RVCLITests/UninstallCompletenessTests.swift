@@ -208,6 +208,33 @@ private final class BinaryWitnessLaunchctl: LaunchctlApplying {
         }
     }
 
+    /// An inherited `XDG_RUNTIME_DIR` can name any directory (`$HOME`,
+    /// `~/src`): a `rv` there holding more than rvd's socket is the user's,
+    /// not rvd's, so purge refuses it and plain uninstall prints no `rm -rf`.
+    @Test func uninstallDoesNotRemoveARuntimeDirectoryHoldingMoreThanTheSocket() throws {
+        try withTempHome { home, _, launchctl in
+            let runtime = home.appendingPathComponent("src/rv").path
+            try touch(runtime + "/evaluate.sock")
+            try touch(runtime + "/Package.swift")
+            var environment = env(home: home, launchctl: launchctl)
+            environment.secretKeychain = RecordingSecretStore().writer
+            environment.runtimeSocketDirectories = [runtime]
+
+            let plain = SetupRun.uninstall(environment)
+            #expect(
+                plain.stderr.split(separator: "\n").contains { $0.contains("rm -rf") && $0.contains(runtime) } == false,
+                "\(plain.stderr)")
+            #expect(exists(runtime + "/Package.swift"))
+
+            let outcome = SetupRun.uninstall(environment, purge: true)
+
+            #expect(outcome.exitCode != 0, "\(outcome.stderr)")
+            #expect(exists(runtime + "/Package.swift"), "purge deleted a runtime dir rvd did not fill")
+            #expect(outcome.stderr.contains(runtime), "\(outcome.stderr)")
+            #expect(outcome.stderr.contains("Package.swift"), "\(outcome.stderr)")
+        }
+    }
+
     @Test func purgeNamesASecretValueItCouldNotDeleteAndFails() throws {
         try withTempHome { home, layout, launchctl in
             try writeUserData(layout)
