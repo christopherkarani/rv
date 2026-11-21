@@ -265,6 +265,36 @@ def test_prepare_end_to_end(env):
     assert all(v == 0 for s in stats["leakage"].values() for v in s.values())
 
 
+def test_expand_context_independent_of_label_with_correlated_touched():
+    """agent-touched is real and label-correlated (review >> allow >> block).
+    The cwd / git lines must still be label-independent on the EXPANDED
+    rows the model trains on, while the touched signal itself is kept."""
+    import prepare_data_v3 as p
+
+    def rows(label, n, touched_frac, targeted_frac=0.0):
+        out = []
+        for i in range(n):
+            r = {"norm": f"{label}-{i}", "label": label, "source": "v11",
+                 "command": f"cargo build -p {label}{i}", "touched": []}
+            if i < targeted_frac * n:   # allow that targets a touched path: context only
+                r.update(command=f"rm -rf ./dist/{label}{i}.map", touched=["./dist/"])
+            elif i < touched_frac * n:
+                r["touched"] = ["Cargo.lock"]
+            out.append(r)
+        return out
+
+    base = rows("allow", 1500, 0.15, 0.10) + rows("review", 1500, 0.60) + rows("block", 1500, 0.05)
+    out = p.expand(base, random.Random(13))
+    shp = p.shape_table(out)
+    spread = {k: max(shp[l][k] for l in common.LABELS) - min(shp[l][k] for l in common.LABELS)
+              for k in ("cwd", "git", "git_zero", "touched")}
+    assert spread["cwd"] <= 1.0 and spread["git"] <= 1.0, (spread, shp)
+    assert spread["touched"] > 20, "agent-touched signal must be kept, not stripped"
+    # every base row still yields its bare row unless it is a context-only allow
+    assert all(any(r["text"] == r["command"] for r in out if r["command"] == b["command"])
+               for b in base if not b["command"].startswith("rm -rf"))
+
+
 def test_prepare_deterministic(env):
     out1, st1 = _run_prepare(env)
     out2, st2 = _run_prepare(env)
