@@ -581,7 +581,21 @@ struct ObserveFloorBypassTests {
         "echo 'rv host mode cursor off' | sh 2>&1",
     ])
     func floorHoldsFedOwnProtection(command: String) {
-        #expect(floorRule(command) == .enforce(held), "\(command)")
+        expectFedTextHeld(command)
+    }
+
+    /// A fed text that weakens rv is held one of two ways. If the engine
+    /// already reads it (`SelfProtectionGuard` sees the program a shell,
+    /// interpreter or scheduler is fed), the command as written holds with
+    /// the engine's own verdict (`indeterminate(.selfProtection)` in
+    /// production). Otherwise the floor raises the allow itself.
+    private func expectFedTextHeld(_ command: String, sourceLocation: SourceLocation = #_sourceLocation) {
+        if SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) {
+            #expect(floorRule(command) == .enforce(EvaluationResult(outcome: .plain)), "\(command)",
+                    sourceLocation: sourceLocation)
+        } else {
+            #expect(floorRule(command) == .enforce(held), "\(command)", sourceLocation: sourceLocation)
+        }
     }
 
     /// The same programs typed as data, not fed to a reader, are observed.
@@ -604,7 +618,7 @@ struct ObserveFloorBypassTests {
         #"node -e 'console.log("rv allowlist add rm")'"#,
     ])
     func floorReadsInterpreterStrings(command: String) {
-        #expect(floorRule(command) == .enforce(held), "\(command)")
+        expectFedTextHeld(command)
     }
 
     /// A scheduler (`at`, `batch`, `crontab`) runs the job it reads from
@@ -624,7 +638,7 @@ struct ObserveFloorBypassTests {
         "echo '-*/5 * * * * rv host mode cursor off' | crontab -",
     ])
     func floorReadsSchedulerFeeds(command: String) {
-        #expect(floorRule(command) == .enforce(held), "\(command)")
+        expectFedTextHeld(command)
     }
 
     /// A scheduler given a harmless job, a job file, or a listing is
