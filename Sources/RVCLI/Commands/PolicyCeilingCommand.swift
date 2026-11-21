@@ -3,12 +3,13 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVPresentation
 
 /// `rv policy check --ceiling`: read-only containment of the policy layers
 /// (or one shared file) in the owner's ceiling, with a concrete witness for
 /// each layer that exceeds it. Exit 0 within, 1 exceeds or indeterminate,
 /// 2 for usage or an invalid ceiling or policy file.
-struct PolicyCheck: AsyncParsableCommand {
+struct PolicyCheck: AsyncParsableCommand, CommandUsage {
     static let exceedsExitCode: Int32 = 1
     static let invalidExitCode: Int32 = 2
 
@@ -16,6 +17,10 @@ struct PolicyCheck: AsyncParsableCommand {
         commandName: "check",
         abstract: "Check policy layers against the policy ceiling (read-only)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
+    ]
 
     @Flag(name: .customLong("ceiling"), help: "Check containment in ceiling.toml.")
     var ceiling = false
@@ -58,13 +63,17 @@ struct PolicyCheck: AsyncParsableCommand {
 }
 
 /// `rv policy ceiling`: show or replace the owner's never-exceed bound.
-struct PolicyCeilingCommand: AsyncParsableCommand {
+struct PolicyCeilingCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "ceiling",
         abstract: "Show or set the policy ceiling.",
         subcommands: [Show.self, SetCeiling.self],
         defaultSubcommand: Show.self
     )
+
+    static let usage = [
+        HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
+    ]
 
     struct Show: AsyncParsableCommand {
         static let configuration = CommandConfiguration(

@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVPolicy
+import RVPresentation
 
 /// What rvd said about its typed-policy load, or why it said nothing.
 enum PolicyStatusObservation: Sendable, Equatable {
@@ -18,11 +19,15 @@ typealias PolicyStatusSource = @Sendable (WorkingDirectory?, Duration) async -> 
 /// one hooks run), so a CLI with another HOME, binary or file access
 /// cannot report a load rvd does not have. When rvd cannot answer, the
 /// CLI runs the same load itself and says so.
-struct PolicyStatusCommand: AsyncParsableCommand {
+struct PolicyStatusCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "status",
         abstract: "Show whether rvd loads the current machine and repo policy."
     )
+
+    static let usage = [
+        HelpRow(name: "rv policy status [--json]"),
+    ]
 
     @OptionGroup
     var format: FormatFlags

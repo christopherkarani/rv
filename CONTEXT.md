@@ -54,3 +54,9 @@ Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all sto
 **Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission` against `EgressHostPolicy`. `EgressProxy`, `EgressWire`.
 
 **Egress audit mode** — an owner-signed MCP `sandbox.enforcement: audit`: the egress proxy lets a host outside `sandbox.hosts` through once its would-be block is an `egress.observed` audit event, and denies if that event cannot be written or the server's per-minute budget is spent. The event means "admitted past the host list" (written after SNI, before the dial); a later `egress.denied` means the request still failed. Only the host list relaxes; every other refusal and the dial filter still deny. Needs a verified mcp.json signature; off under an organization policy. Not observe mode, which is per hook host. `EgressAuditMode`.
+
+## CLI
+
+**Command grammar** — the subcommands, options, flags and positionals rv's parser accepts, as ArgumentParser itself describes them. The `@Option` / `@Flag` / `@Argument` declarations are the only place a flag is spelled; help dispatch (is this `--help` rv's, and for which page?) and the help tests read the grammar. `CommandGrammar`.
+
+**Usage row** — one `rv …` line on a help page, declared in the command it describes, beside its parser properties. Tests parse every row with the real parser and check that a command's rows name every option it has. `CommandUsage`, `UsageRows`.
