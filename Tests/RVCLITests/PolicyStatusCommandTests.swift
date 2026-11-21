@@ -17,11 +17,8 @@ struct PolicyStatusCommandTests {
         #expect(children.contains("status"))
         let help = HelpDispatch.text(.policy, palette: colorOffPalette)
         #expect(help.contains("rv policy status [--json]"))
-        // The usage row stays the bare family name the agent skill cites;
-        // the apply note spells the arguments.
-        #expect(HelpCatalog.page(.policy).sections.flatMap(\.rows).contains { row in
-            row.name == "apply" && row.description.hasPrefix("rv policy apply <policy.toml> [--repo] [--save [--wait]]")
-        })
+        // The usage row spells what the parser takes: apply needs a file.
+        #expect(help.contains("rv policy apply <policy.toml> [--repo] [--save [--wait [--wait-timeout <seconds>]]]"))
     }
 
     @Test func cleanLoad_reportsRvdsRevision() async throws {

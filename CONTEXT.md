@@ -56,3 +56,9 @@ Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all sto
 **Dial-address table** — the one range table that says whether an IP address may be dialed: public unicast, listable private (an owner's `allowed_ips` may open it) or never. The egress proxy, the admission GET and the `allowed_ips` parser all ask it; the proxy judges an IPv6 form that embeds an IPv4 address by that IPv4, the other two read it literally. `DialAddress`, `DialJudgment`.
 
 **Egress audit mode** — an owner-signed MCP `sandbox.enforcement: audit`: the egress proxy lets a host outside `sandbox.hosts` through once its would-be block is an `egress.observed` audit event, and denies if that event cannot be written or the server's per-minute budget is spent. The event means "admitted past the host list" (written after SNI, before the dial); a later `egress.denied` means the request still failed. Only the host list relaxes; every other refusal and the dial filter still deny. Needs a verified mcp.json signature; off under an organization policy. Not observe mode, which is per hook host. `EgressAuditMode`.
+
+## CLI
+
+**Command grammar** — the subcommands, options, flags and positionals rv's parser accepts, as ArgumentParser itself describes them. The `@Option` / `@Flag` / `@Argument` declarations are the only place a flag is spelled; help dispatch (is this `--help` rv's, and for which page?) and the help tests read the grammar. `CommandGrammar`.
+
+**Usage row** — one `rv …` line on a help page, declared in the command it describes, beside its parser properties. Tests parse every row with the real parser and check that a command's rows name every option it has. `CommandUsage`, `UsageRows`.

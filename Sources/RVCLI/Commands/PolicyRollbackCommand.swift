@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVPresentation
 
 /// `rv policy rollback <revision> [--repo] [--save]`: re-submits an earlier
 /// revision from the sealed log as a new head. Without `--save` it is a
@@ -11,11 +12,15 @@ import RVPolicy
 /// relax gate under the policy lock. Shape borrowed from OpenShell's
 /// `policy list` / `policy get --rev`:
 /// https://docs.nvidia.com/openshell/latest/how-it-works/policies/manage-policies
-struct PolicyRollbackCommand: AsyncParsableCommand {
+struct PolicyRollbackCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "rollback",
         abstract: "Preview or restore an earlier policy revision as a new head."
     )
+
+    static let usage = [
+        HelpRow(name: "rv policy rollback <revision> [--repo] [--save [--wait [--wait-timeout <seconds>]]] [--json]"),
+    ]
 
     @Argument(help: "Revision to restore, as rv policy list prints it (3 or r3).")
     var revision: PolicyRevisionNumber

@@ -3,13 +3,14 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
+import ArgumentParser
 import Foundation
 import RVPresentation
 import RVTheme
 import RVTUI
 
 /// Help surfaces reachable via `rv`, `rv help …`, or `<cmd> --help`.
-public enum HelpTopic: Equatable, Sendable {
+public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case root
     case help
     case test
@@ -43,26 +44,25 @@ public enum HelpTopic: Equatable, Sendable {
     case login
 }
 
-/// Intercepts help argv before ArgumentParser so passthrough commands still get help.
+/// Intercepts help argv before ArgumentParser so passthrough commands still
+/// get help, and every command gets rv's page rather than ArgumentParser's.
+///
+/// Whether a `--help` is rv's is read from the parser's own grammar
+/// (`CommandGrammar`), so a new flag or positional needs no edit here.
 public enum HelpDispatch {
     /// When non-`nil`, the process should print that page and exit 0.
     public static func topic(arguments: [String]) -> HelpTopic? {
         if arguments.isEmpty { return .root }
 
         if arguments[0] == "help" {
-            let path = Array(arguments.dropFirst().filter { isHelpFlag($0) == false })
+            let path = arguments.dropFirst().filter { isHelpFlag($0) == false }
             if path.isEmpty { return .root }
             if path == ["help"] { return .help }
-            return topic(path: path) ?? .root
+            return page(before: path[...]) ?? .root
         }
 
-        if let idx = arguments.firstIndex(where: isHelpFlag) {
-            let before = Array(arguments[..<idx])
-            if before.isEmpty { return .root }
-            return topic(path: before)
-        }
-
-        return nil
+        guard let index = arguments.firstIndex(where: isHelpFlag) else { return nil }
+        return page(before: arguments[..<index])
     }
 
     public static func text(_ topic: HelpTopic, palette: Palette) -> String {
@@ -103,191 +103,89 @@ public enum HelpDispatch {
         return true
     }
 
-    private static func topic(path: [String]) -> HelpTopic? {
-        guard let head = path.first else { return .root }
-        let rest = Array(path.dropFirst())
-        switch head {
-        case "run":
-            return isRunPath(rest) ? .run : nil
-        case "opencode":
-            return isOpenCodePath(rest) ? .opencode : nil
-        case "workspace":
-            return isWorkspacePath(rest) ? .workspace : nil
-        case "test":
-            return rest.allSatisfy(isTestFlag) ? .test : nil
-        case "explain":
-            return rest.allSatisfy(isFormatFlag) ? .explain : nil
-        case "service":
-            if rest.isEmpty { return .service }
-            if rest[0] == "status" {
-                return rest.dropFirst().allSatisfy(isFormatFlag) ? .serviceStatus : nil
+    /// The page a help flag after `tokens` asks for, walking the parser's
+    /// grammar: subcommand names descend, and a command's own options and
+    /// flags (with their values) are skipped. `nil` when the help flag is
+    /// not rv's: it follows `--`, an option still waiting for its value, or
+    /// input a passthrough argument captures (a positional or an unknown
+    /// option on a command like `rv run`). Anywhere else an unknown option
+    /// or an extra positional still gets the page: ArgumentParser would
+    /// answer it with its own help. Without a grammar (`CommandGrammar.rv`
+    /// is `nil`) it is always `nil`: ArgumentParser answers on its own.
+    static func page(
+        before tokens: ArraySlice<String>, grammar: CommandGrammar? = CommandGrammar.rv
+    ) -> HelpTopic? {
+        guard var node = grammar?.command else { return nil }
+        var command: ParsableCommand.Type = RV.self
+        var page = HelpTopic.root
+        var rest = tokens
+        while let token = rest.popFirst() {
+            if token == "--" { return nil }
+            if let child = node.subcommand(named: token),
+               let childCommand = command.configuration.subcommands.first(where: { $0._commandName == child.commandName })
+            {
+                node = child
+                command = childCommand
+                page = HelpTopic.owning(command) ?? page
+                continue
             }
-            if rest[0] == "restart" || rest[0] == "start" {
-                return rest.count == 1 ? .serviceRestart : nil
+            if token.hasPrefix("-"), let argument = node.argument(spelled: token) {
+                if argument.kind == .option, token.contains("=") == false, rest.popFirst() == nil {
+                    return nil
+                }
+                continue
             }
-            return rest.allSatisfy(isFormatFlag) ? .service : nil
-        case "hook":
-            return isHookPath(rest) ? .hook : nil
-        case "setup":
-            return rest.allSatisfy(isSetupFlag) ? .setup : nil
-        case "init":
-            return .initialize
-        case "uninstall":
-            return rest.allSatisfy(isFormatFlag) ? .uninstall : nil
-        case "doctor":
-            return rest.allSatisfy(isFormatFlag) ? .doctor : nil
-        case "allow-once":
-            return rest.allSatisfy(isFormatFlag) ? .allowOnce : nil
-        case "packs":
-            return .packs
-        case "scan":
-            return .scan
-        case "policy":
-            return .policy
-        case "allowlist":
-            return .allowlist
-        case "safety":
-            return rest.allSatisfy(isSafetyToken) ? .safety : nil
-        case "blocks":
-            return rest.allSatisfy(isFormatFlag) ? .blocks : nil
-        case "host":
-            return .host
-        case "audit":
-            return .audit
-        case "secrets":
-            return .secrets
-        case "mcp":
-            return .mcp
-        case "managed":
-            return .managed
-        case "report":
-            return .report
-        case "operator":
-            return .`operator`
-        case "egress":
-            return .egress
-        case "login":
-            return .login
-        case "help":
-            return rest.isEmpty ? .help : nil
-        default:
-            return nil
+            if node.capturesPassthrough { return nil }
         }
+        return page
     }
 
     private static func isHelpFlag(_ token: String) -> Bool {
         token == "-h" || token == "--help"
     }
+}
 
-    private static func isOpenCodePath(_ tokens: [String]) -> Bool {
-        var index = tokens.startIndex
-        while index < tokens.endIndex {
-            let token = tokens[index]
-            if token == "--executable" || token == "--workspace" || token == "--resource-profile" {
-                let value = tokens.index(after: index)
-                guard value < tokens.endIndex else { return false }
-                index = tokens.index(after: value)
-            } else if token.hasPrefix("--executable=") || token.hasPrefix("--workspace=")
-                || token.hasPrefix("--resource-profile=")
-            {
-                index = tokens.index(after: index)
-            } else {
-                return false
-            }
-        }
-        return true
-    }
-
-    /// `rv run` flags only; anything else (a `--`, a command) is the command's.
-    private static func isRunPath(_ tokens: [String]) -> Bool {
-        var index = tokens.startIndex
-        while index < tokens.endIndex {
-            let token = tokens[index]
-            if token == "--secret" {
-                let value = tokens.index(after: index)
-                guard value < tokens.endIndex else { return false }
-                index = tokens.index(after: value)
-            } else if token == "--all" || token.hasPrefix("--secret=") {
-                index = tokens.index(after: index)
-            } else {
-                return false
-            }
-        }
-        return true
-    }
-
-    private static func isWorkspacePath(_ tokens: [String]) -> Bool {
-        var index = tokens.startIndex
-        while index < tokens.endIndex {
-            let token = tokens[index]
-            if token == "start" || token == "attach" || token == "status" || token == "close"
-                || token == "run" || token == "agent" || token == "custom"
-                || token == "tui" || token == "abandon" || token == "leftovers" || token == "vms"
-                || token == "upload" || token == "download"
-            {
-                index = tokens.index(after: index)
-                continue
-            }
-            if token == "--workspace" || token == "--rows" || token == "--columns"
-                || token == "--resource-profile" || token == "--hook"
-                || token == "--expected-content-digest-sha256" || token == "--timeout"
-            {
-                let value = tokens.index(after: index)
-                guard value < tokens.endIndex else { return false }
-                index = tokens.index(after: value)
-                continue
-            }
-            if token.hasPrefix("--workspace=") || token.hasPrefix("--rows=")
-                || token.hasPrefix("--columns=") || token.hasPrefix("--resource-profile=")
-                || token.hasPrefix("--hook=") || token.hasPrefix("--expected-content-digest-sha256=")
-                || token.hasPrefix("--timeout=")
-            {
-                index = tokens.index(after: index)
-                continue
-            }
-            return false
-        }
-        return true
-    }
-
-    private static func isFormatFlag(_ token: String) -> Bool {
-        switch token {
-        case "--json", "--robot", "--plain", "--no-color":
-            return true
-        default:
-            return false
+extension HelpTopic {
+    /// The commands whose `--help` and `rv help …` show this page. A
+    /// command not listed shows its nearest listed parent's page.
+    var commands: [ParsableCommand.Type] {
+        switch self {
+        case .root: [RV.self]
+        case .help: []
+        case .test: [Test.self]
+        case .explain: [Explain.self]
+        case .service: [Service.self]
+        case .serviceStatus: [Status.self]
+        case .serviceRestart: [Restart.self, Start.self]
+        case .hook: [Hook.self]
+        case .setup: [Setup.self]
+        case .initialize: [Init.self]
+        case .uninstall: [Uninstall.self]
+        case .doctor: [Doctor.self]
+        case .allowOnce: [AllowOnceCommand.self]
+        case .packs: [Packs.self]
+        case .scan: [Scan.self]
+        case .policy: [Policy.self]
+        case .allowlist: [AllowlistCommand.self]
+        case .safety: [Safety.self]
+        case .blocks: [Blocks.self]
+        case .host: [HostCommand.self]
+        case .audit: [Audit.self]
+        case .secrets: [Secrets.self]
+        case .mcp: [MCP.self]
+        case .managed: [Managed.self]
+        case .report: [ReportCommand.self]
+        case .run: [Run.self]
+        case .opencode: [OpenCode.self]
+        case .workspace: [Workspace.self]
+        case .`operator`: [Operator.self]
+        case .egress: [Egress.self]
+        case .login: [Login.self]
         }
     }
 
-    /// `--force` is setup-only; do not treat it as a shared format flag.
-    private static func isSetupFlag(_ token: String) -> Bool {
-        token == "--force" || isFormatFlag(token)
-    }
-
-    private static func isTestFlag(_ token: String) -> Bool {
-        token == "--explain" || isFormatFlag(token)
-    }
-
-    private static func isSafetyToken(_ token: String) -> Bool {
-        token == "normal" || token == "strict" || isFormatFlag(token)
-    }
-
-    private static func isHookPath(_ tokens: [String]) -> Bool {
-        var i = tokens.startIndex
-        while i < tokens.endIndex {
-            let token = tokens[i]
-            if token == "--host" {
-                let valueIndex = tokens.index(after: i)
-                guard valueIndex < tokens.endIndex else { return false }
-                i = tokens.index(after: valueIndex)
-                continue
-            }
-            if token.hasPrefix("--host=") {
-                i = tokens.index(after: i)
-                continue
-            }
-            return false
-        }
-        return true
+    /// The page `command` owns, if it has one of its own.
+    static func owning(_ command: ParsableCommand.Type) -> HelpTopic? {
+        allCases.first { $0.commands.contains { $0 == command } }
     }
 }
