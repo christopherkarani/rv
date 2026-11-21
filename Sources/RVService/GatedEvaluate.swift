@@ -540,26 +540,31 @@ public struct GatedEvaluate: Sendable {
             let screened = HookTiming.measure(.screen) {
                 shellPosture(
                     result, request: request, inputs: gathered, isPeek: isPeek,
+                    wantsWouldBe: verb.recordsDenial || showsWouldBe,
                     cwd: cwd, home: home, now: now, effects: &effects
                 )
             }
             return (screened, gathered.store.safety, effects)
         }
         var effects = offloaded
-        if let observed = screened.observed {
+        let candidate: EvaluationResult
+        switch screened {
+        case .observe(let observed, nil):
             // A plain peek reads nothing past the observed allow: enforce's
-            // verdict is never asked for (`Judged.result`).
-            guard verb.recordsDenial || showsWouldBe else { return (observed, effects, nil) }
+            // verdict was never asked for (`Judged.result`).
+            return (observed, effects, nil)
+        case .observe(let observed, let enforced?):
             let wouldBe = await Self.policyFinish(
-                .peek, candidate: screened.judged.result, request: request, cwd: cwd, grants: grants,
+                .peek, candidate: enforced, request: request, cwd: cwd, grants: grants,
                 now: now, allowlist: allowlist, safety: safety
             ).result
             return Self.observe(
                 wouldBe, allow: observed, recordsDenial: verb.recordsDenial,
                 cwd: cwd, host: host, tool: tool, now: now, effects: effects
             )
+        case .enforce(let enforced):
+            candidate = enforced
         }
-        let candidate = screened.judged.result
         let decision = await HookTiming.measure(.gate) {
             await Self.policyFinish(
                 verb, candidate: candidate, request: request, cwd: cwd, grants: grants,
@@ -683,11 +688,14 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// A shell result after the enforce path, up to the Policy gate.
-    /// `judged.result` is enforce's verdict; `observed`, under observe, is
-    /// what the door returns instead (an allow).
-    private struct ShellPosture: Sendable {
-        let judged: JudgeRuntime.Judged
-        let observed: EvaluationResult?
+    /// `enforced` is enforce's verdict (`Judged.result`), read inside the
+    /// offload so the packs-only floor's parse runs there. Under observe,
+    /// `allow` is what the door returns instead; `enforced` is nil when
+    /// the caller asked for no would-be (a plain peek), so that peek never
+    /// parses the inline program.
+    private enum ShellPosture: Sendable {
+        case enforce(EvaluationResult)
+        case observe(allow: EvaluationResult, enforced: EvaluationResult?)
     }
 
     /// The enforce path over one evaluated shell result, on observe and
@@ -696,11 +704,14 @@ public struct GatedEvaluate: Sendable {
     /// everything is evaluated, and only the judge-log row differs (it
     /// describes the would-be; `Judged.observedLog`). The door allows; what
     /// it does with enforce's verdict is `decide`'s observe step.
+    /// `wantsWouldBe` asks observe for enforce's verdict too; enforce always
+    /// reads it.
     private func shellPosture(
         _ evaluated: EvaluationResult,
         request: EvaluationRequest,
         inputs: EvaluationInputs,
         isPeek: Bool,
+        wantsWouldBe: Bool,
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
         now: Date,
@@ -722,7 +733,8 @@ public struct GatedEvaluate: Sendable {
         if let log = posture.observing ? judged.observedLog : judged.log {
             effects.append(.judgeLog(log))
         }
-        return ShellPosture(judged: judged, observed: posture.observing ? posture.result.observedAllow : nil)
+        guard posture.observing else { return .enforce(judged.result) }
+        return .observe(allow: posture.result.observedAllow, enforced: wantsWouldBe ? judged.result : nil)
     }
 
     /// Where a prediction that answered after its caller gave up is logged:
@@ -914,10 +926,13 @@ public struct GatedEvaluate: Sendable {
             request, cwd: cwd, home: home, store: inputs.store, now: now, effects: &effects
         )
         let screened = shellPosture(
-            result, request: request, inputs: inputs, isPeek: false, cwd: cwd, home: home, now: now,
-            effects: &effects
+            result, request: request, inputs: inputs, isPeek: false, wantsWouldBe: false,
+            cwd: cwd, home: home, now: now, effects: &effects
         )
-        return (screened.observed ?? screened.judged.result, effects)
+        switch screened {
+        case .enforce(let enforced): return (enforced, effects)
+        case .observe(let allow, _): return (allow, effects)
+        }
     }
 
     private func evaluateWithSemantics(

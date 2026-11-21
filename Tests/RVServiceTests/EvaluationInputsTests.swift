@@ -592,7 +592,7 @@ struct JudgePortPacksOnlyFloorTests {
         let judged = JudgeRuntime.apply(
             to: EvaluationResult(outcome: .plain), command: Self.inline,
             inputs: inputs(.observe, home: home, judge: selection), judge: FixedJudge(run: run),
-            provenance: .unknown, now: now, cwd: nil, allowSafeLane: true, isPeek: false
+            provenance: .unknown, now: now, cwd: nil, allowSafeLane: true, isPeek: false, observing: false
         )
         #expect(judged.result.decision == .indeterminate(.inlineProgramNeedsJudge))
         #expect(judged.scored.decision == .allow)

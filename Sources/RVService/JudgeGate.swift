@@ -293,7 +293,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool,
-        observing: Bool = false,
+        observing: Bool,
         lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> Judged {
         let selection = inputs.judge

@@ -348,7 +348,7 @@ struct GatedEffectTests {
     }
 
     /// The one case where observe `ask` depends on `boundReview == .mandatoryHuman`
-    /// surviving scriptScreen -> JudgeRuntime.observe -> the Policy-gate preview:
+    /// surviving scriptScreen -> JudgeRuntime.apply -> the Policy-gate peek:
     /// a plain push is a builtin-pack deny that only a carried mandatory-human bind
     /// keeps unpinned (HookAuthorization.isPinned).
     @Test("observe would-be ask survives a mandatory-human bind in a real git repo")

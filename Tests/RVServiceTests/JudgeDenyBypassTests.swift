@@ -81,7 +81,7 @@ struct JudgeDenyBypassTests {
         JudgeRuntime.apply(
             to: result, command: ShellCommand(rawValue: command),
             inputs: .gather(home: home, cwd: nil, environment: [:]), judge: judge,
-            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
+            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false, observing: false
         )
     }
 }
