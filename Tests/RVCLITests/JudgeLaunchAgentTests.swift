@@ -88,7 +88,7 @@ import Testing
             _ = try installJudge(beside: home.appendingPathComponent("rvd"))
             _ = try SetupRun.writeLaunchAgent(
                 env: env(home: home, launchctl: launchctl), layout: layout,
-                files: FileOps(fileManager: .default), keepAlive: false)
+                files: FileOps(fileManager: .default))
             #expect(FileManager.default.fileExists(atPath: layout.judgeLaunchAgent) == false)
             #expect(launchctl.bootouts.contains(SetupRun.judgeLaunchAgentLabel) == false)
         }
