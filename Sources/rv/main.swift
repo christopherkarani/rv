@@ -2,6 +2,11 @@
 #error("rv v1 is Apple Silicon only")
 #endif
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVCLI
 
@@ -14,6 +19,13 @@ enum RVEntry {
             args = ["--version"]
         }
         if args.isEmpty {
+            // Bare `rv` opens the workspace shell, which needs a terminal.
+            // Piped, in CI, or from an agent, print the command list instead
+            // of failing with "requires an interactive terminal".
+            guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
+                _ = HelpDispatch.tryEmit(arguments: [])
+                return
+            }
             await RV.main(["workspace", "tui"])
             return
         }
