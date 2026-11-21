@@ -25,6 +25,7 @@ struct RVDStopGuardBoundsTests {
     /// A wrapper between each `xargs` once restarted every nesting count.
     @Test("stop guard and unwrap: an xargs chain through wrappers is bounded on a 512 KB stack", arguments: [
         "xargs sudo ", "xargs nice ", "xargs env ", "xargs timeout 5 ", "xargs -n1 ",
+        "sudo sudo sudo sudo sudo sudo sudo xargs ",
     ])
     func wrappedXargsChainBounded(link: String) {
         let raw = String(repeating: link, count: 600) + "pkill rvd"
