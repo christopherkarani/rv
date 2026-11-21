@@ -458,23 +458,32 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv blocks [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv blocks [--limit <n>] [--all] [--rule <text>] [--host <host>] [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--json", description: "JSON array on stdout"),
-                HelpRow(name: "--robot", description: "JSON array on stdout"),
+                HelpRow(name: "--limit", description: "Rows to show, newest first (default 20)"),
+                HelpRow(name: "--all", description: "Show every row"),
+                HelpRow(name: "--rule", description: "Only rules whose id contains this text"),
+                HelpRow(name: "--host", description: "Only this host"),
+                HelpRow(name: "--json", description: "JSON array of every matching row on stdout"),
+                HelpRow(name: "--robot", description: "JSON array of every matching row on stdout"),
                 HelpRow(name: "--plain", description: "Disable color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
             HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "BLOCKED", description: "rv stopped the agent"),
+                HelpRow(name: "WOULD BLOCK", description: "Observe mode: let it run; enforce would have blocked it"),
+                HelpRow(name: "WOULD ASK", description: "Observe mode: let it run; enforce would have asked you"),
                 HelpRow(
                     name: "ledger",
-                    description: "Denial-only. Paths replace the home prefix with ~"
+                    description: "Denial-only, the last 7 days. Paths replace the home prefix with ~"
                 ),
             ]),
         ],
         examples: [
             "rv blocks",
+            "rv blocks --rule core.git",
+            "rv blocks --host claude --all",
             "rv blocks --json",
         ]
     )
