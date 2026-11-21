@@ -912,6 +912,10 @@ struct ObserveFloorBypassTests {
         "ls ~/.local/bin/rvd && stat ~/.local/bin/rv",
         "head -n 5 ~/Library/LaunchAgents/dev.rv.evaluate.plist",
         "ls ~/.local/bin/rvd | wc -l",
+        "~/.local/bin/rv --version",
+        "~/.local/bin/rv doctor",
+        "~/.local/bin/rv doctor --json",
+        "~/.local/bin/rv service status; ~/.local/bin/rv host list",
     ])
     func observeAllowsProvenWiringReads(command: String) async throws {
         let home = try observeHome()
@@ -991,6 +995,10 @@ struct ObserveFloorBypassTests {
         "LS_COLORS=x ls ~/.local/bin/rvd",
         "file -C -m ~/.local/bin/rvd",
         "sed -n 1p ~/.claude/settings.json",
+        // rv itself: only its report-only forms are a proof.
+        "~/.local/bin/rv setup",
+        "~/.local/bin/rv host mode claude block",
+        "~/.local/bin/rv doctor; touch ~/.local/bin/rvd",
         // Grapheme clusters hide a separator or redirect from a
         // Character scan: `"\r\n"` and `">\u{301}"` are one Character.
         "ls ~/.local/bin/rvd \r\nrm ~/.claude/settings.json",
