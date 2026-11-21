@@ -421,8 +421,9 @@ struct OperatorCommandRunTests {
             do {
                 try await Doctor.parse(["--json"]).run()
             } catch is ExitCode {}
-            try await Status.parse([]).run()
-            try await Status.parse(["--robot"]).run()
+            // rvd is not running in an isolated home: status exits 1.
+            await #expect(throws: ExitCode(1)) { try await Status.parse([]).run() }
+            await #expect(throws: ExitCode(1)) { try await Status.parse(["--robot"]).run() }
         }
         try await withCLIProcess(
             home: home,
@@ -624,8 +625,8 @@ struct OperatorCommandRunTests {
             }
         }
         try await withCLIProcess(home: home) {
-            try await Status.parse(["--json"]).run()
-            try await Status.parse(["--robot"]).run()
+            await #expect(throws: ExitCode(1)) { try await Status.parse(["--json"]).run() }
+            await #expect(throws: ExitCode(1)) { try await Status.parse(["--robot"]).run() }
         }
     }
 }
