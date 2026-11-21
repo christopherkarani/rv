@@ -1,0 +1,5 @@
+[
+  {"prompt":"Audit this UnsafeMutableRawPointer and POSIX descriptor wrapper.","should_trigger":true},
+  {"prompt":"Choose an enum for these business states.","should_trigger":false},
+  {"prompt":"Review actor cancellation behavior.","should_trigger":false}
+]

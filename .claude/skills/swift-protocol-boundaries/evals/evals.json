@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "Review a socket protocol that decodes a [String: Any] dictionary before checking length and returns raw errors to the peer.",
+    "expected_output": "Requires a bounded typed envelope, validates framing/size before allocation or policy, separates transport from domain, and maps errors without leaking implementation details.",
+    "assertions": ["rejects unbounded decode", "rejects dictionary as the wire contract", "distinguishes decode success from authorization/execution"]
+  }
+]

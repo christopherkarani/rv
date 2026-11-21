@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "A large Swift struct is slow after mutation. Determine whether the issue is copying, COW, identity, or unique ownership before changing it.",
+    "expected_output": "States the intended aliasing semantics, measures baseline and mutation after aliasing, then chooses a representation supported by evidence.",
+    "assertions": ["does not assume every struct is cheap", "distinguishes COW from noncopyability", "requires a realistic measurement"]
+  }
+]
