@@ -36,8 +36,13 @@ public enum HookWhenDown: String, Sendable, Equatable {
 /// after the daemon was verified, an agent-chosen XDG_RUNTIME_DIR, an
 /// unresolvable socket path, unrecognized errors): rvd drops in-flight
 /// requests while draining, and an agent can trigger that.
+///
+/// `.stopped` is never classified from a transport error: it is
+/// `.unreachable` under owner observe mode when the rvd state marker says
+/// rvd ran and was stopped or crashed without announcing a restart
+/// (`RVDStateMarker`). It renders like `.unreachable` without observe.
 enum HookDaemonFailure: Sendable, Equatable, CaseIterable {
-    case unreachable, timeout, untrusted, `protocol`, connection
+    case unreachable, timeout, untrusted, `protocol`, connection, stopped
 }
 
 /// Swift twin of `Sources/rv-c/hook_fallback.c` for daemon-unavailable
@@ -57,6 +62,8 @@ enum HookDaemonFallback {
             "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
         case .connection:
             "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
+        case .stopped:
+            "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal."
         }
     }
 
@@ -73,7 +80,7 @@ enum HookDaemonFallback {
         let message = message(for: failure)
         // A daemon that fails identity verification may be an impostor, and a
         // malformed reply carries no trustworthy verdict: never soften those.
-        guard failure == .unreachable || failure == .timeout || failure == .connection else {
+        guard failure == .unreachable || failure == .timeout || failure == .connection || failure == .stopped else {
             return deny(host: host, message: message)
         }
         if ownerObserves, failure == .unreachable {
@@ -204,5 +211,13 @@ enum HookObserveFallback {
               let data = try? handle.readToEnd(), data.count == Int(info.st_size)
         else { return false }
         return GuardModeResolution.resolve(GuardConfig(jsonData: data), host: host, environment: [:]) == .observe
+    }
+
+    /// Twin of rv.c's `rvd_state_allows_observe`: the rvd state marker under
+    /// the passwd home lets observe step aside (rvd never ran here, or a
+    /// restart was announced and is still due).
+    @Sendable static func rvdStateAllowsObserve() -> Bool {
+        guard let path = RVDStateMarker.passwdPath() else { return false }
+        return RVDStateMarker.read(path: path, now: RVDStateMarker.now()).allowsObserve
     }
 }

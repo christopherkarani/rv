@@ -8,6 +8,7 @@ import Foundation
 import FoundationNetworking
 #endif
 import RVDomain
+import RVFileStore
 import RVIsolation
 import Synchronization
 

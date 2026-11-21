@@ -21,15 +21,6 @@ public enum StoredHostModes: Sendable, Equatable {
     }
 }
 
-public enum HostModeStoreError: Error, Sendable, Equatable {
-    /// `config.json` exists but is not a JSON object, its text is one
-    /// `JSONDuplicateKeys` rejects (a repeated key, a U+FEFF key, nesting
-    /// past 64, not UTF-8), or its `guard` / `guard.hosts` value is not an
-    /// object: writing would drop, replace or pick between keys
-    /// rv cannot read, so nothing is written.
-    case unreadableConfig
-}
-
 /// `guard.hosts` in `~/.config/rv/config.json`:
 /// `{"guard": {"hosts": {"claude": "observe", "cursor": "off"}}}`.
 /// Unknown host keys and unknown values read as no entry.
@@ -64,53 +55,33 @@ public struct HostModeStore: Sendable {
     }
 
     /// Writes one host's entry, `block` included: an explicit `block` must
-    /// outrank a global `guard.mode: observe`. Every other key is kept. The
-    /// read, the checks and the write share one lock; a config that is not
-    /// an object, text `JSONDuplicateKeys` rejects, or a non-object
-    /// `guard` / `guard.hosts` throws `unreadableConfig` and nothing is written.
-    /// Records `config.changed` (`guard.hosts.<host>`) write-ahead when the
-    /// stored entry changes. `beforeWrite` runs after that record and before
-    /// the file moves (`rv host mode <host> off` detaches the hooks there,
-    /// so an unrecorded `off` never unwires a host).
+    /// outrank a global `guard.mode: observe`. Every other key is kept.
+    /// Written through `MachineConfigJSON.set`: a config that is not an
+    /// object, text `JSONDuplicateKeys` rejects, or a non-object `guard` /
+    /// `guard.hosts` throws `OwnerConfigWriteError.unreadable` and nothing
+    /// is written. Records `config.changed` (`guard.hosts.<host>`)
+    /// write-ahead when the stored entry changes. `beforeWrite` runs after
+    /// that record and before the file moves (`rv host mode <host> off`
+    /// detaches the hooks there, so an unrecorded `off` never unwires a host).
     public func save(_ mode: HostMode, for host: HookHost, beforeWrite: () throws -> Void = {}) throws {
-        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
-            let prior = before["guard"]?["hosts"]?[host.rawValue]?.string ?? ConfigChangeAudit.unset
-            guard prior != mode.rawValue else { return nil }
-            return ConfigChangeAudit.setting(
-                "guard.hosts.\(host.rawValue)", from: prior, to: mode.rawValue,
-                direction: Self.direction(from: prior, to: mode))
-        }
-        do {
-            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit, beforeWrite: beforeWrite) { root in
-                var guardObject = try Self.object(root["guard"])
-                var hosts = try Self.object(guardObject["hosts"])
-                hosts[host.rawValue] = .string(mode.rawValue)
-                guardObject["hosts"] = .object(hosts)
-                root["guard"] = .object(guardObject)
-            }
-        } catch MachineConfigJSONError.unreadableConfig {
-            throw HostModeStoreError.unreadableConfig
-        }
+        let setting = MachineConfigJSON.Setting(
+            keyPath: ["guard", "hosts", host.rawValue], describe: Self.describe,
+            direction: { prior, _ in Self.direction(from: Self.describe(prior), to: mode) })
+        try MachineConfigJSON.set(.string(mode.rawValue), for: setting, in: configFile, beforeWrite: beforeWrite)
     }
 
     /// Writes the machine-wide `guard.mode: observe` (`rv setup --observe`).
     /// Stored `guard.hosts` entries, and every other key, are kept; the
-    /// same `unreadableConfig` rule as `save` applies.
+    /// same refusal as `save` applies.
     public func saveGlobalObserve() throws {
-        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
-            let prior = before["guard"]?["mode"]?.string ?? ConfigChangeAudit.unset
-            guard prior != "observe" else { return nil }
-            return ConfigChangeAudit.setting("guard.mode", from: prior, to: "observe", direction: .loosening)
-        }
-        do {
-            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit) { root in
-                var guardObject = try Self.object(root["guard"])
-                guardObject["mode"] = .string("observe")
-                root["guard"] = .object(guardObject)
-            }
-        } catch MachineConfigJSONError.unreadableConfig {
-            throw HostModeStoreError.unreadableConfig
-        }
+        let setting = MachineConfigJSON.Setting(
+            keyPath: ["guard", "mode"], describe: Self.describe, direction: { _, _ in .loosening })
+        try MachineConfigJSON.set(.string("observe"), for: setting, in: configFile)
+    }
+
+    /// A stored mode as the audit trail reads it: its string, else `unset`.
+    private static func describe(_ value: JSONValue?) -> String {
+        value?.string ?? ConfigChangeAudit.unset
     }
 
     /// `block` is the tightest mode; otherwise only a move away from a
@@ -119,11 +90,5 @@ public struct HostModeStore: Sendable {
     static func direction(from prior: String, to mode: HostMode) -> ConfigChangeAudit.Direction {
         if mode == .block { return .tightening }
         return HostMode(rawValue: prior)?.isLooser(than: mode) == true ? .tightening : .loosening
-    }
-
-    private static func object(_ value: JSONValue?) throws(HostModeStoreError) -> [String: JSONValue] {
-        guard let value else { return [:] }
-        guard let object = value.asObject else { throw .unreadableConfig }
-        return object
     }
 }

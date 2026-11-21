@@ -91,6 +91,14 @@ if [[ ! -x "$SWIFT_WRAP" ]]; then
   exit 1
 fi
 
+# The test owner presence (docs/security/test-owner-presence.md) is compiled
+# only into debug builds, so `-c release` below never contains it. Refuse
+# the variable anyway: a release is never made by a build meant for tests.
+if [[ -n "${RV_TEST_OWNER_PRESENCE:-}" ]]; then
+  printf 'release: RV_TEST_OWNER_PRESENCE is set; it is for test builds only, unset it\n' >&2
+  exit 1
+fi
+
 if [[ -z "$STAGE" || "$STAGE" == "/" || "$STAGE" == "$ROOT" ]]; then
   printf "release: refusing unsafe stage path %s\n" "${STAGE:-<empty>}" >&2
   exit 1
@@ -119,6 +127,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$C_SRC/hook_fallback.c" \
   "$C_SRC/observe_gate.c" \
   "$C_SRC/local_eval.c" \
+  "$C_SRC/rvd_state.c" \
   "$C_SRC/rv.c"
 chmod 755 "$STAGE/rv"
 if [[ "$OS" == "Darwin" ]]; then
@@ -419,6 +428,9 @@ if [[ "$OS" == "Darwin" ]]; then
     exit 1
   fi
 fi
+
+# No staged binary may carry the test owner presence.
+bash "$ROOT/Scripts/check-no-test-owner-presence.sh" "$STAGE"
 
 # Signing is the last write to the stage: strip and install_name_tool above
 # would invalidate a signature.

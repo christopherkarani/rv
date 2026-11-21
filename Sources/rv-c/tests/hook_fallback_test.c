@@ -22,6 +22,7 @@ static const enum RvHookFailure kDown[] = {
     RV_HOOK_FAIL_UNREACHABLE,
     RV_HOOK_FAIL_TIMEOUT,
     RV_HOOK_FAIL_CONNECTION,
+    RV_HOOK_FAIL_STOPPED,
 };
 #define DOWN_COUNT (sizeof kDown / sizeof kDown[0])
 
@@ -103,6 +104,7 @@ static void test_messages(void) {
     const enum RvHookFailure all[] = {
         RV_HOOK_FAIL_INPUT, RV_HOOK_FAIL_UNREACHABLE, RV_HOOK_FAIL_TIMEOUT,
         RV_HOOK_FAIL_UNTRUSTED, RV_HOOK_FAIL_PROTOCOL, RV_HOOK_FAIL_CONNECTION,
+        RV_HOOK_FAIL_STOPPED,
     };
     size_t i;
     size_t j;
@@ -139,6 +141,9 @@ static void test_messages(void) {
     }
     if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNTRUSTED), "rv setup") == NULL) {
         fail("untrusted_actionable", "missing rv setup");
+    }
+    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_STOPPED), "rv service restart") == NULL) {
+        fail("stopped_actionable", "missing rv service restart");
     }
     /* Unknown class is never NULL: the caller still has to say something. */
     if (rv_hook_failure_message((enum RvHookFailure)99) == NULL) {
@@ -292,6 +297,16 @@ static void test_observe(void) {
         if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code
             || strstr(r.err, "observe") != NULL) {
             fail(name, "connection failure under observe must render like ask");
+        }
+        /* The rvd state marker said rvd was stopped or crashed: observe
+         * mode must not step aside, whatever mode reaches the renderer. */
+        snprintf(name, sizeof name, "%s_observe_stopped", host);
+        render(name, host, RV_HOOK_FAIL_STOPPED, RV_WHEN_DOWN_OBSERVE, &r);
+        render(name, host, RV_HOOK_FAIL_STOPPED, RV_WHEN_DOWN_ASK, &ask);
+        if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code
+            || r.out[0] == '\0'
+            || strstr(r.out, rv_hook_failure_message(RV_HOOK_FAIL_STOPPED)) == NULL) {
+            fail(name, "stopped under observe must render like ask");
         }
         /* Observe never softens impersonation, a malformed reply or bad input. */
         for (f = 0; f < HARD_COUNT; f++) {

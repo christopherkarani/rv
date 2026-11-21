@@ -329,6 +329,7 @@ struct ClaudeAdapterHookTests {
         (cUnreachableReason, "rvd is not reachable"),
         (cTimeoutReason, "rvd did not answer in time"),
         (cConnectionReason, "the connection to rvd dropped"),
+        (cStoppedReason, "rvd was stopped or crashed"),
     ])
     func daemonDownAsk_inManualModeAsksTheHuman(_ reason: String, layer: String) async throws {
         var event = resetHardEvent()
@@ -364,6 +365,7 @@ struct ClaudeAdapterHookTests {
             ("kUnreachableMessage", cUnreachableReason),
             ("kTimeoutMessage", cTimeoutReason),
             ("kConnectionMessage", cConnectionReason),
+            ("kStoppedMessage", cStoppedReason),
         ] {
             #expect(
                 source.contains("static const char \(name)[] =\n    \"\(text)\";"),
@@ -421,6 +423,8 @@ private let cTimeoutReason =
     "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
 private let cConnectionReason =
     "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
+private let cStoppedReason =
+    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal."
 
 /// The C hook's `RV_HOOK_WHEN_DOWN=ask` reply for Claude (`render_ask`).
 private func cDownAskJSON(reason: String) -> String {

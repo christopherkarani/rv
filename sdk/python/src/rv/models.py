@@ -444,7 +444,12 @@ class Analysis:
 
 @dataclass(frozen=True)
 class Evaluation:
-    """Curated evaluate result: verdict, outcome algebra, matches, view."""
+    """Curated evaluate result: verdict, outcome algebra, matches, view.
+
+    ``would_be`` is set only on an ``evaluate`` reply under observe mode,
+    when enforce would have decided otherwise: the verdict enforce would have
+    returned, while ``decision`` is the observed allow. ``None`` otherwise.
+    """
 
     decision: Decision
     outcome: OutcomeKind
@@ -453,6 +458,7 @@ class Evaluation:
     quick_rejected: bool = False
     matching_view: str = ""
     analysis: Analysis = field(default_factory=Analysis.unknown)
+    would_be: Evaluation | None = None
 
     @classmethod
     def from_wire(cls, value: Any) -> Evaluation:

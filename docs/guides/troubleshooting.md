@@ -124,7 +124,9 @@ password with `sudo passwd $USER`.
 Linux needs `secret-tool`, a D-Bus session bus and an unlocked keyring.
 Over SSH with no desktop session there is usually no unlocked keyring;
 use a source that does not need one (1Password, Vault, a cloud secret
-manager) in `secrets.json`.
+manager) in `secrets.json`. A first `set` has already saved the
+definition: once a keyring is available, run the same command again, or
+`rv secrets set NAME`, to store the value.
 
 **`rv run: rv-isolation-exec is not installed beside rv, so the command cannot be started suspended until its placeholders are bound; reinstall rv`**
 Linux `rv run` needs the helper next to `rv` in `~/.local/bin`.

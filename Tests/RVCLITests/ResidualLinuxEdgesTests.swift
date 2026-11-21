@@ -170,9 +170,11 @@ struct ResidualLinuxEdgesTests {
         }
     }
 
-    @Test func helpDispatch_rejectsHelpExtraAndHookGarbage() {
+    @Test func helpDispatch_rejectsHelpExtraAndShowsHookPageForHookGarbage() {
         #expect(HelpDispatch.topic(arguments: ["help", "help", "extra"]) == .root)
-        #expect(HelpDispatch.topic(arguments: ["hook", "nope", "--help"]) == nil)
+        // `hook` takes no positional, so ArgumentParser would print help here
+        // too (exit 0, nothing evaluated); rv prints its own page instead.
+        #expect(HelpDispatch.topic(arguments: ["hook", "nope", "--help"]) == .hook)
         #expect(HelpDispatch.topic(arguments: ["help", "help"]) == .help)
     }
 

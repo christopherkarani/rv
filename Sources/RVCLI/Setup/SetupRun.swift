@@ -236,7 +236,7 @@ enum SetupRun {
             }
         } catch let unrecorded as ConfigChangeUnrecorded {
             throw .guardModeUnrecorded(unrecorded)
-        } catch HostModeStoreError.unreadableConfig {
+        } catch OwnerConfigWriteError.unreadable {
             throw .guardConfigUnreadable
         } catch {
             throw .guardModeWriteFailed
@@ -363,6 +363,7 @@ enum SetupRun {
     static func uninstall(
         _ env: SetupEnvironment,
         removeModels: Bool = false,
+        purge: Bool = false,
         appearance: CLIAppearance = .robot,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
@@ -372,16 +373,23 @@ enum SetupRun {
             let formatted = try uninstallPerform(
                 env,
                 removeModels: removeModels,
+                purge: purge,
                 appearance: appearance,
                 clock: clock,
                 animate: animate,
                 write: write
             )
+            if formatted.ownedPathStillExists {
+                var failure = failureOutcome(.ownedPathStillExists, command: .uninstall)
+                failure.stderr += formatted.leftovers.note
+                return failure
+            }
+            let note = keptModelsNote(
+                layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager))
             return SetupOutcome(
                 stdout: formatted.text,
-                stderr: keptModelsNote(
-                    layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager)),
-                exitCode: 0,
+                stderr: note + formatted.leftovers.note,
+                exitCode: formatted.leftovers.purgeFailed ? EX_UNAVAILABLE : 0,
                 emitted: formatted.emitted
             )
         } catch {

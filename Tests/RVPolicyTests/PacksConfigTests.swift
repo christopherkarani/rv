@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 import RVPolicy
@@ -41,4 +42,29 @@ import RVPolicy
     )
     #expect(merged.hasPrefix("[packs]"))
     #expect(PacksConfigStore.parse(merged).enabled == ["containers.docker"])
+}
+
+/// `config.toml` goes through the owner-config write: an owner-only file
+/// in an owner-only directory, as `config.json` always was.
+@Test func packsConfig_saveWritesAnOwnerOnlyFileInAnOwnerOnlyDirectory() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-packs-mode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = try #require(HomeDirectory(validating: root.path))
+    let file = PacksConfigStore.configURL(home: home)
+    let directory = file.deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+        at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+
+    try PacksConfigStore.save(PacksConfig(enabled: ["cloud.aws"]), home: home)
+
+    #expect(try packsPosixMode(file) == 0o600)
+    #expect(try packsPosixMode(directory) == 0o700)
+    #expect(try PacksConfigStore.load(home: home).enabled == ["cloud.aws"])
+}
+
+private func packsPosixMode(_ url: URL) throws -> Int {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    return ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777
 }

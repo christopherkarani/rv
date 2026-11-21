@@ -5,7 +5,6 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
-import RVFileStore
 import RVHistory
 
 /// Persisted `[packs]` section under `$HOME/.config/rv/config.toml`.
@@ -23,7 +22,6 @@ public struct PacksConfig: Equatable, Sendable {
 
 public enum PacksConfigError: Error, Equatable, Sendable {
     case unreadable
-    case unwritable
 }
 
 public enum PacksConfigStore {
@@ -56,42 +54,18 @@ public enum PacksConfigStore {
         return parse(text)
     }
 
-    public static func save(
-        _ config: PacksConfig,
-        home: HomeDirectory,
-        fileManager: FileManager = .default
-    ) throws {
-        let url = configURL(home: home)
-        let directory = url.deletingLastPathComponent()
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        // The read and the write share one lock, so the recorded prior is
-        // the file this save replaces.
-        try ExclusiveFileLock.withLock(at: url.appendingPathExtension("lock")) {
-            // Never rewrite an existing file this store cannot read: merging
-            // into "" would discard its other sections and the owner's pack
-            // choices.
-            let existing: String
-            if isAbsent(home: home) {
-                existing = ""
-            } else if let text = try? String(contentsOf: url, encoding: .utf8) {
-                existing = text
-            } else {
-                throw PacksConfigError.unreadable
-            }
-            let body = mergePacksSection(existing: existing, config: config)
-            guard let data = body.data(using: .utf8) else {
-                throw PacksConfigError.unwritable
-            }
-            let write: () throws -> Void = {
-                do {
-                    try data.write(to: url, options: .atomic)
-                } catch {
-                    throw PacksConfigError.unwritable
-                }
-            }
-            guard let audit = changeEvent(from: parse(existing), to: config) else { return try write() }
-            try ConfigChangeAudit.commit(audit, configDirectory: directory, write)
-        }
+    /// Replaces `[packs]` and keeps every other section, through
+    /// `OwnerConfigFile`: an existing file that cannot be read or is not
+    /// UTF-8 throws `OwnerConfigWriteError.unreadable` and nothing is
+    /// written (merging into "" would discard its other sections and the
+    /// owner's pack choices). Records `config.changed` (`packs`) write-ahead.
+    public static func save(_ config: PacksConfig, home: HomeDirectory) throws {
+        let file = OwnerConfigFile<String>(
+            url: configURL(home: home), empty: "",
+            parse: { String(data: $0, encoding: .utf8) }, render: { Data($0.utf8) })
+        try file.update(
+            audit: { before, _ in changeEvent(from: parse(before), to: config) },
+            mutate: { text in text = mergePacksSection(existing: text, config: config) })
     }
 
     /// `config.changed` (`packs`) with the enabled and disabled lists before

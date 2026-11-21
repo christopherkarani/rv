@@ -24,12 +24,15 @@ Current boundary and policy:
 - [Linux kernel e2e](security/linux-kernel-e2e.md)
 - [MCP approvals key custodian on Linux](security/mcp-linux-custodian.md)
 - [MCP server sandbox on Linux](security/mcp-linux-sandbox.md)
+- [Test owner presence](security/test-owner-presence.md) (test builds only)
 
 Decisions and designs:
 
 - [Runtime mechanism decision](security/runtime-mechanism-decision.md)
 - [Socket evaluate peek design](security/socket-evaluate-peek-design.md)
 - [Secrets Tier 3 deferred design](security/secrets-tier3-design.md)
+- [The Linux custodian without systemd](security/custodian-without-systemd.md)
+- [A secret store for headless Linux](security/headless-secret-store.md)
 
 Audits and comparisons:
 

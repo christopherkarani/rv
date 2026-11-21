@@ -112,6 +112,9 @@ extension SetupRun {
         env: SetupEnvironment, plist: URL, label: String = launchAgentLabel
     ) throws(SetupError) -> String {
         let uid = env.uid()
+        if label == launchAgentLabel {
+            announceRvdRestart(env)
+        }
         for domain in LaunchdDomain.bootoutOrder(uid: uid) {
             try? env.launchctl.bootout(domain: domain, label: label)
         }
@@ -215,12 +218,21 @@ extension SetupRun {
         if let directory = env.uncreatableRuntimeDirectory() {
             throw SetupError.userRuntimeDirectoryMissing(directory: directory, uid: env.uid())
         }
+        announceRvdRestart(env)
         env.directRvd.stop(rvdPath: env.rvdPath)
         do {
             try env.directRvd.start(rvdPath: env.rvdPath)
         } catch {
             throw SetupError.directStartFailed(rvdPath: env.rvdPath)
         }
+    }
+
+    /// About to stop rvd on purpose (bootout + bootstrap, kickstart, a
+    /// restart): write `restarting` to the rvd state marker so observe-mode
+    /// hooks keep stepping aside until the new rvd re-arms it. Only callers
+    /// that touch the real supervisor (HOME is the login home) reach here.
+    static func announceRvdRestart(_ env: SetupEnvironment) {
+        RVDStateMarker.writeRestarting(path: OwnedPaths(home: env.home).rvdStateMarker)
     }
 
     static func evaluateServicePath(layout: OwnedPaths, supervisor: EvaluateSupervisor) -> String {

@@ -142,6 +142,26 @@ package struct LiveEvaluateWorld: Sendable {
         )
     }
 
+    /// Wire-path apply plus, under observe, the verdict enforce would
+    /// return (ServiceRuntime evaluate, for SDK callers).
+    package func applyVerdict(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        host: LedgerHost = .tty
+    ) async -> GatedVerdict {
+        let now = clock()
+        let load = allowlist
+        return await gated.applyVerdict(
+            request,
+            cwd: cwd,
+            home: home,
+            grants: grants,
+            now: now,
+            allowlist: { load(cwd, now) },
+            host: host
+        )
+    }
+
     package func mintUnlockCode(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,

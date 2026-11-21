@@ -2,10 +2,6 @@ import Foundation
 import RVDomain
 import RVHistory
 
-public enum SafetyStoreError: Error, Sendable, Equatable {
-    case invalidFile
-}
-
 /// Machine safety knob plus restrict-only overlay with a repo layer.
 public struct SafetyStore: Sendable {
     public var configDirectory: URL
@@ -31,19 +27,14 @@ public struct SafetyStore: Sendable {
 
     /// Records `config.changed` (`safety.level`) write-ahead when the level
     /// changes. `strict` is the highest level, so moving to it tightens.
+    /// Written through `MachineConfigJSON.set`: a config that is not an
+    /// object, or whose `safety` is not one, throws
+    /// `OwnerConfigWriteError.unreadable` and nothing is written.
     public func saveMachine(_ level: SafetyLevel) throws {
-        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
-            let prior = before["safety"]?["level"]?.string ?? SafetyLevel.normal.rawValue
-            guard prior != level.rawValue else { return nil }
-            return ConfigChangeAudit.setting(
-                "safety.level", from: prior, to: level.rawValue,
-                direction: level == .strict ? .tightening : .loosening)
-        }
-        try MachineConfigJSON.update(file: configFile, audit: audit) { root in
-            var safety = root["safety"]?.asObject ?? [:]
-            safety["level"] = .string(level.rawValue)
-            root["safety"] = .object(safety)
-        }
+        let setting = MachineConfigJSON.Setting(
+            keyPath: ["safety", "level"], describe: { $0?.string ?? SafetyLevel.normal.rawValue },
+            direction: { _, _ in level == .strict ? .tightening : .loosening })
+        try MachineConfigJSON.set(.string(level.rawValue), for: setting, in: configFile)
     }
 
     /// Restrict-only: `strict` wins. Repo `normal` cannot lower machine `strict`.

@@ -259,8 +259,12 @@ struct JudgeAdmissionTests {
         #expect(reported.wait(timeout: .now() + 10) == .success)
         // It reports its own run time, which outlasted its caller's wait.
         #expect((ranFor.recorded ?? .zero) > .zero)
-        // The model is free again.
-        #expect(admission.run(until: ContinuousClock.now.advanced(by: HookDeadline.budget)) { 1 }.answer == 1)
+        // The model is free again. The slot wait is capped at `waitBudget`
+        // whatever the deadline, so a held slot still fails this fast; the
+        // generous deadline only covers the answer coming back from the
+        // inference queue, which a starved CI pool (thousands of tests
+        // blocking GCD threads) delayed past the 6.25 s a hook budget leaves.
+        #expect(admission.run(until: ContinuousClock.now.advanced(by: .seconds(60))) { 1 }.answer == 1)
     }
 
     @Test func theOffloadCarriesTheHookDeadlineToTheJudge() async {

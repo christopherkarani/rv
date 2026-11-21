@@ -88,6 +88,30 @@ struct EnvelopeRoundTripTests {
         #expect(decoded.serviceSemver == nil)
     }
 
+    @Test func evaluateReplyWouldBe_roundTripsAndIsAdditiveOptionalOnV1() throws {
+        let wouldBe = EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "destroys uncommitted changes"),
+                matched: nil
+            )
+        )
+        let reply = EvaluateReply(result: EvaluationResult(outcome: .plain), wouldBe: wouldBe)
+        let data = try IPCJSON.encode(reply)
+        let decoded = try IPCJSON.decode(EvaluateReply.self, from: data)
+        #expect(decoded == reply)
+        #expect(decoded.wouldBe == wouldBe)
+
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["wouldBe"] != nil)
+        object.removeValue(forKey: "wouldBe")
+        let omitted = try JSONSerialization.data(withJSONObject: object)
+        #expect(try IPCJSON.decode(EvaluateReply.self, from: omitted).wouldBe == nil)
+
+        let plain = try IPCJSON.encode(EvaluateReply(result: EvaluationResult(outcome: .plain)))
+        let plainObject = try #require(JSONSerialization.jsonObject(with: plain) as? [String: Any])
+        #expect(plainObject["wouldBe"] == nil)
+    }
+
     @Test func evaluateParamsClientSemver_isAdditiveOptionalOnV1() throws {
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),

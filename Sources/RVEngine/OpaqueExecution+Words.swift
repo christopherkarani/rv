@@ -4,7 +4,8 @@ extension ShellLexer {
     /// backslash escapes resolved, `$(…)`, backticks and `<(…)`/`>(…)`/
     /// `=(…)` kept whole, comments dropped, and each redirect operator
     /// (`<`, `<<`, `<<-`, `<<<`, `<&`, `<>`, `>`, `>>`, `>&`, `>|`, `&>`,
-    /// `&>>`, with its fd digits) its own word, so its target is the next.
+    /// `&>>`, with its fd digits or `{name}`) its own word, so its target
+    /// is the next.
     static func words(_ text: String) -> [CommandToken] {
         var reader = WordReader(Array(text.unicodeScalars))
         return reader.run()
@@ -13,7 +14,7 @@ extension ShellLexer {
     /// An operator word `words` split out.
     static func isRedirectOperator(_ token: CommandToken) -> Bool {
         guard token.wasQuoted == false else { return false }
-        return redirectOperators.contains(String(token.decoded.drop(while: { $0.isASCII && $0.isNumber })))
+        return redirectOperators.contains(String(OpaqueExecution.redirectOperator(token.decoded)))
     }
 
     private static let redirectOperators: Set<String> = [
@@ -89,10 +90,15 @@ extension ShellLexer {
             tokens.append(CommandToken(decoded: op, wasQuoted: false))
         }
 
-        /// A redirect operator; digits just read (`2>`) are its fd.
+        /// A redirect operator; digits or a `{name}` just read (`2>`,
+        /// `{fd}<`) are its fd.
         private mutating func redirect() {
             var fd = ""
-            if inWord, quoted == false, String(word).allSatisfy({ $0.isASCII && $0.isNumber }) {
+            let text = String(word)
+            if inWord, quoted == false,
+               text.allSatisfy({ $0.isASCII && $0.isNumber })
+                   || text.hasPrefix("{") && text.hasSuffix("}") && OpaqueExecution.isFDName(text.dropFirst().dropLast())
+            {
                 fd = String(word)
                 word = String.UnicodeScalarView()
                 inWord = false

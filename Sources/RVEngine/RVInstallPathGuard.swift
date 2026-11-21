@@ -31,27 +31,34 @@ import RVDomain
 /// entirely in a variable (`rm "$f"`) is not resolvable and is not flagged
 /// unless the command assigns it. Reads (`ls`, `cat`, `stat`, `rg`, `open`,
 /// `git`, running `~/.local/bin/rv`) stay allowed.
+///
+/// It reads the one text it is given; `ObserveFloor` hands it every text
+/// of the command (`ObserveTexts`: fed program text and guard readings
+/// included).
 public enum RVInstallPathGuard {
     public static func touchesInstall(_ command: ShellCommand, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
-        touchesInstall(raw: command.rawValue, home: home, cwd: cwd)
-            || ShellLexer.guardReadings(command.rawValue).contains { touchesInstall(raw: $0, home: home, cwd: cwd) }
-    }
-
-    private static func touchesInstall(raw: String, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
-        let model = InstallPathModel(home: home)
+        let raw = command.rawValue
         let launched = launchedCommandHeads(raw).filter { $0.truncated == false }
-        let bases = trackedBases(launched, raw: raw, cwd: cwd, model: model)
-        for command in launched where isDestructive(command) {
-            let operands = command.guardArgv.dropFirst().filter { isAssignmentWord($0) == false }
-            if operands.contains(where: { model.touches(word: $0, bases: bases) }) { return true }
-        }
-        // A redirect writes its exact target, even with no command (`> rvd`).
-        if redirectTargets(raw).contains(where: { model.touchesExact(word: $0, bases: bases) }) { return true }
-        // An assignment or `xargs` input that names an exact install file,
-        // beside a destructive program (`f=~/.local/bin/rvd; rm $f`).
-        if launched.contains(where: isDestructive),
-           anchoredWords(raw).contains(where: { model.isProtected(word: $0, bases: nil) }) {
-            return true
+        let destructive = launched.filter(isDestructive)
+        let redirects = redirectTargets(raw)
+        // Only a destructive program or a redirect writes a path: the model
+        // and bases are built for those alone (a long fed script is mostly
+        // short string literals, each a reading of its own).
+        if destructive.isEmpty == false || redirects.isEmpty == false {
+            let model = InstallPathModel(home: home)
+            let bases = trackedBases(launched, raw: raw, cwd: cwd, model: model)
+            for command in destructive {
+                let operands = command.guardArgv.dropFirst().filter { isAssignmentWord($0) == false }
+                if operands.contains(where: { model.touches(word: $0, bases: bases) }) { return true }
+            }
+            // A redirect writes its exact target, even with no command (`> rvd`).
+            if redirects.contains(where: { model.touchesExact(word: $0, bases: bases) }) { return true }
+            // An assignment or `xargs` input that names an exact install file,
+            // beside a destructive program (`f=~/.local/bin/rvd; rm $f`).
+            if destructive.isEmpty == false,
+               anchoredWords(raw).contains(where: { model.isProtected(word: $0, bases: nil) }) {
+                return true
+            }
         }
         // A `$(…)`/xargs source that names the install fed to a destructive
         // program (`rm $(which rvd)`, `ls ~/.local/bin | xargs rm`).
@@ -386,8 +393,12 @@ private struct InstallPathModel {
     }
 
     private func isAncestor(_ comps: [Comp]) -> Bool {
-        sequences.contains { sequence in
-            (0..<sequence.slots.count).contains { matches(comps[...], sequence.slots[..<$0], extraAllowed: false) }
+        // Without `.any` only the prefix as long as `comps` can match.
+        let lengths: (Int) -> Range<Int> = comps.contains(.any)
+            ? { 0..<$0 }
+            : { comps.count < $0 ? comps.count..<(comps.count + 1) : 0..<0 }
+        return sequences.contains { sequence in
+            lengths(sequence.slots.count).contains { matches(comps[...], sequence.slots[..<$0], extraAllowed: false) }
         }
     }
 
@@ -428,6 +439,14 @@ private let installParts: Set<String> = [
 ]
 
 private func matches(_ comps: ArraySlice<Comp>, _ slots: ArraySlice<Slot>, extraAllowed: Bool) -> Bool {
+    // Without `.any` each component takes exactly one slot: the table
+    // reduces to a positional compare. Most words land here, and the
+    // table's allocations (hundreds per operand) made `rm` with 32k
+    // operands, or a long fed script, run past the hook's timeout.
+    if comps.contains(.any) == false {
+        guard comps.count == slots.count || (extraAllowed && comps.count > slots.count) else { return false }
+        return zip(slots, comps).allSatisfy { accepts($0, $1) }
+    }
     let comps = Array(comps)
     let slots = Array(slots)
     let (n, m) = (comps.count, slots.count)

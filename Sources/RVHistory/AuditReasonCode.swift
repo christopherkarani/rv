@@ -22,6 +22,9 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
     case commandDeniedSecretPath = "rv.command.denied-secret-path"
     /// The Laya judge blocked or held the command.
     case commandDeniedJudge = "rv.command.denied-judge"
+    /// rv could not finish evaluating the command and refused it
+    /// (`detail.verdict` `indeterminate`; `reason` holds the class).
+    case commandDeniedIndeterminate = "rv.command.denied-indeterminate"
     /// Observe mode let a command run that enforcement would have denied.
     case commandObservedDeny = "rv.command.observed-deny"
     /// Observe mode let a command run that enforcement would have asked about.
@@ -152,6 +155,9 @@ public enum AuditReasonCode: String, Sendable, CaseIterable {
     }
 
     private static func command(_ event: AuditEvent) -> AuditReasonCode {
+        if event.detail["verdict"] == "indeterminate" {
+            return .commandDeniedIndeterminate
+        }
         if let category = event.detail["category"], SecretPathCategory(rawValue: category) != nil {
             return .commandDeniedSecretPath
         }

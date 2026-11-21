@@ -83,38 +83,6 @@ struct HostModeStoreTests {
         #expect(GuardConfig(.object(["guard": .string("observe")])).hosts.isEmpty)
     }
 
-    @Test func save_refusesToClobberAnUnreadableConfig() throws {
-        let home = try tempHome()
-        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
-        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
-        try Data("{not json".utf8).write(to: store.configFile)
-        #expect(throws: HostModeStoreError.unreadableConfig) {
-            try store.save(.observe, for: .claude)
-        }
-        #expect(try String(contentsOf: store.configFile, encoding: .utf8) == "{not json")
-    }
-
-    @Test(arguments: [
-        #"[1, 2]"#,
-        #""observe""#,
-        #"{"guard":"observe","safety":{"level":"strict"}}"#,
-        #"{"guard":null}"#,
-        #"{"guard":{"mode":"observe","hosts":["claude"]}}"#,
-        #"{"guard":{"hosts":"off"}}"#,
-    ])
-    func save_refusesToReplaceANonObjectGuardOrRoot(json: String) throws {
-        let home = try tempHome()
-        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
-        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
-        try Data(json.utf8).write(to: store.configFile)
-        #expect(throws: HostModeStoreError.unreadableConfig) {
-            try store.save(.block, for: .claude)
-        }
-        #expect(try String(contentsOf: store.configFile, encoding: .utf8) == json)
-    }
-
     @Test func looserOrder() {
         #expect(HostMode.observe.isLooser(than: .block))
         #expect(HostMode.off.isLooser(than: .block))

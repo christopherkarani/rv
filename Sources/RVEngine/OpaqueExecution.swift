@@ -4,13 +4,18 @@ import RVDomain
 /// occupy a command position, so the line may run any program at all.
 ///
 /// Floored: a dynamic command word (`$x`, `$(…)`, backticks, `<(…)`);
-/// `eval` of dynamic text; `source`/`.` of stdin, a descriptor or a
-/// process substitution; a shell or interpreter running a dynamic script
+/// `eval` of dynamic text; `source`/`.` of stdin, a descriptor (or a
+/// pattern that may expand to one) or a process substitution; a shell on
+/// a line that names `BASH_ENV` or `ENV`, or sets a variable whose name is
+/// dynamic; a shell or interpreter running a dynamic or descriptor script
 /// operand, a process substitution, a dynamic here-string or heredoc, or
 /// dynamic or encoded inline code; a shell or interpreter reading its
 /// program from stdin unless every producer is a literal `echo`/`printf`,
 /// a `cat` of literal paths or a literal heredoc, and then the program
-/// text it is fed is scanned like the line (and read by the stop floor);
+/// text it is fed is scanned like the line (and recorded for the observe
+/// floor's detectors, `ObserveTexts`); a scheduler (`at`, `batch`,
+/// `crontab`) reading its job from stdin, under the same rule (a
+/// crontab's commands are read without their schedule fields);
 /// inline code that runs a command over input rv cannot read; `awk`
 /// running a command; `sed` with `e`; `ssh` with a dynamic remote
 /// command; a dynamic `trap` action; `xargs`, `find -exec` and `parallel`
@@ -31,10 +36,12 @@ package func runsOpaqueProgram(_ command: ShellCommand) -> Bool {
 enum OpaqueExecution {
     // MARK: Segments
 
-    /// The command's words, its heredoc, its stdin, the scan depth.
+    /// The command's words, its heredoc, its stdin (`piped`: a pipe feeds
+    /// it), the scan depth.
     struct Context {
         let segment: [CommandToken]
         let heredoc: ShellLexer.Heredoc?
+        let piped: Bool
         let feed: () -> Feed
         let depth: Int
 
@@ -42,8 +49,9 @@ enum OpaqueExecution {
         var stdin: () -> Feed {
             let segment = segment
             let heredoc = heredoc
+            let piped = piped
             let feed = feed
-            return { OpaqueExecution.stdin(segment, heredoc: heredoc, feed: feed) }
+            return { OpaqueExecution.stdin(segment, heredoc: heredoc, piped: piped, feed: feed) }
         }
     }
 
@@ -73,7 +81,7 @@ enum OpaqueExecution {
             return scan(arguments.map(\.decoded).joined(separator: " "), depth: depth + 1, inherited: context.stdin, state: &state)
         }
         if head == "source" || head == "." {
-            return sourcesOpaque(arguments)
+            return sourcesOpaque(arguments, context, state: &state)
         }
         if shells.contains(head) {
             return shellRunsOpaque(arguments, context, state: &state)
@@ -90,6 +98,9 @@ enum OpaqueExecution {
             return sshRunsOpaque(arguments, depth: depth, inherited: context.stdin, state: &state)
         case "trap":
             return trapRunsOpaque(arguments, depth: depth, state: &state)
+        case "at", "batch", "crontab":
+            if feedsOpaqueInput(arguments) { return true }
+            return schedulerRunsOpaque(head, arguments, context, state: &state)
         case "xargs":
             return optionReadings(arguments, valueOptions: xargsValueOptions, flags: xargsFlags, separators: []).contains(where: verbRunsOpaque)
         case "parallel":
@@ -199,16 +210,25 @@ enum OpaqueExecution {
 
     // MARK: Runners
 
-    private static func sourcesOpaque(_ arguments: [CommandToken]) -> Bool {
+    private static func sourcesOpaque(_ arguments: [CommandToken], _ context: Context, state: inout ScanState) -> Bool {
         let operands = droppingRedirects(arguments)
         guard let operand = operands.first(where: { $0.decoded.hasPrefix("-") == false || $0.decoded == "-" }) else {
             return arguments.contains(where: isDynamic)
         }
-        return isDynamic(operand) || readsStdin(operand.decoded)
+        if operand.decoded == "-" { return true }
+        switch scriptOperand(operand, context) {
+        case .opaque: return true
+        case .fileOnly: return false
+        case .readsStdin:
+            let fed = context.stdin()
+            guard fed.literal else { return true }
+            return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+        }
     }
 
     private static func shellRunsOpaque(_ rawArguments: [CommandToken], _ context: Context, state: inout ScanState) -> Bool {
-        if feedsOpaqueInput(rawArguments) { return true }
+        // A startup file the line may name (`BASH_ENV`, `ENV`) runs first.
+        if state.setsShellStartup || feedsOpaqueInput(rawArguments) { return true }
         let arguments = droppingRedirects(rawArguments)
         var index = 0
         var command = false
@@ -241,23 +261,46 @@ enum OpaqueExecution {
             return payloadRunsOpaque(arguments[index], context, state: &state)
         }
         let operand = index < arguments.count && stdin == false ? arguments[index] : nil
-        guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            // The program is stdin: readable only when fed literal text,
-            // which is then read like the line itself.
-            let fed = context.stdin()
-            guard fed.literal else { return true }
-            return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+        if let operand {
+            switch scriptOperand(operand, context) {
+            case .opaque: return true
+            case .fileOnly: return false
+            case .readsStdin: break
+            }
         }
-        return isDynamic(operand)
+        // The program is stdin: readable only when fed literal text, which
+        // is then read like the line itself.
+        let fed = context.stdin()
+        guard fed.literal else { return true }
+        return fed.texts.contains { literalProgramRunsOpaque($0, context, state: &state) }
+    }
+
+    enum ScriptOperand {
+        /// Dynamic, or a descriptor path (`/dev/fd/3`, `/dev/stdin`).
+        case opaque
+        /// A literal file rv does not read, as for `sh x.sh`.
+        case fileOnly
+        /// `-`; or a literal file of a reader whose input is redirected,
+        /// which the file's name may reach (`sh stdin <<< …` in `/dev`,
+        /// `sh x 3<<< …`): stdin is read as the program too.
+        case readsStdin
+    }
+
+    /// What a script operand (`sh x.sh`, `at -f job`, `source f`) runs.
+    static func scriptOperand(_ operand: CommandToken, _ context: Context) -> ScriptOperand {
+        if operand.decoded == "-" { return .readsStdin }
+        if isDynamic(operand) || namesDescriptor(operand.decoded) { return .opaque }
+        return redirectsInput(context.segment) ? .readsStdin : .fileOnly
     }
 
     /// Program text a shell reads from a literal pipe, here-string or
-    /// heredoc: the stop floor reads it, then it is scanned with the same
-    /// text as its stdin (a nested `sh` reads the rest of it).
-    private static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
+    /// heredoc: it is recorded (the observe floor's detectors read it),
+    /// then scanned with the same text as its stdin (a nested `sh` reads
+    /// the rest of it).
+    static func literalProgramRunsOpaque(_ text: String, _ context: Context, state: inout ScanState) -> Bool {
         guard text.isEmpty == false else { return false }
         guard state.charge(work: text.utf8.count) else { return true }
-        if state.record(text), RVDStopGuard.stopsRVD(text) { return true }
+        _ = state.record(text)
         return scan(text, depth: context.depth + 1, inherited: { Feed(literal: true, text: text) }, state: &state)
     }
 
@@ -316,7 +359,7 @@ enum OpaqueExecution {
         }
         if payloads.isEmpty == false {
             return payloads.contains { payload in
-                if codeStopsRVD(payload.decoded, state: &state) { return true }
+                recordStrings(payload.decoded, state: &state)
                 if payload.wasAnsiC || carriesSubstitution(payload.decoded) || payload.decoded.hasPrefix("$")
                     || (payload.wasQuoted == false && payload.decoded.contains("$"))
                 {
@@ -331,30 +374,35 @@ enum OpaqueExecution {
                     || context.segment.contains { isDynamic($0) && $0.decoded != payload.decoded }
             }
         }
-        guard let operand, operand.decoded != "-", readsStdin(operand.decoded) == false else {
-            // The program is stdin: unreadable unless fed literal text;
-            // then it is judged like inline code, and the stop floor reads it.
-            let fed = context.stdin()
-            guard fed.literal else { return true }
-            return fed.texts.contains { program in
-                guard program.isEmpty == false else { return false }
-                // Every reader of the text is charged for it, so thousands
-                // of readers of one big feed run out of budget.
-                guard state.charge(work: program.utf8.count) else { return true }
-                if state.record(program), RVDStopGuard.stopsRVD(program) { return true }
-                // Code read before was clean then, and is the same text now.
-                guard state.firstCodeRead(program) else { return false }
-                return codeStopsRVD(program, state: &state) || execsCode(program) && readsUnseen(program)
+        if let operand {
+            switch scriptOperand(operand, context) {
+            case .opaque: return true
+            case .fileOnly: return false
+            case .readsStdin: break
             }
         }
-        return isDynamic(operand)
+        // The program is stdin: unreadable unless fed literal text; then
+        // it is judged like inline code, and recorded.
+        let fed = context.stdin()
+        guard fed.literal else { return true }
+        return fed.texts.contains { program in
+            guard program.isEmpty == false else { return false }
+            // Every reader of the text is charged for it, so thousands of
+            // readers of one big feed run out of budget.
+            guard state.charge(work: program.utf8.count) else { return true }
+            _ = state.record(program)
+            // Code read before was clean then, and is the same text now.
+            guard state.firstCodeRead(program) else { return false }
+            recordStrings(program, state: &state)
+            return execsCode(program) && readsUnseen(program)
+        }
     }
 
     /// The string literals of inline code (`os.system("launchctl …")`):
-    /// each may be a command it runs, so the stop floor reads each.
-    private static func codeStopsRVD(_ code: String, state: inout ScanState) -> Bool {
-        let fresh = quotedStrings(code).filter { state.record($0) }
-        return fresh.contains { RVDStopGuard.stopsRVD($0) }
+    /// each may be a command it runs, so each is recorded for the observe
+    /// floor's detectors.
+    private static func recordStrings(_ code: String, state: inout ScanState) {
+        for string in quotedStrings(code) { _ = state.record(string) }
     }
 
     private static func quotedStrings(_ code: String) -> [String] {
@@ -385,7 +433,7 @@ enum OpaqueExecution {
 
     /// A here-string with dynamic or ANSI-C content, or a process
     /// substitution as an operand: what the program reads is unseen.
-    private static func feedsOpaqueInput(_ arguments: [CommandToken]) -> Bool {
+    static func feedsOpaqueInput(_ arguments: [CommandToken]) -> Bool {
         for (index, token) in arguments.enumerated() {
             if token.wasQuoted == false, isProcessSubstitution(token.decoded) { return true }
             guard ShellLexer.isRedirectOperator(token), redirectOperator(token.decoded) == "<<<" else { continue }
@@ -629,8 +677,46 @@ enum OpaqueExecution {
         word.hasPrefix("<(") || word.hasPrefix(">(") || word.hasPrefix("=(")
     }
 
+    /// `-`, or a path that names a descriptor.
     static func readsStdin(_ path: String) -> Bool {
-        path == "-" || path == "/dev/stdin" || path.hasPrefix("/dev/fd/") || path.hasPrefix("/proc/self/fd/")
+        path == "-" || namesDescriptor(path)
+    }
+
+    /// `/dev/stdin`, `/dev/fd/N`, `/proc/<pid>/fd/N` and the like, however
+    /// spelled (`//dev/./fd/3`, `/tmp/../dev/fd/3`, `/DEV/stdin`): any path
+    /// through `/proc`, or through `/dev` and an `fd` or std stream name,
+    /// in any case. A pattern the shell may expand (`/de?/stdin`) may name
+    /// one too.
+    static func namesDescriptor(_ path: String) -> Bool {
+        if isPattern(path) { return true }
+        let parts = Set(path.lowercased().split(separator: "/").map(String.init))
+        if parts.contains("proc") { return true }
+        return parts.contains("dev") && parts.contains { ["fd", "stdin", "stdout", "stderr"].contains($0) }
+    }
+
+    /// A word the shell may expand to other paths: a glob (`*`, `?`,
+    /// `[…]`, ksh/zsh `@(…)`, `(a|b)`, `^`, `#`, a `~` past the first
+    /// character) or a brace expansion (`{a,b}`). Matched whether or not
+    /// the word was quoted.
+    static func isPattern(_ word: String) -> Bool {
+        word.contains { "*?[{(^#".contains($0) } || word.dropFirst().contains("~")
+    }
+
+    /// `name` as a whole word in `text` (`BASH_ENV=…`, `export ENV`,
+    /// `${ENV:=…}`), not part of a longer name (`NODE_ENV`).
+    static func mentionsName(_ text: String, _ name: String) -> Bool {
+        var rest = text[...]
+        while let range = rest.range(of: name) {
+            let before = range.lowerBound == text.startIndex ? nil : text[text.index(before: range.lowerBound)]
+            let after = range.upperBound == text.endIndex ? nil : text[range.upperBound]
+            if before.map(isNameCharacter) != true, after.map(isNameCharacter) != true { return true }
+            rest = text[range.upperBound...]
+        }
+        return false
+    }
+
+    private static func isNameCharacter(_ character: Character) -> Bool {
+        character.isASCII && (character.isLetter || character.isNumber || character == "_")
     }
 
     static func isAssignment(_ word: String) -> Bool {

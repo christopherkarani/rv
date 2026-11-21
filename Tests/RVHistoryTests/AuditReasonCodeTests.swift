@@ -10,6 +10,7 @@ struct AuditReasonCodeTests {
         (.commandDeniedRule, "rv.command.denied-rule"),
         (.commandDeniedSecretPath, "rv.command.denied-secret-path"),
         (.commandDeniedJudge, "rv.command.denied-judge"),
+        (.commandDeniedIndeterminate, "rv.command.denied-indeterminate"),
         (.commandObservedDeny, "rv.command.observed-deny"),
         (.commandObservedAsk, "rv.command.observed-ask"),
         (.commandObservedOther, "rv.command.observed-other"),
@@ -158,6 +159,17 @@ struct AuditReasonCodeTests {
         (E.event(.commandDenied, .denied, "core.secrets:read", detail: ["category": "ssh"]), "rv.command.denied-secret-path"),
         (E.event(.commandDenied, .denied, "core.judge:laya-block", detail: ["category": "core.judge"]), "rv.command.denied-judge"),
         (E.event(.commandDenied, .denied, "core.judge:laya-review"), "rv.command.denied-judge"),
+        (
+            E.event(
+                .commandDenied, .denied, "rv.indeterminate:selfProtection",
+                detail: ["category": "rv.indeterminate", "verdict": "indeterminate"]),
+            "rv.command.denied-indeterminate"
+        ),
+        (
+            E.event(.commandObserved, .info, "rv.indeterminate:unresolvedInvocation",
+                detail: ["would_be": "deny", "verdict": "indeterminate"]),
+            "rv.command.observed-deny"
+        ),
         (E.event(.commandObserved, .info, "core.git:reset-hard", detail: ["would_be": "deny"]), "rv.command.observed-deny"),
         (E.event(.commandObserved, .info, "core.git:reset-hard", detail: ["would_be": "ask"]), "rv.command.observed-ask"),
         (E.event(.commandObserved, .info, "core.git:reset-hard"), "rv.command.observed-other"),

@@ -6,6 +6,9 @@ import Glibc
 #endif
 import Foundation
 import RVIPC
+#if RV_TEST_OWNER_PRESENCE
+import RVService
+#endif
 
 /// Owner-presence gate for commands that change rv's own guard (packs,
 /// safety, allowlist, policy, egress review, workspace abandon).
@@ -78,10 +81,10 @@ enum OwnerConfirmation {
         #else
         // A locked or empty password can never match: say so instead of
         // prompting for a check that only adds a lockout strike.
-        if let locked = OwnerAccountPassword.refusalIfLocked() {
+        if let locked = refusalIfAccountLocked() {
             throw Refused("rv: \(summary) was not done: \(locked)")
         }
-        guard let password = readOwnerPassword(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
+        guard let password = ownerPasswordForRvd(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
             throw Refused("rv: \(summary) needs your login password at an interactive terminal")
         }
         try await confirm(summary, proof: OwnerProof(password: password), client: client)
@@ -163,6 +166,28 @@ enum OwnerConfirmation {
     /// rvd over XPC on macOS; over its Unix socket on Linux.
     static func defaultClient() -> ServiceClient {
         ServiceClient()
+    }
+
+    /// The password rvd is to check: read from the controlling terminal.
+    /// A test-owner-presence build (never a release; TestOwnerPresence.swift
+    /// in RVService) sends the harness's password from this process's
+    /// environment instead, when it names one. rvd still decides.
+    static func ownerPasswordForRvd(prompt: String) -> String? {
+        #if RV_TEST_OWNER_PRESENCE
+        if let password = TestOwnerPresence.password(in: CLIProcess.environment()) { return password }
+        #endif
+        return readOwnerPassword(prompt: prompt)
+    }
+
+    /// `OwnerAccountPassword.refusalIfLocked`. A test-owner-presence build
+    /// given the harness's password skips it: that rvd does not check this
+    /// account's password, so a locked one (root in a container) is no
+    /// reason to refuse.
+    static func refusalIfAccountLocked() -> String? {
+        #if RV_TEST_OWNER_PRESENCE
+        if TestOwnerPresence.password(in: CLIProcess.environment()) != nil { return nil }
+        #endif
+        return OwnerAccountPassword.refusalIfLocked()
     }
 
     /// Reads a password from the controlling terminal with echo off. nil

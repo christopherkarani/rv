@@ -281,7 +281,11 @@ public enum MCPSandbox {
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
         let writeAllow = paths(writable, denyTargets: false, writable: writable)
-        guard let ancestors = credentialAncestors(unreadable, insideWriteRoots: writable) else {
+        // A denied-write path's ancestors are protected like a credential's:
+        // renaming `~/Library/Caches` aside and a prepared tree into its
+        // place would plant rvd's cache under a path its deny never named.
+        guard let ancestors = credentialAncestors(unreadable + deniedWrites.map(expand), insideWriteRoots: writable)
+        else {
             return .failure(.sandbox(
                 "more than \(maximumCredentialAncestors) credential ancestors lie inside the write roots"))
         }

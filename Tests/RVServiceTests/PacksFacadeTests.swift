@@ -157,23 +157,6 @@ import RVService
         #expect(try Data(contentsOf: url) == bytes)
     }
 
-    @Test func save_unreadableExistingConfigThrowsWithoutWriting() throws {
-        let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        let url = PacksConfigStore.configURL(home: home)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let bytes = Data([0xFF, 0xFE, 0x5B, 0x70])
-        try bytes.write(to: url)
-
-        #expect(throws: PacksConfigError.unreadable) {
-            try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
-        }
-        #expect(try Data(contentsOf: url) == bytes)
-    }
-
     @Test func effectiveIDs_configTomlExtraPackIsIncluded() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }

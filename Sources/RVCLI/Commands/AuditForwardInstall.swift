@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVFileStore
 import RVIsolation
 import RVMCP
 

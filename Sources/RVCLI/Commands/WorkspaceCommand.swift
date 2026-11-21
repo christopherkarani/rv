@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVIsolation
+import RVPresentation
 #if os(macOS)
 import Darwin
 #endif
@@ -17,6 +18,19 @@ struct Workspace: AsyncParsableCommand {
             WorkspaceUpload.self, WorkspaceDownload.self,
         ]
     )
+
+    /// The help page's Flags rows. Each names options of the subcommands
+    /// above; usage rows sit in each subcommand.
+    static let flags = [
+        HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
+        HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
+        HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
+        HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
+        HelpRow(name: "--microvm", description: "Run inside a network-less Linux micro-VM booted from this OCI image (macOS 26+, Apple silicon); the executable is a path inside the guest"),
+        HelpRow(name: "--macvm", description: "Run inside a network-less macOS VM cloned from an image built with rv-macvm prepare (macOS 27); the executable is a path inside the guest"),
+        HelpRow(name: "--cpus / --memory-mib", description: "VM size, with --microvm or --macvm"),
+        HelpRow(name: "--timeout", description: "Kill the runtime's process group after N, Ns, Nm or Nh, even if the workspace host dies; capped by limits.timeoutSeconds in runtime-resources.json (Seatbelt only)"),
+    ]
 }
 
 struct WorkspacePath: ParsableArguments {
@@ -24,11 +38,15 @@ struct WorkspacePath: ParsableArguments {
     var workspace: String?
 }
 
-struct WorkspaceStart: AsyncParsableCommand {
+struct WorkspaceStart: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "start",
         abstract: "Start the workspace host, or attach when one is already live."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace start [--workspace <absolute-path>]", description: "Mount or recovery can take up to 90 s (15 s when rv workspace tui reconnects); a host that publishes its endpoint always gets a further 15 s to answer. On failure says why and stops the host it launched, unless that host is still mounting or recovering: it keeps running"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -37,11 +55,15 @@ struct WorkspaceStart: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceAttach: AsyncParsableCommand {
+struct WorkspaceAttach: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "attach",
         abstract: "Attach to the live workspace host until stdin closes."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -50,11 +72,15 @@ struct WorkspaceAttach: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceStatus: AsyncParsableCommand {
+struct WorkspaceStatus: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "status",
         abstract: "Show the live workspace host, if one exists (exits 1 when its saved endpoint is stale or the host cannot be used: refused by peer trust, not answering, disconnected, busy, or another protocol)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -63,22 +89,30 @@ struct WorkspaceStatus: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceLeftoversCommand: AsyncParsableCommand {
+struct WorkspaceLeftoversCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "leftovers",
         abstract: "List workspaces left behind by a dead host, across all projects."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
+    ]
 
     func run() throws {
         try WorkspaceCommandRun.leftovers()
     }
 }
 
-struct WorkspaceRun: AsyncParsableCommand {
+struct WorkspaceRun: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "run",
         abstract: "Launch a contained runtime on a host-owned terminal and attach until it exits."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace run [--workspace <absolute-path>] [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] [--timeout <duration>] -- <absolute-executable> [args...]"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -132,11 +166,15 @@ struct WorkspaceRun: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceAgent: AsyncParsableCommand {
+struct WorkspaceAgent: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "agent",
         abstract: "Launch a trusted operator-configured Agent Definition on the workspace host (not yet available)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -161,11 +199,15 @@ struct WorkspaceAgent: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceCustom: AsyncParsableCommand {
+struct WorkspaceCustom: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "custom",
         abstract: "Launch a custom executable with an ad-hoc Agent Definition (not yet available)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -190,11 +232,15 @@ struct WorkspaceCustom: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceClose: AsyncParsableCommand {
+struct WorkspaceClose: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "close",
         abstract: "Close the live workspace through its host; stops the host rv launched when connecting is refused by peer trust or reports a stale endpoint that still names that host."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace close [--workspace <absolute-path>]", description: "If connecting is refused by peer trust or reports a stale endpoint, and the endpoint names the host rv launched for this project, stops that host (only while its pid still runs rv's rv-workspace-host as your own session leader); a busy, disconnected or older-protocol host is left running; the volume and saved changes are kept"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -203,11 +249,15 @@ struct WorkspaceClose: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceAbandon: AsyncParsableCommand {
+struct WorkspaceAbandon: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "abandon",
         abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree (asks for owner authentication)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 

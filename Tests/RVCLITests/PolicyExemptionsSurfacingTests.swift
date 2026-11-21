@@ -174,11 +174,12 @@ private func writeMachineExemptions(
     let configDir = RVPolicyPaths.configDirectory(home: home)
     try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
     let configFile = configDir.appendingPathComponent("config.json")
-    if allowPaths.isEmpty == false {
-        try SecretAllowPaths.saveMachineConfig(allowPaths, to: configFile)
-    }
-    if blessPaths.isEmpty == false {
-        try SecretAllowPaths.saveBlessPaths(blessPaths, to: configFile)
+    // rv has no writer for these keys; the owner edits them by hand.
+    var secret: [String: [String]] = [:]
+    if allowPaths.isEmpty == false { secret["allow_paths"] = allowPaths }
+    if blessPaths.isEmpty == false { secret["bless_paths"] = blessPaths }
+    if secret.isEmpty == false {
+        try JSONSerialization.data(withJSONObject: ["secret": secret]).write(to: configFile)
     }
     if machineDocPaths.isEmpty == false {
         try TypedRuleStore(baseDirectory: configDir).saveMachine(

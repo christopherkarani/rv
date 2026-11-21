@@ -2,8 +2,9 @@ import RVDomain
 
 /// One command's observe-floor scan: whether it runs a program rv cannot
 /// read, the program texts its readers are fed (literal pipes,
-/// here-strings, heredocs), which the lexical floors read too, and whether
-/// the work budget ran out (indeterminate: the caller fails closed).
+/// here-strings, heredocs, and an interpreter's string literals), which
+/// the observe floor reads too, and whether the work budget ran out
+/// (indeterminate: the caller fails closed).
 package struct OpaqueScan {
     package let opaque: Bool
     package let innerTexts: [String]
@@ -13,6 +14,10 @@ package struct OpaqueScan {
 
 package func scanOpaqueProgram(_ command: ShellCommand) -> OpaqueScan {
     var state = ScanState()
+    return scanOpaqueProgram(command, state: &state)
+}
+
+private func scanOpaqueProgram(_ command: ShellCommand, state: inout ScanState) -> OpaqueScan {
     let opaque = OpaqueExecution.scan(command.rawValue, depth: 0, inherited: { .empty }, state: &state)
     return OpaqueScan(
         opaque: opaque || state.exhausted, innerTexts: state.innerTexts,
@@ -20,16 +25,58 @@ package func scanOpaqueProgram(_ command: ShellCommand) -> OpaqueScan {
     )
 }
 
-/// How many readings the lifecycle guards make of `texts`: each text, plus
-/// its guard readings (`ShellLexer.guardReadings`). Stops counting once
-/// past `cap`.
-package func lifecycleReadingCount(_ texts: [String], cap: Int) -> Int {
-    var count = 0
-    for text in texts {
-        count += 1 + ShellLexer.guardReadings(text).count
-        if count > cap { return count }
+/// Every text the observe floor reads for one command, built once under
+/// one budget (`ScanState`): the command, each program text it feeds a
+/// shell or interpreter (`OpaqueScan.innerTexts`), and each of their guard
+/// readings (`ShellLexer.guardReadings`). The floor runs every detector
+/// over every text, so no detector re-reads on its own. `exhausted`: the
+/// scan or the readings ran out of budget before the set was whole, and
+/// the caller must fail closed without reading any of it.
+package struct ObserveTexts {
+    package enum Origin: Sendable {
+        /// The command as written.
+        case command
+        /// Program text a reader is fed (`OpaqueScan.innerTexts`).
+        case fed
+        /// A guard reading of the command or of a fed text.
+        case reading
     }
-    return count
+
+    package struct Text: Sendable {
+        package let raw: String
+        package let origin: Origin
+    }
+
+    /// Readings past which nothing is read: each text and each of its list
+    /// commands is one (an interpreter's string literals are texts too), so
+    /// a 1500-line python script with two strings a line takes about 6000.
+    /// The texts' total size is bounded by the scan's work budget; this
+    /// bounds the per-reading overhead.
+    package static let readingCap = ScanState.readingCap
+
+    /// The command first, then its readings, then each fed text and its readings.
+    package let texts: [Text]
+    /// `OpaqueScan.opaque`: part of the command rv cannot read can take a
+    /// command position.
+    package let opaque: Bool
+    package let exhausted: Bool
+}
+
+package func observeTexts(_ command: ShellCommand) -> ObserveTexts {
+    var state = ScanState()
+    let scan = scanOpaqueProgram(command, state: &state)
+    guard scan.exhausted == false else { return ObserveTexts(texts: [], opaque: true, exhausted: true) }
+    let fed = scan.innerTexts.filter { sameBytes($0, command.rawValue) == false }
+    var texts: [ObserveTexts.Text] = []
+    for (raw, origin) in [(command.rawValue, ObserveTexts.Origin.command)] + fed.map({ ($0, .fed) }) {
+        let readings = ShellLexer.guardReadings(raw)
+        guard state.charge(readings: 1 + readings.count) else {
+            return ObserveTexts(texts: [], opaque: true, exhausted: true)
+        }
+        texts.append(ObserveTexts.Text(raw: raw, origin: origin))
+        texts += readings.map { ObserveTexts.Text(raw: $0, origin: .reading) }
+    }
+    return ObserveTexts(texts: texts, opaque: scan.opaque, exhausted: false)
 }
 
 /// Byte-for-byte equality (`==` on String is canonical equivalence). The
@@ -65,9 +112,11 @@ struct ScanState {
     static let commandCap = 4096
     static let workCap = 4_000_000
     static let nestingCap = 32
+    static let readingCap = 8192
 
     private(set) var commands = 0
     private(set) var work = 0
+    private(set) var readings = 0
     private(set) var exhausted = false
     /// Fed program texts, each once, in first-seen order.
     private(set) var innerTexts: [String] = []
@@ -80,9 +129,11 @@ struct ScanState {
     private var lastCodeRead: String?
     /// Function and alias names the command defines.
     var definedNames: Set<String> = []
+    /// The line may set a shell startup file (`BASH_ENV`, `ENV`): every
+    /// shell it runs is opaque.
+    var setsShellStartup = false
 
-    /// Records a fed text; false when it was recorded before (so already
-    /// read by the stop floor, and clean, or the scan would have ended).
+    /// Records a fed text; false when it was recorded before.
     mutating func record(_ text: String) -> Bool {
         if let last = lastRecorded, sameBytes(text, last) { return false }
         lastRecorded = text
@@ -92,7 +143,7 @@ struct ScanState {
     }
 
     /// True the first time `text` is read as interpreter code (its string
-    /// literals stop-read), false after.
+    /// literals recorded), false after.
     mutating func firstCodeRead(_ text: String) -> Bool {
         if let last = lastCodeRead, sameBytes(text, last) { return false }
         lastCodeRead = text
@@ -104,6 +155,13 @@ struct ScanState {
         self.commands += commands
         self.work += work
         if self.commands > Self.commandCap || self.work > Self.workCap { exhausted = true }
+        return exhausted == false
+    }
+
+    /// Spends reading budget (`ObserveTexts`); false once it is gone.
+    mutating func charge(readings: Int) -> Bool {
+        self.readings += readings
+        if self.readings > Self.readingCap { exhausted = true }
         return exhausted == false
     }
 }
@@ -145,7 +203,9 @@ extension OpaqueExecution {
         for index in line.commands.indices {
             let command = line.commands[index]
             let feed: () -> Feed = { producers.feed(for: index) }
-            let context = Context(segment: command.tokens, heredoc: command.heredoc, feed: feed, depth: depth)
+            let context = Context(
+                segment: command.tokens, heredoc: command.heredoc, piped: command.stage > 0, feed: feed, depth: depth
+            )
             if segmentRunsOpaque(context, state: &state) { return true }
             for inner in command.substitutions {
                 if scan(inner, depth: depth + 1, inherited: feed, state: &state) { return true }
@@ -205,6 +265,12 @@ extension OpaqueExecution {
         {
             index += 1
         }
+        if tokens.contains(where: { mentionsName($0.decoded, "BASH_ENV") || mentionsName($0.decoded, "ENV") }) {
+            // `BASH_ENV=/dev/stdin bash -c true`, `set -a; ENV=…; sh -i`: a
+            // shell reads that file first. Checked for every command,
+            // assignment-only ones included.
+            state.setsShellStartup = true
+        }
         guard index < tokens.count else { return }
         let first = tokens[index]
         let word = first.wasQuoted ? "" : first.decoded
@@ -225,16 +291,93 @@ extension OpaqueExecution {
                 flatten(String(argument.decoded[argument.decoded.index(after: equals)...]), into: &line, nesting: nesting + 1, state: &state)
             }
         }
+        if variableSetters.contains(name),
+           setsDynamicName(name, droppingRedirects(Array(tokens.dropFirst(index + 1))).map(\.decoded))
+        {
+            // `export "$(cat vars)"`, `declare -n r=$v`: the variable it
+            // sets may be `BASH_ENV` or `ENV`.
+            state.setsShellStartup = true
+        }
         if name == "hash", tokens.dropFirst(index + 1).contains(where: { $0.decoded == "-p" || $0.decoded.contains("=") }) {
             // `hash -p /usr/bin/base64 echo` makes `echo` run another program.
             line.opaque = true
         }
         if case .none = commandStart(tokens), tokens.contains(where: { commandName($0.decoded) == "exec" }),
-           tokens.contains(where: { ShellLexer.isRedirectOperator($0) && redirectOperator($0.decoded).hasPrefix("<") })
+           redirectsInput(tokens)
         {
-            // `exec < f`, `exec 0<&3`: later readers read that.
+            // `exec < f`, `exec 0<&3`, `exec 0>&3`: later readers read that.
             line.stdinRedirected = true
         }
+    }
+
+    private static let variableSetters: Set<String> = [
+        "export", "declare", "typeset", "local", "readonly", "read", "printf", "getopts",
+    ]
+
+    /// A setter whose variable name rv cannot read (`export "$x=…"`,
+    /// `read "$v"`, `printf -v "$v"`), or a nameref whose target is not a
+    /// literal name other than `BASH_ENV`/`ENV` (`declare -n r=${x}_ENV`,
+    /// `declare -n r`, which takes its target later). Only name positions
+    /// count: a dynamic value names nothing, except a nameref's.
+    private static func setsDynamicName(_ command: String, _ words: [String]) -> Bool {
+        switch command {
+        case "printf":
+            // Options up to the format; a dynamic one may be `-v`.
+            var index = 0
+            while index < words.count {
+                let word = words[index]
+                if isDynamic(word) { return true }
+                guard word != "--", word.hasPrefix("-") else { return false }
+                if word == "-v" {
+                    index += 1
+                    if index < words.count, isDynamic(words[index]) { return true }
+                }
+                index += 1
+            }
+            return false
+        case "getopts":
+            // `getopts [--] optstring name`: bash drops a leading `--`, so
+            // skip it and any option-looking word (fail closed: each one
+            // moves the name later). An unquoted dynamic optstring may
+            // split and move the name, so any dynamic word up to and
+            // including the name position counts.
+            var index = 0
+            while index < words.count {
+                let word = words[index]
+                if isDynamic(word) { return true }
+                guard word.hasPrefix("-") else { break }
+                index += 1
+                if word == "--" { break }
+            }
+            return words.dropFirst(index).prefix(2).contains { isDynamic($0) }
+        case "read":
+            // Option values differ between shells (zsh `-p` takes none),
+            // so every word may be a name.
+            return words.contains { isDynamic($0) }
+        default:
+            let nameref = words.contains { $0.hasPrefix("-") && $0.dropFirst().contains("n") }
+            for word in words {
+                if word.hasPrefix("-") || word.hasPrefix("+") {
+                    if isDynamic(word) { return true }
+                    continue
+                }
+                if isDynamic(word.prefix { $0 != "=" }) { return true }
+                guard nameref else { continue }
+                guard let equals = word.firstIndex(of: "=") else { return true }
+                let target = word[word.index(after: equals)...]
+                if isLiteralName(target) == false || target == "BASH_ENV" || target == "ENV" { return true }
+            }
+            return false
+        }
+    }
+
+    private static func isDynamic(_ word: some StringProtocol) -> Bool {
+        word.contains("$") || word.contains("`")
+    }
+
+    private static func isLiteralName(_ word: Substring) -> Bool {
+        guard let first = word.first, first == "_" || first.isASCII && first.isLetter else { return false }
+        return word.allSatisfy { $0 == "_" || $0.isASCII && ($0.isLetter || $0.isNumber) }
     }
 
     /// `name() …`, `name () …`, `function name …`: the names defined.
@@ -271,6 +414,7 @@ extension OpaqueExecution {
     private static let readerNames: Set<String> = [
         "echo", "printf", "print", "cat", "eval", "source", ".", "trap", "ssh", "xargs", "parallel", "find",
         "awk", "gawk", "mawk", "nawk", "sed", "gsed", "read", "hash", "alias", "unalias", "enable",
+        "at", "batch", "crontab",
         // Read as silent producers.
         "cd", "true", "false", ":", "test", "[", "export", "unset", "local", "readonly", "shift", "exit",
         "return", "sleep", "wait", "set",

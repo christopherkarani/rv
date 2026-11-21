@@ -64,6 +64,10 @@ public enum RVWiringPaths {
         // holds a supervised rvd in its wait for up to five minutes.
         ["Library", "Logs", "rv", "rvd-backoff"],
         [".local", "state", "rv", "rvd-backoff"],
+        // The rvd state marker: rewriting or deleting it turns a stopped
+        // rvd back into "never ran" or "restarting", which re-opens the
+        // observe-mode step-aside (`RVDStateMarker`).
+        [".config", "rv", "rvd-state"],
     ] + coreMLCacheOwners.map { ["Library", "Caches", $0] }
 
     /// The processes that run the Laya judge's Core ML model. Each has an
