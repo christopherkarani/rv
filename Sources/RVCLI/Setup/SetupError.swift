@@ -80,6 +80,10 @@ enum SetupError: Error, Equatable, Sendable {
     /// Linux without a systemd user manager: the directly started rvd did
     /// not answer within `ServiceReadiness.deadline`.
     case directRvdNotAnswering(rvdPath: String, logPath: String)
+    /// Linux without a systemd user manager: XDG_RUNTIME_DIR is unset and
+    /// the directory rvd binds under (`/run/user/<uid>`) is missing, and
+    /// only root can create it. Found before rvd is started.
+    case userRuntimeDirectoryMissing(directory: String, uid: UInt32)
     /// The service step failed, so setup wired no hooks: wired hooks with no
     /// answering rvd deny every agent tool call. `alreadyWired` names hosts
     /// wired before this run; they were left as they were. `observing`:
@@ -233,6 +237,12 @@ private func setupFailureParts(
             "fix: read \(logPath), or run \(DirectRvd.command(rvdPath: rvdPath)) "
                 + "in a terminal to see why; rv doctor shows the cause"
         )
+    case .userRuntimeDirectoryMissing(let directory, let uid):
+        phrase = "XDG_RUNTIME_DIR is unset and \(directory) does not exist: no login manager (logind) "
+            + "created it, and only root can; rvd keeps its socket there, so rv did not start it"
+        exitCode = EX_UNAVAILABLE
+        detail.append("fix: \(UnixSocketPath.userRuntimeDirectoryFix(directory: directory, uid: uid))")
+        detail.append("/run is usually a tmpfs, so \(directory) must be made again after a reboot or container restart")
     case .serviceDown(let cause, let alreadyWired, let observing):
         let inner = setupFailureParts(cause, command: command)
         phrase = inner.phrase

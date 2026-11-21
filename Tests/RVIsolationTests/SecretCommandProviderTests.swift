@@ -8,8 +8,7 @@ struct SecretCommandProviderTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-cli-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(name)
-        try Data(body.utf8).write(to: url)
-        chmod(url.path, 0o755)
+        try writeExecutableStub(body, to: url)
         return ["PATH": directory.path, "HOME": directory.path]
     }
 
