@@ -33,10 +33,10 @@ public struct HTTPDestination: Hashable, Sendable, Equatable {
         }
         if let address {
             self.address = address
-            self.classification = address.addressClass
+            self.classification = address.isPublicGlobal ? .publicGlobal : .nonPublic
         } else {
             self.address = nil
-            self.classification = .reserved
+            self.classification = .unresolved
         }
     }
 

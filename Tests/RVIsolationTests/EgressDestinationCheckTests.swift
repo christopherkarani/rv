@@ -11,164 +11,35 @@ import Testing
 @testable import RVIsolation
 
 /// Destination-address checks after the proxy resolves a CONNECT host: the
-/// pure classifier, the bounded resolver, and the proxy wiring that dials
-/// exactly the address set it checked.
+/// judgment the proxy asks of the dial-address table, the bounded resolver,
+/// and the proxy wiring that dials exactly the address set it checked.
 @Suite struct EgressDestinationCheckTests {
-    struct AddressCase: Sendable, CustomTestStringConvertible {
-        var text: String
-        var isPublic: Bool
-        var testDescription: String { "\(text) -> \(isPublic ? "public" : "denied")" }
+    /// The sockaddr entry point asks the dial-address table following an
+    /// embedded IPv4 (the table's own cases are RVDomain's
+    /// `DialAddressTests`). These pin which judgment the proxy asks: an
+    /// IPv6 form with a fixed IPv4 embedding takes that IPv4's verdict.
+    @Test(arguments: [
+        ("8.8.8.8", true), ("168.63.129.16", false), ("192.88.99.1", false), ("10.0.0.1", false),
+        ("169.254.169.254", false), ("2606:4700:4700::1111", true), ("fd00:ec2::254", false),
+        ("3fff::1", false), ("2001::1", false), ("::1", false),
+        ("::ffff:8.8.8.8", true), ("::ffff:127.0.0.1", false), ("::ffff:0:808:808", true),
+        ("::8.8.8.8", true), ("::10.0.0.1", false), ("2002:808:808::1", true), ("2002:a9fe:a9fe::1", false),
+        ("64:ff9b::808:808", true), ("64:ff9b::a9fe:a9fe", false), ("64:ff9b:1::808:808", false),
+    ])
+    func sockaddrEntryPointFollowsTheEmbeddedIPv4(_ entry: (String, Bool)) throws {
+        let family = entry.0.contains(":") ? AF_INET6 : AF_INET
+        let bytes = try #require(Self.bytes(family, entry.0))
+        #expect(Self.sockaddrVerdict(family, bytes) == entry.1)
+        #expect((DialAddress.judgment(followingEmbeddedIPv4: bytes) == .publicUnicast) == entry.1)
     }
 
-    static let ipv4Cases: [AddressCase] = [
-        // Public unicast, including the edges just outside denied ranges.
-        .init(text: "8.8.8.8", isPublic: true),
-        .init(text: "1.1.1.1", isPublic: true),
-        .init(text: "9.255.255.255", isPublic: true),
-        .init(text: "11.0.0.0", isPublic: true),
-        .init(text: "100.63.255.255", isPublic: true),
-        .init(text: "100.128.0.0", isPublic: true),
-        .init(text: "169.253.255.255", isPublic: true),
-        .init(text: "169.255.0.0", isPublic: true),
-        .init(text: "172.15.255.255", isPublic: true),
-        .init(text: "172.32.0.0", isPublic: true),
-        .init(text: "192.0.1.0", isPublic: true),
-        .init(text: "192.167.255.255", isPublic: true),
-        .init(text: "192.169.0.0", isPublic: true),
-        .init(text: "168.63.129.15", isPublic: true),
-        .init(text: "223.255.255.255", isPublic: true),
-        // Unspecified ("this network").
-        .init(text: "0.0.0.0", isPublic: false),
-        .init(text: "0.255.255.255", isPublic: false),
-        // Loopback.
-        .init(text: "127.0.0.1", isPublic: false),
-        .init(text: "127.255.255.254", isPublic: false),
-        // RFC 1918.
-        .init(text: "10.0.0.1", isPublic: false),
-        .init(text: "10.255.255.255", isPublic: false),
-        .init(text: "172.16.0.0", isPublic: false),
-        .init(text: "172.31.255.255", isPublic: false),
-        .init(text: "192.168.0.1", isPublic: false),
-        .init(text: "192.168.255.255", isPublic: false),
-        // CGNAT 100.64/10, which also holds the Alibaba metadata address.
-        .init(text: "100.64.0.0", isPublic: false),
-        .init(text: "100.127.255.255", isPublic: false),
-        .init(text: "100.100.100.200", isPublic: false),
-        // Link-local, including the AWS/GCP/Azure/OCI metadata address
-        // (and what metadata.google.internal resolves to).
-        .init(text: "169.254.0.1", isPublic: false),
-        .init(text: "169.254.169.254", isPublic: false),
-        .init(text: "169.254.170.2", isPublic: false),
-        // Azure WireServer: a platform endpoint in public space.
-        .init(text: "168.63.129.16", isPublic: false),
-        // IETF protocol assignments (NAT64 discovery 192.0.0.170/171, DS-Lite).
-        .init(text: "192.0.0.1", isPublic: false),
-        .init(text: "192.0.0.170", isPublic: false),
-        .init(text: "192.0.0.192", isPublic: false),
-        // Deprecated 6to4 relay anycast.
-        .init(text: "192.88.99.1", isPublic: false),
-        // Documentation and benchmarking.
-        .init(text: "192.0.2.1", isPublic: false),
-        .init(text: "198.51.100.2", isPublic: false),
-        .init(text: "203.0.113.3", isPublic: false),
-        .init(text: "198.18.0.1", isPublic: false),
-        .init(text: "198.19.255.255", isPublic: false),
-        // Multicast, reserved, broadcast.
-        .init(text: "224.0.0.1", isPublic: false),
-        .init(text: "239.255.255.255", isPublic: false),
-        .init(text: "240.0.0.1", isPublic: false),
-        .init(text: "255.255.255.255", isPublic: false),
-    ]
-
-    static let ipv6Cases: [AddressCase] = [
-        // Global unicast.
-        .init(text: "2606:4700:4700::1111", isPublic: true),
-        .init(text: "2001:4860:4860::8888", isPublic: true),
-        .init(text: "2001:200::1", isPublic: true),
-        .init(text: "2a00:1450:4001::1", isPublic: true),
-        .init(text: "3ffe::1", isPublic: true),
-        // Unspecified and loopback.
-        .init(text: "::", isPublic: false),
-        .init(text: "::1", isPublic: false),
-        // Link-local, deprecated site-local, ULA (incl. the AWS IPv6
-        // metadata address), multicast.
-        .init(text: "fe80::1", isPublic: false),
-        .init(text: "febf:ffff::1", isPublic: false),
-        .init(text: "fec0::1", isPublic: false),
-        .init(text: "fc00::1", isPublic: false),
-        .init(text: "fd00:ec2::254", isPublic: false),
-        .init(text: "ff02::1", isPublic: false),
-        .init(text: "ff0e::1", isPublic: false),
-        // Outside 2000::/3: discard-only, SRv6 SIDs, unallocated.
-        .init(text: "100::1", isPublic: false),
-        .init(text: "5f00::1", isPublic: false),
-        .init(text: "4000::1", isPublic: false),
-        .init(text: "e000::1", isPublic: false),
-        // 2001::/23 IETF protocol assignments: Teredo, benchmarking, AMT,
-        // AS112, ORCHID v1/v2.
-        .init(text: "2001::1", isPublic: false),
-        .init(text: "2001:2::1", isPublic: false),
-        .init(text: "2001:3::1", isPublic: false),
-        .init(text: "2001:4:112::1", isPublic: false),
-        .init(text: "2001:10::1", isPublic: false),
-        .init(text: "2001:20::1", isPublic: false),
-        .init(text: "2001:1ff:ffff::1", isPublic: false),
-        // Documentation.
-        .init(text: "2001:db8::1", isPublic: false),
-        .init(text: "3fff::1", isPublic: false),
-        .init(text: "3fff:fff::1", isPublic: false),
-        // IPv4-mapped: the embedded IPv4 decides.
-        .init(text: "::ffff:8.8.8.8", isPublic: true),
-        .init(text: "::ffff:127.0.0.1", isPublic: false),
-        .init(text: "::ffff:10.0.0.1", isPublic: false),
-        .init(text: "::ffff:169.254.169.254", isPublic: false),
-        .init(text: "::ffff:100.100.100.200", isPublic: false),
-        .init(text: "::ffff:0.0.0.0", isPublic: false),
-        // IPv4-translated (SIIT, ::ffff:0:0:0/96).
-        .init(text: "::ffff:0:808:808", isPublic: true),
-        .init(text: "::ffff:0:a9fe:a9fe", isPublic: false),
-        .init(text: "::ffff:0:7f00:1", isPublic: false),
-        // Deprecated IPv4-compatible.
-        .init(text: "::8.8.8.8", isPublic: true),
-        .init(text: "::10.0.0.1", isPublic: false),
-        .init(text: "::169.254.169.254", isPublic: false),
-        // 6to4 embeds the IPv4 in bits 16-47.
-        .init(text: "2002:808:808::1", isPublic: true),
-        .init(text: "2002:a9fe:a9fe::1", isPublic: false),
-        .init(text: "2002:c0a8:101::1", isPublic: false),
-        // NAT64 well-known prefix 64:ff9b::/96: the embedded IPv4 decides.
-        .init(text: "64:ff9b::808:808", isPublic: true),
-        .init(text: "64:ff9b::a9fe:a9fe", isPublic: false),
-        .init(text: "64:ff9b::a00:1", isPublic: false),
-        .init(text: "64:ff9b::7f00:1", isPublic: false),
-        // The rest of 64:ff9b::/32, including the 64:ff9b:1::/48 local-use
-        // block whose operator-chosen layout makes the embedding ambiguous.
-        .init(text: "64:ff9b:1:808:8:800::", isPublic: false),
-        .init(text: "64:ff9b:1::808:808", isPublic: false),
-        .init(text: "64:ff9b:2::808:808", isPublic: false),
-        .init(text: "64:ff9b:0:0:1::808:808", isPublic: false),
-    ]
-
-    @Test(arguments: ipv4Cases)
-    func ipv4Classifier(_ entry: AddressCase) throws {
-        let bytes = try #require(Self.bytes(AF_INET, entry.text))
-        let hostOrder = bytes.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
-        #expect(EgressWire.isPublicIPv4(hostOrder) == entry.isPublic)
-        // The sockaddr entry point agrees with the pure verdict.
-        #expect(Self.sockaddrVerdict(AF_INET, bytes) == entry.isPublic)
-    }
-
-    @Test(arguments: ipv6Cases)
-    func ipv6Classifier(_ entry: AddressCase) throws {
-        let bytes = try #require(Self.bytes(AF_INET6, entry.text))
-        #expect(EgressWire.isPublicIPv6(bytes) == entry.isPublic)
-        #expect(Self.sockaddrVerdict(AF_INET6, bytes) == entry.isPublic)
-    }
-
-    @Test func ipv6ClassifierRejectsWrongLengths() {
-        #expect(EgressWire.isPublicIPv6([]) == false)
-        #expect(EgressWire.isPublicIPv6([UInt8](repeating: 0x26, count: 15)) == false)
-        #expect(EgressWire.isPublicIPv6([UInt8](repeating: 0x26, count: 17)) == false)
+    @Test func sockaddrEntryPointRefusesNilAndUnknownFamilies() {
+        #expect(EgressProxy.isPublicUnicast(nil) == false)
+        var zero = sockaddr_storage()
+        let unknownFamily = withUnsafePointer(to: &zero) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
+        }
+        #expect(unknownFamily == false)
     }
 
     // MARK: Literal targets through the production resolver
