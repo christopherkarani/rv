@@ -68,19 +68,28 @@ struct MCPManagedPolicyTests {
             }
             return nil
         }
+        /// Why `name` is planned not to start while the others serve.
+        func refusal(_ name: String) -> MCPServerRefusal? {
+            guard case .success(let planned) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true),
+                case .refused(_, let refusal)? = planned.first?.1
+            else { return nil }
+            return refusal
+        }
         configuration.managed = try organization("""
             {"version": 1, "mcp": {"blocked": ["shell-*"], "requireSandbox": true},
              "secrets": {"allowedSources": ["keychain"]}}
             """)
         #expect(plan("shell-exec") == .blocked("shell-exec"))
-        guard case .sandbox(let reason)? = plan("plain") else {
+        guard case .sandbox(let reason)? = refusal("plain") else {
             Issue.record("requireSandbox must refuse an unsandboxed server")
             return
         }
         #expect(reason.contains("needs a sandbox"))
 
         configuration.managed?.mcp.requireSandbox = false
-        guard case .sandbox = plan("plain") else {
+        guard case .sandbox(_)? = refusal("plain") else {
             Issue.record("sandbox must stay required without organization policy")
             return
         }

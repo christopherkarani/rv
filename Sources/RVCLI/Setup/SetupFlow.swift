@@ -204,6 +204,11 @@ extension SetupEnvironment {
         setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
 #if os(Linux)
         setup.directRvd = ProcessDirectRvd()
+        // The directly started rvd inherits this environment.
+        let xdgRuntimeDir = environment["XDG_RUNTIME_DIR"]
+        setup.uncreatableRuntimeDirectory = {
+            UnixSocketPath.uncreatableUserRuntimeDirectory(xdgRuntimeDir: xdgRuntimeDir, uid: getuid())
+        }
         setup.runtimeSocketDirectory = loginHome
             ? "\(UnixSocketPath.userRuntimeRoot)/\(setup.uid())/\(UnixSocketPath.directoryName)"
             : nil
