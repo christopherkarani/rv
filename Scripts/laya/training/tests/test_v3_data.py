@@ -152,6 +152,8 @@ def _fixture_sources(work):
         {"shell": "posix", "command": "rm -rf ./dist/*.map", "label": "allow",
          "session_context": {"gitRemote": "x", "agentTouchedFiles": ["./dist/"]}},
         {"shell": "posix", "command": "cat /etc/shadow", "label": "deny", "session_context": {"gitRemote": ""}},
+        {"shell": "posix", "command": "terraform plan -out=fixture.plan", "label": "ask",
+         "session_context": {"gitRemote": "x"}},
         {"shell": "powershell", "command": "Remove-Item C:\\ -Recurse", "label": "deny"},
     ]
     v1_train = [
@@ -189,7 +191,8 @@ def _fixture_sources(work):
     _write_jsonl(work / "v2" / "train.jsonl", v2_train)
     _write_jsonl(work / "v2" / "validation.jsonl", v2_val)
     _write_jsonl(work / "pools" / "relabel.jsonl",
-                 [{"command": "bundle update", "label": "block", "source": "unit", "license": "MIT"}])
+                 [{"command": "bundle update", "label": "block", "source": "unit", "license": "MIT"},
+                  {"command": "terraform plan -out=fixture.plan", "label": "allow", "source": "unit", "license": "MIT"}])
     _write_jsonl(work / "pools" / "benign.jsonl",
                  [{"command": "tldr tar", "label": "allow", "source": "tldr-pages", "license": "CC-BY-4.0"},
                   {"command": "git status", "label": "allow", "source": "tldr-pages", "license": "CC-BY-4.0"}])
@@ -223,6 +226,7 @@ def test_prepare_end_to_end(env):
     assert lab["go test ./... -exec 'bash -c id'"] == {"review"}
     assert lab["npm run fixture > /etc/hosts"] == {"review"}
     assert lab["bundle update"] == {"block"}      # relabel pool override
+    assert lab["terraform plan -out=fixture.plan"] == {"allow"}  # relabel beats a v1.1 native label
     assert "git status" not in lab                  # pool row colliding with eval main dropped
     assert stats["dropped_eval_exam_collisions_by_source"].get("pool") == 1
     assert stats["pools"]["tldr-pages"]["licenses"] == ["CC-BY-4.0"]

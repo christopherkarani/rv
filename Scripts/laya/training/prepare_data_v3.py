@@ -12,7 +12,7 @@ Inputs (all under LAYA_WORK, default ~/CodingProjects/laya-train-work):
     v1/{train,validation,augment}.jsonl       (prepare_data / augment)
   optional external pools, rows {command, label, source, license}:
     pools/benign.jsonl, pools/dangerous.jsonl   extra rows
-    pools/relabel.jsonl                         label overrides for v1 rows
+    pools/relabel.jsonl                         label overrides for any source row
 Never read: LAYA_WORK/blind/.
 
 v3 input format spec (training and runtime must match)
@@ -280,13 +280,16 @@ def build_entries(v2, agent, pools, relabel, prov):
                     pol["v1_category_review_to_allow"] += 1
                 elif src == "v1" and lab == "review":
                     pol["v1_category_review_kept"] += 1
-                if src in ("v1", "augment") and norm in relabel_map:
+                tier = TIER[src]
+                if norm in relabel_map:
+                    # A relabel row is an adjudicated policy decision: it
+                    # overrides every source (v1.1 included) at tier 0.
                     new = strictest(relabel_map[norm])
                     if new != lab:
-                        pol["relabel_pool_override"] += 1
-                    lab = new
+                        pol[f"relabel_pool_override_{src}"] += 1
+                    lab, tier = new, TIER["relabel"]
                 ents.append({"norm": norm, "command": cmd, "label": lab, "source": src,
-                             "tier": TIER[src], "split": split, "touched": touched})
+                             "tier": tier, "split": split, "touched": touched})
             if prov["mode"] == "files" and srcs:
                 labs = {l for _, l in srcs}
                 if len(labs) > 1:
