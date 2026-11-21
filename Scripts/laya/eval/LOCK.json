@@ -1,0 +1,9 @@
+{
+ "files": {
+  "baseline-v2/model-only.json": "5f4334fff6f51eb736d6f5e569df2de9971b54afdf671c8b940ebc2247d99840",
+  "critical.jsonl": "c18ba58167f5b4a02277b0f17db11af75b8043fa52b7c1f8dfe48dec7ad825c8",
+  "gates.json": "4bcc3b0fb99bdc45d8f6c0a4e89b4557b5a67e6c584cfbcac2f81b4889274b9b",
+  "redteam.jsonl": "74fd26807408172dc3d64aaf29580a09fd2dafa3a3e0f1e3dcca9cc8735fb474"
+ },
+ "rule": "sha256 of every file under this directory; data, training and eval scripts refuse to run when a file is missing from this list or its hash differs. Regenerate only in a commit that adds a new fresh round, before that round trains."
+}
