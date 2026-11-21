@@ -126,7 +126,9 @@ a `command.denied` row marked `detail.verdict: indeterminate`. Its `subject` is
 command: `selfProtection` (an rv command that would weaken rv),
 `packageScriptUnresolved`, `unresolvedInvocation`,
 `inlineProgramNeedsJudge`, `commandTooLarge`, `budgetExhausted` or
-`corePacksUnavailable`. `rv test` and `rv explain` record nothing.
+`corePacksUnavailable`. `rv test` and `rv explain` record nothing. The
+OCSF export codes these rows `rv.command.denied-indeterminate`; one that
+observe mode let run is `rv.command.observed-deny`.
 
 Observe mode keeps refusing the ones that touch rv's own protection, and
 records them as that same `command.denied`: an rv command that would
@@ -221,6 +223,7 @@ writer) gets its area's `*-other` code rather than none.
 | `rv.command.denied-rule` | `command.denied` | A pack or built-in rule denied it; `subject` names the rule |
 | `rv.command.denied-secret-path` | `command.denied` | It touched a secret path (`detail.category` such as `ssh`) |
 | `rv.command.denied-judge` | `command.denied` | The Laya judge blocked or held it |
+| `rv.command.denied-indeterminate` | `command.denied` | rv could not finish evaluating it and refused it (`detail.verdict: indeterminate`; `reason` holds the class) |
 | `rv.command.observed-deny` | `command.observed` | Observe mode let it run; enforcement would have denied |
 | `rv.command.observed-ask` | `command.observed` | Observe mode let it run; enforcement would have asked |
 | `rv.command.observed-other` | `command.observed` | No `would_be` was recorded (older rows) |
