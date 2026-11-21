@@ -258,9 +258,11 @@ as risky.
   Linux Secret Service rule and rv's wiring files, and, in observe only,
   stopping or retuning `rvd` and writing rv's install **[C53]**. A shell
   command whose program rv cannot see (a dynamic command word, `eval` or
-  `trap` action; a shell or interpreter reading its program from stdin
-  unless every producer is a literal `echo`, plain `printf` or `cat` of
-  literal paths, whose fed text is then scanned and stop-read too; a
+  `trap` action; a shell, interpreter or scheduler (`at`, `batch`,
+  `crontab`) reading its program from stdin unless every producer is a
+  literal `echo`, plain `printf` or `cat` of literal paths, whose fed
+  text is then scanned and read by every floor rule above too, as are
+  the string literals of inline interpreter code; a
   same-line function or alias redefining a name the floor reads,
   `coproc`; dynamic or encoded inline code, or inline code, `awk`
   or `sed e` running a command over unreadable input; `ssh` with a
@@ -725,7 +727,7 @@ evaluation **[C48]**.
 | MCP OAuth tokens (`rv mcp connect`) | macOS Keychain; Linux a 0600 file under the config directory **[C170]** | 0600 (Linux) |
 | Allow-once rows | store a redacted command and the cwd **[C171]** | as JSONL stores |
 | Pending approvals | store the full proposed action **[C172]** | as JSONL stores |
-| Denial ledger `blocks.jsonl` | timestamp, host, tool, rule, category, path, observed; no argv; 200 rows or 7 days; on unless `blocks.enabled` is false **[C173]** | as JSONL stores |
+| Denial ledger `blocks.jsonl` | timestamp, host, tool, rule, category, path, observed; no argv; 200 rows or 7 days (the file may hold up to 50 more rows between rewrites; `rv blocks` reads at most 200); on unless `blocks.enabled` is false **[C173]** | as JSONL stores |
 | Judge log `judge-log.jsonl` (macOS) | scores and a 16-hex-character unsalted SHA-256 prefix of the command **[C174]** | no explicit mode |
 | Analytics identity and counters | `~/.config/rv/analytics-*` **[C175]** | no explicit mode |
 | `rvd` log | rvd's stderr. When stderr is discarded (launchd on macOS) it goes to `~/Library/Logs/rv/rvd.log` (macOS) or `~/.local/state/rv/rvd.log` (Linux); under systemd it stays on stderr, so the journal keeps it **[C176]** | file: 0700 dir, 0600 file, symlinks refused |
@@ -990,7 +992,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C50 | Sources/RVService/JudgeGate.swift:412-423; Sources/RVService/JudgeGate.swift:584-585 |
 | C51 | Sources/RVService/GitRebaseProbe.swift:6-16 |
 | C52 | Sources/RVPolicy/RebaseRecovery.swift:20-30; Sources/RVPolicy/PolicyGate.swift:49-50 |
-| C53 | Sources/RVService/ObserveFloor.swift:5-24; Sources/RVService/ObserveFloor.swift:31-39; Sources/RVService/ObserveFloor.swift:84-88; Sources/RVService/ObserveFloor.swift:105-164; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-26; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-21; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:568-583 |
+| C53 | Sources/RVService/ObserveFloor.swift:5-26; Sources/RVService/ObserveFloor.swift:68-116; Sources/RVService/ObserveFloor.swift:122-132; Sources/RVService/ObserveFloor.swift:159-220; Sources/RVService/ObserveFloor.swift:237-280; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-32; Sources/RVEngine/OpaqueExecution+Programs.swift:219-315; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-80; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:710-719 |
 | C54 | Sources/RVEngine/FileToolEvaluate.swift:10-33 |
 | C55 | Sources/RVDomain/SecretPathCatalog.swift:93-127 |
 | C56 | Sources/RVHooks/ClaudeSearchTarget.swift:7-10 |
@@ -1012,7 +1014,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C72 | Sources/RVIsolation/SecretProviders.swift:147-287; Sources/RVIsolation/SecretProviders.swift:310-333 |
 | C73 | Sources/RVIsolation/SecretProviders.swift:414-434; Sources/RVIsolation/SecretProviders.swift:465-474 |
 | C74 | Sources/RVIsolation/SecretStore.swift:142-231 |
-| C75 | Sources/RVIsolation/OwnerOnlyFile.swift:16-18; Sources/RVIsolation/OwnerOnlyFile.swift:29-32; Sources/RVIsolation/OwnerOnlyFile.swift:50-61; Sources/RVIsolation/SecretsConfiguration.swift:277-278; Sources/RVIsolation/SecretStore.swift:263-267 |
+| C75 | Sources/RVFileStore/OwnerOnlyFile.swift:16-18; Sources/RVFileStore/OwnerOnlyFile.swift:29-32; Sources/RVFileStore/OwnerOnlyFile.swift:50-61; Sources/RVIsolation/SecretsConfiguration.swift:277-278; Sources/RVIsolation/SecretStore.swift:263-267 |
 | C76 | Sources/RVIsolation/SecretLaunchBroker.swift:191; Sources/RVIsolation/SecretRun.swift:93-98 |
 | C77 | Sources/RVIsolation/SecretGatewayProtocol.swift:190-195 |
 | C78 | Sources/RVIsolation/SecretGatewayProtocol.swift:3-4; Sources/RVIsolation/SecretGatewayProtocol.swift:20-23; Sources/RVIsolation/SecretLaunchBroker.swift:221 |
@@ -1105,7 +1107,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C164 | install.sh:274; install.sh:320-334; install.sh:380-392 |
 | C165 | install.sh:341-345 |
 | C166 | Sources/RVFileStore/FileLockedJSONLStore.swift:178; Sources/RVFileStore/FileLockedJSONLStore.swift:243-258 |
-| C167 | Sources/RVIsolation/OwnerOnlyFile.swift:30-32; Sources/RVIsolation/OwnerOnlyFile.swift:50-61 |
+| C167 | Sources/RVFileStore/OwnerOnlyFile.swift:30-32; Sources/RVFileStore/OwnerOnlyFile.swift:50-61 |
 | C168 | Sources/RVIsolation/SecretFingerprint.swift:14; Sources/RVIsolation/SecretFingerprint.swift:30-41 |
 | C169 | Sources/RVIsolation/SecretOAuth.swift:71; Sources/RVIsolation/SecretOAuth.swift:139-149; Sources/RVIsolation/SecretOAuth.swift:378-401 |
 | C170 | Sources/RVMCP/MCPOAuth.swift:736-760 |

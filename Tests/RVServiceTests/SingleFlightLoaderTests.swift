@@ -127,10 +127,13 @@ struct SingleFlightLoaderTests {
             makes.hit()
             return Box(id: 5)
         }
-        guard case .cachedFailure = cached else {
+        guard case .cachedFailure(let cachedError) = cached else {
             Issue.record("same-stamp retry must hit the cached failure, got \(cached)")
             return
         }
+        // The cached failure keeps its error, so a refusal that must fail
+        // closed is not later read as a broken install.
+        #expect(cachedError is Broken)
         #expect(makes.count == 1)
 
         let repaired = loader.value(key: key, stamp: 2, wait: nil) {

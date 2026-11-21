@@ -676,5 +676,130 @@ struct MCPCageCredentialLiveTests {
         #expect(after.hasSuffix(" home=yes"), "\(after)")
         #expect(sibling.isRunning)
     }
+
+    /// rvd's and the judge workers' Core ML caches sit inside the
+    /// `~/Library/Caches` write root: a caged server can read one but cannot
+    /// write, link, create, or swap a symlink in there (a planted e5rt bundle
+    /// would run as the judge). The rest of `~/Library/Caches` stays writable.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false], ["rvd", "rv-judge"])
+    func rvdsCoreMLCacheIsNotWritable(cacheExists: Bool, owner: String) throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-rvdcache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let rvd = caches.appendingPathComponent(owner)
+        let bundle = rvd.appendingPathComponent("com.apple.e5rt.e5bundlecache")
+        if cacheExists {
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+            try Data("original".utf8).write(to: bundle.appendingPathComponent("manifest"))
+        } else {
+            try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        }
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = caches.appendingPathComponent("rv-mcp/server", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            c="$1/\(owner)"; s="$2"
+            /bin/cat "$c/com.apple.e5rt.e5bundlecache/manifest" 2>/dev/null && echo READ_OK
+            printf evil > "$c/com.apple.e5rt.e5bundlecache/manifest" 2>/dev/null && echo WRITE_OK
+            printf evil > "$c/planted" 2>/dev/null && echo CREATE_OK
+            /bin/mkdir -p "$c/x" 2>/dev/null && echo MKDIR_OK
+            /bin/mkdir "$s/evil" && printf evil > "$s/evil/manifest"
+            /bin/ln "$s/evil/manifest" "$c/linked" 2>/dev/null && echo LINK_OK
+            replace "$s/evil" "$c" && echo SWAP_OK
+            /bin/ln -s "$s/evil" "$c" 2>/dev/null && echo SYMLINK_OK
+            printf ok > "$1/other-cache" && echo OTHER_OK
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [caches.path, scratch.path], in: scratch.path))
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("READ_OK") == cacheExists, "\(output)")
+        for refused in ["WRITE_OK", "CREATE_OK", "MKDIR_OK", "LINK_OK", "SWAP_OK", "SYMLINK_OK"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(output.contains("OTHER_OK"), "\(output)")
+        if cacheExists {
+            #expect(try String(contentsOf: bundle.appendingPathComponent("manifest"), encoding: .utf8) == "original")
+        } else {
+            #expect(FileManager.default.fileExists(atPath: rvd.path) == false)
+        }
+    }
+
+    /// The deny on each `deniedWrites` path does not hold if its parent is
+    /// replaced: a caged server prepares `<owner>/com.apple.e5rt.e5bundlecache`
+    /// under `~/.cache` (a write root), renames `~/Library/Caches` aside and
+    /// renames its own tree into place, and the judge loads the planted
+    /// bundle. Renaming the parent away, renaming a tree onto it, swapping
+    /// it atomically, and renaming the directory above it are refused; files
+    /// elsewhere in the parent stay writable. Walks every `deniedWrites`
+    /// path, so an owner added there is covered here too.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
+    func deniedWriteParentsCannotBeSwapped(cacheExists: Bool) throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-cacheswap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let denied = MCPSandbox.deniedWrites.map { home.path + $0.dropFirst(1) }
+        try #require(denied.isEmpty == false)
+        for owner in denied {
+            let bundle = URL(fileURLWithPath: owner).appendingPathComponent("com.apple.e5rt.e5bundlecache")
+            if cacheExists {
+                try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+                try Data("original".utf8).write(to: bundle.appendingPathComponent("manifest"))
+            } else {
+                try FileManager.default.createDirectory(
+                    atPath: URL(fileURLWithPath: owner).deletingLastPathComponent().path, withIntermediateDirectories: true)
+            }
+        }
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".cache"), withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/server", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let planted = "com.apple.e5rt.e5bundlecache/25A1/0123abcd/0123abcd.bundle"
+        let script = """
+            k="$1"; p="$2"; o="$3"; i="$4"; g="$5"
+            /bin/mkdir -p "$k/fake$i/$o/\(planted)" && printf evil > "$k/fake$i/$o/\(planted)/model"
+            /bin/mv "$p" "$k/old$i" 2>/dev/null && echo ASIDE_OK
+            /bin/mv "$k/fake$i" "$p" 2>/dev/null && [ -f "$p/$o/\(planted)/model" ] && echo INTO_OK
+            /bin/mkdir -p "$k/swap$i/$o/\(planted)" && printf evil > "$k/swap$i/$o/\(planted)/model"
+            swap "$k/swap$i" "$p" && echo SWAP_OK
+            /bin/mv "$g" "$k/oldg$i" 2>/dev/null && echo ABOVE_OK
+            /bin/mkdir -p "$p/someapp" && printf ok > "$p/someapp/x$i" && echo OTHER_OK
+            echo DONE
+            """
+        for (index, owner) in denied.enumerated() {
+            let parent = URL(fileURLWithPath: owner).deletingLastPathComponent().path
+            let name = URL(fileURLWithPath: owner).lastPathComponent
+            let output = try #require(try caged(
+                profile, script,
+                [home.appendingPathComponent(".cache").path, parent, name, String(index),
+                    URL(fileURLWithPath: parent).deletingLastPathComponent().path],
+                in: tmp.path))
+            #expect(output.contains("DONE"), "\(owner): \(output)")
+            for refused in ["ASIDE_OK", "INTO_OK", "SWAP_OK", "ABOVE_OK"] {
+                #expect(output.contains(refused) == false, "\(owner) \(refused): \(output)")
+            }
+            #expect(output.contains("OTHER_OK"), "\(owner): \(output)")
+            #expect(FileManager.default.fileExists(atPath: owner + "/" + planted) == false, "\(owner)")
+            if cacheExists {
+                #expect(try String(
+                    contentsOfFile: owner + "/com.apple.e5rt.e5bundlecache/manifest", encoding: .utf8) == "original")
+            } else {
+                #expect(FileManager.default.fileExists(atPath: owner) == false, "\(owner)")
+            }
+        }
+    }
 }
 #endif

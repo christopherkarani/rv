@@ -15,7 +15,8 @@ struct OwnedPathsInstallGuardTests {
         let paths = OwnedPaths(home: home)
         for path in [
             paths.localRv, paths.localRvCli, paths.localRvd, paths.launchAgent, paths.custodianLaunchAgent,
-            paths.auditForwardLaunchAgent, paths.systemdUserUnit, paths.custodianAppExecutable,
+            paths.auditForwardLaunchAgent, paths.judgeLaunchAgent, paths.systemdUserUnit, paths.custodianAppExecutable,
+            paths.localBinDirectory + "/rv-judge",
         ] {
             #expect(RVInstallPathGuard.isInstallFile(path, home: home), "\(path)")
         }

@@ -51,6 +51,8 @@ struct WorkspaceTransferCommandTests {
             #expect(upload == ["\(home.rawValue)/.config/rv"])
             #expect(download.contains("\(home.rawValue)/.local/bin"))
             #expect(download.contains("\(home.rawValue)/Library/LaunchAgents"))
+            #expect(download.contains("\(home.rawValue)/Library/Caches/rvd"))
+            #expect(download.contains("\(home.rawValue)/Library/Caches/rv-judge"))
         }
     }
 

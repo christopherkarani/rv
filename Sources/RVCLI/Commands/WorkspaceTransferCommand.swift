@@ -7,12 +7,17 @@ import Glibc
 import Foundation
 import RVDomain
 import RVIsolation
+import RVPresentation
 
-struct WorkspaceUpload: AsyncParsableCommand {
+struct WorkspaceUpload: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "upload",
         abstract: "Copy a host file or directory into the live workspace (asks for owner authentication)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace upload [--workspace <absolute-path>] [--no-gitignore] <host-path> [<workspace-path>]", description: "Copy host files into the live workspace; .gitignore-aware, never follows symlinks (asks for owner authentication)"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -32,11 +37,15 @@ struct WorkspaceUpload: AsyncParsableCommand {
     }
 }
 
-struct WorkspaceDownload: AsyncParsableCommand {
+struct WorkspaceDownload: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "download",
         abstract: "Copy a file or directory out of the live workspace to a new host path (asks for owner authentication)."
     )
+
+    static let usage = [
+        HelpRow(name: "rv workspace download [--workspace <absolute-path>] [--no-gitignore] <workspace-path> <new-host-path>", description: "Copy workspace files to a new host path; refuses symlinks, special files and rv's own dirs (asks for owner authentication)"),
+    ]
 
     @OptionGroup var path: WorkspacePath
 
@@ -155,7 +164,7 @@ enum WorkspaceTransferRun {
         return config + [
             "\(home)/.local/bin", "\(home)/Library/LaunchAgents", "\(home)/.config/systemd/user",
             "\(home)/Applications/RVApprovals.app",
-        ]
+        ] + RVWiringPaths.coreMLCacheOwners.map { "\(home)/Library/Caches/\($0)" }
     }
 
     #if os(macOS)

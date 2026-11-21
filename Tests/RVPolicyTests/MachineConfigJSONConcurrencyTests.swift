@@ -15,7 +15,7 @@ struct MachineConfigJSONConcurrencyTests {
 
         DispatchQueue.concurrentPerform(iterations: writers) { index in
             do {
-                try MachineConfigJSON.update(file: file) { object in
+                try MachineConfigJSON.file(file).update(audit: { _, _ in nil }) { object in
                     object["key\(index)"] = .number(Double(index))
                 }
             } catch {
@@ -39,7 +39,7 @@ struct MachineConfigJSONConcurrencyTests {
         let finished = DispatchSemaphore(value: 0)
         try ExclusiveFileLock.withLock(at: lockURL) {
             DispatchQueue.global().async {
-                try? MachineConfigJSON.update(file: file) { object in
+                try? MachineConfigJSON.file(file).update(audit: { _, _ in nil }) { object in
                     object["late"] = .bool(true)
                 }
                 finished.signal()

@@ -363,7 +363,9 @@ public actor ServiceRuntime {
             case .failure(let error): result = .error(error)
             }
         case .doctorSnapshot:
-            result = .doctorSnapshot(doctorSnapshot())
+            // The pool query blocks on XPC: off the actor.
+            let pool = await JudgeOffload.run { JudgeRuntime.poolProbe() }
+            result = .doctorSnapshot(doctorSnapshot(pool: pool))
         case .policyStatus(let params):
             result = .policyStatus(await policyStatus(params))
         case .pendingList:
@@ -722,7 +724,13 @@ public actor ServiceRuntime {
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
-        EvaluateReply(result: await runEvaluate(request, cwd: cwd))
+        let verdict = await runEvaluate(request, cwd: cwd)
+        // Under observe, what enforce would have returned, only when it
+        // differs from the observed allow (as `rv test` shows it).
+        return EvaluateReply(
+            result: verdict.result,
+            wouldBe: verdict.observeOverrode ? verdict.wouldBe?.result : nil
+        )
     }
 
     /// `request` evaluated under the owner's configured packs. Every door
@@ -814,16 +822,16 @@ public actor ServiceRuntime {
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         host: LedgerHost = .tty
-    ) async -> EvaluationResult {
+    ) async -> GatedVerdict {
         let scoped = ownerScoped(request)
         let world = readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
         // No hook deadline on this door: bound the judge alone (see
         // `JudgeOffload.nonHookBudget`); pattern search keeps its own ceiling.
-        let result = await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
-            await world.apply(scoped, cwd: cwd, host: host)
+        let verdict = await JudgeOffload.$judgeBudget.withValue(JudgeOffload.nonHookBudget) {
+            await world.applyVerdict(scoped, cwd: cwd, host: host)
         }
-        recordAnalytics(for: result)
-        return result
+        recordAnalytics(for: verdict.result)
+        return verdict
     }
 
     /// Frame-level major-version guard: runs even when a Hello on this
@@ -970,12 +978,13 @@ public actor ServiceRuntime {
         )
     }
 
-    private func doctorSnapshot() -> DoctorSnapshotReply {
+    private func doctorSnapshot(pool: JudgePoolProbe) -> DoctorSnapshotReply {
         DoctorSnapshotBuilder.make(
             catalog: compileSet.refreshCatalogFromDisk(),
             corePacksReady: corePacksReady,
             idleExitSeconds: idleExitSeconds,
-            home: configHome
+            home: configHome,
+            judgePool: pool
         )
     }
 

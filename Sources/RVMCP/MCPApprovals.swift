@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVIsolation
 
 /// The tool definition an approval was asked for. A grant is consumed only

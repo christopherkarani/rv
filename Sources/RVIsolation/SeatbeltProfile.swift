@@ -1256,42 +1256,31 @@ func isResolvedPath(_ path: String, atOrBeneath ancestor: String) -> Bool {
 /// SBPL denying contained writes to workspace control paths (ISO-06).
 ///
 /// Hooks and RV policy inside the workspace are consumed host-side after
-/// the run, so the cage must not plant or replace them. Inside `.git` the
-/// deny is the hooks subpath, the `config` file, and the `.git` entry
-/// itself. Index, objects, and refs stay writable so git keeps working.
+/// the run, so the cage must not plant or replace them. The paths come from
+/// `ProtectedWorkspacePaths`: control trees (`.git/hooks`, `.rv`,
+/// `.config/rv`) are subpaths, control files (`.git/config`) literals.
+/// Index, objects, and refs stay writable so git keeps working.
 /// `.git/config` is a literal: `core.hooksPath`, `core.fsmonitor`, and
 /// `core.sshCommand` are how a contained process plants a hook the host
-/// later runs, and a subpath would also freeze the rest of `.git`. The
-/// `.rv` and `.config/rv` control dirs are denied whole.
+/// later runs, and a subpath would also freeze the rest of `.git`.
 ///
 /// A subpath deny alone is bypassable by renaming the parent directory
 /// aside, writing under the staged name, and renaming it back. Denying
-/// create/unlink of the `.git` and `.config` directory entries themselves
-/// closes that rename: an existing `.git` cannot move, and a staged tree
-/// cannot be renamed into place when `.git` is absent. `file-write-data`
-/// on the `.git` literal covers a worktree gitfile: create/unlink do not,
-/// and an in-place rewrite of the `gitdir:` line points the host at a
-/// tree the cage planted. Creating `.git` or `.config` at the workspace
-/// root inside the cage (`git init`) is denied as a consequence; the host
-/// can still init outside the cage.
+/// create/unlink of the pinned directory entries themselves (`.git`,
+/// `.config`) closes that rename: an existing `.git` cannot move, and a
+/// staged tree cannot be renamed into place when `.git` is absent.
+/// `file-write-data` on the `.git` literal covers a worktree gitfile:
+/// create/unlink do not, and an in-place rewrite of the `gitdir:` line
+/// points the host at a tree the cage planted. Creating `.git` or `.config`
+/// at the workspace root inside the cage (`git init`) is denied as a
+/// consequence; the host can still init outside the cage.
 func workspaceControlDenies(workspacePath: String) -> String {
-    let hooks = escapeSeatbeltSubpath(workspacePath + "/.git/hooks")
-    let rv = escapeSeatbeltSubpath(workspacePath + "/.rv")
-    let configRV = escapeSeatbeltSubpath(workspacePath + "/.config/rv")
-    let gitConfig = escapeSeatbeltSubpath(workspacePath + "/.git/config")
-    let git = escapeSeatbeltSubpath(workspacePath + "/.git")
-    let config = escapeSeatbeltSubpath(workspacePath + "/.config")
-    return """
-    (deny file-write*
-        (subpath "\(hooks)")
-        (subpath "\(rv)")
-        (subpath "\(configRV)")
-        (literal "\(gitConfig)"))
-    (deny file-write-data file-write-unlink file-write-create
-        (literal "\(git)"))
-    (deny file-write-unlink file-write-create
-        (literal "\(config)"))
-    """ + "\n" + workspaceControlCaseVariantDenies(workspacePath: workspacePath)
+    let exact = workspaceControlRules { relative in
+        let path = escapeSeatbeltSubpath(workspacePath + "/" + relative)
+        let filter = ProtectedWorkspacePaths.trees.contains(relative) ? "subpath" : "literal"
+        return "    (\(filter) \"\(path)\")"
+    }
+    return exact + "\n" + workspaceControlCaseVariantDenies(workspacePath: workspacePath)
         + "\n" + workspaceRunLaterDenies(workspacePath: workspacePath)
 }
 
@@ -1301,87 +1290,44 @@ func workspaceControlDenies(workspacePath: String) -> String {
 /// rule does not match but rv on the host reads as `.rv/policy.toml`. The
 /// exact literals stay in place; these regex rules only add coverage.
 func workspaceControlCaseVariantDenies(workspacePath: String) -> String {
-    func regex(_ relative: String, tree: Bool = false) -> String {
-        let pattern = caseInsensitiveWorkspaceRegex(workspacePath: workspacePath, relative: relative, tree: tree)
-        return "        (regex \"\(escapeSeatbeltSubpath(pattern))\")"
+    workspaceControlRules { relative in
+        workspaceRegexFilter(workspacePath: workspacePath, relative: relative)
     }
-    return """
-    (deny file-write*
-    \(regex(".git/hooks", tree: true))
-    \(regex(".rv", tree: true))
-    \(regex(".config/rv", tree: true))
-    \(regex(".git/config")))
-    (deny file-write-data file-write-unlink file-write-create
-    \(regex(".git")))
-    (deny file-write-unlink file-write-create
-    \(regex(".config")))
-    """
 }
 
-/// Agent and editor config inside the workspace that a host tool reads and
-/// acts on after the run, outside any cage (ISO-06 extension).
-///
-/// A caged agent that writes a hook into `.claude/settings.json`, a server
-/// into `.mcp.json`, or a task into `.vscode/tasks.json` gets that code run
-/// unsandboxed the next time the developer uses the tool on the host. These
-/// paths are therefore treated like `.git/hooks`: the cage cannot create,
-/// rewrite or remove them.
-///
-/// Matching is case-insensitive. The saved tree is usually on a
-/// case-insensitive APFS volume, so a cage that creates `.MCP.json` would
-/// otherwise get past an exact `.mcp.json` rule while host tools still open
-/// it as `.mcp.json`.
-///
-/// Instruction files (`CLAUDE.md`, `AGENTS.md`) and skill folders are not
-/// listed: agents edit them as normal work, and they carry instructions
-/// rather than code the host runs on its own. Changes to them belong in the
-/// review shown before publish. Config in nested directories (for a tool
-/// started in a subfolder) is not covered either.
-enum WorkspaceRunLaterPaths {
-    /// Workspace-relative files a host agent, editor or shell executes or
-    /// trusts on its own.
-    static let files = [
-        ".claude/settings.json",
-        ".claude/settings.local.json",
-        ".mcp.json",
-        ".codex/config.toml",
-        ".codex/hooks.json",
-        ".cursor/hooks.json",
-        ".cursor/mcp.json",
-        ".gemini/settings.json",
-        ".gemini/config/hooks.json",
-        ".vscode/tasks.json",
-        ".vscode/settings.json",
-        "opencode.json",
-        "opencode.jsonc",
-        ".envrc",
-    ]
+/// The rv and git control rules, with `filter` rendering one path. Control
+/// paths deny every write; the git directory entry also denies data (a
+/// worktree gitfile); other pinned directories deny create and unlink.
+private func workspaceControlRules(_ filter: (String) -> String) -> String {
+    let catalog = ProtectedWorkspacePaths.self
+    let protected = catalog.controlPaths.map(filter).joined(separator: "\n")
+    var rules = """
+    (deny file-write*
+    \(protected))
+    (deny file-write-data file-write-unlink file-write-create
+    \(filter(catalog.gitDirectory)))
+    """
+    let pinned = catalog.controlPinned.filter { $0 != catalog.gitDirectory }
+    if pinned.isEmpty == false {
+        rules += "\n(deny file-write-unlink file-write-create\n" + pinned.map(filter).joined(separator: "\n") + ")"
+    }
+    return rules
+}
 
-    /// Workspace-relative directories whose whole contents are protected:
-    /// scripts that the settings above call by path.
-    static let trees = [
-        ".claude/hooks",
-        ".cursor/hooks",
-        ".codex/hooks",
-    ]
-
-    /// Parent directories whose own entry the cage may not create or
-    /// remove. Without this, a cage could build a replacement directory
-    /// under another name and rename it into place, which writes the files
-    /// above without touching their paths. Same pattern as `.config`.
-    static let pinnedDirectories = [".claude", ".codex", ".cursor", ".gemini", ".vscode"]
+/// One case-insensitive `(regex ...)` filter line for `relative`; a
+/// catalog tree also matches everything beneath it.
+private func workspaceRegexFilter(workspacePath: String, relative: String) -> String {
+    let tree = ProtectedWorkspacePaths.trees.contains(relative)
+    let pattern = caseInsensitiveWorkspaceRegex(workspacePath: workspacePath, relative: relative, tree: tree)
+    return "        (regex \"\(escapeSeatbeltSubpath(pattern))\")"
 }
 
 /// POSIX regex for `relative` under `workspacePath`, case-insensitive in
-/// the relative part (ASCII, plus the non-ASCII letters APFS folds onto
-/// ASCII). `tree` also matches everything beneath it. The
-/// workspace prefix is matched exactly (it already exists, so the kernel
-/// reports its on-disk spelling).
-/// Non-ASCII characters whose Unicode case folding is a single ASCII
-/// letter (CaseFolding.txt, status C): U+017F LATIN SMALL LETTER LONG S
-/// folds to `s`, U+212A KELVIN SIGN to `k`.
-let unicodeCaseFolds: [String: String] = ["s": "\u{017F}", "k": "\u{212A}"]
-
+/// the relative part: each character matches every spelling
+/// `ProtectedWorkspacePaths.spellings(of:)` lists (ASCII case, plus the
+/// non-ASCII letters APFS folds onto ASCII). `tree` also matches everything
+/// beneath it. The workspace prefix is matched exactly (it already exists,
+/// so the kernel reports its on-disk spelling).
 func caseInsensitiveWorkspaceRegex(workspacePath: String, relative: String, tree: Bool = false) -> String {
     func escapeRegex(_ text: String) -> String {
         var out = ""
@@ -1393,46 +1339,45 @@ func caseInsensitiveWorkspaceRegex(workspacePath: String, relative: String, tree
     }
     var suffix = ""
     for character in relative {
-        if let folded = unicodeCaseFolds[character.lowercased()] {
+        let spellings = ProtectedWorkspacePaths.spellings(of: character).map(String.init)
+        switch spellings.count {
+        case 1:
+            suffix += escapeRegex(spellings[0])
+        case 2:
+            suffix += "[\(spellings[0])\(spellings[1])]"
+        default:
             // Seatbelt matches the path's raw bytes, but a case-insensitive
-            // APFS volume also folds these non-ASCII letters onto ASCII
+            // APFS volume also folds some non-ASCII letters onto ASCII
             // (`.mcp.j\u{017F}on` opens `.mcp.json`). A bracket expression
             // cannot hold a multi-byte character, so alternate instead.
-            suffix += "(\(character.lowercased())|\(character.uppercased())|\(folded))"
-        } else if character.isASCII, character.isLetter {
-            suffix += "[\(character.lowercased())\(character.uppercased())]"
-        } else {
-            suffix += escapeRegex(String(character))
+            suffix += "(" + spellings.joined(separator: "|") + ")"
         }
     }
     let end = tree ? "(/.*)?$" : "$"
     return "^" + escapeRegex(workspacePath) + "/" + suffix + end
 }
 
+/// Denies for the run-later paths in `ProtectedWorkspacePaths` (ISO-06
+/// extension): agent and editor config a host tool reads and acts on after
+/// the run, outside any cage. Treated like `.git/hooks`: the cage cannot
+/// create, rewrite or remove them.
+///
+/// Matching is case-insensitive. The saved tree is usually on a
+/// case-insensitive APFS volume, so a cage that creates `.MCP.json` would
+/// otherwise get past an exact `.mcp.json` rule while host tools still open
+/// it as `.mcp.json`.
+///
+/// The pinned directories (`runLaterPinned`: each root, plus every
+/// directory between a root and a protected path, such as `.gemini/config`)
+/// may not be created or removed: the protected path is matched by name, so
+/// renaming a directory above it aside and a replacement into place would
+/// bypass the deny.
 func workspaceRunLaterDenies(workspacePath: String) -> String {
-    func regex(_ relative: String, tree: Bool = false) -> String {
-        let pattern = caseInsensitiveWorkspaceRegex(workspacePath: workspacePath, relative: relative, tree: tree)
-        return "        (regex \"\(escapeSeatbeltSubpath(pattern))\")"
+    func regex(_ relative: String) -> String {
+        workspaceRegexFilter(workspacePath: workspacePath, relative: relative)
     }
-    let protected = (WorkspaceRunLaterPaths.files.map { regex($0) }
-        + WorkspaceRunLaterPaths.trees.map { regex($0, tree: true) })
-        .joined(separator: "\n")
-    // Pin the root directories and every directory between a root and a
-    // protected path (`.gemini/config` for `.gemini/config/hooks.json`):
-    // the protected path is matched by name, so renaming a directory above
-    // it aside and a replacement into place would bypass the deny.
-    var pinned = WorkspaceRunLaterPaths.pinnedDirectories
-    for path in WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees {
-        let components = path.split(separator: "/").map(String.init)
-        guard components.count > 2 else { continue }
-        for depth in 2..<components.count {
-            let intermediate = components[..<depth].joined(separator: "/")
-            if pinned.contains(intermediate) == false { pinned.append(intermediate) }
-        }
-    }
-    let directories = pinned
-        .map { regex($0) }
-        .joined(separator: "\n")
+    let protected = ProtectedWorkspacePaths.runLaterPaths.map(regex).joined(separator: "\n")
+    let directories = ProtectedWorkspacePaths.runLaterPinned.map(regex).joined(separator: "\n")
     return """
     (deny file-write*
     \(protected))

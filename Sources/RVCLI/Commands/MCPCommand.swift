@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVFileStore
 import RVHistory
 import RVIsolation
 import RVMCP

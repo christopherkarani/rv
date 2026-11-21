@@ -31,11 +31,11 @@ struct WorkspaceRunLaterDeniesTests {
 
     @Test func everyProtectedPathAppearsAsARegexDeny() {
         let profile = workspaceControlDenies(workspacePath: workspace)
-        for file in WorkspaceRunLaterPaths.files {
+        for file in ProtectedWorkspacePaths.runLaterFiles {
             let expected = "(regex \"\(escapeSeatbeltSubpath(pattern(file)))\")"
             #expect(profile.contains(expected), "missing deny for \(file)")
         }
-        for tree in WorkspaceRunLaterPaths.trees {
+        for tree in ProtectedWorkspacePaths.runLaterTrees {
             #expect(profile.contains(escapeSeatbeltSubpath(pattern(tree, tree: true))))
         }
     }
@@ -62,8 +62,8 @@ struct WorkspaceRunLaterDeniesTests {
     @Test func otherAgentsHookScriptsAreProtected() {
         #expect(matches(pattern(".cursor/hooks", tree: true), "\(workspace)/.cursor/hooks/fmt.sh"))
         #expect(matches(pattern(".codex/hooks", tree: true), "\(workspace)/.codex/hooks/x.sh"))
-        #expect(WorkspaceRunLaterPaths.files.contains(".codex/hooks.json"))
-        #expect(WorkspaceRunLaterPaths.files.contains(".gemini/config/hooks.json"))
+        #expect(ProtectedWorkspacePaths.runLaterFiles.contains(".codex/hooks.json"))
+        #expect(ProtectedWorkspacePaths.runLaterFiles.contains(".gemini/config/hooks.json"))
     }
 
     @Test func dotsAreLiteralAndMatchesAreAnchored() {
@@ -103,14 +103,14 @@ struct WorkspaceRunLaterDeniesTests {
         let parts = denies.components(separatedBy: "(deny file-write-unlink file-write-create")
         #expect(parts.count == 2)
         #expect(parts[0].hasPrefix("(deny file-write*"))
-        for directory in WorkspaceRunLaterPaths.pinnedDirectories {
+        for directory in ProtectedWorkspacePaths.runLaterPinnedDirectories {
             #expect(parts[1].contains(escapeSeatbeltSubpath(pattern(directory))))
         }
         // Every protected path's top-level directory must be pinned, or the
         // rename bypass reopens for it.
-        for path in WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees where path.contains("/") {
+        for path in ProtectedWorkspacePaths.runLaterPaths where path.contains("/") {
             let top = String(path.split(separator: "/")[0])
-            #expect(WorkspaceRunLaterPaths.pinnedDirectories.contains(top), "\(top) is not pinned")
+            #expect(ProtectedWorkspacePaths.runLaterPinnedDirectories.contains(top), "\(top) is not pinned")
         }
     }
 
@@ -132,10 +132,10 @@ struct WorkspaceRunLaterDeniesTests {
     @Test func instructionFilesStayWritable() {
         // Agents edit these as ordinary work; they belong in publish review.
         for path in ["CLAUDE.md", "AGENTS.md", ".claude/skills/x/SKILL.md", ".claude/agents/a.md"] {
-            for file in WorkspaceRunLaterPaths.files {
+            for file in ProtectedWorkspacePaths.runLaterFiles {
                 #expect(matches(pattern(file), "\(workspace)/\(path)") == false)
             }
-            for tree in WorkspaceRunLaterPaths.trees {
+            for tree in ProtectedWorkspacePaths.runLaterTrees {
                 #expect(matches(pattern(tree, tree: true), "\(workspace)/\(path)") == false)
             }
         }

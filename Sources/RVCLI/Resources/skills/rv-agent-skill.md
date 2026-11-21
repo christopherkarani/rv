@@ -69,7 +69,8 @@ Do not try to get around rv. In particular, never:
   files, rv's binaries, or this skill file;
 - run rv administration commands such as `rv uninstall`, `rv setup --observe`,
   `rv host mode <host> off`, `rv packs disable <pack>`,
-  `rv allowlist add <rule>`, `rv safety normal`, or `rv policy apply`;
+  `rv allowlist add <rule> --reason <reason>`, `rv safety normal`, or
+  `rv policy apply <policy.toml>`;
 - disable hooks in your host's settings, or ask the human to do it for you.
 
 If you think a rule is wrong, say so to the human and let them decide.

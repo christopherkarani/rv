@@ -1254,7 +1254,7 @@ public final class EgressProxy: @unchecked Sendable {
     /// `allowedIPs` every address must be public unicast. With them an
     /// all-public answer passes as before; any other answer passes only
     /// when every address, public ones included, is covered by the list
-    /// and outside the forbidden ranges (`EgressAllowedIPs.covers`), so a
+    /// and outside the `never` ranges (`EgressAllowedIPs.covers`), so a
     /// mixed answer with one uncovered address is refused whole.
     ///
     /// A listed range can include this machine's own interface address
@@ -1397,28 +1397,28 @@ public final class EgressProxy: @unchecked Sendable {
         }
     }
 
-    /// True when `address` is a globally routable unicast destination.
-    /// Rejects loopback, unspecified, private, CGNAT, link-local,
-    /// site-local, unique-local, cloud metadata, multicast, reserved,
-    /// documentation, and benchmarking ranges, recursing into the embedded
-    /// IPv4 of mapped, translated, compatible, 6to4, and NAT64 addresses.
-    /// Unknown families fail closed.
+    /// True when `address` is public unicast by the dial-address table
+    /// (`DialAddress`). The proxy dials this sockaddr, so an IPv6 form with
+    /// a fixed IPv4 embedding (mapped, translated, compatible, the NAT64
+    /// well-known prefix, 6to4) takes the judgment of the IPv4 address the
+    /// dial reaches: on a NAT64/DNS64 network every IPv4-only service
+    /// resolves into 64:ff9b::/96. Unknown families fail closed.
     static func isPublicUnicast(_ address: UnsafePointer<sockaddr>?) -> Bool {
         guard let address else { return false }
+        let bytes: [UInt8]
         switch Int32(address.pointee.sa_family) {
         case AF_INET:
-            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
-                EgressWire.isPublicIPv4(UInt32(bigEndian: socket.pointee.sin_addr.s_addr))
+            bytes = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin_addr) { Array($0) }
             }
         case AF_INET6:
-            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
-                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
-                    EgressWire.isPublicIPv6(Array(raw))
-                }
+            bytes = address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin6_addr) { Array($0) }
             }
         default:
             return false
         }
+        return DialAddress.judgment(followingEmbeddedIPv4: bytes) == .publicUnicast
     }
 
     private static func connectWithTimeout(

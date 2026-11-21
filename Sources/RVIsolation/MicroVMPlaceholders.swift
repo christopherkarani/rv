@@ -12,7 +12,7 @@ import Synchronization
 ///
 /// The Seatbelt cage denies creating `.git`, `.git/hooks/*`, `.git/config`,
 /// `.rv`, `.config/rv` and the agent and editor config in
-/// `WorkspaceRunLaterPaths` (see `workspaceControlDenies`). A VM can only
+/// `ProtectedWorkspacePaths` (see `workspaceControlDenies`). A VM can only
 /// protect a path by mounting over it, and a missing path has nothing to
 /// mount over. So before the first micro-VM run in a workspace, rv creates
 /// each missing control path empty; `rv-microvm` then mounts it read-only
@@ -184,73 +184,19 @@ final class MicroVMControlPlaceholders: Sendable {
     }
 }
 
-/// The workspace control paths a micro-VM guest mounts over, as a tree.
-///
-/// Built from the same lists as the Seatbelt profile (`workspaceControlDenies`
-/// and `WorkspaceRunLaterPaths`), so a path added there is protected in the
-/// guest too. `WorkspaceControlLayout` in `Packages/rv-microvm` holds the
-/// guest's copy; `WorkspaceControlParityTests` fails when the two drift.
+/// The workspace control paths a micro-VM guest mounts over, as a tree:
+/// `ProtectedWorkspacePaths.roots`, the same catalog the Seatbelt rules,
+/// the transfer check and the guest's mounts (`WorkspaceControlLayout` in
+/// `Packages/rv-microvm`) derive from. Exact names only: a placeholder
+/// exists under one spelling.
 enum MicroVMControlLayout {
-    indirect enum Node: Equatable, Sendable {
-        case file(String)
-        case tree(String)
-        case pinned(String, [Node])
+    typealias Node = ProtectedWorkspacePaths.Node
 
-        var name: String {
-            switch self {
-            case .file(let name), .tree(let name), .pinned(let name, _): name
-            }
-        }
-    }
-
-    /// rv and git control paths (same set as `workspaceControlDenies`).
-    static let controlFiles = [".git/config"]
-    static let controlTrees = [".git/hooks", ".rv", ".config/rv"]
-    static let controlPinnedDirectories = [".git", ".config"]
-
-    static let roots: [Node] = tree(
-        protected: controlTrees + controlFiles + WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees,
-        trees: Set(controlTrees + WorkspaceRunLaterPaths.trees),
-        pinnedRoots: controlPinnedDirectories + WorkspaceRunLaterPaths.pinnedDirectories,
-        order: [".git", ".rv", ".config"] + WorkspaceRunLaterPaths.pinnedDirectories
-    )
+    static let roots: [Node] = ProtectedWorkspacePaths.roots
 
     /// `{}` for JSON config, so a guest tool reads an empty object; empty
     /// otherwise (`.git/config`, `config.toml` and `.envrc` accept that).
     static func placeholderContents(_ name: String) -> [UInt8] {
         name.hasSuffix(".json") || name.hasSuffix(".jsonc") ? Array("{}\n".utf8) : []
-    }
-
-    /// Same shape and order as `WorkspaceControlLayout.tree` in the guest
-    /// package: a path under a pinned root goes inside it, and an
-    /// intermediate directory on the way to a deeper path is pinned too.
-    /// `trees` marks which leaves are directories.
-    static func tree(protected: [String], trees: Set<String>, pinnedRoots: [String], order: [String]) -> [Node] {
-        func leaf(_ path: String) -> Node {
-            let name = String(path.split(separator: "/").last ?? Substring(path))
-            return trees.contains(path) ? .tree(name) : .file(name)
-        }
-        func children(of prefix: String) -> [Node] {
-            var names: [String] = []
-            var deeper: [String: Bool] = [:]
-            for path in protected where path.hasPrefix(prefix + "/") {
-                let rest = path.dropFirst(prefix.count + 1)
-                let first = String(rest.split(separator: "/", maxSplits: 1)[0])
-                if deeper[first] == nil { names.append(first) }
-                deeper[first] = (deeper[first] ?? false) || rest.contains("/")
-            }
-            return names.map { name in
-                deeper[name] == true ? .pinned(name, children(of: "\(prefix)/\(name)")) : leaf("\(prefix)/\(name)")
-            }
-        }
-        var roots: [Node] = []
-        var seen = Set<String>()
-        func add(_ name: String) {
-            guard seen.insert(name).inserted else { return }
-            roots.append(pinnedRoots.contains(name) ? .pinned(name, children(of: name)) : leaf(name))
-        }
-        for name in order { add(name) }
-        for path in protected where path.contains("/") == false { add(path) }
-        return roots
     }
 }

@@ -8,6 +8,7 @@ struct SelfProtectionGuardTests {
         "rv packs disable core.filesystem",
         "rv uninstall",
         "rv uninstall --yes",
+        "rv uninstall --purge",
         "rv safety normal",
         "rv allowlist add core.git:reset-hard",
         "rv allowlist add-command 'git reset --hard'",

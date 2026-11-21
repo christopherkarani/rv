@@ -113,32 +113,19 @@ public struct AllowlistStore: Sendable {
         return removed
     }
 
-    /// Rewrite the user allowlist file. Callers that mutate must already enforce TTY.
-    package func writeAll(_ entries: [AllowlistEntry]) throws {
-        try withFileLock {
-            try writeAllUnlocked(entries)
-        }
-    }
-
+    /// Callers enforce the TTY. Through `OwnerConfigFile` under
+    /// `.allowlist.lock`: an existing `allowlist.toml` that cannot be read
+    /// or parsed throws `OwnerConfigWriteError.unreadable` and nothing is
+    /// written. Records `config.changed` (`allowlist`) write-ahead.
     private func mutate(_ body: (inout [AllowlistEntry]) throws -> Void) throws {
-        try withFileLock {
-            var entries: [AllowlistEntry] = []
-            switch loadForValidate(workspacePath: nil) {
-            case .missing, .symlinkIntoWorkspace:
-                entries = []
-            case .invalid(let error):
-                throw error
-            case .ok(let existing):
-                entries = existing
-            }
-            let prior = entries
-            try body(&entries)
-            guard let audit = Self.changeEvent(from: prior, to: entries) else {
-                return try writeAllUnlocked(entries)
-            }
-            try ConfigChangeAudit.commit(audit, configDirectory: baseDirectory) {
-                try writeAllUnlocked(entries)
-            }
+        let file = OwnerConfigFile<[AllowlistEntry]>(
+            url: fileURL, lockURL: RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory), empty: [],
+            parse: { data in String(data: data, encoding: .utf8).flatMap { try? AllowlistTOML.parse($0) } },
+            render: { Data(AllowlistTOML.render($0).utf8) })
+        do {
+            try file.update(audit: Self.changeEvent, mutate: body)
+        } catch ExclusiveFileLock.LockError.lockFailed {
+            throw AllowlistStoreError.lockFailed
         }
     }
 
@@ -163,42 +150,6 @@ public struct AllowlistStore: Sendable {
         return ConfigChangeAudit.setting(
             "allowlist", from: "\(prior.count) entries", to: "\(new.count) entries",
             direction: added.isEmpty ? .tightening : .loosening, detail: detail)
-    }
-
-    private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {
-        try prepareDirectory()
-        let body = AllowlistTOML.render(entries)
-        try body.write(to: fileURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
-    }
-
-    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
-        try prepareDirectory()
-        do {
-            return try ExclusiveFileLock.withLock(
-                at: RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory),
-                body
-            )
-        } catch let error as ExclusiveFileLock.LockError {
-            switch error {
-            case .lockFailed:
-                throw AllowlistStoreError.lockFailed
-            }
-        }
-    }
-
-    private func prepareDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: baseDirectory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: baseDirectory.path
-        )
     }
 
     private func isSymlinkIntoWorkspace(url: URL, workspacePath: String?) -> Bool {

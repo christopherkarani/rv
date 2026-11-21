@@ -231,6 +231,33 @@ def test_evaluate_via_and_reply_skew_enforced():
         client.evaluate("x")
 
 
+def test_evaluate_observe_would_be():
+    observed = json.loads(test_vectors.RESPONSES["evaluate"])
+    reply = observed["result"]["evaluate"]
+    reply["wouldBe"] = reply["result"]
+    reply["result"] = {"decision": {"decision": "allow"}, "quickRejected": False}
+    client, _ = _connected(lambda req: _with_id(observed, req))
+    result = client.evaluate("git reset --hard")
+    assert result.decision.is_allow
+    assert result.would_be is not None
+    assert result.would_be.decision.is_deny
+    assert str(result.would_be.decision.deny.rule_id) == "core.git:reset-hard"
+    assert result.would_be.would_be is None
+
+
+def test_evaluate_without_would_be_is_none():
+    client, _ = _connected(respond(test_vectors.RESPONSES["evaluate"]))
+    assert client.evaluate("git reset --hard").would_be is None
+
+
+def test_evaluate_rejects_malformed_would_be():
+    mutated = json.loads(test_vectors.RESPONSES["evaluate"])
+    mutated["result"]["evaluate"]["wouldBe"] = {"decision": {"decision": "bogus"}}
+    client, _ = _connected(lambda req: _with_id(mutated, req))
+    with pytest.raises(DecodeError):
+        client.evaluate("x")
+
+
 def _with_id(obj: dict, request: dict) -> bytes:
     obj["id"] = request["id"]
     return json.dumps(obj).encode()
