@@ -21,7 +21,7 @@ struct Setup: AsyncParsableCommand {
     @Flag(name: .customLong("plain"), help: "Disable color.")
     var plain = false
 
-    @Flag(name: .customLong("no-color"), help: "Disable color.")
+    @Flag(name: .customLong("no-color"), help: "Human output without color, even when piped.")
     var noColor = false
 
     @Flag(name: .customLong("force"), help: "Replace occupied owned hooks (backs up to *.bak).")

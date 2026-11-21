@@ -206,7 +206,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Exit codes", rows: [
                 HelpRow(name: "0", description: "Allow"),
@@ -233,7 +233,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Observe mode", rows: [
                 HelpRow(name: "guard.mode observe", description: "Explains the verdict enforce would reach and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
@@ -282,7 +282,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "JSON document (same as --robot)"),
                 HelpRow(name: "--robot", description: "JSON document; piped or CI output without a flag is key=value lines"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
@@ -353,7 +353,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "One rv.setup.v1 JSON document (same as --robot)"),
                 HelpRow(name: "--robot", description: "One rv.setup.v1 JSON document"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
@@ -426,7 +426,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
@@ -446,7 +446,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "rv.status.v1 JSON on stdout"),
                 HelpRow(name: "--robot", description: "rv.status.v1 JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -516,7 +516,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "JSON array of every matching row on stdout"),
                 HelpRow(name: "--robot", description: "JSON array of every matching row on stdout"),
                 HelpRow(name: "--plain", description: "Disable color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "BLOCKED", description: "rv stopped the agent"),
