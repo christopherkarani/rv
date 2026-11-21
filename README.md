@@ -176,7 +176,7 @@ rv uninstall              # remove rv's hooks, config, and rvd (asks for owner a
 
 ## Features
 
-rv is one binary with 25 commands. Beyond the shell guard:
+rv is one binary with 27 commands. Beyond the shell guard:
 
 ### Secrets without exposure
 Agents in a contained workspace (macOS), or a command started with
