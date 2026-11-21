@@ -47,7 +47,7 @@ struct LayaEvalHarnessTests {
         if let dir = ProcessInfo.processInfo.environment["RV_LAYA_EVAL_OUT_DIR"], !dir.isEmpty {
             return URL(fileURLWithPath: dir, isDirectory: true)
         }
-        return evalDir.appendingPathComponent("out", isDirectory: true)
+        return LayaEvalHarnessTests.evalDir.appendingPathComponent("out", isDirectory: true)
     }()
 
     struct Row: Decodable {
