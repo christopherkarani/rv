@@ -154,7 +154,7 @@ enum WorkspaceTransferRun {
         guard includingInstall else { return config }
         return config + [
             "\(home)/.local/bin", "\(home)/Library/LaunchAgents", "\(home)/.config/systemd/user",
-            "\(home)/Applications/RVApprovals.app",
+            "\(home)/Applications/RVApprovals.app", "\(home)/Library/Caches/rvd",
         ]
     }
 

@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import Synchronization
 import Testing
 @testable import RVJudgePool
 
@@ -42,9 +43,19 @@ struct PosixWorkerPoolTests {
     let key = ModelKey(engine: "ft", bundle: "/models/fake")
     let input = JudgeInput(command: "echo hi", contextLines: [])
 
+    /// What the supervisor reported as reaped after its own kill.
+    final class Reaped: Sendable {
+        private let entries = Mutex<[String]>([])
+        func record(_ slot: WorkerSlot, _ compute: WorkerCompute) {
+            entries.withLock { $0.append("\(slot.rawValue) \(compute.rawValue)") }
+        }
+        var all: [String] { entries.withLock { $0 } }
+    }
+
     struct Fixture {
         let directory: URL
         let supervisor: JudgePoolSupervisor
+        let reaped: Reaped
 
         func marker(_ slot: WorkerSlot) -> URL { directory.appendingPathComponent("\(slot.rawValue).log") }
 
@@ -64,7 +75,9 @@ struct PosixWorkerPoolTests {
         let spawner = PosixWorkerSpawner(executable: python, environment: ["PATH": "/usr/bin:/bin"]) { slot, _, _ in
             ["-I", "-S", scriptURL.path, modes[slot] ?? "ok", directory.appendingPathComponent("\(slot.rawValue).log").path]
         }
-        return Fixture(directory: directory, supervisor: JudgePoolSupervisor(policy: policy, spawner: spawner))
+        let reaped = Reaped()
+        let supervisor = JudgePoolSupervisor(policy: policy, spawner: spawner, reapedAfterKill: reaped.record)
+        return Fixture(directory: directory, supervisor: supervisor, reaped: reaped)
     }
 
     /// Polls `condition` every 20 ms for up to `seconds`.
@@ -111,6 +124,8 @@ struct PosixWorkerPoolTests {
         #expect(slot == .hedge)
         // A is respawned (backoff 50 ms) and loads again.
         #expect(await eventually { pool.supervisor.status().workers.first { $0.slot == .primary }?.restarts ?? 0 >= 1 })
+        // Someone else's SIGKILL is a crash: its Core ML marker stays.
+        #expect(pool.reaped.all.isEmpty)
     }
 
     @Test("a hung primary: hedged, then SIGKILLed at the budget and respawned", .enabled(if: python != nil, "python3 not installed"))
@@ -139,6 +154,9 @@ struct PosixWorkerPoolTests {
         let status = pool.supervisor.status()
         #expect(status.killed == 1)
         #expect(await eventually { pool.supervisor.status().workers.first { $0.slot == .primary }?.restarts ?? 0 >= 1 })
+        // The supervisor's own budget kill is not a Core ML crash: the shell
+        // is told once, for that worker, before the replacement reads it.
+        #expect(pool.reaped.all == ["primary \(PoolPolicy.live.compute(for: .primary).rawValue)"])
     }
 
     @Test("a worker that is not an executable is a spawn failure, retried with backoff, never an answer")

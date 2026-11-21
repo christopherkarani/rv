@@ -89,69 +89,6 @@ struct LayaVerdictTests {
     }
 
     #if canImport(CoreML)
-    /// Each compute-unit configuration has its own compiled-model entry, and
-    /// a given root (the judge pool's private directory) is the only place
-    /// an entry is looked for.
-    @Test func compiledCacheEntryIsPerComputeUnitsUnderTheGivenRoot() {
-        let package = URL(fileURLWithPath: "/models/laya-ft-v2-coreml/model.mlpackage")
-        let root = URL(fileURLWithPath: "/Users/u/.config/rv/cache/judge/rv-judge-0123", isDirectory: true)
-        let cpu = CompiledModelCache.entry(package: package, computeUnits: .cpu, root: root)
-        let accelerated = CompiledModelCache.entry(package: package, computeUnits: .accelerated, root: root)
-        #expect(cpu != accelerated)
-        #expect(cpu.deletingLastPathComponent().path == root.path)
-        #expect(accelerated.deletingLastPathComponent().path == root.path)
-    }
-
-    /// The pool's private root must already be an owner-only directory: a
-    /// missing, widened or linked root fails the load (the pool answers
-    /// review) and is never created or repaired.
-    @Test func privateCompiledCacheRootIsNeverCreatedOrRepaired() throws {
-        let fm = FileManager.default
-        let parent = fm.temporaryDirectory.appendingPathComponent("laya-root-\(UUID().uuidString)")
-        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: parent) }
-        let package = parent.appendingPathComponent("model.mlpackage")
-        let shared = parent.appendingPathComponent("shared", isDirectory: true)
-
-        let missing = parent.appendingPathComponent("missing", isDirectory: true)
-        let widened = parent.appendingPathComponent("widened", isDirectory: true)
-        try fm.createDirectory(at: widened, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
-        let target = parent.appendingPathComponent("target", isDirectory: true)
-        try fm.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        let linked = parent.appendingPathComponent("linked", isDirectory: true)
-        try fm.createSymbolicLink(at: linked, withDestinationURL: target)
-
-        for root in [missing, widened, linked] {
-            #expect {
-                _ = try CompiledModelCache.load(package: package, computeUnits: .cpu, root: root, sharedRoot: shared)
-            } throws: { error in
-                guard case LayaError.modelUnavailable(let why) = error else { return false }
-                return why.contains("owner-only")
-            }
-        }
-        #expect(!fm.fileExists(atPath: missing.path))
-        #expect((try fm.attributesOfItem(atPath: widened.path)[.posixPermissions] as? Int) == 0o755)
-        #expect(!fm.fileExists(atPath: shared.path), "the shared cache is never touched")
-    }
-
-    /// With a real bundle (RV_FT_BUNDLE): the pool's load compiles into the
-    /// private root and never reads or writes the shared cache.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["RV_FT_BUNDLE"] != nil))
-    func privateLoadNeverTouchesTheSharedCache() throws {
-        let bundle = try #require(ProcessInfo.processInfo.environment["RV_FT_BUNDLE"])
-        let package = URL(fileURLWithPath: bundle).appendingPathComponent("model.mlpackage")
-        let fm = FileManager.default
-        let parent = fm.temporaryDirectory.appendingPathComponent("laya-private-\(UUID().uuidString)")
-        let root = parent.appendingPathComponent("root", isDirectory: true)
-        let shared = parent.appendingPathComponent("shared", isDirectory: true)
-        try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        defer { try? fm.removeItem(at: parent) }
-        _ = try CompiledModelCache.load(package: package, computeUnits: .cpu, root: root, sharedRoot: shared)
-        let entry = CompiledModelCache.entry(package: package, computeUnits: .cpu, root: root)
-        #expect(fm.fileExists(atPath: entry.path))
-        #expect(!fm.fileExists(atPath: shared.path))
-    }
-
     /// AC-004 end to end: the bundle's config labels are checked at load,
     /// before any model file is touched.
     @Test func fineTunedBundleWithUnknownLabelFailsLoading() throws {

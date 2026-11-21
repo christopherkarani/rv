@@ -47,17 +47,27 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
     private var completions: [String: @Sendable (PoolOutcome) -> Void] = [:]
     private var timer: DispatchSourceTimer?
     private var nextID: UInt64 = 0
+    /// Workers this supervisor SIGKILLed itself, until they are reaped.
+    private var killed: Set<Generation> = []
+    private let reapedAfterKill: @Sendable (WorkerSlot, WorkerCompute) -> Void
+
+    private struct Generation: Hashable {
+        let slot: WorkerSlot
+        let generation: UInt64
+    }
 
     public init(
         policy: PoolPolicy = .live,
         spawner: any WorkerSpawning,
         clock: @escaping @Sendable () -> Instant = { ContinuousClock.now },
-        log: @escaping @Sendable (String) -> Void = { _ in }
+        log: @escaping @Sendable (String) -> Void = { _ in },
+        reapedAfterKill: @escaping @Sendable (WorkerSlot, WorkerCompute) -> Void = { _, _ in }
     ) {
         self.core = PoolCore(policy: policy)
         self.spawner = spawner
         self.clock = clock
         self.log = log
+        self.reapedAfterKill = reapedAfterKill
     }
 
     /// Judges `input` with the model `key`; `completion` runs exactly once,
@@ -130,6 +140,7 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .kill(let slot, let generation):
             guard let entry = running[slot], entry.generation == generation else { return }
             log("worker \(slot.rawValue) killed")
+            killed.insert(Generation(slot: slot, generation: generation))
             entry.process.kill()
         case .reply(let id, let outcome):
             completions.removeValue(forKey: id)?(outcome)
@@ -141,7 +152,10 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .frame(let body):
             guard let event = JudgePoolJSON.decode(WorkerEvent.self, from: body) else {
                 log("worker \(slot.rawValue) sent an unreadable frame; killing it")
-                if let entry = running[slot], entry.generation == generation { entry.process.kill() }
+                if let entry = running[slot], entry.generation == generation {
+                    killed.insert(Generation(slot: slot, generation: generation))
+                    entry.process.kill()
+                }
                 return
             }
             switch event {
@@ -156,6 +170,12 @@ public final class JudgePoolSupervisor: @unchecked Sendable {
         case .exited(let description):
             log("worker \(slot.rawValue) exited (\(description))")
             if running[slot]?.generation == generation { running[slot] = nil }
+            // Our own SIGKILL (budget overrun, garbage on stdout) is not a
+            // Core ML crash: let the shell clear the in-flight marker it left
+            // before the replacement starts and reads it.
+            if killed.remove(Generation(slot: slot, generation: generation)) != nil {
+                reapedAfterKill(slot, core.policy.compute(for: slot))
+            }
             apply(.exited(slot, generation: generation))
         }
     }

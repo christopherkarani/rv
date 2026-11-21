@@ -5,6 +5,7 @@ import RVAnalytics
 import RVDomain
 import RVIPC
 import RVJudgePool
+import RVLaya
 import RVPolicy
 import Synchronization
 
@@ -32,6 +33,7 @@ public enum RVDProcess {
             actionCeremonies: actionCeremonies
         )
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
+        RVDLifecycle.bindCoreMLGuard()
         // Core ML runs in the dev.rv.judge worker pool, never in rvd: a
         // worker abort or hang costs one prediction, not the daemon.
         // Unreachable pool = review (docs/architecture/judge-pool.md).
@@ -88,6 +90,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVIPC
+import RVLaya
 import RVPolicy
 import Synchronization
 
@@ -158,6 +161,17 @@ enum RVDLifecycle {
             executableChanged: { executable?.hasChanged() ?? false },
             onFire: exit
         )
+    }
+
+    /// Binds the crash-aware Core ML guard before any judge can load: the
+    /// previous run's in-flight marker is read on first use, so nothing may
+    /// touch Core ML before this. Its lines go to stderr (rvd.log).
+    static func bindCoreMLGuard() {
+        #if canImport(CoreML)
+        CoreMLGuard.bind(.daemon(stateRoot: JudgeRuntime.coreMLStateRoot()) { message in
+            try? FileHandle.standardError.write(contentsOf: Data(RVDLogFile.line(message).utf8))
+        })
+        #endif
     }
 
     /// Loads the judge off the main path after the listeners are up: the

@@ -69,7 +69,8 @@ extension JudgeRuntime {
         case .busy: return .busy
         case .late: return .late
         case .warming: return .warming
-        case .loadFailed: return .failed
+        case .loadFailed(let failure):
+            return .refused("Laya judge pool could not load the model (\(failure.message)); judged calls go to review. Run `rv doctor`.")
         case .failed: return .failed
         }
     }

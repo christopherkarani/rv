@@ -145,6 +145,13 @@ public enum JudgePoolServe {
 
     private static let leaving = ExitOnce()
 
+    /// The account home from the password database; never `$HOME`.
+    public static func passwdHome() -> String? {
+        guard let entry = getpwuid(geteuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        return home.hasPrefix("/") ? home : nil
+    }
+
     /// `exit` from one thread only: SIGTERM and an upgrade can race, and a
     /// second concurrent `exit` would run the atexit cleanup twice.
     static func leave(_ status: Int32) -> Never {
@@ -167,7 +174,10 @@ public enum JudgePoolServe {
         return String(cString: resolved)
     }
 
-    public static func run() -> Never {
+    /// `reapedAfterKill` runs on the supervisor's queue after a worker the
+    /// supervisor SIGKILLed itself is reaped, before its replacement spawns
+    /// (rv-judge clears that worker's Core ML in-flight marker).
+    public static func run(reapedAfterKill: @escaping @Sendable (WorkerCompute) -> Void = { _ in }) -> Never {
         #if canImport(XPC)
         signal(SIGPIPE, SIG_IGN)
         let environment = ProcessInfo.processInfo.environment
@@ -185,14 +195,8 @@ public enum JudgePoolServe {
             JudgePoolLog.line("executable changed on disk; exiting for launchd to restart the new one")
             leave(0)
         }
-        guard let passwdHome = JudgePoolCacheDirectory.passwdHome(),
-              let cache = JudgePoolCacheDirectory.prepare(home: passwdHome)
-        else {
-            JudgePoolLog.line("cannot create a private model cache under ~/.config/rv/cache/judge; exiting")
-            exit(1)
-        }
-        // launchd stops the agent with SIGTERM: leave through exit() so the
-        // private cache is removed.
+        // launchd stops the agent with SIGTERM: leave through `leave`, one
+        // exit for SIGTERM and an upgrade racing it.
         signal(SIGTERM, SIG_IGN)
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         terminate.setEventHandler { leave(0) }
@@ -204,12 +208,13 @@ public enum JudgePoolServe {
                 executable: executable,
                 environment: workerEnvironment(environment),
                 arguments: { slot, compute, key in
-                    PosixWorkerSpawner.judgeWorkerArguments(slot: slot, compute: compute, key: key, cache: cache)
+                    PosixWorkerSpawner.judgeWorkerArguments(slot: slot, compute: compute, key: key)
                 }),
             executable: executable, identity: identity,
             codeMatches: { running.map { JudgePoolTrust.siblingHashes.hash(ofPath: executable) == $0 } ?? true },
             onUpgrade: upgraded)
-        let supervisor = JudgePoolSupervisor(spawner: spawner, log: JudgePoolLog.line)
+        let supervisor = JudgePoolSupervisor(
+            spawner: spawner, log: JudgePoolLog.line, reapedAfterKill: { _, compute in reapedAfterKill(compute) })
         let siblingClient = ((executable as NSString).deletingLastPathComponent as NSString)
             .appendingPathComponent("rvd")
         let listener = JudgePoolXPCListener(supervisor: supervisor) { message in

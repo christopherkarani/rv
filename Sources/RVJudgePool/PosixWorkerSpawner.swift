@@ -35,9 +35,9 @@ public struct PosixWorkerSpawner: WorkerSpawning {
 
     /// The worker arguments for `rv-judge --worker`.
     public static func judgeWorkerArguments(
-        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey, cache: String
+        slot: WorkerSlot, compute: WorkerCompute, key: ModelKey
     ) -> [String] {
-        ["--worker", "--compute", compute.rawValue, "--engine", key.engine, "--bundle", key.bundle, "--cache", cache]
+        ["--worker", "--compute", compute.rawValue, "--engine", key.engine, "--bundle", key.bundle]
     }
 
     public func spawn(
