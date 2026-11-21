@@ -1571,8 +1571,7 @@ private func runInstallScript(
         mount -t overlay overlay -o lowerdir=/usr/sbin,upperdir="$upper_sbin",workdir="$work_sbin" /usr/sbin
         exec /bin/sh \(shellQuote(script.path))
         """
-        try Data(body.utf8).write(to: wrapper)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        try writeExecutableScript(at: wrapper, source: body)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unshare")
         process.arguments = ["--user", "--map-root-user", "--mount", wrapper.path]
     } else {

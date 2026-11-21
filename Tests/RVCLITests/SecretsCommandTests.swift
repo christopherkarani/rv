@@ -776,8 +776,7 @@ struct SecretsCommandTests {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         try git(work, ["init", "-q"])
         let finding = fixture.directory.appendingPathComponent("rv-finds")
-        try Data("#!/bin/sh\necho finding\nexit 1\n".utf8).write(to: finding)
-        chmod(finding.path, 0o755)
+        try writeExecutableScript(at: finding, source: "#!/bin/sh\necho finding\nexit 1\n")
         _ = try SecretGitHook.install(workTree: work, rvPath: finding.path).get()
         func runHook() throws -> (status: Int32, stderr: String) {
             let process = Process()

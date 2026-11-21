@@ -1,6 +1,6 @@
 import Foundation
 
-/// Writes a fake CLI that a test then runs, mode 0755.
+/// Writes a fake CLI that a test then runs, mode 0755. `url` must not exist.
 ///
 /// Exec fails with ETXTBSY while any process holds the file open for
 /// writing. `Data.write(to:)` opens without O_CLOEXEC, so a child that
@@ -24,7 +24,7 @@ func writeExecutableStub(_ source: String, to url: URL) throws {
         }
         offset += count
     }
-    guard fchmod(fd, 0o755) == 0 else { throw stubError(errno, url) }
+    guard fchmod(fd, 0o755) == 0, fsync(fd) == 0 else { throw stubError(errno, url) }
     closed = true
     guard close(fd) == 0 else { throw stubError(errno, url) }
 }

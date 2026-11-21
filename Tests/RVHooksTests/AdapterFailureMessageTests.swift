@@ -238,8 +238,7 @@ private func writeStub(_ stub: AdapterStub, in root: URL) throws -> String {
         printf '%s' "$RV_STUB_STDOUT"
         exit "${RV_STUB_EXIT:-0}"
         """
-        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+        try writeExecutableStub(script, toFile: rvPath)
     }
     return rvPath
 }

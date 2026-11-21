@@ -486,8 +486,7 @@ private func runClaudeWrapper(
         sys.stdout.write(os.environ.get("RV_STUB_STDOUT", ""))
         raise SystemExit(int(os.environ.get("RV_STUB_EXIT", "0")))
         """
-        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+        try writeExecutableStub(script, toFile: rvPath)
     }
 
     let source = try adapterSource(rvPath: rvPath)
