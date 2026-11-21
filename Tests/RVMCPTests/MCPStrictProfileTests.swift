@@ -65,18 +65,19 @@ struct MCPStrictProfileTests {
             MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
             MCPServerDefinition(name: "closed", command: "c", sandbox: MCPSandboxPolicy(network: false)),
         ])
-        func plan(_ name: String) -> Result<Void, MCPLaunchError> {
-            MCPLaunchPlanner.plan(
+        /// What `name` is planned as; nil when the plan fails.
+        func plan(_ name: String) -> MCPUpstreamConnection? {
+            try? MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
                 resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
                 requireSandbox: true
-            ).map { _ in () }
+            ).get().first?.1
         }
-        guard case .failure = plan("bare"), case .failure = plan("open") else {
+        guard case .refused(_, _)? = plan("bare"), case .refused(_, _)? = plan("open") else {
             Issue.record("default profile launched an uncaged or open-network server")
             return
         }
-        #expect((try? plan("closed").get()) != nil)
+        #expect(plan("closed")?.process != nil)
     }
 
     @Test func refusesBadProfilesAndHosts() {
@@ -105,24 +106,26 @@ struct MCPStrictProfileTests {
             MCPServerDefinition(name: "remote", remote: MCPRemoteServer(url: try #require(URL(string: "https://mcp.example.com/mcp")))),
         ])
         configuration.profile = .strict
-        func plan(_ name: String) -> Result<Void, MCPLaunchError> {
-            MCPLaunchPlanner.plan(
+        /// What `name` is planned as; nil when the plan fails.
+        func plan(_ name: String) -> MCPUpstreamConnection? {
+            try? MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
                 resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
                 requireSandbox: true
-            ).map { _ in () }
+            ).get().first?.1
         }
-        guard case .failure(let bare) = plan("bare"), case .failure(let open) = plan("open") else {
+        guard case .refused(_, let bare)? = plan("bare"), case .refused(_, let open)? = plan("open") else {
             Issue.record("strict profile launched an uncaged or open-network server")
             return
         }
         #expect(bare.message == #"sandbox: bare needs a sandbox; add "sandbox" to its mcp.json entry"#)
         #expect(open.message == "sandbox: open stays off the network; list the hosts it needs in sandbox.hosts")
         for name in ["closed", "proxied", "remote"] {
-            #expect((try? plan(name).get()) != nil, "\(name)")
+            let planned = plan(name)
+            #expect(planned?.process != nil || planned?.remote != nil, "\(name)")
         }
         configuration.profile = .standard
-        guard case .failure = plan("bare") else {
+        guard case .refused(_, _)? = plan("bare") else {
             Issue.record("legacy standard profile must not launch an uncaged server")
             return
         }

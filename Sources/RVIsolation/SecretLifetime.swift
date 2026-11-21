@@ -65,12 +65,16 @@ public enum SecretExpiry {
     }
 
     /// `2026-12-31` for a UTC midnight, otherwise `2026-12-31T18:00:00Z`.
+    /// A fraction of a second is dropped, never rounded up: the formatter
+    /// rounds to the millisecond first, which would write 46.9995 s as 47 s
+    /// and so store an expiry later than the one given.
     public static func text(_ date: Date) -> String {
+        let seconds = date.timeIntervalSince1970.rounded(.down)
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = utc
-        let midnight = date.timeIntervalSince1970.truncatingRemainder(dividingBy: 86_400) == 0
+        let midnight = seconds.truncatingRemainder(dividingBy: 86_400) == 0
         formatter.formatOptions = midnight ? [.withFullDate] : [.withInternetDateTime]
-        return formatter.string(from: date)
+        return formatter.string(from: Date(timeIntervalSince1970: seconds))
     }
 
     /// Whole days left, rounded down; negative once expired.

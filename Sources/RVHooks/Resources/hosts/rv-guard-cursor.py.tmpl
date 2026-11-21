@@ -168,7 +168,10 @@ def _map_rv_hook_result(stdout, exit_code):
                 if permission == "allow":
                     return {"action": "allow"}
                 # rv's own native ask (daemon down or slow) denies like a
-                # deny but keeps rv's message, which names the repair.
+                # deny but keeps rv's message, which names the repair. It is
+                # not forwarded as Cursor's ask: auto-run, background agents
+                # and `cursor-agent --force` give the hook no signal that a
+                # person will see the prompt, and preToolUse ignores ask.
                 if permission in ("ask", "deny"):
                     user = parsed.get("user_message")
                     agent = parsed.get("agent_message")
