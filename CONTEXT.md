@@ -39,11 +39,11 @@ The module map is [`Sources/RVIsolation/README.md`](Sources/RVIsolation/README.m
 
 **Backend** — what builds the walls for a runtime. `IsolationBackendFamily` has `.none`, `.seatbelt` (macOS), `.landlock` (Linux, compiled but refused before exec) and `.microvm`. Both VM guests are `.microvm`; `MicroVMGuest` picks `.linux` (`rv-microvm`) or `.macOS` (`rv-macvm`).
 
-**Control path** — a workspace path that rv or git reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`. `workspaceControlDenies`.
+**Control path** — a workspace path that rv or git reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`. `ProtectedWorkspacePaths.controlPaths`.
 
-**Run-later path** — agent and editor config in the workspace that a host tool runs or trusts later, outside any cage: `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json`, `.envrc` and the like. `WorkspaceRunLaterPaths`.
+**Run-later path** — agent and editor config in the workspace that a host tool runs or trusts later, outside any cage: `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json`, `.envrc` and the like. `ProtectedWorkspacePaths.runLaterPaths`.
 
-Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only. Each backend also pins the directories on the way to a protected path (`.claude`, `.gemini/config`), so the cage cannot rename one aside and swap in a replacement.
+Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only. Each backend also pins the directories on the way to a protected path (`.claude`, `.gemini/config`), so the cage cannot rename one aside and swap in a replacement. All of this comes from one catalog, `ProtectedWorkspacePaths`; each backend turns it into its own form.
 
 **Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishOutcome`, `WorkspacePublishRejection`.
 

@@ -1,11 +1,12 @@
 /// Guest mounts that keep rv's workspace control paths out of the guest's
-/// reach, mirroring `workspaceControlDenies` and `WorkspaceRunLaterPaths`
-/// in RVIsolation's Seatbelt profile. Host git, rv, agents and editors
-/// later read these paths outside any cage: a planted `.git/hooks/*`,
-/// `core.hooksPath`/`core.fsmonitor` in `.git/config`, rv config under
-/// `.rv` / `.config/rv`, or a hook in `.claude/settings.json`, `.mcp.json`,
-/// `.vscode/tasks.json` or `.envrc` would run or apply on the host after
-/// publish.
+/// reach. The paths come from `ProtectedWorkspacePaths`, the catalog
+/// RVIsolation's Seatbelt rules, placeholders and transfer check also derive
+/// from; this package compiles the same file through a symlink. Host git,
+/// rv, agents and editors later read these paths outside any cage: a
+/// planted `.git/hooks/*`, `core.hooksPath`/`core.fsmonitor` in
+/// `.git/config`, rv config under `.rv` / `.config/rv`, or a hook in
+/// `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json` or `.envrc`
+/// would run or apply on the host after publish.
 ///
 /// - Control paths are bind-mounted read-only over themselves.
 /// - Pinned directories (`.git`, `.config`, `.claude`, `.codex`, `.cursor`,
@@ -22,40 +23,9 @@
 /// protected child is refused. Top-level control paths, when absent, get no
 /// mount.
 ///
-/// `WorkspaceControlLayout` is the list of paths. RVIsolation keeps the
-/// same lists in `WorkspaceRunLaterPaths` and `MicroVMControlLayout`;
-/// `WorkspaceControlParityTests` in the main package fails when they drift.
+/// Matching is by exact name: a mount covers only the spelling that exists,
+/// so case variants such as `.Claude` are not covered.
 public enum WorkspaceControlLayout {
-    /// rv and git control paths. Same set as `workspaceControlDenies`.
-    public static let controlFiles = [".git/config"]
-    public static let controlTrees = [".git/hooks", ".rv", ".config/rv"]
-    public static let controlPinnedDirectories = [".git", ".config"]
-
-    /// Agent and editor config a host tool executes or trusts on its own.
-    /// Same lists as `WorkspaceRunLaterPaths` in RVIsolation.
-    public static let runLaterFiles = [
-        ".claude/settings.json",
-        ".claude/settings.local.json",
-        ".mcp.json",
-        ".codex/config.toml",
-        ".codex/hooks.json",
-        ".cursor/hooks.json",
-        ".cursor/mcp.json",
-        ".gemini/settings.json",
-        ".gemini/config/hooks.json",
-        ".vscode/tasks.json",
-        ".vscode/settings.json",
-        "opencode.json",
-        "opencode.jsonc",
-        ".envrc",
-    ]
-    public static let runLaterTrees = [
-        ".claude/hooks",
-        ".cursor/hooks",
-        ".codex/hooks",
-    ]
-    public static let runLaterPinnedDirectories = [".claude", ".codex", ".cursor", ".gemini", ".vscode"]
-
     /// One protected path in the tree the mounts follow.
     public indirect enum Node: Equatable, Sendable {
         /// Mounted read-only over itself.
@@ -69,46 +39,20 @@ public enum WorkspaceControlLayout {
             case .protected(let name), .pinned(let name, _): name
             }
         }
+
+        /// The catalog's node as a mount: files and trees alike are
+        /// mounted read-only over themselves.
+        init(_ node: ProtectedWorkspacePaths.Node) {
+            switch node {
+            case .file(let name), .tree(let name): self = .protected(name)
+            case .pinned(let name, let children): self = .pinned(name, children.map(Node.init))
+            }
+        }
     }
 
     /// Workspace-root nodes in mount order: rv and git control paths
     /// first, then agent and editor config.
-    public static let roots: [Node] = tree(
-        protected: controlTrees + controlFiles + runLaterFiles + runLaterTrees,
-        pinnedRoots: controlPinnedDirectories + runLaterPinnedDirectories,
-        order: [".git", ".rv", ".config"] + runLaterPinnedDirectories
-    )
-
-    /// Builds the tree from flat workspace-relative paths. A path under a
-    /// pinned root goes inside it; an intermediate directory on the way to
-    /// a deeper path (`.gemini/config`) is pinned too, so it cannot be
-    /// renamed aside either.
-    static func tree(protected: [String], pinnedRoots: [String], order: [String]) -> [Node] {
-        func children(of prefix: String) -> [Node] {
-            var names: [String] = []
-            var deeper: [String: Bool] = [:]
-            for path in protected where path.hasPrefix(prefix + "/") {
-                let rest = path.dropFirst(prefix.count + 1)
-                let first = String(rest.split(separator: "/", maxSplits: 1)[0])
-                if deeper[first] == nil { names.append(first) }
-                deeper[first] = (deeper[first] ?? false) || rest.contains("/")
-            }
-            return names.map { name in
-                deeper[name] == true
-                    ? .pinned(name, children(of: "\(prefix)/\(name)"))
-                    : .protected(name)
-            }
-        }
-        var roots: [Node] = []
-        var seen = Set<String>()
-        func add(_ name: String) {
-            guard seen.insert(name).inserted else { return }
-            roots.append(pinnedRoots.contains(name) ? .pinned(name, children(of: name)) : .protected(name))
-        }
-        for name in order { add(name) }
-        for path in protected where path.contains("/") == false { add(path) }
-        return roots
-    }
+    public static let roots: [Node] = ProtectedWorkspacePaths.roots.map(Node.init)
 }
 
 public enum WorkspaceControlMounts {
