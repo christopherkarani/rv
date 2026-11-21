@@ -54,14 +54,29 @@ package final class LiveCompileSet: Sendable {
     private let snapshots: [PackSnapshot]
     private let home: HomeDirectory?
     private let uptimeNanoseconds: @Sendable () -> UInt64
+    private let judge: any JudgePort
 
-    package init(
+    package convenience init(
         snapshots providedSnapshots: [PackSnapshot]?,
         catalog providedCatalog: PackCatalog?,
         home: HomeDirectory?,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
+    ) {
+        self.init(
+            snapshots: providedSnapshots, catalog: providedCatalog, home: home,
+            uptimeNanoseconds: uptimeNanoseconds, judge: LiveJudgePort()
+        )
+    }
+
+    /// `judge` is a test seam; production uses the live CoreML judge.
+    init(
+        snapshots providedSnapshots: [PackSnapshot]?,
+        catalog providedCatalog: PackCatalog?,
+        home: HomeDirectory?,
+        uptimeNanoseconds: @escaping @Sendable () -> UInt64,
+        judge: any JudgePort
     ) {
         let catalog = providedCatalog ?? Self.makeCatalog(home: home) ?? PackCatalog()
         let snapshots = EvaluationWorld.resolveSnapshots(providedSnapshots)
@@ -72,10 +87,11 @@ package final class LiveCompileSet: Sendable {
         self.snapshots = snapshots
         self.home = home
         self.uptimeNanoseconds = uptimeNanoseconds
+        self.judge = judge
         self.corePacksReady = session.corePacksReady
         self.state = UnfairLock(State(
             catalog: catalog,
-            door: GatedEvaluate(session),
+            door: GatedEvaluate(session, judge: judge),
             compiledPackIDs: session.compiledPackIDs,
             compiledIDSet: Set(session.compiledPackIDs)
         ))
@@ -129,18 +145,29 @@ package final class LiveCompileSet: Sendable {
     /// cover it before the peek runs. `store` nil keeps the world's
     /// default store for that home (allowlist directory only; grants
     /// are authority).
+    ///
+    /// The approval paths (`pendingResolve`, the hook review ceremony) peek
+    /// with no hook deadline, so the judge is bounded by `judgeBudget`
+    /// counted from the offload: a stuck prediction answers `late` (review)
+    /// instead of holding the approver, a model slot, or the circuit's
+    /// half-open trial. Pattern search is not bounded by it. A hook
+    /// deadline the caller has bound still wins.
     package func livePeek(
         store: AllowOnceStore?,
-        grants: EphemeralAllowOnceTable
+        grants: EphemeralAllowOnceTable,
+        judgeBudget: Duration = JudgeOffload.nonHookBudget
     ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         { command, cwd, now in
-            await LiveEvaluateWorld(
+            let world = LiveEvaluateWorld(
                 home: self.home,
                 store: store,
                 grants: grants,
                 gated: self.readyDoor(wanted: EvaluationWorld.walkedPackIDs(home: self.home)),
                 clock: { now }
-            ).peek(command: command, cwd: cwd)
+            )
+            return await JudgeOffload.$judgeBudget.withValue(judgeBudget) {
+                await world.peek(command: command, cwd: cwd)
+            }
         }
     }
 
@@ -209,7 +236,7 @@ package final class LiveCompileSet: Sendable {
         )
         state.compiledPackIDs = session.compiledPackIDs
         state.compiledIDSet = Set(session.compiledPackIDs)
-        state.door = GatedEvaluate(session)
+        state.door = GatedEvaluate(session, judge: judge)
     }
 
     /// Catalog for a home; nil home mirrors the old empty-HOME catalog
