@@ -3,7 +3,10 @@ import Testing
 @testable import RVService
 
 struct LaunchdPlistTests {
-    @Test func templateIsOnDemandNotKeepAlive() throws {
+    /// rvd is always on: launchd starts it at load and relaunches it after
+    /// any exit (a crash, or the clean exit once its binary was replaced)
+    /// while the rvd binary exists, throttled so a crash loop cannot spin.
+    @Test func templateIsAlwaysOn() throws {
         let url = packageRoot()
             .appendingPathComponent("Sources/RVCLI/Resources/launchd")
             .appendingPathComponent("dev.rv.evaluate.plist")
@@ -13,8 +16,27 @@ struct LaunchdPlistTests {
         #expect(plist["Label"] as? String == "dev.rv.evaluate")
         let mach = try #require(plist["MachServices"] as? [String: Any])
         #expect(mach["dev.rv.evaluate"] as? Bool == true)
-        #expect((plist["KeepAlive"] as? Bool) != true)
-        #expect((plist["RunAtLoad"] as? Bool) != true)
+        let keepAlive = try #require(plist["KeepAlive"] as? [String: Any])
+        #expect(keepAlive.count == 1)
+        #expect(keepAlive["PathState"] as? [String: Bool] == ["@RVD_PATH@": true])
+        #expect(plist["RunAtLoad"] as? Bool == true)
+        #expect(plist["ThrottleInterval"] as? Int == 5)
+    }
+
+    /// The plist's Label and Mach service, the name rvd listens on, and the
+    /// label `isSupervised` trusts are one string.
+    @Test func labelMatchesMachServiceAndSupervisorCheck() throws {
+        let url = packageRoot()
+            .appendingPathComponent("Sources/RVCLI/Resources/launchd")
+            .appendingPathComponent("dev.rv.evaluate.plist")
+        let object = try PropertyListSerialization.propertyList(from: try Data(contentsOf: url), format: nil)
+        let plist = try #require(object as? [String: Any])
+        let label = try #require(plist["Label"] as? String)
+        #expect(label == RVService.machServiceName)
+        let mach = try #require(plist["MachServices"] as? [String: Any])
+        #expect(Array(mach.keys) == [RVService.machServiceName])
+        #expect(StartupBackoff.isSupervised(environment: ["XPC_SERVICE_NAME": label]))
+        #expect(StartupBackoff.isSupervised(environment: ["XPC_SERVICE_NAME": label + ".other"]) == false)
     }
 
     #if os(Linux)

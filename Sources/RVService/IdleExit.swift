@@ -2,8 +2,10 @@ import Synchronization
 
 /// Idle-exit policy for `rvd`.
 ///
-/// The daemon exits (launchd/systemd relaunch it on the next connect) only
-/// when all of these hold:
+/// rvd is resident by default: launchd (KeepAlive) and systemd
+/// (Restart=always) keep it running, so no idle timer is armed. An explicit
+/// `--idle-exit-seconds N` opts back in; the daemon then exits only when all
+/// of these hold:
 /// - no request is in flight (listeners bracket every request with
 ///   `beginRequest` / `endRequest`, synchronously, before any async hop);
 /// - the idle interval elapsed since the last request finished;
@@ -16,9 +18,11 @@ import Synchronization
 /// A replaced executable on disk overrides the idle rules: clients pin the
 /// on-disk binary's code identity, so a stale daemon can serve nobody. It is
 /// checked after each request and every `staleCheckInterval`; once seen, the
-/// daemon stops admitting work, drains what is in flight, then exits.
+/// daemon stops admitting work, drains what is in flight, then exits, and
+/// the supervisor relaunches the new binary. This holds with idle exit off.
 public final class IdleWatchdog: Sendable {
-    public static let defaultSeconds = 1800
+    /// 0: no idle exit (the default; the supervisor keeps rvd resident).
+    public static let defaultSeconds = 0
     /// How often an idle daemon checks whether its binary was replaced.
     public static let defaultStaleCheckInterval: Duration = .seconds(5)
 
@@ -28,6 +32,7 @@ public final class IdleWatchdog: Sendable {
     }
 
     private let state = Mutex(State())
+    /// `.zero`: idle exit off, the idle timer is never armed.
     private let interval: Duration
     private let staleCheckInterval: Duration
     private let hasLiveGrants: @Sendable () async -> Bool
@@ -111,6 +116,7 @@ public final class IdleWatchdog: Sendable {
     private func run(_ effect: IdleExitPolicy.Effect) {
         switch effect {
         case .armIdle(let generation):
+            guard interval > .zero else { return }
             scheduler.after(interval) { [self] in idleTimerFired(generation) }
         case .armStaleCheck:
             // A stat every few seconds; stops once the daemon is exiting or

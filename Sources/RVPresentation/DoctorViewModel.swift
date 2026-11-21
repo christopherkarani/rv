@@ -26,7 +26,7 @@ public enum DoctorConfigState: String, Equatable, Sendable {
     case unreadable
 }
 
-/// Registration state of the on-demand LaunchAgent.
+/// Registration state of the rvd LaunchAgent.
 public enum DoctorLaunchAgentState: String, Equatable, Sendable {
     case loaded
     case installed

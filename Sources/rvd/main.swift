@@ -45,7 +45,7 @@ enum RVD {
             Foundation.exit(2)
         } catch RVDLaunchError.homeRequired {
             try? FileHandle.standardError.write(contentsOf: Data(homeRequired.utf8))
-            Foundation.exit(1)
+            exitOnConfigurationError()
         } catch UnixSocketPathError.runtimeDirectoryMissing {
             #if os(Linux)
             let message = "rvd: XDG_RUNTIME_DIR is set but empty; unset it (rvd then uses /run/user/\(getuid())) "
@@ -55,7 +55,7 @@ enum RVD {
             let message = homeRequired
             #endif
             try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
-            Foundation.exit(1)
+            exitOnConfigurationError()
         } catch UnixSocketPathError.userRuntimeDirectoryUnavailable(let directory) {
             // No login manager made the runtime directory (containers, WSL,
             // logins without logind) and rvd could not make it either.
@@ -63,18 +63,29 @@ enum RVD {
                 + "or is not a directory only you can access (yours, mode 0700)\n"
                 + "rvd: fix: \(UnixSocketPath.userRuntimeDirectoryFix(directory: directory, uid: getuid()))\n"
             try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
-            Foundation.exit(1)
+            exitOnConfigurationError()
         } catch UnixSocketPathError.permission {
             let socket = (try? UnixSocketPath.production())?.path ?? "the socket path"
             let message = "rvd: refusing to listen at \(socket): the directories above it must be yours "
                 + "and not writable by group or others, and only a socket may sit at that path\n"
             try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
-            Foundation.exit(1)
+            exitOnConfigurationError()
         } catch {
             try? FileHandle.standardError.write(contentsOf:
                 Data(RVDLogFile.line("rvd: launch failed: \(RVDLogFile.describe(error))").utf8)
             )
             Foundation.exit(1)
         }
+    }
+
+    /// These errors fail the same way on every start until the owner fixes
+    /// the configuration. Under launchd or systemd, which relaunch rvd at
+    /// once, wait first so the loop runs once a minute, not every few
+    /// seconds. Run by hand, exit at once.
+    static func exitOnConfigurationError() -> Never {
+        if StartupBackoff.isSupervised(environment: ProcessInfo.processInfo.environment) {
+            Thread.sleep(forTimeInterval: Double(StartupBackoff.configErrorPause.components.seconds))
+        }
+        Foundation.exit(1)
     }
 }
