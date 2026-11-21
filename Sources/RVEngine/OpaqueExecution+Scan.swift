@@ -129,6 +129,9 @@ struct ScanState {
     private var lastCodeRead: String?
     /// Function and alias names the command defines.
     var definedNames: Set<String> = []
+    /// The line may set a shell startup file (`BASH_ENV`, `ENV`): every
+    /// shell it runs is opaque.
+    var setsShellStartup = false
 
     /// Records a fed text; false when it was recorded before.
     mutating func record(_ text: String) -> Bool {
@@ -282,6 +285,13 @@ extension OpaqueExecution {
                 flatten(String(argument.decoded[argument.decoded.index(after: equals)...]), into: &line, nesting: nesting + 1, state: &state)
             }
         }
+        if tokens.contains(where: { mentionsName($0.decoded, "BASH_ENV") || mentionsName($0.decoded, "ENV") })
+            || variableSetters.contains(name) && setsDynamicName(Array(tokens.dropFirst(index + 1)), printf: name == "printf")
+        {
+            // `BASH_ENV=/dev/stdin bash -c true`, `export ENV=…; sh -i`,
+            // `export "$(cat vars)"`: a shell reads that file first.
+            state.setsShellStartup = true
+        }
         if name == "hash", tokens.dropFirst(index + 1).contains(where: { $0.decoded == "-p" || $0.decoded.contains("=") }) {
             // `hash -p /usr/bin/base64 echo` makes `echo` run another program.
             line.opaque = true
@@ -291,6 +301,20 @@ extension OpaqueExecution {
         {
             // `exec < f`, `exec 0<&3`, `exec 0>&3`: later readers read that.
             line.stdinRedirected = true
+        }
+    }
+
+    private static let variableSetters: Set<String> = [
+        "export", "declare", "typeset", "local", "readonly", "read", "printf", "getopts",
+    ]
+
+    /// A setter argument whose variable name rv cannot read (`export
+    /// "$x=…"`, `read "$v"`, `printf -v "$v"`).
+    private static func setsDynamicName(_ arguments: [CommandToken], printf: Bool) -> Bool {
+        if printf, arguments.contains(where: { $0.decoded.hasPrefix("-v") }) == false { return false }
+        return arguments.contains { argument in
+            let name = argument.decoded.prefix { $0 != "=" }
+            return name.contains("$") || name.contains("`")
         }
     }
 

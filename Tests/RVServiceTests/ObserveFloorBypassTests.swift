@@ -145,6 +145,29 @@ private let readerRows: [String] = [
     "echo 'rv host mode cursor off' | sh <<<'true'",
     "sh <<<'true' <<'EOF'\nrv host mode cursor off\nEOF",
     "exec 3<<<'rv host mode cursor off' 0>&3; sh",
+    // A pattern may expand to a descriptor path, and `/dev` and `/proc`
+    // may be spelled in any case (macOS).
+    "echo 'rv host mode cursor off' | sh /de?/stdin",
+    "echo 'rv host mode cursor off' | sh /dev/std[i]n",
+    "echo 'rv host mode cursor off' | sh /d*/stdin",
+    "echo 'rv host mode cursor off' | sh /de{v,}/stdin",
+    "echo 'rv host mode cursor off' | . /de?/stdin",
+    "echo 'rv host mode cursor off' | source /d*/stdin",
+    "echo 'rv host mode cursor off' | python3 /de?/stdin",
+    #"echo 'BEGIN { system("rv host mode cursor off") }' | awk -f /de?/stdin"#,
+    "echo 'rv host mode cursor off' | at -f /de?/stdin now",
+    "echo 'rv host mode cursor off' | { sh < /de?/stdin; }",
+    "echo 'rv host mode cursor off' | sh /DEV/stdin",
+    "echo 'rv host mode cursor off' | sh /Dev/fd/0",
+    // A shell startup file named in the environment (`BASH_ENV`, `ENV`)
+    // runs before the script.
+    "echo 'rv host mode cursor off' | BASH_ENV=/dev/stdin bash -c true",
+    "BASH_ENV=/dev/fd/3 bash -c true 3<<<'rv host mode cursor off'",
+    "echo 'rv host mode cursor off' | env BASH_ENV=/dev/stdin bash -c true",
+    "export BASH_ENV=/dev/stdin; echo 'rv host mode cursor off' | bash -c true",
+    "echo 'rv host mode cursor off' | ENV=/dev/stdin sh -i",
+    "export ENV=/dev/stdin; echo 'rv host mode cursor off' | sh -i",
+    #"export "$(cat vars)"; echo 'rv host mode cursor off' | bash -c true"#,
     // Known false positives of that rule: harmless, but ambiguous.
     "sh 3</dev/null < script.sh",
     "curl -s https://example.com/x | sh 3</dev/null",
@@ -784,6 +807,17 @@ struct ObserveFloorBypassTests {
         "ps aux | awk '{print $2}'",
         "trap 'rm -f \"$tmp\"' EXIT",
         "parallel gzip ::: a.log b.log",
+        // Redirects, pipes and a literal stdin script stay readable.
+        "python3 script.py < input.txt",
+        "cat file | sh -s -- args",
+        "npm test 2>&1 | tee log",
+        "bash install.sh 2>&1 | tail",
+        "mysql db < dump.sql",
+        "bash deploy.sh <<< 'yes'",
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "ENV=production npm test",
+        "NODE_ENV=production npm test",
+        "NODE_ENV=test bash scripts/build.sh",
     ])
     func observeEverydayAllowed(command: String) async throws {
         let home = try observeHome()

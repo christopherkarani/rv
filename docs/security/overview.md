@@ -934,7 +934,7 @@ Line numbers are where the behaviour or the statement quoted is found.
 | C50 | Sources/RVService/JudgeGate.swift:412-423; Sources/RVService/JudgeGate.swift:584-585 |
 | C51 | Sources/RVService/GitRebaseProbe.swift:6-16 |
 | C52 | Sources/RVPolicy/RebaseRecovery.swift:20-30; Sources/RVPolicy/PolicyGate.swift:49-50 |
-| C53 | Sources/RVService/ObserveFloor.swift:5-26; Sources/RVService/ObserveFloor.swift:68-116; Sources/RVService/ObserveFloor.swift:122-132; Sources/RVService/ObserveFloor.swift:159-220; Sources/RVService/ObserveFloor.swift:237-280; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-30; Sources/RVEngine/OpaqueExecution+Programs.swift:219-315; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-80; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:710-719 |
+| C53 | Sources/RVService/ObserveFloor.swift:5-26; Sources/RVService/ObserveFloor.swift:68-116; Sources/RVService/ObserveFloor.swift:122-132; Sources/RVService/ObserveFloor.swift:159-220; Sources/RVService/ObserveFloor.swift:237-280; Sources/RVService/ObserveReadProof.swift:3-32; Sources/RVEngine/OpaqueExecution.swift:3-32; Sources/RVEngine/OpaqueExecution+Programs.swift:219-315; Sources/RVEngine/OpaqueExecution+Input.swift:4-16; Sources/RVEngine/OpaqueExecution+Scan.swift:3-80; Sources/RVEngine/OpaqueExecution+Lexer.swift:3-12; Sources/RVEngine/OpaqueExecution+Lexer.swift:77-82; Sources/RVService/GatedEvaluate.swift:710-719 |
 | C54 | Sources/RVEngine/FileToolEvaluate.swift:10-33 |
 | C55 | Sources/RVDomain/SecretPathCatalog.swift:93-127 |
 | C56 | Sources/RVHooks/ClaudeSearchTarget.swift:7-10 |

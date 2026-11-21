@@ -167,7 +167,8 @@ The README's "MCP governance" section lists every case.
     fd 0, and no other input redirect. A second source, a numbered,
     named or duplicated input redirect (`3<…`, `{fd}<…`, `0>&3`, `<&3`),
     or a script operand naming a descriptor (`/dev/stdin`, `/dev/fd/3`,
-    `/proc/self/fd/3`) makes it unreadable, so the reader goes to
+    `/proc/self/fd/3`, in any case, or a glob or brace pattern that may
+    expand to one) makes it unreadable, so the reader goes to
     Terminal. A script operand's stdin is read too when the reader
     redirects it. In a pipeline the producers are the
     stages before the reader; inside a compound command (`if`, `for`,
@@ -184,6 +185,9 @@ The README's "MCP governance" section lists every case.
   - a shell or interpreter running `<(…)` or zsh's `=(…)`, a dynamic
     here-string or heredoc, `source /dev/stdin` or a dynamic script
     operand (`bash "$SCRIPT"`);
+  - a shell on a line that names `BASH_ENV` or `ENV` (a startup file
+    the shell reads first), or that sets a variable whose name is
+    dynamic (`export "$(cat vars)"`);
   - a same-line definition that changes what a name runs: a function or
     alias named like a command the floor reads (`echo(){ …; }`, `alias
     cat=…`), a function whose body is not a group, `coproc`, `>&p`, and
@@ -304,7 +308,12 @@ The README's "MCP governance" section lists every case.
   harmless (`sh 3</dev/null < script.sh`, `echo ls | sh </dev/null`,
   `sh <<< ls <<< pwd`), as does a script operand that names a descriptor
   (`sh /dev/stdin <<< ls`, `awk -f -`), and a here-string handed to a
-  script (`python3 parse.py <<< 'rv …'`) is read like a program.
+  script (`python3 parse.py <<< 'rv …'`) is read like a program. A
+  script operand, `-f` file or input redirect whose name holds glob or
+  brace characters (`*`, `?`, `[`, `{`, `(`, `^`, `#`, a later `~`) goes to
+  Terminal even when it names a plain file, quoted or not (`sh
+  'build[1].sh'`), and so does a shell on a line that mentions `BASH_ENV`
+  or `ENV` for any reason (`ENV=prod bash deploy.sh`).
 - **On an observe host, reading rv's install is observed.** A command
   that names one of rv's hook, service or binary files and is proven to
   only read (`ls`, `stat`, `cat`, `head`, `tail`, `wc`, `codesign` display

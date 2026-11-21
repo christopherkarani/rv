@@ -4,8 +4,10 @@ import RVDomain
 /// occupy a command position, so the line may run any program at all.
 ///
 /// Floored: a dynamic command word (`$x`, `$(…)`, backticks, `<(…)`);
-/// `eval` of dynamic text; `source`/`.` of stdin, a descriptor or a
-/// process substitution; a shell or interpreter running a dynamic script
+/// `eval` of dynamic text; `source`/`.` of stdin, a descriptor (or a
+/// pattern that may expand to one) or a process substitution; a shell on
+/// a line that names `BASH_ENV` or `ENV`, or sets a variable whose name is
+/// dynamic; a shell or interpreter running a dynamic or descriptor script
 /// operand, a process substitution, a dynamic here-string or heredoc, or
 /// dynamic or encoded inline code; a shell or interpreter reading its
 /// program from stdin unless every producer is a literal `echo`/`printf`,
@@ -225,7 +227,8 @@ enum OpaqueExecution {
     }
 
     private static func shellRunsOpaque(_ rawArguments: [CommandToken], _ context: Context, state: inout ScanState) -> Bool {
-        if feedsOpaqueInput(rawArguments) { return true }
+        // A startup file the line may name (`BASH_ENV`, `ENV`) runs first.
+        if state.setsShellStartup || feedsOpaqueInput(rawArguments) { return true }
         let arguments = droppingRedirects(rawArguments)
         var index = 0
         var command = false
@@ -680,12 +683,40 @@ enum OpaqueExecution {
     }
 
     /// `/dev/stdin`, `/dev/fd/N`, `/proc/<pid>/fd/N` and the like, however
-    /// spelled (`//dev/./fd/3`, `/tmp/../dev/fd/3`): any path through
-    /// `/proc`, or through `/dev` and an `fd` or std stream name.
+    /// spelled (`//dev/./fd/3`, `/tmp/../dev/fd/3`, `/DEV/stdin`): any path
+    /// through `/proc`, or through `/dev` and an `fd` or std stream name,
+    /// in any case. A pattern the shell may expand (`/de?/stdin`) may name
+    /// one too.
     static func namesDescriptor(_ path: String) -> Bool {
-        let parts = Set(path.split(separator: "/").map(String.init))
+        if isPattern(path) { return true }
+        let parts = Set(path.lowercased().split(separator: "/").map(String.init))
         if parts.contains("proc") { return true }
         return parts.contains("dev") && parts.contains { ["fd", "stdin", "stdout", "stderr"].contains($0) }
+    }
+
+    /// A word the shell may expand to other paths: a glob (`*`, `?`,
+    /// `[…]`, ksh/zsh `@(…)`, `(a|b)`, `^`, `#`, a `~` past the first
+    /// character) or a brace expansion (`{a,b}`). Matched whether or not
+    /// the word was quoted.
+    static func isPattern(_ word: String) -> Bool {
+        word.contains { "*?[{(^#".contains($0) } || word.dropFirst().contains("~")
+    }
+
+    /// `name` as a whole word in `text` (`BASH_ENV=…`, `export ENV`,
+    /// `${ENV:=…}`), not part of a longer name (`NODE_ENV`).
+    static func mentionsName(_ text: String, _ name: String) -> Bool {
+        var rest = text[...]
+        while let range = rest.range(of: name) {
+            let before = range.lowerBound == text.startIndex ? nil : text[text.index(before: range.lowerBound)]
+            let after = range.upperBound == text.endIndex ? nil : text[range.upperBound]
+            if before.map(isNameCharacter) != true, after.map(isNameCharacter) != true { return true }
+            rest = text[range.upperBound...]
+        }
+        return false
+    }
+
+    private static func isNameCharacter(_ character: Character) -> Bool {
+        character.isASCII && (character.isLetter || character.isNumber || character == "_")
     }
 
     static func isAssignment(_ word: String) -> Bool {
