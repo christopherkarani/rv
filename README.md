@@ -199,6 +199,8 @@ quietly allowed. The block message says which of these it was:
 | `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
 | `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
 | `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
+| `rv degraded: judge late` | the judge did not answer this command in time | Retry; if it keeps happening, `rv doctor` |
+| `rv degraded: judge unavailable (circuit open, retrying in Ns)` | the judge failed several times in a row, so rv skips it for a minute and sends what it would have scored to review | Retry after N seconds; `rv doctor` shows the circuit |
 | `Laya judge unavailable; failing closed` | the judge couldn't score this command | `rv doctor` |
 
 Run these from your own terminal, not through the agent:
