@@ -682,7 +682,7 @@ enum HelpCatalog {
                     description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
                 ),
                 HelpRow(
-                    name: "allow",
+                    name: "allow rules",
                     description: "Without rules any method and path is allowed; outside them 403, ambiguous paths 400"
                 ),
                 HelpRow(
@@ -744,7 +744,7 @@ enum HelpCatalog {
                     description: "scan and hook match resolved values plus built-in token patterns (AWS, GitHub, Slack, Stripe, OpenAI, Anthropic, Google, keys, JWT)"
                 ),
                 HelpRow(
-                    name: "allow",
+                    name: "scan ignores",
                     description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
                 ),
                 HelpRow(

@@ -55,12 +55,16 @@ $ rv test 'git status'
 
 ```sh
 curl -fsSL https://rykanv.com/install | sh
-rv setup    # auto-detects your agents and wires their hooks
-rv doctor   # verify everything is live
+rv setup --dry-run   # optional: see which hooks setup would write
+rv setup             # auto-detects your agents and wires their hooks
+rv doctor            # verify everything is live
 ```
 
 Want to watch before you enforce? Install in observe mode: rv logs what it
-would block and lets everything run.
+would block and lets those commands run. Two checks still stop a command in
+observe mode: rv's own protection (an agent cannot change, stop or approve
+through rv), and commands whose real program rv cannot see, which go to your
+Terminal instead.
 
 ```sh
 curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
