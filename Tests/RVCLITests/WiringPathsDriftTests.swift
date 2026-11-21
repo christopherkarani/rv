@@ -32,6 +32,7 @@ struct WiringPathsDriftTests {
             layout.localRv, layout.localRvCli, layout.localRvd,
             ClaudeSettingsMerge.adapterPath(settingsPath: layout.claudeSettings),
             layout.claudeAgentSkill, layout.codexAgentSkill, layout.openCodeAgentSkill,
+            layout.rvdStateMarker,
         ]
         paths += HookHost.setupSlotOrder.compactMap(layout.agentSkill(for:))
         // rvd's startup backoff record and its mkstemp temp files, on both
