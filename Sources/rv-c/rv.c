@@ -72,7 +72,7 @@ extern char **environ;
 #define RV_STDIN_KEY "rv.stdin"
 #define RV_CLIENT_SEMVER "1.0.0"
 #define RV_STDIN_XPC_MAX 1048576
-/* Hello covers a launchd on-demand spawn of rvd; hookEvaluate covers a
+/* Hello covers launchd (re)starting rvd; hookEvaluate covers a
  * cold judge load (the daemon enforces its own shorter deadline). */
 #define RV_HELLO_TIMEOUT_MS 3000
 #define RV_EVALUATE_TIMEOUT_MS 8000
@@ -635,7 +635,7 @@ static xpc_object_t xpc_exchange(
     }
     if (xpc_get_type(reply) == XPC_TYPE_ERROR) {
         /* Not registered / launchd refused (INVALID) or rvd exited
-         * mid-exchange (INTERRUPTED, e.g. an idle-exit race). */
+         * mid-exchange (INTERRUPTED, e.g. a crash or a replaced binary). */
         *retryable = reply == XPC_ERROR_CONNECTION_INVALID
             || reply == XPC_ERROR_CONNECTION_INTERRUPTED;
         if (discovery && reply == XPC_ERROR_CONNECTION_INVALID) {
@@ -1095,7 +1095,7 @@ static int unix_hook_evaluate(
 #endif
 
 /* One retry, only for transient failures before the hookEvaluate request
- * left this process (cold launchd spawn, idle-exit race). A daemon that
+ * left this process (launchd (re)starting rvd, an exit race). A daemon that
  * answered the first attempt in any way (untrusted, interrupted, slow) was
  * live, so a retry that then finds none is not proof of absence: the first
  * such failure is reported instead of UNREACHABLE. */

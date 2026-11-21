@@ -200,22 +200,6 @@ extension SetupRun {
         return true
     }
 
-    /// Companion uninstall entry. AC-013: the companion app's uninstaller calls this
-    /// library entry to clear KeepAlive in-place without removing CLI/rvd. Not wired
-    /// to `rv uninstall` (which removes owned files) to avoid accidental user use.
-    /// Probe is performed by the caller via `env.companionPresence`; this helper
-    /// just enforces the post-uninstall invariant (KeepAlive == false) when a
-    /// plist already exists. Linux is a no-op (the systemd unit is static).
-    static func restoreKeepAliveAfterCompanionUninstall(
-        _ env: SetupEnvironment
-    ) throws(SetupError) {
-        guard env.supervisor == .launchd else { return }
-        let files = FileOps(fileManager: env.fileManager)
-        let layout = OwnedPaths(home: env.home)
-        guard files.fileExists(layout.launchAgent) else { return }
-        try writeLaunchAgent(env: env, layout: layout, files: files, keepAlive: false)
-    }
-
     /// Strips the rv-owned `managed_hooks_path` key only when it points at our
     /// hooks file. Foreign keys, malformed bytes, and symlinks are left
     /// untouched; `settings.json` itself is never removed. Returns whether

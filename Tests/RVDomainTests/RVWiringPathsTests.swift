@@ -54,6 +54,12 @@ struct RVWiringPathsTests {
         "/Users/me/.config/systemd/user/dev.rv.evaluate.service",
         "/Users/me/.config/systemd/user/dev.rv.evaluate.service.d/override.conf",
         "/Users/me/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian",
+        // rvd's startup backoff record and its temp files (macOS, Linux).
+        "/Users/me/Library/Logs/rv/rvd-backoff",
+        "/Users/me/Library/Logs/rv/rvd-backoff/rvd-starts.json",
+        "/Users/me/Library/Logs/rv/rvd-backoff/rvd-starts.json.Ab12Cd.tmp",
+        "/Users/me/.local/state/rv/rvd-backoff/rvd-starts.json",
+        "/Users/me/.local/state/rv/rvd-backoff/rvd-starts.json.Ab12Cd.tmp",
         // The rvd state marker: forging it re-opens the observe step-aside.
         "/Users/me/.config/rv/rvd-state",
         "~/.config/rv/rvd-state",
@@ -89,6 +95,9 @@ struct RVWiringPathsTests {
         "/Users/other/.claude/settings.json",
         "/tmp/.claude/settings.json",
         "relative/.claude/settings.json",
+        // rvd's log itself stays writable; only the backoff directory is wiring.
+        "/Users/me/Library/Logs/rv/rvd.log",
+        "/Users/me/.local/state/rv/rvd.log",
     ])
     func notWiring(path: String) {
         #expect(RVWiringPaths.matches(path, home: Self.home) == false, "\(path)")
@@ -112,6 +121,8 @@ struct RVWiringPathsTests {
         "/Users/me/.codex", "/Users/me/.gemini/config", "/Users/me/Applications",
         "/Users/me/.claude/skills", "/Users/me/.agents", "/Users/me/.agents/skills",
         "/Users/me/.config/opencode/skills",
+        // Hold rvd-backoff/: moving them would move the backoff record.
+        "/Users/me/Library/Logs", "/Users/me/Library/Logs/rv", "/Users/me/.local/state", "/Users/me/.local/state/rv",
         "/Users/me/.config/rv",
     ])
     func ancestors(path: String) {

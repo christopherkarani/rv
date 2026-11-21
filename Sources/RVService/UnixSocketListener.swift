@@ -139,6 +139,8 @@ public final class UnixSocketListener: Sendable {
         /// socket file only then: a never-started listener must not remove a
         /// path it does not own.
         var ownsSocket: Bool = false
+        /// True once `startAccepting` resumed the accept source.
+        var accepting: Bool = false
     }
 
     /// Dispatch sources are thread-safe handles. Only the listener touches
@@ -171,7 +173,18 @@ public final class UnixSocketListener: Sendable {
         self.afterAccept = afterAccept
     }
 
+    /// `bind` then `startAccepting`.
     public func start() throws {
+        try bind()
+        startAccepting()
+    }
+
+    /// Binds and listens without accepting. rvd does this before its
+    /// startup backoff wait: a client meanwhile connects into the backlog
+    /// and waits for a reply, which hooks read as a slow rvd (TIMEOUT,
+    /// ask/deny), never as an absent one (ENOENT/ECONNREFUSED, the only
+    /// failure observe mode steps aside for).
+    public func bind() throws {
         let already = state.withLock { $0.source != nil }
         guard already == false else { throw DarwinFrameError.alreadyStarted }
         try UnixSocketPath.prepareRuntime(for: socketURL)
@@ -208,19 +221,59 @@ public final class UnixSocketListener: Sendable {
             $0.source = ReadSource(source: source)
             $0.ownsSocket = true
         }
-        source.resume()
+    }
+
+    /// Starts serving the connections `bind` queued and every later one.
+    /// No-op before `bind` or after the first call.
+    public func startAccepting() {
+        let source = state.withLock { state -> ReadSource? in
+            guard state.accepting == false, let source = state.source else { return nil }
+            state.accepting = true
+            return source
+        }
+        source?.source.resume()
+    }
+
+    /// Accepts and closes every connection that queued while bound but not
+    /// accepting (rvd's backoff wait). Those hooks have likely given up;
+    /// one still waiting reads EOF or a reset, which hooks treat as a
+    /// connection failure (ask/deny), never as an absent rvd. A request
+    /// nobody waits for is never evaluated. No-op once accepting. Bounded,
+    /// so a stream of new clients cannot hold rvd here.
+    public func dropQueued() {
+        let fd = state.withLock { $0.accepting ? -1 : $0.listenFD }
+        guard fd >= 0 else { return }
+        let flags = Darwin.fcntl(fd, F_GETFL)
+        guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return }
+        defer { _ = Darwin.fcntl(fd, F_SETFL, flags) }
+        var dropped = 0
+        while dropped < 64 {
+            let client = Darwin.accept(fd, nil, nil)
+            if client >= 0 {
+                Darwin.close(client)
+                dropped += 1
+            } else if errno != EINTR {
+                return
+            }
+        }
     }
 
     public func stop() {
-        let held = state.withLock { state -> (ReadSource?, Bool) in
+        let held = state.withLock { state -> (ReadSource?, Bool, Bool) in
             let current = state.source
             let owned = state.ownsSocket
+            let accepting = state.accepting
             state.source = nil
             state.listenFD = -1
             state.ownsSocket = false
-            return (current, owned)
+            state.accepting = false
+            return (current, owned, accepting)
         }
         held.0?.source.cancel()
+        // A source created by `bind` stays suspended until `startAccepting`;
+        // resuming it after cancel runs the cancel handler (which closes the
+        // descriptor) and never delivers an accept.
+        if held.2 == false { held.0?.source.resume() }
         guard held.1 else { return }
         UnixSocketPath.removeSocketFileIfSocket(at: socketURL)
     }

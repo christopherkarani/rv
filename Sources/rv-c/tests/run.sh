@@ -305,6 +305,7 @@ REASON_OVERSIZE="RV could not read this hook request"
 REASON_UNREACHABLE='RV daemon is not reachable'
 REASON_CONNECTION='RV daemon connection failed'
 REASON_REJECTED='RV daemon identity check failed'
+REASON_TIMEOUT='RV daemon did not answer in time'
 REASON_STOPPED='rvd was stopped or crashed after it last ran'
 
 # Every host denies malformed input directly; an executable CLI sibling must
@@ -610,6 +611,26 @@ if [[ "$down_ready" -eq 1 ]]; then
     DOWN_ENV=(XDG_RUNTIME_DIR="$OUT/foreign-runtime")
     expect_down stale-foreign claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
     rm -f "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/foreign-runtime/rv/evaluate.sock"
+
+    # rvd in its startup backoff wait: bound and listening, not accepting.
+    # connect succeeds into the backlog, the peer check passes, the reply
+    # times out: TIMEOUT (ask), never UNREACHABLE, so observe (configured
+    # here) must not step aside.
+    "$PROBE/rvd" hold "$OWNER_RUNTIME/rv/evaluate.sock" 20 &
+    hold_pid=$!
+    for _try in $(seq 1 50); do
+      [[ -S "$OWNER_RUNTIME/rv/evaluate.sock" ]] && break
+      sleep 0.1
+    done
+    DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
+    expect_down backoff-hold claude "" 0 '"permissionDecision":"ask"' "$REASON_TIMEOUT"
+    if grep -q 'observe' "$OUT/down-backoff-hold.err"; then
+      printf 'rv-c tests: a bound but not yet accepting rvd must not take the observe path\n' >&2
+      exit 1
+    fi
+    kill "$hold_pid" 2>/dev/null || true
+    wait "$hold_pid" 2>/dev/null || true
+    rm -f "$OWNER_RUNTIME/rv/evaluate.sock"
 
     # Post-send drop: a verified daemon reads the whole request and closes
     # without replying (rvd drains in-flight requests on shutdown, which an

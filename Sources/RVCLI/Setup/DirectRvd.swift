@@ -120,8 +120,14 @@ struct ProcessDirectRvd: DirectRvdLaunching {
         "SWIFT_BACKTRACE",
     ]
 
+    /// Set by launchd (`XPC_SERVICE_NAME`) and systemd (`INVOCATION_ID`)
+    /// for the processes they start. A terminal systemd launched passes
+    /// them on, and rvd would then take itself for supervised.
+    static let supervisorVariables: Set<String> = ["INVOCATION_ID", "XPC_SERVICE_NAME"]
+
     /// The environment the detached rvd starts with: the caller's, minus
-    /// `loaderVariables`. `rv service start|restart` is an ordinary command
+    /// `loaderVariables` and `supervisorVariables` (nothing supervises
+    /// this rvd, so it must not wait out a startup backoff). `rv service start|restart` is an ordinary command
     /// an agent may run, and a systemd user manager or launchd would never
     /// hand rvd the caller's environment: `LD_PRELOAD=x.so rv service
     /// restart` must not run agent code inside the rvd it starts.
@@ -129,6 +135,7 @@ struct ProcessDirectRvd: DirectRvdLaunching {
         entries.filter { entry in
             let name = entry.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
             return name.hasPrefix("LD_") == false && loaderVariables.contains(name) == false
+                && supervisorVariables.contains(name) == false
         }
     }
 

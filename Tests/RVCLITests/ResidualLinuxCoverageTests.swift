@@ -116,41 +116,6 @@ struct ResidualLinuxCoverageTests {
         }
     }
 
-    @Test func companionPresence_linuxFilesystemProbe() throws {
-        #expect(CompanionPresence.installed.keepAlive)
-        #expect(CompanionPresence.absent.keepAlive == false)
-        #expect(FixedCompanionPresence(value: .absent).presence() == .absent)
-        let home = try isolatedHome()
-        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
-        let applications = homeURL.appendingPathComponent("Applications", isDirectory: true)
-        try FileManager.default.createDirectory(at: applications, withIntermediateDirectories: true)
-        let fromHome = FilesystemCompanionPresence(home: home.rawValue)
-        #expect(fromHome.searchRoots.map(\.path) == ["/Applications", applications.path])
-        // Probe only the isolated root: `/Applications` is machine state.
-        #expect(FilesystemCompanionPresence(searchRoots: [applications]).presence() == .absent)
-        #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.app"))
-        #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.") == false)
-        #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.evaluate") == false)
-        #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.evaluate.foo") == false)
-        #expect(FilesystemCompanionPresence.isCompanionBundleId("com.example.rv") == false)
-
-        try plantCompanionApp(inApplicationsRoot: applications, bundleId: "dev.rv.app")
-        let installed = FilesystemCompanionPresence(searchRoots: [applications])
-        #expect(installed.presence() == .installed)
-
-        try FileManager.default.removeItem(at: applications.appendingPathComponent("rv.app"))
-        try plantCompanionApp(inApplicationsRoot: applications, bundleId: "dev.rv.evaluate")
-        #expect(FilesystemCompanionPresence(searchRoots: [applications]).presence() == .absent)
-
-        try FileManager.default.removeItem(at: applications.appendingPathComponent("rv.app"))
-        try "not a bundle".write(
-            to: applications.appendingPathComponent("rv.app"),
-            atomically: true,
-            encoding: .utf8
-        )
-        #expect(FilesystemCompanionPresence(searchRoots: [applications]).presence() == .absent)
-    }
-
     @Test func helloAckView_andDefaultTransportSendTimeout() async throws {
         let ack = HelloAck(status: .ok)
         let view = HelloAckView(ack)

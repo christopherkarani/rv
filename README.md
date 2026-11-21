@@ -130,8 +130,8 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   `config.json` only turns Claude Code's prompt into a block and does not
   stop the observe step-aside. "Absent" is
   platform-specific: on **macOS**, rv's launchd service is not registered
-  (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
-  is *not* absent; on **Linux**, the connect to
+  (discovery XPC returns INVALID) — the job stays registered while launchd
+  restarts `rvd`, so a restarting `rvd` is *not* absent; on **Linux**, the connect to
   `/run/user/<uid>/rv/evaluate.sock` fails with `ENOENT`/`ECONNREFUSED` and
   `XDG_RUNTIME_DIR` is unset or equals `/run/user/<uid>`. An organization gate pins enforce, and `rv setup
   --observe` refuses under one. A host set `off` before an organization
@@ -517,6 +517,18 @@ rv is one binary, 25 commands. The rest of the surface:
   rather than downgrade. This is a hardening layer, not a finished
   isolation boundary — see the
   [acceptance audit](docs/security/runtime-acceptance.md).
+
+## Fleet console
+
+[`dashboard/`](dashboard/README.md) is rv Console, a self-hosted web
+dashboard for teams. Machines push to it with `rv audit forward`, either
+configured per machine or fleet-wide through `audit.forward` in the
+organization policy, and post their posture with `rv report --json`. It
+shows blocks, observe-mode would-be blocks, overrides, MCP and secret
+activity, and compliance across the fleet. It also verifies each machine's
+audit hash chain off the machine, signs people in with OpenID Connect
+single sign-on, and sends alerts to Slack or signed webhooks. To try it:
+`cd dashboard && npm ci && RV_CONSOLE_DEMO=1 npm run dev`.
 
 ## Platform support
 

@@ -59,6 +59,11 @@ public enum RVWiringPaths {
         [".config", "systemd", "user.conf"],
         [".config", "systemd", "user.conf.d"],
         [".config", "systemd", "user", "service.d"],
+        // rvd's startup backoff record (`StartupBackoffStore`) and its
+        // temp files, beside rvd's log on macOS and Linux: a planted record
+        // holds a supervised rvd in its wait for up to five minutes.
+        ["Library", "Logs", "rv", "rvd-backoff"],
+        [".local", "state", "rv", "rvd-backoff"],
         // The rvd state marker: rewriting or deleting it turns a stopped
         // rvd back into "never ran" or "restarting", which re-opens the
         // observe-mode step-aside (`RVDStateMarker`).
