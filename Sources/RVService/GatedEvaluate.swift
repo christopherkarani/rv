@@ -779,18 +779,6 @@ public struct GatedEvaluate: Sendable {
             if screened.scriptDenied {
                 return .enforced(screened.result)
             }
-            if inputs.judge.shadow {
-                // Shadow judge: scored and logged as a would-be, never
-                // decides; the packs' and script check's verdict stands.
-                let shadowed = JudgeRuntime.observe(
-                    wouldBe: screened.result, command: request.command,
-                    inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                    cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
-                    lateLog: Self.lateJudgeLog(home: home)
-                )
-                effects.append(.judgeLog(shadowed.log))
-                return .enforced(screened.result)
-            }
             let judged = JudgeRuntime.apply(
                 to: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
