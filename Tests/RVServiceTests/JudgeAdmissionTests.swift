@@ -211,6 +211,24 @@ struct JudgeAdmissionTests {
         #expect(admission.admitted == 0)
     }
 
+    /// Up to `liveLimit - 1` judge callers sit blocked on Dispatch threads
+    /// waiting for the model (`JudgeOffload`). A concurrent Dispatch queue
+    /// draws on that same bounded pool (it is not overcommit on Linux), so a
+    /// prediction queued there could not start until the pool grew, and a
+    /// healthy judge answered `late`, a circuit failure. The prediction gets
+    /// a thread of its own.
+    @Test func aPredictionStartsWhileBlockedCallersFillTheDispatchPool() {
+        let admission = JudgeAdmission(limit: 4)
+        let unblock = DispatchSemaphore(value: 0)
+        let blockers = ProcessInfo.processInfo.activeProcessorCount * 8
+        let pool = DispatchQueue(label: "test.blocked-callers", qos: .userInitiated, attributes: .concurrent)
+        for _ in 0..<blockers { pool.async { unblock.wait() } }
+        defer { for _ in 0..<blockers { unblock.signal() } }
+        Thread.sleep(forTimeInterval: 0.2)
+        let answered = admission.run(until: ContinuousClock.now.advanced(by: HookDeadline.budget)) { 7 }
+        #expect(answered.answer == 7)
+    }
+
     /// A prediction cannot be cancelled: its caller stops waiting before its
     /// deadline (`late`), the prediction reports itself when it returns, and
     /// a request turned away behind the abandoned prediction is `late` too.

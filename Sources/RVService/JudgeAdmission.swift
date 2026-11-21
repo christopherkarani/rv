@@ -1,4 +1,5 @@
 import Dispatch
+import Foundation
 import Synchronization
 
 /// Bounds the queue in front of the judge model, which answers one request
@@ -98,8 +99,20 @@ final class JudgeAdmission: Sendable {
     private let stallAge: Duration
     private let state = Mutex(State())
     private let model = DispatchSemaphore(value: 1)
-    private static let inference = DispatchQueue(
-        label: "rv.judge.inference", qos: .userInitiated, attributes: .concurrent)
+
+    /// Starts a prediction that holds the model on a thread of its own.
+    /// Not a concurrent Dispatch queue: that draws on the same bounded
+    /// worker pool (it is not overcommit on Linux) as `JudgeOffload`, where
+    /// up to `liveLimit - 1` callers sit blocked waiting for this very
+    /// model. With the pool full the prediction could not start until it
+    /// grew, and a healthy judge answered `late`. One thread per prediction
+    /// is cheap: the model runs one at a time.
+    private static func startInference(_ work: @escaping @Sendable () -> Void) {
+        let thread = Thread(block: work)
+        thread.name = "rv.judge.inference"
+        thread.qualityOfService = .userInitiated
+        thread.start()
+    }
 
     /// `stallAge` is a test seam; production uses `JudgeAdmission.stallAge`.
     init(limit: Int, stallAge: Duration = JudgeAdmission.stallAge) {
@@ -156,7 +169,7 @@ final class JudgeAdmission: Sendable {
             return .answered(body())
         }
         let delivery = Delivery<T>()
-        Self.inference.async { [self] in
+        Self.startInference { [self] in
             let value = body()
             let ran = ContinuousClock.now - began
             release(token)
