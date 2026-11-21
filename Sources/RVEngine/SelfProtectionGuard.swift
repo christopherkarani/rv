@@ -15,17 +15,53 @@ import RVDomain
 /// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
+///
+/// rv may also run where the launcher parser cannot follow
+/// (`SelfProtectionScripts`): an interpreter or shell runner's script
+/// (`perl -e`, `su -c`, `ssh host cmd`), `find -exec`, and a program a
+/// shell or interpreter reads from stdin (`echo … | sh`, `sh <<< …`).
 public enum SelfProtectionGuard {
     public static func weakensPolicy(_ command: ShellCommand) -> Bool {
-        launchedCommandHeads(command.rawValue).contains { launchWeakens($0, xargsDepth: 0) }
+        let launched = followingFindExec(launchedCommandHeads(command.rawValue))
+        if launched.contains(where: { launchWeakens($0, xargsDepth: 0) }) { return true }
+        // A program read from stdin, or a script that runs its input or
+        // names rv, takes words from elsewhere on the line (a producer,
+        // here-string, heredoc, assignment): the whole line is scanned.
+        let readsElsewhere = startsShellOnStdin(command.rawValue)
+            || launched.contains(where: { readsProgramFromStdin($0) || scriptReachesPastItself($0) })
+        return readsElsewhere && carriesWeakeningRV(command.rawValue)
     }
 }
 
 private func launchWeakens(_ launched: LaunchedCommand, xargsDepth: Int) -> Bool {
     // Truncated input cannot be followed: unknown, so flagged. A dynamic
-    // or glob head may resolve to rv: judged as rv (fail closed).
+    // or glob head may resolve to rv: judged as rv (fail closed). A script
+    // is judged as opaque text (`SelfProtectionScripts`). At the top level
+    // `followingFindExec` has re-fed every `find -exec` command; one an
+    // xargs runs is checked here (`findUnderXargsWeakens`).
     launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
         || xargsFeedsWeakeningInvocation(launched, depth: xargsDepth)
+        || opaqueScriptText(launched).map(carriesWeakeningRV) == true
+        || (xargsDepth > 0 && findUnderXargsWeakens(launched, depth: xargsDepth))
+}
+
+/// A `find -exec` command an xargs runs (`xargs find . -exec rv`, with
+/// `uninstall ;` on stdin): each clause is re-fed through the resolver and
+/// judged like a launched command, a dynamic head and an unmodelled verb
+/// included, and like an xargs program (stdin pasted into a script, a head
+/// stdin chose, a dynamic head that may be xargs). A clause that runs
+/// another find is not followed further: it is refused (fail closed, and
+/// bounded); another xargs is followed up to `maxXargsDepth`.
+private func findUnderXargsWeakens(_ launched: LaunchedCommand, depth: Int) -> Bool {
+    findExecCommands(launched.guardArgv).contains { clause in
+        scriptTakesStdin(clause) || launchedCommandHeads(argv: clause, depth: depth + 1).contains { fed in
+            fed.truncated || fed.head.contains(xargsStdinWord)
+                || isWeakeningInvocation(fed.guardArgv, headMayBeRV: fed.headIsDynamic)
+                || opaqueScriptText(fed).map(carriesWeakeningRV) == true
+                || findExecCommands(fed.guardArgv).isEmpty == false
+                || xargsFeedsWeakeningInvocation(fed, depth: depth + 1)
+        }
+    }
 }
 
 /// Stands in for the words `xargs` appends from stdin, and for each
@@ -286,9 +322,9 @@ private func parseXargsOptions(_ words: [String]) -> ParsedXargs? {
 
 /// `rv` is the C front door; it execs the installed `rv-cli` sibling with the
 /// same argv, so invoking `rv-cli` directly is the same Swift CLI.
-private let rvProgramNames: Set<String> = ["rv", "rv-cli"]
+let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
-private let subcommandVerbs: Set<String> = [
+let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
     "workspace",
 ]
