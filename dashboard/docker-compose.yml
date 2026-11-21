@@ -1,0 +1,24 @@
+# Local or single-host install. Put TLS in front (a reverse proxy or load
+# balancer): rv refuses plain-http forwarding to anything but localhost.
+services:
+  console:
+    build: .
+    image: rv-console
+    ports: ["3000:3000"]
+    environment:
+      RV_CONSOLE_SECRET: ${RV_CONSOLE_SECRET:?set RV_CONSOLE_SECRET (openssl rand -base64 48)}
+      RV_CONSOLE_PUBLIC_URL: ${RV_CONSOLE_PUBLIC_URL:-}
+      RV_CONSOLE_RETENTION_DAYS: ${RV_CONSOLE_RETENTION_DAYS:-90}
+      RV_CONSOLE_DEMO: ${RV_CONSOLE_DEMO:-0}
+      RV_CONSOLE_OIDC_ISSUER: ${RV_CONSOLE_OIDC_ISSUER:-}
+      RV_CONSOLE_OIDC_CLIENT_ID: ${RV_CONSOLE_OIDC_CLIENT_ID:-}
+      RV_CONSOLE_OIDC_CLIENT_SECRET: ${RV_CONSOLE_OIDC_CLIENT_SECRET:-}
+      RV_CONSOLE_OIDC_NAME: ${RV_CONSOLE_OIDC_NAME:-SSO}
+      RV_CONSOLE_OIDC_ALLOWED_DOMAINS: ${RV_CONSOLE_OIDC_ALLOWED_DOMAINS:-}
+      RV_CONSOLE_OIDC_ADMIN_GROUPS: ${RV_CONSOLE_OIDC_ADMIN_GROUPS:-}
+      RV_CONSOLE_OIDC_VIEWER_GROUPS: ${RV_CONSOLE_OIDC_VIEWER_GROUPS:-}
+      RV_CONSOLE_SSO_ENFORCE: ${RV_CONSOLE_SSO_ENFORCE:-0}
+    volumes: ["console-data:/data"]
+    restart: unless-stopped
+volumes:
+  console-data:
