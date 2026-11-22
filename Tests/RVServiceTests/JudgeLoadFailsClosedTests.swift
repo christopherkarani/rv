@@ -7,6 +7,7 @@ import Foundation
 import Testing
 @testable import RVService
 import RVDomain
+import RVJudgePool
 import RVLaya
 
 /// `.unavailable` is the packs-only floor (an allow without a judge). It may
@@ -32,7 +33,11 @@ struct JudgeLoadFailsClosedTests {
                 continue
             }
             #expect(why.contains("review"), "\(why)")
+            // Agent-visible: no repair for the agent to attempt itself.
             #expect(!why.contains("install script"), "\(why)")
+            #expect(!why.contains("to see the repair"), "\(why)")
+            #expect(!why.contains("chmod"), "\(why)")
+            #expect(why.contains("Ask the owner to run `rv doctor`"), "\(why)")
         }
         guard case .refused(let bad) = JudgeRuntime.loadFailureRun(LayaError.badBundle("config.json unreadable")) else {
             Issue.record("badBundle must refuse")
@@ -40,7 +45,7 @@ struct JudgeLoadFailsClosedTests {
         }
         #expect(bad.contains("config.json unreadable"))
         #expect(bad.contains("rv doctor"))
-        guard case .unavailable = JudgeRuntime.loadFailureRun(LayaError.bundleMissing("no model")) else {
+        guard case .unavailable = JudgeRuntime.loadFailureRun(LayaError.bundleMissing("no bundle")) else {
             Issue.record("bundleMissing is genuine absence: packs-only")
             return
         }
@@ -92,17 +97,44 @@ struct JudgeLoadFailsClosedTests {
         }
     }
 
-    @Test("genuine absence stays unselected: no model, or model without any tokenizer")
-    func genuineAbsenceIsNotSelected() throws {
-        try Self.withHome { home, _ in
-            let dir = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
+    /// Only a bundle dir that is itself absent (ENOENT) is unselected. One
+    /// that is there in any form (empty, model without tokenizer, a symlink
+    /// to nowhere) is a broken install: selected, so its load refuses.
+    @Test(arguments: [JudgeEngine.ft, .laya])
+    func onlyAnAbsentBundleDirIsNotSelected(engine: JudgeEngine) throws {
+        try Self.withHome { home, models in
+            let dir = try #require(JudgeRuntime.expectedBundleDir(engine: engine, home: home))
+            let probe = { engine == .ft ? JudgeRuntime.ftBundleDir(home: home) : JudgeRuntime.bundleDir(home: home) }
+            #expect(probe() == nil)
+            try FileManager.default.createSymbolicLink(
+                at: dir, withDestinationURL: models.appendingPathComponent("nowhere"))
+            #expect(probe() == dir, "a dangling symlink bundle dir is not absence")
+            try FileManager.default.removeItem(at: dir)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            #expect(JudgeRuntime.ftBundleDir(home: home) == nil)
+            #expect(probe() == dir, "an empty bundle dir is not absence")
             try FileManager.default.createDirectory(
                 at: dir.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
-            #expect(JudgeRuntime.ftBundleDir(home: home) == nil)
-            try Data("{}".utf8).write(to: dir.appendingPathComponent("tokenizer.json"))
-            #expect(JudgeRuntime.ftBundleDir(home: home) == dir)
+            #expect(probe() == dir, "a model without a tokenizer is not absence")
+        }
+    }
+
+    /// A broken FT install refuses; it never falls back to the stock
+    /// bundle (which would hand the decision to a different judge).
+    @Test("a broken FT dir is selected over an installed stock bundle")
+    func brokenFTDoesNotFallBackToStock() throws {
+        try Self.withHome { home, _ in
+            let ft = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
+            let stock = try #require(JudgeRuntime.expectedBundleDir(engine: .laya, home: home))
+            try FileManager.default.createDirectory(
+                at: stock.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: stock.appendingPathComponent("tokenizer"), withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: stock.appendingPathComponent("tokenizer/tokenizer.json"))
+            #expect(JudgeRuntime.selection(home: home, config: GuardConfig()).engine == .laya)
+            try FileManager.default.createDirectory(at: ft, withIntermediateDirectories: true)
+            let selected = JudgeRuntime.selection(home: home, config: GuardConfig())
+            #expect(selected.engine == .ft)
+            #expect(selected.bundle == ft)
         }
     }
 
@@ -160,6 +192,72 @@ struct JudgeLoadFailsClosedTests {
         }
     }
 
+    /// A bundle dir that is there but partly broken refuses on both engines:
+    /// model present and tokenizer missing, tokenizer present and model
+    /// missing, or a bundle dir that is a symlink to nowhere.
+    @Test(arguments: [JudgeEngine.ft, .laya])
+    func partlyBrokenBundleRefuses(engine: JudgeEngine) throws {
+        let tokenizer = engine == .laya ? "tokenizer/tokenizer.json" : "tokenizer.json"
+        let cases: [(String, (URL, URL) throws -> URL)] = [
+            ("tokenizer missing", { _, bundle in
+                try FileManager.default.removeItem(at: bundle.appendingPathComponent(tokenizer))
+                return bundle
+            }),
+            ("model missing", { _, bundle in
+                try FileManager.default.removeItem(at: bundle.appendingPathComponent("model.mlpackage"))
+                return bundle
+            }),
+            ("dangling symlink", { base, _ in
+                let link = base.appendingPathComponent("linked", isDirectory: true)
+                try FileManager.default.createSymbolicLink(
+                    at: link, withDestinationURL: base.appendingPathComponent("nowhere"))
+                return link
+            }),
+        ]
+        for (name, breakIt) in cases {
+            let (base, bundle) = try JudgeInvalidLabelsTests.fakeBundle(package: true, engine: engine)
+            defer { try? FileManager.default.removeItem(at: base) }
+            let target = try breakIt(base, bundle)
+            let run = JudgeInvalidLabelsTests.runFakeBundle(
+                target, state: base.appendingPathComponent("state", isDirectory: true), engine: engine)
+            guard case .refused = run else {
+                Issue.record("\(name): expected .refused, got \(run)")
+                continue
+            }
+        }
+    }
+
+    /// A worker's refusal reason is already a full sentence: the pool passes
+    /// it through instead of wrapping it in a second one.
+    @Test("a pool load refusal is not double-wrapped")
+    func poolRefusalNotDoubleWrapped() {
+        let reason = CoreMLLoadRefusal(detail: "x").reason
+        guard case .refused(let why) = JudgeRuntime.read(.loadFailed(LoadFailure(kind: .modelUnavailable, message: reason))) else {
+            Issue.record("a pool load failure must refuse")
+            return
+        }
+        #expect(why == reason)
+        guard case .refused(let wrapped) = JudgeRuntime.read(.loadFailed(LoadFailure(kind: .badBundle, message: "tokenizer missing"))) else {
+            Issue.record("a pool load failure must refuse")
+            return
+        }
+        #expect(wrapped.contains("tokenizer missing"))
+        #expect(wrapped.contains("Ask the owner to run `rv doctor`"))
+    }
+    #endif
+
+    /// The owner-only fix for an unopenable model cache lives in doctor,
+    /// never in the agent-visible refusal.
+    @Test("doctor names the chmod for a model cache its owner cannot open")
+    func doctorNamesModelCacheFix() {
+        let status = CoreMLGuard.Status(
+            units: .cpuAndGPU, cpuOnlyUntil: nil, diskLow: false,
+            inaccessibleModelCache: "/h/.config/rv/cache/laya")
+        let notes = DoctorSnapshotBuilder.coreMLNotes(status)
+        #expect(notes.contains { $0.contains("chmod 700 '/h/.config/rv/cache/laya'") }, "\(notes)")
+    }
+
+    #if canImport(CoreML)
     /// A tokenizer that is there but corrupt is a broken install, not an
     /// absent one: review, on both engines.
     @Test(arguments: [JudgeEngine.ft, .laya])

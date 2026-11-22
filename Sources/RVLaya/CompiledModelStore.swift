@@ -108,9 +108,11 @@ struct CompiledModelStore<Model> {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
             // Our own lease died with the failed attempt. An entry another
             // loader still holds is kept (as the sweep does): the retry
-            // reloads it, and a second failure refuses.
+            // reloads it, and a second failure refuses. A store lock still
+            // held past `lockWait` here refuses now: the retry would only
+            // wait on it again.
             if let entry = try? entry(for: package) {
-                try? exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
+                try exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
             }
             coreML.purgeCache()
         }
@@ -364,18 +366,25 @@ struct CompiledModelStore<Model> {
         return info.st_mode & 0o077 == 0
     }
 
-    /// Why `usableRoot` refused, for the refusal doctor shows. A root that is
-    /// this user's real directory but that its owner cannot open (mode 0000,
-    /// say) never heals on its own, so the message names the fix.
+    /// Why `usableRoot` refused. The refusal reaches the agent, so it names
+    /// the problem only; doctor names the owner's fix
+    /// (`CoreMLGuard.Status.inaccessibleModelCache`).
     static func rootProblem(_ root: URL) -> String {
-        var info = stat()
-        if lstat(root.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == geteuid(),
-           info.st_mode & 0o700 != 0o700 {
-            return "the model cache \(root.path) is not accessible to its owner (mode "
-                + String(info.st_mode & 0o777, radix: 8)
-                + "); the owner can restore it with `chmod 700 \(root.path)`"
+        if let mode = inaccessibleMode(root) {
+            return "the model cache \(root.path) is not accessible to its owner (mode \(String(mode, radix: 8)))"
         }
         return "\(root.path) is not this user's real directory"
+    }
+
+    /// The permission bits of `root` when it is this user's real directory
+    /// but its owner lacks rwx on it (mode 0000, say): a state that never
+    /// heals on its own. Nil otherwise.
+    static func inaccessibleMode(_ root: URL) -> mode_t? {
+        var info = stat()
+        guard lstat(root.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == geteuid(),
+              info.st_mode & 0o700 != 0o700
+        else { return nil }
+        return info.st_mode & 0o777
     }
 
     /// Narrows the store's fresh copy to owner-only (directories 0700, files
@@ -419,7 +428,7 @@ struct CompiledModelStore<Model> {
     }
 
     /// Whether the bundle's model package is there. Only ENOENT is absence
-    /// (the packs-only floor); any other error refuses (review), so an error
+    /// (a broken bundle the caller names); any other error refuses (review), so an error
     /// an agent can provoke never reads as "no model". The refusal is
     /// recorded on `coreML` so doctor shows it.
     static func packageExists(_ url: URL, recordingOn coreML: CoreMLGuard? = nil) throws(CoreMLLoadRefusal) -> Bool {

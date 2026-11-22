@@ -110,10 +110,10 @@ struct BundleFilePresenceTests {
         }
     }
 
-    /// A model package that is not there (ENOENT) is the one genuine
-    /// absence: `bundleMissing`, the packs-only floor. Both engines.
-    @Test("a missing model package is bundleMissing on both engines")
-    func missingModelIsBundleMissing() throws {
+    /// A bundle dir that is there without its model is broken, not absent:
+    /// `badBundle` (the gate refuses), never `bundleMissing`. Both engines.
+    @Test("a missing model package in a present bundle is badBundle on both engines")
+    func missingModelInPresentBundleIsBadBundle() throws {
         let dir = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
         let tokenizer = Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
@@ -130,10 +130,11 @@ struct BundleFilePresenceTests {
         ] as [() throws -> Void] {
             do {
                 try load()
-                Issue.record("expected bundleMissing")
-            } catch LayaError.bundleMissing {
+                Issue.record("expected badBundle")
+            } catch LayaError.badBundle(let why) {
+                #expect(why.contains("model"), "\(why)")
             } catch {
-                Issue.record("expected bundleMissing, got \(error)")
+                Issue.record("expected badBundle, got \(error)")
             }
         }
     }

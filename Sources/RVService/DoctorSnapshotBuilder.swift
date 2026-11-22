@@ -167,6 +167,9 @@ public enum DoctorSnapshotBuilder {
         if let reason = status.lastRefusal {
             notes.append("last judge load refused: \(reason)")
         }
+        if let cache = status.inaccessibleModelCache {
+            notes.append("judge model cache \(cache) is not accessible to its owner; restore it with `chmod 700 '\(cache)'`")
+        }
         return notes
     }
 

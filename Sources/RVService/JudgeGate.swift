@@ -17,8 +17,9 @@ import RVPolicy
 /// even when its bundle is missing — a missing bundle for the SELECTED
 /// engine is packs-only with an `engine-missing` log note, never
 /// fail-closed. With no explicit engine the fine-tuned judge is the
-/// default whenever its bundle validates (`model.mlpackage` present);
-/// otherwise the gate falls back to the stock Laya bundle. Each engine is
+/// default whenever its bundle dir is there at all (a broken one refuses
+/// on load; it is never skipped); otherwise the gate falls back to the
+/// stock Laya bundle. Each engine is
 /// slot-cached separately.
 ///
 /// The judge runs whenever the selected engine's bundle is installed: it
@@ -140,10 +141,9 @@ public enum JudgeRuntime {
                 ? .ok(engine: resolved.engine, bundle: resolved.bundle)
                 : .invalid(engine: resolved.engine, dir: resolved.bundle, problems: problems)
         }
-        // No runnable bundle. If an install dir exists at all, it is a
+        // No selected bundle. If an install dir exists at all, it is a
         // broken install, not an absence. Check the explicit engine,
-        // else FT (production default) before stock — the resolver
-        // falls back to stock precisely because FT did not validate.
+        // else FT (production default) before stock.
         for engine in config.judgeEngine.map { [$0] } ?? [JudgeEngine.ft, .laya] {
             if let expected = expectedBundleDir(engine: engine, home: home),
                BundleFilePresence.of(expected) != .absent {
@@ -207,33 +207,28 @@ public enum JudgeRuntime {
             .appendingPathComponent("models/\(name)", isDirectory: true)
     }
 
-    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`. A
-    /// directory only counts when `model.mlpackage` and a tokenizer (either
-    /// layout) are in it.
+    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`, whenever
+    /// that path is there at all (`selectable`).
     static func ftBundleDir(home: HomeDirectory?) -> URL? {
-        guard let expected = expectedBundleDir(engine: .ft, home: home) else { return nil }
-        return selectable(expected, tokenizers: ["tokenizer.json", "tokenizer/tokenizer.json"])
+        expectedBundleDir(engine: .ft, home: home).flatMap(selectable)
     }
 
-    /// A directory only counts as a bundle when a model artifact is in it;
-    /// anything else (unset, empty, wrong path) means packs-only. Only the
-    /// CoreML judge is wired; an ONNX-only directory is not a runnable
-    /// bundle and must not read as judge-on.
+    /// Stock bundle: the installed `models/laya-multilingual-coreml`,
+    /// whenever that path is there at all (`selectable`). Only the CoreML
+    /// judge is wired; a dir without `model.mlpackage` (ONNX-only, say)
+    /// refuses on load rather than reading as judge-on.
     static func bundleDir(home: HomeDirectory?) -> URL? {
-        guard let expected = expectedBundleDir(engine: .laya, home: home) else { return nil }
-        return selectable(expected, tokenizers: ["tokenizer/tokenizer.json"])
+        expectedBundleDir(engine: .laya, home: home).flatMap(selectable)
     }
 
-    /// `dir` unless its model, or every tokenizer layout, is absent
-    /// (`lstat` ENOENT). A path that cannot be checked (EACCES, ENOTDIR,
-    /// ELOOP, ...) is not absence: the bundle is selected and its load
-    /// refuses (review), never packs-only.
-    static func selectable(_ dir: URL, tokenizers: [String]) -> URL? {
-        let model = BundleFilePresence.of(dir.appendingPathComponent("model.mlpackage"))
-        let tokenizerAbsent = tokenizers.allSatisfy {
-            BundleFilePresence.of(dir.appendingPathComponent($0)) == .absent
-        }
-        return model == .absent || tokenizerAbsent ? nil : dir
+    /// `dir` unless the bundle dir itself is absent (`lstat` ENOENT): only
+    /// no install at all is packs-only. A dir that is there in any form
+    /// (empty, partial, a symlink, even one to nowhere, or a path that
+    /// cannot be checked) is a broken install: selected, so its load
+    /// refuses (review), and with no explicit engine a broken FT dir never
+    /// falls back to the stock judge.
+    static func selectable(_ dir: URL) -> URL? {
+        BundleFilePresence.of(dir) == .absent ? nil : dir
     }
 
     /// v1 runtime context. Only signals already available at this layer:
@@ -312,8 +307,8 @@ public enum JudgeRuntime {
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
         // only when a loaded judge errors mid-prediction (`.failed`).
-        // A selected bundle, or its model, that is not there (ENOENT) is unavailable: packs-only
-        // plus a note (doctor surfaces it). A selected bundle that is there
+        // A selected bundle dir that is gone (ENOENT) is unavailable:
+        // packs-only plus a note. A selected bundle that is there
         // but cannot load (corrupt, unreadable, uncheckable), or Core ML
         // failing on a model that is there, refuses (review): an agent can
         // provoke those (`loadFailureRun`).
@@ -488,10 +483,10 @@ public enum JudgeRuntime {
     }
 
     /// `unavailable` is the packs-only floor, an allow without a judge. It
-    /// comes only from genuine absence: the selected bundle or its model is not there
+    /// comes only from genuine absence: the selected bundle dir is gone
     /// (ENOENT), or no Core ML on this platform. A selected bundle that is
-    /// there but cannot load (corrupt config or tokenizer, an uncheckable
-    /// path) is `refused` (review, doctor-visible); a loaded judge that
+    /// there but cannot load (no model, corrupt config or tokenizer, an
+    /// uncheckable path) is `refused` (review, doctor-visible); a loaded judge that
     /// cannot answer this input is `failed` (fail-closed Ask).
     ///
     /// `warming` is a load still in progress past the bounded wait. It goes
@@ -570,10 +565,10 @@ public enum JudgeRuntime {
     }
 
     /// What a judge load that threw means. Only genuine absence
-    /// (`LayaError.bundleMissing`: the selected bundle or its model is not there, ENOENT)
+    /// (`LayaError.bundleMissing`: the selected bundle dir is gone, ENOENT)
     /// is `.unavailable`, the packs-only floor that allows. A bundle that is
-    /// there but corrupt, unreadable or uncheckable, and any error not named
-    /// here, refuses (review): an agent can provoke those.
+    /// there but incomplete, corrupt, unreadable or uncheckable, and any
+    /// error not named here, refuses (review): an agent can provoke those.
     static func loadFailureRun(_ error: any Error) -> JudgeRun {
         switch error {
         case JudgeLoadError.warming:
@@ -592,10 +587,10 @@ public enum JudgeRuntime {
     }
 
     /// Refusal reason for a selected bundle that could not load. It reaches
-    /// the agent: it names only the read-only doctor, never a repair.
+    /// the agent: it sends the agent to the owner, never to a repair.
     static func bundleRefusal(_ why: String) -> String {
         "Laya judge: the installed judge bundle could not be loaded (\(why)); judged calls go to review "
-            + "until the owner repairs it. Run `rv doctor` to see the repair."
+            + "until the owner repairs it. Ask the owner to run `rv doctor`."
     }
 
     /// Inference through the live admission, bounded by this request's hook

@@ -381,11 +381,11 @@ struct CompiledModelStoreTests {
         #expect(load.reason.hasPrefix("Laya judge: Core ML could not compile or load the judge model"))
         #expect(load.reason.contains("LoadFailed()"))
         #expect(load.reason.contains("judged calls go to review"))
-        #expect(load.reason.contains("Run `rv doctor`"))
         // The reason reaches the agent: it names no repair an agent should
-        // attempt (the installer), only the read-only doctor.
+        // attempt (the installer, a repair of its own), only the owner.
+        #expect(load.reason.contains("Ask the owner to run `rv doctor`"))
         #expect(!load.reason.contains("install script"))
-        #expect(load.reason.contains("owner"))
+        #expect(!load.reason.contains("to see the repair"))
     }
 
     @Test("a nested symlink in the compile output refuses")
@@ -599,10 +599,13 @@ struct CompiledModelStoreTests {
         #expect(f.coreML.loads == 0)
     }
 
+    /// The refusal (which reaches the agent) names the problem, never a
+    /// repair; the guard's status carries the path so doctor can name the
+    /// owner's fix.
     @Test(
-        "a cache root its owner cannot open refuses and says how the owner fixes it",
+        "a cache root its owner cannot open refuses without naming a repair; the guard reports it for doctor",
         .enabled(if: geteuid() != 0, "root opens mode-000 directories"))
-    func unopenableRootNamesTheFix() throws {
+    func unopenableRootIsReportedForDoctor() throws {
         let f = try Fixture()
         try FileManager.default.createDirectory(at: f.root, withIntermediateDirectories: true)
         chmod(f.root.path, 0)
@@ -615,8 +618,53 @@ struct CompiledModelStoreTests {
             Issue.record("expected a refusal")
         } catch let refusal as CompiledModelRefusal {
             #expect(refusal.reason.contains(f.root.path))
-            #expect(refusal.reason.contains("chmod 700"))
+            #expect(refusal.reason.contains("not accessible to its owner"))
+            #expect(!refusal.reason.contains("chmod"))
         }
         #expect(f.coreML.compiles == 0)
+
+        let state = f.base.appendingPathComponent("state", isDirectory: true)
+        let guardian = CoreMLGuard(
+            store: nil, disk: FakeDisk(free: 100 << 30), cacheVolume: nil, stateRoot: state,
+            purgeCoreMLCache: {}, log: { _ in })
+        #expect(guardian.status.inaccessibleModelCache == nil)
+        let models = try #require(guardian.modelRoot)
+        try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+        chmod(models.path, 0)
+        defer { chmod(models.path, 0o700) }
+        #expect(guardian.status.inaccessibleModelCache == models.path)
+    }
+
+    /// The retry's discard waits for the store lock too. A lock still held
+    /// there refuses at once instead of waiting again in the second attempt.
+    @Test("a lock held at the retry's discard refuses; the second attempt never waits on it")
+    func heldLockAtDiscardRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let lockPath = f.root.deletingLastPathComponent().appendingPathComponent("rv-laya.lock").path
+        // Written by the load closure, closed once the load returns.
+        final class Holder: @unchecked Sendable { var fd: Int32 = -1 }
+        let holder = Holder()
+        defer { if holder.fd >= 0 { close(holder.fd) } }
+        struct LoadFailed: Error {}
+        let base = f.store()
+        var store = CompiledModelStore<String>(
+            root: base.root, coreML: base.coreML, version: base.version, compile: base.compile,
+            load: { _ in
+                // Another process takes the lock while the load fails.
+                holder.fd = open(lockPath, O_RDONLY | O_CLOEXEC)
+                _ = flock(holder.fd, LOCK_EX | LOCK_NB)
+                throw LoadFailed()
+            },
+            digest: base.digest)
+        store.lockWait = .milliseconds(200)
+        do {
+            _ = try store.model(package: f.package)
+            Issue.record("expected a refusal")
+        } catch let refusal as CompiledModelRefusal {
+            #expect(refusal.detail.contains("held by another process"), "\(refusal.detail)")
+        }
+        #expect(f.recorder.purgeCount == 0, "refused at the discard, before the purge and the retry")
+        #expect(f.coreML.compiles == 1)
     }
 }

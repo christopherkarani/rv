@@ -71,7 +71,7 @@ public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
 /// Core ML could not compile or load the judge model even after the store's
 /// one discard-and-retry. An agent can provoke that (a swapped compile
 /// output, a poisoned e5rt cache), so it refuses to review like any other
-/// refusal; a bundle with no model at all stays packs-only (absence).
+/// refusal; only a bundle dir that is not there at all is packs-only.
 public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     public let detail: String
 
@@ -80,10 +80,10 @@ public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     }
 
     public var reason: String {
-        // Reaches the agent too: it names only the read-only doctor, never a
-        // repair (the installer) an agent should attempt.
+        // Reaches the agent too: it sends the agent to the owner, never to a
+        // repair (the installer, doctor's fixes) of its own.
         "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review "
-            + "until the owner repairs the judge install. Run `rv doctor` to see the repair."
+            + "until the owner repairs the judge install. Ask the owner to run `rv doctor`."
     }
 }
 
@@ -124,16 +124,23 @@ public final class CoreMLGuard: Sendable {
         /// The reason of the last judge load this guard refused; nil once a
         /// load succeeds.
         public let lastRefusal: String?
+        /// The verified-model cache dir when it is this user's directory but
+        /// its owner cannot use it (mode 0000, say): every load refuses until
+        /// the owner restores it. Doctor names the fix; the refusal the agent
+        /// sees does not.
+        public let inaccessibleModelCache: String?
 
         public init(
             units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool,
-            crashMarkerUnavailable: Bool = false, lastRefusal: String? = nil
+            crashMarkerUnavailable: Bool = false, lastRefusal: String? = nil,
+            inaccessibleModelCache: String? = nil
         ) {
             self.units = units
             self.cpuOnlyUntil = cpuOnlyUntil
             self.diskLow = diskLow
             self.crashMarkerUnavailable = crashMarkerUnavailable
             self.lastRefusal = lastRefusal
+            self.inaccessibleModelCache = inaccessibleModelCache
         }
     }
 
@@ -216,7 +223,10 @@ public final class CoreMLGuard: Sendable {
         return Status(
             units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil,
             crashMarkerUnavailable: tracksCrashes && current.store == nil,
-            lastRefusal: refusal.withLock { $0 })
+            lastRefusal: refusal.withLock { $0 },
+            inaccessibleModelCache: modelRoot.flatMap { root in
+                CompiledModelStore<Never>.inaccessibleMode(root).map { _ in root.path }
+            })
     }
 
     /// Records the last refused load (nil after a good one) for doctor.

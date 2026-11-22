@@ -5,9 +5,11 @@ import Glibc
 #endif
 import Foundation
 
-/// Whether one judge-bundle file is there, by `lstat` (a symlink counts as
-/// present, never followed). Only ENOENT is absence, the one answer that may
-/// lead to the packs-only floor (which allows). Any other error (EACCES,
+/// Whether one judge-bundle file is there, by `lstat`: the last path
+/// component is never followed (a symlink there counts as present, even to
+/// nowhere); symlinks in the intermediate components are followed, as for
+/// any path lookup. Only ENOENT is absence, the one answer that may lead to
+/// the packs-only floor (which allows). Any other error (EACCES,
 /// ENOTDIR, ELOOP, ENAMETOOLONG, ...) is `unknown`: an agent can provoke
 /// those, so callers treat it as present-but-unusable and fail closed to
 /// review. `FileManager.fileExists` reads every error as "absent" and must

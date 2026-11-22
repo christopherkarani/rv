@@ -119,14 +119,14 @@ struct LayaVerdictTests {
     }
 
     /// Absent config keeps the default order: the load proceeds past config
-    /// parsing and fails only on the missing model package (genuine absence).
+    /// parsing and fails only on the missing model package.
     @Test func absentConfigKeepsDefaultOrder() throws {
         let dir = try ftBundle(config: nil)
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect {
             _ = try FineTunedJudge(bundleDir: dir)
         } throws: { error in
-            guard case LayaError.bundleMissing(let why) = error else { return false }
+            guard case LayaError.badBundle(let why) = error else { return false }
             return why.contains("model.mlpackage")
         }
     }

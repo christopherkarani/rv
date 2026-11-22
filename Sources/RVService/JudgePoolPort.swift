@@ -70,7 +70,9 @@ extension JudgeRuntime {
         case .late: return .late
         case .warming: return .warming
         case .loadFailed(let failure):
-            return .refused("Laya judge pool could not load the model (\(failure.message)); judged calls go to review. Run `rv doctor`.")
+            // A worker's own refusal reason is already a full sentence.
+            if failure.message.hasPrefix("Laya judge:") { return .refused(failure.message) }
+            return .refused("Laya judge pool could not load the model (\(failure.message)); judged calls go to review. Ask the owner to run `rv doctor`.")
         case .failed: return .failed
         }
     }

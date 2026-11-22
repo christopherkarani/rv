@@ -114,11 +114,11 @@ enum CompiledModelCache {
     /// The model and the lease that keeps its cache entry from being swept
     /// while it is loaded (hold it as long as the model).
     static func load(package: URL, coreML: CoreMLGuard) throws -> (model: MLModel, lease: CompiledModelLease) {
-        // No model in the bundle (ENOENT only) is absence: packs-only, doctor
-        // names it. Any other lstat error, or Core ML failing on a model that
-        // is there, refuses (review).
+        // No model in a bundle dir that is there is a broken install
+        // (badBundle, review; doctor names it). Any other lstat error, or
+        // Core ML failing on a model that is there, refuses (review) too.
         guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
-            throw LayaError.bundleMissing("no model at \(package.path)")
+            throw LayaError.badBundle("no model at \(package.path)")
         }
         let configuration = MLModelConfiguration()
         switch coreML.computeUnits {
