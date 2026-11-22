@@ -7,14 +7,24 @@ import RVService
 /// The Swift CLI's IPC transport on Linux: rvd's Unix socket, through a
 /// peer-verified `UnixServiceConnection` (the peer must be the sibling `rvd`
 /// running as the same user before any request, password included, is sent).
+///
+/// Each round trip blocks in `recv` under the connection's lock, so it runs
+/// on a thread of its own (`BlockingIO`), never on the cooperative pool.
 struct UnixSocketServiceTransport: ServiceTransport {
+    private let socketPath: String
     private let connection: UnixServiceConnection
     /// The socket is the uid-derived one (`UnixSocketPath.ClientSocket`).
     private let ownerRuntimeSocket: Bool
 
     init(socketPath: String, ownerRuntimeSocket: Bool = false) {
+        self.socketPath = socketPath
         self.connection = UnixServiceConnection(socketPath: socketPath)
         self.ownerRuntimeSocket = ownerRuntimeSocket
+    }
+
+    /// The same socket over a connection (and lock) of its own.
+    func longPollChannel() -> any ServiceTransport {
+        UnixSocketServiceTransport(socketPath: socketPath, ownerRuntimeSocket: ownerRuntimeSocket)
     }
 
     /// The production socket, resolved exactly like the C hook
@@ -29,7 +39,7 @@ struct UnixSocketServiceTransport: ServiceTransport {
 
     func hello(clientSemver: String) async throws -> HelloAckView {
         let body = try IPCJSON.encode(Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver))
-        let reply = try roundTripReportingAbsence(body, timeoutMs: UnixServiceConnection.connectTimeoutMs)
+        let reply = try await roundTripReportingAbsence(body, timeoutMs: UnixServiceConnection.connectTimeoutMs)
         return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
     }
 
@@ -38,24 +48,25 @@ struct UnixSocketServiceTransport: ServiceTransport {
     }
 
     func send(_ body: Data) async throws -> Data {
-        try connection.roundTrip(body, timeoutMs: oneShotEvaluateTimeoutMs)
+        try await send(body, timeoutMs: oneShotEvaluateTimeoutMs)
     }
 
     func send(_ body: Data, timeoutMs: Int) async throws -> Data {
-        try connection.roundTrip(body, timeoutMs: timeoutMs)
+        let connection = connection
+        return try await BlockingIO.run { try connection.roundTrip(body, timeoutMs: timeoutMs) }
     }
 
     func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
-        try roundTripReportingAbsence(body, timeoutMs: timeoutMs)
+        try await roundTripReportingAbsence(body, timeoutMs: timeoutMs)
     }
 
     /// A connect miss (ENOENT / ECONNREFUSED) on the uid-derived socket is the
     /// only failure reported as `.connectFailed`, the positive-absence signal
     /// (the hook's observe step-aside, diagnostics' "down"); everything else
     /// propagates for `HookDaemonFallback.classify`.
-    private func roundTripReportingAbsence(_ body: Data, timeoutMs: Int) throws -> Data {
+    private func roundTripReportingAbsence(_ body: Data, timeoutMs: Int) async throws -> Data {
         do {
-            return try connection.roundTrip(body, timeoutMs: timeoutMs)
+            return try await send(body, timeoutMs: timeoutMs)
         } catch UnixServiceConnection.TransportFailure.connect(let code)
             where ownerRuntimeSocket && (code == ENOENT || code == ECONNREFUSED) {
             throw ServiceTransportError.connectFailed

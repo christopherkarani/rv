@@ -288,7 +288,7 @@ public final class UnixSocketListener: Sendable {
             return
         }
         DarwinFrameIO.ignorePipe(client)
-        guard limits.applyReceiveTimeout(to: client), slots.acquire() else {
+        guard limits.applyTimeouts(to: client), slots.acquire() else {
             Darwin.close(client)
             return
         }
@@ -320,8 +320,11 @@ public final class UnixSocketListener: Sendable {
             }
             let incoming = gate.wait()
             handshakeOK = incoming.handshakeAccepted
-            try? DarwinFrameIO.writeFrame(fd: fd, body: incoming.frame)
+            // A reply the peer did not take within the send timeout leaves
+            // the stream mid-frame: close the connection, freeing its slot.
+            let sent = (try? DarwinFrameIO.writeFrame(fd: fd, body: incoming.frame)) != nil
             watchdog.endRequest()
+            guard sent else { return }
         }
     }
 }
