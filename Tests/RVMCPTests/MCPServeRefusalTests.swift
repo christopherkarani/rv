@@ -41,10 +41,31 @@ struct MCPServeRefusalTests {
     @Test func notificationsAndResponsesGetNoAnswerAndGarbageGetsAParseError() throws {
         #expect(untrusted.answer(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)
         #expect(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":3,"result":{}}"#.utf8)) == nil)
-        #expect(untrusted.answer(Data(#"[1,2]"#.utf8)) == nil)
+        #expect(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":"r","error":{"code":1,"message":"no"}}"#.utf8)) == nil)
         let garbage = try #require(untrusted.answer(Data("not json".utf8)))
         #expect(garbage["error"]?["code"] == .int(-32700))
         #expect(garbage["id"] == .null)
+    }
+
+    /// JSON that is not a request, notification or response gets -32600,
+    /// with its id when it has a usable one.
+    @Test func invalidRequestsGetInvalidRequest() throws {
+        for line in ["[]", "[1,2]", "123", #""str""#, "null", "true"] {
+            let answer = try #require(untrusted.answer(Data(line.utf8)), "\(line)")
+            #expect(answer["error"]?["code"] == .int(-32600), "\(line)")
+            #expect(answer["id"] == .null, "\(line)")
+        }
+        let noMethod = try #require(untrusted.answer(Data(#"{"id":2}"#.utf8)))
+        #expect(noMethod["error"]?["code"] == .int(-32600))
+        #expect(noMethod["id"] == .int(2))
+        let numericMethod = try #require(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":"a","method":5}"#.utf8)))
+        #expect(numericMethod["error"]?["code"] == .int(-32600))
+        #expect(numericMethod["id"] == .string("a"))
+        let long = String(repeating: "x", count: MCPServeRefusal.maximumIDBytes + 1)
+        let longID = try #require(untrusted.answer(Data(#"{"id":"\#(long)"}"#.utf8)))
+        #expect(longID["error"]?["code"] == .int(-32600))
+        #expect(longID["id"] == .null)
+        #expect(untrusted.answer(Data("{}".utf8))?["error"]?["code"] == .int(-32600))
     }
 
     /// The agent's channel is the model's context: resolver and sandbox
@@ -348,7 +369,7 @@ struct MCPServeRefusalTests {
         for fd in [input.read, input.write, output.read, output.write] { close(fd) }
     }
 
-    @Test func responderDropsAnOversizedLineWhole() throws {
+    @Test func responderAnswersAnOversizedLineOnceAsAParseError() throws {
         let input = try pipePair()
         let output = try pipePair()
         let writer = Thread {
@@ -364,8 +385,28 @@ struct MCPServeRefusalTests {
         close(output.write)
         let lines = readAll(output.read)
         close(output.read)
+        #expect(answered == 2)
+        #expect(lines.map { $0["id"] } == [.null, .int(10)])
+        #expect(lines.first?["error"]?["code"] == .int(-32700))
+        #expect(lines.last?["error"]?["code"] == .int(MCPServeRefusal.errorCode))
+    }
+
+    /// An oversized last line with no newline is answered at EOF the same way.
+    @Test func anOversizedLastLineIsAnsweredAtEOF() throws {
+        let input = try pipePair()
+        let output = try pipePair()
+        let writer = Thread {
+            Self.send(input.write, String(repeating: "a", count: MCPRefusalResponder.maximumLineBytes + 10))
+            close(input.write)
+        }
+        writer.start()
+        let answered = MCPRefusalResponder.serve(untrusted, input: input.read, output: output.write, idleSeconds: 5)
+        close(input.read)
+        close(output.write)
+        let lines = readAll(output.read)
+        close(output.read)
         #expect(answered == 1)
-        #expect(lines.map { $0["id"] } == [.int(10)])
+        #expect(lines.first?["error"]?["code"] == .int(-32700))
     }
 
     @Test func responderStopsWhenTheClientIsGone() throws {

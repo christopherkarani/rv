@@ -189,16 +189,31 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
     /// message with a method and an id), nothing for notifications or
     /// responses, a parse error for a line that is not JSON.
     public func answer(_ line: Data) -> JSONValue? {
-        guard let message = try? JSONValue.parse(line) else {
-            return .object([
-                "jsonrpc": .string("2.0"), "id": .null,
-                "error": .object(["code": .int(-32700), "message": .string("Parse error")]),
-            ])
+        guard let message = try? JSONValue.parse(line) else { return Self.parseError }
+        guard message.objectValue != nil else { return Self.invalidRequest(id: .null) }
+        let id = message["id"].map(Self.echoed) ?? .null
+        if let method = message["method"] {
+            guard method.stringValue != nil else { return Self.invalidRequest(id: id) }
+            // A notification: no id, no answer.
+            return message["id"] == nil ? nil : errorResponse(id: id)
         }
-        guard message.objectValue != nil, message["method"]?.stringValue != nil, let id = message["id"] else {
-            return nil
-        }
-        return errorResponse(id: Self.echoed(id))
+        // A response to nothing rv asked: no answer.
+        if message["id"] != nil, message["result"] != nil || message["error"] != nil { return nil }
+        return Self.invalidRequest(id: id)
+    }
+
+    /// The answer to a line that is not JSON, or one over the line cap.
+    public static let parseError: JSONValue = .object([
+        "jsonrpc": .string("2.0"), "id": .null,
+        "error": .object(["code": .int(-32700), "message": .string("Parse error")]),
+    ])
+
+    /// The answer to JSON that is neither a request, a notification nor a response.
+    static func invalidRequest(id: JSONValue) -> JSONValue {
+        .object([
+            "jsonrpc": .string("2.0"), "id": id,
+            "error": .object(["code": .int(-32600), "message": .string("Invalid Request")]),
+        ])
     }
 
     /// The longest request id echoed back; a longer one, or one that is not
@@ -218,8 +233,9 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
 /// server is off instead of an empty pipe.
 ///
 /// It starts nothing, resolves nothing and reads no configuration: it only
-/// holds the refusal it was given. It is bounded every way: lines over
-/// `maximumLineBytes` are dropped whole; it reads at most `maximumLines`
+/// holds the refusal it was given. It is bounded every way: a line over
+/// `maximumLineBytes` is dropped whole and answered once as a parse
+/// error; it reads at most `maximumLines`
 /// lines of any kind (empty ones, notifications and responses included);
 /// it stops at EOF, on a failed or stalled write, after `idleSeconds`
 /// with no input, and after `totalSeconds` in all however the client
@@ -245,11 +261,15 @@ public enum MCPRefusalResponder {
         var overflowing = false
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         /// False once serving should stop: the line budget is spent or a write failed.
-        func handle(_ bytes: [UInt8]) -> Bool {
+        /// `bytes` nil: a line over the cap, answered once as a parse error.
+        func handle(_ bytes: [UInt8]?) -> Bool {
             lines += 1
-            var trimmed = bytes
+            var trimmed = bytes ?? []
             if trimmed.last == 0x0D { trimmed.removeLast() }
-            if trimmed.isEmpty == false, let reply = refusal.answer(Data(trimmed)) {
+            let reply: JSONValue? = bytes == nil
+                ? MCPServeRefusal.parseError
+                : trimmed.isEmpty ? nil : refusal.answer(Data(trimmed))
+            if let reply {
                 guard writeLine(output, reply.compactText) else { return false }
                 answered += 1
             }
@@ -276,7 +296,7 @@ public enum MCPRefusalResponder {
                 }
                 // The newline can arrive in the chunk that crosses the cap.
                 let dropped = overflowing || line.count > maximumLineBytes
-                guard handle(dropped ? [] : line) else { return answered }
+                guard handle(dropped ? nil : line) else { return answered }
                 line.removeAll(keepingCapacity: true)
                 overflowing = false
                 start = index + 1
@@ -290,7 +310,11 @@ public enum MCPRefusalResponder {
             }
         }
         // EOF: a last line with no newline.
-        if overflowing == false, line.isEmpty == false { _ = handle(line) }
+        if overflowing {
+            _ = handle(nil)
+        } else if line.isEmpty == false {
+            _ = handle(line)
+        }
         return answered
     }
 
