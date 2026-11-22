@@ -11,6 +11,9 @@ public struct PackDocument: Equatable, Sendable {
     public var safe: [NamedPattern]
     public var destructive: [DestructiveRule]
     public var enabledByDefault: Bool
+    /// One entry per destructive rule, in file order. Not part of
+    /// `snapshot`: the engine never sees it.
+    public var guidance: [RuleGuidance]
 
     public init(
         id: PackID,
@@ -20,7 +23,8 @@ public struct PackDocument: Equatable, Sendable {
         keywords: [String],
         safe: [NamedPattern],
         destructive: [DestructiveRule],
-        enabledByDefault: Bool
+        enabledByDefault: Bool,
+        guidance: [RuleGuidance] = []
     ) {
         self.id = id
         self.name = name
@@ -30,6 +34,12 @@ public struct PackDocument: Equatable, Sendable {
         self.safe = safe
         self.destructive = destructive
         self.enabledByDefault = enabledByDefault
+        self.guidance = guidance
+    }
+
+    /// Guidance for one of this pack's rules, by pattern name.
+    public func guidance(forRule name: String) -> RuleGuidance? {
+        guidance.first { $0.ruleID.pattern == name }
     }
 
     public var snapshot: PackSnapshot {
@@ -108,6 +118,8 @@ struct DestructiveFile: Decodable {
     var description: String
     var explanation: String?
     var reason: String?
+    var saferCommand: String?
+    var examples: ExamplesFile?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -116,6 +128,8 @@ struct DestructiveFile: Decodable {
         case description
         case explanation
         case reason
+        case saferCommand = "safer_command"
+        case examples
     }
 
     init(from decoder: Decoder) throws {
@@ -135,7 +149,14 @@ struct DestructiveFile: Decodable {
         }
         explanation = try container.decodeIfPresent(String.self, forKey: .explanation)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        saferCommand = try container.decodeIfPresent(String.self, forKey: .saferCommand)
+        examples = try container.decodeIfPresent(ExamplesFile.self, forKey: .examples)
     }
+}
+
+struct ExamplesFile: Decodable {
+    var stop: [String]?
+    var allow: [String]?
 }
 
 public enum PackJSON {
@@ -162,6 +183,16 @@ public enum PackJSON {
                 explanation: row.explanation
             )
         }
+        let guidance = file.destructivePatterns.map { row in
+            RuleGuidance(
+                ruleID: RuleID(pack: packID, pattern: row.name),
+                saferCommand: row.saferCommand,
+                examples: RuleExamples(
+                    stop: row.examples?.stop ?? [],
+                    allow: row.examples?.allow ?? []
+                )
+            )
+        }
         let enabledByDefault =
             file.enabledByDefault
             ?? dayOnePackIDs.contains(packID)
@@ -173,7 +204,8 @@ public enum PackJSON {
             keywords: file.keywords,
             safe: safe,
             destructive: destructive,
-            enabledByDefault: enabledByDefault
+            enabledByDefault: enabledByDefault,
+            guidance: guidance
         )
     }
 }
