@@ -330,9 +330,12 @@ lifetime (`stream`, a UUID).
 - Redaction (`CommandLineRedaction`): `command`, `path` and `cwd` hide
   credentials: `KEY=value` with a secret-shaped key, known token prefixes,
   `Bearer x`, URL userinfo passwords (`https://bob:[redacted]@host`), `-u` /
-  `--user name:password`, a secret-named flag's value (`--password x`,
-  `--api-key x`), MySQL `-pVALUE`, and secret-named headers (`-H 'X-Api-Key:
-  v'`). `$HOME` is shown as `~`, control characters are flattened, and text
+  `--user name:password` and `-uname:password`, the value of a flag whose
+  whole name is a secret's (`--password x`, `--api-key x`; never a following
+  flag; `--max-tokens` and `--secret-id` are not secrets), per-program
+  password flags wherever the program sits in the command (MySQL `-pVALUE`,
+  `sshpass -p`, `docker login -p`, `redis-cli -a`), and secret-named headers
+  (`-H 'X-Api-Key: v'`). `$HOME` is shown as `~`, control characters are flattened, and text
   stops at 512 bytes then `…`. `session` only when it is an opaque id. A
   timed-out reply is `refused` with `rule: "rv.timeout"`.
 - Skew: an rvd from before `events` cannot decode the method key and answers

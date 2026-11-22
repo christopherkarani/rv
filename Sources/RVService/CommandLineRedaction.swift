@@ -12,9 +12,13 @@ import RVDomain
 ///
 /// - URL userinfo: `https://bob:pw@host` → `https://bob:[redacted]@host`
 /// - `-u` / `--user` / `--proxy-user` `name:password` → `name:[redacted]`
-/// - a flag named like a secret and its separate value:
-///   `--password hunter2`, `--token x`, `--api-key x`, `-pass x`
-/// - MySQL-family `-pVALUE` (`mysql -phunter2`)
+/// - a flag whose whole name is a secret's and its separate value:
+///   `--password hunter2`, `--token x`, `--api-key x`, `-pass x`; a flag
+///   where the value should be is never eaten
+/// - `-ubob:pw` (curl's attached form)
+/// - per-program password flags, wherever the program sits in the
+///   segment: MySQL-family `-pVALUE`, `sshpass -p pw`, `docker login -p
+///   pw`, `redis-cli -a pw`
 /// - a header with a secret-shaped name: `-H 'X-Api-Key: v'`,
 ///   `--header=Authorization:Basic v`, `-H "Cookie: v w"`
 ///
@@ -47,17 +51,23 @@ package enum CommandLineRedaction {
 
     private struct Scan {
         var pending: Pending?
-        var atCommandStart = true
-        var program: String?
+        /// Words seen so far in this command segment (basenames), so a
+        /// password flag is read in context wherever the program sits:
+        /// `docker exec db mysql -pX`, `sudo -u root mysql -pX`,
+        /// `sh -c "mysql -pX"`.
+        var words: Set<String> = []
 
         mutating func next(_ token: String) -> String {
             let quoted = Quoted(token)
             if let pending {
                 self.pending = nil
                 switch pending {
-                case .value:
-                    return quoted.replacingBody(with: placeholder)
-                case .userPassword:
+                case .value, .userPassword:
+                    // A flag where a value was expected: the earlier flag
+                    // took none (a boolean, or a missing value). Never eat
+                    // a flag; read this one as itself.
+                    if Self.isFlag(quoted.body) || Self.separators.contains(quoted.body) { break }
+                    if case .value = pending { return quoted.replacingBody(with: placeholder) }
                     return quoted.redactingAfterColon()
                 case .header:
                     return header(quoted)
@@ -69,25 +79,21 @@ package enum CommandLineRedaction {
                 }
             }
             if Self.separators.contains(quoted.body) {
-                atCommandStart = true
-                program = nil
+                words = []
                 return token
             }
-            if atCommandStart {
-                if quoted.body.contains("=") && quoted.body.hasPrefix("-") == false { return token }
-                if Self.prefixWords.contains(quoted.body) { return token }
-                program = (quoted.body as NSString).lastPathComponent
-                atCommandStart = false
+            let shown = Self.isFlag(quoted.body) ? flag(quoted, token: token) : token
+            if Self.isFlag(quoted.body) == false {
+                words.insert((quoted.body as NSString).lastPathComponent)
             }
             if token.hasSuffix(";") || token.hasSuffix("&&") || token.hasSuffix("|") {
-                atCommandStart = true
+                words = []
             }
-            return flag(quoted, token: token)
+            return shown
         }
 
         private mutating func flag(_ quoted: Quoted, token: String) -> String {
             let body = quoted.body
-            guard body.hasPrefix("-"), body.count > 1 else { return token }
             if body == "-H" || body == "--header" {
                 pending = .header
                 return token
@@ -105,10 +111,19 @@ package enum CommandLineRedaction {
                 let value = Quoted(String(body[body.index(after: equals)...]))
                 return quoted.leading + name + value.redactingAfterColon() + quoted.trailing
             }
-            if let program, Self.mysqlFamily.contains(program),
-               body.hasPrefix("-p"), body.hasPrefix("--") == false, body.count > 2
-            {
-                return quoted.leading + "-p" + placeholder + quoted.trailing
+            // `-ubob:pw` (curl's attached form): only `name:password` hides.
+            if body.hasPrefix("-u"), body.hasPrefix("--") == false, body.count > 2 {
+                let value = Quoted(String(body.dropFirst(2)))
+                return quoted.leading + "-u" + value.redactingAfterColon() + quoted.trailing
+            }
+            if let short = Self.shortPasswordFlag(in: words), body.hasPrefix(short), body.hasPrefix("--") == false {
+                if body == short {
+                    if Self.separateValueAllowed(short, words: words) { pending = .value }
+                    return token
+                }
+                if Self.attachedValueAllowed(short, words: words) {
+                    return quoted.leading + short + placeholder + quoted.trailing
+                }
             }
             if body.contains("=") == false, Self.isSecretFlag(body) {
                 pending = .value
@@ -141,28 +156,62 @@ package enum CommandLineRedaction {
         }
 
         static let separators: Set<String> = ["&&", "||", ";", "|", "&"]
-        static let prefixWords: Set<String> = ["sudo", "env", "command", "exec", "nohup", "time", "nice"]
         static let userFlags: Set<String> = ["-u", "--user", "-U", "--proxy-user"]
         static let mysqlFamily: Set<String> = [
             "mysql", "mysqldump", "mysqladmin", "mysqlimport", "mysqlshow", "mysqlcheck", "mariadb",
             "mariadb-dump", "mariadb-admin",
         ]
 
-        static func isSecretFlag(_ flag: String) -> Bool {
-            let name = fold(String(flag.drop(while: { $0 == "-" })))
-            if name.hasSuffix("_stdin") { return false }
-            if ["pass", "pw", "pwd", "auth", "key"].contains(name) { return true }
-            return secretFragments.contains { name.contains($0) }
+        static func isFlag(_ body: String) -> Bool {
+            body.hasPrefix("-") && body.count > 1
         }
+
+        /// The short flag that carries a password for a program seen in this
+        /// segment: `-p` (MySQL family, `sshpass`, `docker|podman login`),
+        /// `-a` (`redis-cli`).
+        static func shortPasswordFlag(in words: Set<String>) -> String? {
+            if words.isDisjoint(with: mysqlFamily) == false || words.contains("sshpass") { return "-p" }
+            if words.contains("login"), words.contains("docker") || words.contains("podman") { return "-p" }
+            if words.contains("redis-cli") { return "-a" }
+            return nil
+        }
+
+        /// `-p VALUE` with a space: a password for `sshpass` and `docker
+        /// login`; for MySQL a bare `-p` prompts and the next word is a
+        /// database.
+        static func separateValueAllowed(_ short: String, words: Set<String>) -> Bool {
+            if short == "-a" { return true }
+            return words.contains("sshpass") || words.contains("login")
+        }
+
+        static func attachedValueAllowed(_ short: String, words: Set<String>) -> Bool {
+            short == "-a" || words.isDisjoint(with: mysqlFamily) == false || words.contains("sshpass")
+                || words.contains("login")
+        }
+
+        /// A flag whose whole name says it carries a secret value. Whole
+        /// names only: `--max-tokens`, `--secret-id`, `--no-password` and
+        /// `--password-stdin` name no secret value.
+        static func isSecretFlag(_ flag: String) -> Bool {
+            secretFlagNames.contains(fold(String(flag.drop(while: { $0 == "-" }))))
+        }
+
+        static let secretFlagNames: Set<String> = [
+            "password", "passwd", "pass", "pw", "pwd", "passphrase", "db_password", "admin_password",
+            "secret", "client_secret", "api_secret", "app_secret", "secret_key", "secret_access_key",
+            "token", "api_token", "auth_token", "access_token", "refresh_token", "bearer_token",
+            "session_token", "id_token", "github_token", "oauth_token", "personal_access_token",
+            "api_key", "apikey", "access_key", "access_key_id", "private_key", "auth", "authorization",
+        ]
 
         static func isSecretHeader(_ name: String) -> Bool {
             let folded = fold(name.trimmingCharacters(in: .whitespaces))
-            return (secretFragments + ["auth", "cookie", "session", "signature"]).contains { folded.contains($0) }
+            return headerFragments.contains { folded.contains($0) }
         }
 
-        static let secretFragments = [
-            "password", "passwd", "passphrase", "secret", "token", "authorization", "credential",
-            "api_key", "apikey", "private_key", "privatekey", "access_key", "accesskey",
+        static let headerFragments = [
+            "password", "passwd", "secret", "token", "auth", "credential", "api_key", "apikey",
+            "access_key", "cookie", "session", "signature",
         ]
 
         static func fold(_ text: String) -> String {

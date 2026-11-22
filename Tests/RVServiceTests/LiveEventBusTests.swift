@@ -183,13 +183,27 @@ struct LiveEventBusTests {
 
     /// A sink is the lossless path (the decision log): it sees every event
     /// in order however far a cursor reader would have fallen behind.
-    @Test func sinksSeeEveryEventInOrderPastTheRing() {
+    @Test func sinksSeeEveryEventInOrderPastTheRing() throws {
         let bus = LiveEventBus(capacity: 4)
         let seen = SequenceLog()
-        bus.addSink { seen.append($0.sequence) }
+        try bus.addSink { seen.append($0.sequence) }
         for n in 1...1_000 { bus.publish(decision(n), at: t0) }
         #expect(seen.values == Array(1...1_000))
         #expect(bus.read(after: 0, stream: bus.stream).missed == 996)
+    }
+
+    /// A sink added once the bus has published would start with a gap:
+    /// it is refused, says how many it missed, and is never called.
+    @Test func aSinkAfterTheFirstPublishIsRefused() {
+        let bus = LiveEventBus(capacity: 4)
+        bus.publish(decision(1), at: t0)
+        bus.publish(decision(2), at: t0)
+        let seen = SequenceLog()
+        #expect(throws: LiveEventBus.SinkAfterPublish(missed: 2)) {
+            try bus.addSink { seen.append($0.sequence) }
+        }
+        bus.publish(decision(3), at: t0)
+        #expect(seen.values.isEmpty)
     }
 
     /// Events a reader may not see still move its cursor, and a batch with

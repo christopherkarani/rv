@@ -18,6 +18,9 @@ public struct RoutedEvaluation: Sendable, Equatable {
 
 public struct ServiceClient: Sendable {
     let transport: (any ServiceTransport)?
+    /// `events` long polls go here: a connection of their own, so a parked
+    /// poll never shares a lock or a connection with owner actions.
+    let eventsTransport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
     private let home: HomeDirectory?
@@ -81,6 +84,7 @@ public struct ServiceClient: Sendable {
         clock: @escaping @Sendable () -> Date
     ) {
         self.transport = resolvedTransport
+        self.eventsTransport = resolvedTransport?.longPollChannel()
         if let session {
             self.door = GatedEvaluate(session)
         } else {
@@ -101,6 +105,7 @@ public struct ServiceClient: Sendable {
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
+        self.eventsTransport = transport?.longPollChannel()
         self.door = GatedEvaluate(lazySession: lazySession)
         self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory, home: home)
         self.home = home
@@ -204,10 +209,10 @@ public struct ServiceClient: Sendable {
     }
 
     /// `undecodableIsServiceError`: an rvd that cannot decode the request
-    /// (one that predates its method) answers `decodeFailed` under a fresh
-    /// id, since it never read the request's. With this set that answer
-    /// throws `.service(.decodeFailed)` instead of `.identityMismatch`, so
-    /// the caller can read it as "unsupported".
+    /// (one that predates its method) answers `decodeFailed`, or
+    /// `handshakeRequired` before a hello, under a fresh id, since it never
+    /// read the request's. With this set those answers throw `.service`
+    /// instead of `.identityMismatch`, so the caller can act on them.
     func send<C: IPCCall>(
         _ call: C,
         using transport: any ServiceTransport,
@@ -228,9 +233,10 @@ public struct ServiceClient: Sendable {
         }
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         if undecodableIsServiceError, response.protocolName == request.protocolName,
-           case .error(.decodeFailed) = response.result
+           case .error(let error) = response.result,
+           error == .decodeFailed || error == .protocolSkew(.handshakeRequired)
         {
-            throw IPCCallError.service(.decodeFailed)
+            throw IPCCallError.service(error)
         }
         guard response.id == request.id, response.protocolName == request.protocolName else {
             throw IPCCallError.identityMismatch

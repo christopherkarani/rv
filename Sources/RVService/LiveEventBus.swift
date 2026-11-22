@@ -32,12 +32,12 @@ package final class LiveEventBus: Sendable {
     package let stream: UUID
     private let capacity: Int
     private let state: Mutex<State>
-    private let sinks = Mutex<[@Sendable (LiveEvent) -> Void]>([])
 
     private struct State {
         var slots: [LiveEvent?]
         var nextSequence: UInt64 = 1
         var waiters: [UUID: Waiter] = [:]
+        var sinks: [@Sendable (LiveEvent) -> Void] = []
 
         var head: UInt64 { nextSequence - 1 }
     }
@@ -68,15 +68,27 @@ package final class LiveEventBus: Sendable {
     /// Wire polls waiting now, at most `maxWireWaiters`.
     package var wireWaiters: Int { state.withLock { $0.waiters.values.filter(\.wire).count } }
 
+    /// A sink added after the bus published: it would have missed events.
+    package struct SinkAfterPublish: Error, Equatable {
+        /// Events the sink would never have seen.
+        package let missed: UInt64
+    }
+
     /// Registers a lossless in-process consumer: `sink` sees every event
-    /// published from now on, in order, unlike a cursor that can fall
-    /// behind the ring. For a consumer that must not drop events (the
-    /// local decision log): register before the first hook. `sink` runs
-    /// on the publisher's task, under the bus lock: it must only hand the
-    /// event to the consumer's own queue, never block, wait on I/O or call
-    /// back into the bus.
-    package func addSink(_ sink: @escaping @Sendable (LiveEvent) -> Void) {
-        sinks.withLock { $0.append(sink) }
+    /// this bus publishes, in order, unlike a cursor that can fall behind
+    /// the ring. Only before the first publish (for rvd: while
+    /// `ServiceRuntime.init` runs, before any listener serves a hook), so
+    /// a sink can never start with a gap; later it throws and adds nothing.
+    /// `sink` runs on the publisher's task, under the bus lock: it must only
+    /// hand the event to the consumer's own queue, never block, wait on
+    /// I/O or call back into the bus.
+    package func addSink(_ sink: @escaping @Sendable (LiveEvent) -> Void) throws(SinkAfterPublish) {
+        let head = state.withLock { state -> UInt64 in
+            guard state.head == 0 else { return state.head }
+            state.sinks.append(sink)
+            return 0
+        }
+        guard head == 0 else { throw SinkAfterPublish(missed: head) }
     }
 
     /// Publishes one event. O(1), never awaits, never blocks on a reader.
@@ -88,7 +100,7 @@ package final class LiveEventBus: Sendable {
             let event = LiveEvent(sequence: sequence, at: time, payload: payload)
             state.slots[slot(of: sequence)] = event
             state.nextSequence = sequence + 1
-            for sink in sinks.withLock({ $0 }) { sink(event) }
+            for sink in state.sinks { sink(event) }
             var woken: [CheckedContinuation<Void, Never>] = []
             for (id, waiter) in state.waiters {
                 switch waiter.phase {
