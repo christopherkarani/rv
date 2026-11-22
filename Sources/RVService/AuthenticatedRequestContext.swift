@@ -76,6 +76,11 @@ public enum ServiceMethodAuthorization {
         /// authority comes only from the presence proof rvd verifies in the
         /// handler (`OwnerPresence`), never from the caller's identity alone.
         case ownerConfirm
+        /// Live events (`events`): read-only and redacted, but every
+        /// agent's decisions pass through it, so only a kernel-attested
+        /// peer running as rvd's own user (the owner) may read it. No
+        /// component role is needed: rv term and the menu bar app read it.
+        case ownerEvents
     }
 
     public static func requirement(for method: IPCMethod) -> Requirement {
@@ -94,6 +99,8 @@ public enum ServiceMethodAuthorization {
             return .launchProposal
         case .attestTTYRedemption, .mintAllowOnce:
             return .ttyAttestation
+        case .events:
+            return .ownerEvents
         case .confirmOwnerAction:
             return .ownerConfirm
         }
@@ -158,6 +165,14 @@ public enum ServiceMethodAuthorization {
             }
         case .ownerConfirm:
             return context.peer != nil
+        case .ownerEvents:
+            // The same peer credential the transports capture (XPC audit
+            // token euid, SO_PEERCRED uid), compared with rvd's own.
+            guard let peer = context.peer else { return false }
+            return peer.evidence.effectiveUserID == ownerUserID
         }
     }
+
+    /// rvd's effective uid: the owner whose agents it guards.
+    static var ownerUserID: UInt32 { UInt32(geteuid()) }
 }
