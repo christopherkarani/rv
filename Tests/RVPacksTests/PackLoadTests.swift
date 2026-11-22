@@ -85,3 +85,32 @@ let expectedFilesystemDestructive = [
     let disk = try PackRegistry.loadDocument(.systemDisk)
     #expect(disk.enabledByDefault)
 }
+
+@Test func packLoad_decodesRuleGuidanceBesideEachRule() throws {
+    let git = try PackRegistry.loadDocument(.coreGit)
+    #expect(git.guidance.map(\.ruleID.pattern) == expectedGitDestructive)
+    let resetHard = try #require(git.guidance(forRule: "reset-hard"))
+    #expect(resetHard.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    #expect(resetHard.saferCommand == "git stash")
+    #expect(resetHard.examples.stop.contains("git reset --hard"))
+    #expect(resetHard.examples.allow.isEmpty == false)
+    #expect(git.guidance(forRule: "push-force-long")?.saferCommand == nil)
+    #expect(git.guidance(forRule: "no-such-rule") == nil)
+}
+
+@Test func packLoad_ruleGuidanceIsOptionalInPackJSON() throws {
+    let json = """
+    {"schema_version": 1, "id": "test.min", "name": "Min", "description": "d",
+     "keywords": ["x"],
+     "destructive_patterns": [{"name": "boom", "pattern": "x boom", "severity": "high", "description": "d"}]}
+    """
+    let document = try PackJSON.decodeDocument(Data(json.utf8))
+    #expect(document.guidance == [RuleGuidance(ruleID: RuleID(pack: document.id, pattern: "boom"))])
+}
+
+@Test func packLoad_ruleGuidanceCatalogFindsADenyRuleID() throws {
+    let catalog = try PackRegistry.loadRuleGuidance()
+    let clean = try #require(catalog[RuleID(pack: .coreGit, pattern: "clean-force")])
+    #expect(clean.saferCommand == "git clean -n")
+    #expect(catalog[RuleID(pack: .coreGit, pattern: "no-such-rule")] == nil)
+}
