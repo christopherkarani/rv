@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVHistory
 
 /// Persisted `[packs]` section under `$HOME/.config/rv/config.toml`.
@@ -48,7 +49,7 @@ public enum PacksConfigStore {
         if isAbsent(home: home) {
             return .empty
         }
-        guard let text = try? String(contentsOf: configURL(home: home), encoding: .utf8) else {
+        guard let data = readRegularFile(configURL(home: home)), let text = String(data: data, encoding: .utf8) else {
             throw PacksConfigError.unreadable
         }
         return parse(text)

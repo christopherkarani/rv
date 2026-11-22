@@ -87,7 +87,9 @@ import RVIsolation
 
         try FileManager.default.createDirectory(
             atPath: (layout.judgeLaunchAgent as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        try "<plist/>".write(toFile: layout.judgeLaunchAgent, atomically: true, encoding: .utf8)
+        let judge = SetupRun.judgeExecutable(rvdPath: layout.localRvd)
+        try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+            .write(toFile: layout.judgeLaunchAgent, atomically: true, encoding: .utf8)
         let unloaded = try #require(DoctorJudgeChecks.agent(
             paths: layout, fileManager: .default, loaded: false, bundleInstalled: true))
         #expect(unloaded.summary.contains("not loaded"))
@@ -96,6 +98,33 @@ import RVIsolation
         #expect(DoctorJudgeChecks.agent(
             paths: layout, fileManager: .default, loaded: nil, bundleInstalled: true) == nil,
             "launchd not observed (Linux, tests): nothing to say")
+    }
+
+    @Test("a judge agent that is not RunAtLoad + KeepAlive, or loaded in both domains, is a warning")
+    func judgeAgentOnDemandOrDuplicateIsAWarning() throws {
+        let (root, layout) = try paths()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let judge = SetupRun.judgeExecutable(rvdPath: layout.localRvd)
+        try touchExecutable(judge)
+        try FileManager.default.createDirectory(
+            atPath: (layout.judgeLaunchAgent as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let onDemand = try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+            .replacingOccurrences(of: "<key>RunAtLoad</key>\n\t<true/>", with: "<key>RunAtLoad</key>\n\t<false/>")
+        try #require(onDemand.contains("<false/>"))
+        try onDemand.write(toFile: layout.judgeLaunchAgent, atomically: true, encoding: .utf8)
+        let problem = try #require(DoctorJudgeChecks.agent(
+            paths: layout, fileManager: .default, loaded: true, bundleInstalled: true))
+        #expect(problem.id == "judge-agent-on-demand")
+        #expect(problem.summary.contains("RunAtLoad + KeepAlive"))
+        #expect(problem.fix == "rv setup")
+
+        try LaunchAgentTemplate.renderedJudge(judgePath: judge)
+            .write(toFile: layout.judgeLaunchAgent, atomically: true, encoding: .utf8)
+        let duplicate = try #require(DoctorJudgeChecks.agent(
+            paths: layout, fileManager: .default, loaded: true, bundleInstalled: true, loadedInBothDomains: true))
+        #expect(duplicate.id == "judge-agent-duplicate")
+        #expect(DoctorJudgeChecks.agent(
+            paths: layout, fileManager: .default, loaded: true, bundleInstalled: true, loadedInBothDomains: false) == nil)
     }
     @Test func humanDoctorPrintsTheAgentCauseAndRvdsPoolWarning() throws {
         let (root, layout) = try paths()
