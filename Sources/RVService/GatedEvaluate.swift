@@ -180,6 +180,13 @@ public struct GatedEvaluate: Sendable {
            WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
             result = WiringPathGuard.deny(path: action.path.rawValue)
         }
+        // Edit/Write to what switches off or silences the commit check:
+        // the ignore file, a repository's git config or hooks, the global
+        // git config. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           Self.touchesScanControls(action.path.rawValue, home: home, cwd: cwd) {
+            result = SecretsScanGuard.deny(searchText: action.path.rawValue)
+        }
         // Edit/Write to a host MCP config while rv's MCP gateway is in use.
         if case .allow = result.decision, action.kind != .read,
            let guarded = MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home, now: now)),
@@ -1099,6 +1106,15 @@ public struct GatedEvaluate: Sendable {
 
     private static func workspaceURL(cwd: WorkingDirectory?) -> URL? {
         cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+    }
+
+    /// `SecretsScanGuard.protectsFile` for a file-door path as typed, made
+    /// absolute against the cwd and home, and as its symlink target.
+    static func touchesScanControls(_ typed: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        let homePath = home?.rawValue ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let lexical = WiringPathGuard.absolute(typed, home: homePath, cwd: cwd) ?? typed
+        let resolved = lexical.hasPrefix("/") ? SecretPathCandidateResolver.resolvedPath(lexical) : nil
+        return [lexical, resolved].compactMap { $0 }.contains { SecretsScanGuard.protectsFile($0, home: homePath) }
     }
 
     /// The audit row for a deny the Policy gate overrode; nil otherwise.

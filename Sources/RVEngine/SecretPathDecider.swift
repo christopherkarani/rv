@@ -91,6 +91,14 @@ public struct SecretPathDecider: Sendable {
                 matchingView: result.matchingView
             )
         }
+        // The commit check's off switch and allow paths are the owner's.
+        if catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command) {
+            let matched = SecretsScanGuard.match(searchText: result.matchingView.rawValue)
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+                matchingView: result.matchingView
+            )
+        }
         // A pager set in the environment runs a command the view dropped.
         if var matched = pagerAssignmentHit(in: command) {
             matched.searchText = result.matchingView.rawValue
