@@ -70,6 +70,10 @@ enum MCPRun {
         var headerNames: [String]
         var plaintextCredentials: [String]
         var governedServer: String?
+        /// For `off` rows: why serve will not start it ("not governed: …").
+        var offReason: String?
+        /// For `off` rows: the command that fixes it.
+        var next: String?
     }
 
     struct Problem: Encodable, Equatable {
@@ -197,20 +201,30 @@ enum MCPRun {
     ) -> Report {
         let inventory = MCPInventory.discover(
             home: environment.home, project: project, environment: environment.processEnvironment)
+        let integrity = environment.integrity
         let rows = MCPInventoryRow.rows(inventory, configuration: configuration, rvExecutable: rvExecutable).map { row in
-            Row(
+            // "governed" only when serve would start it.
+            let off = row.status == .governed
+                ? row.entry.governedServer.flatMap { server in
+                    MCPServeRefusal.cause(serving: server, configuration: configuration, integrity: integrity).map {
+                        MCPServeRefusal(servers: [server], cause: $0, log: "")
+                    }
+                }
+                : nil
+            return Row(
                 host: row.entry.host.rawValue,
                 scope: row.entry.scope.label,
                 configPath: row.entry.configPath,
                 name: row.entry.name,
-                status: row.status.rawValue,
+                status: off == nil ? row.status.rawValue : MCPEntryStatus.off.rawValue,
                 command: row.display,
                 environmentNames: row.environmentNames,
                 headerNames: row.headerNames,
                 plaintextCredentials: row.plaintextCredentials,
-                governedServer: row.entry.governedServer)
+                governedServer: row.entry.governedServer,
+                offReason: off.map { "not governed: " + $0.listReason },
+                next: off?.next)
         }
-        let integrity = environment.integrity
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
         problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
         let auditing = configuration.servers.filter { $0.sandbox?.enforcement == .audit }
@@ -272,6 +286,9 @@ enum MCPRun {
             let padded = name.padding(toLength: max(width, name.count), withPad: " ", startingAt: 0)
             let status = reviewField(row.status).padding(toLength: 10, withPad: " ", startingAt: 0)
             lines.append("  \(padded)  \(status)  \(reviewField(row.command))")
+            if let reason = row.offReason {
+                lines.append("  " + String(repeating: " ", count: max(width, name.count)) + "  ✕ " + reviewField(reason))
+            }
             var details: [String] = []
             if row.environmentNames.isEmpty == false { details.append("env " + capped(row.environmentNames.map(reviewField))) }
             if row.headerNames.isEmpty == false { details.append("headers " + row.headerNames.map(reviewField).joined(separator: ", ")) }
@@ -287,7 +304,14 @@ enum MCPRun {
         lines += problemLines(report, home: home)
         if let problem = report.integrityProblem { lines.append("warning: " + reviewField(problem)) }
         lines += sandboxAuditLines(report)
+        lines += nextLines(report)
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The fix for every `off` row, once each, last so it is ready to copy.
+    static func nextLines(_ report: Report) -> [String] {
+        var seen = Set<String>()
+        return report.rows.compactMap(\.next).filter { seen.insert($0).inserted }.map { "→ " + reviewField($0) }
     }
 
     static func checkText(_ report: Report, home: URL) -> String {
@@ -303,7 +327,11 @@ enum MCPRun {
                 let status = MCPEntryStatus(rawValue: row.status)
                 lines.append(
                     "\(reviewField(row.status))  \(reviewField(row.name))  \(reviewField(row.host)) \(reviewField(abbreviate(row.configPath, home: home)))")
-                if let status { lines.append("  \(status.explanation)") }
+                if let reason = row.offReason {
+                    lines.append("  " + reviewField(reason))
+                } else if let status {
+                    lines.append("  \(status.explanation)")
+                }
                 if let status, let fix = fixLine(status: status, row: row) { lines.append(fix) }
             }
             lines += problemLines(report, home: home)
@@ -334,6 +362,8 @@ enum MCPRun {
             return "  Fix: `rv mcp setup --host \(host) --server \(name) --undo`, or define \(name) in mcp.json"
         case .blocked:
             return "  Fix: remove \(name) from \"blocked\" in mcp.json to review it"
+        case .off:
+            return row.next.map { "  Fix: `\(reviewField($0))`" }
         case .governed, .direct, .disabled:
             return nil
         }
@@ -395,13 +425,14 @@ enum MCPRun {
     }
 
     static func summary(_ report: Report) -> String {
-        let order: [MCPEntryStatus] = [.governed, .direct, .bypass, .unreviewed, .blocked, .dangling, .disabled]
+        let order: [MCPEntryStatus] = [.governed, .off, .direct, .bypass, .unreviewed, .blocked, .dangling, .disabled]
         let counts = order.compactMap { status -> String? in
             let count = report.rows.filter { $0.status == status.rawValue }.count
             return count == 0 ? nil : "\(count) \(status.rawValue)"
         }
         let files = Set(report.rows.map(\.configPath)).count
-        return "\(report.rows.count) host entries in \(files) files" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", "))
+        let entries = report.rows.count == 1 ? "1 host entry" : "\(report.rows.count) host entries"
+        return "\(entries) in \(files) file\(files == 1 ? "" : "s")" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", "))
     }
 
     /// Governed local servers `rv mcp serve` will refuse. Where the cage
@@ -1164,7 +1195,7 @@ enum MCPRun {
     }
 
     static func denyMissingIDMessage(_ id: String) -> String {
-        "no MCP approval has id \(reviewField(id))"
+        "no MCP approval has id \(reviewField(id)) (see `rv mcp pending`)"
     }
 
     /// Quoted review values. `read_file` plus `shell` does not look like the
@@ -1256,9 +1287,28 @@ enum MCPRun {
         },
         placeholders: MCPPlaceholderLeasing = .unavailable
     ) -> Result<MCPServePlan, CommandFailure> {
+        upstreamPlan(
+            names: names, configuration: configuration, environment: environment, secrets: secrets, resolver: resolver,
+            sandbox: sandbox, placeholders: placeholders
+        ).mapError { CommandFailure($0.log) }
+    }
+
+    /// `upstreamLaunches`, failing with the refusal serve answers the
+    /// client with: the owner's message in `log`, its cause for the agent.
+    static func upstreamPlan(
+        names: [String], configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
+        resolver: SecretResolver,
+        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch, _ in
+            .success(launch)
+        },
+        placeholders: MCPPlaceholderLeasing = .unavailable
+    ) -> Result<MCPServePlan, MCPServeRefusal> {
+        func refusal(_ cause: MCPServeRefusal.Cause, _ log: String) -> MCPServeRefusal {
+            MCPServeRefusal(servers: names, cause: cause, log: log)
+        }
         let verified: MCPConfiguration
         switch boundConfiguration(environment) {
-        case .failure(let failure): return .failure(failure)
+        case .failure(let failure): return .failure(refusal(.configurationUnusable, failure.message))
         case .success(let bound):
             if let problem = bound.integrity.problem {
                 auditOrLog(
@@ -1266,7 +1316,8 @@ enum MCPRun {
                         time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
                         reason: problem, source: "rv mcp serve", detail: ["integrity": "untrusted"]),
                     configDirectory: environment.configDirectory)
-                return .failure(CommandFailure("\(problem); not launching MCP servers"))
+                let cause: MCPServeRefusal.Cause = bound.integrity == .unsupportedPlatform ? .trustUnavailable : .untrusted
+                return .failure(refusal(cause, "\(problem); not launching MCP servers"))
             }
             guard sameStoredConfiguration(configuration, bound.configuration) else {
                 let problem = "mcp.json changed while it was being checked"
@@ -1275,7 +1326,7 @@ enum MCPRun {
                         time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
                         reason: problem, source: "rv mcp serve", detail: ["integrity": "changed"]),
                     configDirectory: environment.configDirectory)
-                return .failure(CommandFailure("\(problem); not launching MCP servers"))
+                return .failure(refusal(.changedWhileChecked, "\(problem); not launching MCP servers"))
             }
             verified = bound.configuration
         }
@@ -1294,7 +1345,7 @@ enum MCPRun {
                         detail: ["server": server, "secret": secret]),
                     configDirectory: environment.configDirectory)
             }
-            return .failure(CommandFailure(error.message))
+            return .failure(refusal(MCPServeRefusal.cause(of: error), error.message))
         case .success(let planned): return .success(MCPServePlan(configuration: verified, launches: planned))
         }
     }
@@ -1790,27 +1841,51 @@ struct MCPServe: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp serve", json: false, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
         let environment = MCPEnvironment.live(home: home)
+        do {
+            try serve(home: home, environment: environment)
+        } catch let refusal as MCPServeRefusal {
+            try Self.refuse(refusal, ctx: ctx)
+        }
+    }
+
+    /// Serve could not start: the owner's line on stderr, then the reason
+    /// and its fix as the error to every request the client sends, so the
+    /// host shows the agent why instead of an empty pipe. Runs after
+    /// `serve` returned: its signal handlers, proxies and placeholder
+    /// broker are gone, and nothing was started.
+    static func refuse(_ refusal: MCPServeRefusal, ctx: CommandContext) throws -> Never {
         // Through the gateway's stderr writer, so a closed stderr cannot end
         // serve by SIGPIPE before it says why it stops; a test's captured
         // output still gets the line.
-        func fail(_ message: String) throws -> Never {
-            let line = "rv mcp serve: \(message)\n"
-            guard CLIProcess.context?.output == nil else { try ctx.emit(stdout: "", stderr: line, exitCode: 1) }
-            MCPGatewayRuntime.writeStderrLine(line)
-            throw ExitCode(1)
+        let line = "rv mcp serve: \(refusal.log)\n"
+        guard CLIProcess.context?.output == nil else { try ctx.emit(stdout: "", stderr: line, exitCode: 1) }
+        MCPGatewayRuntime.writeStderrLine(line)
+        // A person who ran serve at a terminal has read the line above; only
+        // a host's pipe gets the protocol answer.
+        if isatty(STDIN_FILENO) == 0 {
+            signal(SIGPIPE, SIG_IGN)
+            MCPRefusalResponder.serve(refusal)
+        }
+        throw ExitCode(1)
+    }
+
+    private func serve(home: HomeDirectory, environment: MCPEnvironment) throws {
+        var names = servers
+        func fail(_ cause: MCPServeRefusal.Cause, _ message: String) throws -> Never {
+            throw MCPServeRefusal(servers: names, cause: cause, log: message)
         }
         let bound: MCPRun.MCPBoundConfiguration
         switch MCPRun.boundConfiguration(environment) {
-        case .failure(let failure): try fail(failure.message)
+        case .failure(let failure): try fail(.configurationUnusable, failure.message)
         case .success(let loaded): bound = loaded
         }
         let configuration = bound.configuration
         var seen = Set<String>()
-        let names = (servers.isEmpty ? configuration.servers.map(\.name) : servers).filter { seen.insert($0).inserted }
-        guard names.isEmpty == false else { try fail("mcp.json defines no servers; see `rv mcp import`") }
+        names = (servers.isEmpty ? configuration.servers.map(\.name) : servers).filter { seen.insert($0).inserted }
+        guard names.isEmpty == false else { try fail(.noServers, "mcp.json defines no servers; see `rv mcp import`") }
         let secrets: SecretsConfiguration
         switch SecretsConfiguration.load(configDirectory: environment.configDirectory) {
-        case .failure(let error): try fail(error.message)
+        case .failure(let error): try fail(.secretsUnusable, error.message)
         case .success(let loaded): secrets = loaded
         }
         // A signal ends serve through its normal shutdown: from before
@@ -1824,8 +1899,10 @@ struct MCPServe: AsyncParsableCommand {
         let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
         defer { signals.cancel() }
         guard signals.installed else {
-            try fail("rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; "
-                + "not serving")
+            try fail(
+                .signalsUnavailable,
+                "rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; "
+                    + "not serving")
         }
         // Its gateway serves only the servers that list `placeholders`, each
         // lease bound to that server's process group; it stops with serve.
@@ -1841,7 +1918,7 @@ struct MCPServe: AsyncParsableCommand {
         let auditPasses = DenialAudit.observed(configDirectory: environment.configDirectory)
         let plan: MCPServePlan
         let outcome = signals.plan {
-            MCPRun.upstreamLaunches(
+            MCPRun.upstreamPlan(
                 names: names, configuration: configuration, environment: environment, secrets: secrets,
                 resolver: .live(home: home.rawValue),
                 sandbox: MCPSandbox.apply(
@@ -1855,10 +1932,20 @@ struct MCPServe: AsyncParsableCommand {
             throw ExitCode(128 + (signals.first ?? SIGTERM))
         }
         switch outcome {
-        case .failure(let failure): try fail(failure.message)
+        case .failure(let refusal): throw refusal
         case .success(let result): plan = result
         }
         let planned = plan.launches
+        // Nothing would start: refuse in the protocol now, rather than
+        // serve an empty tool list with the reasons only on stderr.
+        if let cause = MCPServeRefusal.cause(ofPlanned: planned.map { $0.1 }) {
+            MCPSandbox.stopProxies()
+            let reasons = planned.compactMap { _, connection -> String? in
+                guard case .refused(let server, let refusal) = connection else { return nil }
+                return "not starting MCP server \(MCPDisplayedText.field(server)): \(refusal.message)"
+            }
+            try fail(cause, reasons.joined(separator: "; "))
+        }
         let configDirectory = environment.configDirectory
         // As `MCPGatewayRuntime.run` does, before the pin-store and
         // host-check lines below. Lines through the gateway's stderr writer
