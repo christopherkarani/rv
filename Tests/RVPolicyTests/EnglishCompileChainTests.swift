@@ -72,6 +72,53 @@ struct EnglishCompileChainTests {
         }
     }
 
+    /// The bug on macOS 26: the on-device model answered `refuse(empty)` for
+    /// every sentence. The grammar now drafts first, so a plain sentence
+    /// never reaches the model.
+    @Test func productChain_draftsPlainSentencesEvenWhenTheModelRefusesEmpty() async throws {
+        let chain = EnglishCompileChain(
+            primary: EmptyRefusingEnglishCompiler(), fallback: FakeEnglishCompiler(),
+            phrases: PlainEnglishRuleCompiler())
+        for sentence in ["never force push to main", "never allow force-push to main", "block git reset --hard"] {
+            guard case .preview = try await chain.compile(sentence) else {
+                Issue.record("expected a rule for \(sentence)")
+                continue
+            }
+        }
+        #expect(try await chain.compile("never delete files outside this repo") == .refuse(.alreadyBuiltIn))
+        // The grammar's refusal stands over the model's "empty".
+        #expect(try await chain.compile("be careful in prod") == .refuse(.uncompilable))
+    }
+
+    @Test func productChain_asksTheModelOnlyForWhatTheGrammarCannotRead() async throws {
+        let chain = EnglishCompileChain(
+            primary: DistinctPreviewEnglishCompiler(sentence: "model-form"), fallback: FakeEnglishCompiler(),
+            phrases: PlainEnglishRuleCompiler())
+        guard case .preview(let grammar) = try await chain.compile("never force push to main") else {
+            Issue.record("expected the grammar's rule")
+            return
+        }
+        #expect(grammar.sentence == "Always block force-push to main")
+        guard case .preview(let model) = try await chain.compile("keep main safe from forced history rewrites") else {
+            Issue.record("expected the model's rule")
+            return
+        }
+        #expect(model.sentence == "model-form")
+        // Unsupported tools are the grammar's answer, not the model's.
+        #expect(try await chain.compile("never npm publish") == .refuse(.unsupportedPredicate))
+    }
+
+    @Test func productChain_modelUnavailable_keepsTheGrammarReason() async throws {
+        let chain = EnglishCompileChain(
+            primary: UnavailableEnglishCompiler(), fallback: FakeEnglishCompiler(),
+            phrases: PlainEnglishRuleCompiler())
+        #expect(try await chain.compile("be careful in prod") == .refuse(.uncompilable))
+        guard case .preview = try await chain.compile("ask before pushing to release") else {
+            Issue.record("expected a rule")
+            return
+        }
+    }
+
     @Test func otherError_propagatesWithoutFallback() async {
         let chain = EnglishCompileChain(
             primary: ExplodingEnglishCompiler(),
@@ -119,5 +166,11 @@ private struct DistinctPreviewEnglishCompiler: EnglishCompiler {
                 allowedToSave: true
             )
         )
+    }
+}
+
+private struct EmptyRefusingEnglishCompiler: EnglishCompiler {
+    func compile(_: String) async throws -> EnglishCompileResult {
+        .refuse(.empty)
     }
 }
