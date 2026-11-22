@@ -98,6 +98,17 @@ struct SecretsEveryModeTests {
         "git -c rv.secretsScan=false commit -m x",
         "echo 'config.ts:generic-secret:3' >> .rv-secrets-ignore",
         #"sed -i 's/$/ # rv-secrets:allow/' config.ts"#,
+        "git config -t bool rv.secretsScan false",
+        "git config --ty bool rv.secretsScan false",
+        "git config --fil .git/config rv.secretsScan false",
+        "git config core.hooksPath /dev/null",
+        "git config --global include.path /tmp/evil",
+        "chmod -x .git/hooks/pre-commit",
+        "rm .git/hooks/pre-commit",
+        ": > .git/hooks/pre-commit",
+        #"printf '[rv]\n\tsecretsS%san = false\n' c >> .git/config"#,
+        // A pack deny in front must not let one allow-once run the switch.
+        "git reset --hard && git config rv.secretsScan false",
     ])
     func switchIsOwnerOnly(command: String) async throws {
         for config in [Self.block, Self.observe] {
@@ -118,11 +129,33 @@ struct SecretsEveryModeTests {
         "git config --get rv.secretsScan",
         "grep -rn rv-secrets:allow .",
         "git config rv.secretsScan true",
+        "swift test --filter SecretsScanGuardTests",
+        "git add Sources/RVEngine/SecretsScanGuard.swift",
+        "sed -n 1,40p Sources/RVEngine/SecretsScanGuard.swift",
+        "git commit -m 'guard rv.secretsScan'",
+        "find . -name '*SecretsScan*'",
+        "git add .rv-secrets-ignore",
     ])
     func readsStayAllowed(command: String) async throws {
         let home = try Self.home(Self.block)
         defer { remove(home) }
         #expect(await Self.apply(command, home: home).decision == .allow, "\(command)")
+    }
+
+    @Test("naming the controls is never the pinned stop", arguments: [
+        "cat .rv-secrets-ignore | sort",
+        "grep -n secretsScan .git/config",
+        "git log -p -- .rv-secrets-ignore",
+    ])
+    func namingIsNotThePinnedStop(command: String) async throws {
+        for config in [Self.block, Self.observe] {
+            let home = try Self.home(config)
+            defer { remove(home) }
+            let result = await Self.apply(command, home: home)
+            if case .deny(let deny) = result.decision {
+                #expect(deny.ruleID != SecretsScanGuard.ruleID, "\(config) \(command)")
+            }
+        }
     }
 
     @Test("file door: writing the scan's controls is denied, reading them is not", arguments: [
@@ -210,6 +243,27 @@ struct SecretsEveryModeTests {
                 }
                 #expect(deny.ruleID == SecretsScanGuard.ruleID)
             }
+        }
+    }
+
+    @Test("removing or moving rv's hook stops, in a shared hooks dir too", arguments: [
+        "rm .husky/pre-commit",
+        "rm -rf .husky",
+        "chmod -x .husky/pre-commit",
+        "cd .husky && : > pre-commit",
+        "sh -c 'rm .husky/pre-commit'",
+    ])
+    func removingRVHookStops(command: String) async throws {
+        for config in [Self.block, Self.observe] {
+            let home = try Self.home(config)
+            defer { remove(home) }
+            let cwd = try Self.repo(in: home, hook: .husky)
+            let result = await Self.apply(command, home: home, cwd: cwd)
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("\(config) \(command): expected a deny, got \(result.decision)")
+                continue
+            }
+            #expect(deny.ruleID == SecretsScanGuard.ruleID, "\(config) \(command)")
         }
     }
 

@@ -227,8 +227,7 @@ enum ObserveFloor {
         mutating func touched(by text: String, matchingView: String? = nil) -> Bool {
             let shell = ShellCommand(rawValue: text)
             if SelfProtectionGuard.weakensPolicy(shell) || SecretServiceGuard.touchesSecretService(shell)
-                || SecretsScanGuard.weakensScan(shell)
-                || SecretsScanHookProbe.weakensHook(shell, cwd: cwd, home: home)
+                || SecretsScanHookProbe.weakensScan(shell, cwd: cwd, home: home)
             {
                 return true
             }

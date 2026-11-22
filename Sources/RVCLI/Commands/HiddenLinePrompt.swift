@@ -13,7 +13,9 @@ import Foundation
 /// The terminal is put in non-canonical mode with echo and signals off, and
 /// its attributes are restored before returning on every path. With signals
 /// off, Ctrl-C and Ctrl-D are bytes, read here as cancel, so an interrupt
-/// never leaves the terminal silent. Backspace and Ctrl-U edit the line;
+/// never leaves the terminal silent. A SIGTERM, SIGHUP, SIGINT or SIGQUIT
+/// sent from elsewhere restores the terminal too, then gets its previous
+/// action, as `readpassphrase(3)` does. Backspace and Ctrl-U edit the line;
 /// Enter ends it. The prompt and the closing newline go to the same fd.
 enum HiddenLinePrompt {
     enum Outcome: Equatable {
@@ -44,6 +46,8 @@ enum HiddenLinePrompt {
         setControlCharacter(&hidden, VMIN, 1)
         setControlCharacter(&hidden, VTIME, 0)
         // TCSAFLUSH drops what was typed ahead, which the terminal echoed.
+        HiddenLineSignals.arm(fd: fd, saved: original)
+        defer { HiddenLineSignals.disarm() }
         guard setAttributes(fd, &hidden, when: TCSAFLUSH) else { return .unavailable }
         writeAll(fd, Array(prompt.utf8))
         var line: [UInt8] = []
@@ -60,6 +64,9 @@ enum HiddenLinePrompt {
         var byte: UInt8 = 0
         while true {
             let count = readByte(fd, &byte)
+            // A signal whose previous action returned: the terminal is
+            // already back, so the line is cancelled.
+            if HiddenLineSignals.caught != 0 { return false }
             if count < 0, errno == EINTR { continue }
             guard count == 1 else { return false }
             switch byte {
@@ -115,5 +122,75 @@ enum HiddenLinePrompt {
         withUnsafeMutableBytes(of: &term.c_cc) { buffer in
             buffer[Int(index)] = value
         }
+    }
+}
+
+/// The terminal attributes to put back if a signal ends the prompt. The
+/// handler only calls async-signal-safe functions: `tcsetattr`,
+/// `sigaction` and `raise`.
+private enum HiddenLineSignals {
+    nonisolated(unsafe) static var fd: Int32 = -1
+    nonisolated(unsafe) static var saved = termios()
+    nonisolated(unsafe) static var caught: sig_atomic_t = 0
+    nonisolated(unsafe) static var previousTERM = sigaction()
+    nonisolated(unsafe) static var previousHUP = sigaction()
+    nonisolated(unsafe) static var previousINT = sigaction()
+    nonisolated(unsafe) static var previousQUIT = sigaction()
+
+    static func arm(fd: Int32, saved: termios) {
+        self.fd = fd
+        self.saved = saved
+        caught = 0
+        previousTERM = install(SIGTERM)
+        previousHUP = install(SIGHUP)
+        previousINT = install(SIGINT)
+        previousQUIT = install(SIGQUIT)
+    }
+
+    static func disarm() {
+        restore(SIGTERM, previousTERM)
+        restore(SIGHUP, previousHUP)
+        restore(SIGINT, previousINT)
+        restore(SIGQUIT, previousQUIT)
+        fd = -1
+    }
+
+    private static func install(_ number: Int32) -> sigaction {
+        var action = sigaction()
+        var previous = sigaction()
+        #if canImport(Darwin)
+        action.__sigaction_u.__sa_handler = handle
+        #else
+        action.__sigaction_handler.sa_handler = handle
+        #endif
+        sigemptyset(&action.sa_mask)
+        // No SA_RESTART: the blocked `read` returns EINTR if the previous
+        // action lets the process live.
+        action.sa_flags = 0
+        sigaction(number, &action, &previous)
+        return previous
+    }
+
+    private static func restore(_ number: Int32, _ previous: sigaction) {
+        var copy = previous
+        sigaction(number, &copy, nil)
+    }
+
+    private static let handle: @convention(c) (Int32) -> Void = { number in
+        caught = 1
+        if fd >= 0 {
+            var copy = saved
+            while tcsetattr(fd, TCSANOW, &copy) != 0 && errno == EINTR {}
+        }
+        // Hand the signal to what was there before (default: terminate).
+        var previous: sigaction
+        switch number {
+        case SIGTERM: previous = previousTERM
+        case SIGHUP: previous = previousHUP
+        case SIGINT: previous = previousINT
+        default: previous = previousQUIT
+        }
+        sigaction(number, &previous, nil)
+        raise(number)
     }
 }

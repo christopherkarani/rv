@@ -14,9 +14,9 @@ import RVPolicy
 /// marker. Files are read with a size cap; any failure reads as "not
 /// installed", so a repository rv cannot read is never blocked.
 ///
-/// Only commands that would skip or move hooks (`SecretsScanGuard.
-/// skipsCommitHook`, `movesHooksPath`) and file-tool writes of a
-/// `pre-commit` file reach it, so ordinary evaluations pay nothing.
+/// `SecretsScanGuard.weakensScan` asks it only for a command that could
+/// skip or move hooks or that writes some path, and a file-tool write of a
+/// `pre-commit` file asks it too, so ordinary evaluations pay nothing.
 enum SecretsScanHookProbe {
     static let maximumFileBytes = 1024 * 1024
     /// The whole-hook marker an older `rv secrets hook install` wrote.
@@ -30,26 +30,29 @@ enum SecretsScanHookProbe {
         else { return nil }
         let common = commonDirectory(gitdir: gitdir)
         let hooks = hooksDirectory(root: root, common: common, home: home?.rawValue)
-        let hook = hooks + "/pre-commit"
+        let hook = ((hooks + "/pre-commit") as NSString).standardizingPath
         guard let text = readCapped(hook), holdsRVBlock(text) else { return nil }
         return hook
     }
 
-    /// Tightens an allow for a command that skips or moves the hooks of a
-    /// repository with rv's hook to the commit check's stop.
+    /// Raises any verdict but a `core.secrets` deny to the commit check's
+    /// stop when the command weakens the scan: a pack deny alone (`git reset
+    /// --hard && git config rv.secretsScan false`) would let one allow-once
+    /// run the switch too.
     static func tighten(
         _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, home: HomeDirectory?
     ) -> EvaluationResult {
-        guard result.decision == .allow, weakensHook(command, cwd: cwd, home: home) else { return result }
+        if case .deny(let deny) = result.decision, deny.ruleID.pack == .coreSecrets { return result }
+        guard weakensScan(command, cwd: cwd, home: home) else { return result }
         return SecretsScanGuard.deny(searchText: result.matchingView.rawValue)
     }
 
-    /// The text test first (cheap), the filesystem only when it holds.
-    static func weakensHook(_ command: ShellCommand, cwd: WorkingDirectory?, home: HomeDirectory?) -> Bool {
-        guard SecretsScanGuard.skipsCommitHook(command) || SecretsScanGuard.movesHooksPath(command) else {
-            return false
+    /// `SecretsScanGuard.weakensScan` with the command's directories and
+    /// this probe.
+    static func weakensScan(_ command: ShellCommand, cwd: WorkingDirectory?, home: HomeDirectory?) -> Bool {
+        SecretsScanGuard.weakensScan(command, home: home, cwd: cwd) {
+            installedHook(cwd: cwd, home: home)
         }
-        return installedHook(cwd: cwd, home: home) != nil
     }
 
     static func holdsRVBlock(_ text: String) -> Bool {

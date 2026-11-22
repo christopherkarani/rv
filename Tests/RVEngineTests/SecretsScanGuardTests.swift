@@ -48,6 +48,30 @@ struct SecretsScanGuardTests {
         "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rv.secretsScan GIT_CONFIG_VALUE_0=false git commit -m x",
         "cat .rv-secrets-ignore > /tmp/x; mv /tmp/x .rv-secrets-ignore",
         "rv run --secret K -- sh -c 'echo x >> .rv-secrets-ignore'",
+        // git's own option spellings: short, attached, unique prefixes.
+        "git config -t bool rv.secretsScan false",
+        "git config -tbool rv.secretsScan false",
+        "git config --ty bool rv.secretsScan false",
+        "git config --fil .git/config rv.secretsScan false",
+        "git config --glob rv.secretsScan false",
+        // An option rv does not know, beside the switch, fails closed.
+        "git config --frobnicate rv.secretsScan false",
+        // Hooks moved away or another config file pulled in, anywhere.
+        "git config core.hooksPath /dev/null",
+        "git config --global core.hooksPath ~/hooks",
+        "git -c core.hooksPath=/dev/null commit -m x",
+        "git config include.path /tmp/evil",
+        "git config --global includeIf.gitdir:~/x/.path /tmp/evil",
+        "git -c include.path=/tmp/x commit -m x",
+        "GIT_CONFIG_GLOBAL=/tmp/evil git commit -m x",
+        "export GIT_CONFIG_PARAMETERS=\"'rv.secretsscan'='false'\"",
+        // Shell writes of the hooks and config, as the file door denies.
+        "chmod -x .git/hooks/pre-commit",
+        "rm .git/hooks/pre-commit",
+        ": > .git/hooks/pre-commit",
+        #"printf '[rv]\n\tsecretsS%san = false\n' c >> .git/config"#,
+        "cd /repo/.git && rm hooks/pre-commit",
+        "echo '// rv-secrets:allow' >> src/config.ts",
     ]
 
     static let harmless: [String] = [
@@ -71,6 +95,24 @@ struct SecretsScanGuardTests {
         "rv explain 'git config rv.secretsScan false'",
         "ls -la",
         "npm test",
+        // Naming the controls is not touching them.
+        "swift test --filter SecretsScanGuardTests",
+        "git add Sources/RVEngine/SecretsScanGuard.swift",
+        "sed -n 1,40p Sources/RVEngine/SecretsScanGuard.swift",
+        "git commit -m 'guard rv.secretsScan'",
+        "find . -name '*SecretsScan*'",
+        "git add .rv-secrets-ignore",
+        "cat .rv-secrets-ignore | sort",
+        "git config --get-regexp core",
+        "git -c core.pager=cat log",
+        "GIT_CONFIG_GLOBAL=/dev/null git status",
+        "chmod +x scripts/run.sh",
+        "echo hi > notes.txt",
+        "python3 -m pytest tests",
+        // Without rv's hook, skipping or moving hooks is the repository's own business.
+        "git commit -n -m x",
+        "git config --unset core.hooksPath",
+        "rm -rf .husky",
     ]
 
     @Test(arguments: weakening)
@@ -81,6 +123,52 @@ struct SecretsScanGuardTests {
     @Test(arguments: harmless)
     func leavesReadsAndOtherCommandsAlone(_ command: String) {
         #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    @Test("with rv's hook installed", arguments: [
+        "git commit -n -m x",
+        "git commit --no-verify -m x",
+        "git config --unset core.hooksPath",
+        "rm -rf .husky",
+        "rm .husky/pre-commit",
+        "mv .husky /tmp/old",
+        "cp /tmp/empty .husky/pre-commit",
+        "chmod -x .husky/pre-commit",
+    ])
+    func weakensWithRVHook(_ command: String) {
+        let hook = "/repo/.husky/pre-commit"
+        let cwd = WorkingDirectory(validating: "/repo")
+        #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) { hook }, "\(command)")
+        #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) { nil } == false, "\(command)")
+    }
+
+    @Test func theProbeRunsOnlyForCommandsThatCouldNeedIt() {
+        var asked = 0
+        let cwd = WorkingDirectory(validating: "/repo")
+        for command in ["ls -la", "npm test", "git status", "cat README.md"] {
+            _ = SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) {
+                asked += 1
+                return "/repo/.git/hooks/pre-commit"
+            }
+        }
+        #expect(asked == 0)
+    }
+
+    @Test func foldPinsTheSwitchBehindAPackDeny() {
+        let command = "git reset --hard && git config rv.secretsScan false"
+        let resetHard = RuleID(pack: .coreGit, pattern: "reset-hard")
+        var matched = SecretsScanGuard.match(searchText: command)
+        matched.ruleID = resetHard
+        let denied = EvaluationResult(
+            outcome: .deny(Deny(ruleID: resetHard, reason: "x"), matched: matched),
+            matchingView: MatchingView(command)
+        )
+        let folded = SecretPathDecider.dayOne.fold(denied, command: ShellCommand(rawValue: command))
+        guard case .deny(let deny, _) = folded.outcome else {
+            Issue.record("expected a deny, got \(folded.outcome)")
+            return
+        }
+        #expect(deny.ruleID == SecretsScanGuard.ruleID)
     }
 
     @Test func foldDeniesAnAllowedSwitchAsCoreSecrets() {
@@ -163,6 +251,8 @@ struct SecretsScanGuardTests {
         "git config --local core.hooksPath .git/hooks",
         "git config --remove-section core",
         "git config --rename-section core old",
+        "git config --unse core.hooksPath",
+        "git config --frobnicate core.hooksPath",
     ])
     func movesHooksPath(_ command: String) {
         #expect(SecretsScanGuard.movesHooksPath(ShellCommand(rawValue: command)), "\(command)")

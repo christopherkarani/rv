@@ -81,6 +81,14 @@ public struct SecretPathDecider: Sendable {
     /// (`grep "k" ".env"`, `jq . .env`). The deny keeps the matching view and
     /// never quotes the unmasked text.
     public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        // The commit check's switch is pinned even behind a pack deny: `git
+        // reset --hard && git config rv.secretsScan false` must not ride on
+        // an allow-once for the reset.
+        if case .deny(let deny, _) = result.outcome, deny.ruleID.pack != .coreSecrets,
+           catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command)
+        {
+            return SecretsScanGuard.deny(searchText: result.matchingView.rawValue)
+        }
         let folded = fold(result)
         guard folded == result, escalatesToAliasPass(result) else { return folded }
         // The Linux secret store is a keyring reached over D-Bus, not a path.
