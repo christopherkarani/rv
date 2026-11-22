@@ -27,17 +27,23 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
     private let discover: @Sendable () -> xpc_connection_t
     private let verify: @Sendable (xpc_object_t) -> Bool
     private let rewarmDelays: [Duration]
+    /// Whether a new connection warms the last model, and a broken one is
+    /// re-warmed. The hook-local evaluator lives for one call and may not
+    /// warm, so its client never does.
+    private let warms: Bool
     private let cached = Mutex<JudgePoolHeld?>(nil)
     private let lastKey = Mutex<ModelKey?>(nil)
     private let rewarming = Mutex(false)
 
     public convenience init(
         serviceName: String = JudgePoolWire.machServiceName,
-        siblingSupervisorPath: String? = JudgePoolTrust.siblingPath("rv-judge")
+        siblingSupervisorPath: String? = JudgePoolTrust.siblingPath("rv-judge"),
+        warms: Bool = true
     ) {
         self.init(
             discover: { xpc_connection_create_mach_service(serviceName, nil, 0) },
-            verify: { JudgePoolTrust.verifySupervisor(reply: $0, siblingSupervisorPath: siblingSupervisorPath) })
+            verify: { JudgePoolTrust.verifySupervisor(reply: $0, siblingSupervisorPath: siblingSupervisorPath) },
+            warms: warms)
     }
 
     /// `discover` opens a connection to the discovery listener; `verify`
@@ -45,11 +51,13 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
     init(
         discover: @escaping @Sendable () -> xpc_connection_t,
         verify: @escaping @Sendable (xpc_object_t) -> Bool,
-        rewarmDelays: [Duration] = XPCJudgeClient.rewarmDelays
+        rewarmDelays: [Duration] = XPCJudgeClient.rewarmDelays,
+        warms: Bool = true
     ) {
         self.discover = discover
         self.verify = verify
         self.rewarmDelays = rewarmDelays
+        self.warms = warms
     }
 
     public func judge(key: ModelKey, input: JudgeInput, budget: Duration) -> PoolOutcome? {
@@ -66,6 +74,7 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
     }
 
     public func warm(key: ModelKey) {
+        guard warms else { return }
         lastKey.withLock { $0 = key }
         DispatchQueue.global(qos: .utility).async {
             let deadline = ContinuousClock.now + Self.helloTimeout * 2
@@ -159,7 +168,7 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
             xpc_connection_cancel(requests)
             return winner
         }
-        if warmNew, let key = lastKey.withLock({ $0 }) {
+        if warms, warmNew, let key = lastKey.withLock({ $0 }) {
             DispatchQueue.global(qos: .utility).async {
                 _ = self.call(.warm(key: key), on: held, until: ContinuousClock.now + Self.helloTimeout * 2)
             }
@@ -207,7 +216,7 @@ public final class XPCJudgeClient: JudgeClient, Sendable {
 
     /// Forgets `connection` and, when it was the cached one, re-warms.
     private func drop(_ connection: JudgePoolHeld) {
-        if forget(connection) { startRewarm() }
+        if forget(connection), warms { startRewarm() }
     }
 
     /// Drops `connection` if it is the cached one; returns whether it was.

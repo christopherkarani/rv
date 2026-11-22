@@ -48,6 +48,9 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     public static let configChanged = AuditEventKind(rawValue: "config.changed")
     /// An owner-authentication attempt (`OwnerPresence`), passed or not.
     public static let ownerAction = AuditEventKind(rawValue: "owner.action")
+    /// Rows that should be in the chain and are not: `detail.lost` audit
+    /// rows the hook-local evaluator could not write or spool.
+    public static let auditGap = AuditEventKind(rawValue: "audit.gap")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")
@@ -80,6 +83,7 @@ extension AuditEventKind: CaseIterable {
         .commandDenied, .commandObserved, .commandOverride, .egressDenied, .egressObserved, .admission,
         .runtimeSession, .runtimeStarted, .runtimeEnded, .secretUse, .secretMisuse, .mcpCall, .mcpApproval,
         .mcpToolChanged, .mcpHostsUngoverned, .policyChanged, .policyManaged, .configChanged, .ownerAction,
+        .auditGap,
     ]
 }
 

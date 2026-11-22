@@ -188,6 +188,15 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 | No manifest (one-click install) | same euid and exact on-disk bytes of `rvd` beside `rv-judge` (canonical path + CDHash) | same euid and exact bytes of `rv-judge` beside `rvd` |
 | Manifest present but invalid | never | never |
 
+The hook-local evaluator (`rv-hook-local`, `docs/architecture/hook-local-decide.md`)
+is a second, judge-only client. The supervisor accepts it, with a manifest,
+when its live code is hardened, non-adhoc, Developer ID signed
+`dev.rv.rv-hook-local` from the team the `service` entry names (the identity
+the C hook pins; the manifest has no entry of its own for it), and without
+one when it is the exact bytes of `rv-hook-local` beside `rv-judge`. It may
+send `judge` requests only: `warm` and `status` are refused, and its client
+never warms. It verifies the supervisor exactly as rvd does.
+
 - **A manifest without a `judge` entry verifies no supervisor.** rvd then
   treats the pool as unreachable and every judged call goes to review; it
   does not fall back to a sibling pin or to the in-process judge. Add a
@@ -200,7 +209,8 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 - Before each spawn the supervisor compares the on-disk `rv-judge`'s CDHash
   with its own running code (`SecCodeCopySelf`), not only the file identity.
 - The C hook validates a `judge` entry like Swift does (it is a known role in
-  `daemon_trust.c`), though the hook itself never talks to the pool.
+  `daemon_trust.c`), though the C hook itself never talks to the pool (its
+  `rv-hook-local` child does).
 - Every message on the listener is authorized before it is read; the Mach
   service connection only performs the hello and hands out an anonymous
   endpoint, and requests are refused on any connection that has not
@@ -213,13 +223,20 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 ## Lifecycle
 
 - `rv setup` writes `~/Library/LaunchAgents/dev.rv.judge.plist`
-  (`RunAtLoad`, `KeepAlive`, `ThrottleInterval` 5, Mach service
-  `dev.rv.judge`) when `rv-judge` is installed beside rvd, and bootstraps it
-  before rvd, so rvd's first judged call finds the pool. A missing
-  `rv-judge` or a refused bootstrap does not stop setup (rvd's judged calls
-  then go to review); with a judge bundle installed, setup warns. `rv
-  service restart` does not touch it. `rv uninstall` boots it out of both
-  launchd domains and removes the plist.
+  (`RunAtLoad`, `KeepAlive` while `rv-judge` exists, `ThrottleInterval` 5,
+  Mach service `dev.rv.judge`) when `rv-judge` is installed beside rvd, and
+  bootstraps it before rvd, so rvd's first judged call finds the pool. The
+  agent is always on, like rvd's: rvd is always on and every judged call
+  needs the pool, so waiting for a judged call to demand-launch the
+  supervisor after a crash would send that call to review while the model
+  loads; a deleted `rv-judge` is never respawned. A missing `rv-judge` or a
+  refused bootstrap does not stop setup (rvd's judged calls then go to
+  review); with a judge bundle installed, setup warns. `rv service restart`
+  restarts rvd only (the pool keeps its loaded workers). `rv uninstall`
+  boots it out of both launchd domains and removes the plist. `rv doctor`
+  warns when the installed plist is not RunAtLoad + KeepAlive
+  (`judge-agent-on-demand`) or the agent is loaded in both the gui and user
+  domains (`judge-agent-duplicate`).
 - rvd asks the pool to warm the configured model at startup.
 - Upgrade: the supervisor checks its executable's identity every 30 s and
   before each spawn. When the file changed it exits, and launchd restarts it

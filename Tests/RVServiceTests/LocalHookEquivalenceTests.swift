@@ -13,7 +13,10 @@ import RVPolicy
 /// with a judge installed. Each call is decided by the local evaluator and
 /// then by rvd's hook door over the same home. Every final local answer
 /// must be byte-identical to rvd's reply; an escalation is always sound,
-/// since rvd then decides. `RV_LOCAL_EQUIVALENCE_REPORT=<path>` writes the
+/// since rvd then decides. With a judge, both sides ask one pool stub with
+/// fixed scores per command (`ScoredPoolClient`), and rvd answers every
+/// call so the report can count pool requests per hook call: the
+/// evaluator's, plus rvd's when it escalated. `RV_LOCAL_EQUIVALENCE_REPORT=<path>` writes the
 /// per-configuration share decided locally. By default every 5th call
 /// runs (about 70 s); `RV_LOCAL_EQUIVALENCE_FULL=1` runs all ~12,500.
 @Suite("Hook-local equivalence", .serialized)
@@ -33,22 +36,37 @@ struct LocalHookEquivalenceTests {
         .init(guardMode: "observe", repo: true, judge: false),
         .init(guardMode: "observe", repo: false, judge: false),
         .init(guardMode: nil, repo: true, judge: true),
+        .init(guardMode: "observe", repo: true, judge: true),
     ]
 
     @Test(arguments: configurations)
     func everyLocalFinalIsRvdsReply(_ configuration: Configuration) async throws {
+        let pool = configuration.judge ? ScoredPoolClient() : nil
         let fixture = try LocalHookFixture(
-            judgeBundle: configuration.judge, guardMode: configuration.guardMode, repo: configuration.repo)
-        let runtime = hookTestRuntime(home: fixture.home, allowOnceDirectory: try isolatedAllowOnceDirectory())
+            judgeBundle: configuration.judge, guardMode: configuration.guardMode, repo: configuration.repo,
+            judge: pool)
+        let runtime = hookTestRuntime(
+            home: fixture.home, allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            judge: pool.map { PoolJudgePort(client: $0) } ?? LiveJudgePort())
         var tally = Tally()
         let all = EquivalenceCorpus.calls(workspace: fixture.workspace, home: fixture.home.path)
         let stride = ProcessInfo.processInfo.environment["RV_LOCAL_EQUIVALENCE_FULL"] == "1" ? 1 : 5
         for (index, call) in all.enumerated() where index % stride == 0 {
+            let before = pool?.count ?? 0
             let local = await fixture.decider.decide(host: .claude, stdin: call.stdin)
+            let asked = (pool?.count ?? 0) - before
             switch local {
             case .escalate(let reason):
                 tally.escalated[reason.rawValue, default: 0] += 1
+                if let pool {
+                    // rvd answers the escalated call, asking the pool again
+                    // when it judges.
+                    let rvdBefore = pool.count
+                    _ = try await Self.rvdReply(runtime, stdin: call.stdin)
+                    tally.count(local: asked, rvd: pool.count - rvdBefore)
+                }
             case .final(let reply):
+                if pool != nil { tally.count(local: asked, rvd: 0) }
                 let rvd = try await Self.rvdReply(runtime, stdin: call.stdin)
                 if reply != rvd {
                     tally.mismatches += 1
@@ -81,6 +99,21 @@ struct LocalHookEquivalenceTests {
         var finalDeny = 0
         var mismatches = 0
         var escalated: [String: Int] = [:]
+        /// Hook calls that reached the pool, and pool requests for them
+        /// (the evaluator's plus rvd's after an escalation).
+        var judgedCalls = 0
+        var poolRequests = 0
+        /// Judged calls the pool was asked twice (the evaluator, then rvd).
+        var askedTwice = 0
+        var localJudgedFinal = 0
+
+        mutating func count(local: Int, rvd: Int) {
+            guard local + rvd > 0 else { return }
+            judgedCalls += 1
+            poolRequests += local + rvd
+            if local > 0, rvd > 0 { askedTwice += 1 }
+            if local > 0, rvd == 0 { localJudgedFinal += 1 }
+        }
     }
 
     static func rvdReply(_ runtime: ServiceRuntime, stdin: String) async throws -> HookEvaluateReply {
@@ -100,9 +133,10 @@ struct LocalHookEquivalenceTests {
         let share = Double(local) / Double(max(tally.total, 1))
         let bashShare = Double(tally.bashLocal) / Double(max(tally.bash, 1))
         let line = String(
-            format: "%@ total=%d local=%d (%.1f%%) bash=%d bashLocal=%d (%.1f%%) allow=%d deny=%d mismatches=%d escalated=%@\n",
+            format: "%@ total=%d local=%d (%.1f%%) bash=%d bashLocal=%d (%.1f%%) allow=%d deny=%d mismatches=%d judged=%d poolRequests=%d askedTwice=%d judgedLocal=%d escalated=%@\n",
             configuration.description, tally.total, local, share * 100, tally.bash, tally.bashLocal,
-            bashShare * 100, tally.finalAllow, tally.finalDeny, tally.mismatches,
+            bashShare * 100, tally.finalAllow, tally.finalDeny, tally.mismatches, tally.judgedCalls,
+            tally.poolRequests, tally.askedTwice, tally.localJudgedFinal,
             tally.escalated.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ","))
         let handle = FileHandle(forWritingAtPath: path) ?? {
             FileManager.default.createFile(atPath: path, contents: nil)
