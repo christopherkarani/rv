@@ -36,7 +36,12 @@ public actor ServiceRuntime {
     private let grants: EphemeralAllowOnceTable
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
+    /// Drains the hook-local evaluator's spool, one drain at a time off the
+    /// cooperative pool; nil without a home.
+    let hookLocalSpool: HookLocalSpoolDrainer?
     private let clock: @Sendable () -> Date
+    /// Every hook decision, for `rv term` (`DecisionLog`). Nil outside rvd.
+    private let decisionLog: DecisionLogRecorder?
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     /// Operator launch ceremonies (proposal → review → permit). Shared with
@@ -107,7 +112,9 @@ public actor ServiceRuntime {
         hookCeremonies: HookReviewCeremonyService? = nil,
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
-        policyStatusService: PolicyStatusService = PolicyStatusService()
+        policyStatusService: PolicyStatusService = PolicyStatusService(),
+        judge: any JudgePort = LiveJudgePort(),
+        recordsDecisions: Bool = false
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -119,7 +126,9 @@ public actor ServiceRuntime {
         let compileSet = LiveCompileSet(
             snapshots: snapshots,
             catalog: catalog,
-            home: resolvedHome
+            home: resolvedHome,
+            uptimeNanoseconds: { DispatchTime.now().uptimeNanoseconds },
+            judge: judge
         )
         self.compileSet = compileSet
         self.corePacksReady = compileSet.corePacksReady
@@ -136,7 +145,18 @@ public actor ServiceRuntime {
         self.idleExitSeconds = idleExitSeconds
         self.log = log
         self.analytics = analytics
+        self.hookLocalSpool = resolvedHome.map { home in
+            HookLocalSpoolDrainer(home: home, deliver: { drained in
+                guard let analytics else { return }
+                if drained.decisions.isEmpty == false { await analytics.recordDecisions(drained.decisions) }
+                await analytics.noteEnabledPacks(compileSet.analyticsEnabledPackIDs)
+                await analytics.flushDailyIfNeeded()
+            })
+        }
         self.clock = clock
+        // rvd only (`RVDProcess`): tests and in-process runtimes never
+        // write the decision log.
+        self.decisionLog = recordsDecisions ? DecisionLogRecorder.live(home: resolvedHome, clock: clock) : nil
         self.pendingApprovals = Self.resolvePendingApprovals(
             pendingApprovals,
             home: resolvedHome
@@ -795,7 +815,8 @@ public actor ServiceRuntime {
                     host: params.host,
                     pending: pendingApprovals,
                     clock: clock,
-                    recordDecision: analyticsRecorder()
+                    recordDecision: analyticsRecorder(),
+                    decisionLog: decisionLog
                 ),
                 deadline: deadline
             )
@@ -851,8 +872,9 @@ public actor ServiceRuntime {
     private func analyticsRecorder() -> @Sendable (EvaluationResult) -> Void {
         let analytics = self.analytics
         let packs = compileSet.analyticsEnabledPackIDs
+        let spool = hookLocalSpool
         return { result in
-            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs)
+            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs, spool: spool)
         }
     }
 
@@ -860,15 +882,27 @@ public actor ServiceRuntime {
         Self.recordAnalytics(
             result,
             analytics: analytics,
-            enabledPackIDs: compileSet.analyticsEnabledPackIDs
+            enabledPackIDs: compileSet.analyticsEnabledPackIDs,
+            spool: hookLocalSpool
         )
     }
 
+    /// Starts draining the hook-local spool every minute, so its rows and
+    /// the daily analytics flush do not wait for rvd to evaluate something.
+    /// rvd calls it once at launch.
+    public nonisolated func startHookLocalSpoolTimer() {
+        hookLocalSpool?.startTimer()
+    }
+
+    /// Counts `result` and asks for a drain of the hook-local spool (a
+    /// non-blocking request: the drain runs on its own queue, one at a time).
     private static func recordAnalytics(
         _ result: EvaluationResult,
         analytics: AnalyticsCoordinator?,
-        enabledPackIDs: [String]
+        enabledPackIDs: [String],
+        spool: HookLocalSpoolDrainer?
     ) {
+        spool?.request()
         guard let analytics else { return }
         let kind: AnalyticsDecisionKind
         switch result.decision {

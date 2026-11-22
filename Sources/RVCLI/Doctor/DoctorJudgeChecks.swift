@@ -89,13 +89,15 @@ enum DoctorJudgeChecks {
     }
 
     /// With a judge bundle installed (macOS), the pool agent must be
-    /// installed beside rvd, registered and loaded. `loaded` is nil when
-    /// launchd was not observed: nothing to say then.
+    /// installed beside rvd, registered and loaded, always on (RunAtLoad +
+    /// KeepAlive, as rvd's), and loaded in one domain only. `loaded` is nil
+    /// when launchd was not observed: nothing to say then.
     static func agent(
         paths: OwnedPaths,
         fileManager: FileManager,
         loaded: Bool?,
-        bundleInstalled: Bool
+        bundleInstalled: Bool,
+        loadedInBothDomains: Bool = false
     ) -> DoctorProblem? {
         guard bundleInstalled, let loaded else { return nil }
         let judge = SetupRun.judgeExecutable(rvdPath: paths.localRvd)
@@ -115,6 +117,20 @@ enum DoctorJudgeChecks {
             return DoctorProblem(
                 id: "judge-agent", severity: .warn,
                 summary: "\(SetupRun.judgeLaunchAgentLabel) is not loaded; judged calls go to review",
+                fix: "rv setup")
+        }
+        guard DoctorInstallChecks.launchAgentKeepsRvdUp(at: paths.judgeLaunchAgent, rvdPath: judge) else {
+            return DoctorProblem(
+                id: "judge-agent-on-demand", severity: .warn,
+                summary: "LaunchAgent \(paths.judgeLaunchAgent) is not RunAtLoad + KeepAlive: after a crash "
+                    + "the judge pool stays down until a judged call starts it, and that call goes to review",
+                fix: "rv setup")
+        }
+        guard loadedInBothDomains == false else {
+            return DoctorProblem(
+                id: "judge-agent-duplicate", severity: .warn,
+                summary: "\(SetupRun.judgeLaunchAgentLabel) is loaded in both the gui and user launchd domains, "
+                    + "so launchd keeps two judge pools running",
                 fix: "rv setup")
         }
         return nil
