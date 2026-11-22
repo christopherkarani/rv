@@ -44,38 +44,65 @@ enum WorkspaceMicroVM {
         ([MicroVMHelper.executableName(for: options.guest)] + prepareArguments(image: options.image)).joined(separator: " ")
     }
 
+    /// Why a VM image is not ready to launch. `message` is the text
+    /// `rv workspace run` prints; `rv box` words it its own way.
+    enum Unready: Error, Equatable {
+        /// `rv-microvm` / `rv-macvm` is not next to rv.
+        case helperMissing(MicroVMGuest)
+        /// A macOS image is built only on request (about 26 GB).
+        case notPrepared(MicroVMLaunchOptions)
+        /// Pulling a Linux image failed with the helper's exit status.
+        case prepareFailed(image: String, status: Int32)
+        /// The helper could not be started at all.
+        case helperUnstartable(path: String, detail: String)
+
+        var message: String {
+            switch self {
+            case .helperMissing(.linux):
+                "VM launches need \(MicroVMHelper.executableName(for: .linux)) next to rv; reinstall rv or run Scripts/build-microvm.sh"
+            case .helperMissing(.macOS):
+                // Releases built with an SDK older than macOS 27 leave it out.
+                "macOS VM launches need \(MicroVMHelper.executableName(for: .macOS)) next to rv, and this rv was built without it; "
+                    + "build it with Scripts/build-microvm.sh using the macOS 27 SDK"
+            case .notPrepared(let options):
+                "macOS image \(options.image) is not prepared; build it once with: \(prepareInstruction(options))"
+            case .prepareFailed(let image, let status):
+                "micro-VM image \(image) could not be prepared (rv-microvm exit \(status))"
+            case .helperUnstartable(let path, let detail):
+                "cannot start \(path): \(detail)"
+            }
+        }
+    }
+
     /// Cheap offline check first; for Linux, download and unpack only when
     /// it fails. `prepare` reports its own progress on stderr. A macOS
     /// image's status warns on stderr when its guest agent is not this rv's.
     static func ensurePrepared(_ options: MicroVMLaunchOptions, project: String) throws {
-        let name = MicroVMHelper.executableName(for: options.guest)
+        do throws(Unready) {
+            try ensureReady(options, project: project)
+        } catch {
+            throw ValidationError(error.message)
+        }
+    }
+
+    /// `ensurePrepared` with the reason kept as a value.
+    static func ensureReady(_ options: MicroVMLaunchOptions, project: String) throws(Unready) {
         guard let helper = MicroVMHelper.locate(workspace: project, guest: options.guest) else {
-            switch options.guest {
-            case .linux:
-                throw ValidationError("VM launches need \(name) next to rv; reinstall rv or run Scripts/build-microvm.sh")
-            case .macOS:
-                // Releases built with an SDK older than macOS 27 leave it out.
-                throw ValidationError(
-                    "macOS VM launches need \(name) next to rv, and this rv was built without it; "
-                        + "build it with Scripts/build-microvm.sh using the macOS 27 SDK"
-                )
-            }
+            throw .helperMissing(options.guest)
         }
         let warns = options.guest == .macOS
         if try run(helper, statusArguments(image: options.image), output: false, errors: warns) == 0 { return }
         guard preparesImplicitly(options) else {
-            throw ValidationError(
-                "macOS image \(options.image) is not prepared; build it once with: \(prepareInstruction(options))"
-            )
+            throw .notPrepared(options)
         }
         let status = try run(helper, prepareArguments(image: options.image), output: true, errors: true)
         guard status == 0 else {
-            throw ValidationError("micro-VM image \(options.image) could not be prepared (rv-microvm exit \(status))")
+            throw .prepareFailed(image: options.image, status: status)
         }
     }
 
     /// `output` and `errors` choose which of the helper's streams reach rv's stderr.
-    private static func run(_ helper: String, _ arguments: [String], output: Bool, errors: Bool) throws -> Int32 {
+    private static func run(_ helper: String, _ arguments: [String], output: Bool, errors: Bool) throws(Unready) -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: helper)
         process.arguments = arguments
@@ -85,7 +112,7 @@ enum WorkspaceMicroVM {
         do {
             try process.run()
         } catch {
-            throw ValidationError("cannot start \(helper): \(error.localizedDescription)")
+            throw .helperUnstartable(path: helper, detail: error.localizedDescription)
         }
         process.waitUntilExit()
         return process.terminationStatus
