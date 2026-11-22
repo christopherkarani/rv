@@ -23,17 +23,17 @@ struct LogRendererTests {
     /// judge notes in shadow.
     static let fixture: [LogEntry] = [
         LogEntry(time: at(14, 2), agent: "claude", stopped: true, rule: "core.git:reset-hard",
-                 tool: "Bash", target: "", code: "a7c-835"),
+                 tool: "Bash", target: "", command: "git reset --hard origin/main", code: "a7c-835"),
         LogEntry(time: at(13, 58), agent: "claude", stopped: false, rule: "core.judge:laya-block", isJudge: true,
                  tool: "Bash", target: "", code: "0d1-4e2"),
         LogEntry(time: at(13, 47), agent: "codex", stopped: false, rule: "core.git:push-force-long",
-                 tool: "Bash", target: "", code: "b20-7de"),
+                 tool: "Bash", target: "", command: "git push --force origin main", code: "b20-7de"),
         LogEntry(time: at(13, 31), agent: "claude", stopped: false, rule: "core.judge:laya-block", isJudge: true,
                  tool: "Bash", target: "", code: "5f3-c19"),
         LogEntry(time: at(12, 15), agent: "cursor", stopped: true, rule: "core.secrets:id-ed25519",
                  tool: "Read", target: "~/.ssh/id_ed25519", code: "e41-0b7"),
         LogEntry(time: at(11, 20), agent: "claude", stopped: false, rule: "core.filesystem:rm-rf-general",
-                 tool: "Bash", target: "", code: "9ac-2f0"),
+                 tool: "Bash", target: "", command: "rm -rf ./dist ../dist", code: "9ac-2f0"),
         LogEntry(time: at(10, 5), agent: "claude", stopped: false, rule: "core.judge:laya-block", isJudge: true,
                  tool: "Bash", target: "", code: "77e-a01"),
         LogEntry(time: at(9, 12, daysAgo: 1), agent: "codex", stopped: false, wouldAsk: true, rule: "core.secrets:env",
@@ -59,23 +59,59 @@ struct LogRendererTests {
 
           ◆ last 7 days                                                                5
 
-          14:02  claude  ✕ Stopped     core.git:reset-hard            Bash       a7c-835
-          13:47  codex   ◐ Would stop  core.git:push-force-long       Bash       b20-7de
-          12:15  cursor  ✕ Stopped     core.secrets:id-ed25519        …_ed25519  e41-0b7
-          11:20  claude  ◐ Would stop  core.filesystem:rm-rf-general  Bash       9ac-2f0
+          14:02  claude  ✕ Stopped     core.git:reset-hard   git reset --hard …  a7c-835
+          13:47  codex   ◐ Would stop  core.git:push-force…  git push --force …  b20-7de
+          12:15  cursor  ✕ Stopped     core.secrets:id-ed2…  Read …h/id_ed25519  e41-0b7
+          11:20  claude  ◐ Would stop  core.filesystem:rm-…  rm -rf ./dist ../…  9ac-2f0
           Sat 21 Nov
-          09:12  codex   ◐ Would stop  core.secrets:env               …oduction  c08-d3a
+          09:12  codex   ◐ Would stop  core.secrets:env      Edit …v.production  c08-d3a
 
           2 stopped · 3 would stop · judge: 3 notes in shadow, hidden
 
           → rv log --all   every row, judge notes too
         """
 
-    @Test("120 columns: the whole command fits, and a file keeps the end of its path")
+    @Test("120 columns: whole commands and rule ids; a file keeps the end of its path")
     func goldenAt120() {
-        let rendered = Self.lines(columns: 120)
-        #expect(rendered.contains("  12:15  cursor  ✕ Stopped     core.secrets:id-ed25519        Read ~/.ssh/id_ed25519                             e41-0b7"))
-        #expect(rendered.contains("  09:12  codex   ◐ Would stop  core.secrets:env               Edit …p/Sources/Payments/Internal/.env.production  c08-d3a"))
+        #expect(Self.lines(columns: 120).joined(separator: "\n") == Self.golden120)
+    }
+
+    static let golden120 = """
+
+          ◆ last 7 days                                                                                                        5
+
+          14:02  claude  ✕ Stopped     core.git:reset-hard            git reset --hard origin/main                       a7c-835
+          13:47  codex   ◐ Would stop  core.git:push-force-long       git push --force origin main                       b20-7de
+          12:15  cursor  ✕ Stopped     core.secrets:id-ed25519        Read ~/.ssh/id_ed25519                             e41-0b7
+          11:20  claude  ◐ Would stop  core.filesystem:rm-rf-general  rm -rf ./dist ../dist                              9ac-2f0
+          Sat 21 Nov
+          09:12  codex   ◐ Would stop  core.secrets:env               Edit …p/Sources/Payments/Internal/.env.production  c08-d3a
+
+          2 stopped · 3 would stop · judge: 3 notes in shadow, hidden
+
+          → rv log --all   every row, judge notes too
+        """
+
+    @Test("without rvd's decision log, shell rows show the tool and one dim note says why")
+    func commandsNotRecorded() {
+        let model = LogViewModel(
+            entries: Self.fixture.map { entry in
+                var entry = entry
+                entry.command = nil
+                return entry
+            },
+            query: LogQuery(), now: Self.now, calendar: Self.utc, commandsRecorded: false
+        )
+        let rendered = LogRenderer().render(LogFrame(model: model), palette: colorOffPalette)
+        #expect(rendered.contains { $0.hasPrefix("  14:02  claude  ✕ Stopped") && $0.contains("  Bash  ") })
+        let summary = rendered.firstIndex { $0.hasPrefix("  2 stopped") } ?? 0
+        #expect(rendered[summary + 1] == "  Commands aren't recorded: rvd is older or its decision log is off.")
+        let dim = Palette(for: ColorCapability(colorsEnabled: true))
+        let painted = LogRenderer().render(LogFrame(model: model), palette: dim)
+        #expect(painted.contains { $0.contains(dim.muted + "Commands aren't recorded") })
+        #expect(LogRenderer().render(LogFrame(model: LogViewModel(
+            entries: Self.fixture, query: LogQuery(), now: Self.now, calendar: Self.utc
+        )), palette: colorOffPalette).contains { $0.contains("Commands aren't") } == false)
     }
 
     @Test("rows stay one line each at any width; the command ends in … when cut")

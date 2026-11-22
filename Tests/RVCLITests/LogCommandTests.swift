@@ -70,14 +70,14 @@ struct LogCommandTests {
         #expect(lines.allSatisfy { $0.count <= 80 })
         let stop = try #require(lines.first { $0.contains("core.git:reset-hard") })
         #expect(stop.contains("14:02") && stop.contains("claude") && stop.contains("✕ Stopped"))
-        let watched = try #require(lines.first { $0.contains("core.git:push-force-long") })
+        let watched = try #require(lines.first { $0.contains("core.git:push-force") })
         #expect(watched.contains("◐ Would stop") && watched.contains("✕") == false)
-        #expect(lines.contains { $0.contains("…code/app/.env") })
+        #expect(lines.contains { $0.contains("app/.env") })
         #expect(text.contains("laya-block") == false)
         #expect(text.contains("1 stopped · 2 would stop · judge: 2 notes in shadow, hidden"))
         #expect(lines.last { $0.isEmpty == false } == "  → rv log --all   every row, judge notes too")
         let all = try output(home, LogQuery(all: true))
-        #expect(all.components(separatedBy: "core.judge:laya-block").count == 3)
+        #expect(all.split(separator: "\n").filter { $0.contains("core.judge:") }.count == 2)
     }
 
     @Test("the code column is the row's code, the same on every read")
@@ -134,6 +134,129 @@ struct LogCommandTests {
         // rv blocks lists every row, judge notes included, in its own words.
         #expect(blocks.components(separatedBy: "core.judge:laya-block").count == 3)
         #expect(blocks.contains("✕") == false && blocks.contains("◐") == false)
+    }
+
+    // MARK: - rvd's decision log
+
+    /// rvd's rows for the seeded ledger: the stop and the would-stop with
+    /// their commands, an allow in the same session outside the window, and
+    /// a stop only the decision log has, its token redacted as rvd writes it.
+    static func seedDecisions(_ home: HomeDirectory) {
+        let log = DecisionLog(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        let secret = "curl -H 'Authorization: Bearer sk-live-4f9a8b7c6d5e' https://api.example.com/v1/charges"
+        let rows: [DecisionRecord] = [
+            DecisionRecord(time: now.addingTimeInterval(-28 * 60 - 0.4), verdict: .denied, host: .hook(.claude), tool: .bash,
+                           command: DecisionRedaction.command("git reset --hard origin/main", home: nil),
+                           rule: "core.git:reset-hard", session: "cc8a1"),
+            DecisionRecord(time: now.addingTimeInterval(-28 * 60 + 40), verdict: .allowed, host: .hook(.claude), tool: .bash,
+                           command: "git status", session: "cc8a1"),
+            DecisionRecord(time: now.addingTimeInterval(-43 * 60 - 0.2), verdict: .allowed, host: .hook(.codex), tool: .bash,
+                           command: DecisionRedaction.command("git push --force origin main", home: nil)),
+            DecisionRecord(time: now.addingTimeInterval(-10 * 60), verdict: .denied, host: .hook(.claude), tool: .bash,
+                           command: DecisionRedaction.command(secret, home: nil),
+                           rule: "core.network:pipe-to-shell", session: "cc8a1"),
+        ]
+        for row in rows { log.append(row, now: now) }
+    }
+
+    @Test("with rvd's decision log, shell rows show their command and no note")
+    func commandsShown() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        Self.seed(home)
+        Self.seedDecisions(home)
+        let wide = try LogRun.output(home: home, query: LogQuery(), json: false, palette: colorOffPalette,
+                                     columns: 160, now: Self.now, calendar: Self.utc)
+        let lines = wide.split(separator: "\n").map(String.init)
+        let stop = try #require(lines.first { $0.contains("core.git:reset-hard") })
+        #expect(stop.contains("✕ Stopped") && stop.contains("git reset --hard origin/main"))
+        let watched = try #require(lines.first { $0.contains("core.git:push-force-long") })
+        #expect(watched.contains("◐ Would stop") && watched.contains("git push --force origin main"))
+        #expect(wide.contains("git status") == false)
+        #expect(wide.contains("Commands aren't recorded") == false)
+        // A stop only the decision log has is a row too.
+        let only = try #require(lines.first { $0.contains("core.network:pipe-to-shell") })
+        #expect(only.contains("✕ Stopped") && only.contains("14:20"))
+        #expect(wide.contains("2 stopped · 2 would stop"))
+        let narrow = try output(home)
+        #expect(narrow.split(separator: "\n").allSatisfy { $0.count <= 80 })
+        #expect(narrow.contains("git reset --hard …"))
+    }
+
+    @Test("a secret in a command stays redacted, in text and in --json")
+    func redactedSecret() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        Self.seed(home)
+        Self.seedDecisions(home)
+        let text = try LogRun.output(home: home, query: LogQuery(all: true), json: false, palette: colorOffPalette,
+                                     columns: 200, now: Self.now, calendar: Self.utc)
+        let json = try output(home, LogQuery(all: true), json: true)
+        for out in [text, json] {
+            #expect(out.contains("sk-live-4f9a8b7c6d5e") == false)
+            #expect(out.contains("4f9a8b7c6d5e") == false)
+            #expect(out.contains("[redacted]"))
+        }
+        #expect(text.contains("https://api.example.com/v1/charges"))
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["commands_recorded"] as? Bool == true)
+    }
+
+    @Test("no decision log, or one switched off: the tool, and one note says commands aren't recorded")
+    func fallbackNote() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        Self.seed(home)
+        let missing = try output(home)
+        #expect(missing.contains("  Commands aren't recorded: rvd is older or its decision log is off.\n"))
+        #expect(missing.split(separator: "\n").contains { $0.contains("core.git:reset-hard") && $0.contains("Bash") })
+        let json = try output(home, json: true)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["commands_recorded"] as? Bool == false)
+
+        Self.seedDecisions(home)
+        #expect(try output(home).contains("Commands aren't recorded") == false)
+        let config = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("config.json")
+        try Data(#"{"decisions":{"enabled":false}}"#.utf8).write(to: config)
+        let off = try output(home)
+        #expect(off.contains("Commands aren't recorded"))
+        #expect(off.contains("git reset --hard") == false)
+    }
+
+    @Test("a would-stop with two different allowed commands in its window gets no command")
+    func ambiguousWouldStopGetsNone() {
+        let at = Self.now
+        let ledger = [DenialLedgerRecord(timestamp: at, host: .hook(.codex), tool: .bash,
+                                         ruleID: RuleID(pack: .coreGit, pattern: "push-force-long"),
+                                         category: .pack(.coreGit), path: "", observed: true)]
+        let one = [DecisionRecord(time: at.addingTimeInterval(-0.5), verdict: .allowed, host: .hook(.codex), tool: .bash,
+                                  command: "git push --force")]
+        #expect(LogSources.entries(ledger: ledger, decisions: one).first?.command == "git push --force")
+        let two = one + [DecisionRecord(time: at.addingTimeInterval(-1), verdict: .allowed, host: .hook(.codex),
+                                        tool: .bash, command: "ls")]
+        #expect(LogSources.entries(ledger: ledger, decisions: two).first?.command == nil)
+        let otherSession = [DecisionRecord(time: at, verdict: .allowed, host: .hook(.codex), tool: .bash,
+                                           command: "git push --force", session: "x")]
+        #expect(LogSources.entries(ledger: ledger, decisions: otherSession).first?.command == nil)
+        #expect(LogSources.entries(ledger: ledger, decisions: nil).first?.command == nil)
+    }
+
+    @Test("a stop matches only a deny under the same rule, and is never listed twice")
+    func stopMatchesItsDeny() {
+        let at = Self.now
+        let ledger = [DenialLedgerRecord(timestamp: at, host: .hook(.claude), tool: .bash,
+                                         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                                         category: .pack(.coreGit), path: "")]
+        let decisions = [
+            DecisionRecord(time: at.addingTimeInterval(-0.3), verdict: .denied, host: .hook(.claude), tool: .bash,
+                           command: "rm -rf /", rule: "core.filesystem:rm-rf-root-home"),
+            DecisionRecord(time: at.addingTimeInterval(-0.6), verdict: .denied, host: .hook(.claude), tool: .bash,
+                           command: "git reset --hard", rule: "core.git:reset-hard"),
+        ]
+        let entries = LogSources.entries(ledger: ledger, decisions: decisions)
+        #expect(entries.count == 2)
+        #expect(entries.first { $0.rule == "core.git:reset-hard" }?.command == "git reset --hard")
+        #expect(entries.first { $0.rule == "core.filesystem:rm-rf-root-home" }?.command == "rm -rf /")
     }
 
     private func tempHome() throws -> HomeDirectory {

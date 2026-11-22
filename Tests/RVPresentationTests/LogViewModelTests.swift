@@ -113,6 +113,20 @@ struct LogViewModelTests {
         #expect(model([Self.entry(minutesAgo: 60 * 24, stopped: true)]).spanLabel == "last 7 days")
     }
 
+    @Test("a recorded command is the command; the note shows only without the decision log")
+    func recordedCommand() {
+        let entries = [LogEntry(time: Self.now, agent: "claude", stopped: true, rule: "core.git:reset-hard",
+                                tool: "Bash", target: "", command: "git reset --hard origin/main", code: "a")]
+        let recorded = model(entries)
+        #expect(recorded.rows.first?.command == "git reset --hard origin/main")
+        #expect(recorded.commandsNote == nil)
+        let missing = LogViewModel(entries: [Self.entry(minutesAgo: 1, stopped: true)], query: LogQuery(),
+                                   now: Self.now, calendar: Self.utc, commandsRecorded: false)
+        #expect(missing.rows.first?.command == "Bash")
+        #expect(missing.commandsNote == "Commands aren't recorded: rvd is older or its decision log is off.")
+        #expect(LogRobotPayload(missing).commandsRecorded == false)
+    }
+
     @Test("empty, filtered and switched-off logs each say so")
     func emptyStates() {
         #expect(model([]).emptyMessage == "Nothing stopped, nothing would stop in the last 7 days.")
@@ -136,7 +150,7 @@ struct LogViewModelTests {
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let json = try #require(String(data: encoder.encode(payload), encoding: .utf8))
-        #expect(json.hasPrefix(#"{"judge_notes_hidden":1,"matching":2,"rows":[{"agent":"claude","code":"abc-1","command":"Bash","rule":"core.git:reset-hard","target":"","time":"2026-11-22T14:29:00Z","tool":"Bash","verdict":"stopped"}"#))
+        #expect(json.hasPrefix(#"{"commands_recorded":true,"judge_notes_hidden":1,"matching":2,"rows":[{"agent":"claude","code":"abc-1","command":"Bash","rule":"core.git:reset-hard","target":"","time":"2026-11-22T14:29:00Z","tool":"Bash","verdict":"stopped"}"#))
         #expect(json.contains(#""verdict":"would_stop","would_be":"ask""#))
         #expect(json.hasSuffix(#""schema":"rv.log.v1","stopped":1,"would_stop":1}"#))
     }
