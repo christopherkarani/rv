@@ -68,6 +68,8 @@ struct DoctorInstallProbes {
     /// macOS: is `dev.rv.judge` loaded in either domain? Nil when launchd
     /// was not observed (Linux, tests).
     var judgeLoaded: Bool? = nil
+    /// macOS: is `dev.rv.judge` loaded in both gui and user domains?
+    var judgeLoadedInBothDomains: Bool = false
     /// Does a valid judge bundle sit where rvd looks? Default false (tests).
     var judgeBundleInstalled: Bool = false
     /// The roles an installed manifest names; nil without a valid manifest
@@ -99,6 +101,7 @@ struct DoctorInstallProbes {
         let judge = LaunchAgentProbe.observe(
             label: SetupRun.judgeLaunchAgentLabel, userID: userID, launchctl: launchctl)
         probes.judgeLoaded = judge.loadedInGui || judge.loadedInUser
+        probes.judgeLoadedInBothDomains = judge.loadedInGui && judge.loadedInUser
         probes.judgeBundleInstalled = JudgeRuntime.selectsBundle(home: home)
         probes.manifestRoles = ProtectedPeerTrustConfiguration.hookTrustSource().manifestRoles.map {
             Set($0.map(\.rawValue))
