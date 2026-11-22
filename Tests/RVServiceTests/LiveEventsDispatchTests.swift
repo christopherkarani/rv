@@ -95,10 +95,12 @@ struct LiveEventsDispatchTests {
             pendingApprovals: .coordinator(store))
         let start = try await poll(runtime, EventsParams())
         _ = try await hook(runtime, command: "git reset --hard", cwd: "/tmp/rv-hook-fixture")
+        // The ask is recorded while the hook runs; its decision publishes
+        // after the reply, so either may come first.
         var kinds: [String] = []
         var askID: ApprovalID?
         var cursor = start.cursor
-        for _ in 0..<10 where askID == nil {
+        for _ in 0..<10 where askID == nil || kinds.contains("decision") == false {
             let reply = try await poll(runtime, EventsParams(stream: start.stream, after: cursor, waitMs: 2_000))
             cursor = reply.cursor
             for event in reply.events {
@@ -108,13 +110,16 @@ struct LiveEventsDispatchTests {
         }
         let id = try #require(askID, "a host ask must publish an ask event; saw \(kinds)")
         #expect(kinds.contains("decision"))
-        let row = try await store.load(id: id, now: Date())
-        _ = try await store.cancel(id: row.id, now: Date())
-        let reply = try await poll(runtime, EventsParams(stream: start.stream, after: cursor, waitMs: 2_000))
-        let resolution = reply.events.compactMap { event -> LiveResolution? in
-            if case .resolution(let resolution) = event.payload { return resolution }
-            return nil
-        }.first
+        _ = try await store.cancel(id: id, now: Date())
+        var resolution: LiveResolution?
+        for _ in 0..<10 where resolution == nil {
+            let reply = try await poll(runtime, EventsParams(stream: start.stream, after: cursor, waitMs: 2_000))
+            cursor = reply.cursor
+            resolution = reply.events.lazy.compactMap { event -> LiveResolution? in
+                if case .resolution(let resolution) = event.payload { return resolution }
+                return nil
+            }.first
+        }
         #expect(resolution == LiveResolution(id: id, host: .claude, outcome: .canceled))
     }
 
