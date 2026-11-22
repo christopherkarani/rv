@@ -8,7 +8,7 @@ import RVDomain
 /// A model refusal never replaces the grammar's reason: on macOS 26 the
 /// model answered `refuse(empty)` for every sentence, which is how
 /// `rv policy draft` refused everything. Other errors propagate.
-public struct EnglishCompileChain: EnglishCompiler {
+public struct EnglishCompileChain: ReasonedEnglishCompiler {
     private let phrases: PlainEnglishRuleCompiler?
     private let primary: any EnglishCompiler
     private let fallback: any EnglishCompiler
@@ -33,19 +33,28 @@ public struct EnglishCompileChain: EnglishCompiler {
     }
 
     public func compile(_ english: String) async throws -> EnglishCompileResult {
+        try await compileWithReason(english).result
+    }
+
+    public func compileWithReason(_ english: String) async throws -> ReasonedCompileResult {
         guard let phrases else {
-            return try await model(english)
+            return ReasonedCompileResult(result: try await model(english), reason: nil)
         }
+        let draft = try await draft(english, phrases: phrases)
+        return ReasonedCompileResult(result: PlainEnglishRuleCompiler.result(draft), reason: draft.reason)
+    }
+
+    private func draft(_ english: String, phrases: PlainEnglishRuleCompiler) async throws -> PlainEnglishRuleCompiler.Draft {
         let draft = phrases.draft(english)
-        guard case .unreadable = draft else {
-            return PlainEnglishRuleCompiler.result(draft)
-        }
-        // A model's rule goes through the grammar's checks and preview
-        // builder, so its title is the normalized sentence, never the input.
+        guard case .unreadable = draft else { return draft }
+        // A model's rule must agree with the sentence's own words, then goes
+        // through the grammar's checks and preview builder: never a
+        // different rule than the sentence describes, never the input as
+        // its title.
         if case .preview(let preview) = try await model(english) {
-            return PlainEnglishRuleCompiler.result(PlainEnglishRuleCompiler.reviewed(preview, english: english))
+            return PlainEnglishRuleCompiler.reviewed(preview, english: english)
         }
-        return PlainEnglishRuleCompiler.result(draft)
+        return draft
     }
 
     private func model(_ english: String) async throws -> EnglishCompileResult {

@@ -99,7 +99,7 @@ struct EnglishCompileChainTests {
             return
         }
         #expect(grammar.sentence == "Always block force-push to main")
-        guard case .preview(let model) = try await chain.compile("keep main safe from forced history rewrites") else {
+        guard case .preview(let model) = try await chain.compile("under no circumstances force push to main") else {
             Issue.record("expected the model's rule")
             return
         }
@@ -130,7 +130,7 @@ struct EnglishCompileChainTests {
     /// Mac test of #669: a model rule's title was the raw sentence. It now
     /// goes through the grammar's preview builder.
     @Test func productChain_modelRule_getsTheNormalizedTitle() async throws {
-        let english = "it is fine to force push to main"
+        let english = "pushing with force to main is fine"
         let chain = EnglishCompileChain(
             primary: FormEnglishCompiler(force: .exactly(.force), branch: "main", verdict: .allow),
             fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
@@ -150,10 +150,58 @@ struct EnglishCompileChainTests {
         let chain = EnglishCompileChain(
             primary: FormEnglishCompiler(force: .exactly(.force), branch: branch, verdict: .deny),
             fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
-        guard case .refuse = try await chain.compile("keep the branch safe from forced history rewrites") else {
+        guard case .refuse = try await chain.compile("under no circumstances force push to \(branch)") else {
             Issue.record("expected a refusal for branch \(branch)")
             return
         }
+    }
+
+    /// Mac recheck of #669: the model sometimes returned force=none for a
+    /// force-push sentence. A model rule must agree with the sentence's own
+    /// words (verdict, push, force kind, branch) or it is refused.
+    @Test(arguments: [
+        // force sentence, model says no force
+        ("under no circumstances force push to main", GitPushForceConstraint.exactly(.none), "main" as String?,
+         TypedRuleVerdict.deny, "it says force-push"),
+        // no force in the sentence, model says force
+        ("under no circumstances push to main", .exactly(.force), "main", .deny, "and the draft was force-push"),
+        // force-with-lease sentence, model says plain force
+        ("under no circumstances push --force-with-lease to main", .exactly(.force), "main", .deny,
+         "it says --force-with-lease"),
+        // branch the sentence never names
+        ("under no circumstances force push to main", .exactly(.force), "release", .deny,
+         "doesn't name the branch release"),
+        // every branch, when the sentence names one
+        ("under no circumstances force push to main", .exactly(.force), nil, .deny, "covers every branch"),
+        // verdict flipped
+        ("under no circumstances force push to main", .exactly(.force), "main", .allow, "reads as deny"),
+        ("pushing with force to main is fine", .exactly(.force), "main", .deny, "reads as allow"),
+        // no push in the sentence
+        ("keep main safe from forced history rewrites", .exactly(.force), "main", .deny, "doesn't say push"),
+    ])
+    func productChain_modelRuleThatDisagrees_isRefused(
+        english: String, force: GitPushForceConstraint, branch: String?, verdict: TypedRuleVerdict, why: String
+    ) async throws {
+        let chain = EnglishCompileChain(
+            primary: FormEnglishCompiler(force: force, branch: branch, verdict: verdict),
+            fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
+        let answer = try await chain.compileWithReason(english)
+        #expect(answer.result == .refuse(.uncompilable), "\(english)")
+        #expect(answer.reason?.contains(why) == true, "\(english): \(answer.reason ?? "nil")")
+        #expect(answer.reason?.hasPrefix("can't read this sentence for sure: ") == true)
+    }
+
+    @Test func productChain_modelRuleThatAgrees_isKept() async throws {
+        let chain = EnglishCompileChain(
+            primary: FormEnglishCompiler(force: .exactly(.forceWithLease), branch: "main", verdict: .ask),
+            fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
+        let answer = try await chain.compileWithReason("check with the team first when pushing --force-with-lease to main")
+        guard case .preview(let preview) = answer.result else {
+            Issue.record("expected the model's rule, got \(answer)")
+            return
+        }
+        #expect(preview.rule.predicate == .gitPush(force: .exactly(.forceWithLease), branch: "main"))
+        #expect(answer.reason == nil)
     }
 
     @Test func productChain_modelUnavailable_keepsTheGrammarReason() async throws {

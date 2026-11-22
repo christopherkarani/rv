@@ -116,12 +116,22 @@ enum PolicyDraftRun {
     ) async throws -> PolicyDraftResult {
         // Compile first: the owner approves the rule they can see, and a
         // sentence with nothing to save never asks.
-        let compiled = try await compiler.compile(english)
+        let compiled: EnglishCompileResult
+        var why: String?
+        if let reasoned = compiler as? any ReasonedEnglishCompiler {
+            let answer = try await reasoned.compileWithReason(english)
+            compiled = answer.result
+            why = answer.reason
+        } else {
+            compiled = try await compiler.compile(english)
+        }
         switch compiled {
         case .refuse(let reason):
             let alreadyOn = reason == .alreadyBuiltIn && coreFilesystemOn(home: home)
             return PolicyDraftResult(
-                text: try render(compiled, english: english, alreadyOn: alreadyOn, robot: robot),
+                text: try render(
+                    compiled, english: english, alreadyOn: alreadyOn, robot: robot,
+                    reason: why ?? refusalReason(reason, english: english)),
                 outcome: .refuse(reason),
                 alreadyOn: alreadyOn
             )
@@ -139,7 +149,7 @@ enum PolicyDraftRun {
                 }
             }
             return PolicyDraftResult(
-                text: try render(compiled, english: english, alreadyOn: false, robot: robot),
+                text: try render(compiled, english: english, alreadyOn: false, robot: robot, reason: nil),
                 outcome: .preview(saved: savedDocument != nil),
                 savedHash: savedDocument.map(PolicyRevisionIdentity.hash)
             )
@@ -152,14 +162,15 @@ enum PolicyDraftRun {
     }
 
     private static func render(
-        _ result: EnglishCompileResult, english: String, alreadyOn: Bool, robot: Bool
+        _ result: EnglishCompileResult, english: String, alreadyOn: Bool, robot: Bool, reason why: String?
     ) throws -> String {
         if robot {
             switch result {
             case .preview(let preview):
                 return try RobotJSON.encode(preview)
             case .refuse(let reason):
-                return try RobotJSON.encode(PolicyDraftRobotRefuse(refuse: reason))
+                return try RobotJSON.encode(PolicyDraftRobotRefuse(
+                    refuse: reason, reason: why ?? refusalReason(reason, english: english)))
             }
         }
         switch result {
@@ -177,7 +188,7 @@ enum PolicyDraftRun {
             return "refused (alreadyBuiltIn): only the core.filesystem pack stops changes outside this repo, "
                 + "and it is off here; a rule can't name a path yet\n→ rv packs enable core.filesystem"
         case .refuse(let reason):
-            return "refused (\(reason.rawValue)): \(refusalReason(reason, english: english))"
+            return "refused (\(reason.rawValue)): \(why ?? refusalReason(reason, english: english))"
         }
     }
 
@@ -210,6 +221,8 @@ enum PolicyDraftRun {
 
 struct PolicyDraftRobotRefuse: Equatable, Sendable, Codable {
     var refuse: EnglishCompileRefusal
+    /// One line saying why, as the text output prints it.
+    var reason: String
 }
 
 func formatDocumentRule(_ rule: PolicyDocumentRule) -> String {

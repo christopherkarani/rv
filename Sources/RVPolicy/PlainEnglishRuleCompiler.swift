@@ -10,7 +10,24 @@ import RVDomain
 ///
 /// Rules stay restrict-only whatever the verdict (`ActionPolicyEngine`), so
 /// nothing drafted here can let through what rv or a pack stops.
-public struct PlainEnglishRuleCompiler: EnglishCompiler {
+/// A compile result and, for a refusal, the one line that says why.
+public struct ReasonedCompileResult: Sendable, Equatable {
+    public var result: EnglishCompileResult
+    public var reason: String?
+
+    public init(result: EnglishCompileResult, reason: String?) {
+        self.result = result
+        self.reason = reason
+    }
+}
+
+/// A compiler that can say why it refused, for `rv policy draft` (text and
+/// `--json`).
+public protocol ReasonedEnglishCompiler: EnglishCompiler {
+    func compileWithReason(_ english: String) async throws -> ReasonedCompileResult
+}
+
+public struct PlainEnglishRuleCompiler: ReasonedEnglishCompiler {
     /// What a sentence drafts to.
     public enum Draft: Sendable, Equatable {
         case rule(TypedRulePreview)
@@ -21,12 +38,25 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         /// No verdict or no command the grammar knows. The only drafts a
         /// model may take a second look at (`EnglishCompileChain`).
         case unreadable(reason: String)
+
+        /// The one-line reason for a refusal; nil for a rule or built-in.
+        public var reason: String? {
+            switch self {
+            case .refused(_, let reason), .unreadable(let reason): return reason
+            case .rule, .builtIn: return nil
+            }
+        }
     }
 
     public init() {}
 
     public func compile(_ english: String) async throws -> EnglishCompileResult {
         Self.result(draft(english))
+    }
+
+    public func compileWithReason(_ english: String) async throws -> ReasonedCompileResult {
+        let draft = draft(english)
+        return ReasonedCompileResult(result: Self.result(draft), reason: draft.reason)
     }
 
     static func result(_ draft: Draft) -> EnglishCompileResult {
@@ -115,13 +145,24 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
             "never allow", "never let", "do not allow", "don't allow", "dont allow", "do not let", "don't let",
             "always block", "always deny", "always stop", "block", "never", "deny", "forbid", "disallow",
             "prevent", "stop", "prohibit", "refuse", "no", "do not", "don't", "dont",
+            // Negated permission, so "you can't" never reads as "you can".
+            "you can't", "you cannot", "you may not", "you must not", "you mustn't", "you should not",
+            "you shouldn't", "can't", "cannot", "may not", "must not", "it is not ok to", "it's not ok to",
+            "it is not okay to", "it's not okay to", "it is not fine to", "it's not fine to", "not ok to",
+            "it is never ok to", "it's never ok to",
         ]
         let ask = [
             "always ask before", "always ask me before", "ask me before", "ask first before", "ask before",
             "ask first for", "ask for", "ask", "confirm before", "require approval for", "require approval before",
             "check with me before",
         ]
-        let allow = ["always allow", "allow", "let", "permit"]
+        let allow = [
+            "always allow", "allow", "let", "permit",
+            // Common ways to say it, read here so they never reach a model.
+            "it is fine to", "it's fine to", "its fine to", "it is ok to", "it's ok to", "its ok to",
+            "it is okay to", "it's okay to", "it is alright to", "it's alright to", "fine to", "ok to", "okay to",
+            "you may", "you can", "you are allowed to", "feel free to", "may", "can",
+        ]
         let all = deny.map { ($0, TypedRuleVerdict.deny) } + ask.map { ($0, .ask) } + allow.map { ($0, .allow) }
         return all
             .map { (PlainEnglishRuleCompiler.words($0.0).map(\.key), $0.1) }
@@ -675,6 +716,10 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
     /// sentence, never the model's own title.
     static func reviewed(_ preview: TypedRulePreview, english: String) -> Draft {
         let rule = preview.rule
+        if let mismatch = disagreement(rule, english: english) {
+            return .refused(.uncompilable, reason: "can't read this sentence for sure: \(mismatch); "
+                + "say it like \"never force-push to main\"")
+        }
         let draft: Draft
         if case .gitPush(let force, let branch) = rule.predicate {
             draft = pushDraft(force: force, branch: branch, verdict: rule.verdict, english: rule.english ?? english)
@@ -686,6 +731,77 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         return .rule(TypedRulePreview(
             sentence: checked.sentence, rule: checked.rule,
             allowedToSave: checked.allowedToSave && preview.allowedToSave))
+    }
+
+    private static let denyCues: Set<String> = [
+        "never", "not", "no", "t", "dont", "cannot", "block", "stop", "forbid", "prevent", "deny", "disallow",
+        "prohibit", "refuse", "nobody", "mustn", "shouldn", "forbidden",
+    ]
+    private static let askCues: Set<String> = ["ask", "confirm", "approval", "approve", "check"]
+    private static let allowCues: Set<String> = [
+        "fine", "ok", "okay", "may", "can", "allow", "allowed", "permit", "permitted", "free", "alright", "sure",
+        "let",
+    ]
+
+    /// Where a model's rule says something the sentence does not, or nil
+    /// when the words back every field: the verdict, git push, the force
+    /// kind and the branch. A model is free to read loosely; the rule it
+    /// drafts is not.
+    static func disagreement(_ rule: PolicyDocumentRule, english: String) -> String? {
+        let tokens = Self.words(english)
+        let keys = Set(tokens.map(\.key))
+        guard case .gitPush(let force, let branch) = rule.predicate else {
+            return "a model draft can only be a git push rule"
+        }
+        guard keys.contains("push") else { return "the sentence doesn't say push" }
+
+        let expected: TypedRuleVerdict?
+        if keys.contains(where: askCues.contains) {
+            expected = .ask
+        } else if keys.contains(where: denyCues.contains) {
+            expected = .deny
+        } else if keys.contains(where: allowCues.contains) {
+            expected = .allow
+        } else {
+            expected = nil
+        }
+        guard let expected else { return "it doesn't say never, ask before, or allow" }
+        guard rule.verdict == expected else {
+            return "it reads as \(expected.rawValue), and the draft was \(rule.verdict.rawValue)"
+        }
+
+        let wantForce: GitPushForceConstraint
+        if keys.contains("lease") || keys.contains("--force-with-lease") {
+            wantForce = .exactly(.forceWithLease)
+        } else if keys.contains("force") || keys.contains("-f") || keys.contains("--force") {
+            wantForce = .exactly(.force)
+        } else {
+            wantForce = .any
+        }
+        guard force == wantForce else {
+            return "it says \(forceWords(wantForce)), and the draft was \(forceWords(force))"
+        }
+
+        if let branch {
+            let target = branchName(branch)
+            guard tokens.contains(where: { $0.text == branch || branchName($0.text) == target }) else {
+                return "it doesn't name the branch \(DisplayedText.field(branch))"
+            }
+        } else {
+            let list = tokens.map(\.key)
+            let saysEvery = list.indices.dropLast().contains { everyBranch.contains(list[$0]) && list[$0 + 1] == "branch" }
+            guard saysEvery else { return "the draft covers every branch, and the sentence doesn't say so" }
+        }
+        return nil
+    }
+
+    private static func forceWords(_ force: GitPushForceConstraint) -> String {
+        switch force {
+        case .exactly(.force): return "force-push"
+        case .exactly(.forceWithLease): return "--force-with-lease"
+        case .exactly(.none): return "push without force"
+        case .any: return "any push, forced or not"
+        }
     }
 
     private static func sentence(_ verdict: TypedRuleVerdict, _ thing: String) -> String {

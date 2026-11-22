@@ -55,6 +55,35 @@ struct PolicyF1CommandTests {
         #expect(result.text.contains("\n") == false)
     }
 
+    /// Mac recheck of #669: --json on a refusal carries the reason.
+    @Test func draft_jsonRefusal_carriesTheReason() async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let result = try await PolicyDraftRun.execute(
+            english: "never npm publish", save: false, robot: true, home: home, workspace: workspace,
+            compiler: EnglishCompileChain(
+                primary: FakeEnglishCompiler(), fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler()))
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(result.text.utf8)) as? [String: String], "\(result.text)")
+        #expect(object["refuse"] == "unsupportedPredicate")
+        #expect(object["reason"]?.hasPrefix("a rule can't cover npm yet") == true, "\(result.text)")
+    }
+
+    @Test func draft_modelRuleThatDisagrees_saysWhy() async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let result = try await PolicyDraftRun.execute(
+            english: "under no circumstances force push to main", save: true, robot: false, home: home,
+            workspace: workspace,
+            compiler: EnglishCompileChain(
+                primary: NoForceModel(), fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler()))
+        #expect(result.outcome == .refuse(.uncompilable))
+        #expect(result.text.hasPrefix("refused (uncompilable): can't read this sentence for sure: it says force-push"),
+            "\(result.text)")
+        #expect(FileManager.default.fileExists(
+            atPath: TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home)).machineFileURL.path) == false)
+    }
+
     @Test func draft_modelRefusalStillGetsAReason() async throws {
         let (home, workspace) = try scratch()
         defer { cleanup(home, workspace) }
@@ -259,5 +288,17 @@ struct PolicyF1CommandTests {
             try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any], "\(stdout)")
         let rules = try #require(object["typed_rules"] as? [[String: String]], "\(stdout)")
         #expect(rules == [["rule_id": "typed.git:force-push-main", "source": "repo", "verdict": "deny"]])
+    }
+}
+
+/// A model that drafts a non-force push for every sentence.
+private struct NoForceModel: EnglishCompiler {
+    func compile(_ english: String) async throws -> EnglishCompileResult {
+        .preview(TypedRulePreview(
+            sentence: english,
+            rule: PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "git-push-none-main-deny"), verdict: .deny,
+                predicate: .gitPush(force: .exactly(.none), branch: "main"), english: english),
+            allowedToSave: true))
     }
 }

@@ -159,6 +159,32 @@ struct PlainEnglishRuleCompilerTests {
         #expect(ascii, "\(drafted.id.rawValue)")
     }
 
+    /// Mac recheck of #669: common ways to give permission are read by the
+    /// grammar, so they never reach a model.
+    @Test(arguments: [
+        "it is fine to force push to main", "it's fine to force push to main", "it's ok to force push to main",
+        "ok to force push to main", "you may force push to main", "you can force push to main",
+        "feel free to force push to main", "allow force push to main", "agents may force push to main",
+    ])
+    func allowPhrasings_areReadByTheGrammar(sentence: String) throws {
+        let drafted = try #require(rule(sentence))
+        #expect(drafted.verdict == .allow)
+        #expect(drafted.predicate == .gitPush(force: .exactly(.force), branch: "main"))
+        guard case .rule(let preview) = compiler.draft(sentence) else { return }
+        #expect(preview.sentence == "Always allow force-push to main")
+    }
+
+    /// Negated permission reads as never, not as allow.
+    @Test(arguments: [
+        "you can't force push to main", "you cannot force push to main", "you may not force push to main",
+        "it's not ok to force push to main", "it is not fine to force push to main",
+    ])
+    func negatedPermission_isDeny(sentence: String) throws {
+        let drafted = try #require(rule(sentence))
+        #expect(drafted.verdict == .deny)
+        #expect(drafted.predicate == .gitPush(force: .exactly(.force), branch: "main"))
+    }
+
     @Test func remotePrefix_isNamedInThePreview() {
         guard case .rule(let preview) = compiler.draft("never force push to origin/main") else {
             Issue.record("expected a rule")
