@@ -1,7 +1,7 @@
 /// A key that moves between views. Keys that act inside a view (move,
 /// allow, deny) belong to that view, not here.
 public enum TermNavigationKey: Equatable, Sendable {
-    /// `1`...`6`.
+    /// `1`...`3`.
     case digit(Int)
     /// Space: Glance and Stream swap.
     case space
