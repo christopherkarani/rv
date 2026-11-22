@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="456" viewBox="0 0 800 456" role="img" aria-label="Terminal: rv test allows git status, blocks git reset --hard and cat .env">
+<rect width="100%" height="100%" rx="12" fill="#0d1117"/>
+<rect x="0.5" y="0.5" width="799" height="455" rx="12" fill="none" stroke="#30363d"/>
+<circle cx="22" cy="20" r="6" fill="#ff5f57"/><circle cx="42" cy="20" r="6" fill="#febc2e"/><circle cx="62" cy="20" r="6" fill="#28c840"/>
+<text x="400.0" y="25" text-anchor="middle" fill="#8b949e" font-family="ui-sans-serif,-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="12">rv 0.2.2</text>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,Liberation Mono,monospace" font-size="14" xml:space="preserve">
+<text x="22.0" y="54" fill="#7ee787">$ </text>
+<text x="38.8" y="54" fill="#e6edf3">rv test &#x27;git status&#x27;</text>
+<text x="22.0" y="74" fill="#8b949e">Command: </text>
+<text x="97.6" y="74" fill="#c9d1d9">git status</text>
+<text x="22.0" y="94" fill="#8b949e">Result: </text>
+<text x="89.2" y="94" fill="#56d364" font-weight="700">ALLOWED</text>
+<text x="22.0" y="134" fill="#7ee787">$ </text>
+<text x="38.8" y="134" fill="#e6edf3">rv test &#x27;git reset --hard&#x27;</text>
+<text x="22.0" y="154" fill="#8b949e">Command: </text>
+<text x="97.6" y="154" fill="#ff7b72" font-weight="700">git reset --hard</text>
+<text x="22.0" y="174" fill="#c9d1d9">         </text>
+<text x="97.6" y="174" fill="#ff7b72" font-weight="700">^^^^^^^^^^^^^^^^</text>
+<text x="22.0" y="194" fill="#c9d1d9">         </text>
+<text x="97.6" y="194" fill="#8b949e">└── </text>
+<text x="131.2" y="194" fill="#e3b341" font-weight="700">Matched: core.git:reset-hard</text>
+<text x="22.0" y="234" fill="#8b949e">Pack: </text>
+<text x="72.4" y="234" fill="#79c0ff" font-weight="700">core.git</text>
+<text x="22.0" y="254" fill="#8b949e">Reason: </text>
+<text x="89.2" y="254" fill="#c9d1d9">git reset --hard destroys uncommitted changes. Use &#x27;git stash&#x27; first.</text>
+<text x="22.0" y="274" fill="#8b949e">  … what gets destroyed, safer alternatives, how to preview</text>
+<text x="22.0" y="294" fill="#8b949e">Result: </text>
+<text x="89.2" y="294" fill="#ff7b72" font-weight="700">BLOCKED</text>
+<text x="22.0" y="334" fill="#7ee787">$ </text>
+<text x="38.8" y="334" fill="#e6edf3">rv test &#x27;cat .env&#x27;</text>
+<text x="22.0" y="354" fill="#8b949e">Command: </text>
+<text x="97.6" y="354" fill="#c9d1d9">cat </text>
+<text x="131.2" y="354" fill="#ff7b72" font-weight="700">.env</text>
+<text x="22.0" y="374" fill="#c9d1d9">             </text>
+<text x="131.2" y="374" fill="#ff7b72" font-weight="700">^^^^</text>
+<text x="22.0" y="394" fill="#c9d1d9">             </text>
+<text x="131.2" y="394" fill="#8b949e">└── </text>
+<text x="164.8" y="394" fill="#e3b341" font-weight="700">Matched: core.secrets:env</text>
+<text x="22.0" y="414" fill="#8b949e">Result: </text>
+<text x="89.2" y="414" fill="#ff7b72" font-weight="700">BLOCKED</text>
+</g></svg>
