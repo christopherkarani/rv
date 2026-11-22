@@ -122,6 +122,14 @@ audit and denial-ledger rows for a deny (`AuditLog.append`, flocked and
 hash-chained), exemption audit (`FileLockedJSONLStore`). An escalation
 writes nothing, so rvd's own evaluation writes each row once.
 
+Last, after the spool, it appends rvd's decision-log row for the call
+(`DecisionLogRecorder.shellRecord` / `fileRecord`, the same redaction) to
+`decisions/<day>.jsonl`, so `rv term` sees the calls rvd never hears
+about. Only with time left before the write deadline, waiting at most
+50 ms for the day file's lock; a row that cannot land is dropped, as rvd
+drops one. `decisions.enabled` is read with `readRegularFile`. Pruning old
+day files is left to rvd.
+
 `judge-log.jsonl` was serialized only in-process (seek to end, write;
 `.atomic` replace on first create). It now goes through
 `JSONLAppendLog.append` (a `.lock` sidecar under `flock`, `O_APPEND`,

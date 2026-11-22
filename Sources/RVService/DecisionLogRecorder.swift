@@ -33,27 +33,46 @@ package struct DecisionLogRecorder: Sendable {
     package func shell(
         _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost, at time: Date
     ) {
-        let record = Self.record(
-            result, tool: .bash, command: DecisionRedaction.command(command.rawValue, home: home), path: nil,
-            cwd: cwd, host: host, home: home, at: time,
-            timedOut: HookDeadline.current?.requiresTimeoutReply ?? false,
-            session: HookSessionAttribution.current.flatMap { DenialLedgerRecord.attributableSession($0.rawValue) }
-        )
-        send(record)
+        send(Self.shellRecord(
+            result, command: command, cwd: cwd, host: host, home: home, at: time,
+            timedOut: HookDeadline.current?.requiresTimeoutReply ?? false))
     }
 
     /// A file-tool decision the door made at `time`.
     package func file(
         _ result: EvaluationResult, action: FileToolAction, cwd: WorkingDirectory?, host: LedgerHost, at time: Date
     ) {
-        let record = Self.record(
+        send(Self.fileRecord(
+            result, action: action, cwd: cwd, host: host, home: home, at: time,
+            timedOut: HookDeadline.current?.requiresTimeoutReply ?? false))
+    }
+
+    /// The row for a shell decision, redacted, filed under the hook
+    /// session bound on this task. rvd and the hook-local evaluator both
+    /// build rows here, so a command reads the same whichever decided it.
+    static func shellRecord(
+        _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost,
+        home: HomeDirectory?, at time: Date, timedOut: Bool
+    ) -> DecisionRecord {
+        record(
+            result, tool: .bash, command: DecisionRedaction.command(command.rawValue, home: home), path: nil,
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession)
+    }
+
+    /// The row for a file-tool decision; see `shellRecord`.
+    static func fileRecord(
+        _ result: EvaluationResult, action: FileToolAction, cwd: WorkingDirectory?, host: LedgerHost,
+        home: HomeDirectory?, at time: Date, timedOut: Bool
+    ) -> DecisionRecord {
+        record(
             result, tool: .file(action.kind), command: nil,
             path: DecisionRedaction.path(action.path.rawValue, home: home),
-            cwd: cwd, host: host, home: home, at: time,
-            timedOut: HookDeadline.current?.requiresTimeoutReply ?? false,
-            session: HookSessionAttribution.current.flatMap { DenialLedgerRecord.attributableSession($0.rawValue) }
-        )
-        send(record)
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession)
+    }
+
+    /// The hook session bound on this task, when it can be attributed.
+    private static var currentSession: String? {
+        HookSessionAttribution.current.flatMap { DenialLedgerRecord.attributableSession($0.rawValue) }
     }
 
     /// The rule a timed-out reply is filed under: the door answered with

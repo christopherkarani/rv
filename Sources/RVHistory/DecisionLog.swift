@@ -147,7 +147,9 @@ public struct DecisionLog: Sendable {
     /// `decisions.enabled` in `config.json`. A missing key is on.
     public static func isEnabled(inConfigDirectory directory: URL) -> Bool {
         let file = directory.appendingPathComponent("config.json", isDirectory: false)
-        guard let data = try? Data(contentsOf: file),
+        // Never `Data(contentsOf:)`: a FIFO planted at config.json must
+        // not hang the hook-local evaluator, which reads this per call.
+        guard let data = readRegularFile(file),
               let root = try? JSONDecoder().decode(JSONValue.self, from: data),
               let enabled = root["decisions"]?["enabled"]?.bool
         else {
@@ -167,21 +169,29 @@ public struct DecisionLog: Sendable {
         directory.appendingPathComponent("\(day).jsonl", isDirectory: false)
     }
 
-    /// Appends one row to its day's file, then, once per day per process,
-    /// drops day files past `maxAge`. Returns whether the row landed.
+    /// How long `append` waits for the day file's lock by default.
+    public static let lockTimeout: Duration = .milliseconds(200)
+
+    /// Appends one row to its day's file, waiting at most `lockTimeout` for
+    /// its lock, then, when `prunes` is set, once per day per process,
+    /// drops day files past `maxAge`. A short-lived writer (the hook-local
+    /// evaluator, one process per call) passes `prunes: false` and leaves
+    /// pruning to rvd. Returns whether the row landed.
     @discardableResult
-    public func append(_ record: DecisionRecord, now: Date) -> Bool {
+    public func append(
+        _ record: DecisionRecord, now: Date, lockTimeout: Duration = DecisionLog.lockTimeout, prunes: Bool = true
+    ) -> Bool {
         guard let line = try? Self.encoder.encode(record) else { return false }
         let landed: Bool
         do {
             try JSONLAppendLog.append(
-                line, to: fileURL(day: Self.day(of: record.time)), sync: false, lockTimeout: .milliseconds(200)
+                line, to: fileURL(day: Self.day(of: record.time)), sync: false, lockTimeout: lockTimeout
             )
             landed = true
         } catch {
             landed = false
         }
-        pruneOncePerDay(now: now)
+        if prunes { pruneOncePerDay(now: now) }
         return landed
     }
 
