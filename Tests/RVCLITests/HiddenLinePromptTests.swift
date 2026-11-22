@@ -54,7 +54,9 @@ struct HiddenLinePromptTests {
                 let count = buffer.withUnsafeMutableBytes { systemRead(primary, $0.baseAddress, $0.count) }
                 guard count > 0 else { break }
                 out += buffer.prefix(count)
-                if String(decoding: out, as: UTF8.self).contains(marker) { break }
+                // Bytes, not Characters: the terminal ends a line with
+                // "\r\n", which Swift reads as one Character, not "\n".
+                if containsBytes(out, Array(marker.utf8)) { break }
             }
             return String(decoding: out, as: UTF8.self)
         }
@@ -123,7 +125,7 @@ struct HiddenLinePromptTests {
         shown += pty.readOutput(until: "\n")
         var after = termios()
         #expect(tcgetattr(pty.replica, &after) == 0)
-        return (reader.outcome, shown, after.c_lflag == before.c_lflag)
+        return (reader.outcome, shown, sameLocalModes(after, before))
     }
 
     @Test func readsTheLineWithoutEchoingIt() throws {
@@ -184,7 +186,7 @@ struct HiddenLinePromptTests {
         #expect(reader.outcome == .cancelled)
         var after = termios()
         #expect(tcgetattr(pty.replica, &after) == 0)
-        #expect(after.c_lflag == before.c_lflag)
+        #expect(sameLocalModes(after, before))
     }
 
     @Test func aPipeIsNotATerminal() throws {
@@ -192,6 +194,20 @@ struct HiddenLinePromptTests {
         #expect(pipe(&fds) == 0)
         defer { _ = systemClose(fds[0]); _ = systemClose(fds[1]) }
         #expect(HiddenLinePrompt.read(fd: fds[0], prompt: "x", maximumBytes: 8) == .unavailable)
+    }
+}
+
+/// The local modes match, PENDIN aside: macOS sets it on its own when a
+/// terminal goes back to canonical mode (pending input is re-read).
+private func sameLocalModes(_ lhs: termios, _ rhs: termios) -> Bool {
+    let mask = ~tcflag_t(PENDIN)
+    return lhs.c_lflag & mask == rhs.c_lflag & mask
+}
+
+private func containsBytes(_ haystack: [UInt8], _ needle: [UInt8]) -> Bool {
+    guard needle.isEmpty == false, haystack.count >= needle.count else { return needle.isEmpty }
+    return (0...(haystack.count - needle.count)).contains { start in
+        haystack[start..<start + needle.count].elementsEqual(needle)
     }
 }
 

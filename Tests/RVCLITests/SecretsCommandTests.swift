@@ -95,7 +95,7 @@ struct SecretsCommandTests {
         ).get()
         #expect(text.hasPrefix(
             "✓ Stored OPENAI_API_KEY in \(SecretKeychain.storeName) (rv.secrets).\n"
-                + "  Sends to api.openai.com; commands get a stand-in, never the value.\n"))
+                + "  Delivery: gateway → api.openai.com via $OPENAI_BASE_URL; commands get a stand-in, never the value.\n"))
         // An agents filter keeps it out of `rv run`: a profile is the way in.
         #expect(text.hasSuffix("→ add \"OPENAI_API_KEY\" to a profile's \"secrets\" in runtime-resources.json\n"))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/OPENAI_API_KEY"] } == Data("sk-real-value-123".utf8))
@@ -598,7 +598,7 @@ struct SecretsCommandTests {
         let text = try setToken(fixture.environment()).get()
         #expect(text.hasPrefix(
             "✓ Stored GH_TOKEN in \(SecretKeychain.storeName) (rv.secrets).\n"
-                + "  Commands get the real value in their environment (weaker).\n"))
+                + "  Delivery: environment (real value in the cage), weaker than a stand-in.\n"))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == Data("ghp-12345678".utf8))
         #expect(try Data(contentsOf: fixture.secretsFile) == defined)
     }
@@ -1050,10 +1050,9 @@ struct SecretsCommandTests {
         try Data("clean now\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
         let leaked = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(leaked.failed)
-        #expect(leaked.text.contains("leak.txt:1:GH_TOKEN"))
-        // The fix, never the off switch: whoever commits may be an agent.
-        #expect(leaked.text.contains("✕ commit blocked: a key is in the staged files."))
-        #expect(leaked.text.hasSuffix("→ rv run --secret GH_TOKEN -- <command>\n"))
+        // One glyph line per finding, then the fix, never the off switch:
+        // whoever commits may be an agent.
+        #expect(leaked.text == "✕ leak.txt:1  GH_TOKEN\n→ use it: rv run --secret GH_TOKEN -- <command>\n")
         #expect(leaked.text.contains("rv.secretsScan") == false)
         #expect(leaked.text.contains("rv-secrets:allow") == false)
         #expect(leaked.text.contains(value) == false)
@@ -1080,8 +1079,8 @@ struct SecretsCommandTests {
         try git(work, ["add", "big.txt", "huge.bin"])
         let result = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
         #expect(result.failed)
-        #expect(result.text.contains("big.txt:120001:aws-access-key-id"))
-        #expect(result.text.contains("→ rv secrets set AWS_ACCESS_KEY_ID\n"))
+        #expect(result.text.contains("✕ big.txt:120001  aws-access-key-id\n"))
+        #expect(result.text.hasSuffix("→ move it: rv secrets set AWS_ACCESS_KEY_ID\n"))
         #expect(result.text.contains("not scanned (over 8 MiB): huge.bin"))
         #expect(result.text.contains(token) == false)
 

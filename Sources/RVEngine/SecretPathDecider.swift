@@ -85,7 +85,7 @@ public struct SecretPathDecider: Sendable {
         // reset --hard && git config rv.secretsScan false` must not ride on
         // an allow-once for the reset.
         if case .deny(let deny, _) = result.outcome, deny.ruleID.pack != .coreSecrets,
-           catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command)
+           catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command, leavingGitInternals: true)
         {
             return SecretsScanGuard.deny(searchText: result.matchingView.rawValue)
         }
@@ -100,7 +100,7 @@ public struct SecretPathDecider: Sendable {
             )
         }
         // The commit check's off switch and allow paths are the owner's.
-        if catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command) {
+        if catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command, leavingGitInternals: true) {
             let matched = SecretsScanGuard.match(searchText: result.matchingView.rawValue)
             return EvaluationResult(
                 outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),

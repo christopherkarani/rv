@@ -101,8 +101,10 @@ struct SecretsEveryModeTests {
         "git config -t bool rv.secretsScan false",
         "git config --ty bool rv.secretsScan false",
         "git config --fil .git/config rv.secretsScan false",
-        "git config core.hooksPath /dev/null",
+        "git config --global core.hooksPath /dev/null",
         "git config --global include.path /tmp/evil",
+        "echo rv.secretsScan false | xargs git config",
+        "git -c alias.x='!git config rv.secretsScan false' x",
         "chmod -x .git/hooks/pre-commit",
         "rm .git/hooks/pre-commit",
         ": > .git/hooks/pre-commit",
@@ -119,8 +121,13 @@ struct SecretsEveryModeTests {
                 Issue.record("\(config) \(command): expected a deny, got \(result.decision)")
                 continue
             }
-            #expect(deny.ruleID == SecretsScanGuard.ruleID, "\(config) \(command): \(deny.ruleID)")
-            #expect(deny.reason == SecretsScanGuard.reason)
+            // Writes inside `.git` keep the filesystem rule (protected path,
+            // or an unresolved path with no cwd), pinned as well; everything
+            // else is the commit check's own stop.
+            #expect(
+                deny.ruleID == SecretsScanGuard.ruleID || deny.ruleID.pack == BuiltinRule.protectedPathMutation.ruleID.pack,
+                "\(config) \(command): \(deny.ruleID)")
+            #expect(HookAuthorization.isPinned(result), "\(config) \(command): not pinned")
             #expect(ledgerRows(home).allSatisfy { $0.observed == false }, "\(command)")
         }
     }
@@ -128,6 +135,9 @@ struct SecretsEveryModeTests {
     @Test("reading the switch and searching for allow comments stay allowed", arguments: [
         "git config --get rv.secretsScan",
         "grep -rn rv-secrets:allow .",
+        "awk '/url/' .git/config",
+        "perl -ne 'print if /url/' .git/config",
+        #"python3 -c "import configparser" && cat .git/config"#,
         "git config rv.secretsScan true",
         "swift test --filter SecretsScanGuardTests",
         "git add Sources/RVEngine/SecretsScanGuard.swift",
@@ -144,6 +154,20 @@ struct SecretsEveryModeTests {
 
     @Test("naming the controls is never the pinned stop", arguments: [
         "cat .rv-secrets-ignore | sort",
+        // An out-of-repo report stays an ordinary write another rule judges.
+        "grep -rn 'rv-secrets:allow' . > /tmp/hits",
+        // A commit message is text, not commands (Claude Code's own form).
+        """
+        git commit -m "$(cat <<'EOF'
+        Tidy the hook
+
+        rm .git/hooks/pre-commit
+        git config rv.secretsScan false
+        EOF
+        )"
+        """,
+        // Without rv's hook, a repository's own hooksPath is the git rules' call.
+        "git init /tmp/x && cd /tmp/x && git config core.hooksPath .githooks",
         "grep -n secretsScan .git/config",
         "git log -p -- .rv-secrets-ignore",
     ])
@@ -229,6 +253,11 @@ struct SecretsEveryModeTests {
         "git commit --no-verify -m x",
         "git commit -nm x",
         "git config --unset core.hooksPath",
+        "git config core.hooksPath /dev/null",
+        "git -c alias.ci='commit --no-verify' ci -m x",
+        "git config alias.ci 'commit --no-verify'",
+        "git commit-tree HEAD^{tree} -m x",
+        "HOME=/tmp git commit -m x",
     ])
     func skippingRVHookStops(command: String) async throws {
         for place in [HookPlace.gitHooks, .husky, .linkedWorktree] {
@@ -267,10 +296,30 @@ struct SecretsEveryModeTests {
         }
     }
 
+    @Test("the repository a command acts on is the one probed", arguments: [
+        "git -C repo commit -n -m x",
+        "cd repo && git commit -n -m x",
+        "git --git-dir=repo/.git --work-tree=repo commit -n -m x",
+        "git -C repo config --unset core.hooksPath",
+    ])
+    func targetRepositoryIsProbed(command: String) async throws {
+        let home = try Self.home(Self.block)
+        defer { remove(home) }
+        let repo = try Self.repo(in: home, hook: .gitHooks)
+        let parent = try #require(WorkingDirectory(validating: (repo.rawValue as NSString).deletingLastPathComponent))
+        let result = await Self.apply(command, home: home, cwd: parent)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("\(command): expected a deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == SecretsScanGuard.ruleID, "\(command)")
+    }
+
     @Test("skipping hooks stays allowed in a repository without rv's hook", arguments: [
         "git commit --no-verify -m x",
         "git commit -nm x",
         "git config --unset core.hooksPath",
+        "git -c alias.ci='commit --no-verify' ci -m x",
     ])
     func skippingOtherHooksIsAllowed(command: String) async throws {
         let home = try Self.home(Self.block)

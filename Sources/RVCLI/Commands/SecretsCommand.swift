@@ -844,30 +844,32 @@ enum SecretsRun {
         case .success(let found): report = found
         }
         let findings = report.findings
-        var lines = findings.map { "\(DisplayedText.field($0.path)):\($0.line):\($0.secret)" }
+        // `✕ path:line  rule` per finding (never the value), the fix last,
+        // never the off switch: whoever commits may be an agent.
+        var lines = findings.map { "✕ \(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
         let gaps = report.tooLarge.isEmpty == false || skipped.isEmpty == false
         if findings.isEmpty {
             lines.append(gaps ? "No secrets in the staged files that were scanned." : "No secrets in staged files.")
-        } else {
-            // The fix, never the off switch: whoever commits may be an agent.
-            lines.append("✕ commit blocked: a key is in the staged files. Take it out, keep it in rv, then commit again.")
-            lines.append(hookNextStep(findings, defined: Set(configuration.secrets.map(\.name))))
         }
         lines += report.tooLarge.map(notScanned)
         lines += skipped
         if gaps { lines.append(hookGapSummary(files: report.tooLarge.count, secrets: skipped.count)) }
+        lines += hookNextSteps(findings, defined: Set(configuration.secrets.map(\.name)))
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
     }
 
-    /// The hook's last line. A defined secret's value is already in rv: use
-    /// it through rv run. A token pattern names the variable its issuer's
-    /// SDKs read, when there is one.
-    static func hookNextStep(_ findings: [SecretLeakFinding], defined: Set<String>) -> String {
-        if let finding = findings.first(where: { defined.contains($0.secret) }) {
-            return "→ rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
+    /// The hook's last lines, one per distinct name, in finding order. A
+    /// defined secret's value is already in rv: use it through rv run. A
+    /// token pattern names the variable its issuer's SDKs read, when there
+    /// is one, and is moved into rv.
+    static func hookNextSteps(_ findings: [SecretLeakFinding], defined: Set<String>) -> [String] {
+        var seen: Set<String> = []
+        return findings.compactMap { finding in
+            let line = defined.contains(finding.secret)
+                ? "→ use it: rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
+                : "→ move it: rv secrets set \(patternSecretNames[finding.secret] ?? "NAME")"
+            return seen.insert(line).inserted ? line : nil
         }
-        let name = findings.lazy.compactMap { patternSecretNames[$0.secret] }.first ?? "NAME"
-        return "→ rv secrets set \(name)"
     }
 
     /// Pattern rule ids (`SecretPatternRules`) and the name a key of that
@@ -913,13 +915,13 @@ enum SecretsRun {
 
     /// One plain line on where the value goes, for the `set` success text.
     static func deliveryLine(_ delivery: SecretDelivery) -> String {
+        // The delivery summary (`gateway → api.openai.com via
+        // $OPENAI_BASE_URL`) names the variable a command reads.
         switch delivery {
-        case .gateway(let binding):
-            "Sends to \(binding.upstream.host ?? binding.upstream.absoluteString); commands get a stand-in, never the value."
-        case .awsSigV4(let binding):
-            "Signs for \(binding.upstream.host ?? binding.upstream.absoluteString); commands get a stand-in, never the value."
+        case .gateway, .awsSigV4:
+            "Delivery: \(delivery.summary); commands get a stand-in, never the value."
         case .environment:
-            "Commands get the real value in their environment (weaker)."
+            "Delivery: \(delivery.summary), weaker than a stand-in."
         }
     }
 
@@ -1340,7 +1342,9 @@ struct SecretsHookRun: AsyncParsableCommand {
 
     func run() throws {
         let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: true, noColor: true)
-        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        // The store is the real user's, from the passwd entry: a commit run
+        // with HOME pointed elsewhere must not swap in an empty store.
+        let environment = SecretsEnvironment.live(home: try Self.passwdHome() ?? ctx.requireHome())
         let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         switch SecretsRun.hookRun(workTree: workTree, environment: environment) {
         case .failure(let failure): try ctx.fail("rv secrets hook run: \(failure.message)\n")
@@ -1348,6 +1352,14 @@ struct SecretsHookRun: AsyncParsableCommand {
             if result.failed { try ctx.emit(stdout: result.text, exitCode: 1) }
             else { ctx.writeStdout(result.text) }
         }
+    }
+
+    /// The home directory in the real user's passwd entry, never HOME.
+    static func passwdHome() -> HomeDirectory? {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        guard home.hasPrefix("/") else { return nil }
+        return HomeDirectory(validating: home)
     }
 }
 

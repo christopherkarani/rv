@@ -682,7 +682,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "allow",
-                    description: "You only: silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false. rv stops agents' git config and shell edits of these"
+                    description: "You only: silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config --local rv.secretsScan false. rv stops agents' git config and shell edits of these"
                 ),
                 HelpRow(
                     name: "audit",

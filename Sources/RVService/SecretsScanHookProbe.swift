@@ -3,6 +3,7 @@ import RVDomain
 import RVEngine
 import RVIsolation
 import RVPolicy
+import Synchronization
 
 /// Read-only probe: does the repository a command runs in have rv's secrets
 /// pre-commit hook (`rv secrets hook install`)? It finds the hooks
@@ -15,8 +16,9 @@ import RVPolicy
 /// installed", so a repository rv cannot read is never blocked.
 ///
 /// `SecretsScanGuard.weakensScan` asks it only for a command that could
-/// skip or move hooks or that writes some path, and a file-tool write of a
-/// `pre-commit` file asks it too, so ordinary evaluations pay nothing.
+/// skip, move or replace hooks (for the repository each command acts on,
+/// `cd`/`-C`/`--git-dir` followed), and a file-tool write of a `pre-commit`
+/// file asks it too, so ordinary evaluations pay nothing.
 enum SecretsScanHookProbe {
     static let maximumFileBytes = 1024 * 1024
     /// The whole-hook marker an older `rv secrets hook install` wrote.
@@ -24,34 +26,122 @@ enum SecretsScanHookProbe {
 
     /// The `pre-commit` file holding rv's block, or nil.
     static func installedHook(cwd: WorkingDirectory?, home: HomeDirectory?) -> String? {
-        guard let cwd,
-              let root = FilesystemLiveProbe.discoverRepositoryRoot(from: cwd.rawValue)?.rawValue,
-              let gitdir = GitLiveProbe.resolvedGitDir(repoRoot: root)
-        else { return nil }
+        guard let cwd else { return nil }
+        return installedHook(near: cwd.rawValue, home: home)
+    }
+
+    /// The `pre-commit` holding rv's block for the repository at or above
+    /// `directory`, which may be a git dir (`--git-dir`) or a path that does
+    /// not exist yet (the nearest existing directory above it counts). The
+    /// path is spelled from `directory` where the repository lies under it,
+    /// so it compares with the command's own lexical paths.
+    static func installedHook(near directory: String, home: HomeDirectory?) -> String? {
+        guard directory.hasPrefix("/") else { return nil }
+        var lexical = (directory as NSString).standardizingPath
+        var hops = 0
+        while resolveExistingDirectory(lexical) == nil {
+            guard lexical != "/", hops < 64 else { return nil }
+            lexical = (lexical as NSString).deletingLastPathComponent
+            hops += 1
+        }
+        guard let start = resolveExistingDirectory(lexical) else { return nil }
+        let root: String
+        let gitdir: String
+        if isGitDirectory(start) {
+            gitdir = start
+            root = (start as NSString).lastPathComponent == ".git" ? (start as NSString).deletingLastPathComponent : start
+        } else {
+            guard let found = FilesystemLiveProbe.discoverRepositoryRoot(from: start)?.rawValue,
+                  let resolved = GitLiveProbe.resolvedGitDir(repoRoot: found)
+            else { return nil }
+            root = found
+            gitdir = resolved
+        }
         let common = commonDirectory(gitdir: gitdir)
         let hooks = hooksDirectory(root: root, common: common, home: home?.rawValue)
         let hook = ((hooks + "/pre-commit") as NSString).standardizingPath
         guard let text = readCapped(hook), holdsRVBlock(text) else { return nil }
+        return respelled(hook, canonical: start, lexical: lexical)
+    }
+
+    /// `HEAD` beside `objects` or `config`: a git dir named directly.
+    private static func isGitDirectory(_ path: String) -> Bool {
+        let manager = FileManager.default
+        return manager.fileExists(atPath: path + "/HEAD")
+            && (manager.fileExists(atPath: path + "/objects") || manager.fileExists(atPath: path + "/config"))
+    }
+
+    /// `hook` with the canonical spelling of an ancestor of `canonical`
+    /// swapped for the matching ancestor of `lexical` (`/private/tmp` back
+    /// to `/tmp`).
+    private static func respelled(_ hook: String, canonical: String, lexical: String) -> String {
+        var canonicalBase = canonical
+        var lexicalBase = lexical
+        while canonicalBase != "/", lexicalBase != "/" {
+            if hook.hasPrefix(canonicalBase + "/") {
+                return lexicalBase + hook.dropFirst(canonicalBase.count)
+            }
+            guard (canonicalBase as NSString).lastPathComponent == (lexicalBase as NSString).lastPathComponent else {
+                break
+            }
+            canonicalBase = (canonicalBase as NSString).deletingLastPathComponent
+            lexicalBase = (lexicalBase as NSString).deletingLastPathComponent
+        }
         return hook
     }
 
-    /// Raises any verdict but a `core.secrets` deny to the commit check's
+    /// Raises any verdict but a pinned deny to the commit check's
     /// stop when the command weakens the scan: a pack deny alone (`git reset
     /// --hard && git config rv.secretsScan false`) would let one allow-once
     /// run the switch too.
     static func tighten(
         _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, home: HomeDirectory?
     ) -> EvaluationResult {
-        if case .deny(let deny) = result.decision, deny.ruleID.pack == .coreSecrets { return result }
+        // A pinned deny already holds (a protected-path write into
+        // `.git`, a secret read): it keeps its own rule and message. A
+        // command too large to evaluate is already refused.
+        if case .deny = result.decision, HookAuthorization.isPinned(result) { return result }
+        if case .indeterminate(.commandTooLarge) = result.decision { return result }
         guard weakensScan(command, cwd: cwd, home: home) else { return result }
         return SecretsScanGuard.deny(searchText: result.matchingView.rawValue)
     }
 
     /// `SecretsScanGuard.weakensScan` with the command's directories and
-    /// this probe.
+    /// this probe. One evaluation asks for the same command more than once
+    /// (the verdict, then the observe floor): the answer is kept briefly.
     static func weakensScan(_ command: ShellCommand, cwd: WorkingDirectory?, home: HomeDirectory?) -> Bool {
-        SecretsScanGuard.weakensScan(command, home: home, cwd: cwd) {
-            installedHook(cwd: cwd, home: home)
+        let key = Recent.Key(command: command.rawValue, cwd: cwd?.rawValue, home: home?.rawValue)
+        let now = Date()
+        if let known = recent.withLock({ $0.answer(for: key, at: now) }) { return known }
+        let answer = SecretsScanGuard.weakensScan(command, home: home, cwd: cwd) { directory in
+            installedHook(near: directory, home: home)
+        }
+        recent.withLock { $0.remember(answer, for: key, at: now) }
+        return answer
+    }
+
+    private static let recent = Mutex(Recent())
+
+    /// The last few answers, each for `lifetime` seconds.
+    private struct Recent {
+        struct Key: Equatable {
+            let command: String
+            let cwd: String?
+            let home: String?
+        }
+
+        static let capacity = 4
+        static let lifetime: TimeInterval = 2
+        var entries: [(key: Key, answer: Bool, at: Date)] = []
+
+        func answer(for key: Key, at now: Date) -> Bool? {
+            entries.last { $0.key == key && now >= $0.at && now.timeIntervalSince($0.at) < Self.lifetime }?.answer
+        }
+
+        mutating func remember(_ answer: Bool, for key: Key, at now: Date) {
+            entries.removeAll { $0.key == key }
+            entries.append((key, answer, now))
+            if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
         }
     }
 
