@@ -312,7 +312,7 @@ public enum JudgeRuntime {
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
         // only when a loaded judge errors mid-prediction (`.failed`).
-        // A selected bundle with no model (ENOENT) is unavailable: packs-only
+        // A selected bundle, or its model, that is not there (ENOENT) is unavailable: packs-only
         // plus a note (doctor surfaces it). A selected bundle that is there
         // but cannot load (corrupt, unreadable, uncheckable), or Core ML
         // failing on a model that is there, refuses (review): an agent can
@@ -488,7 +488,7 @@ public enum JudgeRuntime {
     }
 
     /// `unavailable` is the packs-only floor, an allow without a judge. It
-    /// comes only from genuine absence: no model in the selected bundle
+    /// comes only from genuine absence: the selected bundle or its model is not there
     /// (ENOENT), or no Core ML on this platform. A selected bundle that is
     /// there but cannot load (corrupt config or tokenizer, an uncheckable
     /// path) is `refused` (review, doctor-visible); a loaded judge that
@@ -570,7 +570,7 @@ public enum JudgeRuntime {
     }
 
     /// What a judge load that threw means. Only genuine absence
-    /// (`LayaError.bundleMissing`: no model at the selected bundle, ENOENT)
+    /// (`LayaError.bundleMissing`: the selected bundle or its model is not there, ENOENT)
     /// is `.unavailable`, the packs-only floor that allows. A bundle that is
     /// there but corrupt, unreadable or uncheckable, and any error not named
     /// here, refuses (review): an agent can provoke those.
