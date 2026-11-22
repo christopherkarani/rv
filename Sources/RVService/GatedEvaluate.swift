@@ -184,7 +184,8 @@ public struct GatedEvaluate: Sendable {
         // the ignore file, a repository's git config or hooks, the global
         // git config. Reads stay allowed.
         if case .allow = result.decision, action.kind != .read,
-           Self.touchesScanControls(action.path.rawValue, home: home, cwd: cwd) {
+           Self.touchesScanControls(action.path.rawValue, home: home, cwd: cwd)
+            || Self.writesRVHook(action.path.rawValue, home: home, cwd: cwd) {
             result = SecretsScanGuard.deny(searchText: action.path.rawValue)
         }
         // Edit/Write to a host MCP config while rv's MCP gateway is in use.
@@ -1069,9 +1070,12 @@ public struct GatedEvaluate: Sendable {
         // whose candidates really land on secret paths (F-2: symlinks
         // disarming path rules must not buy an allow).
         let stance = run(secretPaths)
-        guard secretPaths.escalatesToAliasPass(stance) else { return stance }
-        return run(secretPaths.withResolution(
-            SecretPathCandidateResolver.resolution(home: home, cwd: cwd)))
+        let resolved = secretPaths.escalatesToAliasPass(stance)
+            ? run(secretPaths.withResolution(SecretPathCandidateResolver.resolution(home: home, cwd: cwd)))
+            : stance
+        // `git commit --no-verify` or moving core.hooksPath skips rv's
+        // commit check, but only in a repository that has it.
+        return SecretsScanHookProbe.tighten(resolved, command: request.command, cwd: cwd, home: home)
     }
 
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
@@ -1106,6 +1110,21 @@ public struct GatedEvaluate: Sendable {
 
     private static func workspaceURL(cwd: WorkingDirectory?) -> URL? {
         cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+    }
+
+    /// The `pre-commit` file that holds rv's hook block, wherever
+    /// `core.hooksPath` puts it (`.husky/pre-commit`): an edit could cut
+    /// the block out. Only a path named `pre-commit` is probed.
+    static func writesRVHook(_ typed: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        guard (typed as NSString).lastPathComponent.lowercased() == "pre-commit",
+              let hook = SecretsScanHookProbe.installedHook(cwd: cwd, home: home)
+        else { return false }
+        let homePath = home?.rawValue ?? FileManager.default.homeDirectoryForCurrentUser.path
+        guard let lexical = WiringPathGuard.absolute(typed, home: homePath, cwd: cwd) else { return false }
+        let target = WiringPathGuard.absolute(hook, home: homePath, cwd: cwd) ?? hook
+        let resolvedTarget = SecretPathCandidateResolver.resolvedPath(target)
+        let resolvedPath = SecretPathCandidateResolver.resolvedPath(lexical)
+        return lexical == target || (resolvedPath != nil && resolvedPath == resolvedTarget)
     }
 
     /// `SecretsScanGuard.protectsFile` for a file-door path as typed, made

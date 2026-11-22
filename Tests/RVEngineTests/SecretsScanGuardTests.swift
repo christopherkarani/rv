@@ -122,4 +122,60 @@ struct SecretsScanGuardTests {
     func leavesOtherFilesAlone(_ path: String) {
         #expect(SecretsScanGuard.protectsFile(path, home: "/home/me") == false, "\(path)")
     }
+
+    @Test("git commit that skips hooks", arguments: [
+        "git commit --no-verify -m x",
+        "git commit -n -m x",
+        "git commit -nm x",
+        "git commit -anm x",
+        "git commit -m x -n",
+        "git commit --no-ver -m x",
+        "git -C /repo commit --no-verify",
+        "cd /repo && git commit -n",
+        "bash -c 'git commit -n -m x'",
+        "git commit $FLAGS -m x",
+        "git commit -mfixm -n",
+    ])
+    func skipsCommitHook(_ command: String) {
+        #expect(SecretsScanGuard.skipsCommitHook(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    @Test("git commit that runs hooks", arguments: [
+        "git commit -m x",
+        "git commit -m 'skip -n later'",
+        "git commit -m -n",
+        "git commit -uno -m x",
+        "git commit --amend --no-edit",
+        "git commit -F msg.txt",
+        "git log -n 3",
+        "git merge --no-verify topic",
+        "echo git commit -n",
+    ])
+    func runsCommitHook(_ command: String) {
+        #expect(SecretsScanGuard.skipsCommitHook(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    @Test("git config that moves hooks", arguments: [
+        "git config --unset core.hooksPath",
+        "git config --unset-all core.hooksPath",
+        "git config unset core.hooksPath",
+        "git config core.hooksPath /tmp/hooks",
+        "git config --local core.hooksPath .git/hooks",
+        "git config --remove-section core",
+        "git config --rename-section core old",
+    ])
+    func movesHooksPath(_ command: String) {
+        #expect(SecretsScanGuard.movesHooksPath(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    @Test("git config that leaves hooks alone", arguments: [
+        "git config --get core.hooksPath",
+        "git config core.hooksPath",
+        "git config core.editor vim",
+        "git config --unset core.editor",
+        "git config --remove-section alias",
+    ])
+    func leavesHooksPath(_ command: String) {
+        #expect(SecretsScanGuard.movesHooksPath(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
 }

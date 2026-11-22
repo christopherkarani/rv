@@ -54,6 +54,99 @@ public enum SecretsScanGuard {
         return launched.isEmpty || launched.contains { onlyReads($0) == false }
     }
 
+    /// `git commit --no-verify` (`-n`, an abbreviation, or a short cluster
+    /// holding `n`) skips every pre-commit hook, rv's scan included. Only a
+    /// repository with rv's hook installed makes this a stop; the caller
+    /// asks that (`SecretsScanHookProbe`), since text alone cannot.
+    public static func skipsCommitHook(_ command: ShellCommand) -> Bool {
+        let plain = plainText(command.rawValue)
+        guard plain.contains("commit") else { return false }
+        return launchedCommandHeads(command.rawValue).contains { launched in
+            guard let head = launched.guardArgv.first, commandName(head) == "git",
+                  let sub = gitSubcommandIndex(launched.guardArgv),
+                  foldedWord(launched.guardArgv[sub]) == "commit"
+            else { return false }
+            return commitArgsSkipHooks(launched.guardArgv[(sub + 1)...].map(unescapeBackslashPairs))
+        }
+    }
+
+    /// git config that moves hooks away from where rv's hook is: unsetting,
+    /// setting, or renaming away `core.hooksPath`, or removing or renaming
+    /// the `[core]` section. Setting it is already an unverifiable-config
+    /// deny; it is listed so the rule reads whole.
+    public static func movesHooksPath(_ command: ShellCommand) -> Bool {
+        let plain = plainText(command.rawValue)
+        guard plain.contains("hookspath") || plain.contains("core") else { return false }
+        return launchedCommandHeads(command.rawValue).contains { launched in
+            guard let head = launched.guardArgv.first, commandName(head) == "git",
+                  let sub = gitSubcommandIndex(launched.guardArgv),
+                  foldedWord(launched.guardArgv[sub]) == "config"
+            else { return false }
+            let args = launched.guardArgv[(sub + 1)...].map(unescapeBackslashPairs)
+            let folded = args.map(foldedWord)
+            if folded.contains("--remove-section") || folded.contains("--rename-section")
+                || folded.first == "remove-section" || folded.first == "rename-section"
+            {
+                return folded.contains("core") || args.contains { $0.contains("$") || $0.contains("`") }
+            }
+            if folded.contains(where: { $0 == "--get" || $0 == "--get-all" || $0 == "--list" || $0 == "-l" })
+                || folded.first == "get" || folded.first == "list"
+            {
+                return false
+            }
+            let positionals = folded.filter { $0.hasPrefix("-") == false }
+            let keys = positionals.first.map { ["set", "unset"].contains($0) } == true
+                ? Array(positionals.dropFirst()) : positionals
+            guard let key = keys.first else { return false }
+            let unsets = folded.contains("--unset") || folded.contains("--unset-all") || positionals.first == "unset"
+            return key == "core.hookspath" && (unsets || keys.count >= 2)
+        }
+    }
+
+    /// Short options of `git commit` that take a value (attached or next).
+    private static let commitValueLetters: Set<Character> = ["m", "F", "c", "C", "t"]
+
+    private static func commitArgsSkipHooks(_ args: [String]) -> Bool {
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if arg == "--" { return false }
+            if arg.hasPrefix("--") {
+                let name = String(arg.prefix { $0 != "=" })
+                // git takes any unambiguous prefix; `--no-v` is the shortest.
+                if name.count >= 6, "--no-verify".hasPrefix(name) { return true }
+                if ["--message", "--file", "--reuse-message", "--reedit-message", "--template",
+                    "--author", "--date", "--fixup", "--squash", "--trailer", "--cleanup", "--pathspec-from-file"]
+                    .contains(name), arg.contains("=") == false
+                {
+                    index += 2
+                    continue
+                }
+                index += 1
+                continue
+            }
+            if arg.hasPrefix("-"), arg.count > 1 {
+                let letters = Array(arg.dropFirst())
+                for (position, letter) in letters.enumerated() {
+                    if letter == "n" { return true }
+                    // `-uno`, `-Skey`: an attached optional value ends the cluster.
+                    if letter == "u" || letter == "S" { break }
+                    if commitValueLetters.contains(letter) {
+                        // The rest of the word is the value, or the next word is.
+                        if position == letters.count - 1 { index += 1 }
+                        break
+                    }
+                }
+                index += 1
+                continue
+            }
+            // A dynamic word in option position may carry `-n`: fail closed.
+            if arg.hasPrefix("$") { return true }
+            index += 1
+        }
+        return false
+    }
+
     static func match(searchText: String) -> RuleMatch {
         RuleMatch(ruleID: ruleID, severity: .high, reason: reason, regex: nil, matchedText: nil, searchText: searchText)
     }

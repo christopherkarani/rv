@@ -147,4 +147,122 @@ struct SecretsEveryModeTests {
             #expect(read.decision == .allow, "\(config) read \(suffix)")
         }
     }
+
+    // MARK: Hooks skipped or moved, only where rv's hook is installed
+
+    /// Where rv's block is, if anywhere: `.git/hooks`, `.husky` through
+    /// core.hooksPath, or the common dir's hooks of a linked worktree.
+    private enum HookPlace { case none, gitHooks, husky, linkedWorktree }
+
+    private static func repo(in home: HomeDirectory, hook: HookPlace) throws -> WorkingDirectory {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: home.rawValue).appendingPathComponent("repo")
+        let git = root.appendingPathComponent(".git")
+        try fm.createDirectory(at: git.appendingPathComponent("hooks"), withIntermediateDirectories: true)
+        try Data("ref: refs/heads/main\n".utf8).write(to: git.appendingPathComponent("HEAD"))
+        let block = "#!/bin/sh\n# >>> rv secrets >>>\nrv secrets hook run || exit $?\n# <<< rv secrets <<<\n"
+        switch hook {
+        case .none:
+            try Data("#!/bin/sh\nnpm run lint\n".utf8).write(to: git.appendingPathComponent("hooks/pre-commit"))
+        case .gitHooks:
+            try Data(block.utf8).write(to: git.appendingPathComponent("hooks/pre-commit"))
+        case .husky:
+            try Data("[core]\n\trepositoryformatversion = 0\n\thooksPath = .husky ; set by husky\n".utf8)
+                .write(to: git.appendingPathComponent("config"))
+            try fm.createDirectory(at: root.appendingPathComponent(".husky"), withIntermediateDirectories: true)
+            try Data(block.utf8).write(to: root.appendingPathComponent(".husky/pre-commit"))
+        case .linkedWorktree:
+            try Data(block.utf8).write(to: git.appendingPathComponent("hooks/pre-commit"))
+            let linked = git.appendingPathComponent("worktrees/wt")
+            try fm.createDirectory(at: linked, withIntermediateDirectories: true)
+            try Data("../..\n".utf8).write(to: linked.appendingPathComponent("commondir"))
+            let tree = URL(fileURLWithPath: home.rawValue).appendingPathComponent("wt")
+            try fm.createDirectory(at: tree, withIntermediateDirectories: true)
+            try Data("gitdir: \(linked.path)\n".utf8).write(to: tree.appendingPathComponent(".git"))
+            return try #require(WorkingDirectory(validating: tree.path))
+        }
+        return try #require(WorkingDirectory(validating: root.path))
+    }
+
+    private static func apply(_ command: String, home: HomeDirectory, cwd: WorkingDirectory) async -> EvaluationResult {
+        await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: cwd, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+    }
+
+    @Test("skipping or moving hooks stops where rv's hook is installed", arguments: [
+        "git commit --no-verify -m x",
+        "git commit -nm x",
+        "git config --unset core.hooksPath",
+    ])
+    func skippingRVHookStops(command: String) async throws {
+        for place in [HookPlace.gitHooks, .husky, .linkedWorktree] {
+            for config in [Self.block, Self.observe] {
+                let home = try Self.home(config)
+                defer { remove(home) }
+                let cwd = try Self.repo(in: home, hook: place)
+                let result = await Self.apply(command, home: home, cwd: cwd)
+                guard case .deny(let deny) = result.decision else {
+                    Issue.record("\(place) \(config) \(command): expected a deny, got \(result.decision)")
+                    continue
+                }
+                #expect(deny.ruleID == SecretsScanGuard.ruleID)
+            }
+        }
+    }
+
+    @Test("skipping hooks stays allowed in a repository without rv's hook", arguments: [
+        "git commit --no-verify -m x",
+        "git commit -nm x",
+        "git config --unset core.hooksPath",
+    ])
+    func skippingOtherHooksIsAllowed(command: String) async throws {
+        let home = try Self.home(Self.block)
+        defer { remove(home) }
+        let cwd = try Self.repo(in: home, hook: .none)
+        #expect(await Self.apply(command, home: home, cwd: cwd).decision == .allow, "\(command)")
+    }
+
+    @Test("a plain commit stays allowed where rv's hook is installed")
+    func plainCommitAllowed() async throws {
+        let home = try Self.home(Self.block)
+        defer { remove(home) }
+        let cwd = try Self.repo(in: home, hook: .gitHooks)
+        #expect(await Self.apply("git commit -m x", home: home, cwd: cwd).decision == .allow)
+    }
+
+    @Test("file door: editing a shared hooks dir's pre-commit with rv's block is denied")
+    func fileDoorGuardsHuskyHook() throws {
+        let home = try Self.home(Self.block)
+        defer { remove(home) }
+        let cwd = try Self.repo(in: home, hook: .husky)
+        let hook = FileToolPath(rawValue: cwd.rawValue + "/.husky/pre-commit")
+        let edit = GatedEvaluate().runFile(
+            FileToolAction(kind: .edit, path: hook), home: home, cwd: cwd, host: .hook(.claude), now: Self.now)
+        guard case .deny(let deny) = edit.decision else {
+            Issue.record("expected a deny, got \(edit.decision)")
+            return
+        }
+        #expect(deny.ruleID == SecretsScanGuard.ruleID)
+        let read = GatedEvaluate().runFile(
+            FileToolAction(kind: .read, path: hook), home: home, cwd: cwd, host: .hook(.claude), now: Self.now)
+        #expect(read.decision == .allow)
+        let other = GatedEvaluate().runFile(
+            FileToolAction(kind: .edit, path: FileToolPath(rawValue: cwd.rawValue + "/.husky/commit-msg")),
+            home: home, cwd: cwd, host: .hook(.claude), now: Self.now)
+        #expect(other.decision == .allow)
+    }
+
+    @Test("core.hooksPath parsing", arguments: [
+        ("[core]\n\thooksPath = .husky\n", ".husky"),
+        ("[CORE]\n  HOOKSPATH=\"/opt/hooks\" # c\n", "/opt/hooks"),
+        ("[core] hooksPath = a\n[core]\nhooksPath = b\n", "b"),
+        ("[core \"x\"]\nhooksPath = no\n", nil),
+        ("[user]\nhooksPath = no\n", nil),
+    ] as [(String, String?)])
+    func parsesHooksPath(text: String, expected: String?) {
+        #expect(SecretsScanHookProbe.hooksPath(inConfig: text) == expected)
+    }
 }
