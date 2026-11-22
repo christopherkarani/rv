@@ -49,10 +49,20 @@ package struct GatedVerdict: Sendable, Equatable {
     /// Nil when the enforce branch decided: enforce mode, or a result the
     /// observe floor took.
     package let wouldBe: WouldBe?
+    /// The guard mode the evaluation read (enforce when none was read).
+    package let guardMode: GuardMode
 
-    package init(result: EvaluationResult, wouldBe: WouldBe? = nil) {
+    package init(result: EvaluationResult, wouldBe: WouldBe? = nil, guardMode: GuardMode = .enforce) {
         self.result = result
         self.wouldBe = wouldBe
+        self.guardMode = guardMode
+    }
+
+    /// Observe was read, yet the enforce branch decided and did not allow:
+    /// the observe floor (`ObserveFloor.rule`) stopped it, so it is
+    /// stopped in every mode and must never read like a watched verdict.
+    package var stoppedInEveryMode: Bool {
+        guardMode == .observe && wouldBe == nil && result.decision != .allow
     }
 
     /// The verdict to show: the would-be one under observe, else the result.
@@ -473,7 +483,7 @@ public struct GatedEvaluate: Sendable {
             await JudgeOffload.run { Self.perform(effects, home: home) }
         }
         let result = overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
-        return GatedVerdict(result: result, wouldBe: decided.wouldBe)
+        return GatedVerdict(result: result, wouldBe: decided.wouldBe, guardMode: decided.guardMode)
     }
 
     /// Why an override whose `command.override` row was not written stays a deny.
@@ -534,7 +544,8 @@ public struct GatedEvaluate: Sendable {
     ) async -> (
         result: EvaluationResult,
         effects: [GatedEffect],
-        wouldBe: GatedVerdict.WouldBe?
+        wouldBe: GatedVerdict.WouldBe?,
+        guardMode: GuardMode
     ) {
         let verb: PolicyVerb
         switch intent {
@@ -560,7 +571,7 @@ public struct GatedEvaluate: Sendable {
         // The effects the offloaded steps ask for (exemption audit, judge
         // log) come back out of the closure, in order, with the result;
         // the denial row is appended after the Policy gate, here.
-        let (screened, safety, offloaded) = await JudgeOffload.run { [self] in
+        let (screened, safety, guardMode, offloaded) = await JudgeOffload.run { [self] in
             let gathered = HookTiming.measure(.inputs) { inputs() }
             var effects: [GatedEffect] = []
             let result = HookTiming.measure(.policy) {
@@ -579,7 +590,7 @@ public struct GatedEvaluate: Sendable {
                     effects: &effects
                 )
             }
-            return (screened, gathered.store.safety, effects)
+            return (screened, gathered.store.safety, gathered.guardMode, effects)
         }
         var effects = offloaded
         let candidate: EvaluationResult
@@ -602,7 +613,7 @@ public struct GatedEvaluate: Sendable {
                 // reaches the Policy gate as a ledger row, not even a preview.
                 effects.append(row)
             }
-            guard recordsDenial || previewsWouldBe else { return (observed, effects, nil) }
+            guard recordsDenial || previewsWouldBe else { return (observed, effects, nil, guardMode) }
             // The packs-only floor only turns an allow indeterminate, so it
             // never changes whether a denial row is recorded: it runs here,
             // where the would-be is consumed, not on every observed allow.
@@ -620,7 +631,9 @@ public struct GatedEvaluate: Sendable {
             ) {
                 effects.append(row)
             }
-            return (observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization))
+            return (
+                observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization), guardMode
+            )
         case .enforced(let enforced):
             candidate = enforced
         }
@@ -650,7 +663,7 @@ public struct GatedEvaluate: Sendable {
                                         withDenial: denialInTime || override == .allowOnce) {
             effects.append(row)
         }
-        return (finished, effects, nil)
+        return (finished, effects, nil, guardMode)
     }
 
     /// The Policy gate over a candidate verdict. Fast path: allow and

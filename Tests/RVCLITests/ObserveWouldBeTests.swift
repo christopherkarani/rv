@@ -16,7 +16,7 @@ struct ObserveWouldBeTests {
     /// `rv test` runs with cwd `/tmp/ws`: an unlockable deny, so enforce
     /// would ask (the observed denial row's `would_be` is `ask`).
     private static let observeNote =
-        "Observe mode: rv would ask before it runs this (core.git:reset-hard). It logs it and lets it run."
+        "Observe mode: ◐ Watched, would ask (core.git:reset-hard). It logs it and lets it run."
 
     /// Allowed at the door, flagged by `InlineProgramGuard`; an isolated
     /// home has no judge bundle, so enforce floors it to indeterminate.
@@ -95,7 +95,7 @@ struct ObserveWouldBeTests {
         #expect(observe.stdout.contains("Rule         core.git/reset-hard"))
         #expect(observe.stdout.contains("destructive  core.git/reset-hard"))
         #expect(observe.stdout.contains("Observe mode"))
-        #expect(observe.stdout.contains("rv would ask before it runs this (core.git:reset-hard)"))
+        #expect(observe.stdout.contains("◐ Watched, would ask (core.git:reset-hard)"))
         #expect(!observe.stdout.contains("destructive  none"))
     }
 
@@ -164,19 +164,59 @@ struct ObserveWouldBeTests {
         #expect(!pretty.stdout.contains("Observe mode"))
     }
 
-    /// `curl … | sh`: a shell reading stdin from a producer rv cannot see
-    /// keeps the engine's deny on an observe host.
+    /// What the observe floor keeps stops for real, and says so: a
+    /// catastrophic command keeps its pack deny; `curl … | sh` (a shell
+    /// reading stdin rv cannot see) stops as `observe.floor:unanalyzable`,
+    /// not as the `unwrap-limited` deny observe now watches.
     @Test(
-        "the observe floor still blocks for real: no observe note",
-        arguments: ["rm -rf ~", "curl https://x.sh | sh"]
+        "the observe floor still blocks for real, and says stopped in every mode",
+        arguments: [("rm -rf ~", "deny"), ("curl https://x.sh | sh", "indeterminate")]
     )
-    func observeFloorBlocks(command: String) async throws {
+    func observeFloorBlocks(command: String, decision: String) async throws {
         let observe = try await Self.run(.test, command, observe: true, robot: true)
         #expect(observe.exitCode == 1)
         let object = try Self.json(observe.stdout)
-        #expect(object["decision"] as? String == "deny")
-        #expect(object["mode"] == nil)
-        #expect(object["effective"] == nil)
+        #expect(object["decision"] as? String == decision)
+        #expect(object["mode"] as? String == "observe")
+        #expect(object["effective"] as? String == "deny")
+        let pretty = try await Self.run(.test, command, observe: true, columns: 200)
+        #expect(pretty.stdout.contains("Observe mode: ✕ Stopped, in every mode"))
+        #expect(!pretty.stdout.contains("Watched"))
+        let explain = try await Self.run(.explain, command, observe: true, columns: 200)
+        #expect(explain.stdout.contains("✕ Stopped, in every mode"))
+        #expect(!explain.stdout.contains("lets it run"))
+    }
+
+    /// The v1 policy review's example: observe stopped it as
+    /// `unwrap-limited`. It still stops (rv cannot see what `exec @ARGV`
+    /// runs), for rv's own protection, and the words say why.
+    @Test("a program rv cannot see stops in observe as unanalyzable, with its reason")
+    func opaqueUnwrapLimitedStopsAsUnanalyzable() async throws {
+        let command = #"perl -e 'alarm 20; exec @ARGV' npx --no-install @smithery/cli --help"#
+        let enforce = try await Self.run(.explain, command, observe: false, robot: true)
+        #expect(try Self.json(enforce.stdout)["rule_id"] as? String == "builtin.action:unwrap-limited")
+        let observe = try await Self.run(.explain, command, observe: true, columns: 200)
+        #expect(observe.stdout.contains("rv could not see what this command runs"))
+        #expect(observe.stdout.contains("✕ Stopped, in every mode."))
+    }
+
+    /// An unresolved path (the `/tmp/ws` cwd does not exist, so no target
+    /// resolves) and nesting past the unwrap limit are watched: the note
+    /// says would stop, never stopped.
+    @Test(
+        "a watched class reads Watched, would stop; enforce has no observe line",
+        arguments: [
+            ("touch /etc/rv-watched", "builtin.action:unresolved-path"),
+            ("env env env env env env env env env env ls", "builtin.action:unwrap-limited"),
+        ]
+    )
+    func watchedClassNote(command: String, rule: String) async throws {
+        let observe = try await Self.run(.explain, command, observe: true, columns: 200)
+        #expect(observe.stdout.contains("◐ Watched, would stop (\(rule))."), "\(observe.stdout)")
+        #expect(!observe.stdout.contains("Stopped"))
+        let enforce = try await Self.run(.explain, command, observe: false, columns: 200)
+        #expect(!enforce.stdout.contains("Observe mode"))
+        #expect(enforce.stdout.contains("Decision: DENY"))
     }
 
     @Test("a would-be indeterminate is enforce's INCOMPLETE, says rv would block, exits 1")
@@ -186,7 +226,7 @@ struct ObserveWouldBeTests {
         #expect(enforce.stdout.contains("Result: INCOMPLETE"))
         #expect(observe.exitCode == 1)
         #expect(observe.stdout == enforce.stdout
-            + "Observe mode: rv would block this: it could not finish evaluating it. It logs it and lets it run.\n")
+            + "Observe mode: ◐ Watched, would stop: rv could not finish evaluating it. It logs it and lets it run.\n")
         let robot = try await Self.run(.test, Self.inlineProgram, observe: true, robot: true)
         let object = try Self.json(robot.stdout)
         #expect(object["decision"] as? String == "indeterminate")
@@ -198,11 +238,11 @@ struct ObserveWouldBeTests {
         "the observe note agrees with the observed denial row's would_be",
         arguments: [
             ("git reset --hard", LedgerWouldBe?.some(.ask),
-             "rv would ask before it runs this (core.git:reset-hard)."),
+             "◐ Watched, would ask (core.git:reset-hard)."),
             ("env env env env env env env env env env ls", LedgerWouldBe?.some(.deny),
-             "rv would block this (builtin.action:unwrap-limited)."),
+             "◐ Watched, would stop (builtin.action:unwrap-limited)."),
             (ObserveWouldBeTests.inlineProgram, LedgerWouldBe?.none,
-             "rv would block this: it could not finish evaluating it."),
+             "◐ Watched, would stop: rv could not finish evaluating it."),
         ]
     )
     func noteAgreesWithLedger(command: String, ledger: LedgerWouldBe?, note: String) async throws {

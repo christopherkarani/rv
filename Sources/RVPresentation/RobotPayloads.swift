@@ -206,13 +206,13 @@ public struct PacksRobotPayload: Equatable, Sendable, Encodable {
     }
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run; adds
-/// `mode` / `effective`.
-public func testRobotPayload(from result: EvaluationResult, observed: Bool = false) -> TestRobotPayload {
+/// `observed`: what observe mode did with a `result` that is not an allow;
+/// adds `mode` / `effective` (`allow` when watched, `deny` when stopped).
+public func testRobotPayload(from result: EvaluationResult, observed: ObserveOutcome? = nil) -> TestRobotPayload {
     var payload = baseTestRobotPayload(from: result)
-    if observed {
+    if let observed, result.decision != .allow {
         payload.mode = observeRobotMode
-        payload.effective = observeRobotEffective
+        payload.effective = observed == .stopped ? observeRobotStoppedEffective : observeRobotEffective
     }
     return payload
 }
@@ -235,21 +235,23 @@ private func baseTestRobotPayload(from result: EvaluationResult) -> TestRobotPay
             ruleID: deny.ruleID.rawValue,
             reason: factSentence(from: deny.reason)
         )
-    case .indeterminate:
+    case .indeterminate(let reason):
         return TestRobotPayload(
             schema: RobotSchema.test,
             decision: "indeterminate",
             packID: nil,
             ruleID: nil,
-            reason: incompleteEvalSentence
+            reason: indeterminateSentence(reason)
         )
     }
 }
 
-/// Observe fields follow `model.observeNote`: set only when observe let
-/// the would-be decision run.
+/// Observe fields follow `model.observeNote`: set only when observe mode
+/// was read for a decision that is not an allow (`effective` says whether
+/// it ran).
 public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPayload {
     let observed = model.observeNote != nil
+    let effective = model.observeStopped ? observeRobotStoppedEffective : observeRobotEffective
     return ExplainRobotPayload(
         schema: RobotSchema.explain,
         decision: robotDecision(model.decision),
@@ -259,7 +261,7 @@ public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPay
         explanation: model.explanation,
         nextAction: model.nextAction,
         mode: observed ? observeRobotMode : nil,
-        effective: observed ? observeRobotEffective : nil
+        effective: observed ? effective : nil
     )
 }
 

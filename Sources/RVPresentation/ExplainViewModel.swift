@@ -55,8 +55,12 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var steps: [ExplainStep]
     public var suggestions: [ExplainSuggestion]
     public var semantic: ExplainSemanticView?
-    /// Observe-mode note, when observe let a would-be block or ask run.
+    /// Observe-mode note, when observe mode was read for a verdict that is
+    /// not an allow: watched (it ran) or stopped (in every mode).
     package var observeNote: String?
+    /// The observe note says the observe floor stopped it (in every mode),
+    /// not that observe let it run.
+    package var observeStopped = false
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
@@ -81,7 +85,8 @@ public struct ExplainViewModel: Equatable, Sendable {
         regex: String? = nil,
         suggestions: [ExplainSuggestion] = [],
         semantic: ExplainSemanticView? = nil,
-        observeNote: String? = nil
+        observeNote: String? = nil,
+        observeStopped: Bool = false
     ) {
         self.command = command
         self.normalized = normalized
@@ -98,16 +103,17 @@ public struct ExplainViewModel: Equatable, Sendable {
         self.suggestions = suggestions
         self.semantic = semantic
         self.observeNote = observeNote
+        self.observeStopped = observeStopped && observeNote != nil
     }
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run, which
-/// enforce would have authorized this way; adds the observe note.
+/// `observed`: what observe mode did with `result` (watched: the would-be
+/// verdict ran; stopped: the observe floor kept it); adds the observe note.
 public func explainViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
     normalized: String? = nil,
-    observed: HookAuthorization? = nil
+    observed: ObserveOutcome? = nil
 ) -> ExplainViewModel {
     let fact: String
     let next: String?
@@ -118,8 +124,8 @@ public func explainViewModel(
     case .deny(let deny, _):
         fact = factSentence(from: deny.reason)
         next = denyNextAction
-    case .indeterminate:
-        fact = incompleteEvalSentence
+    case .indeterminate(let reason):
+        fact = indeterminateSentence(reason)
         next = nil
     }
     let packID = result.outcome.explainPackID
@@ -141,7 +147,8 @@ public func explainViewModel(
         regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis),
-        observeNote: observed.flatMap { observeNote(for: result.decision, authorization: $0) }
+        observeNote: observed.flatMap { observeNote(for: result.decision, outcome: $0) },
+        observeStopped: observed == .stopped && result.decision != .allow
     )
 }
 

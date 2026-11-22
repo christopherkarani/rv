@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVPresentation
 
 enum BlocksRun {
     static func list(home: HomeDirectory, json: Bool, now: Date = Date()) throws -> String {
@@ -18,14 +19,16 @@ enum BlocksRun {
         return records.map(prettyLine).joined(separator: "\n") + "\n"
     }
 
-    /// Observe-mode rows (the agent was not blocked) carry an `observed`
-    /// column after the timestamp (`observed ask` when enforcement would
-    /// have asked a human); a host name is never that word. A row that
-    /// names its agent session ends with `session=<id>`.
+    /// Every row says what happened after the timestamp, so a real stop
+    /// never reads like a watched one: `✕ Stopped` (the command did not
+    /// run), or for an observe-mode row (the agent was not blocked)
+    /// `◐ Watched, would stop` / `◐ Watched, would ask` (what enforcement
+    /// would have done). A host name is never one of these words. A row
+    /// that names its agent session ends with `session=<id>`.
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
         [
             iso8601(record.timestamp),
-            record.observed ? (record.wouldBe == .ask ? "observed ask" : "observed") : nil,
+            verdict(record),
             record.host.rawValue,
             record.tool.rawValue,
             DisplayedText.field(record.ruleID.rawValue),
@@ -33,6 +36,11 @@ enum BlocksRun {
             DisplayedText.field(record.path),
             record.session.map { "session=" + DisplayedText.field($0) },
         ].compactMap { $0 }.joined(separator: "  ")
+    }
+
+    private static func verdict(_ record: DenialLedgerRecord) -> String {
+        guard record.observed else { return "✕ Stopped" }
+        return record.wouldBe == .ask ? watchedWouldAskWords : watchedWouldStopWords
     }
 
     // REQ-T7 named divergence: slashes are no longer spelled `\/`.

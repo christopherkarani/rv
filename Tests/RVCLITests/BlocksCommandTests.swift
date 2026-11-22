@@ -92,9 +92,9 @@ struct BlocksCommandTests {
         )
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("Z  observed  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
-        #expect(lines[1].contains("observed") == false)
-        #expect(lines[1].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[0].hasSuffix("Z  ◐ Watched, would stop  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[1].contains("Watched") == false)
+        #expect(lines[1].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
     }
 
     /// A row that names its agent session prints it last (`session=<id>`)
@@ -115,8 +115,8 @@ struct BlocksCommandTests {
         ledger.append(record(0, session: "0b7f3c2e-1d2a"), now: now)
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git    session=0b7f3c2e-1d2a"))
-        #expect(lines[1].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[0].hasSuffix("Z  ✕ Stopped  claude  Bash  core.git:reset-hard  core.git    session=0b7f3c2e-1d2a"))
+        #expect(lines[1].hasSuffix("Z  ✕ Stopped  claude  Bash  core.git:reset-hard  core.git  "))
         let json = try BlocksRun.list(home: home, json: true, now: now)
         let rows = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
         #expect(rows[0]["session"] as? String == "0b7f3c2e-1d2a")
@@ -124,7 +124,8 @@ struct BlocksCommandTests {
     }
 
     /// Observed would-ask rows (enforcement would have asked a human) say
-    /// `observed ask`; would-deny rows keep printing `observed`. JSON
+    /// `◐ Watched, would ask`; would-deny rows `◐ Watched, would stop`;
+    /// real stops `✕ Stopped`, so the two never look alike. JSON
     /// carries `would_be` on observed rows only.
     @Test func observedWouldAskRowsAreDistinct() throws {
         let home = try tempHome()
@@ -148,9 +149,9 @@ struct BlocksCommandTests {
         ledger.append(record(0, .claude, observed: true, wouldBe: .ask), now: now)
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 3)
-        #expect(lines[0].hasSuffix("Z  observed ask  claude  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[1].hasSuffix("Z  observed  codex  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[2].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[0].hasSuffix("Z  ◐ Watched, would ask  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[1].hasSuffix("Z  ◐ Watched, would stop  codex  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[2].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  "))
         let json = try BlocksRun.list(home: home, json: true, now: now)
         let rows = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
