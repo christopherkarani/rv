@@ -570,20 +570,16 @@ struct JudgeInvalidLabelsTests {
         }
     }
 
-    /// A bad FT config disables the judge (packs-only plus floor); it does not
-    /// fail closed to review.
-    @Test func invalidFTConfigIsUnavailable() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-ft-badcfg-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
-            .write(to: dir.appendingPathComponent("tokenizer.json"))
+    /// A bad FT config in a selected bundle is a broken install, not an
+    /// absent one: it refuses (review), never the packs-only allow.
+    @Test func invalidFTConfigIsRefused() throws {
+        let (base, dir) = try Self.fakeBundle(package: true)
+        defer { try? FileManager.default.removeItem(at: base) }
         try Data(#"{"logit_order":"allow,review,block"}"#.utf8)
             .write(to: dir.appendingPathComponent("config.json"))
-        let run = JudgeRuntime.runJudge(
-            command: "ls", context: JudgeContext(), engine: .ft, bundle: dir, wait: nil)
-        guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
+        let run = Self.runFakeBundle(dir, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .refused(let why) = run else { Issue.record("expected .refused, got \(run)"); return }
+        #expect(why.contains("judged calls go to review"))
     }
 
     /// A compiled model that cannot be placed in or verified from rv's

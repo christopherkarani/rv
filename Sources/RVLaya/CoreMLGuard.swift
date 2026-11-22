@@ -80,8 +80,10 @@ public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     }
 
     public var reason: String {
-        "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review. "
-            + "Run `rv doctor`; if it persists, reinstall the judge model (re-run rv's install script)."
+        // Reaches the agent too: it names only the read-only doctor, never a
+        // repair (the installer) an agent should attempt.
+        "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review "
+            + "until the owner repairs the judge install. Run `rv doctor` to see the repair."
     }
 }
 
