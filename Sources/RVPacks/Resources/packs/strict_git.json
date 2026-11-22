@@ -16,97 +16,226 @@
       "name": "push-force-any",
       "pattern": "git\\b.*?\\bpush(?:[^\\n;]*\\s(?:--force(?:=\\S*)?|--force-with-lease(?:=\\S*)?|-f)(?=\\s|$)|(?:\\s+\\S+)*\\s+(?:\\$?[\"']|\\\\)*\\+\\S+)",
       "severity": "high",
-      "description": "Force push (even with --force-with-lease) can rewrite remote history. Disabled in strict mode."
+      "description": "Force push (even with --force-with-lease) can rewrite remote history. Disabled in strict mode.",
+      "examples": {
+        "stop": [
+          "git push --force-with-lease"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "push-mirror",
       "pattern": "git\\b.*?\\bpush\\b[^\\n;]*(?:^|\\s)--mirror(?:=\\S*)?(?=\\s|$)",
       "severity": "high",
-      "description": "git push --mirror force-updates and deletes remote refs. Disabled in strict mode."
+      "description": "git push --mirror force-updates and deletes remote refs. Disabled in strict mode.",
+      "examples": {
+        "stop": [
+          "git push --mirror",
+          "git push --mirror origin"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "push-dynamic-argument",
       "pattern": "git\\b.*?\\bpush\\b[^\\n;]*(?:\\\\|\\$|`|\\*|\\?|\\{|\\}|\\[)",
       "severity": "high",
-      "description": "Force push risk: a shell-expanded or escaped git push argument cannot be verified as non-forcing. Use literal remote and refspec arguments in strict mode."
+      "description": "Force push risk: a shell-expanded or escaped git push argument cannot be verified as non-forcing. Use literal remote and refspec arguments in strict mode.",
+      "examples": {
+        "stop": [
+          "git push origin 'feat*'"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "rebase",
       "pattern": "git\\b.*?\\brebase\\b",
       "severity": "high",
-      "description": "git rebase rewrites commit history. Disabled in strict mode."
+      "description": "git rebase rewrites commit history. Disabled in strict mode.",
+      "examples": {
+        "stop": [
+          "git rebase"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "commit-amend",
       "pattern": "git\\b.*?\\bcommit\\s+.*--amend",
       "severity": "high",
-      "description": "git commit --amend rewrites the last commit. Disabled in strict mode."
+      "description": "git commit --amend rewrites the last commit. Disabled in strict mode.",
+      "examples": {
+        "stop": [
+          "git commit --amend"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "cherry-pick",
       "pattern": "git\\b.*?\\bcherry-pick\\b",
       "severity": "high",
-      "description": "git cherry-pick can introduce duplicate commits. Review carefully."
+      "description": "git cherry-pick can introduce duplicate commits. Review carefully.",
+      "examples": {
+        "stop": [
+          "git cherry-pick"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "filter-branch",
       "pattern": "git\\b.*?\\bfilter-branch\\b",
       "severity": "high",
-      "description": "git filter-branch rewrites entire repository history. Extremely dangerous!"
+      "description": "git filter-branch rewrites entire repository history. Extremely dangerous!",
+      "examples": {
+        "stop": [
+          "git filter-branch"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "filter-repo",
       "pattern": "git\\b.*?\\bfilter-repo\\b",
       "severity": "high",
-      "description": "git filter-repo rewrites repository history. Review carefully."
+      "description": "git filter-repo rewrites repository history. Review carefully.",
+      "examples": {
+        "stop": [
+          "git filter-repo"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "reflog-expire",
       "pattern": "git\\b.*?\\breflog\\s+expire",
       "severity": "high",
-      "description": "git reflog expire removes reflog entries needed for recovery."
+      "description": "git reflog expire removes reflog entries needed for recovery.",
+      "examples": {
+        "stop": [
+          "git reflog expire"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "gc-aggressive",
       "pattern": "git\\b.*?\\bgc\\s+.*--(?:aggressive|prune)",
       "severity": "high",
-      "description": "git gc with aggressive/prune options can remove recoverable objects."
+      "description": "git gc with aggressive/prune options can remove recoverable objects.",
+      "examples": {
+        "stop": [
+          "git gc --aggressive prune my-app"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "worktree-remove",
       "pattern": "git\\b.*?\\bworktree\\s+remove",
       "severity": "high",
-      "description": "git worktree remove deletes a linked working tree."
+      "description": "git worktree remove deletes a linked working tree.",
+      "examples": {
+        "stop": [
+          "git worktree remove my-app"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "submodule-deinit",
       "pattern": "git\\b.*?\\bsubmodule\\s+deinit",
       "severity": "high",
-      "description": "git submodule deinit removes submodule configuration."
+      "description": "git submodule deinit removes submodule configuration.",
+      "examples": {
+        "stop": [
+          "git submodule deinit"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "add-all-dot",
       "pattern": "git\\b.*?\\badd\\s+['\"]?\\.['\"]?(?:\\s|$)",
       "severity": "high",
-      "description": "git add . stages everything including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead."
+      "description": "git add . stages everything including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead.",
+      "examples": {
+        "stop": [
+          "git add ."
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "add-all-flag",
       "pattern": "git\\b.*?\\badd\\s+(?:-A|--all)\\b",
       "severity": "high",
-      "description": "git add -A/--all stages all changes including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead."
+      "description": "git add -A/--all stages all changes including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead.",
+      "examples": {
+        "stop": [
+          "git add -A --all"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "push-master",
       "pattern": "git\\s+(?:\\S+\\s+)*push\\s+(?:.*[\\s:/])?\\+?master(?:\\s|$)",
       "severity": "high",
-      "description": "Direct push to master is blocked. Use a feature branch and open a Pull Request."
+      "description": "Direct push to master is blocked. Use a feature branch and open a Pull Request.",
+      "examples": {
+        "stop": [
+          "git push master"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     },
     {
       "name": "push-main",
       "pattern": "git\\s+(?:\\S+\\s+)*push\\s+(?:.*[\\s:/])?\\+?main(?:\\s|$)",
       "severity": "high",
-      "description": "Direct push to main is blocked. Use a feature branch and open a Pull Request."
+      "description": "Direct push to main is blocked. Use a feature branch and open a Pull Request.",
+      "examples": {
+        "stop": [
+          "git push main"
+        ],
+        "allow": [
+          "git --help"
+        ]
+      }
     }
   ]
 }
