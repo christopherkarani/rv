@@ -10,7 +10,7 @@ import Synchronization
 /// authorized from its own audit-token-bound code before it is read.
 public final class JudgePoolXPCListener: Sendable {
     private let supervisor: JudgePoolSupervisor
-    private let authorize: @Sendable (xpc_object_t) -> Bool
+    private let authorize: @Sendable (xpc_object_t) -> JudgePoolClient?
     private let makeDiscoveryListener: @Sendable () -> xpc_connection_t
     private let listener = Mutex<JudgePoolHeld?>(nil)
     private let endpointListener = Mutex<JudgePoolHeld?>(nil)
@@ -19,7 +19,7 @@ public final class JudgePoolXPCListener: Sendable {
     public convenience init(
         supervisor: JudgePoolSupervisor,
         machServiceName: String = JudgePoolWire.machServiceName,
-        authorize: @escaping @Sendable (xpc_object_t) -> Bool
+        authorize: @escaping @Sendable (xpc_object_t) -> JudgePoolClient?
     ) {
         self.init(supervisor: supervisor, authorize: authorize) {
             xpc_connection_create_mach_service(machServiceName, nil, UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER))
@@ -30,7 +30,7 @@ public final class JudgePoolXPCListener: Sendable {
     /// Mach service in production, an anonymous listener in tests).
     init(
         supervisor: JudgePoolSupervisor,
-        authorize: @escaping @Sendable (xpc_object_t) -> Bool,
+        authorize: @escaping @Sendable (xpc_object_t) -> JudgePoolClient?,
         discoveryListener: @escaping @Sendable () -> xpc_connection_t
     ) {
         self.supervisor = supervisor
@@ -93,13 +93,13 @@ public final class JudgePoolXPCListener: Sendable {
 
 final class JudgePoolPeerSession: Sendable {
     private let supervisor: JudgePoolSupervisor
-    private let authorize: @Sendable (xpc_object_t) -> Bool
+    private let authorize: @Sendable (xpc_object_t) -> JudgePoolClient?
     private let discoveryOnly: Bool
     private let endpoint: JudgePoolHeld?
     private let handshake = Mutex(false)
 
     init(
-        supervisor: JudgePoolSupervisor, authorize: @escaping @Sendable (xpc_object_t) -> Bool,
+        supervisor: JudgePoolSupervisor, authorize: @escaping @Sendable (xpc_object_t) -> JudgePoolClient?,
         discoveryOnly: Bool, endpoint: JudgePoolHeld?
     ) {
         self.supervisor = supervisor
@@ -112,7 +112,7 @@ final class JudgePoolPeerSession: Sendable {
         guard xpc_get_type(event) == XPC_TYPE_DICTIONARY else { return }
         let message = JudgePoolHeld(event)
         // Authorized synchronously from this message's own code identity.
-        guard authorize(event),
+        guard let client = authorize(event),
               let body = JudgePoolXPCBody.get(from: event),
               let request = JudgePoolJSON.decode(JudgePoolRequest.self, from: body) else {
             respond(.refused, to: message)
@@ -123,6 +123,14 @@ final class JudgePoolPeerSession: Sendable {
             // Requests only on an endpoint connection that said hello.
             respond(.refused, to: message)
             return
+        }
+        switch (client, request) {
+        case (.evaluator, .warm), (.evaluator, .status):
+            // The hook-local evaluator only asks for verdicts.
+            respond(.refused, to: message)
+            return
+        default:
+            break
         }
         switch request {
         case .hello(let version):

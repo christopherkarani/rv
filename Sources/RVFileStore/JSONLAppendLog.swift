@@ -68,8 +68,10 @@ public enum JSONLAppendLog {
 
     /// Opens (creating) `url`'s `<name>.lock` sidecar and reads its identity.
     private static func openSidecar(_ url: URL) -> Result<(fd: Int32, sidecar: Sidecar), AppendError> {
+        // O_NONBLOCK: a FIFO or device planted at the sidecar fails here
+        // instead of hanging the writer; it must be a regular file.
         let fd = url.appendingPathExtension("lock").path.withCString { path in
-            open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
         }
         guard fd >= 0 else {
             return .failure(.lock(errno: errno))
@@ -79,6 +81,10 @@ public enum JSONLAppendLog {
             let code = errno
             close(fd)
             return .failure(.lock(errno: code))
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            close(fd)
+            return .failure(.lock(errno: EINVAL))
         }
         return .success((fd, Sidecar(
             device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino))))
@@ -117,12 +123,14 @@ public enum JSONLAppendLog {
     /// exclusion is held, so no append is lost to a rename, and lock-free
     /// readers always see the old or the new file whole, never a partial
     /// rewrite. Returns nil when the lock cannot be taken. Not reentrant:
-    /// `body` must not call `append` or `withExclusiveLock`.
+    /// `body` must not call `append` or `withExclusiveLock`. `lockTimeout`
+    /// bounds the wait for another process's lock, as for `append`.
     public static func withExclusiveLock<T: Sendable>(
         at url: URL,
+        lockTimeout: Duration? = nil,
         body: (URL) -> T
     ) -> T? {
-        try? exclusively(at: url) { locked in .success(body(locked)) }.get()
+        try? exclusively(at: url, lockTimeout: lockTimeout) { locked in .success(body(locked)) }.get()
     }
 
     private static func exclusively<T: Sendable>(
@@ -179,7 +187,7 @@ public enum JSONLAppendLog {
     /// Runs under `exclusively`.
     private static func appendLocked(_ line: Data, to url: URL, sync: Bool) -> Result<Void, AppendError> {
         let fd = url.path.withCString { path in
-            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
         }
         guard fd >= 0 else {
             return .failure(.open(errno: errno))
