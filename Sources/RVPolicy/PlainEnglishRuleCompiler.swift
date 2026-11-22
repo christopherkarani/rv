@@ -264,7 +264,7 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
                 + "like \"never discard uncommitted changes\"") { return refused }
             return preview(
                 .gitDiscardWorktree(pathspec: nil), pack: .typedGit, name: "discard",
-                thing: "discarding uncommitted changes", verdict: verdict, english: english)
+                verdict: verdict, english: english)
         case .delete:
             return delete(&slots, verdict: verdict, english: english)
         case .move:
@@ -274,7 +274,7 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
             if let refused = refusal(slots, hint: "a move rule covers every move and can't name a path yet, "
                 + "like \"ask before moving files\"") { return refused }
             return preview(
-                .filesystemMove, pack: typedFilesystem, name: "move", thing: "moving files", verdict: verdict,
+                .filesystemMove, pack: typedFilesystem, name: "move", verdict: verdict,
                 english: english)
         }
     }
@@ -376,34 +376,15 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         }
 
         var branch: String?
-        var note: String?
         if cursor < words.count, slots.free(cursor) {
             let candidate = words[cursor]
             if everyBranch.contains(candidate.key), cursor + 1 < words.count, keys[cursor + 1] == "branch" {
                 slots.used.formUnion([cursor, cursor + 1])
-            } else if pushNouns.contains(candidate.key) {
-                return .refused(
-                    .unsupportedPredicate,
-                    reason: "\"\(DisplayedText.field(candidate.text))\" is not a branch; a push rule covers "
-                        + "one branch, like \"never force-push to main\"")
-            } else if notBranchNames.contains(candidate.key) {
-                return .refused(
-                    .uncompilable,
-                    reason: "\"\(DisplayedText.field(candidate.text))\" doesn't name a branch; say which one, "
-                        + "like \"never force-push to main\"")
-            } else if candidate.text.contains(where: { "*?[".contains($0) }) {
-                return .refused(
-                    .uncompilable, reason: "a rule names one branch, not a pattern; try \"never force-push to main\"")
             } else {
-                let name = branchName(candidate.text)
-                guard isBranchName(name) else {
-                    return .refused(
-                        .uncompilable, reason: "\"\(DisplayedText.field(candidate.text))\" is not a branch name")
+                if let (refusal, reason) = branchProblem(candidate.text) {
+                    return .refused(refusal, reason: reason)
                 }
-                if name != candidate.text {
-                    note = "\(DisplayedText.field(candidate.text)) read as branch \(DisplayedText.field(name))"
-                }
-                branch = name
+                branch = candidate.text
                 slots.used.insert(cursor)
                 if cursor + 1 < words.count, keys[cursor + 1] == "branch" { slots.used.insert(cursor + 1) }
             }
@@ -416,16 +397,26 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         if let refused = refusal(slots, hint: "a push rule names force and one branch, like \"never force-push to main\"") {
             return refused
         }
-        // The same id the model path gives a git push form; the sentence
-        // says exactly which pushes the rule covers.
-        let target = branch.map(DisplayedText.field) ?? "any branch"
-        var thing: String
-        switch force {
-        case .exactly(.force): thing = "force-push to \(target)"
-        case .exactly(.forceWithLease): thing = "git push --force-with-lease to \(target) (not plain --force)"
-        case .exactly(.none): thing = "git push without force to \(target)"
-        case .any: thing = "git push to \(target), forced or not"
+        return pushDraft(force: force, branch: branch, verdict: verdict, english: english)
+    }
+
+    /// The one git push builder, for the grammar and for a model's form
+    /// alike: the branch passes the same checks, the id is the model path's,
+    /// and the sentence says exactly which pushes the rule covers.
+    static func pushDraft(
+        force: GitPushForceConstraint, branch typed: String?, verdict: TypedRuleVerdict, english: String
+    ) -> Draft {
+        var branch: String?
+        var note: String?
+        if let typed {
+            if let (refusal, reason) = branchProblem(typed) { return .refused(refusal, reason: reason) }
+            let name = branchName(typed)
+            if name != typed {
+                note = "\(DisplayedText.field(typed)) read as branch \(DisplayedText.field(name))"
+            }
+            branch = name
         }
+        var thing = describe(.gitPush(force: force, branch: branch))
         if let note { thing += " (\(note))" }
         guard case .preview(let preview) = FoundationModelsEnglishCompileMapping.preview(
             force: force, branch: branch, verdict: verdict, sentence: sentence(verdict, thing), english: english)
@@ -433,6 +424,32 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
             return .refused(.uncompilable, reason: "can't draft that git push rule")
         }
         return .rule(preview)
+    }
+
+    /// Why `text` can't be the branch of a push rule, or nil when it can.
+    private static func branchProblem(_ text: String) -> (EnglishCompileRefusal, String)? {
+        let shown = DisplayedText.field(text)
+        let key = stem(text.lowercased())
+        if text.unicodeScalars.contains(where: { $0.isASCII == false }) {
+            // A look-alike letter ("mаin" with a Cyrillic а) would save a
+            // rule that never matches the branch it appears to name.
+            return (.uncompilable, "branch name has non-ASCII characters (\(shown)); type it in plain ASCII")
+        }
+        if pushNouns.contains(key) {
+            return (
+                .unsupportedPredicate,
+                "\"\(shown)\" is not a branch; a push rule covers one branch, like \"never force-push to main\"")
+        }
+        if notBranchNames.contains(key) {
+            return (.uncompilable, "\"\(shown)\" doesn't name a branch; say which one, like \"never force-push to main\"")
+        }
+        if text.contains(where: { "*?[".contains($0) }) {
+            return (.uncompilable, "a rule names one branch, not a pattern; try \"never force-push to main\"")
+        }
+        guard isBranchName(branchName(text)) else {
+            return (.uncompilable, "\"\(shown)\" is not a branch name")
+        }
+        return nil
     }
 
     /// `origin/main` and `refs/heads/main` name the branch `main`: a push
@@ -447,7 +464,7 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
 
     private static func isBranchName(_ text: String) -> Bool {
         text.hasPrefix("-") == false && text.hasPrefix("/") == false && text.contains("..") == false
-            && text.count <= 200 && text.allSatisfy { $0.isLetter || $0.isNumber || "._/-".contains($0) }
+            && text.count <= 200 && text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._/-".contains($0)) }
     }
 
     // MARK: git reset and git clean
@@ -469,9 +486,8 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
             : "a reset rule names a mode, like \"never git reset --hard\""
         if let refused = refusal(slots, hint: hint) { return refused }
         let name = mode.map { "reset-\($0.rawValue)" } ?? "reset"
-        let thing = mode.map { "git reset --\($0.rawValue)" } ?? "every git reset"
         return preview(
-            .gitReset(mode: mode), pack: .typedGit, name: name, thing: thing, verdict: verdict, english: english)
+            .gitReset(mode: mode), pack: .typedGit, name: name, verdict: verdict, english: english)
     }
 
     /// `-f` and `-d` are the flags a clean rule can name. Another flag would
@@ -512,10 +528,9 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         if force { letters += "f" }
         if directories { letters += "d" }
         let name = letters.isEmpty ? "clean" : "clean-\(letters)"
-        let thing = letters.isEmpty ? "every git clean" : "git clean -\(letters), with or without other flags"
         return preview(
             .gitClean(force: force ? true : nil, directories: directories ? true : nil), pack: .typedGit,
-            name: name, thing: thing, verdict: verdict, english: english)
+            name: name, verdict: verdict, english: english)
     }
 
     // MARK: Files
@@ -566,16 +581,9 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         if recursive { flags += "r" }
         if force { flags += "f" }
         let name = flags.isEmpty ? "delete" : "delete-" + flags
-        let thing: String
-        switch (recursive, force) {
-        case (false, false): thing = "deleting files"
-        case (true, false): thing = "rm -r, with or without -f"
-        case (false, true): thing = "rm -f, with or without -r"
-        case (true, true): thing = "rm -rf"
-        }
         return preview(
             .filesystemDelete(recursive: recursive ? true : nil, force: force ? true : nil), pack: typedFilesystem,
-            name: name, thing: thing, verdict: verdict, english: english)
+            name: name, verdict: verdict, english: english)
     }
 
     private static let scopeWords: Set<String> = ["outside", "beyond", "above"]
@@ -616,6 +624,70 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
 
     // MARK: Preview
 
+    /// What a rule covers, in the words its preview uses. One describer
+    /// for grammar and model rules, so a preview never just repeats the
+    /// sentence it was drafted from.
+    static func describe(_ predicate: PolicyPredicate) -> String {
+        switch predicate {
+        case .gitPush(let force, let branch):
+            let target = branch.map(DisplayedText.field) ?? "any branch"
+            switch force {
+            case .exactly(.force): return "force-push to \(target)"
+            case .exactly(.forceWithLease): return "git push --force-with-lease to \(target) (not plain --force)"
+            case .exactly(.none): return "git push without force to \(target)"
+            case .any: return "git push to \(target), forced or not"
+            }
+        case .gitReset(let mode):
+            return mode.map { "git reset --\($0.rawValue)" } ?? "every git reset"
+        case .gitClean(let force, let directories):
+            if force == nil, directories == nil { return "every git clean" }
+            var letters = ""
+            if force == true { letters += "f" }
+            if directories == true { letters += "d" }
+            var text = letters.isEmpty ? "git clean" : "git clean -\(letters)"
+            if force == false { text += " without -f" }
+            if directories == false { text += " without -d" }
+            return force == nil || directories == nil ? text + ", with or without other flags" : text
+        case .gitDiscardWorktree(let pathspec):
+            return pathspec.map { "discarding uncommitted changes to \(DisplayedText.field($0))" }
+                ?? "discarding uncommitted changes"
+        case .filesystemDelete(let recursive, let force):
+            switch (recursive, force) {
+            case (nil, nil): return "deleting files"
+            case (true, nil): return "rm -r, with or without -f"
+            case (nil, true): return "rm -f, with or without -r"
+            case (true, true): return "rm -rf"
+            default:
+                var text = "rm"
+                if recursive == true { text += " -r" }
+                if force == true { text += " -f" }
+                if recursive == false { text += " without -r" }
+                if force == false { text += " without -f" }
+                return text
+            }
+        case .filesystemMove:
+            return "moving files"
+        }
+    }
+
+    /// A rule a model drafted, put through the grammar's checks and its
+    /// preview builder: the same branch rules and the same normalized
+    /// sentence, never the model's own title.
+    static func reviewed(_ preview: TypedRulePreview, english: String) -> Draft {
+        let rule = preview.rule
+        let draft: Draft
+        if case .gitPush(let force, let branch) = rule.predicate {
+            draft = pushDraft(force: force, branch: branch, verdict: rule.verdict, english: rule.english ?? english)
+        } else {
+            draft = .rule(TypedRulePreview(
+                sentence: sentence(rule.verdict, describe(rule.predicate)), rule: rule, allowedToSave: true))
+        }
+        guard case .rule(let checked) = draft else { return draft }
+        return .rule(TypedRulePreview(
+            sentence: checked.sentence, rule: checked.rule,
+            allowedToSave: checked.allowedToSave && preview.allowedToSave))
+    }
+
     private static func sentence(_ verdict: TypedRuleVerdict, _ thing: String) -> String {
         switch verdict {
         case .deny: return "Always block \(thing)"
@@ -625,11 +697,10 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
     }
 
     private static func preview(
-        _ predicate: PolicyPredicate, pack: PackID, name: String, thing: String, verdict: TypedRuleVerdict,
-        english: String
+        _ predicate: PolicyPredicate, pack: PackID, name: String, verdict: TypedRuleVerdict, english: String
     ) -> Draft {
         .rule(TypedRulePreview(
-            sentence: sentence(verdict, thing),
+            sentence: sentence(verdict, describe(predicate)),
             rule: PolicyDocumentRule(
                 id: RuleID(pack: pack, pattern: "\(name)-\(verdict.rawValue)"),
                 verdict: verdict,

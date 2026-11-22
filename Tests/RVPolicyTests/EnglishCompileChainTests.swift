@@ -103,7 +103,9 @@ struct EnglishCompileChainTests {
             Issue.record("expected the model's rule")
             return
         }
-        #expect(model.sentence == "model-form")
+        // The model's rule, under the grammar's own title.
+        #expect(model.rule.id == RuleID(pack: .typedGit, pattern: "force-push-main"))
+        #expect(model.sentence == "Always block force-push to main")
         // Unsupported tools are the grammar's answer, not the model's.
         #expect(try await chain.compile("never npm publish") == .refuse(.unsupportedPredicate))
     }
@@ -121,6 +123,35 @@ struct EnglishCompileChainTests {
             phrases: PlainEnglishRuleCompiler())
         guard case .refuse = try await chain.compile(sentence) else {
             Issue.record("expected the grammar's refusal for \(sentence)")
+            return
+        }
+    }
+
+    /// Mac test of #669: a model rule's title was the raw sentence. It now
+    /// goes through the grammar's preview builder.
+    @Test func productChain_modelRule_getsTheNormalizedTitle() async throws {
+        let english = "it is fine to force push to main"
+        let chain = EnglishCompileChain(
+            primary: FormEnglishCompiler(force: .exactly(.force), branch: "main", verdict: .allow),
+            fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
+        guard case .preview(let preview) = try await chain.compile(english) else {
+            Issue.record("expected the model's rule")
+            return
+        }
+        #expect(preview.sentence == "Always allow force-push to main")
+        #expect(preview.sentence != english)
+        #expect(preview.rule.english == english)
+    }
+
+    /// A model's branch passes the grammar's branch checks: no look-alike
+    /// letters, no nouns, no patterns.
+    @Test(arguments: ["m\u{0430}in", "tags", "release/*"])
+    func productChain_modelBranch_isChecked(branch: String) async throws {
+        let chain = EnglishCompileChain(
+            primary: FormEnglishCompiler(force: .exactly(.force), branch: branch, verdict: .deny),
+            fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
+        guard case .refuse = try await chain.compile("keep the branch safe from forced history rewrites") else {
+            Issue.record("expected a refusal for branch \(branch)")
             return
         }
     }
@@ -183,6 +214,18 @@ private struct DistinctPreviewEnglishCompiler: EnglishCompiler {
                 allowedToSave: true
             )
         )
+    }
+}
+
+/// A model that fills the git push form and titles it with the raw input.
+private struct FormEnglishCompiler: EnglishCompiler {
+    var force: GitPushForceConstraint
+    var branch: String?
+    var verdict: TypedRuleVerdict
+
+    func compile(_ english: String) async throws -> EnglishCompileResult {
+        FoundationModelsEnglishCompileMapping.preview(
+            force: force, branch: branch, verdict: verdict, sentence: english, english: english)
     }
 }
 

@@ -40,9 +40,10 @@ public struct EnglishCompileChain: EnglishCompiler {
         guard case .unreadable = draft else {
             return PlainEnglishRuleCompiler.result(draft)
         }
-        let modelResult = try await model(english)
-        if case .preview = modelResult {
-            return modelResult
+        // A model's rule goes through the grammar's checks and preview
+        // builder, so its title is the normalized sentence, never the input.
+        if case .preview(let preview) = try await model(english) {
+            return PlainEnglishRuleCompiler.result(PlainEnglishRuleCompiler.reviewed(preview, english: english))
         }
         return PlainEnglishRuleCompiler.result(draft)
     }

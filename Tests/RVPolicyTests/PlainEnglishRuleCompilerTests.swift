@@ -137,6 +137,28 @@ struct PlainEnglishRuleCompilerTests {
         #expect(found == branch)
     }
 
+    /// Mac test of #669: a Cyrillic "а" in "mаin" saved a rule that never
+    /// matches main. Branch names are plain ASCII, and so are rule ids.
+    @Test(arguments: ["never force push to m\u{0430}in", "never push to r\u{0435}lease", "never force push to café"])
+    func nonASCIIBranch_refuses(sentence: String) {
+        guard case .refused(_, let why) = compiler.draft(sentence) else {
+            Issue.record("expected a refusal for \(sentence), got \(compiler.draft(sentence))")
+            return
+        }
+        #expect(why.hasPrefix("branch name has non-ASCII characters ("), "\(why)")
+        #expect(why.hasSuffix("); type it in plain ASCII"))
+    }
+
+    @Test(arguments: [
+        "never force push to main", "ask before push --force-with-lease to release-1.2", "never rm -rf",
+        "never git clean -fd", "block git reset --hard", "ask before moving files",
+    ])
+    func ruleIDs_areASCII(sentence: String) throws {
+        let drafted = try #require(rule(sentence))
+        let ascii = drafted.id.rawValue.unicodeScalars.allSatisfy { $0.isASCII }
+        #expect(ascii, "\(drafted.id.rawValue)")
+    }
+
     @Test func remotePrefix_isNamedInThePreview() {
         guard case .rule(let preview) = compiler.draft("never force push to origin/main") else {
             Issue.record("expected a rule")
