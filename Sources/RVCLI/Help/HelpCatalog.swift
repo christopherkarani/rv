@@ -600,7 +600,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
                 HelpRow(name: "--since", description: "Only events newer than 30m, 24h, 7d"),
-                HelpRow(name: "--kind", description: "Kind or prefix: command, egress, admission, runtime, secret, mcp, policy, config, owner, workspace, agent"),
+                HelpRow(name: "--kind", description: "Kind or prefix: command, egress, admission, runtime, secret, mcp, policy, config, owner, audit, workspace, agent"),
                 HelpRow(name: "--json", description: "JSON array on stdout"),
                 HelpRow(name: "--batch-size", description: "forward: events per POST, 1-5000 (default 500)"),
                 HelpRow(name: "--status", description: "forward: show target, cursor, pending events and schedule; sends nothing"),

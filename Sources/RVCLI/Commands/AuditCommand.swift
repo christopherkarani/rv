@@ -35,7 +35,14 @@ enum AuditRun {
 
     /// The kind families `--kind` can name. `workspace.*` and `agent.*` take
     /// any phase, so only their family is checked.
-    static let kindFamilies = ["command", "egress", "admission", "runtime", "secret", "mcp", "policy", "config", "owner", "workspace", "agent"]
+    static let kindFamilies: [String] = {
+        var families: [String] = []
+        for kind in AuditEventKind.allCases {
+            let family = String(kind.rawValue.prefix { $0 != "." })
+            if families.contains(family) == false { families.append(family) }
+        }
+        return families + ["workspace", "agent"]
+    }()
 
     /// A `--kind` that matches no event would print nothing, which reads as
     /// "nothing happened". Refuse it and list what does exist.
