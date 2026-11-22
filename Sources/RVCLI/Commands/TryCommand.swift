@@ -393,13 +393,14 @@ struct TryGit: Sendable {
     }
 }
 
-/// Removes the sandbox if `rv try` is interrupted, then exits 130.
-private final class SignalCleanup: @unchecked Sendable {
-    private let sources: [DispatchSourceSignal]
+/// Removes the sandbox if `rv try` is interrupted, then exits 130. A value
+/// owned by `TryDemo.run` alone; the handlers capture only the sandbox URL.
+private struct SignalCleanup {
+    private static let signals: [Int32] = [SIGINT, SIGTERM, SIGHUP]
+    private let sources: [any DispatchSourceSignal]
 
     init(removing root: URL) {
-        let signals: [Int32] = [SIGINT, SIGTERM, SIGHUP]
-        sources = signals.map { number in
+        sources = Self.signals.map { number in
             _ = signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
             source.setEventHandler {
@@ -413,6 +414,6 @@ private final class SignalCleanup: @unchecked Sendable {
 
     func cancel() {
         for source in sources { source.cancel() }
-        for number in [SIGINT, SIGTERM, SIGHUP] { _ = signal(number, SIG_DFL) }
+        for number in Self.signals { _ = signal(number, SIG_DFL) }
     }
 }
