@@ -115,9 +115,14 @@ forwarded events carry `rv_chain_head`, so compare it off the machine.
 | `command.observed` | `info` | rule id | as above, plus `would_be` (`deny` or `ask`): observe mode let it run |
 | `command.override` | `allowed` | rule id | `host`, `override` (allow-once, allowlist, rebase recovery, contained delete); `reason` repeats the override |
 | `owner.action` | | | every owner-authentication attempt, passed or not |
+| `audit.gap` | `failed` | `hook-local` | `lost`: audit rows the hook-local evaluator could not write or spool; the chain is missing that many rows. `at_least: "true"`: `lost` is a lower bound (a count file was full, spool bytes were dropped unread, or a planted spool file was removed) |
 
 Plain allows are not logged. Every hook deny is recorded whatever
-`rv blocks` keeps.
+`rv blocks` keeps. A `command.denied` or `command.observed` row with
+`recorded_by: hook-local` in `detail` is one the hook-local evaluator
+could not append in its time budget; rvd appended it later from the
+evaluator's spool, so its place in the chain can be after rows written
+since. Spooled rows and gaps reach the chain only when rvd next runs.
 
 A command rv could not finish evaluating ("Run it in Terminal") is
 refused too. Each such refusal by the hook or file-tool guard is recorded as

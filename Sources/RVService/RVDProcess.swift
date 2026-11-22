@@ -34,6 +34,7 @@ public enum RVDProcess {
             actionCeremonies: actionCeremonies,
             recordsDecisions: true
         )
+        runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         RVDLifecycle.bindCoreMLGuard()
         // Core ML runs in the dev.rv.judge worker pool, never in rvd: a
@@ -127,6 +128,7 @@ public enum RVDProcess {
             actionCeremonies: actionCeremonies,
             recordsDecisions: true
         )
+        runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         let slot = ListenerSlot()
         let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {

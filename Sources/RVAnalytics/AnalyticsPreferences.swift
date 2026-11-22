@@ -17,7 +17,13 @@ public struct AnalyticsPreferences: Sendable, Equatable {
     /// (`{"analytics.enabled": false}`), matching how `guard.mode` is read.
     /// When both forms are present and disagree, the opt-out wins.
     public static func load(from paths: AnalyticsPaths, fileManager: FileManager = .default) -> AnalyticsPreferences {
-        guard let data = fileManager.contents(atPath: paths.configFile.path),
+        load(configData: fileManager.contents(atPath: paths.configFile.path))
+    }
+
+    /// The preferences in `config.json`'s bytes, read by the caller (nil:
+    /// missing or unreadable).
+    public static func load(configData data: Data?) -> AnalyticsPreferences {
+        guard let data,
               let root = try? JSONDecoder().decode(JSONValue.self, from: data)
         else {
             return .enabledByDefault
