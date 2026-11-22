@@ -1036,6 +1036,48 @@ public struct TypedRuleStore: Sendable {
         documentProblem(toml: Self.repoFileURL(workspace: workspace), json: Self.repoLegacyJSONURL(workspace: workspace))
     }
 
+    /// Why the machine layer does not load, with the line, key and fix when
+    /// it is a parse error. Nil when it loads. Read-only, by the same reader.
+    public func machineDocumentFailure() -> PolicyFileFailure? {
+        Self.documentFailure(toml: machineFileURL, json: machineLegacyJSONURL)
+    }
+
+    /// Why the repo layer does not load, with the line, key and fix when it
+    /// is a parse error. Nil when it loads. Read-only, by the same reader.
+    public func repoDocumentFailure(workspace: URL) -> PolicyFileFailure? {
+        Self.documentFailure(
+            toml: Self.repoFileURL(workspace: workspace), json: Self.repoLegacyJSONURL(workspace: workspace))
+    }
+
+    private static func documentFailure(toml: URL, json: URL) -> PolicyFileFailure? {
+        let text: String?
+        do {
+            text = try readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }, else: .notUTF8)
+        } catch let problem as PolicyLoadStatus.Problem {
+            return PolicyFileFailure(file: toml, reason: .load(problem))
+        } catch {
+            return PolicyFileFailure(file: toml, reason: .load(.unreadable))
+        }
+        if let text {
+            do {
+                _ = try PolicyDocumentTOML.parse(text)
+                return nil
+            } catch let error as PolicyDocumentError {
+                return PolicyFileFailure(file: toml, reason: error.problem.map { .parse($0) } ?? .load(.unparseable))
+            } catch {
+                return PolicyFileFailure(file: toml, reason: .load(.unparseable))
+            }
+        }
+        do {
+            _ = try readLegacyJSON(from: json)
+            return nil
+        } catch let problem as PolicyLoadStatus.Problem {
+            return PolicyFileFailure(file: json, reason: .load(problem))
+        } catch {
+            return PolicyFileFailure(file: json, reason: .load(.unparseable))
+        }
+    }
+
     /// Throws `PolicyLoadStatus.Problem`.
     private static func readDocument(toml: URL, json: URL) throws -> PolicyDocument {
         if let text = try readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }, else: .notUTF8) {
