@@ -25,7 +25,7 @@ struct LocalHookRecordParityTests {
         let local = try LocalHookFixture(guardMode: guardMode)
         let rvd = try LocalHookFixture(guardMode: guardMode)
         let now = Date(timeIntervalSince1970: 1_790_000_000)
-        let decider = LocalHookDecider(home: local.home, clock: { now })
+        let decider = LocalHookDecider(home: local.home, clock: { now }, localDeadline: testLocalDeadline)
         let rvdAnalytics = Self.coordinator(home: rvd.home)
         let runtime = hookTestRuntime(
             home: rvd.home, allowOnceDirectory: try isolatedAllowOnceDirectory(),

@@ -31,7 +31,7 @@ struct LocalHookRecordFailureTests {
     // MARK: Audit first, and what a lost audit row costs
 
     @Test func enforcedDenyWhoseAuditCannotLandEscalatesAndWritesNothing() async throws {
-        let fixture = try LocalHookFixture()
+        let fixture = try LocalHookFixture(localDeadline: LocalHookDecider.localDeadline)
         let holder = try FileLockHolder(path: Self.config(fixture).appendingPathComponent("audit.jsonl").path)
         defer { holder.release() }
 
@@ -48,7 +48,7 @@ struct LocalHookRecordFailureTests {
     }
 
     @Test func observeKeepsTheVerdictAndSpoolsTheAuditFieldsForRvd() async throws {
-        let fixture = try LocalHookFixture(guardMode: "observe")
+        let fixture = try LocalHookFixture(guardMode: "observe", localDeadline: LocalHookDecider.localDeadline)
         let stdin = try await Self.observedFinalDeny(fixture)
         let audit = Self.config(fixture).appendingPathComponent("audit.jsonl")
         let holder = try FileLockHolder(path: audit.path)

@@ -69,20 +69,23 @@ package struct LocalHookDecider: Sendable {
     private let clock: @Sendable () -> Date
     private let session: @Sendable () -> EvaluateSession
     private let judge: (any JudgeClient)?
+    private let localDeadline: Duration
 
     /// `judge` is the pool client the evaluator asks (`dev.rv.judge`, as a
-    /// judge-only client); nil escalates every judged call.
+    /// judge-only client); nil escalates every judged call. `localDeadline`
+    /// is the C hook's (tests on a starved pool pass a longer one).
     package init(
         home: HomeDirectory,
         clock: @escaping @Sendable () -> Date = { Date() },
-        judge: (any JudgeClient)? = nil
+        judge: (any JudgeClient)? = nil,
+        localDeadline: Duration = LocalHookDecider.localDeadline
     ) {
         self.init(home: home, clock: clock, session: {
             EvaluationWorld.makeSession(
                 coverage: EvaluationWorld.coverage(catalog: nil, home: home),
                 snapshots: nil
             )
-        }, judge: judge)
+        }, judge: judge, localDeadline: localDeadline)
     }
 
     /// `session` builds the Evaluate session (tests pass a prepared one).
@@ -90,12 +93,14 @@ package struct LocalHookDecider: Sendable {
         home: HomeDirectory,
         clock: @escaping @Sendable () -> Date,
         session: @escaping @Sendable () -> EvaluateSession,
-        judge: (any JudgeClient)? = nil
+        judge: (any JudgeClient)? = nil,
+        localDeadline: Duration = LocalHookDecider.localDeadline
     ) {
         self.home = home
         self.clock = clock
         self.session = session
         self.judge = judge
+        self.localDeadline = localDeadline
     }
 
     /// The local verdict for one hook call. A final verdict's writes (judge
@@ -122,7 +127,7 @@ package struct LocalHookDecider: Sendable {
         let now = clock()
         // One pool request per call: the observe pass and its enforce pass
         // read the same verdict.
-        let asker = LocalJudgeAsker(client: judge, started: started)
+        let asker = LocalJudgeAsker(client: judge, started: started, localDeadline: localDeadline)
         let live = await run(
             host: host, stdin: stdin, session: built, now: now, environment: [:], asker: asker)
         guard case .final = live.outcome else { return live.outcome }
@@ -135,7 +140,7 @@ package struct LocalHookDecider: Sendable {
                 environment: ["RV_GUARD_MODE": GuardMode.enforce.rawValue], asker: asker)
             guard enforced.outcome == live.outcome else { return .escalate(.observe) }
         }
-        return record(live, deadline: Self.writeDeadline(started: started))
+        return record(live, deadline: Self.writeDeadline(started: started, localDeadline: localDeadline))
     }
 
     /// The C hook's deadline for this process (`local_eval.c`), counted
@@ -150,7 +155,9 @@ package struct LocalHookDecider: Sendable {
     package static let auditFloor: Duration = .milliseconds(500)
 
     /// When every write of a final answer must be done.
-    package static func writeDeadline(started: ContinuousClock.Instant) -> ContinuousClock.Instant {
+    package static func writeDeadline(
+        started: ContinuousClock.Instant, localDeadline: Duration = localDeadline
+    ) -> ContinuousClock.Instant {
         started + localDeadline - replyMargin
     }
 
@@ -167,9 +174,9 @@ package struct LocalHookDecider: Sendable {
     /// kill therefore never lands during a judge wait. Nil when less than
     /// `minimumJudgeBudget` is left.
     package static func judgeBudget(
-        started: ContinuousClock.Instant, now: ContinuousClock.Instant
+        started: ContinuousClock.Instant, now: ContinuousClock.Instant, localDeadline: Duration = localDeadline
     ) -> Duration? {
-        let left = writeDeadline(started: started) - judgeWriteReserve - now - JudgePoolWire.transportSlack
+        let left = writeDeadline(started: started, localDeadline: localDeadline) - judgeWriteReserve - now - JudgePoolWire.transportSlack
         guard left >= minimumJudgeBudget else { return nil }
         return min(PoolPolicy.live.budget, left)
     }
@@ -413,11 +420,13 @@ private final class LocalJudgeAsker: Sendable {
 
     private let client: (any JudgeClient)?
     private let started: ContinuousClock.Instant
+    private let localDeadline: Duration
     private let asked = UnfairLock<Asked?>(nil)
 
-    init(client: (any JudgeClient)?, started: ContinuousClock.Instant) {
+    init(client: (any JudgeClient)?, started: ContinuousClock.Instant, localDeadline: Duration) {
         self.client = client
         self.started = started
+        self.localDeadline = localDeadline
     }
 
     /// Nil: not asked (no client, too little time, or a second call).
@@ -426,7 +435,7 @@ private final class LocalJudgeAsker: Sendable {
         if let previous = asked.withLock({ $0 }) {
             return previous.matches(call) ? previous.run : nil
         }
-        guard let budget = LocalHookDecider.judgeBudget(started: started, now: .now) else { return nil }
+        guard let budget = LocalHookDecider.judgeBudget(started: started, now: .now, localDeadline: localDeadline) else { return nil }
         let run = JudgeRuntime.runPool(call, client: client, budget: budget)
         asked.withLock {
             $0 = Asked(

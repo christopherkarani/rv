@@ -13,6 +13,11 @@ import RVPolicy
 /// and its timeout path; everything else gets this one generous value.
 let testHookBudget: Duration = .seconds(120)
 
+/// The hook-local evaluator's counterpart: a decide that waits in the
+/// starved pool past the C hook's real 1 s would drop the rows a test
+/// compares. Tests of that deadline pass `LocalHookDecider.localDeadline`.
+let testLocalDeadline: Duration = .seconds(120)
+
 /// `ServiceRuntime`'s public init, with `testHookBudget` (or `hookBudget`)
 /// for hook dispatch.
 func hookTestRuntime(

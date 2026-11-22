@@ -21,17 +21,19 @@ final class ScoredPoolClient: JudgeClient, Sendable {
     }
 
     let answer: Answer
-    private let calls = Mutex<[(input: JudgeInput, budget: Duration)]>([])
+    private let calls = Mutex<[(input: JudgeInput, budget: Duration, at: ContinuousClock.Instant)]>([])
 
     init(_ answer: Answer = .scored) {
         self.answer = answer
     }
 
     var budgets: [Duration] { calls.withLock { $0.map(\.budget) } }
+    /// When each request reached the client.
+    var instants: [ContinuousClock.Instant] { calls.withLock { $0.map(\.at) } }
     var count: Int { calls.withLock { $0.count } }
 
     func judge(key: ModelKey, input: JudgeInput, budget: Duration) -> PoolOutcome? {
-        calls.withLock { $0.append((input, budget)) }
+        calls.withLock { $0.append((input, budget, .now)) }
         switch answer {
         case .scored:
             return .verdict(Self.verdict(Self.choice(input.command)), slot: .primary)
@@ -137,25 +139,32 @@ struct LocalHookJudgeTests {
         #expect(local == .escalate(.judge))
     }
 
+    // The three tests below pin the C hook's real deadline; the fixture's
+    // default is `testLocalDeadline`.
+
     @Test func theBudgetEndsBeforeTheWritesAndNeverPastThePools() async throws {
         let client = ScoredPoolClient(.fixed(choice: "allow"))
-        let fixture = try LocalHookFixture(judgeBundle: true, judge: client)
+        let fixture = try LocalHookFixture(
+            judgeBundle: true, judge: client, localDeadline: LocalHookDecider.localDeadline)
         let started = ContinuousClock.now
         _ = await fixture.decider.decide(
             host: .claude, stdin: claudeBash(Self.judged, cwd: fixture.workspace), started: started)
-        let budget = try #require(client.budgets.first)
         // The client may take budget + transport slack: it must be back by
         // the judge deadline, which leaves the reserve for the writes.
         let latest = LocalHookDecider.writeDeadline(started: started) - LocalHookDecider.judgeWriteReserve
             - JudgePoolWire.transportSlack - started
+        #expect(LocalHookDecider.judgeBudget(started: started, now: started) == latest)
+        // A starved test pool can use up the time before the ask; then the
+        // pool is never asked.
+        guard let budget = client.budgets.first else { return }
         #expect(budget <= latest)
         #expect(budget <= PoolPolicy.live.budget)
-        #expect(LocalHookDecider.judgeBudget(started: started, now: started) == latest)
     }
 
     @Test func tooLittleTimeLeftEscalatesWithoutAsking() async throws {
         let client = ScoredPoolClient(.fixed(choice: "allow"))
-        let fixture = try LocalHookFixture(judgeBundle: true, judge: client)
+        let fixture = try LocalHookFixture(
+            judgeBundle: true, judge: client, localDeadline: LocalHookDecider.localDeadline)
         let local = await fixture.decider.decide(
             host: .claude, stdin: claudeBash(Self.judged, cwd: fixture.workspace),
             started: .now - .milliseconds(600))
@@ -163,13 +172,33 @@ struct LocalHookJudgeTests {
         #expect(client.count == 0)
     }
 
+    /// A silent pool holds the call for its whole budget plus the transport
+    /// slack. The budget is cut at the moment of asking so that worst case
+    /// still ends `judgeWriteReserve` before the write deadline, and the
+    /// call escalates. Checked against the instants the client saw, not the
+    /// wall clock, which a starved test pool stretches without bound.
     @Test func aPoolThatNeverAnswersStillEscalatesBeforeTheWriteDeadline() async throws {
-        let fixture = try LocalHookFixture(judgeBundle: true, judge: ScoredPoolClient(.silent))
+        let client = ScoredPoolClient(.silent)
+        let fixture = try LocalHookFixture(
+            judgeBundle: true, judge: client, localDeadline: LocalHookDecider.localDeadline)
         let started = ContinuousClock.now
         let local = await fixture.decider.decide(
             host: .claude, stdin: claudeBash(Self.judged, cwd: fixture.workspace), started: started)
         #expect(local == .escalate(.judge))
-        #expect(ContinuousClock.now < LocalHookDecider.writeDeadline(started: started))
+        // On a starved pool the evaluation can use up the time before the
+        // ask: then the pool is never asked, which is just as bounded.
+        guard client.count > 0 else { return }
+        #expect(client.count == 1)
+        let budget = try #require(client.budgets.first)
+        let called = try #require(client.instants.first)
+        #expect(budget >= LocalHookDecider.minimumJudgeBudget)
+        // The instant the budget was cut at: the client back by then plus
+        // budget plus slack is back by the judge deadline exactly. It lies
+        // between the start and the client's call.
+        let asked = LocalHookDecider.writeDeadline(started: started) - LocalHookDecider.judgeWriteReserve
+            - JudgePoolWire.transportSlack - budget
+        #expect(asked >= started)
+        #expect(asked <= called)
     }
 
     @Test func observeAsksThePoolOnceForBothPasses() async throws {
