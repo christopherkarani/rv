@@ -26,6 +26,7 @@ public struct RV: AsyncParsableCommand {
             Egress.self,
             Safety.self,
             Blocks.self,
+            Log.self,
             HostCommand.self,
             Audit.self,
             Secrets.self,
