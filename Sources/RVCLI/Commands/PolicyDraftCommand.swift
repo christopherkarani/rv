@@ -187,8 +187,11 @@ enum PolicyDraftRun {
 
     /// One line: the grammar's own reason when it has one, else the kind's.
     static func refusalReason(_ reason: EnglishCompileRefusal, english: String) -> String {
-        if case .refused(_, let why) = PlainEnglishRuleCompiler().draft(english) {
+        switch PlainEnglishRuleCompiler().draft(english) {
+        case .refused(_, let why), .unreadable(let why):
             return why
+        case .rule, .builtIn:
+            break
         }
         switch reason {
         case .empty:

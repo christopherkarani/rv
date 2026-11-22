@@ -179,7 +179,8 @@ enum ManagedRun {
         var notChecked: [String]
 
         private enum CodingKeys: String, CodingKey {
-            case state, directory, organization, serial, sha256, signed, signingKey, restrictions, checked, notChecked
+            case state, directory, organization, serial, sha256, signed, signingKey, signatureUnchecked
+            case restrictions, checked, notChecked
         }
 
         func encode(to encoder: Encoder) throws {
@@ -191,6 +192,7 @@ enum ManagedRun {
             try container.encode(sha256, forKey: .sha256)
             try container.encode(signingKey != nil, forKey: .signed)
             try container.encodeIfPresent(signingKey, forKey: .signingKey)
+            try container.encode(signatureUnchecked, forKey: .signatureUnchecked)
             try container.encode(restrictions, forKey: .restrictions)
             try container.encode(checked, forKey: .checked)
             try container.encode(notChecked, forKey: .notChecked)
@@ -257,8 +259,24 @@ enum ManagedRun {
         ]
         lines += report.checked.map { "  ✓ \($0)" }
         lines += report.restrictions.map { "    " + DisplayedText.field($0) }
-        lines += report.notChecked.map { "  · not checked: \($0)" }
+        lines += report.notChecked.map { "  ◐ not checked: \($0)" }
+        lines.append("  → " + verifyNext(report))
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The one next step after a verify: sign it, add the key that checks
+    /// the signature, or deploy it and read it back on a managed machine.
+    static func verifyNext(_ report: VerifyReport) -> String {
+        let policy = URL(fileURLWithPath: report.directory, isDirectory: true)
+            .appendingPathComponent(ManagedPolicyLocation.policyFile).path
+        if report.signatureUnchecked {
+            return "add \(ManagedPolicyLocation.publicKeyFile) to the bundle, then: rv managed verify "
+                + DisplayedText.field(report.directory)
+        }
+        if report.signingKey == nil {
+            return "rv managed sign \(DisplayedText.field(policy)) --key org-key.private"
+        }
+        return "after deploying to \(ManagedPolicyLocation.installedDirectory), on that Mac: rv managed status"
     }
 
     static func keygen(directory: URL) -> Result<String, CommandFailure> {

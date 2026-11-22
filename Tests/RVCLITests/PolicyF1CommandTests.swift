@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
+import RVPresentation
 @testable import RVCLI
 
 /// F1 policy bugs: draft drafts plain sentences, errors say line and fix,
@@ -169,37 +170,38 @@ struct PolicyF1CommandTests {
     // MARK: explain
 
     @Test func explain_listsTheTypedRuleThePackHid() {
-        let rules = [
-            TypedRule(
-                id: RuleID(pack: .typedGit, pattern: "force-push-main"),
-                predicate: .gitPush(force: .exactly(.force), branch: "main"), verdict: .deny, origin: .repo),
-            TypedRule(
-                id: RuleID(pack: .typedGit, pattern: "reset-hard-deny"),
-                predicate: .gitReset(mode: .hard), verdict: .deny, origin: .machine),
-        ]
         let push = SemanticAction.git(.push(remote: "origin", refspec: "main", force: .force))
+        let forcePushMain = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"), verdict: .deny, origin: .repo)
+        let resetHard = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "reset-hard-deny"),
+            predicate: .gitReset(mode: .hard), verdict: .deny, origin: .machine)
+        let rules: [(TypedRule, ExplainAlsoMatch.Source)] = [(forcePushMain, .repo), (resetHard, .machine)]
         let packRule = RuleID(pack: .coreGit, pattern: "push-force-long")
-        #expect(ExplainTypedRules.lines(rules: rules, action: push, decidedBy: packRule) == [
-            "  Your rule  typed.git:force-push-main · this repo (.rv/policy.toml) · deny · also matches"
-        ])
+        let found = ExplainTypedRules.matches(rules: rules, action: push, decidedBy: packRule)
+        #expect(found == [ExplainAlsoMatch(ruleID: forcePushMain.id, source: .repo, verdict: .deny)])
+        #expect(found.first?.label == "Your rule")
+        #expect(found.first?.display == "typed.git:force-push-main · this repo (.rv/policy.toml) · deny")
         // The rule that decided is already on the Rule line.
-        #expect(ExplainTypedRules.lines(rules: rules, action: push, decidedBy: rules[0].id) == [])
-        #expect(ExplainTypedRules.lines(rules: rules, action: nil, decidedBy: packRule) == [])
+        #expect(ExplainTypedRules.matches(rules: rules, action: push, decidedBy: forcePushMain.id) == [])
+        #expect(ExplainTypedRules.matches(rules: rules, action: nil, decidedBy: packRule) == [])
+    }
+
+    /// Review of #669: an owner-ceiling rule is not "Your rule · this machine".
+    @Test func explain_ceilingRule_isLabelledCeiling() {
+        let match = ExplainAlsoMatch(
+            ruleID: RuleID(pack: .typedGit, pattern: "no-force-push"), source: .ceiling, verdict: .deny)
+        #expect(match.label == "Ceiling")
+        #expect(match.display == "typed.git:no-force-push · owner ceiling (~/.config/rv/ceiling.toml) · deny")
     }
 
     @Test func explain_typedAllow_saysRestrictOnly() {
-        let rules = [
-            TypedRule(
-                id: RuleID(pack: .typedGit, pattern: "allow-main"),
-                predicate: .gitPush(force: .any, branch: "main"), verdict: .allow, origin: .machine),
-        ]
-        let push = SemanticAction.git(.push(remote: "origin", refspec: "main", force: .force))
-        let lines = ExplainTypedRules.lines(rules: rules, action: push, decidedBy: RuleID(pack: .coreGit, pattern: "x"))
-        #expect(lines.count == 1)
-        #expect(lines[0].contains("allow is restrict-only"))
+        let match = ExplainAlsoMatch(ruleID: RuleID(pack: .typedGit, pattern: "allow-main"), source: .machine, verdict: .allow)
+        #expect(match.display.contains("allow is restrict-only"))
     }
 
-    @Test func explain_endToEnd_showsRepoRuleBesidePackDeny() async throws {
+    private func explainForcePushMain(json: Bool, ceiling: Bool = false) async throws -> String {
         let (home, workspace) = try scratch()
         defer { cleanup(home, workspace) }
         let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
@@ -214,13 +216,48 @@ struct PolicyF1CommandTests {
         force = "force"
         branch = "main"
         """.write(to: repoFile, atomically: true, encoding: .utf8)
+        if ceiling {
+            let config = RVPolicyPaths.configDirectory(home: home)
+            try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+            try """
+            schema_version = 1
+            [[rule]]
+            id = "typed.git:no-force-push"
+            verdict = "deny"
+            predicate = "gitPush"
+            force = "force"
+            """.write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        }
         let allowOnce = workspace.appendingPathComponent("allow-once", isDirectory: true)
         let probe = ThemeProbeFactory.make(
-            jsonFlag: false, robotFlag: false, plainFlag: true, noColorFlag: true,
+            jsonFlag: json, robotFlag: false, plainFlag: json == false, noColorFlag: true,
             stdinIsTTY: true, stdoutIsTTY: true, environment: ["TERM": "xterm"])
         let result = try await CommandRun.run(
             kind: .explain, command: "git push --force origin main", probe: probe,
             requested: .automatic, cwd: workspace.path, allowOnceDirectory: allowOnce, home: home)
-        #expect(result.stdout.contains("typed.git:force-push-main"), "\(result.stdout)")
+        return result.stdout
+    }
+
+    /// The typed rule sits inside the tree, before Next, so the next
+    /// command stays the last line.
+    @Test func explain_endToEnd_showsRepoRuleBeforeNext() async throws {
+        let stdout = try await explainForcePushMain(json: false, ceiling: true)
+        let lines = stdout.split(separator: "\n").map(String.init)
+        let rule = try #require(lines.firstIndex { $0.contains("typed.git:force-push-main") }, "\(stdout)")
+        let ceiling = try #require(lines.firstIndex { $0.contains("typed.git:no-force-push") }, "\(stdout)")
+        let next = try #require(lines.firstIndex { $0.contains("Next") }, "\(stdout)")
+        #expect(lines[rule].contains("Your rule"))
+        #expect(lines[ceiling].contains("Ceiling"))
+        #expect(lines[ceiling].contains("Your rule") == false)
+        #expect(rule < next && ceiling < next)
+        #expect(next == lines.count - 1, "\(stdout)")
+    }
+
+    @Test func explain_json_carriesTypedRules() async throws {
+        let stdout = try await explainForcePushMain(json: true)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any], "\(stdout)")
+        let rules = try #require(object["typed_rules"] as? [[String: String]], "\(stdout)")
+        #expect(rules == [["rule_id": "typed.git:force-push-main", "source": "repo", "verdict": "deny"]])
     }
 }

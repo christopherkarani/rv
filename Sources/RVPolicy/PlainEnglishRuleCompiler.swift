@@ -2,9 +2,11 @@ import RVDomain
 
 /// Plain sentences → a typed rule, with no model. "never force push to main",
 /// "ask before git reset --hard", "block rm -rf". It reads a verdict word,
-/// one command rv can type, and that command's branch or flags. Anything it
-/// does not understand is refused with the reason, never guessed: a word left
-/// over is named back, so a rule never quietly drops part of what was said.
+/// one command rv can type, and that command's branch or flags.
+///
+/// Every word has to land in a slot. A word the grammar cannot place is
+/// named back in a refusal, never dropped: dropping a word ("work" in "never
+/// force push to work") would save a rule wider than the sentence.
 ///
 /// Rules stay restrict-only whatever the verdict (`ActionPolicyEngine`), so
 /// nothing drafted here can let through what rv or a pack stops.
@@ -14,20 +16,29 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         case rule(TypedRulePreview)
         /// rv already stops this with a built-in rule; nothing to save.
         case builtIn(BuiltinRule)
-        /// Not draftable. `reason` is one line for the person.
+        /// Read and not draftable. Final: `reason` is one line for the person.
         case refused(EnglishCompileRefusal, reason: String)
+        /// No verdict or no command the grammar knows. The only drafts a
+        /// model may take a second look at (`EnglishCompileChain`).
+        case unreadable(reason: String)
     }
 
     public init() {}
 
     public func compile(_ english: String) async throws -> EnglishCompileResult {
-        switch draft(english) {
+        Self.result(draft(english))
+    }
+
+    static func result(_ draft: Draft) -> EnglishCompileResult {
+        switch draft {
         case .rule(let preview):
             return .preview(preview)
         case .builtIn:
             return .refuse(.alreadyBuiltIn)
         case .refused(let refusal, _):
             return .refuse(refusal)
+        case .unreadable:
+            return .refuse(.uncompilable)
         }
     }
 
@@ -38,9 +49,7 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         }
         let words = Self.words(trimmed)
         guard let (verdict, rest) = Self.verdict(words) else {
-            return .refused(
-                .uncompilable,
-                reason: "start with never, ask before, or allow, like \"never force-push to main\"")
+            return .unreadable(reason: "start with never, ask before, or allow, like \"never force-push to main\"")
         }
         return Self.action(rest, verdict: verdict, english: trimmed)
     }
@@ -54,20 +63,25 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         var key: String
     }
 
-    /// Hyphens inside plain words split ("force-push" → force push); flags
-    /// (`-f`, `--hard`) stay whole. Quotes and end punctuation drop.
+    /// Words that may be written joined by hyphens ("force-push", "hard-reset").
+    private static let joinable: Set<String> = [
+        "force", "forced", "forcing", "push", "pushing", "pushes", "pushed", "hard", "reset", "with", "lease", "git",
+    ]
+
+    /// Flags (`-f`, `--hard`) stay whole, and so does any hyphenated word
+    /// that is not made of command words: a branch like `work-in-progress`
+    /// is one name. Quotes and end punctuation drop.
     static func words(_ sentence: String) -> [Word] {
         var result: [Word] = []
         let stripped = sentence.map { "\"'`“”‘’,;:!?".contains($0) ? " " : $0 }
         for raw in String(stripped).split(whereSeparator: \.isWhitespace) {
             var token = String(raw)
             while token.count > 1, token.hasSuffix(".") { token.removeLast() }
-            if token.hasPrefix("-") {
-                result.append(Word(text: token, key: token.lowercased()))
-                continue
-            }
-            for part in token.split(separator: "-") where part.isEmpty == false {
-                result.append(Word(text: String(part), key: stem(part.lowercased())))
+            let parts = token.split(separator: "-").map(String.init)
+            if token.hasPrefix("-") == false, parts.count > 1, parts.allSatisfy({ joinable.contains($0.lowercased()) }) {
+                result += parts.map { Word(text: $0, key: stem($0.lowercased())) }
+            } else {
+                result.append(Word(text: token, key: token.hasPrefix("-") ? token.lowercased() : stem(token.lowercased())))
             }
         }
         return result
@@ -85,8 +99,8 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         "renaming": "rename", "renames": "rename",
         "discarding": "discard", "discards": "discard",
         "restoring": "restore", "restores": "restore",
-        "running": "run", "runs": "run",
-        "branches": "branch", "repositories": "repository", "folders": "folder",
+        "running": "run", "runs": "run", "using": "use", "doing": "do",
+        "branches": "branch", "repositories": "repository",
     ]
 
     private static func stem(_ word: String) -> String {
@@ -126,18 +140,57 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         return nil
     }
 
-    // MARK: Action
+    // MARK: Slots
 
-    /// Words that never change which commands a rule matches.
-    private static let filler: Set<String> = [
-        "the", "a", "an", "any", "anyone", "anybody", "anything", "everything", "all", "every", "ever", "again",
-        "agent", "agents", "claude", "codex", "cursor", "me", "my", "our", "i", "you", "we", "they", "it", "them",
-        "please", "to", "on", "onto", "into", "in", "of", "from", "for", "with", "by", "here", "this", "that",
-        "repo", "repository", "project", "origin", "remote", "upstream", "file", "files", "folder", "folders",
-        "command", "commands", "run", "do", "doing", "use", "using", "git", "always", "anywhere", "rv",
-        "changes", "change", "uncommitted", "unstaged", "local", "work", "worktree", "working", "tree", "copy",
-        "things", "stuff", "before", "first",
+    /// Words that never change which commands a rule matches, wherever they sit.
+    private static let neutral: Set<String> = [
+        "the", "a", "an", "please", "ever", "again", "agent", "agents", "claude", "codex", "cursor", "rv", "always",
     ]
+
+    /// Who the rule is about, only at the start: "never let anyone push …".
+    private static let subjects: Set<String> = [
+        "anyone", "anybody", "agent", "agents", "claude", "codex", "cursor", "you", "them",
+    ]
+
+    /// The sentence's words and which of them a slot has used.
+    struct Slots {
+        let words: [Word]
+        var used: Set<Int> = []
+
+        var keys: [String] { words.map(\.key) }
+
+        func free(_ index: Int) -> Bool {
+            used.contains(index) == false
+        }
+
+        mutating func use(_ keys: Set<String>) {
+            for (index, word) in words.enumerated() where keys.contains(word.key) { used.insert(index) }
+        }
+
+        /// Words no slot used and that are not neutral.
+        var leftover: [Int] {
+            words.indices.filter { free($0) && PlainEnglishRuleCompiler.neutral.contains(words[$0].key) == false }
+        }
+
+        /// "anyone to", "run", "git" at the start of the rest of the sentence.
+        mutating func useLead(git: Bool) {
+            var cursor = 0
+            if cursor < words.count, PlainEnglishRuleCompiler.subjects.contains(words[cursor].key) {
+                used.insert(cursor)
+                cursor += 1
+                if cursor < words.count, words[cursor].key == "to" {
+                    used.insert(cursor)
+                    cursor += 1
+                }
+            }
+            if cursor < words.count, ["run", "use", "do"].contains(words[cursor].key) {
+                used.insert(cursor)
+            }
+            if git { use(["git"]) }
+        }
+    }
+
+    // MARK: Action
 
     private static let otherTools: Set<String> = [
         "npm", "npx", "yarn", "pnpm", "pip", "pip3", "cargo", "docker", "kubectl", "terraform", "dropdb", "psql",
@@ -157,10 +210,16 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
         "unlink": .delete, "rmdir": .delete, "move": .move, "mv": .move, "rename": .move,
     ]
 
-    private static let pathScopes: Set<String> = ["outside", "beyond", "above"]
+    private static let exceptions: Set<String> = ["except", "unless", "but", "besides", "excluding"]
 
     static func action(_ words: [Word], verdict: TypedRuleVerdict, english: String) -> Draft {
         let keys = words.map(\.key)
+        if let word = words.first(where: { exceptions.contains($0.key) }) {
+            return .refused(
+                .uncompilable,
+                reason: "a rule can't have exceptions (\"\(DisplayedText.field(word.text))\"); "
+                    + "draft the narrower rule instead")
+        }
         var kinds: [Kind] = []
         for key in keys {
             if let kind = actionWords[key], kinds.contains(kind) == false { kinds.append(kind) }
@@ -181,202 +240,396 @@ public struct PlainEnglishRuleCompiler: EnglishCompiler {
             if kinds.count > 1 {
                 return .refused(.uncompilable, reason: "one command per rule; draft each one on its own")
             }
-            return .refused(
-                .uncompilable,
+            return .unreadable(
                 reason: "can't tell which command this is about; name one: git push, git reset, git clean, "
                     + "git restore, rm or mv")
-        }
-        if keys.contains(where: pathScopes.contains), kind == .delete || kind == .move {
-            return .builtIn(.outOfRepoWrite)
         }
         if kind == .delete, keys.contains("branch") {
             return .refused(.unsupportedPredicate, reason: "a rule can't cover deleting branches yet")
         }
-        if keys.contains("except") || keys.contains("unless") || keys.contains("but") {
-            return .refused(.uncompilable, reason: "a rule can't have exceptions; draft the narrower rule instead")
-        }
+        var slots = Slots(words: words)
+        slots.useLead(git: kind != .delete && kind != .move)
         switch kind {
         case .push:
-            return push(words, verdict: verdict, english: english)
+            return push(&slots, verdict: verdict, english: english)
         case .reset:
-            return reset(words, verdict: verdict, english: english)
+            return reset(&slots, verdict: verdict, english: english)
         case .clean:
-            // Every git clean, whatever its flags: a wider stop, shown in the preview.
-            let flags = Set(keys.filter { $0.hasPrefix("-") })
-            return simple(
-                words, used: flags.union(["clean", "force", "directories", "ignored"]),
-                predicate: .gitClean(force: nil, directories: nil), pack: .typedGit, name: "clean",
-                thing: "git clean", verdict: verdict, english: english)
+            return clean(&slots, verdict: verdict, english: english)
         case .discard:
-            return simple(
-                words, used: ["discard", "restore", "checkout", "--", "."],
-                predicate: .gitDiscardWorktree(pathspec: nil), pack: .typedGit, name: "discard",
+            slots.use(["discard", "restore", "checkout", "--", "."])
+            slots.use(["uncommitted", "unstaged", "local", "changes", "change", "edits", "work", "working", "tree",
+                       "worktree", "copy", "my", "your", "our", "all", "any", "every"])
+            if let refused = refusal(slots, hint: "a discard rule covers every discard of uncommitted changes, "
+                + "like \"never discard uncommitted changes\"") { return refused }
+            return preview(
+                .gitDiscardWorktree(pathspec: nil), pack: .typedGit, name: "discard",
                 thing: "discarding uncommitted changes", verdict: verdict, english: english)
         case .delete:
-            return delete(words, verdict: verdict, english: english)
+            return delete(&slots, verdict: verdict, english: english)
         case .move:
-            return simple(
-                words, used: ["move", "mv", "rename"], predicate: .filesystemMove, pack: typedFilesystem,
-                name: "move", thing: "moving files", verdict: verdict, english: english)
+            slots.use(["move", "mv", "rename"])
+            slots.use(objects)
+            if let draft = outsideTheRepo(&slots, verdict: verdict) { return draft }
+            if let refused = refusal(slots, hint: "a move rule covers every move and can't name a path yet, "
+                + "like \"ask before moving files\"") { return refused }
+            return preview(
+                .filesystemMove, pack: typedFilesystem, name: "move", thing: "moving files", verdict: verdict,
+                english: english)
         }
     }
 
     private static let typedFilesystem = PackID(rawValue: "typed.filesystem")
 
-    /// The first word nothing in the rule accounts for.
-    private static func leftover(_ words: [Word], used: Set<String>) -> Draft? {
-        guard let word = words.first(where: { filler.contains($0.key) == false && used.contains($0.key) == false })
-        else { return nil }
+    private static let connectors: Set<String> = ["to", "on", "onto", "into", "in", "at", "for", "of", "by", "with"]
+    private static let changeWords: Set<String> = ["changes", "change", "uncommitted", "unstaged", "edits", "work"]
+
+    /// A refusal naming the first word no slot took, or nil when every word
+    /// has a place.
+    private static func refusal(_ slots: Slots, hint: String) -> Draft? {
+        let left = slots.leftover
+        guard let first = left.first else { return nil }
+        let words = slots.words
+        if left.contains(where: { ["and", "or", "nor", "plus", "&"].contains(words[$0].key) }) {
+            return .refused(.uncompilable, reason: "one thing per rule; draft each one on its own")
+        }
+        let named = left.first(where: { connectors.contains(words[$0].key) == false }) ?? first
         return .refused(
             .uncompilable,
-            reason: "can't fit \"\(DisplayedText.field(word.text))\" into a rule; "
-                + "a rule names one command, and for git push the branch")
+            reason: "can't fit \"\(DisplayedText.field(words[named].text))\" into a rule; \(hint)")
     }
 
-    private static func push(_ words: [Word], verdict: TypedRuleVerdict, english: String) -> Draft {
-        let keys = words.map(\.key)
-        var used: Set<String> = ["push", "force", "-f", "--force", "lease", "--force-with-lease", "branch"]
+    // MARK: git push
+
+    private static let pointers: Set<String> = ["to", "on", "onto", "into"]
+    private static let remotes: Set<String> = ["origin", "upstream", "remote"]
+    private static let everyBranch: Set<String> = ["all", "any", "every", "each"]
+
+    /// Things a push carries that are not branch names: "never push tags"
+    /// is not a rule about a branch called tags.
+    private static let pushNouns: Set<String> = [
+        "tag", "tags", "commit", "commits", "secret", "secrets", "credential", "credentials", "key", "keys",
+        "token", "tokens", "password", "passwords", "code", "change", "changes", "file", "files", "history",
+        "stuff", "thing", "things", "everything", "anything", "something", "it", "them", "this", "that",
+        "anywhere",
+    ]
+
+    /// Words that describe a branch without naming one.
+    private static let notBranchNames: Set<String> = [
+        "local", "current", "same", "my", "your", "our", "their", "his", "her", "new", "other", "own", "default",
+        "shared", "protected", "important", "public", "private", "someone", "someones", "else", "branch",
+    ]
+
+    private static func push(_ slots: inout Slots, verdict: TypedRuleVerdict, english: String) -> Draft {
+        let words = slots.words
+        let keys = slots.keys
+        slots.use(["push"])
         let force: GitPushForceConstraint
-        if keys.contains("lease") || keys.contains("--force-with-lease") {
-            used.formUnion(["with"])
+        if keys.contains("--force-with-lease") || keys.contains("lease") {
+            if keys.contains("-f") || keys.contains("--force") {
+                return .refused(.uncompilable, reason: "pick --force or --force-with-lease; a rule covers one")
+            }
+            slots.use(["--force-with-lease", "lease", "force", "with"])
             force = .exactly(.forceWithLease)
         } else if keys.contains("force") || keys.contains("-f") || keys.contains("--force") {
+            slots.use(["force", "-f", "--force"])
+            for index in words.indices.dropFirst() where keys[index] == "force" && keys[index - 1] == "with" {
+                slots.used.insert(index - 1)  // "push with force"
+            }
             force = .exactly(.force)
         } else {
             force = .any
         }
-        var branch: String?
-        var anyBranch = false
-        for (index, word) in words.enumerated() {
-            if ["all", "any", "every"].contains(word.key), index + 1 < words.count, words[index + 1].key == "branch" {
-                anyBranch = true
-            }
+        if let flag = words.indices.first(where: { slots.free($0) && keys[$0].hasPrefix("-") }) {
+            return .refused(
+                .unsupportedPredicate,
+                reason: "a push rule can't single out \(DisplayedText.field(words[flag].text)); it names "
+                    + "--force or --force-with-lease and one branch")
         }
-        if anyBranch == false, let candidate = branchWord(words) {
-            guard candidate.text.contains(where: { "*?[".contains($0) }) == false else {
+
+        // The branch slot: after to/on/onto/into, or the next free word after push.
+        guard let pushIndex = keys.firstIndex(of: "push") else {
+            return .unreadable(reason: "can't tell which command this is about")
+        }
+        var cursor = pushIndex + 1
+        var pointer: Int?
+        if let found = words.indices.first(where: { $0 > pushIndex && slots.free($0) && pointers.contains(keys[$0]) }) {
+            pointer = found
+            slots.used.insert(found)
+            cursor = found + 1
+        } else {
+            while cursor < words.count, slots.free(cursor) == false { cursor += 1 }
+        }
+        func skipNeutral() {
+            while cursor < words.count, slots.free(cursor), neutral.contains(keys[cursor]) { cursor += 1 }
+        }
+        skipNeutral()
+        if cursor < words.count, slots.free(cursor), keys[cursor] == "branch", cursor + 1 < words.count {
+            slots.used.insert(cursor)  // "to branch main"
+            cursor += 1
+            skipNeutral()
+        }
+        if cursor < words.count, slots.free(cursor), remotes.contains(keys[cursor]) {
+            slots.used.insert(cursor)  // "origin main"
+            cursor += 1
+            skipNeutral()
+        }
+
+        var branch: String?
+        var note: String?
+        if cursor < words.count, slots.free(cursor) {
+            let candidate = words[cursor]
+            if everyBranch.contains(candidate.key), cursor + 1 < words.count, keys[cursor + 1] == "branch" {
+                slots.used.formUnion([cursor, cursor + 1])
+            } else if pushNouns.contains(candidate.key) {
+                return .refused(
+                    .unsupportedPredicate,
+                    reason: "\"\(DisplayedText.field(candidate.text))\" is not a branch; a push rule covers "
+                        + "one branch, like \"never force-push to main\"")
+            } else if notBranchNames.contains(candidate.key) {
+                return .refused(
+                    .uncompilable,
+                    reason: "\"\(DisplayedText.field(candidate.text))\" doesn't name a branch; say which one, "
+                        + "like \"never force-push to main\"")
+            } else if candidate.text.contains(where: { "*?[".contains($0) }) {
                 return .refused(
                     .uncompilable, reason: "a rule names one branch, not a pattern; try \"never force-push to main\"")
+            } else {
+                let name = branchName(candidate.text)
+                guard isBranchName(name) else {
+                    return .refused(
+                        .uncompilable, reason: "\"\(DisplayedText.field(candidate.text))\" is not a branch name")
+                }
+                if name != candidate.text {
+                    note = "\(DisplayedText.field(candidate.text)) read as branch \(DisplayedText.field(name))"
+                }
+                branch = name
+                slots.used.insert(cursor)
+                if cursor + 1 < words.count, keys[cursor + 1] == "branch" { slots.used.insert(cursor + 1) }
             }
-            guard isBranchName(candidate.text) else {
-                return .refused(
-                    .uncompilable, reason: "\"\(DisplayedText.field(candidate.text))\" is not a branch name")
-            }
-            branch = candidate.text
-            used.insert(candidate.key)
+        } else if let pointer {
+            return .refused(
+                .uncompilable,
+                reason: "say which branch after \"\(DisplayedText.field(words[pointer].text))\", "
+                    + "like \"never force-push to main\"")
         }
-        if let refused = leftover(words, used: used) { return refused }
-        // The same id and sentence the model path gives a git push form.
+        if let refused = refusal(slots, hint: "a push rule names force and one branch, like \"never force-push to main\"") {
+            return refused
+        }
+        // The same id the model path gives a git push form; the sentence
+        // says exactly which pushes the rule covers.
+        let target = branch.map(DisplayedText.field) ?? "any branch"
+        var thing: String
+        switch force {
+        case .exactly(.force): thing = "force-push to \(target)"
+        case .exactly(.forceWithLease): thing = "git push --force-with-lease to \(target) (not plain --force)"
+        case .exactly(.none): thing = "git push without force to \(target)"
+        case .any: thing = "git push to \(target), forced or not"
+        }
+        if let note { thing += " (\(note))" }
         guard case .preview(let preview) = FoundationModelsEnglishCompileMapping.preview(
-            force: force, branch: branch, verdict: verdict, sentence: "", english: english)
+            force: force, branch: branch, verdict: verdict, sentence: sentence(verdict, thing), english: english)
         else {
             return .refused(.uncompilable, reason: "can't draft that git push rule")
         }
         return .rule(preview)
     }
 
-    /// The word after to/on/onto/into/origin, or right after push and its
-    /// flags ("force push main").
-    private static func branchWord(_ words: [Word]) -> Word? {
-        let pointers: Set<String> = ["to", "on", "onto", "into", "origin", "upstream", "remote"]
-        let skip: Set<String> = ["the", "origin", "upstream", "remote", "branch", "a", "an", "my", "our"]
-        let flags: Set<String> = ["force", "-f", "--force", "lease", "--force-with-lease", "with", "git"]
-        func next(after index: Int) -> Word? {
-            var cursor = index + 1
-            while cursor < words.count, skip.contains(words[cursor].key) { cursor += 1 }
-            guard cursor < words.count else { return nil }
-            let word = words[cursor]
-            if filler.contains(word.key) || flags.contains(word.key) || actionWords[word.key] != nil { return nil }
-            return word
+    /// `origin/main` and `refs/heads/main` name the branch `main`: a push
+    /// destination never carries the remote, so the rule keeps only the branch.
+    private static func branchName(_ text: String) -> String {
+        for prefix in ["origin/", "upstream/", "refs/heads/"]
+        where text.lowercased().hasPrefix(prefix) && text.count > prefix.count {
+            return String(text.dropFirst(prefix.count))
         }
-        for (index, word) in words.enumerated() where pointers.contains(word.key) {
-            if let found = next(after: index) { return found }
-        }
-        if let push = words.firstIndex(where: { $0.key == "push" }) {
-            var cursor = push + 1
-            while cursor < words.count, flags.contains(words[cursor].key) { cursor += 1 }
-            if cursor < words.count {
-                let word = words[cursor]
-                if filler.contains(word.key) == false, word.key.hasPrefix("-") == false { return word }
-            }
-        }
-        return nil
+        return text
     }
 
     private static func isBranchName(_ text: String) -> Bool {
-        text.hasPrefix("-") == false && text.count <= 200
-            && text.allSatisfy { $0.isLetter || $0.isNumber || "._/-".contains($0) }
+        text.hasPrefix("-") == false && text.hasPrefix("/") == false && text.contains("..") == false
+            && text.count <= 200 && text.allSatisfy { $0.isLetter || $0.isNumber || "._/-".contains($0) }
     }
 
-    private static func reset(_ words: [Word], verdict: TypedRuleVerdict, english: String) -> Draft {
-        let keys = words.map(\.key)
+    // MARK: git reset and git clean
+
+    private static func reset(_ slots: inout Slots, verdict: TypedRuleVerdict, english: String) -> Draft {
+        let keys = slots.keys
+        slots.use(["reset"])
         var mode: GitResetMode?
-        var used: Set<String> = ["reset"]
         for candidate in [GitResetMode.hard, .soft, .mixed, .merge, .keep]
         where keys.contains(candidate.rawValue) || keys.contains("--" + candidate.rawValue) {
             guard mode == nil else {
                 return .refused(.uncompilable, reason: "one reset mode per rule; draft each one on its own")
             }
             mode = candidate
-            used.formUnion([candidate.rawValue, "--" + candidate.rawValue])
+            slots.use([candidate.rawValue, "--" + candidate.rawValue])
         }
-        if let refused = leftover(words, used: used) { return refused }
+        let hint = slots.leftover.contains(where: { changeWords.contains(keys[$0]) || keys[$0] == "local" })
+            ? "a reset rule names a mode; to keep uncommitted changes say \"never discard uncommitted changes\""
+            : "a reset rule names a mode, like \"never git reset --hard\""
+        if let refused = refusal(slots, hint: hint) { return refused }
         let name = mode.map { "reset-\($0.rawValue)" } ?? "reset"
-        let thing = mode.map { "git reset --\($0.rawValue)" } ?? "git reset"
+        let thing = mode.map { "git reset --\($0.rawValue)" } ?? "every git reset"
         return preview(
             .gitReset(mode: mode), pack: .typedGit, name: name, thing: thing, verdict: verdict, english: english)
     }
 
-    private static func delete(_ words: [Word], verdict: TypedRuleVerdict, english: String) -> Draft {
-        let keys = words.map(\.key)
-        var recursive: Bool?
-        var force: Bool?
-        var used: Set<String> = ["delete", "remove", "rm", "erase", "wipe", "unlink", "rmdir", "recursively", "recursive", "force"]
-        for key in keys where key.hasPrefix("-") && key.hasPrefix("--") == false {
-            let letters = Set(key.dropFirst())
-            guard letters.isSubset(of: ["r", "R", "f"]) else { continue }
-            if letters.contains("r") || letters.contains("R") { recursive = true }
-            if letters.contains("f") { force = true }
-            used.insert(key)
+    /// `-f` and `-d` are the flags a clean rule can name. Another flag would
+    /// be dropped and the rule would cover more than was said, so it refuses.
+    private static func clean(_ slots: inout Slots, verdict: TypedRuleVerdict, english: String) -> Draft {
+        let words = slots.words
+        slots.use(["clean"])
+        var force = false
+        var directories = false
+        for (index, word) in words.enumerated() where slots.free(index) {
+            switch word.key {
+            case "--force", "force":
+                force = true
+            case let flag where flag.hasPrefix("-") && flag.hasPrefix("--") == false:
+                let letters = Set(word.text.dropFirst())
+                guard letters.isSubset(of: ["f", "d"]) else {
+                    return .refused(
+                        .unsupportedPredicate,
+                        reason: "a rule can't single out git clean \(DisplayedText.field(word.text)); "
+                            + "it names -f and -d, like \"never git clean -fd\"")
+                }
+                force = force || letters.contains("f")
+                directories = directories || letters.contains("d")
+            case let flag where flag.hasPrefix("--"):
+                return .refused(
+                    .unsupportedPredicate,
+                    reason: "a rule can't single out git clean \(DisplayedText.field(word.text)); "
+                        + "it names -f and -d, like \"never git clean -fd\"")
+            default:
+                continue
+            }
+            slots.used.insert(index)
         }
-        if keys.contains("--recursive") || keys.contains("recursively") || keys.contains("recursive") {
-            recursive = true
-            used.insert("--recursive")
+        if let refused = refusal(slots, hint: "a clean rule names -f or -d, like \"never git clean -fd\"") {
+            return refused
         }
-        if keys.contains("--force") || keys.contains("force") {
-            force = true
-            used.insert("--force")
-        }
-        if let refused = leftover(words, used: used) { return refused }
-        var flags = ""
-        if recursive == true { flags += "r" }
-        if force == true { flags += "f" }
-        let name = flags.isEmpty ? "delete" : "delete-" + flags
-        let thing = flags.isEmpty ? "deleting files" : "rm -\(flags)"
+        var letters = ""
+        if force { letters += "f" }
+        if directories { letters += "d" }
+        let name = letters.isEmpty ? "clean" : "clean-\(letters)"
+        let thing = letters.isEmpty ? "every git clean" : "git clean -\(letters), with or without other flags"
         return preview(
-            .filesystemDelete(recursive: recursive, force: force), pack: typedFilesystem, name: name, thing: thing,
-            verdict: verdict, english: english)
+            .gitClean(force: force ? true : nil, directories: directories ? true : nil), pack: .typedGit,
+            name: name, thing: thing, verdict: verdict, english: english)
     }
 
-    private static func simple(
-        _ words: [Word], used: Set<String>, predicate: PolicyPredicate, pack: PackID, name: String, thing: String,
-        verdict: TypedRuleVerdict, english: String
-    ) -> Draft {
-        if let refused = leftover(words, used: used) { return refused }
-        return preview(predicate, pack: pack, name: name, thing: thing, verdict: verdict, english: english)
+    // MARK: Files
+
+    /// What a delete or move rule can be about: every file.
+    private static let objects: Set<String> = ["file", "files", "anything", "everything", "all", "any"]
+
+    private static func delete(_ slots: inout Slots, verdict: TypedRuleVerdict, english: String) -> Draft {
+        let words = slots.words
+        let keys = slots.keys
+        slots.use(["delete", "remove", "rm", "erase", "wipe", "unlink", "rmdir"])
+        slots.use(objects)
+        var recursive = false
+        var force = false
+        for (index, word) in words.enumerated() where slots.free(index) {
+            switch word.key {
+            case "--recursive", "recursively", "recursive":
+                recursive = true
+            case "--force", "force", "forcefully":
+                force = true
+            case let flag where flag.hasPrefix("-") && flag.hasPrefix("--") == false:
+                let letters = Set(word.text.dropFirst())
+                guard letters.isSubset(of: ["r", "R", "f"]) else {
+                    return .refused(
+                        .unsupportedPredicate,
+                        reason: "a rule can't single out rm \(DisplayedText.field(word.text)); it names -r and -f, "
+                            + "like \"never rm -rf\"")
+                }
+                recursive = recursive || letters.contains("r") || letters.contains("R")
+                force = force || letters.contains("f")
+            default:
+                continue
+            }
+            slots.used.insert(index)
+        }
+        if let draft = outsideTheRepo(&slots, verdict: verdict) { return draft }
+        let left = slots.leftover
+        let hint: String
+        if left.contains(where: { changeWords.contains(keys[$0]) }) {
+            hint = "to keep uncommitted changes say \"never discard uncommitted changes\""
+        } else if left.contains(where: { keys[$0] == "git" }) {
+            hint = "a rule can't cover git rm yet; \"never rm\" covers deleting files"
+        } else {
+            hint = "a delete rule covers every delete and can't name a path yet, like \"never rm -rf\""
+        }
+        if let refused = refusal(slots, hint: hint) { return refused }
+        var flags = ""
+        if recursive { flags += "r" }
+        if force { flags += "f" }
+        let name = flags.isEmpty ? "delete" : "delete-" + flags
+        let thing: String
+        switch (recursive, force) {
+        case (false, false): thing = "deleting files"
+        case (true, false): thing = "rm -r, with or without -f"
+        case (false, true): thing = "rm -f, with or without -r"
+        case (true, true): thing = "rm -rf"
+        }
+        return preview(
+            .filesystemDelete(recursive: recursive ? true : nil, force: force ? true : nil), pack: typedFilesystem,
+            name: name, thing: thing, verdict: verdict, english: english)
+    }
+
+    private static let scopeWords: Set<String> = ["outside", "beyond", "above"]
+    private static let repoWords: Set<String> = ["repo", "repository", "project", "workspace", "worktree", "checkout"]
+    private static let determiners: Set<String> = ["this", "the", "my", "our", "your", "current"]
+
+    /// "outside [of] [this] repo": rv's built-in rule already stops that.
+    /// Any other place ("outside node_modules") is a path a rule can't name,
+    /// and an allow can't let through what the built-in stops. Nil when the
+    /// sentence names no place, or when other words still need a slot.
+    private static func outsideTheRepo(_ slots: inout Slots, verdict: TypedRuleVerdict) -> Draft? {
+        let words = slots.words
+        let keys = slots.keys
+        guard let scope = keys.firstIndex(where: scopeWords.contains) else { return nil }
+        var cursor = scope + 1
+        if cursor < words.count, keys[cursor] == "of" { cursor += 1 }
+        if cursor < words.count, determiners.contains(keys[cursor]) { cursor += 1 }
+        var end: Int?
+        if cursor < words.count, repoWords.contains(keys[cursor]) {
+            end = cursor
+        } else if cursor + 1 < words.count, keys[cursor] == "working", ["directory", "tree", "folder"].contains(keys[cursor + 1]) {
+            end = cursor + 1
+        }
+        guard let end else {
+            return .refused(
+                .unsupportedPredicate,
+                reason: "a rule can't name a path yet; rv's built-in rule covers deletes and moves outside this repo")
+        }
+        slots.used.formUnion(scope...end)
+        guard slots.leftover.isEmpty else { return nil }
+        if verdict == .allow {
+            return .refused(
+                .unsupported,
+                reason: "an allow rule can't let through what rv stops; rv stops deletes and moves outside this repo")
+        }
+        return .builtIn(.outOfRepoWrite)
+    }
+
+    // MARK: Preview
+
+    private static func sentence(_ verdict: TypedRuleVerdict, _ thing: String) -> String {
+        switch verdict {
+        case .deny: return "Always block \(thing)"
+        case .ask: return "Ask before \(thing)"
+        case .allow: return "Always allow \(thing)"
+        }
     }
 
     private static func preview(
         _ predicate: PolicyPredicate, pack: PackID, name: String, thing: String, verdict: TypedRuleVerdict,
         english: String
     ) -> Draft {
-        let sentence: String
-        switch verdict {
-        case .deny: sentence = "Always block \(thing)"
-        case .ask: sentence = "Ask before \(thing)"
-        case .allow: sentence = "Always allow \(thing)"
-        }
-        return .rule(TypedRulePreview(
-            sentence: sentence,
+        .rule(TypedRulePreview(
+            sentence: sentence(verdict, thing),
             rule: PolicyDocumentRule(
                 id: RuleID(pack: pack, pattern: "\(name)-\(verdict.rawValue)"),
                 verdict: verdict,

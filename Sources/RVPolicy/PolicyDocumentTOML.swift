@@ -37,7 +37,7 @@ public enum PolicyDocumentTOML {
         let all = text.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map {
             Line(number: $0.offset + 1, text: String($0.element))
         }
-        let firstRule = all.firstIndex { $0.trimmed == "[[rule]]" } ?? all.endIndex
+        let firstRule = all.firstIndex(where: isRuleHeader) ?? all.endIndex
         var schemaVersion: Int?
         var safetyLevel: SafetyLevel?
         var allowPaths: [String] = []
@@ -189,11 +189,19 @@ public enum PolicyDocumentTOML {
         return merged
     }
 
+    /// `[[rule]]`, alone or followed by a `# comment`.
+    private static func isRuleHeader(_ line: Line) -> Bool {
+        let trimmed = line.trimmed
+        guard trimmed.hasPrefix("[[rule]]") else { return false }
+        let rest = trimmed.dropFirst("[[rule]]".count).trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty || rest.hasPrefix("#")
+    }
+
     /// Each block starts at its `[[rule]]` line and runs to the next one.
     private static func ruleBlocks(_ lines: [Line]) -> [[Line]] {
         var blocks: [[Line]] = []
         for line in lines {
-            if line.trimmed == "[[rule]]" {
+            if isRuleHeader(line) {
                 blocks.append([line])
             } else if blocks.isEmpty == false {
                 blocks[blocks.count - 1].append(line)
@@ -216,46 +224,63 @@ public enum PolicyDocumentTOML {
             throw problem(line, nil, "\(shown(trimmed)) is not key = value", "write it as key = \"value\", or start it with #")
         }
         let key = trimmed[..<eq].trimmingCharacters(in: .whitespaces)
-        let raw = withoutTrailingComment(String(trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces)))
-        if raw.hasPrefix("\"\"\"") {
+        let text = String(trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+        if text.hasPrefix("\"\"\"") {
             throw problem(line, key, "multi-line strings are not supported", "put the value on one line in \"quotes\"")
+        }
+        let (raw, after) = valueAndRest(text)
+        if raw.isEmpty {
+            throw problem(line, key, "\(key) has no value", "write it as \(key) = \"value\"")
+        }
+        if let after {
+            throw problem(
+                line, key, "\(shown(after)) after the value is not a comment",
+                "put the whole value in \"quotes\", or start the rest with # to make it a comment")
         }
         return (key, raw)
     }
 
-    /// `"value"   # note` → `"value"`; `1 # note` → `1`. A `#` inside quotes
-    /// stays. Anything else after a closing quote is left for the value
-    /// check to refuse.
-    static func withoutTrailingComment(_ raw: String) -> String {
-        let characters = Array(raw)
-        if characters.first == "\"" {
-            var index = 1
+    /// The value written after `=`, and whatever follows it that is not a
+    /// `# comment` (nil when nothing does). A `#` inside quotes stays, and an
+    /// array ends at its first `]` outside quotes, so a `]` in the comment
+    /// after it does not count. An unclosed quote or bracket is left whole
+    /// for the value check to refuse.
+    static func valueAndRest(_ text: String) -> (value: String, rest: String?) {
+        let characters = Array(text)
+        guard let first = characters.first else { return ("", nil) }
+        var end: Int?
+        if first == "\"" || first == "[" {
+            var inQuote = first == "\""
             var escaped = false
+            var index = 1
             while index < characters.count {
                 let character = characters[index]
                 if escaped {
                     escaped = false
-                } else if character == "\\" {
+                } else if inQuote, character == "\\" {
                     escaped = true
                 } else if character == "\"" {
+                    inQuote.toggle()
+                    if inQuote == false, first == "\"" {
+                        end = index
+                        break
+                    }
+                } else if character == "]", inQuote == false, first == "[" {
+                    end = index
                     break
                 }
                 index += 1
             }
-            guard index < characters.count else { return raw }
-            let rest = String(characters[(index + 1)...]).trimmingCharacters(in: .whitespaces)
-            return rest.hasPrefix("#") ? String(characters[...index]) : raw
+        } else if first == "#" {
+            return ("", nil)
+        } else {
+            // A bare value (a number or true/false) runs to the first space.
+            end = (characters.firstIndex(where: \.isWhitespace) ?? characters.count) - 1
         }
-        if characters.first == "[" {
-            guard let close = characters.lastIndex(of: "]") else { return raw }
-            let rest = String(characters[(close + 1)...]).trimmingCharacters(in: .whitespaces)
-            return rest.hasPrefix("#") ? String(characters[...close]) : raw
-        }
-        for (index, character) in characters.enumerated()
-        where character == "#" && index > 0 && characters[index - 1].isWhitespace {
-            return String(characters[..<index]).trimmingCharacters(in: .whitespaces)
-        }
-        return raw
+        guard let end else { return (text, nil) }
+        let value = String(characters[...end])
+        let rest = String(characters[(end + 1)...]).trimmingCharacters(in: .whitespaces)
+        return (value, rest.isEmpty || rest.hasPrefix("#") ? nil : rest)
     }
 
     private static func parseRule(_ block: [Line]) throws -> PolicyDocumentRule {

@@ -142,14 +142,65 @@ struct PolicyDocumentTOMLErrorTests {
         #expect(document.rules[0].english == "keep # this")
     }
 
-    @Test func withoutTrailingComment_cases() {
-        #expect(PolicyDocumentTOML.withoutTrailingComment(#""deny" # x"#) == #""deny""#)
-        #expect(PolicyDocumentTOML.withoutTrailingComment(#""a # b""#) == #""a # b""#)
-        #expect(PolicyDocumentTOML.withoutTrailingComment(#""a\" # b" # c"#) == #""a\" # b""#)
-        #expect(PolicyDocumentTOML.withoutTrailingComment("1 # v") == "1")
-        #expect(PolicyDocumentTOML.withoutTrailingComment("feat#1") == "feat#1")
-        #expect(PolicyDocumentTOML.withoutTrailingComment(#"[".env"] # x"#) == #"[".env"]"#)
-        #expect(PolicyDocumentTOML.withoutTrailingComment(#""deny" x"#) == #""deny" x"#)
+    @Test func valueAndRest_cases() {
+        func split(_ text: String) -> (String, String?) {
+            let found = PolicyDocumentTOML.valueAndRest(text)
+            return (found.value, found.rest)
+        }
+        #expect(split(#""deny" # x"#) == (#""deny""#, nil))
+        #expect(split(#""a # b""#) == (#""a # b""#, nil))
+        #expect(split(#""a\" # b" # c"#) == (#""a\" # b""#, nil))
+        #expect(split("1 # v") == ("1", nil))
+        #expect(split("feat#1") == ("feat#1", nil))
+        #expect(split(#"[".env"] # x"#) == (#"[".env"]"#, nil))
+        #expect(split(#"[".env"] # see ] below"#) == (#"[".env"]"#, nil))
+        #expect(split(#"["a]b"] # x"#) == (#"["a]b"]"#, nil))
+        #expect(split(#""deny" x"#) == (#""deny""#, "x"))
+        #expect(split("true trailing") == ("true", "trailing"))
+        #expect(split("# only comment") == ("", nil))
+    }
+
+    /// Review of #669: words after a value used to be kept or dropped
+    /// silently. They are an error with the line and the fix.
+    @Test(arguments: [
+        (#"branch = "main" trailing"#, "branch", #""trailing" after the value is not a comment"#),
+        ("branch = # only comment", "branch", "branch has no value"),
+        ("recursive = true trailing", "recursive", #""trailing" after the value is not a comment"#),
+    ])
+    func junkAfterAValue_isLocated(line: String, key: String, message: String) throws {
+        let found = try #require(problem("""
+        schema_version = 1
+        [[rule]]
+        id = "typed.git:x"
+        verdict = "deny"
+        predicate = "gitPush"
+        \(line)
+        """))
+        #expect(found.line == 6)
+        #expect(found.key == key)
+        #expect(found.problem == message)
+        #expect(found.fix.isEmpty == false)
+    }
+
+    @Test func arrayWithBracketInItsComment_parses() throws {
+        let document = try PolicyDocumentTOML.parse("""
+        schema_version = 1
+        secret.allow_paths = [".env", "fixtures/key.pem"] # not ] these
+        """)
+        #expect(document.allowPaths == [".env", "fixtures/key.pem"])
+    }
+
+    @Test func ruleHeaderWithAComment_isARule() throws {
+        let document = try PolicyDocumentTOML.parse("""
+        schema_version = 1
+        [[rule]] # keep main safe
+        id = "typed.git:x"
+        verdict = "deny"
+        predicate = "gitPush"
+        branch = "main"
+        """)
+        #expect(document.rules.count == 1)
+        #expect(document.rules.first?.predicate == .gitPush(force: .any, branch: "main"))
     }
 
     @Test func layerFailure_carriesTheLocatedProblem() throws {

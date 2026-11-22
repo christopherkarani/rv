@@ -108,6 +108,23 @@ struct EnglishCompileChainTests {
         #expect(try await chain.compile("never npm publish") == .refuse(.unsupportedPredicate))
     }
 
+    /// Review of #669: a sentence the grammar read and refused (a leftover
+    /// word, an exception, two commands) never goes to the model, which
+    /// could save a rule wider than the sentence.
+    @Test(arguments: [
+        "never force push to main on fridays", "never push except to feature", "never push unless it is main",
+        "never push and reset", "never push tags",
+    ])
+    func productChain_finalGrammarRefusals_neverReachTheModel(sentence: String) async throws {
+        let chain = EnglishCompileChain(
+            primary: DistinctPreviewEnglishCompiler(sentence: "model-form"), fallback: FakeEnglishCompiler(),
+            phrases: PlainEnglishRuleCompiler())
+        guard case .refuse = try await chain.compile(sentence) else {
+            Issue.record("expected the grammar's refusal for \(sentence)")
+            return
+        }
+    }
+
     @Test func productChain_modelUnavailable_keepsTheGrammarReason() async throws {
         let chain = EnglishCompileChain(
             primary: UnavailableEnglishCompiler(), fallback: FakeEnglishCompiler(),

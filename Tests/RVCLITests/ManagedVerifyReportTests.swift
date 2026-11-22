@@ -44,9 +44,9 @@ struct ManagedVerifyReportTests {
         #expect(text.contains("  ✓ policy.json parses as an organization policy this rv reads\n"))
         #expect(text.contains("  ✓ policy.json.sig verifies against key 1 in this bundle's org-key.pub\n"))
         #expect(text.contains("    mcp blocked servers: shell-*\n"))
-        #expect(text.contains("  · not checked: that this org-key.pub is your organization's key"))
-        #expect(text.contains("  · not checked: anti-rollback"))
-        #expect(text.contains("  · not checked: owner and permissions once installed"))
+        #expect(text.contains("  ◐ not checked: that this org-key.pub is your organization's key"))
+        #expect(text.contains("  ◐ not checked: anti-rollback"))
+        #expect(text.contains("  ◐ not checked: owner and permissions once installed"))
         // No line about this host's sandbox: the bundle does not say it.
         #expect(text.contains("on this host") == false)
     }
@@ -82,6 +82,35 @@ struct ManagedVerifyReportTests {
         #expect(object["signed"] as? Bool == false)
         #expect((object["checked"] as? [String])?.isEmpty == false)
         #expect((object["notChecked"] as? [String])?.count == 3)
+        #expect(object["signatureUnchecked"] as? Bool == false)
+    }
+
+    /// Review of #669: not-checked lines use the artifact's caution glyph,
+    /// and the output ends with the one next step.
+    @Test func text_endsWithTheNextStep() throws {
+        let unsigned = Bundle()
+        try unsigned.write("policy.json", #"{"version": 1}"#)
+        let unsignedText = ManagedRun.verifyText(try ManagedRun.verifyReport(directory: unsigned.directory).get())
+        #expect(unsignedText.contains("· not checked") == false)
+        let last = try #require(unsignedText.split(separator: "\n").last)
+        #expect(last.hasPrefix("  → rv managed sign "), "\(unsignedText)")
+        #expect(last.hasSuffix("policy.json --key org-key.private"))
+
+        let unchecked = Bundle()
+        try unchecked.write("policy.json", #"{"version": 1}"#)
+        try unchecked.write("policy.json.sig", "AAAA\n")
+        let uncheckedReport = try ManagedRun.verifyReport(directory: unchecked.directory).get()
+        let json = try RobotJSON.encode(uncheckedReport, options: .pretty)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["signatureUnchecked"] as? Bool == true)
+        #expect(ManagedRun.verifyText(uncheckedReport).hasSuffix("  → add org-key.pub to the bundle, then: rv managed verify "
+            + uncheckedReport.directory + "\n"))
+
+        let signed = Bundle()
+        try signed.write("policy.json", #"{"version": 1}"#)
+        try signed.sign()
+        let signedText = ManagedRun.verifyText(try ManagedRun.verifyReport(directory: signed.directory).get())
+        #expect(signedText.hasSuffix(": rv managed status\n"), "\(signedText)")
     }
 
     @Test func invalidBundle_stillFails() throws {
