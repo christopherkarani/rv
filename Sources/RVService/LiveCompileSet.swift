@@ -66,11 +66,10 @@ package final class LiveCompileSet: Sendable {
     ) {
         self.init(
             snapshots: providedSnapshots, catalog: providedCatalog, home: home,
-            uptimeNanoseconds: uptimeNanoseconds, judge: LiveJudgePort()
-        )
+            uptimeNanoseconds: uptimeNanoseconds, judge: LiveJudgePort())
     }
 
-    /// `judge` is a test seam; production uses the live CoreML judge.
+    /// `judge` is the door's judge (tests pass a pool stub).
     init(
         snapshots providedSnapshots: [PackSnapshot]?,
         catalog providedCatalog: PackCatalog?,
