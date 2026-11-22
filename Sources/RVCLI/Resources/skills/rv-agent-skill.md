@@ -53,10 +53,11 @@ that key's API. The real value never reaches you or the transcript.
 - `rv secrets describe --json` lists the keys you can use and where each one
   sends; it never shows a value.
 - Do not read `.env` files or other secret files to find a key; rv stops it.
-- A key rv does not have yet: ask the human to run `rv secrets set NAME`.
+- A key rv does not have yet: ask the human to keep it in rv (the command is
+  under "Commands only the human runs").
 - The commit check stops a key in a commit: take the key out of the file and
-  ask the human to keep it in rv (`rv secrets set NAME`). Never switch the
-  check off or mark the line as allowed.
+  ask the human to keep it in rv. Never switch the check off or mark the line
+  as allowed.
 
 ## Commands you may run
 

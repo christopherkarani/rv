@@ -192,7 +192,8 @@ struct SecretsCommandTests {
             definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
             agents: [], description: nil, environment: environment).get()
         #expect(open.hasSuffix(
-            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"))
+            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"
+                + "→ rv run --secret ACME_KEY -- <command>\n"))
         let rotated = try SecretsRun.set(
             name: "ACME_KEY", value: Data("acme-5678".utf8), definition: nil, agents: [], description: nil,
             environment: environment).get()

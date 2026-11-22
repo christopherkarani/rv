@@ -116,9 +116,12 @@ struct LocalHookDeciderTests {
     enum ModeFlip: String, CaseIterable, Sendable {
         case fileGlobal, shellGlobal, shellHost
 
-        var stdin: String {
+        /// A secret read is enforced in every mode, so the file door's
+        /// observable deny is a host MCP config write while rv's gateway is
+        /// in use (`MCPHostConfigDoor`).
+        func stdin(home: HomeDirectory) -> String {
             switch self {
-            case .fileGlobal: claudeFile("Read", path: "/Users/x/.ssh/id_rsa", cwd: "/tmp")
+            case .fileGlobal: claudeFile("Write", path: home.rawValue + "/.cursor/mcp.json", cwd: "/tmp")
             case .shellGlobal, .shellHost: claudeBash("touch /etc/x", cwd: "/tmp")
             }
         }
@@ -140,16 +143,17 @@ struct LocalHookDeciderTests {
     /// the flip never landing.
     @Test(arguments: ModeFlip.allCases)
     func guardModeFlipsNeverFinalizeAnObservedDeny(_ flip: ModeFlip) async throws {
-        let stdin = flip.stdin
-        let enforced = await (try LocalHookFixture(guardMode: "enforce")).decider
-            .decide(host: .claude, stdin: stdin)
+        let fixture = try LocalHookFixture(guardMode: "enforce")
+        let configDirectory = RVPolicyPaths.configDirectory(home: fixture.home)
+        try Data("{}".utf8).write(to: configDirectory.appendingPathComponent(MCPHostConfigPaths.gatewayConfigFileName))
+        let stdin = flip.stdin(home: fixture.home)
+        let enforced = await fixture.decider.decide(host: .claude, stdin: stdin)
         guard case .final(let deny) = enforced, deny.stdout.isEmpty == false else {
             Issue.record("expected a final enforce deny, got \(enforced)")
             return
         }
 
-        let fixture = try LocalHookFixture(guardMode: "enforce")
-        let config = RVPolicyPaths.configDirectory(home: fixture.home).appendingPathComponent("config.json")
+        let config = configDirectory.appendingPathComponent("config.json")
         let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
         let observe = flip.observe
         let stop = UnfairLock(false)
