@@ -32,12 +32,12 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path)
         defer { client.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
 
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(darwinResetHardRequest()))
+            from: await client.exchange(body: try IPCJSON.encode(darwinResetHardRequest()))
         )
         guard case .evaluate(let reply) = response.result else {
             Issue.record("socket evaluate must return evaluate")
@@ -51,7 +51,7 @@ struct UnixSocketListenerTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func methodBeforeHelloIsHandshakeRequired() throws {
+    @Test func methodBeforeHelloIsHandshakeRequired() async throws {
         let home = try makeIsolatedHome("unready")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -68,7 +68,7 @@ struct UnixSocketListenerTests {
         let request = IPCRequest(method: .listPacks)
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(request))
+            from: await client.exchange(body: try IPCJSON.encode(request))
         )
         guard case .error(.protocolSkew(.handshakeRequired)) = response.result else {
             Issue.record("pre-hello listPacks must be handshakeRequired, got \(response.result)")
@@ -77,7 +77,7 @@ struct UnixSocketListenerTests {
         #expect(response.id == request.id)
     }
 
-    @Test func skewedHelloIsRejected() throws {
+    @Test func skewedHelloIsRejected() async throws {
         let home = try makeIsolatedHome("skew")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -93,7 +93,7 @@ struct UnixSocketListenerTests {
         defer { client.close() }
         let major = try IPCJSON.decode(
             HelloAck.self,
-            from: client.send(
+            from: await client.exchange(
                 body: try IPCJSON.encode(
                     Hello(protocolName: ProtocolVersion.name, clientSemver: "99.0.0")
                 )
@@ -103,7 +103,7 @@ struct UnixSocketListenerTests {
 
         let proto = try IPCJSON.decode(
             HelloAck.self,
-            from: client.send(
+            from: await client.exchange(
                 body: try IPCJSON.encode(
                     Hello(protocolName: "rv.ipc.wrong", clientSemver: "1.0.0")
                 )
@@ -112,7 +112,7 @@ struct UnixSocketListenerTests {
         #expect(proto.status == .skew(.protocolSkew))
     }
 
-    @Test func garbageBodyIsDecodeFailed() throws {
+    @Test func garbageBodyIsDecodeFailed() async throws {
         let home = try makeIsolatedHome("garbage")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -126,10 +126,10 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path)
         defer { client.close() }
-        _ = try client.send(body: try IPCJSON.encode(Hello()))
+        _ = try await client.exchange(body: try IPCJSON.encode(Hello()))
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: Data("not-json".utf8))
+            from: await client.exchange(body: Data("not-json".utf8))
         )
         guard case .error(.decodeFailed) = response.result else {
             Issue.record("garbage body must decode-fail, got \(response.result)")
@@ -137,7 +137,7 @@ struct UnixSocketListenerTests {
         }
     }
 
-    @Test func oversizedFrameDropsConnection() throws {
+    @Test func oversizedFrameDropsConnection() async throws {
         let home = try makeIsolatedHome("oversize")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -167,7 +167,7 @@ struct UnixSocketListenerTests {
         #expect(received <= 0)
     }
 
-    @Test func stopRemovesSocketFile() throws {
+    @Test func stopRemovesSocketFile() async throws {
         let home = try makeIsolatedHome("stop")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -214,11 +214,11 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path, attempts: 80)
         defer { client.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(darwinResetHardRequest()))
+            from: await client.exchange(body: try IPCJSON.encode(darwinResetHardRequest()))
         )
         guard case .evaluate(let reply) = response.result else {
             Issue.record("rvd evaluate must return evaluate")
@@ -232,7 +232,7 @@ struct UnixSocketListenerTests {
         #expect(try UnixSocketPath.posixMode(of: socketURL) & 0o777 == 0o600)
     }
 
-    @Test func rvdProcessWithUnsetHomeExitsOne() throws {
+    @Test func rvdProcessWithUnsetHomeExitsOne() async throws {
         let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
         let process = Process()
         process.executableURL = rvd
@@ -253,7 +253,7 @@ struct UnixSocketListenerTests {
     /// stdout is a pipe nobody reads: the version write must fail with
     /// EPIPE (SIGPIPE ignored) and rvd must say so with its exit status,
     /// not die of the signal and not exit 0 having printed nothing.
-    @Test func rvdVersionToAClosedPipeExitsOne() throws {
+    @Test func rvdVersionToAClosedPipeExitsOne() async throws {
         let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
         let home = try makeIsolatedHome("ver")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -273,7 +273,7 @@ struct UnixSocketListenerTests {
 
     /// The stderr twin: no HOME, so rvd writes its refusal to a stderr pipe
     /// nobody reads. It must still exit 1 by code, not die of SIGPIPE.
-    @Test func rvdRefusalToAClosedStderrPipeExitsOne() throws {
+    @Test func rvdRefusalToAClosedStderrPipeExitsOne() async throws {
         let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
         let process = Process()
         process.executableURL = rvd
@@ -291,7 +291,7 @@ struct UnixSocketListenerTests {
 
     /// On macOS XPC is the production transport: a socket base the daemon
     /// refuses (group-writable `~/.config`) must not take XPC down with it.
-    @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
+    @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() async throws {
         let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
         let home = try makeIsolatedHome("gw")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -323,7 +323,7 @@ struct UnixSocketListenerTests {
     /// every client rejects (cdhash pin). The stale daemon must exit after
     /// its next request so launchd starts the new binary. The copy also has
     /// no `rv_RVPacks.bundle` beside it: it must answer, not trap.
-    @Test func rvdProcessExitsAfterItsBinaryIsReplaced() throws {
+    @Test func rvdProcessExitsAfterItsBinaryIsReplaced() async throws {
         let built = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
         let home = try makeIsolatedHome("swap")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -350,7 +350,7 @@ struct UnixSocketListenerTests {
 
         let first = try retryDarwinConnect(path: socketURL.path, attempts: 80)
         defer { first.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: first.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await first.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .skew(.corePacksUnavailable))
         Darwin.usleep(200_000)
         #expect(process.isRunning)
@@ -361,7 +361,7 @@ struct UnixSocketListenerTests {
 
         let second = try retryDarwinConnect(path: socketURL.path, attempts: 80)
         defer { second.close() }
-        _ = try? second.send(body: try IPCJSON.encode(Hello()))
+        _ = try? await second.exchange(body: try IPCJSON.encode(Hello()))
         let deadline = Date().addingTimeInterval(5)
         while process.isRunning, Date() < deadline {
             Darwin.usleep(50_000)
@@ -380,7 +380,7 @@ struct UnixSocketListenerTests {
     /// socket, which `openStream` sets, so even with that close removed and
     /// flags 0 the reply's EPIPE raised no signal (measured on Darwin 27).
     /// `repliesPassMSGNOSIGNAL` covers the flags.
-    @Test func aClientGoneBeforeItsReplyIsClosedAndTheListenerKeepsServing() throws {
+    @Test func aClientGoneBeforeItsReplyIsClosedAndTheListenerKeepsServing() async throws {
         let home = try makeIsolatedHome("pipe")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -415,7 +415,7 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path)
         defer { client.close() }
-        let data = try #require(sendWithin(seconds: 10, client, body: hello).data)
+        let data = try #require(await sendWithin(seconds: 10, client, body: hello).data)
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
@@ -425,7 +425,7 @@ struct UnixSocketListenerTests {
         #expect(DarwinFrameIO.sendFlags & Int32(MSG_NOSIGNAL) != 0)
     }
 
-    @Test func concurrentConnectionsAreBothServed() throws {
+    @Test func concurrentConnectionsAreBothServed() async throws {
         let home = try makeIsolatedHome("conc")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -441,7 +441,7 @@ struct UnixSocketListenerTests {
         defer { first.close() }
         let firstAck = try IPCJSON.decode(
             HelloAck.self,
-            from: first.send(body: try IPCJSON.encode(Hello()))
+            from: await first.exchange(body: try IPCJSON.encode(Hello()))
         )
         #expect(firstAck.status == .ok)
 
@@ -457,7 +457,7 @@ struct UnixSocketListenerTests {
             box.data = try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data())
             done.signal()
         }
-        guard done.wait(timeout: .now() + 10) == .success, let data = box.data else {
+        guard await signaled(done, within: 10), let data = box.data else {
             Issue.record("second concurrent connection was not served within 10s")
             return
         }
@@ -465,7 +465,7 @@ struct UnixSocketListenerTests {
         #expect(secondAck.status == .ok)
     }
 
-    @Test func doubleStartThrowsAndFirstListenerKeepsServing() throws {
+    @Test func doubleStartThrowsAndFirstListenerKeepsServing() async throws {
         let home = try makeIsolatedHome("dbl")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -483,14 +483,14 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path)
         defer { client.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
     }
 
     /// rvd binds before its startup backoff wait and accepts after it: a
     /// client meanwhile connects (the backlog queues it) and waits for a
     /// reply, which hooks read as a slow rvd, never an absent one.
-    @Test func boundButNotAcceptingQueuesClientsUntilAccepting() throws {
+    @Test func boundButNotAcceptingQueuesClientsUntilAccepting() async throws {
         let home = try makeIsolatedHome("hold")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -512,16 +512,16 @@ struct UnixSocketListenerTests {
             box.set((try? held.client.send(body: hello)).map(SendOutcome.reply) ?? .hungUp)
             done.signal()
         }
-        #expect(done.wait(timeout: .now() + 1.5) == .timedOut, "nothing answers before accepting")
+        #expect(await signaled(done, within: 1.5) == false, "nothing answers before accepting")
         listener.startAccepting()
-        #expect(done.wait(timeout: .now() + 5) == .success)
+        #expect(await signaled(done, within: 5))
         let data = try #require(box.get()?.data)
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
     /// After a backoff wait, connections that queued during it are hung up,
     /// not served late; a client connecting once rvd accepts is served.
-    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() throws {
+    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() async throws {
         let home = try makeIsolatedHome("drop")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -543,20 +543,20 @@ struct UnixSocketListenerTests {
             box.set((try? held.client.send(body: hello)).map(SendOutcome.reply) ?? .hungUp)
             done.signal()
         }
-        #expect(done.wait(timeout: .now() + 0.5) == .timedOut, "nothing answers before accepting")
+        #expect(await signaled(done, within: 0.5) == false, "nothing answers before accepting")
         listener.dropQueued()
         listener.startAccepting()
-        #expect(done.wait(timeout: .now() + 5) == .success)
+        #expect(await signaled(done, within: 5))
         #expect(box.get() == .hungUp)
 
         let later = try retryDarwinConnect(path: socketURL.path)
         defer { later.close() }
-        #expect(try IPCJSON.decode(HelloAck.self, from: try later.send(body: hello)).status == .ok)
+        #expect(try IPCJSON.decode(HelloAck.self, from: try await later.exchange(body: hello)).status == .ok)
     }
 
     /// A listener stopped while still bound but not accepting (rvd exiting
     /// during its backoff wait) cancels cleanly and removes its socket.
-    @Test func stopWhileNotAcceptingRemovesTheSocket() throws {
+    @Test func stopWhileNotAcceptingRemovesTheSocket() async throws {
         let home = try makeIsolatedHome("holdstop")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -571,7 +571,7 @@ struct UnixSocketListenerTests {
         #expect(FileManager.default.fileExists(atPath: socketURL.path) == false)
     }
 
-    @Test func stopWithoutStartRemovesNothing() throws {
+    @Test func stopWithoutStartRemovesNothing() async throws {
         let home = try makeIsolatedHome("nostart")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -590,7 +590,7 @@ struct UnixSocketListenerTests {
         #expect(try Data(contentsOf: socketURL) == Data("not-ours".utf8))
     }
 
-    @Test func silentIdleConnectionDoesNotDelaySecondClient() throws {
+    @Test func silentIdleConnectionDoesNotDelaySecondClient() async throws {
         let home = try makeIsolatedHome("idle")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -608,12 +608,12 @@ struct UnixSocketListenerTests {
         let second = try retryDarwinConnect(path: socketURL.path)
         defer { second.close() }
         let started = Date()
-        let data = try #require(sendWithin(seconds: 5, second, body: try IPCJSON.encode(Hello())).data)
+        let data = try #require(await sendWithin(seconds: 5, second, body: try IPCJSON.encode(Hello())).data)
         #expect(Date().timeIntervalSince(started) < 2)
         #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
     }
 
-    @Test func idleConnectionIsClosedAfterReceiveTimeout() throws {
+    @Test func idleConnectionIsClosedAfterReceiveTimeout() async throws {
         let home = try makeIsolatedHome("rcvto")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -628,14 +628,14 @@ struct UnixSocketListenerTests {
 
         let client = try retryDarwinConnect(path: socketURL.path)
         defer { client.close() }
-        let ack = try #require(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())).data)
+        let ack = try #require(await sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())).data)
         #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
         // Idle past the receive timeout: the listener must hang up.
-        Thread.sleep(forTimeInterval: 2)
-        #expect(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())) == .hungUp)
+        try await Task.sleep(for: .seconds(2))
+        #expect(await sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())) == .hungUp)
     }
 
-    @Test func connectionsBeyondCapAreClosedAndSlotsAreReleased() throws {
+    @Test func connectionsBeyondCapAreClosedAndSlotsAreReleased() async throws {
         let home = try makeIsolatedHome("cap")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -650,29 +650,29 @@ struct UnixSocketListenerTests {
 
         let first = try retryDarwinConnect(path: socketURL.path)
         defer { first.close() }
-        let ack = try #require(sendWithin(seconds: 5, first, body: try IPCJSON.encode(Hello())).data)
+        let ack = try #require(await sendWithin(seconds: 5, first, body: try IPCJSON.encode(Hello())).data)
         #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
 
         let over = try retryDarwinConnect(path: socketURL.path)
         defer { over.close() }
-        #expect(sendWithin(seconds: 5, over, body: try IPCJSON.encode(Hello())) == .hungUp)
+        #expect(await sendWithin(seconds: 5, over, body: try IPCJSON.encode(Hello())) == .hungUp)
 
         // Closing the first connection frees its slot for a later client.
         first.close()
         var recovered = false
         for _ in 0..<40 where recovered == false {
             let next = try retryDarwinConnect(path: socketURL.path)
-            if let data = sendWithin(seconds: 5, next, body: try IPCJSON.encode(Hello())).data,
+            if let data = await sendWithin(seconds: 5, next, body: try IPCJSON.encode(Hello())).data,
                (try? IPCJSON.decode(HelloAck.self, from: data))?.status == .ok {
                 recovered = true
             }
             next.close()
-            if recovered == false { Thread.sleep(forTimeInterval: 0.05) }
+            if recovered == false { try await Task.sleep(for: .milliseconds(50)) }
         }
         #expect(recovered)
     }
 
-    @Test func skewedHelloKeepsHandshakeClosedThenRecovers() throws {
+    @Test func skewedHelloKeepsHandshakeClosedThenRecovers() async throws {
         let home = try makeIsolatedHome("skrec")
         defer { try? FileManager.default.removeItem(at: home) }
         let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
@@ -688,7 +688,7 @@ struct UnixSocketListenerTests {
         defer { client.close() }
         let skew = try IPCJSON.decode(
             HelloAck.self,
-            from: client.send(
+            from: await client.exchange(
                 body: try IPCJSON.encode(
                     Hello(protocolName: ProtocolVersion.name, clientSemver: "99.0.0")
                 )
@@ -700,7 +700,7 @@ struct UnixSocketListenerTests {
         let early = IPCRequest(method: .listPacks)
         let earlyResponse = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(early))
+            from: await client.exchange(body: try IPCJSON.encode(early))
         )
         guard case .error(.protocolSkew(.handshakeRequired)) = earlyResponse.result else {
             Issue.record("post-skew listPacks must be handshakeRequired, got \(earlyResponse.result)")
@@ -709,11 +709,11 @@ struct UnixSocketListenerTests {
         #expect(earlyResponse.id == early.id)
 
         // A valid hello on the same connection recovers it.
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
         let late = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(IPCRequest(method: .listPacks)))
+            from: await client.exchange(body: try IPCJSON.encode(IPCRequest(method: .listPacks)))
         )
         guard case .listPacks = late.result else {
             Issue.record("post-hello listPacks must succeed, got \(late.result)")
@@ -770,7 +770,13 @@ private enum SendOutcome: Equatable, Sendable {
 
 /// One request/reply on a worker thread, bounded by `seconds` because the
 /// client socket itself has no timeout.
-private func sendWithin(seconds: Double, _ client: DarwinEvaluateClient, body: Data) -> SendOutcome {
+/// Waits off the cooperative pool (see `offPool`).
+private func sendWithin(seconds: Double, _ client: DarwinEvaluateClient, body: Data) async -> SendOutcome {
+    let held = UncheckedClient(client)
+    return await offPool { sendWithinBlocking(seconds: seconds, held.client, body: body) }
+}
+
+private func sendWithinBlocking(seconds: Double, _ client: DarwinEvaluateClient, body: Data) -> SendOutcome {
     let box = OutcomeBox()
     let done = DispatchSemaphore(value: 0)
     let held = UncheckedClient(client)
@@ -780,6 +786,21 @@ private func sendWithin(seconds: Double, _ client: DarwinEvaluateClient, body: D
     }
     guard done.wait(timeout: .now() + seconds) == .success else { return .timedOut }
     return box.get() ?? .hungUp
+}
+
+/// Whether `semaphore` is signaled within `seconds`, waiting off the
+/// cooperative pool: the listener answers from a `Task` on that pool.
+private func signaled(_ semaphore: DispatchSemaphore, within seconds: Double) async -> Bool {
+    await offPool { semaphore.wait(timeout: .now() + seconds) == .success }
+}
+
+extension DarwinEvaluateClient {
+    /// `send(body:)` off the cooperative pool. The listener answers from a
+    /// `Task`, so a test blocked in recv on a pool thread can starve it.
+    fileprivate func exchange(body: Data) async throws -> Data {
+        let held = UncheckedClient(self)
+        return try await offPool { try held.client.send(body: body) }
+    }
 }
 
 private final class OutcomeBox: Sendable {

@@ -263,9 +263,10 @@ struct RVDExitAnalyticsTests {
         await coordinator.recordDecision(.allow)
         #expect(FileManager.default.fileExists(atPath: paths.countersFile.path) == false)
 
-        // Blocks its thread as the exit closure does; keep that off the
-        // test's own executor.
-        await Task.detached { RVDLifecycle.persistAnalytics(coordinator, wait: .seconds(30)) }.value
+        // Blocks its thread as the exit closure does, waiting for a Task
+        // that needs a cooperative thread: block a thread of its own, never
+        // one of the pool's (a detached Task is still on the pool).
+        await offPool { RVDLifecycle.persistAnalytics(coordinator, wait: .seconds(30)) }
 
         let text = try String(contentsOf: paths.countersFile, encoding: .utf8)
         #expect(text.contains(#""denyCount":1"#))
