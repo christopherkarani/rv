@@ -382,6 +382,10 @@ struct CompiledModelStoreTests {
         #expect(load.reason.contains("LoadFailed()"))
         #expect(load.reason.contains("judged calls go to review"))
         #expect(load.reason.contains("Run `rv doctor`"))
+        // The reason reaches the agent: it names no repair an agent should
+        // attempt (the installer), only the read-only doctor.
+        #expect(!load.reason.contains("install script"))
+        #expect(load.reason.contains("owner"))
     }
 
     @Test("a nested symlink in the compile output refuses")
@@ -551,5 +555,68 @@ struct CompiledModelStoreTests {
         #expect(try f.store().model(package: f.package) == "model")
         #expect(f.coreML.compiles == 1, "the held entry was reloaded, not discarded and recompiled")
         withExtendedLifetime(held) {}
+    }
+
+    /// Any local process can open the store lock (even read-only) and hold
+    /// a `flock` on it. The store waits a bounded time, then refuses
+    /// (review); it never blocks a load forever and never loads unverified.
+    @Test("a store lock someone else holds times out and refuses; nothing compiles or loads")
+    func heldLockTimesOutAndRefuses() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let parent = f.root.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let lockPath = parent.appendingPathComponent("rv-laya.lock").path
+        try Data().write(to: URL(fileURLWithPath: lockPath))
+        let holder = open(lockPath, O_RDONLY | O_CLOEXEC)
+        try #require(holder >= 0)
+        try #require(flock(holder, LOCK_EX | LOCK_NB) == 0)
+        var store = f.store()
+        store.lockWait = .milliseconds(300)
+        // Written before `done` is signalled, read after it is waited on.
+        final class Outcome: @unchecked Sendable { var error: (any Error)?; var loaded = false }
+        let outcome = Outcome()
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) let loader = store
+        let package = f.package
+        DispatchQueue.global().async {
+            do {
+                _ = try loader.model(package: package)
+                outcome.loaded = true
+            } catch {
+                outcome.error = error
+            }
+            done.signal()
+        }
+        let finished = done.wait(timeout: .now() + 10) == .success
+        close(holder)
+        if !finished { _ = done.wait(timeout: .now() + 10) }
+        #expect(finished, "the load blocked on a held store lock")
+        #expect(!outcome.loaded)
+        let refusal = outcome.error as? CompiledModelRefusal
+        #expect(refusal?.detail.contains("lock") == true, "\(String(describing: outcome.error))")
+        #expect(f.coreML.compiles == 0)
+        #expect(f.coreML.loads == 0)
+    }
+
+    @Test(
+        "a cache root its owner cannot open refuses and says how the owner fixes it",
+        .enabled(if: geteuid() != 0, "root opens mode-000 directories"))
+    func unopenableRootNamesTheFix() throws {
+        let f = try Fixture()
+        try FileManager.default.createDirectory(at: f.root, withIntermediateDirectories: true)
+        chmod(f.root.path, 0)
+        defer {
+            chmod(f.root.path, 0o700)
+            f.remove()
+        }
+        do {
+            _ = try f.store().model(package: f.package)
+            Issue.record("expected a refusal")
+        } catch let refusal as CompiledModelRefusal {
+            #expect(refusal.reason.contains(f.root.path))
+            #expect(refusal.reason.contains("chmod 700"))
+        }
+        #expect(f.coreML.compiles == 0)
     }
 }
