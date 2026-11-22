@@ -131,6 +131,7 @@ enum HostLifecycle {
         }
         switch env.supervisor {
         case .launchd:
+            // The judge agent first: rvd's first judged call finds it.
             judge = SetupRun.writeJudgeLaunchAgent(env: env, layout: layout, files: files)
             try SetupRun.writeLaunchAgent(env: env, layout: layout, files: files)
             try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
