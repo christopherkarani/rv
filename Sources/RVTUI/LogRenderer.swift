@@ -15,8 +15,9 @@ public struct LogFrame: Equatable, Sendable {
 }
 
 /// Paints `rv log`: a `◆` heading with the count, one row per decision in
-/// fixed columns (time, agent, verdict, rule, command, code), one summary
-/// line, then the next command. Columns are as wide as their widest cell;
+/// fixed columns (time, agent, verdict, rule, command, code), a muted day
+/// line above rows from an earlier day, one summary line, then the next
+/// command. Columns are as wide as their widest cell;
 /// the command column takes what is left of the width and ends in `…`
 /// when cut. Without color the glyphs and words carry the meaning.
 public struct LogRenderer: FrameRenderer {
@@ -25,7 +26,7 @@ public struct LogRenderer: FrameRenderer {
     static let indent = "  "
     static let gap = "  "
     /// The command column keeps at least this much before the rule is cut.
-    static let minimumCommand = 12
+    static let minimumCommand = 8
 
     public func render(_ frame: LogFrame, palette: Palette) -> [String] {
         let model = frame.model
@@ -36,7 +37,14 @@ public struct LogRenderer: FrameRenderer {
         if let empty = model.emptyMessage {
             lines.append(Self.indent + empty)
         } else {
-            lines += model.rows.map { row(for: $0, widths: widths, palette: palette) }
+            var day: String?
+            for row in model.rows {
+                if let label = row.dayLabel, label != day {
+                    day = label
+                    lines.append(Self.indent + paint(label, slot: palette.muted, reset: palette.reset))
+                }
+                lines.append(self.row(for: row, widths: widths, palette: palette))
+            }
         }
         if model.ledgerOff == false, model.rows.isEmpty == false || model.judgeNotesHidden > 0 {
             lines.append("")
@@ -70,11 +78,10 @@ public struct LogRenderer: FrameRenderer {
             (DisplayedText.field(row.agent), widths.agent, ""),
             (row.verdict.label, widths.verdict, verdictSlot),
             (DisplayedText.field(row.rule), widths.rule, palette.silver),
-            (DisplayedText.field(row.command), widths.command, commandSlot),
         ]
         let padded = cells.map { text, width, slot in
             paint(padRight(Self.clip(text, to: width), to: width), slot: slot, reset: palette.reset)
-        }
+        } + [paint(padRight(Self.command(row, to: widths.command), to: widths.command), slot: commandSlot, reset: palette.reset)]
         return Self.indent + (padded + [paint(row.code, slot: palette.muted, reset: palette.reset)])
             .joined(separator: Self.gap)
     }
@@ -115,6 +122,24 @@ public struct LogRenderer: FrameRenderer {
         widths.command = max(1, min(command, room - widths.rule))
         return widths
     }
+
+    /// The command cell in `width`: a shell command keeps its start
+    /// (`git reset --hard orig…`); a file keeps the end of its path, where
+    /// the name is (`Read …/id_ed25519`), and drops the tool too when the
+    /// cell is narrow (`…d_ed25519`).
+    static func command(_ row: LogRow, to width: Int) -> String {
+        let command = DisplayedText.field(row.command)
+        let tool = DisplayedText.field(row.tool)
+        guard command.count > width, width > 1, row.target.isEmpty == false, command.hasPrefix(tool + " ") else {
+            return clip(command, to: width)
+        }
+        let path = command.dropFirst(tool.count + 1)
+        let lead = width >= tool.count + 2 + minimumPathTail ? tool + " …" : "…"
+        return lead + String(path.suffix(width - lead.count))
+    }
+
+    /// Path characters a cut file cell keeps before it also drops the tool.
+    static let minimumPathTail = 10
 
     /// `text`, cut to `width` characters with `…` as the last one.
     static func clip(_ text: String, to width: Int) -> String {

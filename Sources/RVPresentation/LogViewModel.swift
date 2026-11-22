@@ -98,8 +98,11 @@ public enum LogVerdict: String, Equatable, Sendable, Encodable {
 /// One `rv log` row: time, agent, verdict, rule, command, code.
 public struct LogRow: Equatable, Sendable {
     public var time: Date
-    /// `14:02` today, `Sat 14:02` on an earlier day.
+    /// `14:02`, local time.
     public var timeLabel: String
+    /// `Sat 21 Nov` for a row from an earlier day; nil for today. The
+    /// renderer puts it on its own line above that day's rows.
+    public var dayLabel: String?
     public var agent: String
     public var verdict: LogVerdict
     public var wouldAsk: Bool
@@ -225,7 +228,8 @@ public struct LogViewModel: Equatable, Sendable {
         }
         return LogRow(
             time: entry.time,
-            timeLabel: timeLabel(entry.time, now: now, calendar: calendar),
+            timeLabel: timeLabel(entry.time, calendar: calendar),
+            dayLabel: calendar.isDate(entry.time, inSameDayAs: now) ? nil : dayLabel(entry.time, calendar: calendar),
             agent: entry.agent,
             verdict: entry.stopped ? .stopped : .wouldStop,
             wouldAsk: entry.stopped == false && entry.wouldAsk,
@@ -239,13 +243,19 @@ public struct LogViewModel: Equatable, Sendable {
     }
 
     private static let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    private static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    static func timeLabel(_ time: Date, now: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.hour, .minute, .weekday], from: time)
-        let clock = String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
-        if calendar.isDate(time, inSameDayAs: now) { return clock }
-        let weekday = parts.weekday.map { weekdays[($0 - 1) % 7] } ?? "   "
-        return weekday + " " + clock
+    static func timeLabel(_ time: Date, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+    }
+
+    /// `Sat 21 Nov`, in English whatever the locale, like the rest of rv.
+    static func dayLabel(_ time: Date, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.weekday, .day, .month], from: time)
+        let weekday = parts.weekday.map { weekdays[($0 - 1) % 7] } ?? ""
+        let month = parts.month.map { months[($0 - 1) % 12] } ?? ""
+        return "\(weekday) \(parts.day ?? 0) \(month)"
     }
 }
 
