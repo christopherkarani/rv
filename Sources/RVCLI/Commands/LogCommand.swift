@@ -7,23 +7,27 @@ import RVPresentation
 import RVTheme
 import RVTUI
 
-/// `rv log`: the denial ledger in fixed columns. Reads what `rv blocks`
-/// reads and leaves `rv blocks` as it is.
+/// `rv log`: the denial ledger in fixed columns, with each shell row's
+/// command from rvd's decision log. Reads what `rv blocks` reads and
+/// leaves `rv blocks` as it is.
 enum LogRun {
-    /// `rv log` text or `--json`, for the ledger under `home`.
+    /// `rv log` text or `--json`, for the files under `home`.
     static func output(
         home: HomeDirectory, query: LogQuery, json: Bool, palette: Palette, columns: Int,
         now: Date = Date(), calendar: Calendar = .current
     ) throws -> String {
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
         let records = DenialLedger(configDirectory: configDirectory).records(asOf: now)
+        let decisions = decisionLog(configDirectory: configDirectory, now: now)
+        let entries = LogSources.entries(ledger: records, decisions: decisions)
         let model = LogViewModel(
-            entries: records.map(entry),
+            entries: entries,
             query: query,
             now: now,
             calendar: calendar,
             windowDays: Int(RVHistory.maxAge / 86_400),
-            ledgerOff: records.isEmpty && DenialLedgerPreferences.isEnabled(inConfigDirectory: configDirectory) == false
+            ledgerOff: entries.isEmpty && DenialLedgerPreferences.isEnabled(inConfigDirectory: configDirectory) == false,
+            commandsRecorded: decisions != nil
         )
         if json {
             return try RobotJSON.encode(LogRobotPayload(model), options: .compactISO8601) + "\n"
@@ -31,19 +35,17 @@ enum LogRun {
         return PrettyWriter.join(LogRenderer().render(LogFrame(model: model, columns: columns), palette: palette))
     }
 
-    static func entry(_ record: DenialLedgerRecord) -> LogEntry {
-        LogEntry(
-            time: record.timestamp,
-            agent: record.host.rawValue,
-            stopped: record.observed == false,
-            wouldAsk: record.observed && record.wouldBe == .ask,
-            rule: record.ruleID.rawValue,
-            isJudge: record.ruleID.pack == .coreJudge,
-            tool: record.tool.rawValue,
-            target: record.path,
-            code: record.code,
-            session: record.session
-        )
+    /// rvd's decision-log rows from the ledger's window, or nil when there
+    /// is no log to read: `decisions.enabled` is false, or this rvd never
+    /// wrote one (its directory is missing).
+    static func decisionLog(configDirectory: URL, now: Date) -> [DecisionRecord]? {
+        guard DecisionLog.isEnabled(inConfigDirectory: configDirectory) else { return nil }
+        let log = DecisionLog(configDirectory: configDirectory)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: log.directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return nil }
+        return log.records(since: now.addingTimeInterval(-RVHistory.maxAge), now: now)
     }
 }
 
