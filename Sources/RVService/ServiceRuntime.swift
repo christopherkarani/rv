@@ -37,6 +37,8 @@ public actor ServiceRuntime {
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
+    /// Every hook decision, for `rv term` (`DecisionLog`). Nil outside rvd.
+    private let decisionLog: DecisionLogRecorder?
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     /// Operator launch ceremonies (proposal → review → permit). Shared with
@@ -107,7 +109,8 @@ public actor ServiceRuntime {
         hookCeremonies: HookReviewCeremonyService? = nil,
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
-        policyStatusService: PolicyStatusService = PolicyStatusService()
+        policyStatusService: PolicyStatusService = PolicyStatusService(),
+        recordsDecisions: Bool = false
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -137,6 +140,9 @@ public actor ServiceRuntime {
         self.log = log
         self.analytics = analytics
         self.clock = clock
+        // rvd only (`RVDProcess`): tests and in-process runtimes never
+        // write the decision log.
+        self.decisionLog = recordsDecisions ? DecisionLogRecorder.live(home: resolvedHome, clock: clock) : nil
         self.pendingApprovals = Self.resolvePendingApprovals(
             pendingApprovals,
             home: resolvedHome
@@ -795,7 +801,8 @@ public actor ServiceRuntime {
                     host: params.host,
                     pending: pendingApprovals,
                     clock: clock,
-                    recordDecision: analyticsRecorder()
+                    recordDecision: analyticsRecorder(),
+                    decisionLog: decisionLog
                 ),
                 deadline: deadline
             )

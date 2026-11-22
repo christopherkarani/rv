@@ -31,7 +31,8 @@ public enum RVDProcess {
             clock: { Date() },
             pendingApprovals: .automatic,
             ceremonies: ceremonies,
-            actionCeremonies: actionCeremonies
+            actionCeremonies: actionCeremonies,
+            recordsDecisions: true
         )
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         RVDLifecycle.bindCoreMLGuard()
@@ -123,7 +124,8 @@ public enum RVDProcess {
             clock: { Date() },
             pendingApprovals: .automatic,
             ceremonies: ceremonies,
-            actionCeremonies: actionCeremonies
+            actionCeremonies: actionCeremonies,
+            recordsDecisions: true
         )
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         let slot = ListenerSlot()
