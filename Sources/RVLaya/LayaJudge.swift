@@ -181,6 +181,11 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         try coreML.requireDiskSpace()
         actionLabels = try questions.actionLabels()
         self.questions = questions
+        // No bundle at all (ENOENT) is genuine absence (packs-only); a bundle
+        // path that cannot be checked refuses (review).
+        guard try BundleFilePresence.exists(bundleDir, recordingOn: coreML) else {
+            throw LayaError.bundleMissing("no bundle at \(bundleDir.path)")
+        }
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)
         let configURL = bundleDir.appendingPathComponent("rl_agent_config.json")
         var maxLen = 1024

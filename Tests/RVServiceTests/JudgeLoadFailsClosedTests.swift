@@ -145,6 +145,21 @@ struct JudgeLoadFailsClosedTests {
         }
     }
 
+    /// A selected bundle that is gone entirely (ENOENT) is genuine absence:
+    /// packs-only on both engines.
+    @Test(arguments: [JudgeEngine.ft, .laya])
+    func absentBundleStaysUnavailable(engine: JudgeEngine) throws {
+        let (base, _) = try JudgeInvalidLabelsTests.fakeBundle(package: true, engine: engine)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let run = JudgeInvalidLabelsTests.runFakeBundle(
+            base.appendingPathComponent("gone", isDirectory: true),
+            state: base.appendingPathComponent("state", isDirectory: true), engine: engine)
+        guard case .unavailable = run else {
+            Issue.record("expected .unavailable, got \(run)")
+            return
+        }
+    }
+
     /// A tokenizer that is there but corrupt is a broken install, not an
     /// absent one: review, on both engines.
     @Test(arguments: [JudgeEngine.ft, .laya])

@@ -86,6 +86,30 @@ struct BundleFilePresenceTests {
         #expect(throws: CoreMLLoadRefusal.self) { _ = try FineTunedJudge(bundleDir: dir, coreML: guardian) }
     }
 
+    /// No bundle at all is genuine absence on both engines; a bundle path
+    /// that is a file (ENOTDIR below it) is not.
+    @Test("an absent bundle is bundleMissing; an uncheckable one refuses")
+    func absentBundleIsBundleMissing() throws {
+        let dir = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let guardian = CoreMLGuard(
+            store: nil, disk: FakeDisk(free: 100 << 30), cacheVolume: nil,
+            stateRoot: dir.appendingPathComponent("state"), purgeCoreMLCache: {}, log: { _ in })
+        let absent = dir.appendingPathComponent("no-bundle", isDirectory: true)
+        let loads: [(URL) throws -> Void] = [
+            { _ = try FineTunedJudge(bundleDir: $0, coreML: guardian) },
+            { _ = try LayaCoreMLJudge(bundleDir: $0, coreML: guardian) },
+        ]
+        for load in loads {
+            #expect(throws: LayaError.bundleMissing("no bundle at \(absent.path)")) { try load(absent) }
+        }
+        let file = dir.appendingPathComponent("file")
+        try Data().write(to: file)
+        for load in loads {
+            #expect(throws: CoreMLLoadRefusal.self) { try load(file.appendingPathComponent("bundle")) }
+        }
+    }
+
     /// A model package that is not there (ENOENT) is the one genuine
     /// absence: `bundleMissing`, the packs-only floor. Both engines.
     @Test("a missing model package is bundleMissing on both engines")

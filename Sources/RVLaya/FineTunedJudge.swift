@@ -88,6 +88,11 @@ public final class FineTunedJudge: @unchecked Sendable {
         // Before any bundle work: a nearly full disk refuses (review), whatever
         // else is wrong with the bundle.
         try coreML.requireDiskSpace()
+        // No bundle at all (ENOENT) is genuine absence (packs-only); a bundle
+        // path that cannot be checked refuses (review).
+        guard try BundleFilePresence.exists(bundleDir, recordingOn: coreML) else {
+            throw LayaError.bundleMissing("no bundle at \(bundleDir.path)")
+        }
         // Presence by `lstat`: only ENOENT is absent; a path that cannot be
         // checked refuses (review) rather than falling through to the other
         // layout or reading as missing.
