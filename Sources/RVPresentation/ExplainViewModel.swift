@@ -64,7 +64,11 @@ public struct ExplainViewModel: Equatable, Sendable {
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
-    public var explainDecisionWord: String { decision.emphasizedName }
+    /// Under observe, the decision line names what happened instead of the
+    /// bare verdict word: `◐ Watched, would stop` / `◐ Watched, would ask`
+    /// (it ran) or `✕ Stopped, in every mode` (it did not).
+    package var observeDecisionWords: String?
+    public var explainDecisionWord: String { observeDecisionWords ?? decision.emphasizedName }
     public var decisionTone: DecisionTone { decision.tone }
     public var ruleDisplay: String? { ruleID.map(\.slashDisplay) }
     public var packDisplay: String? { packID?.rawValue }
@@ -128,18 +132,22 @@ public func explainViewModel(
         fact = indeterminateSentence(reason)
         next = nil
     }
+    // A watched verdict ran: no "run it in Terminal, or rv allow-once"
+    // advice for a command observe already let through.
+    let watched: Bool
+    if case .watched = observed, result.decision != .allow { watched = true } else { watched = false }
     let packID = result.outcome.explainPackID
     let ruleID = result.outcome.explainRuleID
     let match = result.matched
 
-    return ExplainViewModel(
+    var model = ExplainViewModel(
         command: command,
         normalized: normalized ?? command.rawValue,
         decision: result.decision,
         packID: packID,
         ruleID: ruleID,
         fact: fact,
-        nextAction: next,
+        nextAction: watched ? nil : next,
         steps: explainSteps(from: result),
         patternName: match?.patternName,
         severity: match?.severity,
@@ -147,9 +155,13 @@ public func explainViewModel(
         regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis),
-        observeNote: observed.flatMap { observeNote(for: result.decision, outcome: $0) },
+        observeNote: observed.flatMap { observeNote(for: result.decision, outcome: $0, leadingWords: false) },
         observeStopped: observed == .stopped && result.decision != .allow
     )
+    if result.decision != .allow {
+        model.observeDecisionWords = observed.map(observeDecisionWords(for:))
+    }
+    return model
 }
 
 package func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {

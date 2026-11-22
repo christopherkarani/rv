@@ -105,6 +105,40 @@ struct ObserveWatchedClassesTests {
         #expect(enforced.result.decision == .deny(Self.builtin(rule)), "\(command)")
     }
 
+    /// Mac report (C1): under observe the hook still asked on an output
+    /// redirect to a file and on a command whose text only contains
+    /// `rm -rf`. Neither stops under observe: a redirect outside the
+    /// repository is a watched would-be stop, the others are allowed.
+    @Test(
+        "redirects and rm -rf in text never stop under observe",
+        arguments: [
+            "echo hi > out.txt",
+            "swift build 2>&1 > build.log",
+            "echo hi > /tmp/out.txt",
+            "npm test > /tmp/test.log 2>&1",
+            "ls -la > ~/notes.txt",
+            "printf '%s\\n' 'rm -rf x' > notes.md",
+            "cat > script.sh <<'EOF'\nrm -rf build\nEOF",
+            #"echo "rm -rf build""#,
+            "echo 'rm -rf ~'",
+            #"git commit -m "drop rm -rf usage""#,
+            #"grep -rn "rm -rf" ."#,
+            #"gh pr create --body "run rm -rf node_modules first""#,
+        ]
+    )
+    func redirectsAndRmRfTextAreWatched(command: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        #expect(observed.result.decision == .allow, "\(command)")
+        #expect(observed.stoppedInEveryMode == false, "\(command)")
+        if let wouldBe = observed.wouldBe, wouldBe.result.decision != .allow {
+            // What enforce would do is still reported, not done.
+            let enforced = await Self.verdict(command, home: place.enforce, cwd: place.cwd)
+            #expect(enforced.result.decision == wouldBe.result.decision, "\(command)")
+        }
+    }
+
     @Test(
         "catastrophic commands and rv's own files stop in observe, as in enforce",
         arguments: [

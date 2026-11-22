@@ -30,20 +30,47 @@ public enum ObserveOutcome: Sendable, Equatable {
 /// The observe-mode line for a verdict, or nil when it is an allow (an
 /// allow under observe is byte-identical to enforce). `.watched(.ask)`
 /// reads "would ask", any other watched verdict "would stop"; an
-/// indeterminate is never asked about.
-package func observeNote(for verdict: Decision, outcome: ObserveOutcome) -> String? {
-    switch (verdict, outcome) {
-    case (.allow, _):
+/// indeterminate is never asked about. `leadingWords` false drops the
+/// verdict words, for a frame whose decision line already says them
+/// (`rv explain`).
+package func observeNote(for verdict: Decision, outcome: ObserveOutcome, leadingWords: Bool = true) -> String? {
+    let words = observeDecisionWords(for: outcome)
+    let rule: String
+    switch verdict {
+    case .allow:
         return nil
-    case (.deny(let deny), .watched(let authorization)):
-        let words = authorization == .ask ? watchedWouldAskWords : watchedWouldStopWords
-        return "\(words) (\(deny.ruleID.rawValue)). It logs it and lets it run."
+    case .deny(let deny):
+        rule = " (\(deny.ruleID.rawValue))"
+    case .indeterminate:
+        rule = ""
+    }
+    let tail: String
+    switch (verdict, outcome) {
     case (.indeterminate, .watched):
-        return "\(watchedWouldStopWords): rv could not finish evaluating it. It logs it and lets it run."
-    case (.deny(let deny), .stopped):
-        return "\(stoppedInEveryModeWords) (\(deny.ruleID.rawValue)). \(stoppedTail)"
-    case (.indeterminate, .stopped):
-        return "\(stoppedInEveryModeWords). \(stoppedTail)"
+        tail = ": rv could not finish evaluating it. It logs it and lets it run."
+    case (_, .watched):
+        tail = "\(rule). It logs it and lets it run."
+    case (_, .stopped):
+        tail = "\(rule). \(stoppedTail)"
+    }
+    guard leadingWords == false else { return words + tail }
+    switch (verdict, outcome) {
+    case (.indeterminate, .watched):
+        return "rv could not finish evaluating it. It logs it and lets it run."
+    case (_, .watched):
+        return "Enforce would \(outcome == .watched(.ask) ? "ask first" : "stop it")\(rule). It logs it and lets it run."
+    case (_, .stopped):
+        return "It still stops catastrophic commands and anything that touches rv itself\(rule)."
+    }
+}
+
+/// The verdict words for the decision line under observe.
+package func observeDecisionWords(for outcome: ObserveOutcome) -> String {
+    switch outcome {
+    case .watched(let authorization):
+        authorization == .ask ? watchedWouldAskWords : watchedWouldStopWords
+    case .stopped:
+        stoppedInEveryModeWords
     }
 }
 

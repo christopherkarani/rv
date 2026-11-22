@@ -91,11 +91,14 @@ struct ObserveWouldBeTests {
     func explainShowsWouldBe() async throws {
         let observe = try await Self.run(.explain, "git reset --hard", observe: true)
         #expect(observe.exitCode == 0)
-        #expect(observe.stdout.contains("Decision: DENY"))
+        #expect(observe.stdout.contains("Decision: ◐ Watched, would ask"))
+        #expect(!observe.stdout.contains("Decision: DENY"))
+        // It ran: no "run it in Terminal, or rv allow-once" advice.
+        #expect(!observe.stdout.contains("allow-once"))
         #expect(observe.stdout.contains("Rule         core.git/reset-hard"))
         #expect(observe.stdout.contains("destructive  core.git/reset-hard"))
         #expect(observe.stdout.contains("Observe mode"))
-        #expect(observe.stdout.contains("◐ Watched, would ask (core.git:reset-hard)"))
+        #expect(observe.stdout.contains("Enforce would ask first (core.git:reset-hard)"))
         #expect(!observe.stdout.contains("destructive  none"))
     }
 
@@ -103,7 +106,7 @@ struct ObserveWouldBeTests {
     func testExplainExitsOnWouldBe() async throws {
         let observe = try await Self.run(.testExplain, "git reset --hard", observe: true)
         #expect(observe.exitCode == 1)
-        #expect(observe.stdout.contains("Decision: DENY"))
+        #expect(observe.stdout.contains("Decision: ◐ Watched, would ask"))
     }
 
     @Test(
@@ -141,6 +144,26 @@ struct ObserveWouldBeTests {
         #expect(object["rule_id"] as? String == "core.git:reset-hard")
         #expect(object["mode"] as? String == "observe")
         #expect(object["effective"] as? String == "allow")
+        #expect(object["next_action"] == nil)
+        let enforce = try Self.json(try await Self.run(.explain, "git reset --hard", observe: false, robot: true).stdout)
+        #expect(enforce["next_action"] as? String != nil)
+    }
+
+    /// Mac report: observe explain of a force push said DENY and advised
+    /// allow-once for a command observe lets run. One consistent story:
+    /// watched in human and JSON output, no unlock advice.
+    @Test("rv explain under observe: a watched force push reads watched, with no unlock advice")
+    func explainWatchedForcePush() async throws {
+        let command = "git push --force origin main"
+        let human = try await Self.run(.explain, command, observe: true, columns: 200)
+        #expect(human.exitCode == 0)
+        #expect(human.stdout.contains("Decision: ◐ Watched, would"))
+        #expect(!human.stdout.contains("Decision: DENY"))
+        #expect(!human.stdout.contains("allow-once"))
+        #expect(!human.stdout.contains("Stopped"))
+        let object = try Self.json(try await Self.run(.explain, command, observe: true, robot: true).stdout)
+        #expect(object["effective"] as? String == "allow")
+        #expect(object["next_action"] == nil)
     }
 
     @Test("an allow under observe is byte-identical to enforce")
@@ -183,7 +206,7 @@ struct ObserveWouldBeTests {
         #expect(pretty.stdout.contains("Observe mode: ✕ Stopped, in every mode"))
         #expect(!pretty.stdout.contains("Watched"))
         let explain = try await Self.run(.explain, command, observe: true, columns: 200)
-        #expect(explain.stdout.contains("✕ Stopped, in every mode"))
+        #expect(explain.stdout.contains("Decision: ✕ Stopped, in every mode"))
         #expect(!explain.stdout.contains("lets it run"))
     }
 
@@ -197,7 +220,7 @@ struct ObserveWouldBeTests {
         #expect(try Self.json(enforce.stdout)["rule_id"] as? String == "builtin.action:unwrap-limited")
         let observe = try await Self.run(.explain, command, observe: true, columns: 200)
         #expect(observe.stdout.contains("rv could not see what this command runs"))
-        #expect(observe.stdout.contains("✕ Stopped, in every mode."))
+        #expect(observe.stdout.contains("Decision: ✕ Stopped, in every mode"))
     }
 
     /// An unresolved path (the `/tmp/ws` cwd does not exist, so no target
@@ -212,7 +235,8 @@ struct ObserveWouldBeTests {
     )
     func watchedClassNote(command: String, rule: String) async throws {
         let observe = try await Self.run(.explain, command, observe: true, columns: 200)
-        #expect(observe.stdout.contains("◐ Watched, would stop (\(rule))."), "\(observe.stdout)")
+        #expect(observe.stdout.contains("Decision: ◐ Watched, would stop"), "\(observe.stdout)")
+        #expect(observe.stdout.contains("Enforce would stop it (\(rule))"), "\(observe.stdout)")
         #expect(!observe.stdout.contains("Stopped"))
         let enforce = try await Self.run(.explain, command, observe: false, columns: 200)
         #expect(!enforce.stdout.contains("Observe mode"))
