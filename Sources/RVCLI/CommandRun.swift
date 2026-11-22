@@ -123,12 +123,16 @@ public enum CommandRun {
             command: ShellCommand(rawValue: raw),
             cwd: cwd
         )
+        let typedRules = kind == .explain
+            ? ExplainTypedRules.lines(result: verdict.shown, command: ShellCommand(rawValue: raw), cwd: cwd, home: home)
+            : []
         return try render(
             kind: kind,
             verdict: verdict,
             command: ShellCommand(rawValue: raw),
             probe: probe,
-            requested: requested
+            requested: requested,
+            typedRuleLines: typedRules
         )
     }
 
@@ -200,7 +204,8 @@ public enum CommandRun {
         verdict: GatedVerdict,
         command: ShellCommand,
         probe: ThemeProbe,
-        requested: RequestedMode
+        requested: RequestedMode,
+        typedRuleLines: [String] = []
     ) throws -> CLIResult {
         let result = verdict.shown
         let observed = verdict.observeOverrode
@@ -217,7 +222,7 @@ public enum CommandRun {
             )
         }
 
-        let lines = kind.usesExplainFrame
+        var lines = kind.usesExplainFrame
             ? ExplainRenderer().render(
                 explainViewModel(
                     from: result,
@@ -231,6 +236,8 @@ public enum CommandRun {
                 testViewModel(from: result, command: command, columns: probe.columns, observed: authorization),
                 palette: palette
             )
+        // The person's own rules that also match, which a pack deny hides.
+        lines += typedRuleLines
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
     }
 
