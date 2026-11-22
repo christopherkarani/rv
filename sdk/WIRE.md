@@ -304,7 +304,9 @@ lifetime (`stream`, a UUID).
   rvd still holds). Later calls echo the reply's `stream` and `cursor`. With
   nothing ready, rvd waits up to `waitMs` (capped at 5000) for the next event;
   the client's request timeout must cover `waitMs` plus its normal budget. At
-  most 8 polls wait at once; more answer at once (empty), so poll in a loop.
+  most 8 polls wait at once; more answer at once (empty). A client whose empty
+  reply came back well before its `waitMs` should pause (about a second) before
+  polling again rather than spin.
 - `EventsReply{stream, cursor: uint64, missed: uint64, resync: bool, events}`.
   `missed > 0`: that many events were dropped before the first one here because
   the caller read too slowly ("missed N"). `resync`: the cursor's stream is gone
