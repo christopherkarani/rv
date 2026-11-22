@@ -444,18 +444,17 @@ enum SecretsRun {
             }
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
-        var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
+        var text = "✓ Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)).\n"
+        text += "  \(deliveryLine(secret.delivery))\n"
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
-        if users.isEmpty {
-            text += "Add \"\(DisplayedText.field(name))\" to a profile's \"secrets\" in runtime-resources.json to use it.\n"
-        } else {
-            text += "Used by profiles: \(users.joined(separator: ", ")).\n"
+        if users.isEmpty == false {
+            text += "  Used by profiles: \(users.joined(separator: ", ")).\n"
         }
         if updated != current, case .gateway(let binding) = secret.delivery, binding.allow.isEmpty {
             text += "note: \(DisplayedText.field(name)) may be used with any method and path on "
                 + "\(binding.upstream.host ?? binding.upstream.absoluteString); narrow it with --allow, e.g. --allow read-only.\n"
         }
-        return .success(text)
+        return .success(text + nextStep(secret, inProfile: users.isEmpty == false))
     }
 
     /// The definition `set` adds for a new name from its flags.
@@ -850,15 +849,38 @@ enum SecretsRun {
         if findings.isEmpty {
             lines.append(gaps ? "No secrets in the staged files that were scanned." : "No secrets in staged files.")
         } else {
-            lines.append(
-                "commit blocked. A false positive: add an `rv-secrets:allow` comment on the line, or "
-                    + "path:rule:line to \(SecretLeakIgnore.fileName). Skip the scan: git config \(SecretGitHook.killSwitch) false")
+            // The fix, never the off switch: whoever commits may be an agent.
+            lines.append("✕ commit blocked: a key is in the staged files. Take it out, keep it in rv, then commit again.")
+            lines.append(hookNextStep(findings, defined: Set(configuration.secrets.map(\.name))))
         }
         lines += report.tooLarge.map(notScanned)
         lines += skipped
         if gaps { lines.append(hookGapSummary(files: report.tooLarge.count, secrets: skipped.count)) }
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
     }
+
+    /// The hook's last line. A defined secret's value is already in rv: use
+    /// it through rv run. A token pattern names the variable its issuer's
+    /// SDKs read, when there is one.
+    static func hookNextStep(_ findings: [SecretLeakFinding], defined: Set<String>) -> String {
+        if let finding = findings.first(where: { defined.contains($0.secret) }) {
+            return "→ rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
+        }
+        let name = findings.lazy.compactMap { patternSecretNames[$0.secret] }.first ?? "NAME"
+        return "→ rv secrets set \(name)"
+    }
+
+    /// Pattern rule ids (`SecretPatternRules`) and the name a key of that
+    /// kind usually goes by.
+    static let patternSecretNames: [String: String] = [
+        "aws-access-key-id": "AWS_ACCESS_KEY_ID",
+        "github-token": "GITHUB_TOKEN",
+        "slack-token": "SLACK_TOKEN",
+        "stripe-secret-key": "STRIPE_SECRET_KEY",
+        "anthropic-api-key": "ANTHROPIC_API_KEY",
+        "openai-api-key": "OPENAI_API_KEY",
+        "google-api-key": "GOOGLE_API_KEY",
+    ]
 
     /// The hook lets a commit through past files it could not read and
     /// secrets it could not resolve; this line says so in one place.
@@ -889,6 +911,47 @@ enum SecretsRun {
         (try? RobotJSON.encode(value, options: .pretty)) ?? "{}\n"
     }
 
+    /// One plain line on where the value goes, for the `set` success text.
+    static func deliveryLine(_ delivery: SecretDelivery) -> String {
+        switch delivery {
+        case .gateway(let binding):
+            "Sends to \(binding.upstream.host ?? binding.upstream.absoluteString); commands get a stand-in, never the value."
+        case .awsSigV4(let binding):
+            "Signs for \(binding.upstream.host ?? binding.upstream.absoluteString); commands get a stand-in, never the value."
+        case .environment:
+            "Commands get the real value in their environment (weaker)."
+        }
+    }
+
+    /// The last line of `set`: how to use the secret, ready to copy. `rv
+    /// run` stages gateway and AWS secrets with no agents filter; any other
+    /// is used through a runtime profile.
+    static func nextStep(_ secret: SecretDefinition, inProfile: Bool) -> String {
+        let name = DisplayedText.field(secret.name)
+        if runsWithRVRun(secret) { return "→ rv run --secret \(name) -- <command>\n" }
+        return inProfile ? "" : profileStep(name)
+    }
+
+    static func profileStep(_ displayedName: String) -> String {
+        "→ add \"\(displayedName)\" to a profile's \"secrets\" in runtime-resources.json\n"
+    }
+
+    /// What `rv run --secret` accepts: a stand-in delivery and no agents filter.
+    static func runsWithRVRun(_ secret: SecretDefinition) -> Bool {
+        if case .environment = secret.delivery { return false }
+        return (secret.agents ?? []).isEmpty
+    }
+
+    /// `text` with `lines` put before its last line, the next step, which
+    /// stays last.
+    static func insertingBeforeNextStep(_ lines: String, into text: String) -> String {
+        guard lines.isEmpty == false, let range = text.range(of: "\n→ ", options: .backwards) else {
+            return text + lines
+        }
+        let split = text.index(after: range.lowerBound)
+        return String(text[..<split]) + lines + String(text[split...])
+    }
+
     /// The secret value: hidden prompt on a terminal, otherwise all of stdin
     /// minus trailing newlines.
     static func readValue(name: String, stdinIsTTY: Bool) -> Data? {
@@ -901,7 +964,11 @@ enum SecretsRun {
             for index in buffer.indices { buffer[index] = 0 }
             return Data(bytes)
             #else
-            return nil
+            // No readpassphrase off macOS: the same hidden prompt on /dev/tty.
+            switch HiddenLinePrompt.readFromTerminal(prompt: "Value for \(name): ", maximumBytes: SecretValue.maximumBytes) {
+            case .line(let data): return data
+            case .cancelled, .unavailable: return nil
+            }
             #endif
         }
         var data = FileHandle.standardInput.readDataToEndOfFile()
@@ -991,6 +1058,8 @@ struct SecretsSet: AsyncParsableCommand {
             Setting a new value reaches running sessions that use the gateway on their next
             request. Environment-delivered values only change for new sessions.
               rv secrets set GITHUB_TOKEN --expires 2027-01-31
+            Then run a command with it; the command gets a stand-in, never the value:
+              rv run --secret OPENAI_API_KEY -- codex
             """
     )
 
@@ -1103,19 +1172,21 @@ struct SecretsSet: AsyncParsableCommand {
         case .success(var text):
             // Only a new secret's definition is written; a re-run applies no defaults.
             if isNew, let inferredNote { text = inferredNote + text }
+            var wiring = ""
             if let profile {
                 switch InitRun.attachSecret(
                     name, profileID: profile, configDirectory: environment.configDirectory)
                 {
                 case .failure(let failure):
-                    text += "warning: stored but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n"
+                    wiring += "warning: stored but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n"
                 case .success(true):
-                    text += "Wired \(DisplayedText.field(name)) into profile \(DisplayedText.field(profile)).\n"
+                    text = text.replacingOccurrences(of: SecretsRun.profileStep(DisplayedText.field(name)), with: "")
+                    wiring += "Wired \(DisplayedText.field(name)) into profile \(DisplayedText.field(profile)).\n"
                 case .success(false):
                     break
                 }
             }
-            ctx.writeStdout(text)
+            ctx.writeStdout(SecretsRun.insertingBeforeNextStep(wiring, into: text))
         }
     }
 }
