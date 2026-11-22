@@ -86,7 +86,8 @@ enum ObserveFloor {
     ///    interpreter, a guard reading) does: "run it in Terminal", since
     ///    the engine never read that text;
     /// 5. the command runs a program rv cannot see:
-    ///    `observe.floor:unanalyzable`.
+    ///    `observe.floor:unanalyzable`, over an allow or a watched-class
+    ///    deny (`watchedClasses`); any other deny is kept.
     /// The file door reads one path: 2 and 3 only.
     static func rule(_ result: EvaluationResult, door: Door, context: Context) -> Ruling {
         switch door {
@@ -278,18 +279,40 @@ enum ObserveFloor {
         .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
     ]
 
-    /// An allow, or an "unanalyzable" indeterminate, becomes "run it in
-    /// Terminal" under its own rule id; it never becomes a hard deny.
+    /// An allow, an "unanalyzable" indeterminate, or a watched-class deny
+    /// (`watchedClasses`) becomes "run it in Terminal" under its own rule
+    /// id; it never becomes a hard deny. Any other deny is kept.
+    ///
+    /// A watched-class deny is no reason to stop in observe (Q5: only
+    /// catastrophic commands and rv's own protection stop there); the
+    /// command stops only because rv cannot see what it runs, so the stop
+    /// carries that reason. Never weaker: like the pinned deny it replaces,
+    /// the indeterminate takes no allow-once, ask or allowlist entry.
     private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
         switch result.decision {
         case .allow:
             break
         case .indeterminate(let reason) where unanalyzableReasons.contains(reason):
             break
+        case .deny(let deny) where isWatchedClass(deny.ruleID):
+            break
         case .deny, .indeterminate:
             return result
         }
         return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
+    }
+
+    /// Built-in denies that observe watches (logs as a would-be stop and
+    /// lets run) instead of stopping: an unresolved path, a write outside
+    /// the repository, and wrapper or interpreter nesting past the unwrap
+    /// limit. Enforce still stops each. Observe stops one of them only when
+    /// it is also catastrophic or touches rv's own protection (rules 2 to
+    /// 4 keep the deny then) or rv cannot see what it runs (rule 5, as
+    /// `observe.floor:unanalyzable`).
+    static let watchedClasses: Set<BuiltinRule> = [.unresolvedPath, .outOfRepoWrite, .unwrapLimited]
+
+    static func isWatchedClass(_ ruleID: RuleID) -> Bool {
+        BuiltinRule(ruleID).map { watchedClasses.contains($0) } ?? false
     }
 
     /// An allow becomes "run it in Terminal"; anything else is kept.

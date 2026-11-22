@@ -270,7 +270,9 @@ characters where it may run, such as a long JSON body given to `curl
   interpreter or script forms, or a renamed `launchctl`. A command whose
   program rv cannot see is sent to Terminal on an observe host
   (`observe.floor:unanalyzable`), never hard-denied (a command the
-  engine already denies keeps that deny):
+  engine already denies keeps that deny, except a deny observe only
+  watches, `out-of-repo-write`, `unresolved-path` or `unwrap-limited`,
+  which becomes `observe.floor:unanalyzable` too):
   - a dynamic command word (`$x`, `$(…)`, backticks), a dynamic `eval`,
     or a dynamic `trap` action (`trap "$X" EXIT`);
   - a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `mksh`, `ash`, `yash`,

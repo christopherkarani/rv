@@ -269,8 +269,10 @@ as risky.
   dynamic remote command; a runner whose verb is a shell, an interpreter
   or a process or service control verb; an unresolved alias; an
   over-budget command) is sent to Terminal as
-  `observe.floor:unanalyzable`, never hard-denied; a deny stays the deny
-  **[C53]**. A command proven to
+  `observe.floor:unanalyzable`, never hard-denied; a deny stays the deny,
+  except a deny observe only watches (`out-of-repo-write`,
+  `unresolved-path`, `unwrap-limited`), which becomes
+  `observe.floor:unanalyzable` too **[C53]**. A command proven to
   only read a wiring file is observed **[C53]**. These floors are lexical:
   code the agent can already run as the user can stop `rvd`, after which
   observe steps aside (below).

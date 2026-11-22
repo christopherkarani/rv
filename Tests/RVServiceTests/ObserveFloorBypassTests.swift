@@ -310,20 +310,33 @@ struct ObserveFloorBypassTests {
         }
     }
 
-    /// An opaque command the engine already denies keeps that deny on an
-    /// observe host: its rule id, row and allow-once path, not the label.
-    @Test("observe host: an opaque command's deny stays the deny")
-    func observeKeepsUnwrapLimitedDeny() async throws {
+    /// An opaque command whose deny observe only watches (`unwrap-limited`,
+    /// C1) still stops on an observe host, as the floor's own
+    /// `observe.floor:unanalyzable`, never as an allow.
+    @Test("observe host: an opaque command's watched-class deny stops as unanalyzable")
+    func observeFloorsOpaqueUnwrapLimited() async throws {
         let home = try observeHome()
         defer { remove(home) }
         let command = "echo \(stop) | base64 -d | sh"
+        #expect(runsOpaqueProgram(ShellCommand(rawValue: command)))
+        let result = await observeApply(command, home: home)
+        #expect(result.decision == .indeterminate(.observeUnanalyzable))
+    }
+
+    /// Any other deny an opaque command gets keeps that deny on an observe
+    /// host: its rule id, row and allow-once path, not the label.
+    @Test("observe host: an opaque command's pack deny stays the deny")
+    func observeKeepsOpaquePackDeny() async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let command = #"eval "$X"; git reset --hard"#
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)))
         let result = await observeApply(command, home: home)
         guard case .deny(let deny) = result.decision else {
             Issue.record("must stay denied, got \(result.decision)")
             return
         }
-        #expect(deny.ruleID == BuiltinRule.unwrapLimited.ruleID)
+        #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
     }
 
     /// Literal feeds are not opaque in themselves: the floor reads their
