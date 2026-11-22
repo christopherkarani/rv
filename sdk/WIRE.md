@@ -175,7 +175,8 @@ core-packs readiness. First failure wins.
 
 ## 4. Methods
 
-`Sources/RVIPC/IPCMethods.swift`. All 13 operations are unary request/response.
+`Sources/RVIPC/IPCMethods.swift`. All 14 operations are unary request/response
+(`events` is a bounded long poll, still one request and one reply).
 `cwd`/`host`/`session` inputs are untrusted metadata: they route and label, they
 never confer authority (§7 of `sdk/README.md`, identity model).
 
@@ -194,6 +195,7 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 11 | `rulePreview` | `RulePreviewParams` | `RulePreviewReply` | Never writes. |
 | 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 13 | `policyStatus` | `PolicyStatusParams` | `PolicyStatusReply` | Read-only diagnostic (additive, `sdk/VERSIONING.md` §3). Python SDK: raw-only. See §4.6. |
+| 14 | `events` | `EventsParams` | `EventsReply` | Live decisions, asks and resolutions; long poll up to 5 s. **Owner only**: a peer whose uid is not rvd's gets `authorizationDenied`. Additive; not in the Python SDK yet (Swift clients: `EventsCall`). See §4.7. |
 
 ### 4.1 Evaluate family
 
@@ -290,6 +292,43 @@ policy on every evaluation and keeps no last-good copy).
   `policyStatusVariants_bytesMatchGoldenAndRoundTrip` (request with `cwd`, a
   failed load with its `problem`, and `busy`).
 
+### 4.7 Live events
+
+`Sources/RVIPC/IPCEvents.swift`, `Sources/RVService/LiveEventBus.swift`. rvd
+publishes each hook decision it replied with, each new pending ask and each
+resolution once, into one ring of the last 256 events, numbered from 1 per rvd
+lifetime (`stream`, a UUID).
+
+- `EventsParams{stream?, after?: uint64, waitMs?: int}`. First call: `{}`
+  (start at the live head, no backlog) or `{"after":0}` (from the oldest event
+  rvd still holds). Later calls echo the reply's `stream` and `cursor`. With
+  nothing ready, rvd waits up to `waitMs` (capped at 5000) for the next event;
+  the client's request timeout must cover `waitMs` plus its normal budget. At
+  most 8 polls wait at once; more answer at once (empty), so poll in a loop.
+- `EventsReply{stream, cursor: uint64, missed: uint64, resync: bool, events}`.
+  `missed > 0`: that many events were dropped before the first one here because
+  the caller read too slowly ("missed N"). `resync`: the cursor's stream is gone
+  (rvd restarted) or impossible; reading restarted at the oldest retained event
+  and an unknown number were lost, so reload derived state (`pendingList`).
+- `LiveEvent{seq, atMs: int64 (ms since 1970), kind, <kind>: body}`. Kinds:
+  `decision` (`LiveDecision{verdict: allowed|denied|refused, host, tool:
+  Bash|Read|Edit|Write, command?, path?, cwd?, rule?, session?, timedOut}`),
+  `ask` (`{item: PendingListItem}`, the `pendingList` projection, no command),
+  `resolution` (`{id, host, outcome: allowOnce|createRule|deny|expired|
+  canceled|timedOut|consumed}`). **Open set**: a decoder maps an unknown
+  `kind`, or a known kind whose body it cannot decode, to an opaque unknown
+  event and keeps its `seq`. New kinds are additive.
+- Redaction: `command`, `path` and `cwd` are redacted as rvd's local records
+  are: credential-shaped tokens replaced, `$HOME` shown as `~`, control
+  characters flattened, at most 512 bytes then `…`. `session` only when it is
+  an opaque id. A timed-out reply is `refused` with `rule: "rv.timeout"`.
+- Skew: an rvd from before `events` cannot decode the method key and answers
+  `decodeFailed` on a live handshake; clients read that (or `unknownMethod`) as
+  "unsupported" (`EventsCall.isUnsupported`) and keep polling `pendingWatch`.
+  `events` has no implicit hello: hello first.
+- Publishing never waits on a reader; a reader that stops reading only falls
+  behind the ring.
+
 ## 5. Domain value shapes
 
 Sources in `Sources/RVDomain/`. SDK decoders must implement the strictness below;
@@ -382,7 +421,8 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
 - `exitCode` is int32; `generation`/`afterGeneration` are uint64;
   `idleExitSeconds`/counts are ints; `elapsedMs` is a JSON number.
 - **No `Date` values cross `rv.ipc.v1`.** (The pending ledger has dates; the IPC
-  projection does not.) SDKs need no date codec for this contract.
+  projection does not.) SDKs need no date codec for this contract. Live events
+  carry their time as `atMs`, an integer (ms since 1970).
 
 ## 6. Timeouts and budgets
 
