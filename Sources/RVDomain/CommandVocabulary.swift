@@ -1,8 +1,8 @@
 /// rv's one vocabulary table: every top-level command, verdict word and
-/// glyph rv shows a person or an agent. Help, hook deny text and the docs
-/// take their words from here, and the tests check that no help page or doc
-/// names a command this table does not, so a rename is one edit here plus
-/// an alias.
+/// glyph rv shows a person or an agent. Hook unlock text, the decision
+/// words and help dispatch read their words from here; tests check that
+/// the parser, every help page and the docs name only commands in it. New
+/// copy takes its words from here, so a rename is one edit plus an alias.
 ///
 /// It lives in `RVDomain`, not `RVCLI` or `RVPresentation`, because hook
 /// deny text (`RVHooks`) depends only on `RVDomain`: this is the lowest
@@ -59,7 +59,8 @@ public enum CommandVocabulary {
         public static let allow = "allow"
         /// The policy verdict that stops a command.
         public static let deny = "deny"
-        /// The policy verdict that waits for a human.
+        /// The policy verdict that holds a command until a human approves
+        /// it. Hooks cannot pause, so a host sees it as a deny with guidance.
         public static let ask = "ask"
         /// rv could not finish evaluating (`Decision.indeterminate`).
         public static let incomplete = "incomplete"
@@ -70,25 +71,24 @@ public enum CommandVocabulary {
     }
 
     /// The six glyphs every rv screen is built from (North Star v2,
-    /// "The language"). Not printed yet; new screens take them from here.
-    ///
-    /// Q1 is still open on `⏺`: v2 uses it for an agent's words, the v5c
-    /// rv term cut for an ask. It means an agent until Q1 settles.
+    /// "The language", with the v5c rv term cut's event words that Q1
+    /// chose: `✓ ran`, `◐ would stop`, `✕ stopped`, `⏺ asks`). Not
+    /// printed yet; new screens take them from here.
     public enum Glyph: String, CaseIterable, Sendable {
         /// rv speaking; headers.
         case rv = "◆"
-        /// Blocked; the command really did not run.
+        /// The command really did not run.
         case stopped = "✕"
-        /// Would stop, ran anyway (watch / observe mode).
+        /// Watch (observe) mode would have stopped it and let it run.
         case watched = "◐"
-        /// Success, healthy.
+        /// It ran; success, healthy.
         case done = "✓"
         /// The one command to type next.
         case next = "→"
-        /// An agent's words, labelled.
-        case agent = "⏺"
+        /// Waiting for a human to approve it.
+        case ask = "⏺"
 
-        /// The word printed beside the glyph.
+        /// The label printed beside the glyph on a heading or legend.
         public var word: String {
             switch self {
             case .rv: "rv"
@@ -96,7 +96,19 @@ public enum CommandVocabulary {
             case .watched: "Watched"
             case .done: "Done"
             case .next: "Next"
-            case .agent: "Agent"
+            case .ask: "Asks"
+            }
+        }
+
+        /// The event word on a log or status line (`◐ would stop`), or
+        /// `nil` for glyphs that do not mark an event.
+        public var eventWord: String? {
+            switch self {
+            case .rv, .next: nil
+            case .stopped: "stopped"
+            case .watched: "would stop"
+            case .done: "ran"
+            case .ask: "asks"
             }
         }
     }
@@ -107,7 +119,7 @@ public enum CommandVocabulary {
     public struct PlannedName: Equatable, Sendable {
         public enum Status: Equatable, Sendable {
             /// Chris chose it.
-            case decided(by: String, on: String)
+            case decided
             /// The build plan's Q1 recommendation, not yet decided.
             case recommended
         }
@@ -127,14 +139,10 @@ public enum CommandVocabulary {
 
     /// Planned names from the North Star build plan, "Decisions for Chris" Q1.
     public static let plannedNames: [PlannedName] = [
-        PlannedName(
-            spelling: "rv protect <tool>", today: "rv packs enable <pack>",
-            status: .decided(by: "Chris", on: "2026-11-22")
-        ),
-        PlannedName(
-            spelling: "rv protect <tool> off", today: "rv packs disable <pack>",
-            status: .decided(by: "Chris", on: "2026-11-22")
-        ),
+        // Chris chose `rv protect <tool>` over `rv packs on/off` on
+        // 2026-11-22 (build plan G6).
+        PlannedName(spelling: "rv protect <tool>", today: "rv packs enable <pack>", status: .decided),
+        PlannedName(spelling: "rv protect <tool> off", today: "rv packs disable <pack>", status: .decided),
         PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
         PlannedName(spelling: "rv log", today: "rv blocks", status: .recommended),
         PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
@@ -146,20 +154,12 @@ public enum CommandVocabulary {
         PlannedName(spelling: "rv mcp forget <server>", today: nil, status: .recommended),
     ]
 
-    /// Mode and event words from the v5c rv term cut that Q1 lists as
-    /// chosen. Not printed yet.
+    /// Host mode words from the v5c rv term cut that Q1 chose. Not
+    /// printed yet. The event words are on `Glyph.eventWord`.
     public enum PlannedWord {
         /// Host mode `block`, as a state.
         public static let guarding = "guarding"
         /// Host mode `observe`, as a state.
         public static let watching = "watching"
-        /// `✓ ran`: the command ran.
-        public static let ran = "ran"
-        /// `◐ would stop`: watch mode let it run.
-        public static let wouldStop = "would stop"
-        /// `✕ stopped`: the command did not run.
-        public static let stopped = "stopped"
-        /// `⏺ asks`: waiting for a human.
-        public static let asks = "asks"
     }
 }

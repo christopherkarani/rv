@@ -21,7 +21,9 @@ struct CommandVocabularyTests {
 
     @Test func sixGlyphsWithTheirWords() {
         let pairs = CommandVocabulary.Glyph.allCases.map { "\($0.rawValue) \($0.word)" }
-        #expect(pairs == ["◆ rv", "✕ Stopped", "◐ Watched", "✓ Done", "→ Next", "⏺ Agent"])
+        #expect(pairs == ["◆ rv", "✕ Stopped", "◐ Watched", "✓ Done", "→ Next", "⏺ Asks"])
+        let events = CommandVocabulary.Glyph.allCases.compactMap { glyph in glyph.eventWord.map { "\(glyph.rawValue) \($0)" } }
+        #expect(events == ["✕ stopped", "◐ would stop", "✓ ran", "⏺ asks"])
     }
 
     @Test func verdictWords() {
@@ -33,7 +35,7 @@ struct CommandVocabularyTests {
     @Test func protectIsDecidedByChris() {
         let protect = CommandVocabulary.plannedNames.filter { $0.spelling.hasPrefix("rv protect ") }
         #expect(protect.map(\.today) == ["rv packs enable <pack>", "rv packs disable <pack>"])
-        #expect(protect.allSatisfy { $0.status == .decided(by: "Chris", on: "2026-11-22") })
+        #expect(protect.allSatisfy { $0.status == .decided })
     }
 
     @Test func plannedTopLevelWordsAreNotCommandsYet() {
