@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVIsolation
 
 /// Why `rv mcp serve` starts nothing, kept as a value so the same refusal
 /// reaches the owner (stderr, `log`) and the agent (a JSON-RPC error on its
@@ -28,11 +29,15 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case blocked(String)
         case secretUndefined(server: String, secret: String)
         case secretUnavailable(server: String, secret: String)
-        /// rv will not run it uncaged, or cannot build its cage.
-        case notSealed
-        /// Planned not to start for another reason (placeholders this host
-        /// cannot lease).
-        case refusedHere
+        /// The cage is enforced here and this local server has no sandbox.
+        case noSandbox(String)
+        /// The cage is enforced here and its sandbox leaves the network open.
+        case openNetwork(String)
+        /// rv cannot build the cage it asks for (or organization policy
+        /// requires) on this host, or building it failed.
+        case cageUnavailable
+        /// Its `placeholders` cannot be used.
+        case placeholders(server: String, MCPPlaceholderRefusal)
         case secretsUnusable
         case signalsUnavailable
     }
@@ -56,8 +61,20 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .blocked(let name): .blocked(name)
         case .secretUndefined(let server, let secret): .secretUndefined(server: server, secret: secret)
         case .secretUnavailable(let server, let secret, _): .secretUnavailable(server: server, secret: secret)
-        case .sandbox: .notSealed
+        case .sandbox: .cageUnavailable
         case .untrustedRemote: .untrusted
+        }
+    }
+
+    /// The cause of a placeholder refusal: a missing secret or a sandbox
+    /// problem in the same words as any server's.
+    static func cause(server: String, placeholders refusal: MCPPlaceholderRefusal) -> Cause {
+        switch refusal {
+        case .unknownSecret(let secret): .secretUndefined(server: server, secret: secret)
+        case .noSandbox: .noSandbox(server)
+        case .unconfinedNetwork: .openNetwork(server)
+        case .cageUnavailable, .uncaged: .cageUnavailable
+        default: .placeholders(server: server, refusal)
         }
     }
 
@@ -73,23 +90,38 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .blocked(let name): "\(MCPDisplayedText.field(name)) is blocked in mcp.json"
         case .secretUndefined(_, let secret): "secret \(MCPDisplayedText.field(secret)) is not set up"
         case .secretUnavailable(_, let secret): "rv could not read secret \(MCPDisplayedText.field(secret))"
-        case .notSealed: "not sealed: rv won't run it without its sandbox"
-        case .refusedHere: "rv won't start it on this host"
+        case .noSandbox: "not sealed: it has no sandbox"
+        case .openNetwork: "not sealed: its sandbox network is open"
+        case .cageUnavailable: "rv can't seal it on this host"
+        case .placeholders(_, let refusal):
+            switch refusal {
+            // Their detail comes from the lease, not from mcp.json.
+            case .capabilityUnavailable, .leaseFailed: "its placeholders could not be staged"
+            default: "placeholders: " + MCPDisplayedText.field(refusal.message)
+            }
         case .secretsUnusable: "rv can't read secrets.json"
         case .signalsUnavailable: "rv can't catch stop signals here"
         }
     }
 
-    /// The one command that fixes it, for the person to run.
+    /// What fixes it, for the person to do: a command, or the edit and the
+    /// command after it.
     public var next: String {
         switch cause {
         case .untrusted, .changedWhileChecked: "rv mcp trust"
         case .trustUnavailable: "sudo rv mcp custodian install"
-        case .configurationUnusable, .notSealed, .refusedHere, .signalsUnavailable: "rv mcp check"
+        case .configurationUnusable: "rv mcp check"
         case .noServers: "rv mcp import"
         case .unknownServer, .blocked: "rv mcp list"
         case .secretUndefined(_, let secret): "rv secrets set \(MCPDisplayedText.field(secret))"
         case .secretUnavailable, .secretsUnusable: "rv secrets check"
+        case .noSandbox(let server):
+            "add \"sandbox\": {\"network\": false} to \(MCPDisplayedText.field(server)) in mcp.json, then rv mcp trust"
+        case .openNetwork(let server):
+            "list the hosts \(MCPDisplayedText.field(server)) needs in sandbox.hosts in mcp.json, then rv mcp trust"
+        case .cageUnavailable, .signalsUnavailable: "rv doctor"
+        case .placeholders(let server, _):
+            "fix \(MCPDisplayedText.field(server))'s placeholders in mcp.json, then rv mcp trust"
         }
     }
 
@@ -133,17 +165,24 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         ])
     }
 
-    /// The cause when every planned connection is refused: `notSealed`
-    /// when each was refused for its sandbox; nil when any would start.
-    public static func cause(ofPlanned connections: [MCPUpstreamConnection]) -> Cause? {
-        var sealing = true
+    /// The cause when every planned connection is refused (the first
+    /// one's); nil when any would start.
+    public static func cause(
+        ofPlanned connections: [MCPUpstreamConnection], configuration: MCPConfiguration
+    ) -> Cause? {
+        var first: Cause?
         for connection in connections {
-            guard case .refused(_, let refusal) = connection else { return nil }
-            if case .sandbox = refusal { continue }
-            sealing = false
+            guard case .refused(let server, let refusal) = connection else { return nil }
+            guard first == nil else { continue }
+            switch refusal {
+            case .placeholder(let placeholder): first = cause(server: server, placeholders: placeholder)
+            case .sandbox:
+                // `MCPLaunchPlanner.sealRefusal` refuses one alone only for
+                // these two.
+                first = configuration.server(named: server)?.sandbox == nil ? .noSandbox(server) : .openNetwork(server)
+            }
         }
-        guard connections.isEmpty == false else { return nil }
-        return sealing ? .notSealed : .refusedHere
+        return first
     }
 
     /// The answer to one client line: an error for every request (a
@@ -159,7 +198,18 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         guard message.objectValue != nil, message["method"]?.stringValue != nil, let id = message["id"] else {
             return nil
         }
-        return errorResponse(id: id)
+        return errorResponse(id: Self.echoed(id))
+    }
+
+    /// The longest request id echoed back; a longer one, or one that is not
+    /// a string or number, is answered with a null id.
+    public static let maximumIDBytes = 1024
+
+    static func echoed(_ id: JSONValue) -> JSONValue {
+        switch id {
+        case .string, .number: id.compactText.utf8.count <= maximumIDBytes ? id : .null
+        case .null, .bool, .array, .object: .null
+        }
     }
 }
 
@@ -169,52 +219,64 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
 ///
 /// It starts nothing, resolves nothing and reads no configuration: it only
 /// holds the refusal it was given. It is bounded every way: lines over
-/// `maximumLineBytes` are dropped whole, it answers at most
-/// `maximumAnswers` requests, and it stops at EOF, on a failed write, or
-/// after `idleSeconds` with no input.
+/// `maximumLineBytes` are dropped whole; it reads at most `maximumLines`
+/// lines of any kind (empty ones, notifications and responses included);
+/// it stops at EOF, on a failed or stalled write, after `idleSeconds`
+/// with no input, and after `totalSeconds` in all however the client
+/// trickles bytes.
 public enum MCPRefusalResponder {
     public static let maximumLineBytes = 1024 * 1024
-    public static let maximumAnswers = 32
+    public static let maximumLines = 32
     public static let idleSeconds: Int32 = 30
+    public static let totalSeconds: Double = 60
+    /// How long one answer may take to write, on a blocking stdout too.
+    public static let writeSeconds: Double = 10
 
     /// Returns how many requests were answered.
     @discardableResult
     public static func serve(
         _ refusal: MCPServeRefusal, input: Int32 = STDIN_FILENO, output: Int32 = STDOUT_FILENO,
-        idleSeconds: Int32 = idleSeconds
+        idleSeconds: Int32 = idleSeconds, totalSeconds: Double = totalSeconds
     ) -> Int {
+        let deadline = Date().addingTimeInterval(totalSeconds)
         var answered = 0
+        var lines = 0
         var line: [UInt8] = []
         var overflowing = false
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        /// False once serving should stop: the line budget is spent or a write failed.
         func handle(_ bytes: [UInt8]) -> Bool {
+            lines += 1
             var trimmed = bytes
             if trimmed.last == 0x0D { trimmed.removeLast() }
-            guard trimmed.isEmpty == false, let reply = refusal.answer(Data(trimmed)) else { return true }
-            guard writeLine(output, reply.compactText) else { return false }
-            answered += 1
-            return answered < maximumAnswers
+            if trimmed.isEmpty == false, let reply = refusal.answer(Data(trimmed)) {
+                guard writeLine(output, reply.compactText) else { return false }
+                answered += 1
+            }
+            return lines < maximumLines
         }
         reading: while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return answered }
             var poller = pollfd(fd: input, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&poller, 1, idleSeconds * 1000)
+            let wait = min(Int32(idleSeconds) * 1000, Int32(min(remaining * 1000, Double(Int32.max))) + 1)
+            let ready = poll(&poller, 1, wait)
             if ready < 0, errno == EINTR { continue }
-            guard ready > 0 else { break }
+            guard ready > 0 else { return answered }
             let n = buffer.withUnsafeMutableBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
                 return read(input, base, raw.count)
             }
             if n < 0, errno == EINTR { continue }
-            guard n > 0 else { break }
+            guard n > 0 else { break reading }
             var start = 0
             for index in 0..<n where buffer[index] == 0x0A {
                 if overflowing == false {
                     line += buffer[start..<index]
-                    // The newline can arrive in the chunk that crosses the cap.
-                    if line.count <= maximumLineBytes {
-                        guard handle(line) else { break reading }
-                    }
                 }
+                // The newline can arrive in the chunk that crosses the cap.
+                let dropped = overflowing || line.count > maximumLineBytes
+                guard handle(dropped ? [] : line) else { return answered }
                 line.removeAll(keepingCapacity: true)
                 overflowing = false
                 start = index + 1
@@ -227,29 +289,32 @@ public enum MCPRefusalResponder {
                 }
             }
         }
-        if overflowing == false, line.isEmpty == false, answered < maximumAnswers { _ = handle(line) }
+        // EOF: a last line with no newline.
+        if overflowing == false, line.isEmpty == false { _ = handle(line) }
         return answered
     }
 
-    /// One JSON-RPC line, written whole; false when the reader is gone.
-    static func writeLine(_ fd: Int32, _ text: String) -> Bool {
+    /// One JSON-RPC line, written whole within `writeSeconds`; false when
+    /// the reader is gone or stalls. Each write waits for room first and is
+    /// at most `PIPE_BUF` bytes, so a blocking stdout cannot hold it past
+    /// the deadline either.
+    static func writeLine(_ fd: Int32, _ text: String, seconds: Double = writeSeconds) -> Bool {
         let bytes = Array((text + "\n").utf8)
+        let deadline = Date().addingTimeInterval(seconds)
+        let chunk = 512
         var written = 0
-        var waits = 0
         while written < bytes.count {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return false }
+            var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            let ready = poll(&poller, 1, Int32(remaining * 1000) + 1)
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0, poller.revents & Int16(POLLOUT) != 0 else { return false }
             let n = bytes.withUnsafeBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
-                return write(fd, base + written, raw.count - written)
+                return write(fd, base + written, min(chunk, raw.count - written))
             }
-            if n < 0, errno == EINTR { continue }
-            if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                // A client that never reads is given ten seconds, not forever.
-                waits += 1
-                guard waits <= 10 else { return false }
-                var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                _ = poll(&poller, 1, 1000)
-                continue
-            }
+            if n < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
             guard n > 0 else { return false }
             written += n
         }
@@ -259,40 +324,45 @@ public enum MCPRefusalResponder {
 
 extension MCPServeRefusal {
     /// Why `rv mcp serve --server name` would start nothing, judged from
-    /// mcp.json and its integrity alone, as serve judges them before any
-    /// secret is resolved; nil when serve would start it. It mirrors
-    /// `MCPRun.upstreamPlan` and `MCPLaunchPlanner.plan`: an untrusted
-    /// file refuses everything, a local server needs a usable sandbox
-    /// where the cage is enforced, and where it is not, a server that asks
-    /// for a sandbox (or every local server under the organization's
-    /// `requireSandbox`) is refused.
+    /// mcp.json, its integrity and secrets.json alone (nothing is resolved);
+    /// nil when serve would start it. It asks the planner's own questions
+    /// (`MCPLaunchPlanner.sealRefusal`, `MCPPlaceholderPlanning.refusal`,
+    /// `MCPLaunchPlanner.referencedSecrets`, `MCPSandbox.refusesUncaged`)
+    /// in the planner's order, so `rv mcp list` cannot drift from serve.
+    /// `secrets` nil: secrets.json could not be read, so serve starts nothing.
     public static func cause(
         serving name: String, configuration: MCPConfiguration, integrity: MCPIntegrityStatus,
-        requireSandbox: Bool = MCPSandbox.enforced
+        secrets: SecretsConfiguration?, requireSandbox: Bool = MCPSandbox.enforced,
+        placeholdersSupported: Bool? = nil
     ) -> Cause? {
+        let placeholdersSupported = placeholdersSupported ?? MCPPlaceholderLeasing.supportedPlatform
         switch integrity {
         case .unsupportedPlatform: return .trustUnavailable
         case .untrusted: return .untrusted
         case .noConfiguration, .trusted: break
         }
+        guard let secrets else { return .secretsUnusable }
         if configuration.isBlocked(name) { return .blocked(name) }
         guard let server = configuration.server(named: name) else { return .unknownServer(name) }
-        guard server.remote == nil else { return nil }
-        if requireSandbox {
-            guard let sandbox = server.sandbox, sandbox.network == false else { return .notSealed }
-            return nil
+        func undefined(_ names: [String]) -> Cause? {
+            names.first { secrets.secret(named: $0) == nil }.map { .secretUndefined(server: name, secret: $0) }
         }
-        if configuration.managed?.mcp.requireSandbox == true || server.sandbox != nil { return .notSealed }
+        if let remote = server.remote { return undefined(remote.secretNames) }
+        if server.placeholders.isEmpty == false {
+            if let refusal = MCPPlaceholderPlanning.refusal(
+                server, platformSupported: placeholdersSupported, cageEnforced: requireSandbox, secrets: secrets)
+            {
+                return cause(server: name, placeholders: refusal)
+            }
+        } else {
+            switch MCPLaunchPlanner.sealRefusal(server, configuration: configuration, requireSandbox: requireSandbox) {
+            case .refusedAlone?: return server.sandbox == nil ? .noSandbox(name) : .openNetwork(name)
+            case .failsPlan?: return .cageUnavailable
+            case nil: break
+            }
+        }
+        if let missing = undefined(MCPLaunchPlanner.referencedSecrets(server)) { return missing }
+        if MCPSandbox.refusesUncaged(server, enforced: requireSandbox) { return .cageUnavailable }
         return nil
-    }
-
-    /// The short why `rv mcp list` shows after "not governed:".
-    public var listReason: String {
-        switch cause {
-        case .untrusted: "mcp.json untrusted"
-        case .trustUnavailable: "no key custodian to trust mcp.json"
-        case .notSealed: "not sealed"
-        default: reason
-        }
     }
 }

@@ -133,6 +133,12 @@ public enum MCPSandbox {
     /// `enforcement` is the configuration's effective answer per server
     /// (`MCPConfiguration.sandboxEnforcement(for:integrity:)`); `audited` must record
     /// each audit pass durably and return false when it could not.
+    /// A server that asks for a sandbox where rv cannot build one is
+    /// refused, never run bare. `rv mcp list` asks the same question.
+    package static func refusesUncaged(_ definition: MCPServerDefinition, enforced: Bool = MCPSandbox.enforced) -> Bool {
+        definition.sandbox != nil && enforced == false
+    }
+
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
         notice: @escaping @Sendable (String) -> Void = { MCPGatewayRuntime.writeStderrLine($0 + "\n") },
@@ -142,7 +148,9 @@ public enum MCPSandbox {
     ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch, reach in
             guard let policy = definition.sandbox else { return .success(launch) }
-            guard enforced else { return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name))) }
+            guard refusesUncaged(definition, enforced: enforced) == false else {
+                return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name)))
+            }
             #if os(macOS)
             let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
             let temporary = launch.environment["TMPDIR"] ?? NSTemporaryDirectory()

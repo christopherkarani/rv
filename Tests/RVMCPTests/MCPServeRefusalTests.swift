@@ -6,6 +6,7 @@ import Darwin
 import Foundation
 import RVPolicy
 import Testing
+@testable import RVIsolation
 @testable import RVMCP
 
 @Suite("rv mcp serve refuses inside the MCP protocol")
@@ -58,7 +59,7 @@ struct MCPServeRefusalTests {
         let sandbox = MCPServeRefusal(
             servers: ["wax"], cause: MCPServeRefusal.cause(of: .sandbox("/Users/me/secret-dir cannot be read")), log: "x")
         #expect(sandbox.agentMessage.contains("secret-dir") == false)
-        #expect(sandbox.next == "rv mcp check")
+        #expect(sandbox.next == "rv doctor")
     }
 
     @Test func namesAreEscapedBeforeTheAgentSeesThem() {
@@ -70,46 +71,165 @@ struct MCPServeRefusalTests {
     }
 
     @Test func everyRefusedPlanIsOffAndAnyStartableServerIsNot() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "wax", command: "w"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+        ])
         let launch = MCPUpstreamLaunch(server: "ok", executable: "/usr/bin/env", arguments: ["true"], environment: [:])
-        #expect(MCPServeRefusal.cause(ofPlanned: [.refused(server: "wax", .sandbox("needs a sandbox"))]) == .notSealed)
-        #expect(MCPServeRefusal.cause(ofPlanned: [
-            .refused(server: "wax", .sandbox("needs a sandbox")), .refused(server: "p", .placeholder(.unsupportedPlatform)),
-        ]) == .refusedHere)
-        #expect(MCPServeRefusal.cause(ofPlanned: [.refused(server: "wax", .sandbox("x")), .process(launch)]) == nil)
-        #expect(MCPServeRefusal.cause(ofPlanned: []) == nil)
+        func cause(_ planned: [MCPUpstreamConnection]) -> MCPServeRefusal.Cause? {
+            MCPServeRefusal.cause(ofPlanned: planned, configuration: configuration)
+        }
+        #expect(cause([.refused(server: "wax", .sandbox("needs a sandbox"))]) == .noSandbox("wax"))
+        #expect(cause([.refused(server: "open", .sandbox("stays off the network"))]) == .openNetwork("open"))
+        #expect(cause([.refused(server: "p", .placeholder(.unsupportedPlatform)), .refused(server: "wax", .sandbox("x"))])
+            == .placeholders(server: "p", .unsupportedPlatform))
+        #expect(cause([.refused(server: "p", .placeholder(.unknownSecret("K")))]) == .secretUndefined(server: "p", secret: "K"))
+        #expect(cause([.refused(server: "wax", .sandbox("x")), .process(launch)]) == nil)
+        #expect(cause([]) == nil)
+    }
+
+    /// Every off state names its own fix; none sends the person to a
+    /// command that only repeats the problem.
+    @Test func eachCauseHasARealFix() {
+        func next(_ cause: MCPServeRefusal.Cause) -> String { MCPServeRefusal(servers: ["wax"], cause: cause, log: "").next }
+        #expect(next(.noSandbox("wax")) == #"add "sandbox": {"network": false} to wax in mcp.json, then rv mcp trust"#)
+        #expect(next(.openNetwork("wax")) == "list the hosts wax needs in sandbox.hosts in mcp.json, then rv mcp trust")
+        #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets set WAX_TOKEN")
+        #expect(next(.placeholders(server: "wax", .unsupportedPlatform)) == "fix wax's placeholders in mcp.json, then rv mcp trust")
+        #expect(next(.cageUnavailable) == "rv doctor")
+        // Lease detail is the gateway's, not mcp.json's: it stays out of the agent's text.
+        let lease = MCPServeRefusal(servers: ["wax"], cause: .placeholders(server: "wax", .leaseFailed("socket /tmp/x: EACCES")), log: "")
+        #expect(lease.agentMessage.contains("/tmp/x") == false)
+    }
+
+    private static let secretsJSON = """
+        {"version":1,"secrets":[
+          {"name":"WAX_TOKEN","source":{"keychain":{"service":"rv.secrets","account":"WAX_TOKEN"}},"delivery":{"environment":{}}},
+          {"name":"API_KEY","source":{"keychain":{"service":"rv.secrets","account":"API_KEY"}},
+           "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"API_BASE_URL"}}}
+        ]}
+        """
+
+    private static func secrets() throws -> SecretsConfiguration {
+        try SecretsConfiguration.decode(Data(secretsJSON.utf8)).get()
+    }
+
+    private static func configuration() throws -> MCPConfiguration {
+        let sealed = MCPSandboxPolicy(network: false)
+        return MCPConfiguration(servers: [
+            MCPServerDefinition(name: "bare", command: "b"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+            MCPServerDefinition(name: "sealed", command: "c", sandbox: sealed),
+            MCPServerDefinition(name: "keyed", command: "k", secrets: ["WAX_TOKEN": "WAX_TOKEN"], sandbox: sealed),
+            MCPServerDefinition(name: "missing", command: "m", secrets: ["TOKEN": "NOPE"], sandbox: sealed),
+            MCPServerDefinition(name: "argmissing", command: "m", args: ["--key=${secret:GONE}"], sandbox: sealed),
+            MCPServerDefinition(name: "held", command: "h", sandbox: sealed, placeholders: ["API_KEY"]),
+            MCPServerDefinition(name: "unknownheld", command: "h", sandbox: sealed, placeholders: ["NOPE"]),
+            MCPServerDefinition(name: "envheld", command: "h", sandbox: sealed, placeholders: ["WAX_TOKEN"]),
+            MCPServerDefinition(name: "bareheld", command: "h", placeholders: ["API_KEY"]),
+            MCPServerDefinition(name: "web", remote: MCPRemoteServer(url: try #require(URL(string: "https://mcp.example/mcp")))),
+            MCPServerDefinition(name: "webmissing", remote: MCPRemoteServer(
+                url: try #require(URL(string: "https://mcp.example/mcp")), headers: ["Authorization": "Bearer ${secret:NOPE}"])),
+        ])
     }
 
     @Test func listJudgesAServerOffExactlyWhenServeWouldRefuseIt() throws {
-        let configuration = MCPConfiguration(servers: [
-            MCPServerDefinition(name: "bare", command: "b"),
-            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
-            MCPServerDefinition(name: "sealed", command: "c", sandbox: MCPSandboxPolicy(network: false)),
-            MCPServerDefinition(name: "web", remote: MCPRemoteServer(url: try #require(URL(string: "https://mcp.example/mcp")))),
-        ])
-        func cause(_ name: String, _ integrity: MCPIntegrityStatus = .trusted, cage: Bool) -> MCPServeRefusal.Cause? {
-            MCPServeRefusal.cause(serving: name, configuration: configuration, integrity: integrity, requireSandbox: cage)
+        let configuration = try Self.configuration()
+        let secrets = try Self.secrets()
+        func cause(
+            _ name: String, _ integrity: MCPIntegrityStatus = .trusted, cage: Bool, placeholders: Bool = true,
+            secrets known: SecretsConfiguration?? = .none
+        ) -> MCPServeRefusal.Cause? {
+            MCPServeRefusal.cause(
+                serving: name, configuration: configuration, integrity: integrity,
+                secrets: known ?? secrets, requireSandbox: cage, placeholdersSupported: placeholders)
         }
         for name in ["bare", "sealed", "web"] {
             #expect(cause(name, .untrusted("no rv signature"), cage: true) == .untrusted)
             #expect(cause(name, .unsupportedPlatform, cage: false) == .trustUnavailable)
+            #expect(cause(name, cage: true, secrets: .some(nil)) == .secretsUnusable)
         }
-        #expect(cause("bare", cage: true) == .notSealed)
-        #expect(cause("open", cage: true) == .notSealed)
+        #expect(cause("bare", cage: true) == .noSandbox("bare"))
+        #expect(cause("open", cage: true) == .openNetwork("open"))
         #expect(cause("sealed", cage: true) == nil)
+        #expect(cause("keyed", cage: true) == nil)
         #expect(cause("web", cage: true) == nil)
+        // A secret secrets.json does not define, by `secrets`, in args, or in a remote header.
+        #expect(cause("missing", cage: true) == .secretUndefined(server: "missing", secret: "NOPE"))
+        #expect(cause("argmissing", cage: true) == .secretUndefined(server: "argmissing", secret: "GONE"))
+        #expect(cause("webmissing", cage: true) == .secretUndefined(server: "webmissing", secret: "NOPE"))
+        // Placeholders: the planner's own checks.
+        #expect(cause("held", cage: true) == nil)
+        #expect(cause("held", cage: true, placeholders: false) == .placeholders(server: "held", .unsupportedPlatform))
+        #expect(cause("held", cage: false) == .cageUnavailable)
+        #expect(cause("unknownheld", cage: true) == .secretUndefined(server: "unknownheld", secret: "NOPE"))
+        #expect(cause("envheld", cage: true) == .placeholders(server: "envheld", .environmentDelivery("WAX_TOKEN")))
+        #expect(cause("bareheld", cage: true) == .noSandbox("bareheld"))
         // No cage on this host: a bare server runs uncaged; one that asks
         // for a sandbox is refused.
         #expect(cause("bare", cage: false) == nil)
-        #expect(cause("sealed", cage: false) == .notSealed)
+        #expect(cause("sealed", cage: false) == .cageUnavailable)
         #expect(cause("web", .noConfiguration, cage: false) == nil)
 
         var managed = configuration
         managed.managed = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
-        #expect(MCPServeRefusal.cause(serving: "bare", configuration: managed, integrity: .trusted, requireSandbox: false) == .notSealed)
-
-        let untrustedList = MCPServeRefusal(servers: ["bare"], cause: .untrusted, log: "")
-        #expect("not governed: " + untrustedList.listReason == "not governed: mcp.json untrusted")
+        #expect(MCPServeRefusal.cause(
+            serving: "bare", configuration: managed, integrity: .trusted, secrets: secrets, requireSandbox: false)
+            == .cageUnavailable)
         #expect(MCPEntryStatus.off.isAcceptable == false)
+    }
+
+    /// The list's answer and the planner's agree, server by server: what
+    /// list calls off, serve refuses; what it would start, serve plans.
+    @Test func listAndThePlannerAgree() throws {
+        let configuration = try Self.configuration()
+        let secrets = try Self.secrets()
+        let resolver = SecretResolver { _ in .success(SecretValue("value-0123456789")!) }
+        for cage in [true, false] {
+            let hook: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = {
+                definition, launch, _ in
+                MCPSandbox.refusesUncaged(definition, enforced: cage) ? .failure(.sandbox("uncaged")) : .success(launch)
+            }
+            for server in configuration.servers where server.placeholders.isEmpty {
+                let listed = MCPServeRefusal.cause(
+                    serving: server.name, configuration: configuration, integrity: .trusted, secrets: secrets,
+                    requireSandbox: cage)
+                let planned = MCPLaunchPlanner.plan(
+                    servers: [server.name], configuration: configuration, secrets: secrets, resolver: resolver,
+                    baseEnvironment: [:], requireSandbox: cage, sandbox: hook)
+                let serveRefuses: Bool = switch planned {
+                case .failure: true
+                case .success(let launches): MCPServeRefusal.cause(ofPlanned: launches.map(\.1), configuration: configuration) != nil
+                }
+                #expect((listed != nil) == serveRefuses, "\(server.name) cage=\(cage): list \(String(describing: listed))")
+            }
+            for server in configuration.servers where server.placeholders.isEmpty == false {
+                let listed = MCPServeRefusal.cause(
+                    serving: server.name, configuration: configuration, integrity: .trusted, secrets: secrets,
+                    requireSandbox: cage, placeholdersSupported: true)
+                guard listed != nil else { continue }
+                let planned = MCPLaunchPlanner.plan(
+                    servers: [server.name], configuration: configuration, secrets: secrets, resolver: resolver,
+                    baseEnvironment: [:], requireSandbox: cage, sandbox: hook,
+                    placeholders: MCPPlaceholderLeasing(
+                        platformSupported: true, capability: { nil }, lease: { _, _ in .failure(.gatewayUnavailable) }))
+                let serveRefuses: Bool = switch planned {
+                case .failure: true
+                case .success(let launches): MCPServeRefusal.cause(ofPlanned: launches.map(\.1), configuration: configuration) != nil
+                }
+                #expect(serveRefuses, "\(server.name) cage=\(cage): list says off, serve would plan it")
+            }
+        }
+    }
+
+    @Test func overlongAndNonScalarIDsAreAnsweredWithNull() throws {
+        let long = String(repeating: "x", count: MCPServeRefusal.maximumIDBytes + 1)
+        let answer = try #require(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":"\#(long)","method":"initialize"}"#.utf8)))
+        #expect(answer["id"] == .null)
+        let object = try #require(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":{"a":1},"method":"initialize"}"#.utf8)))
+        #expect(object["id"] == .null)
+        let fine = try #require(untrusted.answer(Data(#"{"jsonrpc":"2.0","id":"abc","method":"initialize"}"#.utf8)))
+        #expect(fine["id"] == .string("abc"))
     }
 
     // MARK: - The stdio responder
@@ -157,14 +277,65 @@ struct MCPServeRefusalTests {
         let input = try pipePair()
         let output = try pipePair()
         let request = #"{"jsonrpc":"2.0","id":7,"method":"ping"}"# + "\n"
-        Self.send(input.write, String(repeating: request, count: MCPRefusalResponder.maximumAnswers + 5))
+        Self.send(input.write, String(repeating: request, count: MCPRefusalResponder.maximumLines + 5))
         let answered = MCPRefusalResponder.serve(untrusted, input: input.read, output: output.write, idleSeconds: 5)
         close(input.write)
         close(input.read)
         close(output.write)
-        #expect(answered == MCPRefusalResponder.maximumAnswers)
-        #expect(readAll(output.read).count == MCPRefusalResponder.maximumAnswers)
+        #expect(answered == MCPRefusalResponder.maximumLines)
+        #expect(readAll(output.read).count == MCPRefusalResponder.maximumLines)
         close(output.read)
+    }
+
+    /// Empty lines and notifications count too, so trickling them keeps
+    /// nothing alive past the budget.
+    @Test func everyLineCountsTowardTheBudget() throws {
+        let input = try pipePair()
+        let output = try pipePair()
+        let note = #"{"jsonrpc":"2.0","method":"notifications/x"}"# + "\n"
+        Self.send(input.write, String(repeating: "\n", count: 20) + String(repeating: note, count: 20)
+            + #"{"jsonrpc":"2.0","id":1,"method":"ping"}"# + "\n")
+        let answered = MCPRefusalResponder.serve(untrusted, input: input.read, output: output.write, idleSeconds: 5)
+        #expect(answered == 0)
+        for fd in [input.read, input.write, output.read, output.write] { close(fd) }
+    }
+
+    /// A client that trickles bytes without a newline is cut off at the
+    /// overall deadline, not kept alive by each byte.
+    @Test func aTricklingClientIsCutOffAtTheDeadline() throws {
+        let input = try pipePair()
+        let output = try pipePair()
+        let writer = Thread {
+            for _ in 0..<40 {
+                Self.send(input.write, " ")
+                usleep(100_000)
+            }
+        }
+        writer.start()
+        let started = Date()
+        let answered = MCPRefusalResponder.serve(
+            untrusted, input: input.read, output: output.write, idleSeconds: 5, totalSeconds: 1)
+        #expect(answered == 0)
+        #expect(Date().timeIntervalSince(started) < 3)
+        while writer.isFinished == false { usleep(50_000) }
+        for fd in [input.read, input.write, output.read, output.write] { close(fd) }
+    }
+
+    /// A reader that never reads stalls a blocking stdout; the write gives
+    /// up at its deadline instead of hanging serve.
+    @Test func aStalledReaderEndsTheWrite() throws {
+        let output = try pipePair()
+        // Fill the pipe so the next write would block.
+        let flags = fcntl(output.write, F_GETFL)
+        _ = fcntl(output.write, F_SETFL, flags | O_NONBLOCK)
+        var chunk = [UInt8](repeating: 0x61, count: 4096)
+        while chunk.withUnsafeMutableBytes({ write(output.write, $0.baseAddress, $0.count) }) > 0 {}
+        _ = fcntl(output.write, F_SETFL, flags)
+        let started = Date()
+        #expect(MCPRefusalResponder.writeLine(output.write, "{}", seconds: 1) == false)
+        #expect(Date().timeIntervalSince(started) < 3)
+        close(output.read)
+        close(output.write)
     }
 
     @Test func responderGivesUpOnAnIdleClient() throws {
