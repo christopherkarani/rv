@@ -39,6 +39,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case run
     case opencode
     case workspace
+    case box
     case `operator`
     case egress
     case login
@@ -178,6 +179,7 @@ extension HelpTopic {
         case .run: [Run.self]
         case .opencode: [OpenCode.self]
         case .workspace: [Workspace.self]
+        case .box: [BoxCommand.self]
         case .`operator`: [Operator.self]
         case .egress: [Egress.self]
         case .login: [Login.self]

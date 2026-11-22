@@ -10,6 +10,7 @@ public struct RV: AsyncParsableCommand {
             Run.self,
             OpenCode.self,
             Workspace.self,
+            BoxCommand.self,
             Test.self,
             Explain.self,
             Packs.self,

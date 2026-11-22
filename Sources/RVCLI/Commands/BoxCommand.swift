@@ -1,0 +1,256 @@
+import ArgumentParser
+import Foundation
+import RVDomain
+import RVIsolation
+import RVPolicy
+import RVPresentation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
+/// `rv box <agent>`: one front door over `rv workspace run`. It finds the
+/// project, the agent and the resource profile, then launches exactly as
+/// `rv workspace run` would; the workspace host enforces every wall.
+struct BoxCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "box",
+        abstract: "Run an agent in a box for this project."
+    )
+
+    static let usage = [
+        HelpRow(
+            name: "rv box [--linux | --mac] [--profile <id>] [<agent> [args...]]",
+            description: "Run an agent in a box for this repo, found on your PATH; with no agent, open the box shell"),
+        HelpRow(
+            name: "rv box [--linux | --mac] [--profile <id>] -- <command> [args...]",
+            description: "Run any command in the box"),
+        HelpRow(name: "rv box list [--json]", description: "Every box, any strength, newest first; --json writes schema rv.boxes.v1"),
+    ]
+
+    static let flags = [
+        HelpRow(name: "--linux", description: "A network-less Linux micro-VM booted from \(BoxWall.linuxImage), fetched once (macOS 26+, Apple silicon); a bare name runs from the VM's PATH"),
+        HelpRow(name: "--mac", description: "A network-less macOS VM cloned from the prepared image \(BoxWall.macImage) (macOS 27); set it up once with rv-macvm prepare --image \(BoxWall.macImage)"),
+        HelpRow(name: "--profile", description: "Resource profile to stage. Default: the one profile that serves this agent here, else the defaultProfile in runtime-resources.json, else none"),
+    ]
+
+    @Flag(name: .long, help: "Run in a network-less Linux micro-VM.")
+    var linux = false
+
+    @Flag(name: .long, help: "Run in a network-less macOS VM.")
+    var mac = false
+
+    @Option(name: .long, help: "Owner resource profile ID to stage. Default: the profile that serves this agent here.")
+    var profile: String?
+
+    @Argument(parsing: .captureForPassthrough, help: "An agent name and its arguments, or -- and a command.")
+    var words: [String] = []
+
+    func run() async throws {
+        // `list` is read from the captured words: a passthrough capture
+        // takes every word after the flags, a subcommand name included.
+        if words.first == BoxListCommand.configuration.commandName {
+            let rest = Array(words.dropFirst())
+            if rest.contains(where: { $0 == "--help" || $0 == "-h" }) {
+                _ = HelpDispatch.tryEmit(arguments: ["box", "--help"])
+                return
+            }
+            let list = try BoxListCommand.parse(rest)
+            try list.run()
+            return
+        }
+        try await BoxRun.run(linux: linux, mac: mac, profile: profile, captured: words)
+    }
+}
+
+/// `rv box list`. Not a registered subcommand: `BoxCommand` hands it the
+/// words after `list`.
+struct BoxListCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list",
+        abstract: "List boxes, newest first."
+    )
+
+    @OptionGroup
+    var format: FormatFlags
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "box list", format: format)
+        #if os(macOS)
+        let home = try ctx.requireHome()
+        let boxes = BoxRun.listings(home: home)
+        let shownHome = BoxRun.canonical(home.rawValue)
+        let platformNote: String? = nil
+        #else
+        let boxes: [BoxListing] = []
+        let shownHome: String? = nil
+        let platformNote: String? = "boxes run on macOS only today"
+        #endif
+        if ctx.explicitRobot {
+            ctx.writeStdout(try RobotJSON.encode(BoxListRender.document(boxes), options: .compactISO8601) + "\n")
+        } else {
+            ctx.writeStdout(BoxListRender.text(boxes, home: shownHome, platformNote: platformNote))
+        }
+    }
+}
+
+/// The imperative shell of `rv box`: reads the machine, then hands the
+/// launch `BoxPlan` resolved to `WorkspaceCommandRun`.
+enum BoxRun {
+    static func run(linux: Bool, mac: Bool, profile: String?, captured: [String]) async throws {
+        #if !os(macOS)
+        try refuse(BoxPlan.linuxHostRefusal)
+        #else
+        let clock = ContinuousClock()
+        let started = clock.now
+        let surroundings = live()
+        let start: BoxStart
+        switch BoxPlan.start(
+            linux: linux, mac: mac, profile: profile, captured: captured, surroundings: surroundings)
+        {
+        case .failure(let refusal): try refuse(refusal)
+        case .success(let value): start = value
+        }
+        switch start {
+        case .shell(let project):
+            guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
+                try refuse(BoxPlan.shellNeedsTerminal)
+            }
+            try await WorkspaceTUICommand.run(project)
+        case .launch(let launch):
+            try runLaunch(launch, surroundings: surroundings) {
+                let elapsed = started.duration(to: clock.now).components
+                return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+            }
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private static func runLaunch(
+        _ launch: BoxLaunch, surroundings: BoxSurroundings, elapsed: () -> Double
+    ) throws {
+        if let microVM = launch.wall.microVM {
+            do throws(WorkspaceMicroVM.Unready) {
+                try WorkspaceMicroVM.ensureReady(microVM, project: launch.project)
+            } catch {
+                try refuse(BoxPlan.refusal(error))
+            }
+        }
+        let home = surroundings.home
+        let workingDirectory = surroundings.workingDirectory
+        writeStderr(BoxPlan.startLines(launch, home: home, workingDirectory: workingDirectory))
+        let exitLine = BoxPlan.exitLine(project: launch.project, workingDirectory: workingDirectory, home: home)
+        do {
+            try WorkspaceCommandRun.runInteractive(
+                project: launch.project,
+                executable: launch.executable,
+                arguments: launch.arguments,
+                hook: launch.hook,
+                rows: nil,
+                columns: nil,
+                resourceProfileID: launch.profile?.id,
+                microVM: launch.wall.microVM,
+                onLaunched: { writeStderr(BoxPlan.readyLine(seconds: elapsed())) }
+            )
+        } catch let exit as ExitCode {
+            // The runtime ran and exited; its writes are still in the box.
+            writeStderr(exitLine)
+            throw exit
+        } catch let error as ValidationError {
+            try refuse(BoxRefusal(why: error.message))
+        }
+        writeStderr(exitLine)
+    }
+
+    /// The machine, as `BoxPlan` reads it.
+    static func live() -> BoxSurroundings {
+        let environment = CLIProcess.environment()
+        let pathDirectories = (environment["PATH"] ?? "/usr/bin:/bin").split(separator: ":")
+            .map(String.init).filter { $0.hasPrefix("/") && $0.contains("\0") == false }
+        return BoxSurroundings(
+            workingDirectory: canonical(FileManager.default.currentDirectoryPath) ?? "/",
+            home: HomeDirectory.process().flatMap { canonical($0.rawValue) },
+            policy: WorkspaceTUICommand.loadResourceProfiles(),
+            hasGitEntry: { FileManager.default.fileExists(atPath: $0 + "/.git") },
+            findOnPath: { name in
+                for directory in pathDirectories {
+                    let candidate = URL(fileURLWithPath: directory, isDirectory: true)
+                        .appendingPathComponent(name).path
+                    var isDirectory: ObjCBool = false
+                    guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
+                        isDirectory.boolValue == false,
+                        FileManager.default.isExecutableFile(atPath: candidate)
+                    else { continue }
+                    return canonical(candidate) ?? candidate
+                }
+                return nil
+            }
+        )
+    }
+
+    /// Open workspaces and leftovers, with the walls their runtimes used.
+    static func listings(home: HomeDirectory) -> [BoxListing] {
+        let runtimeLog = RVPolicyPaths.configDirectory(home: home)
+            .appendingPathComponent("runtime-sessions.jsonl", isDirectory: false)
+        let runtimes = RuntimeSessionLog.records(at: runtimeLog).map { (workspace: $0.workspaceSession, backend: $0.backend) }
+        return WorkspaceHosts.unclosedWorkspaces().compactMap { found -> BoxListing? in
+            var workspace = found.workspace
+            let state: BoxListing.State
+            switch found.attachment {
+            case .live(let endpoint):
+                state = .open
+                workspace = endpoint.workspace
+            case .starting: state = .starting
+            case .orphaned, .staleEndpoint: state = .unfinished
+            case .recovering: state = .recovering
+            case .blocked: state = .blocked
+            case .absent, .unsupported: return nil
+            }
+            return BoxListing(
+                project: found.project, workspace: workspace, state: state, lastActive: found.recordedAt,
+                walls: BoxListRender.walls(for: workspace, runtimes: runtimes))
+        }
+    }
+    #endif
+
+    /// `realpath(3)`: the path the workspace host and profiles use.
+    static func canonical(_ path: String) -> String? {
+        guard path.hasPrefix("/"), path.contains("\0") == false, let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    private static func refuse(_ refusal: BoxRefusal) throws -> Never {
+        writeStderr(refusal.text)
+        throw ExitCode(refusal.exitCode)
+    }
+
+    private static func writeStderr(_ text: String) {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+}
+
+extension HelpCatalog {
+    static let box = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: BoxCommand.usage),
+            HelpSection(heading: "Flags", rows: BoxCommand.flags),
+            HelpSection(heading: "Walls", rows: [
+                HelpRow(name: "cage", description: "Default. Seatbelt on the workspace host: starts at once, public HTTPS through rv, LAN closed"),
+                HelpRow(name: "linux", description: "--linux: its own Linux kernel and no network card; public HTTPS through rv"),
+                HelpRow(name: "mac", description: "--mac: a whole macOS VM with no network card, cloned fresh for each run"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "project", description: "The nearest folder at or above this one that holds .git, else this folder; never your home folder"),
+                HelpRow(name: "writes", description: "Stay in the box until rv workspace close brings them home"),
+                HelpRow(name: "keys", description: "Only what the resource profile stages; rv init writes one for this project"),
+                HelpRow(name: "platform", description: "macOS only; on Linux rv box refuses rather than use a weaker wall"),
+            ]),
+        ],
+        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list"]
+    )
+}
