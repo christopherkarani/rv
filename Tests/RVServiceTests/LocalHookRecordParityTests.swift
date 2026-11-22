@@ -205,15 +205,21 @@ struct LocalHookRecordBudgetTests {
 }
 
 /// Holds an exclusive `flock` on `path` from another process until released.
+/// `release` waits for the holder's stdout to close, never on
+/// `Process.waitUntilExit`, which hung a local run after the child was
+/// already gone: the holder unlocks before it exits, so EOF means unlocked.
 final class FileLockHolder: @unchecked Sendable {
     private let process: Process
+    private let out: FileHandle
+    private let released = UnfairLock(false)
 
     init(path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [
             "-e",
-            #"use Fcntl qw(:flock); open(F, ">>", $ARGV[0]) or die; flock(F, LOCK_EX) or die; $| = 1; print "locked\n"; sleep 30"#,
+            #"use Fcntl qw(:flock); open(F, ">>", $ARGV[0]) or die; flock(F, LOCK_EX) or die; "#
+                + #"$SIG{TERM} = sub { flock(F, LOCK_UN); close(F); exit 0 }; $| = 1; print "locked\n"; sleep 30"#,
             path,
         ]
         let out = Pipe()
@@ -225,11 +231,12 @@ final class FileLockHolder: @unchecked Sendable {
             throw LocalHookFixtureError.noReply("lock holder did not start")
         }
         self.process = process
+        self.out = out.fileHandleForReading
     }
 
     func release() {
-        guard process.isRunning else { return }
-        process.terminate()
-        process.waitUntilExit()
+        guard released.withLock({ done in defer { done = true }; return !done }) else { return }
+        if process.isRunning { process.terminate() }
+        _ = out.readDataToEndOfFile()
     }
 }
