@@ -99,7 +99,7 @@ struct EnglishCompileChainTests {
             return
         }
         #expect(grammar.sentence == "Always block force-push to main")
-        guard case .preview(let model) = try await chain.compile("under no circumstances force push to main") else {
+        guard case .preview(let model) = try await chain.compile("force pushing to main is forbidden") else {
             Issue.record("expected the model's rule")
             return
         }
@@ -150,7 +150,7 @@ struct EnglishCompileChainTests {
         let chain = EnglishCompileChain(
             primary: FormEnglishCompiler(force: .exactly(.force), branch: branch, verdict: .deny),
             fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler())
-        guard case .refuse = try await chain.compile("under no circumstances force push to \(branch)") else {
+        guard case .refuse = try await chain.compile("force pushing to \(branch) is forbidden") else {
             Issue.record("expected a refusal for branch \(branch)")
             return
         }
@@ -161,20 +161,20 @@ struct EnglishCompileChainTests {
     /// words (verdict, push, force kind, branch) or it is refused.
     @Test(arguments: [
         // force sentence, model says no force
-        ("under no circumstances force push to main", GitPushForceConstraint.exactly(.none), "main" as String?,
+        ("force pushing to main is forbidden", GitPushForceConstraint.exactly(.none), "main" as String?,
          TypedRuleVerdict.deny, "it says force-push"),
         // no force in the sentence, model says force
-        ("under no circumstances push to main", .exactly(.force), "main", .deny, "and the draft was force-push"),
+        ("pushing to main is forbidden", .exactly(.force), "main", .deny, "and the draft was force-push"),
         // force-with-lease sentence, model says plain force
-        ("under no circumstances push --force-with-lease to main", .exactly(.force), "main", .deny,
+        ("pushing --force-with-lease to main is forbidden", .exactly(.force), "main", .deny,
          "it says --force-with-lease"),
         // branch the sentence never names
-        ("under no circumstances force push to main", .exactly(.force), "release", .deny,
+        ("force pushing to main is forbidden", .exactly(.force), "release", .deny,
          "doesn't name the branch release"),
         // every branch, when the sentence names one
-        ("under no circumstances force push to main", .exactly(.force), nil, .deny, "covers every branch"),
+        ("force pushing to main is forbidden", .exactly(.force), nil, .deny, "covers every branch"),
         // verdict flipped
-        ("under no circumstances force push to main", .exactly(.force), "main", .allow, "reads as deny"),
+        ("force pushing to main is forbidden", .exactly(.force), "main", .allow, "reads as deny"),
         ("pushing with force to main is fine", .exactly(.force), "main", .deny, "reads as allow"),
         // no push in the sentence
         ("keep main safe from forced history rewrites", .exactly(.force), "main", .deny, "doesn't say push"),

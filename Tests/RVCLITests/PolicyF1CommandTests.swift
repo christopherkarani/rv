@@ -4,6 +4,7 @@ import Testing
 import RVDomain
 import RVPolicy
 import RVPresentation
+import RVTheme
 @testable import RVCLI
 
 /// F1 policy bugs: draft drafts plain sentences, errors say line and fix,
@@ -34,7 +35,48 @@ struct PolicyF1CommandTests {
         ) {
             try await PolicyDraftCommand.parse(["never force push to main"]).run()
         }
-        #expect(out.stdout == "Always block force-push to main\ntyped.git:force-push-main deny gitPush force=force branch=main\n")
+        #expect(out.stdout == "  ✕ never git push --force → main\n  typed.git:force-push-main\n")
+    }
+
+    /// The preview line the artifact shows: glyph and verb, command, → branch,
+    /// then the rule id. Predicate fields stay in --json.
+    @Test(arguments: [
+        ("never force push to main", "  ✕ never git push --force → main\n  typed.git:force-push-main"),
+        ("ask before pushing to release", "  ◐ ask git push → release\n  typed.git:git-push-release-ask"),
+        ("ask before push --force-with-lease to main",
+         "  ◐ ask git push --force-with-lease → main\n  typed.git:git-push-forceWithLease-main-ask"),
+        ("never force push to origin/main",
+         "  ✕ never git push --force → main · origin/main read as branch main\n  typed.git:force-push-main"),
+        ("it is fine to force push to main",
+         "  ✓ allow git push --force → main\n  typed.git:git-push-force-main-allow\n"
+            + "  allow only narrows: it never lets through what rv or a pack stops"),
+        ("under no circumstances force push to main", "  ✕ never git push --force → main\n  typed.git:force-push-main"),
+        ("block git reset --hard", "  ✕ never git reset --hard\n  typed.git:reset-hard-deny"),
+        ("never rm -rf", "  ✕ never rm -rf\n  typed.filesystem:delete-rf-deny"),
+    ])
+    func draft_previewLine_matchesTheArtifact(english: String, expected: String) async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let result = try await PolicyDraftRun.execute(
+            english: english, save: false, robot: false, home: home, workspace: workspace,
+            compiler: PlainEnglishRuleCompiler())
+        #expect(result.text == expected)
+    }
+
+    @Test func draft_previewGlyph_usesTheVocabularyColours() async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let palette = Palette(for: ColorCapability(colorsEnabled: true))
+        for (english, ink, glyph) in [
+            ("never force push to main", palette.deny, "✕"), ("ask before pushing to release", palette.mark, "◐"),
+            ("allow force push to main", palette.allow, "✓"),
+        ] {
+            let result = try await PolicyDraftRun.execute(
+                english: english, save: false, robot: false, home: home, workspace: workspace,
+                compiler: PlainEnglishRuleCompiler(), palette: palette)
+            #expect(result.text.hasPrefix("  " + ink + glyph + palette.reset + " "), "\(english)")
+            #expect(result.text.contains(palette.muted + "→" + palette.reset))
+        }
     }
 
     @Test func draft_sentenceGivenTwice_isAUsageError() {
@@ -73,7 +115,7 @@ struct PolicyF1CommandTests {
         let (home, workspace) = try scratch()
         defer { cleanup(home, workspace) }
         let result = try await PolicyDraftRun.execute(
-            english: "under no circumstances force push to main", save: true, robot: false, home: home,
+            english: "force pushing to main is forbidden", save: true, robot: false, home: home,
             workspace: workspace,
             compiler: EnglishCompileChain(
                 primary: NoForceModel(), fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler()))
@@ -121,8 +163,11 @@ struct PolicyF1CommandTests {
         let result = try await PolicyDraftRun.execute(
             english: "allow force push to main", save: false, robot: false, home: home, workspace: workspace,
             compiler: PlainEnglishRuleCompiler())
-        #expect(result.text.hasSuffix("\n" + PolicyDraftRun.restrictOnlyNote))
-        #expect(PolicyDraftRun.restrictOnlyNote.contains("restrict-only"))
+        #expect(result.text == """
+              ✓ allow git push --force → main
+              typed.git:git-push-force-main-allow
+              allow only narrows: it never lets through what rv or a pack stops
+            """)
     }
 
     // MARK: validate / apply errors

@@ -5,6 +5,7 @@ import RVHistory
 import RVPolicy
 import RVPresentation
 import RVService
+import RVTheme
 
 struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
@@ -64,7 +65,8 @@ struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
                 robot: ctx.explicitRobot,
                 home: home,
                 workspace: workspace,
-                compiler: compiler
+                compiler: compiler,
+                palette: ctx.appearance.palette
             )
         } catch let error as PolicyCeilingError {
             try ctx.fail("rv policy draft: refused: \(error.refusal)\n")
@@ -112,7 +114,8 @@ enum PolicyDraftRun {
         robot: Bool,
         home: HomeDirectory,
         workspace: URL,
-        compiler: some EnglishCompiler
+        compiler: some EnglishCompiler,
+        palette: Palette = colorOffPalette
     ) async throws -> PolicyDraftResult {
         // Compile first: the owner approves the rule they can see, and a
         // sentence with nothing to save never asks.
@@ -131,7 +134,7 @@ enum PolicyDraftRun {
             return PolicyDraftResult(
                 text: try render(
                     compiled, english: english, alreadyOn: alreadyOn, robot: robot,
-                    reason: why ?? refusalReason(reason, english: english)),
+                    reason: why ?? refusalReason(reason, english: english), palette: palette),
                 outcome: .refuse(reason),
                 alreadyOn: alreadyOn
             )
@@ -149,7 +152,8 @@ enum PolicyDraftRun {
                 }
             }
             return PolicyDraftResult(
-                text: try render(compiled, english: english, alreadyOn: false, robot: robot, reason: nil),
+                text: try render(
+                    compiled, english: english, alreadyOn: false, robot: robot, reason: nil, palette: palette),
                 outcome: .preview(saved: savedDocument != nil),
                 savedHash: savedDocument.map(PolicyRevisionIdentity.hash)
             )
@@ -162,7 +166,8 @@ enum PolicyDraftRun {
     }
 
     private static func render(
-        _ result: EnglishCompileResult, english: String, alreadyOn: Bool, robot: Bool, reason why: String?
+        _ result: EnglishCompileResult, english: String, alreadyOn: Bool, robot: Bool, reason why: String?,
+        palette: Palette
     ) throws -> String {
         if robot {
             switch result {
@@ -175,11 +180,7 @@ enum PolicyDraftRun {
         }
         switch result {
         case .preview(let preview):
-            var lines = ["\(DisplayedText.field(preview.sentence))", formatDocumentRule(preview.rule)]
-            if preview.rule.verdict == .allow {
-                lines.append(restrictOnlyNote)
-            }
-            return lines.joined(separator: "\n")
+            return PolicyDraftPreview.lines(preview, palette: palette).joined(separator: "\n")
         case .refuse(.alreadyBuiltIn):
             if alreadyOn {
                 return "✓ Already on: rv stops deletes and moves outside this repo "
@@ -191,10 +192,6 @@ enum PolicyDraftRun {
             return "refused (\(reason.rawValue)): \(why ?? refusalReason(reason, english: english))"
         }
     }
-
-    /// Typed rules only add stops; an allow cannot loosen rv or a pack.
-    static let restrictOnlyNote =
-        "note: allow is restrict-only: it never lets through what rv or a pack stops, so this rule changes nothing on its own"
 
     /// One line: the grammar's own reason when it has one, else the kind's.
     static func refusalReason(_ reason: EnglishCompileRefusal, english: String) -> String {

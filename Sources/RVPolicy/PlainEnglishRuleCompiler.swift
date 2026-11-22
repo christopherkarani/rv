@@ -150,6 +150,8 @@ public struct PlainEnglishRuleCompiler: ReasonedEnglishCompiler {
             "you shouldn't", "can't", "cannot", "may not", "must not", "it is not ok to", "it's not ok to",
             "it is not okay to", "it's not okay to", "it is not fine to", "it's not fine to", "not ok to",
             "it is never ok to", "it's never ok to",
+            "under no circumstances", "under no circumstance", "under no circumstances should", "do not ever",
+            "don't ever", "dont ever", "never ever",
         ]
         let ask = [
             "always ask before", "always ask me before", "ask me before", "ask first before", "ask before",

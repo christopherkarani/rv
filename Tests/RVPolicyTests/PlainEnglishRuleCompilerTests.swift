@@ -174,6 +174,17 @@ struct PlainEnglishRuleCompilerTests {
         #expect(preview.sentence == "Always allow force-push to main")
     }
 
+    /// Mac check of #669: these read as never without the model.
+    @Test(arguments: [
+        "under no circumstances force push to main", "do not force push to main", "don't ever force push to main",
+        "never ever force push to main", "never, ever force push to main", "do not ever force push to main",
+    ])
+    func emphaticNever_isDeny(sentence: String) throws {
+        let drafted = try #require(rule(sentence))
+        #expect(drafted.verdict == .deny)
+        #expect(drafted.predicate == .gitPush(force: .exactly(.force), branch: "main"))
+    }
+
     /// Negated permission reads as never, not as allow.
     @Test(arguments: [
         "you can't force push to main", "you cannot force push to main", "you may not force push to main",
