@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
+import RVJudgePool
 import RVPolicy
 @testable import RVService
 
@@ -48,6 +49,28 @@ struct LocalHookDeciderTests {
         // The safe-lane judge-log row rvd would have written.
         let log = try fixture.configFileText("judge-log.jsonl")
         #expect(log.contains("\"note\":\"safe-lane"))
+    }
+
+    /// The write deadline follows the injected local deadline; production
+    /// keeps the C hook's 1 s.
+    @Test func theWriteDeadlineFollowsTheInjectedLocalDeadline() async throws {
+        let started = ContinuousClock.now
+        #expect(LocalHookDecider.writeDeadline(started: started)
+            == started + .seconds(1) - LocalHookDecider.replyMargin)
+        #expect(LocalHookDecider.writeDeadline(started: started, localDeadline: .seconds(5))
+            == started + .seconds(5) - LocalHookDecider.replyMargin)
+
+        // Started 2 s ago: past the real deadline, inside the injected one,
+        // so the safe-lane judge-log row still lands.
+        let fixture = try LocalHookFixture(judgeBundle: true, localDeadline: .seconds(120))
+        let local = await fixture.decider.decide(
+            host: .claude, stdin: claudeBash("git status", cwd: fixture.workspace),
+            started: .now - .seconds(2))
+        guard case .final = local else {
+            Issue.record("safe-lane call must be decided locally, got \(local)")
+            return
+        }
+        #expect(try fixture.configFileText("judge-log.jsonl").contains("\"note\":\"safe-lane"))
     }
 
     @Test func fileToolSecretDenyIsFinalAuditedAndMatchesRvd() async throws {
@@ -243,8 +266,15 @@ struct LocalHookFixture {
     let home: HomeDirectory
     let workspace: String
     let decider: LocalHookDecider
+    /// The judge pool both the evaluator and rvd ask; nil: no pool.
+    let judge: (any JudgeClient)?
 
-    init(judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true) throws {
+    /// `localDeadline` defaults to `testLocalDeadline`; tests of the real
+    /// deadline pass `LocalHookDecider.localDeadline`.
+    init(
+        judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true, judge: (any JudgeClient)? = nil,
+        localDeadline: Duration = testLocalDeadline
+    ) throws {
         let root = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: root.path))
         let workspace = root.appendingPathComponent("work", isDirectory: true)
@@ -271,13 +301,15 @@ struct LocalHookFixture {
         }
         self.home = home
         self.workspace = workspace.path
-        self.decider = LocalHookDecider(home: home)
+        self.decider = LocalHookDecider(home: home, judge: judge, localDeadline: localDeadline)
+        self.judge = judge
     }
 
     /// rvd's reply for the same call, from a fresh runtime over this home.
     func rvdReply(host: HookHost, stdin: String) async throws -> HookEvaluateReply {
         let runtime = hookTestRuntime(
-            home: home, allowOnceDirectory: try isolatedAllowOnceDirectory())
+            home: home, allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            judge: judge.map { PoolJudgePort(client: $0) } ?? LiveJudgePort())
         let response = await runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: host, stdin: stdin))),
             context: peerHookContext()
