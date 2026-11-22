@@ -145,8 +145,8 @@ an answer. The pool keeps both workers loaded.
   runs the in-process judge: no fallback, so killing the pool cannot move
   rvd back onto the crash-prone path. `rv test` and the bench CLI keep the
   in-process judge (`JudgeSlot`, its `NSLock`), since they have no pool.
-  Known difference: when the bundle fails to load, `rv test` shows the
-  in-process path's packs-only result, while the live hook gets review.
+  A bundle that is there but fails to load is review on both paths; only
+  a bundle dir that is not there at all is packs-only.
 - The client keeps one verified connection. The budget sent is computed
   after the connection is obtained: `min(1.5 s, hook deadline − now − 400 ms
   − 250 ms transport slack)`; nothing left is `late` without asking. The
@@ -171,8 +171,8 @@ an answer. The pool keeps both workers loaded.
 
 Every row but a verdict is review. A missing bundle never reaches the pool:
 rvd decides that first (`engine-missing`, packs-only, as before). A bundle
-that is present but fails to load in the worker is review, not the in-process
-path's packs-only floor: the failure can be induced (a full disk, a corrupt
+that is present but fails to load in the worker is review, as in-process,
+never the packs-only floor: the failure can be induced (a full disk, a corrupt
 compile cache), and the floor would make it an unjudged allow. The
 `judgePool` doctor check names the load failure, and the worker retries the
 load every 60 s.

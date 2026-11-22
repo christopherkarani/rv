@@ -71,7 +71,7 @@ public struct CompiledModelRefusal: CoreMLRefusal, Equatable {
 /// Core ML could not compile or load the judge model even after the store's
 /// one discard-and-retry. An agent can provoke that (a swapped compile
 /// output, a poisoned e5rt cache), so it refuses to review like any other
-/// refusal; a bundle with no model at all stays packs-only (absence).
+/// refusal; only a bundle dir that is not there at all is packs-only.
 public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     public let detail: String
 
@@ -80,8 +80,10 @@ public struct CoreMLLoadRefusal: CoreMLRefusal, Equatable {
     }
 
     public var reason: String {
-        "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review. "
-            + "Run `rv doctor`; if it persists, reinstall the judge model (re-run rv's install script)."
+        // Reaches the agent too: it sends the agent to the owner, never to a
+        // repair (the installer, doctor's fixes) of its own.
+        "Laya judge: Core ML could not compile or load the judge model (\(detail)); judged calls go to review "
+            + "until the owner repairs the judge install. Ask the owner to run `rv doctor`."
     }
 }
 
@@ -198,7 +200,21 @@ public final class CoreMLGuard: Sendable {
 
     /// Where verified compiled models live; nil refuses every load.
     var modelRoot: URL? {
-        stateRoot?.appendingPathComponent("models", isDirectory: true)
+        stateRoot.map(Self.modelRoot(stateRoot:))
+    }
+
+    /// `<stateRoot>/models`: the verified compiled-model cache.
+    public static func modelRoot(stateRoot: URL) -> URL {
+        stateRoot.appendingPathComponent("models", isDirectory: true)
+    }
+
+    /// The model cache under `stateRoot` when it is this user's directory
+    /// but its owner cannot use it (mode 0000, say): every load refuses
+    /// until the owner restores it. Doctor names the fix; the refusal the
+    /// agent sees does not. One `lstat`: no crash marker, no lock, no write.
+    public static func inaccessibleModelCache(stateRoot: URL) -> URL? {
+        let root = modelRoot(stateRoot: stateRoot)
+        return CompiledModelStore<Never>.inaccessibleMode(root).map { _ in root }
     }
 
     /// Compute units for the next model load (runs crash recovery once).
