@@ -58,6 +58,7 @@ enum HelpCatalog {
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
+                    HelpRow(name: "try", description: "Watch rv stop a fake agent in a throwaway repo"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
                 ],
                 accentNames: true
