@@ -368,7 +368,7 @@ struct CompiledModelStore<Model> {
 
     /// Why `usableRoot` refused. The refusal reaches the agent, so it names
     /// the problem only; doctor names the owner's fix
-    /// (`CoreMLGuard.Status.inaccessibleModelCache`).
+    /// (`CoreMLGuard.inaccessibleModelCache(stateRoot:)`).
     static func rootProblem(_ root: URL) -> String {
         if let mode = inaccessibleMode(root) {
             return "the model cache \(root.path) is not accessible to its owner (mode \(String(mode, radix: 8)))"

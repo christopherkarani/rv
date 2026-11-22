@@ -124,23 +124,16 @@ public final class CoreMLGuard: Sendable {
         /// The reason of the last judge load this guard refused; nil once a
         /// load succeeds.
         public let lastRefusal: String?
-        /// The verified-model cache dir when it is this user's directory but
-        /// its owner cannot use it (mode 0000, say): every load refuses until
-        /// the owner restores it. Doctor names the fix; the refusal the agent
-        /// sees does not.
-        public let inaccessibleModelCache: String?
 
         public init(
             units: JudgeComputeUnits, cpuOnlyUntil: Date?, diskLow: Bool,
-            crashMarkerUnavailable: Bool = false, lastRefusal: String? = nil,
-            inaccessibleModelCache: String? = nil
+            crashMarkerUnavailable: Bool = false, lastRefusal: String? = nil
         ) {
             self.units = units
             self.cpuOnlyUntil = cpuOnlyUntil
             self.diskLow = diskLow
             self.crashMarkerUnavailable = crashMarkerUnavailable
             self.lastRefusal = lastRefusal
-            self.inaccessibleModelCache = inaccessibleModelCache
         }
     }
 
@@ -207,7 +200,21 @@ public final class CoreMLGuard: Sendable {
 
     /// Where verified compiled models live; nil refuses every load.
     var modelRoot: URL? {
-        stateRoot?.appendingPathComponent("models", isDirectory: true)
+        stateRoot.map(Self.modelRoot(stateRoot:))
+    }
+
+    /// `<stateRoot>/models`: the verified compiled-model cache.
+    public static func modelRoot(stateRoot: URL) -> URL {
+        stateRoot.appendingPathComponent("models", isDirectory: true)
+    }
+
+    /// The model cache under `stateRoot` when it is this user's directory
+    /// but its owner cannot use it (mode 0000, say): every load refuses
+    /// until the owner restores it. Doctor names the fix; the refusal the
+    /// agent sees does not. One `lstat`: no crash marker, no lock, no write.
+    public static func inaccessibleModelCache(stateRoot: URL) -> URL? {
+        let root = modelRoot(stateRoot: stateRoot)
+        return CompiledModelStore<Never>.inaccessibleMode(root).map { _ in root }
     }
 
     /// Compute units for the next model load (runs crash recovery once).
@@ -223,10 +230,7 @@ public final class CoreMLGuard: Sendable {
         return Status(
             units: current.units, cpuOnlyUntil: current.cpuOnlyUntil, diskLow: diskShortfall() != nil,
             crashMarkerUnavailable: tracksCrashes && current.store == nil,
-            lastRefusal: refusal.withLock { $0 },
-            inaccessibleModelCache: modelRoot.flatMap { root in
-                CompiledModelStore<Never>.inaccessibleMode(root).map { _ in root.path }
-            })
+            lastRefusal: refusal.withLock { $0 })
     }
 
     /// Records the last refused load (nil after a good one) for doctor.

@@ -7,6 +7,7 @@ import Foundation
 import Testing
 @testable import RVService
 import RVDomain
+import RVIPC
 import RVJudgePool
 import RVLaya
 
@@ -246,16 +247,65 @@ struct JudgeLoadFailsClosedTests {
     }
     #endif
 
+    #if canImport(CoreML)
     /// The owner-only fix for an unopenable model cache lives in doctor,
-    /// never in the agent-visible refusal.
-    @Test("doctor names the chmod for a model cache its owner cannot open")
-    func doctorNamesModelCacheFix() {
-        let status = CoreMLGuard.Status(
-            units: .cpuAndGPU, cpuOnlyUntil: nil, diskLow: false,
-            inaccessibleModelCache: "/h/.config/rv/cache/laya")
-        let notes = DoctorSnapshotBuilder.coreMLNotes(status)
-        #expect(notes.contains { $0.contains("chmod 700 '/h/.config/rv/cache/laya'") }, "\(notes)")
+    /// never in the agent-visible refusal. Doctor names it whenever a bundle
+    /// is selected: with the pool bound (rvd on macOS) or not, and for an
+    /// invalid bundle too. The path is one shell word even with a quote and
+    /// a space in it.
+    @Test("doctor names the chmod for a model cache its owner cannot open, pool bound or not")
+    func doctorNamesModelCacheFix() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv judge's home \(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let cache = CoreMLGuard.modelRoot(
+            stateRoot: CoreMLGuard.stateRoot(configDirectory: root.appendingPathComponent(".config/rv")))
+        defer {
+            chmod(cache.path, 0o700)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let home = try #require(HomePath(validating: root.path))
+        let bundle = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: bundle.appendingPathComponent("tokenizer.json"))
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+
+        func check(poolBound: Bool) -> DoctorCheck {
+            DoctorSnapshotBuilder.judgeCheck(home: home, circuit: .closed, poolBound: poolBound)
+        }
+        for bound in [false, true] {
+            #expect(!check(poolBound: bound).message.contains("chmod"), "a usable cache adds no note")
+        }
+        chmod(cache.path, 0)
+        for bound in [true, false] {
+            let ok = check(poolBound: bound)
+            #expect(ok.status == .warning)
+            #expect(try Self.shellWord(afterChmodIn: ok.message) == cache.path, "\(ok.message)")
+        }
+        // A selected bundle that fails a check still loads through the cache.
+        try FileManager.default.removeItem(at: bundle.appendingPathComponent("tokenizer.json"))
+        let invalid = check(poolBound: true)
+        #expect(invalid.message.contains("bundle invalid"), "\(invalid.message)")
+        #expect(try Self.shellWord(afterChmodIn: invalid.message) == cache.path, "\(invalid.message)")
     }
+
+    /// The word doctor prints after `chmod 700 `, as `/bin/sh` reads it.
+    static func shellWord(afterChmodIn message: String) throws -> String {
+        let start = try #require(message.range(of: "`chmod 700 "))
+        let end = try #require(message[start.upperBound...].firstIndex(of: "`"))
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "printf '%s' " + message[start.upperBound..<end]]
+        let out = Pipe()
+        shell.standardOutput = out
+        try shell.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        shell.waitUntilExit()
+        #expect(shell.terminationStatus == 0)
+        return String(decoding: data, as: UTF8.self)
+    }
+    #endif
 
     #if canImport(CoreML)
     /// A tokenizer that is there but corrupt is a broken install, not an

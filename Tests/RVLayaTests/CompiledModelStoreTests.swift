@@ -624,15 +624,13 @@ struct CompiledModelStoreTests {
         #expect(f.coreML.compiles == 0)
 
         let state = f.base.appendingPathComponent("state", isDirectory: true)
-        let guardian = CoreMLGuard(
-            store: nil, disk: FakeDisk(free: 100 << 30), cacheVolume: nil, stateRoot: state,
-            purgeCoreMLCache: {}, log: { _ in })
-        #expect(guardian.status.inaccessibleModelCache == nil)
-        let models = try #require(guardian.modelRoot)
+        #expect(CoreMLGuard.inaccessibleModelCache(stateRoot: state) == nil, "an absent cache is not inaccessible")
+        let models = CoreMLGuard.modelRoot(stateRoot: state)
         try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+        #expect(CoreMLGuard.inaccessibleModelCache(stateRoot: state) == nil)
         chmod(models.path, 0)
         defer { chmod(models.path, 0o700) }
-        #expect(guardian.status.inaccessibleModelCache == models.path)
+        #expect(CoreMLGuard.inaccessibleModelCache(stateRoot: state) == models)
     }
 
     /// The retry's discard waits for the store lock too. A lock still held
