@@ -202,14 +202,10 @@ enum MCPRun {
         let inventory = MCPInventory.discover(
             home: environment.home, project: project, environment: environment.processEnvironment)
         let integrity = environment.integrity
+        let secrets = try? SecretsConfiguration.load(configDirectory: environment.configDirectory).get()
         let rows = MCPInventoryRow.rows(inventory, configuration: configuration, rvExecutable: rvExecutable).map { row in
-            // "governed" only when serve would start it.
             let off = row.status == .governed
-                ? row.entry.governedServer.flatMap { server in
-                    MCPServeRefusal.cause(serving: server, configuration: configuration, integrity: integrity).map {
-                        MCPServeRefusal(servers: [server], cause: $0, log: "")
-                    }
-                }
+                ? offRefusal(row.entry, configuration: configuration, integrity: integrity, secrets: secrets)
                 : nil
             return Row(
                 host: row.entry.host.rawValue,
@@ -222,7 +218,7 @@ enum MCPRun {
                 headerNames: row.headerNames,
                 plaintextCredentials: row.plaintextCredentials,
                 governedServer: row.entry.governedServer,
-                offReason: off.map { "not governed: " + $0.listReason },
+                offReason: off.map { "off · " + $0.reason },
                 next: off?.next)
         }
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
@@ -328,7 +324,7 @@ enum MCPRun {
                 lines.append(
                     "\(reviewField(row.status))  \(reviewField(row.name))  \(reviewField(row.host)) \(reviewField(abbreviate(row.configPath, home: home)))")
                 if let reason = row.offReason {
-                    lines.append("  " + reviewField(reason))
+                    lines.append("  ✕ " + reviewField(reason))
                 } else if let status {
                     lines.append("  \(status.explanation)")
                 }
@@ -344,6 +340,7 @@ enum MCPRun {
                     + leaks.map { reviewField($0.name) }.joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
         }
         lines += sandboxAuditLines(report)
+        lines += nextLines(report)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -363,7 +360,8 @@ enum MCPRun {
         case .blocked:
             return "  Fix: remove \(name) from \"blocked\" in mcp.json to review it"
         case .off:
-            return row.next.map { "  Fix: `\(reviewField($0))`" }
+            // Its fix is a `→` line at the end (`nextLines`).
+            return nil
         case .governed, .direct, .disabled:
             return nil
         }
@@ -1848,27 +1846,6 @@ struct MCPServe: AsyncParsableCommand {
         }
     }
 
-    /// Serve could not start: the owner's line on stderr, then the reason
-    /// and its fix as the error to every request the client sends, so the
-    /// host shows the agent why instead of an empty pipe. Runs after
-    /// `serve` returned: its signal handlers, proxies and placeholder
-    /// broker are gone, and nothing was started.
-    static func refuse(_ refusal: MCPServeRefusal, ctx: CommandContext) throws -> Never {
-        // Through the gateway's stderr writer, so a closed stderr cannot end
-        // serve by SIGPIPE before it says why it stops; a test's captured
-        // output still gets the line.
-        let line = "rv mcp serve: \(refusal.log)\n"
-        guard CLIProcess.context?.output == nil else { try ctx.emit(stdout: "", stderr: line, exitCode: 1) }
-        MCPGatewayRuntime.writeStderrLine(line)
-        // A person who ran serve at a terminal has read the line above; only
-        // a host's pipe gets the protocol answer.
-        if isatty(STDIN_FILENO) == 0 {
-            signal(SIGPIPE, SIG_IGN)
-            MCPRefusalResponder.serve(refusal)
-        }
-        throw ExitCode(1)
-    }
-
     private func serve(home: HomeDirectory, environment: MCPEnvironment) throws {
         var names = servers
         func fail(_ cause: MCPServeRefusal.Cause, _ message: String) throws -> Never {
@@ -1936,15 +1913,9 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let result): plan = result
         }
         let planned = plan.launches
-        // Nothing would start: refuse in the protocol now, rather than
-        // serve an empty tool list with the reasons only on stderr.
-        if let cause = MCPServeRefusal.cause(ofPlanned: planned.map { $0.1 }) {
+        if let refusal = Self.nothingStarts(planned.map { $0.1 }, configuration: plan.configuration, servers: names) {
             MCPSandbox.stopProxies()
-            let reasons = planned.compactMap { _, connection -> String? in
-                guard case .refused(let server, let refusal) = connection else { return nil }
-                return "not starting MCP server \(MCPDisplayedText.field(server)): \(refusal.message)"
-            }
-            try fail(cause, reasons.joined(separator: "; "))
+            throw refusal
         }
         let configDirectory = environment.configDirectory
         // As `MCPGatewayRuntime.run` does, before the pin-store and

@@ -58,7 +58,7 @@ struct MCPServeStderrWriterTests {
         #expect(run.contains("catch let refusal as MCPServeRefusal"), "run does not catch serve's refusals")
         #expect(run.contains("try Self.refuse(refusal, ctx: ctx)"), "run does not hand refusals to refuse")
         let code = try slice(
-            "Sources/RVCLI/Commands/MCPCommand.swift",
+            "Sources/RVCLI/Commands/MCPServeRefusal+CLI.swift",
             from: "let line = \"rv mcp serve: \\(refusal.log)\\n\"", to: "throw ExitCode(1)")
         expectSafeWriter(code, "serve's refuse")
         // The reason is written before the protocol answer is served.

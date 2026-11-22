@@ -111,8 +111,8 @@ struct MCPCommandTests {
             #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
         }
         if MCPSandbox.enforced {
-            // Serve will not start an unsealed server, so list says off, not governed.
-            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" && $0.offReason == "not governed: not sealed" })
+            // Serve will not start an unsealed server, so list says off.
+            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" && $0.offReason == "off · not sealed: it has no sandbox" })
         } else {
             #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         }

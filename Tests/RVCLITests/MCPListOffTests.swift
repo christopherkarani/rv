@@ -12,7 +12,7 @@ import Testing
 
 /// `rv mcp list` and `check` never call a server governed when
 /// `rv mcp serve` would refuse to start it.
-@Suite("rv mcp list says off, not governed, when serve would refuse")
+@Suite("rv mcp list says off when serve would refuse")
 struct MCPListOffTests {
     final class Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-off-\(UUID().uuidString)")
@@ -75,11 +75,11 @@ struct MCPListOffTests {
         let edited = try fixture.report(signing)
         let off = try #require(edited.rows.first { $0.name == "wax" })
         #expect(off.status == "off")
-        #expect(off.offReason == "not governed: mcp.json untrusted")
+        #expect(off.offReason == "off · mcp.json is untrusted")
         #expect(off.next == "rv mcp trust")
         let list = MCPRun.listText(edited, home: fixture.home)
-        #expect(list.contains("governed  ") == false)
-        #expect(list.contains("✕ not governed: mcp.json untrusted"))
+        #expect(list.contains("governed") == false)
+        #expect(list.contains("✕ off · mcp.json is untrusted"))
         #expect(list.contains("1 host entry in 1 file: 1 off"))
         let lines = list.split(separator: "\n")
         #expect(lines.last == "→ rv mcp trust")
@@ -87,7 +87,8 @@ struct MCPListOffTests {
         #expect(edited.passes == false)
         let check = MCPRun.checkText(edited, home: fixture.home)
         #expect(check.contains("off  wax  cursor"))
-        #expect(check.contains("  not governed: mcp.json untrusted\n  Fix: `rv mcp trust`"))
+        #expect(check.contains("off  wax  cursor ~/.cursor/mcp.json\n  ✕ off · mcp.json is untrusted\n"))
+        #expect(check.split(separator: "\n").last == "→ rv mcp trust")
     }
 
     @Test func withoutAKeyCustodianNothingIsGoverned() throws {
@@ -96,15 +97,32 @@ struct MCPListOffTests {
         let report = try fixture.report(.file(configDirectory: fixture.config, honorsGrants: false))
         let row = try #require(report.rows.first { $0.name == "wax" })
         #expect(row.status == "off")
-        #expect(row.offReason == "not governed: no key custodian to trust mcp.json")
+        #expect(row.offReason == "off · mcp.json can't be trusted without a key custodian")
         #expect(MCPRun.nextLines(report) == ["→ sudo rv mcp custodian install"])
     }
 
-    @Test func anOffRowsFixIsItsNextCommand() {
+    @Test func anOffRowsFixIsTheLastLineNotAFixLine() {
         #expect(MCPRun.fixLine(status: .off, row: MCPRun.Row(
             host: "cursor", scope: "user", configPath: "/x", name: "wax", status: "off", command: "rv",
             environmentNames: [], headerNames: [], plaintextCredentials: [], governedServer: "wax",
-            offReason: "not governed: mcp.json untrusted", next: "rv mcp trust")) == "  Fix: `rv mcp trust`")
+            offReason: "off · mcp.json is untrusted", next: "rv mcp trust")) == nil)
+    }
+
+    /// Serve refuses a server whose secret secrets.json does not define;
+    /// list says so without resolving anything.
+    @Test func anUndefinedSecretIsOffWithItsFix() throws {
+        let fixture = try Fixture()
+        try fixture.write(".config/rv/mcp.json", #"""
+            {"version":1,"servers":[{"name":"wax","url":"https://mcp.example/mcp","headers":{"Authorization":"Bearer ${secret:WAX_TOKEN}"}}]}
+            """#)
+        chmod(fixture.mcpJSON.path, 0o600)
+        let signing = fixture.custodianSigning
+        #expect(MCPIntegrity.signCurrent(configDirectory: fixture.config, signing: signing))
+        let report = try fixture.report(signing)
+        let row = try #require(report.rows.first { $0.name == "wax" })
+        #expect(row.status == "off")
+        #expect(row.offReason == "off · secret WAX_TOKEN is not set up")
+        #expect(MCPRun.nextLines(report) == ["→ rv secrets set WAX_TOKEN"])
     }
 
     /// What `rv mcp serve --server wax` answers the host with, from the
