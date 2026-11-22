@@ -14,6 +14,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case root
     case help
     case test
+    case `try`
     case explain
     case service
     case serviceStatus
@@ -153,6 +154,7 @@ extension HelpTopic {
         case .root: [RV.self]
         case .help: []
         case .test: [Test.self]
+        case .`try`: [Try.self]
         case .explain: [Explain.self]
         case .service: [Service.self]
         case .serviceStatus: [Status.self]

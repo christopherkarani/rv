@@ -13,6 +13,7 @@ enum HelpCatalog {
         case .root: root
         case .help: helpMeta
         case .test: test
+        case .`try`: tryDemo
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
@@ -189,6 +190,24 @@ enum HelpCatalog {
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
+    )
+
+    static let tryDemo = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv try"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "nothing real", description: "A throwaway git repo in a temp dir, removed when it ends. The reset never runs; rvd and ~/.config/rv are never touched"),
+                HelpRow(name: "the stop", description: "rv's own evaluate with day-one policy, and the words a stopped agent reads"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "rv stopped the reset and every file is intact"),
+                HelpRow(name: "1", description: "Anything else"),
+            ]),
+        ]
     )
 
     static let test = HelpViewModel(
