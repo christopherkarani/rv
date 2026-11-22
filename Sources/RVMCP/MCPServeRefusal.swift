@@ -210,7 +210,10 @@ public enum MCPRefusalResponder {
             for index in 0..<n where buffer[index] == 0x0A {
                 if overflowing == false {
                     line += buffer[start..<index]
-                    guard handle(line) else { break reading }
+                    // The newline can arrive in the chunk that crosses the cap.
+                    if line.count <= maximumLineBytes {
+                        guard handle(line) else { break reading }
+                    }
                 }
                 line.removeAll(keepingCapacity: true)
                 overflowing = false

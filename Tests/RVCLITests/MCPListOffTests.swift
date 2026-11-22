@@ -83,13 +83,11 @@ struct MCPListOffTests {
         #expect(list.contains("1 host entry in 1 file: 1 off"))
         let lines = list.split(separator: "\n")
         #expect(lines.last == "→ rv mcp trust")
-        print(list)
 
         #expect(edited.passes == false)
         let check = MCPRun.checkText(edited, home: fixture.home)
         #expect(check.contains("off  wax  cursor"))
         #expect(check.contains("  not governed: mcp.json untrusted\n  Fix: `rv mcp trust`"))
-        print(check)
     }
 
     @Test func withoutAKeyCustodianNothingIsGoverned() throws {
@@ -125,7 +123,6 @@ struct MCPListOffTests {
         #expect(refusal.cause == .untrusted)
         #expect(refusal.log.hasSuffix("not launching MCP servers"))
         #expect(refusal.agentMessage == "✕ wax is off · mcp.json is untrusted · nothing ran\n→ ask your user: rv mcp trust")
-        print(refusal.errorResponse(id: .int(1)).compactText)
 
         let sameUser = fixture.environment(.file(configDirectory: fixture.config, honorsGrants: false))
         guard case .failure(let custodian) = MCPRun.upstreamPlan(
