@@ -180,4 +180,50 @@ struct LiveEventBusTests {
         reader.cancel()
         #expect(await reader.value == 1)
     }
+
+    /// A sink is the lossless path (the decision log): it sees every event
+    /// in order however far a cursor reader would have fallen behind.
+    @Test func sinksSeeEveryEventInOrderPastTheRing() {
+        let bus = LiveEventBus(capacity: 4)
+        let seen = SequenceLog()
+        bus.addSink { seen.append($0.sequence) }
+        for n in 1...1_000 { bus.publish(decision(n), at: t0) }
+        #expect(seen.values == Array(1...1_000))
+        #expect(bus.read(after: 0, stream: bus.stream).missed == 996)
+    }
+
+    /// Events a reader may not see still move its cursor, and a batch with
+    /// nothing visible keeps the poll waiting instead of answering empty.
+    @Test func hiddenEventsMoveTheCursorAndThePollKeepsWaiting() async {
+        let bus = LiveEventBus(capacity: 8)
+        let onlyDecisions: @Sendable (LiveEvent) -> LiveEvent? = { event in
+            if case .decision = event.payload { return event }
+            return nil
+        }
+        let poll = Task {
+            await bus.next(after: 0, stream: bus.stream, wait: .seconds(30), wire: true, visible: onlyDecisions)
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        bus.publish(.unknown(kind: "proposal"), at: t0)
+        try? await Task.sleep(for: .milliseconds(50))
+        bus.publish(decision(2), at: t0)
+        let reply = await poll.value
+        #expect(reply.events.map(\.sequence) == [2])
+        #expect(reply.cursor == 2)
+
+        let hiddenOnly = await bus.next(
+            after: 2, stream: bus.stream, wait: .milliseconds(50), wire: true, visible: onlyDecisions)
+        #expect(hiddenOnly.events.isEmpty && hiddenOnly.cursor == 2)
+        bus.publish(.unknown(kind: "proposal"), at: t0)
+        let skipped = await bus.next(
+            after: 2, stream: bus.stream, wait: .milliseconds(50), wire: true, visible: onlyDecisions)
+        #expect(skipped.events.isEmpty)
+        #expect(skipped.cursor == 3)
+    }
+}
+
+private final class SequenceLog: Sendable {
+    private let box = Mutex<[UInt64]>([])
+    func append(_ value: UInt64) { box.withLock { $0.append(value) } }
+    var values: [UInt64] { box.withLock { $0 } }
 }

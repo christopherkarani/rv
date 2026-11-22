@@ -17,7 +17,7 @@ public struct RoutedEvaluation: Sendable, Equatable {
 }
 
 public struct ServiceClient: Sendable {
-    private let transport: (any ServiceTransport)?
+    let transport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
     private let home: HomeDirectory?
@@ -197,17 +197,23 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
-    private enum IPCCallError: Error, Sendable, Equatable {
+    enum IPCCallError: Error, Sendable, Equatable {
         case identityMismatch
         case unexpectedResult
         case service(IPCError)
     }
 
-    private func send<C: IPCCall>(
+    /// `undecodableIsServiceError`: an rvd that cannot decode the request
+    /// (one that predates its method) answers `decodeFailed` under a fresh
+    /// id, since it never read the request's. With this set that answer
+    /// throws `.service(.decodeFailed)` instead of `.identityMismatch`, so
+    /// the caller can read it as "unsupported".
+    func send<C: IPCCall>(
         _ call: C,
         using transport: any ServiceTransport,
         timeoutMs: Int? = nil,
-        hookConsult: Bool = false
+        hookConsult: Bool = false,
+        undecodableIsServiceError: Bool = false
     ) async throws -> C.Reply {
         let request = IPCRequest(method: call.method)
         let body = try IPCJSON.encode(request)
@@ -221,6 +227,11 @@ public struct ServiceClient: Sendable {
             data = try await transport.send(body)
         }
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        if undecodableIsServiceError, response.protocolName == request.protocolName,
+           case .error(.decodeFailed) = response.result
+        {
+            throw IPCCallError.service(.decodeFailed)
+        }
         guard response.id == request.id, response.protocolName == request.protocolName else {
             throw IPCCallError.identityMismatch
         }
@@ -357,7 +368,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
+    func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
         switch error {
         case .identityMismatch:
             return .transport("identityMismatch")

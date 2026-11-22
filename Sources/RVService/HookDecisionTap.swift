@@ -135,8 +135,8 @@ extension HookDecisionTap.Capture {
     }
 }
 
-/// How a live decision hides what it must not carry: credential-shaped
-/// tokens (`ReviewSanitizer.redactCredentials`), the home directory
+/// How a live decision hides what it must not carry: credentials in the
+/// command (`CommandLineRedaction`), the home directory
 /// (`DenialPathRedaction` for paths), control characters, and anything
 /// past `LiveDecision.maxTextBytes`. The same recipe as the local decision
 /// log (J1b `DecisionRedaction`); once both land, one calls the other.
@@ -145,7 +145,7 @@ enum LiveEventRedaction {
         let flattened = String(String.UnicodeScalarView(raw.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) ? " " : $0
         }))
-        let redacted = homeShown(in: ReviewSanitizer.redactCredentials(in: flattened), home: home)
+        let redacted = homeShown(in: CommandLineRedaction.redact(flattened), home: home)
         return capped(redacted.trimmingCharacters(in: .whitespaces), bytes: LiveDecision.maxTextBytes)
     }
 

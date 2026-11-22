@@ -32,6 +32,7 @@ package final class LiveEventBus: Sendable {
     package let stream: UUID
     private let capacity: Int
     private let state: Mutex<State>
+    private let sinks = Mutex<[@Sendable (LiveEvent) -> Void]>([])
 
     private struct State {
         var slots: [LiveEvent?]
@@ -64,12 +65,30 @@ package final class LiveEventBus: Sendable {
     /// The last sequence published, 0 before the first.
     package var head: UInt64 { state.withLock { $0.head } }
 
+    /// Wire polls waiting now, at most `maxWireWaiters`.
+    package var wireWaiters: Int { state.withLock { $0.waiters.values.filter(\.wire).count } }
+
+    /// Registers a lossless in-process consumer: `sink` sees every event
+    /// published from now on, in order, unlike a cursor that can fall
+    /// behind the ring. For a consumer that must not drop events (the
+    /// local decision log): register before the first hook. `sink` runs
+    /// on the publisher's task, under the bus lock: it must only hand the
+    /// event to the consumer's own queue, never block, wait on I/O or call
+    /// back into the bus.
+    package func addSink(_ sink: @escaping @Sendable (LiveEvent) -> Void) {
+        sinks.withLock { $0.append(sink) }
+    }
+
     /// Publishes one event. O(1), never awaits, never blocks on a reader.
     package func publish(_ payload: LiveEventPayload, at time: Date) {
+        // Sinks run under the lock that assigns the sequence, so concurrent
+        // publishers never hand a sink events out of order.
         let woken = state.withLock { state -> [CheckedContinuation<Void, Never>] in
             let sequence = state.nextSequence
-            state.slots[slot(of: sequence)] = LiveEvent(sequence: sequence, at: time, payload: payload)
+            let event = LiveEvent(sequence: sequence, at: time, payload: payload)
+            state.slots[slot(of: sequence)] = event
             state.nextSequence = sequence + 1
+            for sink in sinks.withLock({ $0 }) { sink(event) }
             var woken: [CheckedContinuation<Void, Never>] = []
             for (id, waiter) in state.waiters {
                 switch waiter.phase {
@@ -101,14 +120,30 @@ package final class LiveEventBus: Sendable {
     /// `wait` waits without a timeout (in-process subscribers only).
     /// `wire` polls count against `maxWireWaiters`; past it they answer
     /// at once.
+    ///
+    /// `visible` decides what this reader may see (nil drops an event; it
+    /// may also return a reduced copy). Dropped events still move the
+    /// cursor, and a batch with nothing visible keeps waiting.
     package func next(
-        after: UInt64?, stream: UUID?, wait: Duration?, wire: Bool, limit: Int = LiveEventBus.maxBatch
+        after: UInt64?, stream: UUID?, wait: Duration?, wire: Bool, limit: Int = LiveEventBus.maxBatch,
+        visible: (LiveEvent) -> LiveEvent? = { $0 }
     ) async -> EventsReply {
-        let first = read(after: after, stream: stream, limit: limit)
-        let nothingYet = first.events.isEmpty && first.missed == 0 && first.resync == false
-        guard nothingYet, wait.map({ $0 > .zero }) ?? true else { return first }
-        await waitForPublish(beyond: first.cursor, timeout: wait, wire: wire)
-        return read(after: first.cursor, stream: self.stream, limit: limit)
+        let clock = ContinuousClock()
+        let deadline = wait.map { clock.now.advanced(by: $0) }
+        var reply = Self.filtered(read(after: after, stream: stream, limit: limit), visible)
+        while reply.events.isEmpty, reply.missed == 0, reply.resync == false, Task.isCancelled == false {
+            let remaining = deadline.map { $0 - clock.now }
+            if let remaining, remaining <= .zero { break }
+            guard await waitForPublish(beyond: reply.cursor, timeout: remaining, wire: wire) else { break }
+            reply = Self.filtered(read(after: reply.cursor, stream: self.stream, limit: limit), visible)
+        }
+        return reply
+    }
+
+    private static func filtered(_ reply: EventsReply, _ visible: (LiveEvent) -> LiveEvent?) -> EventsReply {
+        var reply = reply
+        reply.events = reply.events.compactMap(visible)
+        return reply
     }
 
     /// An in-process subscription starting after the current head: every
@@ -121,16 +156,23 @@ package final class LiveEventBus: Sendable {
 
     // MARK: - Waiting
 
-    private func waitForPublish(beyond cursor: UInt64, timeout: Duration?, wire: Bool) async {
+    /// Waits for a publish past `cursor`. False when the wait was refused
+    /// (the wire waiter cap is full): the caller answers at once.
+    private func waitForPublish(beyond cursor: UInt64, timeout: Duration?, wire: Bool) async -> Bool {
         let id = UUID()
-        let armed = state.withLock { state -> Bool in
+        enum Arm { case published, capped, armed }
+        let arm = state.withLock { state -> Arm in
             // Published since the read: no wait.
-            guard state.head == cursor else { return false }
-            if wire, state.waiters.values.filter(\.wire).count >= Self.maxWireWaiters { return false }
+            guard state.head == cursor else { return .published }
+            if wire, state.waiters.values.filter(\.wire).count >= Self.maxWireWaiters { return .capped }
             state.waiters[id] = Waiter(phase: .armed, wire: wire)
-            return true
+            return .armed
         }
-        guard armed else { return }
+        switch arm {
+        case .published: return true
+        case .capped: return false
+        case .armed: break
+        }
         let timer = timeout.map { timeout in
             Task { [weak self] in
                 guard (try? await Task.sleep(for: timeout)) != nil else { return }
@@ -157,6 +199,7 @@ package final class LiveEventBus: Sendable {
         // A wake that lands after the wait ended finds nothing to resume;
         // drop the entry it may have marked `fired`.
         state.withLock { $0.waiters[id] = nil }
+        return true
     }
 
     /// Ends one wait: resumes it, or marks it fired if it is not waiting yet.

@@ -143,6 +143,59 @@ struct LiveEventsDispatchTests {
         }
     }
 
+    /// The macOS socket listener's call shape: no captured peer, the
+    /// same-user flag set only after `getpeereid` matched rvd's uid at
+    /// accept. Runs on every platform, so the macOS path is pinned here too.
+    @Test func macSocketSessionShapeReadsEvents() async throws {
+        let runtime = try isolatedRuntime()
+        let body = try IPCJSON.encode(IPCRequest(method: .events(EventsParams())))
+        let flagged = await runtime.handleIncoming(body, handshakeOK: true, sameUIDSocket: true)
+        let reply = try IPCJSON.decode(IPCResponse.self, from: flagged.frame)
+        guard case .events = reply.result else {
+            Issue.record("a same-user socket session must read events, got \(reply.result)")
+            return
+        }
+        let unflagged = await runtime.handleIncoming(body, handshakeOK: true, sameUIDSocket: false)
+        #expect(try IPCJSON.decode(IPCResponse.self, from: unflagged.frame).result == .error(.authorizationDenied))
+    }
+
+    /// Asks, resolutions, unknown kinds and session ids follow
+    /// `pendingList`'s gate per caller; decisions are a same-user read.
+    @Test func eachCallerSeesNoMoreThanPendingListShowsIt() async throws {
+        let runtime = try isolatedRuntime()
+        let bus = runtime.events
+        bus.publish(.decision(LiveDecision(
+            verdict: .denied, host: .claude, tool: .bash, command: "git reset --hard", session: "abc-123")), at: Date())
+        bus.publish(.ask(LiveAsk(item: PendingListItem(
+            id: ApprovalID(rawValue: "ask-1"), host: .pi, folder: "ws", actionKind: "git push",
+            fingerprint: ActionFingerprint(rawValue: "shell:git"),
+            identity: ApprovalIdentity(session: SessionID(validating: "sess")!, agent: .pi)))), at: Date())
+        bus.publish(.resolution(LiveResolution(id: ApprovalID(rawValue: "ask-1"), host: .pi, outcome: .deny)), at: Date())
+        bus.publish(.unknown(kind: "proposal"), at: Date())
+        let request = IPCRequest(method: .events(EventsParams(after: 0)))
+
+        // An owner XPC peer with no role (pendingList refuses it).
+        let roleless = try events(await runtime.dispatch(request, context: ownerContext()))
+        #expect(roleless.events.map(\.payload.kind) == ["decision"])
+        #expect(roleless.cursor == 4)
+        guard case .decision(let hidden) = roleless.events.first?.payload else {
+            Issue.record("the decision must stay visible")
+            return
+        }
+        #expect(hidden.session == nil)
+        #expect(hidden.command == "git reset --hard")
+
+        // pendingList admits these two: they see every event as published.
+        let all = ["decision", "ask", "resolution", "proposal"]
+        let socket = try events(await runtime.dispatch(request, context: ownerContext(), sameUIDSocket: true))
+        #expect(socket.events.map(\.payload.kind) == all)
+        let service = try events(await runtime.dispatch(request, context: ownerServiceContext()))
+        #expect(service.events.map(\.payload.kind) == all)
+        if case .decision(let shown) = service.events.first?.payload {
+            #expect(shown.session == "abc-123")
+        }
+    }
+
     // MARK: - Hello skew
 
     /// A new client asking an rvd that predates `events`: that rvd cannot
@@ -280,8 +333,18 @@ struct LiveEventsDispatchTests {
         return reply
     }
 
+    private func events(_ response: IPCResponse) throws -> EventsReply {
+        guard case .events(let reply) = response.result else {
+            throw LiveEventsTestError.unexpected("\(response.result)")
+        }
+        return reply
+    }
+
+    /// Polls as a same-user socket session, which `pendingList` admits, so
+    /// every event arrives as published (`LiveEventView`).
     private func poll(_ runtime: ServiceRuntime, _ params: EventsParams) async throws -> EventsReply {
-        let response = await runtime.dispatch(IPCRequest(method: .events(params)), context: ownerContext())
+        let response = await runtime.dispatch(
+            IPCRequest(method: .events(params)), context: ownerContext(), sameUIDSocket: true)
         guard case .events(let reply) = response.result else {
             throw LiveEventsTestError.unexpected("\(response.result)")
         }
@@ -324,4 +387,19 @@ private func peer(uid: UInt32) -> AuthenticatedRequestContext {
 /// A peer running as rvd's own user: rv term, the menu bar app.
 private func ownerContext() -> AuthenticatedRequestContext {
     peer(uid: ServiceMethodAuthorization.ownerUserID)
+}
+
+/// A `controlRead` component (role `.service`) running as rvd's user.
+private func ownerServiceContext() -> AuthenticatedRequestContext {
+    let code = PeerCodeIdentity(
+        identifier: "events-service-fixture", teamIdentifier: nil, cdHash: Data([11]),
+        executablePath: "/events-service-fixture", isAdHoc: true, hardenedRuntime: true,
+        injectionExceptions: [])
+    let id = UUID()
+    let peer = AuthenticatedPeer(
+        evidence: PlatformPeerEvidence(
+            processID: 4244, effectiveUserID: ServiceMethodAuthorization.ownerUserID,
+            auditToken: Data([11]), codeIdentity: code, componentRole: .service),
+        connectionID: id)
+    return .captured(peer: peer, connectionID: id)
 }

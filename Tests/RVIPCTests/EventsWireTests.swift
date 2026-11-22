@@ -80,4 +80,15 @@ struct EventsWireTests {
         let event = LiveEvent(sequence: 1, at: Date(timeIntervalSince1970: 1.5), payload: .unknown(kind: "x"))
         #expect(event.atMs == 1_500)
     }
+
+    /// A clock far off (or not a number) clamps instead of trapping.
+    @Test func outOfRangeDatesClampToTheMillisecondRange() {
+        #expect(LiveEvent.milliseconds(since1970: .nan) == 0)
+        #expect(LiveEvent.milliseconds(since1970: .infinity) == .max)
+        #expect(LiveEvent.milliseconds(since1970: -.infinity) == .min)
+        #expect(LiveEvent.milliseconds(since1970: 1e300) == .max)
+        #expect(LiveEvent.milliseconds(since1970: -1e300) == .min)
+        #expect(LiveEvent.milliseconds(since1970: -1.5) == -1_500)
+        #expect(LiveEvent(sequence: 1, at: .distantFuture, payload: .unknown(kind: "x")).atMs > 0)
+    }
 }

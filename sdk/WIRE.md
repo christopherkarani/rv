@@ -195,7 +195,7 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 11 | `rulePreview` | `RulePreviewParams` | `RulePreviewReply` | Never writes. |
 | 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 13 | `policyStatus` | `PolicyStatusParams` | `PolicyStatusReply` | Read-only diagnostic (additive, `sdk/VERSIONING.md` §3). Python SDK: raw-only. See §4.6. |
-| 14 | `events` | `EventsParams` | `EventsReply` | Live decisions, asks and resolutions; long poll up to 5 s. **Owner only**: a peer whose uid is not rvd's gets `authorizationDenied`. Additive; not in the Python SDK yet (Swift clients: `EventsCall`). See §4.7. |
+| 14 | `events` | `EventsParams` | `EventsReply` | Live decisions, asks and resolutions; long poll up to 5 s. **Owner only**: a peer whose uid is not rvd's gets `authorizationDenied`; asks, resolutions and session ids only for callers `pendingList` admits. Additive; not in the Python SDK yet (Swift clients: `EventsCall`). See §4.7. |
 
 ### 4.1 Evaluate family
 
@@ -320,16 +320,30 @@ lifetime (`stream`, a UUID).
   canceled|timedOut|consumed}`). **Open set**: a decoder maps an unknown
   `kind`, or a known kind whose body it cannot decode, to an opaque unknown
   event and keeps its `seq`. New kinds are additive.
-- Redaction: `command`, `path` and `cwd` are redacted as rvd's local records
-  are: credential-shaped tokens replaced, `$HOME` shown as `~`, control
-  characters flattened, at most 512 bytes then `…`. `session` only when it is
-  an opaque id. A timed-out reply is `refused` with `rule: "rv.timeout"`.
+- Who sees what: any kernel-attested peer running as rvd's user may call
+  `events` (XPC: audit-token euid; socket: `SO_PEERCRED` on Linux, `getpeereid`
+  at accept on macOS). Each reply holds no more than `pendingList` would show
+  that caller: a caller `pendingList` admits (a same-user socket session, or an
+  XPC peer with the `service`/`workspaceHost` role) gets every event; any other
+  owner peer gets `decision` events only, without `session`. Hidden events
+  still move `cursor`, and a poll whose batch is all hidden keeps waiting.
+- Redaction (`CommandLineRedaction`): `command`, `path` and `cwd` hide
+  credentials: `KEY=value` with a secret-shaped key, known token prefixes,
+  `Bearer x`, URL userinfo passwords (`https://bob:[redacted]@host`), `-u` /
+  `--user name:password`, a secret-named flag's value (`--password x`,
+  `--api-key x`), MySQL `-pVALUE`, and secret-named headers (`-H 'X-Api-Key:
+  v'`). `$HOME` is shown as `~`, control characters are flattened, and text
+  stops at 512 bytes then `…`. `session` only when it is an opaque id. A
+  timed-out reply is `refused` with `rule: "rv.timeout"`.
 - Skew: an rvd from before `events` cannot decode the method key and answers
   `decodeFailed` on a live handshake; clients read that (or `unknownMethod`) as
   "unsupported" (`EventsCall.isUnsupported`) and keep polling `pendingWatch`.
   `events` has no implicit hello: hello first.
 - Publishing never waits on a reader; a reader that stops reading only falls
-  behind the ring.
+  behind the ring. A socket peer that pipelines requests and never reads its
+  replies is disconnected once a reply waits 10 s to be sent.
+- A subscriber keeps rvd busy: while polls keep arriving, rvd's idle exit
+  (`--idle-exit-seconds`) does not fire. Stop polling to let it exit.
 
 ## 5. Domain value shapes
 

@@ -76,8 +76,19 @@ public struct LiveEvent: Sendable, Equatable {
         self.payload = payload
     }
 
+    /// A time outside what `Int64` milliseconds can hold (or not a number)
+    /// clamps to the nearest end (NaN to 0) instead of trapping.
     public init(sequence: UInt64, at time: Date, payload: LiveEventPayload) {
-        self.init(sequence: sequence, atMs: Int64((time.timeIntervalSince1970 * 1000).rounded()), payload: payload)
+        self.init(sequence: sequence, atMs: Self.milliseconds(since1970: time.timeIntervalSince1970), payload: payload)
+    }
+
+    static func milliseconds(since1970 seconds: Double) -> Int64 {
+        let ms = (seconds * 1000).rounded()
+        guard ms.isNaN == false else { return 0 }
+        // 2^63 as a Double; anything at or past it does not fit.
+        if ms >= 9_223_372_036_854_775_808.0 { return .max }
+        if ms < -9_223_372_036_854_775_808.0 { return .min }
+        return Int64(ms)
     }
 }
 

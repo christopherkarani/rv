@@ -63,7 +63,7 @@ public actor ServiceRuntime {
     /// here (`LiveEventBus.subscribe`); none writes on the hook path.
     package nonisolated let events: LiveEventBus
     /// Finishes once the pending store's events reach `events`.
-    private let pendingEventsForwarded: Task<Void, Never>?
+    nonisolated let pendingEventsForwarded: Task<Void, Never>?
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -345,6 +345,7 @@ public actor ServiceRuntime {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
         }
         let allowed = Self.sameUIDSocketSession(request.method, enabled: sameUIDSocket)
+            || Self.socketSessionReadsEvents(request.method, enabled: sameUIDSocket, context: context)
             || ServiceMethodAuthorization.permits(request.method, context: context)
         guard allowed else {
             return IPCResponse(id: request.id, result: .error(.authorizationDenied))
@@ -426,7 +427,7 @@ public actor ServiceRuntime {
         case .mintAllowOnce(let params):
             result = await mintAllowOnce(params, context: context)
         case .events(let params):
-            result = .events(await liveEvents(params))
+            result = .events(await liveEvents(params, context: context, sameUIDSocket: sameUIDSocket))
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -441,7 +442,7 @@ public actor ServiceRuntime {
     static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
         guard enabled else { return false }
         switch ServiceMethodAuthorization.requirement(for: method) {
-        // `ownerEvents` compares the peer's uid in the matrix itself.
+        // `ownerEvents` checks the uid: `socketSessionReadsEvents`.
         case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm, .ownerEvents:
             return false
         case .diagnostic, .agent, .hookConsult, .controlRead:
@@ -820,15 +821,6 @@ public actor ServiceRuntime {
         } catch {
             return .failure(.hookEvaluateFailed)
         }
-    }
-
-    /// One `events` long poll: the wait is capped (`EventsParams.maxWaitMs`)
-    /// and runs off the actor, so a poll holds neither the actor nor a hook.
-    private nonisolated func liveEvents(_ params: EventsParams) async -> EventsReply {
-        await pendingEventsForwarded?.value
-        let waitMs = min(max(params.waitMs ?? 0, 0), EventsParams.maxWaitMs)
-        return await events.next(
-            after: params.after, stream: params.stream, wait: .milliseconds(waitMs), wire: true)
     }
 
     /// Ready world for `wanted`: the compile-set module heals coverage

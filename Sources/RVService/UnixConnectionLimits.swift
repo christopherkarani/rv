@@ -15,6 +15,7 @@ import Synchronization
 public struct UnixConnectionLimits: Sendable, Equatable {
     public static let defaultMaxConnections = 64
     public static let defaultReceiveTimeoutSeconds = 30
+    public static let defaultSendTimeoutSeconds = 10
 
     public static let standard = UnixConnectionLimits(
         maxConnections: defaultMaxConnections,
@@ -25,20 +26,31 @@ public struct UnixConnectionLimits: Sendable, Equatable {
     public let maxConnections: Int
     /// `SO_RCVTIMEO` on each accepted connection.
     public let receiveTimeoutSeconds: Int
+    /// `SO_SNDTIMEO` on each accepted connection: how long a reply may wait
+    /// for a peer that stopped reading. A client reads its reply at once,
+    /// so this only reaps a peer that pipelines requests (say `events`
+    /// polls) and never reads; its connection closes and frees the slot.
+    public let sendTimeoutSeconds: Int
 
-    public init(maxConnections: Int, receiveTimeoutSeconds: Int) {
+    public init(
+        maxConnections: Int,
+        receiveTimeoutSeconds: Int,
+        sendTimeoutSeconds: Int = UnixConnectionLimits.defaultSendTimeoutSeconds
+    ) {
         self.maxConnections = max(1, maxConnections)
         self.receiveTimeoutSeconds = max(1, receiveTimeoutSeconds)
+        self.sendTimeoutSeconds = max(1, sendTimeoutSeconds)
     }
 
-    /// Applies the receive timeout to an accepted connection. A failed
-    /// `setsockopt` is reported so the caller drops the connection rather
-    /// than serving one that could park forever.
-    func applyReceiveTimeout(to fd: Int32) -> Bool {
-        var timeout = timeval(tv_sec: receiveTimeoutSeconds, tv_usec: 0)
-        return setsockopt(
-            fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)
-        ) == 0
+    /// Applies the receive and send timeouts to an accepted connection. A
+    /// failed `setsockopt` is reported so the caller drops the connection
+    /// rather than serving one that could park forever.
+    func applyTimeouts(to fd: Int32) -> Bool {
+        var receive = timeval(tv_sec: receiveTimeoutSeconds, tv_usec: 0)
+        var send = timeval(tv_sec: sendTimeoutSeconds, tv_usec: 0)
+        let size = socklen_t(MemoryLayout<timeval>.size)
+        return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &receive, size) == 0
+            && setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &send, size) == 0
     }
 }
 

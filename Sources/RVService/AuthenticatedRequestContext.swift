@@ -78,8 +78,12 @@ public enum ServiceMethodAuthorization {
         case ownerConfirm
         /// Live events (`events`): read-only and redacted, but every
         /// agent's decisions pass through it, so only a kernel-attested
-        /// peer running as rvd's own user (the owner) may read it. No
-        /// component role is needed: rv term and the menu bar app read it.
+        /// peer running as rvd's own user (the owner) may read it: an XPC
+        /// peer here, a socket peer through
+        /// `ServiceRuntime.socketSessionReadsEvents`. No
+        /// component role is needed for decisions (rv term reads them);
+        /// asks, resolutions and session ids follow `pendingList`'s gate
+        /// per caller (`LiveEventView`).
         case ownerEvents
     }
 
