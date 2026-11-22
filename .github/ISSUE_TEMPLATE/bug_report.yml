@@ -1,0 +1,53 @@
+name: Bug report
+description: rv did something wrong (a false block, a crash, a confusing message).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If rv **allowed** something it should have blocked, or leaked a secret, please use [private vulnerability reporting](https://github.com/christopherkarani/rv/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what rv did, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: The command, file path, or config that shows the problem.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: rv version
+      description: Output of `rv --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: macOS version, or Linux distro and kernel.
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - OpenCode
+        - Other / none
+  - type: textarea
+    id: doctor
+    attributes:
+      label: rv doctor output
+      description: Paste `rv doctor` output if it looks relevant. Check it for anything private first.
+      render: text

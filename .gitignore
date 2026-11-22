@@ -2,6 +2,12 @@
 .swiftpm/
 xcuserdata/
 .DS_Store
+# Editors and local env
+.vscode/
+.idea/
+*.swp
+.env
+.env.*
 .worktrees/
 # Agent / editor leftovers — not product
 .agents/

@@ -103,7 +103,7 @@ Two threats are outside this boundary. The contained agent is the untrusted call
 | Important hardening | CLI compatibility under minimal environment and platform packaging | Real OpenCode interactive smoke test with explicit credential/network requirements; packaged Linux launcher test. |
 | Future enhancement | Central enterprise ingestion and additional agent adapters | Build on authenticated identity and typed audit events after blockers are closed. Secrets, MCP credentials and wallets remain out of scope for this pass. |
 
-See [the criterion matrix](runtime-acceptance.md), [the attack inventory](adversarial-inventory.md), and the appended [phase-10 completion notes](../rv-agent/handoffs/phase-10-contained-host-launch.md).
+See [the criterion matrix](runtime-acceptance.md), [the attack inventory](adversarial-inventory.md), and the appended phase-10 completion notes (kept outside the repo).
 
 ## Phase addenda (phases 1-7)
 
