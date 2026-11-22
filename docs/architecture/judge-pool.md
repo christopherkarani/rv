@@ -223,13 +223,20 @@ never warms. It verifies the supervisor exactly as rvd does.
 ## Lifecycle
 
 - `rv setup` writes `~/Library/LaunchAgents/dev.rv.judge.plist`
-  (`RunAtLoad`, `KeepAlive`, `ThrottleInterval` 5, Mach service
-  `dev.rv.judge`) when `rv-judge` is installed beside rvd, and bootstraps it
-  before rvd, so rvd's first judged call finds the pool. A missing
-  `rv-judge` or a refused bootstrap does not stop setup (rvd's judged calls
-  then go to review); with a judge bundle installed, setup warns. `rv
-  service restart` does not touch it. `rv uninstall` boots it out of both
-  launchd domains and removes the plist.
+  (`RunAtLoad`, `KeepAlive` while `rv-judge` exists, `ThrottleInterval` 5,
+  Mach service `dev.rv.judge`) when `rv-judge` is installed beside rvd, and
+  bootstraps it before rvd, so rvd's first judged call finds the pool. The
+  agent is always on, like rvd's: rvd is always on and every judged call
+  needs the pool, so waiting for a judged call to demand-launch the
+  supervisor after a crash would send that call to review while the model
+  loads; a deleted `rv-judge` is never respawned. A missing `rv-judge` or a
+  refused bootstrap does not stop setup (rvd's judged calls then go to
+  review); with a judge bundle installed, setup warns. `rv service restart`
+  restarts rvd only (the pool keeps its loaded workers). `rv uninstall`
+  boots it out of both launchd domains and removes the plist. `rv doctor`
+  warns when the installed plist is not RunAtLoad + KeepAlive
+  (`judge-agent-on-demand`) or the agent is loaded in both the gui and user
+  domains (`judge-agent-duplicate`).
 - rvd asks the pool to warm the configured model at startup.
 - Upgrade: the supervisor checks its executable's identity every 30 s and
   before each spawn. When the file changed it exits, and launchd restarts it
