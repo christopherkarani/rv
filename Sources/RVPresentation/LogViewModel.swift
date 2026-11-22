@@ -1,10 +1,11 @@
 import Foundation
 import RVDomain
 
-/// One denial-ledger row as `rv log` reads it. The CLI builds these from
-/// the ledger; nothing here reads a file. The ledger keeps no command
-/// text, so `target` is the redacted path for a file tool and usually
-/// empty for a shell command.
+/// One decision as `rv log` reads it. The CLI builds these from the
+/// denial ledger and rvd's decision log; nothing here reads a file. The
+/// ledger keeps no command text: `command` comes from the decision log
+/// (already redacted there) and is nil when it holds no matching row.
+/// `target` is the redacted path for a file tool.
 public struct LogEntry: Equatable, Sendable {
     public var time: Date
     /// Host raw value (`claude`, `codex`, `tty`).
@@ -19,12 +20,15 @@ public struct LogEntry: Equatable, Sendable {
     /// `Bash`, `Read`, `Edit` or `Write`.
     public var tool: String
     public var target: String
+    /// The shell command, redacted by the decision log when it was written.
+    public var command: String?
     public var code: String
     public var session: String?
 
     public init(
         time: Date, agent: String, stopped: Bool, wouldAsk: Bool = false, rule: String,
-        isJudge: Bool = false, tool: String, target: String, code: String, session: String? = nil
+        isJudge: Bool = false, tool: String, target: String, command: String? = nil, code: String,
+        session: String? = nil
     ) {
         self.time = time
         self.agent = agent
@@ -34,6 +38,7 @@ public struct LogEntry: Equatable, Sendable {
         self.isJudge = isJudge
         self.tool = tool
         self.target = target
+        self.command = command
         self.code = code
         self.session = session
     }
@@ -137,6 +142,9 @@ public struct LogViewModel: Equatable, Sendable {
     public var query: LogQuery
     /// `blocks.enabled` is false: rv keeps no rows.
     public var ledgerOff: Bool
+    /// rvd's decision log was there to read: shell rows can show their
+    /// command. False for an older rvd or `decisions.enabled: false`.
+    public var commandsRecorded: Bool
 
     /// - Parameters:
     ///   - entries: ledger rows, any order.
@@ -144,7 +152,7 @@ public struct LogViewModel: Equatable, Sendable {
     ///   - calendar: its time zone sets the time column.
     public init(
         entries: [LogEntry], query: LogQuery, now: Date, calendar: Calendar,
-        windowDays: Int = 7, ledgerOff: Bool = false
+        windowDays: Int = 7, ledgerOff: Bool = false, commandsRecorded: Bool = true
     ) {
         let newestFirst = entries.filter(query.matches).sorted { $0.time > $1.time }
         let folds = query.foldsJudgeNotes
@@ -159,6 +167,14 @@ public struct LogViewModel: Equatable, Sendable {
         self.span = listed.isEmpty == false && allToday ? .today : .days(windowDays)
         self.query = query
         self.ledgerOff = ledgerOff
+        self.commandsRecorded = commandsRecorded
+    }
+
+    /// A dim note under the summary when shell rows cannot show their
+    /// command, or nil.
+    public var commandsNote: String? {
+        guard commandsRecorded == false, rows.contains(where: { $0.tool == "Bash" }) else { return nil }
+        return "Commands aren't recorded: rvd is older or its decision log is off."
     }
 
     /// Something matched but is not on screen: past the limit, or a
@@ -221,7 +237,9 @@ public struct LogViewModel: Equatable, Sendable {
     /// terminal and `--json` encodes them as they are.
     private static func row(_ entry: LogEntry, now: Date, calendar: Calendar) -> LogRow {
         let command: String
-        if entry.target.isEmpty {
+        if let recorded = entry.command, recorded.isEmpty == false {
+            command = recorded
+        } else if entry.target.isEmpty {
             command = entry.tool
         } else {
             command = entry.tool == "Bash" ? entry.target : entry.tool + " " + entry.target
@@ -289,11 +307,15 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
     public var stopped: Int
     public var wouldStop: Int
     public var judgeNotesHidden: Int
+    /// False when rvd's decision log was missing or off, so shell rows
+    /// carry no command text.
+    public var commandsRecorded: Bool
 
     enum CodingKeys: String, CodingKey {
         case schema, rows, matching, stopped
         case wouldStop = "would_stop"
         case judgeNotesHidden = "judge_notes_hidden"
+        case commandsRecorded = "commands_recorded"
     }
 
     public init(_ model: LogViewModel) {
@@ -310,5 +332,6 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         stopped = model.stopped
         wouldStop = model.wouldStop
         judgeNotesHidden = model.judgeNotesHidden
+        commandsRecorded = model.commandsRecorded
     }
 }

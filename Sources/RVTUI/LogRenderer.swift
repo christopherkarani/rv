@@ -25,8 +25,9 @@ public struct LogRenderer: FrameRenderer {
 
     static let indent = "  "
     static let gap = "  "
-    /// The command column keeps at least this much before the rule is cut.
-    static let minimumCommand = 8
+    /// The command column keeps at least this much before the rule is cut:
+    /// the command is what happened, and v5c's stream rows lead with it.
+    static let minimumCommand = 18
 
     public func render(_ frame: LogFrame, palette: Palette) -> [String] {
         let model = frame.model
@@ -49,6 +50,9 @@ public struct LogRenderer: FrameRenderer {
         if model.ledgerOff == false, model.rows.isEmpty == false || model.judgeNotesHidden > 0 {
             lines.append("")
             lines.append(Self.indent + paint(model.summary, slot: palette.muted, reset: palette.reset))
+        }
+        if let note = model.commandsNote {
+            lines.append(Self.indent + paint(note, slot: palette.muted, reset: palette.reset))
         }
         if let next = model.next {
             lines.append("")
