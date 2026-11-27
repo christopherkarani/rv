@@ -673,14 +673,8 @@ public struct GatedEvaluate: Sendable {
         // deadline the check trips it and `HookDoor` swaps in the timeout
         // deny, so no denial row is emitted for a reply nobody reads.
         let denialInTime = verb.recordsDenial && HookDeadline.permitsSideEffects()
-        if denialInTime, case .denialRow(var row)? = Self.denialRow(
-            for: finished, path: nil, host: host, tool: tool, now: now
-        ) {
-            // An enforced deny the host shows as an ask is listed as one.
-            if case .deny = finished.decision, HookAuthorization.project(result: finished, cwd: cwd) == .ask {
-                row.asked = true
-            }
-            effects.append(.denialRow(row))
+        if denialInTime, let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
+            effects.append(row)
         }
         // An allow-once grant spent in time keeps its reply even when the
         // deadline passes after (`HookDoor` sends no timeout deny then), so
@@ -1501,7 +1495,6 @@ public struct GatedEvaluate: Sendable {
             path: DenialPathRedaction.redact(row.path, home: home),
             observed: row.observed,
             wouldBe: row.wouldBe,
-            asked: row.asked,
             session: row.session
         )
         let ledger = DenialLedger(configDirectory: configDir)

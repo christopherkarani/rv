@@ -161,10 +161,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     /// Observed rows only: encoded with `observed`; a row without it
     /// (written before it existed) was a would-be deny.
     public var wouldBe: LedgerWouldBe
-    /// Enforced rows only: the host showed this deny as an ask, so the
-    /// person may have approved it. Encoded only when true, so other
-    /// enforced rows keep their bytes.
-    public var asked: Bool
     /// The host's session id for the hook request that tripped the rule
     /// (`attributableSession`), so a row names the agent session. Nil for
     /// the TTY and rows written before it existed; encoded only when set.
@@ -179,7 +175,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         path: String,
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny,
-        asked: Bool = false,
         session: String? = nil
     ) {
         self.timestamp = timestamp
@@ -190,7 +185,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.path = path
         self.observed = observed
         self.wouldBe = wouldBe
-        self.asked = asked && observed == false
         self.session = session
     }
 
@@ -228,7 +222,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case path
         case observed
         case wouldBe = "would_be"
-        case asked
         case session
     }
 
@@ -250,8 +243,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         path = try container.decode(String.self, forKey: .path)
         observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
         wouldBe = try container.decodeIfPresent(LedgerWouldBe.self, forKey: .wouldBe) ?? .deny
-        let decodedAsked = try container.decodeIfPresent(Bool.self, forKey: .asked) ?? false
-        asked = observed == false && decodedAsked
         session = try container.decodeIfPresent(String.self, forKey: .session)
     }
 
@@ -266,8 +257,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         if observed {
             try container.encode(true, forKey: .observed)
             try container.encode(wouldBe, forKey: .wouldBe)
-        } else if asked {
-            try container.encode(true, forKey: .asked)
         }
         try container.encodeIfPresent(session, forKey: .session)
     }
