@@ -133,14 +133,14 @@ struct GlanceFeedTests {
         }
     }
 
-    private static func item(_ id: String) -> PendingListItem {
+    static func item(_ id: String) -> PendingListItem {
         PendingListItem(
             id: ApprovalID(rawValue: id), host: .claude, folder: "rv", actionKind: "git push",
             fingerprint: ActionFingerprint(rawValue: "shell:git"),
             identity: ApprovalIdentity(session: SessionID(validating: "sess")!, agent: .claude))
     }
 
-    private static func denied(_ sequence: UInt64) -> LiveEvent {
+    static func denied(_ sequence: UInt64) -> LiveEvent {
         LiveEvent(
             sequence: sequence, atMs: Int64(GlanceSamples.now.timeIntervalSince1970 * 1000) - 60_000,
             payload: .decision(LiveDecision(
@@ -149,7 +149,7 @@ struct GlanceFeedTests {
 }
 
 /// Answers each request with `reply(method)`, recording what was asked.
-private final class FakeWire: GlanceWire, Sendable {
+final class FakeWire: GlanceWire, Sendable {
     private struct Log {
         var methods: [IPCMethod] = []
         var hellos = 0
