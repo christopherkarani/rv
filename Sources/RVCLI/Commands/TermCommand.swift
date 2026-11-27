@@ -303,11 +303,12 @@ enum TermTerminal {
     }
 
     static func write(_ text: String) {
-        var bytes = Array(text.utf8)
+        let bytes = Array(text.utf8)
         var offset = 0
         while offset < bytes.count {
-            let written = bytes.withUnsafeMutableBytes { buffer in
-                Foundation.write(STDOUT_FILENO, buffer.baseAddress! + offset, buffer.count - offset)
+            let written = bytes.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return Foundation.write(STDOUT_FILENO, base + offset, buffer.count - offset)
             }
             if written <= 0 {
                 if written < 0, errno == EINTR { continue }
