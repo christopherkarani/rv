@@ -786,9 +786,11 @@ struct MCPGatewayCoreTests {
         let tool = "read_file\u{000B}\(trailer)\u{001B}[2J\u{009B}2J"
         let outputs = harness.core.outOfBand(
             client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [], binding: .unbound)
-        let log = outputs.logs.first ?? ""
+        // The code line is a notice for the person, never a log line.
+        #expect(outputs.logs.isEmpty)
+        let notice = outputs.notices.first ?? ""
         let pause = outputs.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
-        for text in [log, pause] {
+        for text in [notice, pause] {
             let scalars = Set(text.unicodeScalars.map(\.value))
             #expect(scalars.contains(0x0B) == false)
             #expect(scalars.contains(0x1B) == false)

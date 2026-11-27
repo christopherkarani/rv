@@ -36,7 +36,7 @@ struct MCPApprovalCodeNoticeTests {
         var core = MCPGatewayCore(
             configuration: configuration,
             upstreams: configuration.servers.map { MCPGatewayCore.Upstream(definition: $0, secretValues: []) },
-            approvals: .store(store), pinning: .unenforced)
+            approvals: .store(store), pinning: .unenforced, recordForward: { _ in true })
         for case .toUpstream(let server, let message) in core.start() {
             _ = core.handle(.upstream(server: server, message: .object([
                 "jsonrpc": .string("2.0"), "id": message["id"] ?? .null,
@@ -77,11 +77,16 @@ struct MCPApprovalCodeNoticeTests {
     }
 
     @Test func aTerminalGetsTheLine() throws {
-        let master = posix_openpt(O_RDWR | O_NOCTTY)
-        try #require(master >= 0)
-        defer { close(master) }
-        try #require(grantpt(master) == 0 && unlockpt(master) == 0)
-        let name = try #require(ptsname(master).map { String(cString: $0) })
+        // openpty, not posix_openpt: Glibc's Swift module hides the latter.
+        var master: Int32 = -1
+        var terminalEnd: Int32 = -1
+        var path = [CChar](repeating: 0, count: 1024)
+        try #require(openpty(&master, &terminalEnd, &path, nil, nil) == 0)
+        defer {
+            close(master)
+            close(terminalEnd)
+        }
+        let name = String(cString: path)
         #expect(MCPPersonTerminal.post("approval 1 for s tool t: confirmation code ABCDE-FGHJK", path: name))
         var buffer = [UInt8](repeating: 0, count: 512)
         var poll = pollfd(fd: master, events: Int16(POLLIN), revents: 0)
