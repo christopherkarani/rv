@@ -28,12 +28,15 @@ package enum CommandLineRedaction {
     package static let placeholder = ReviewSanitizer.redactedPlaceholder
 
     package static func redact(_ command: String) -> String {
-        // The token scan runs first, on the quotes as written: the
-        // sanitizer takes a `Bearer` value whole, closing quote and all,
-        // and a header value whose quote is gone would run to the end.
+        // JSON-shaped values first (they may span tokens), then the token
+        // scan on the quotes as written: the sanitizer takes a `Bearer`
+        // value whole, closing quote and all, and a header value whose
+        // quote is gone would run to the end. The scan does the sanitizer's
+        // scheme rule itself (`Bearer x`, `Basic x`), on the words as
+        // written. Known token prefixes go last, wherever they sit.
         var scan = Scan()
-        let scanned = mapTokens(urlUserinfoRedacted(command)) { scan.next($0) }
-        return ReviewSanitizer.redactCredentials(in: scanned)
+        let scanned = mapTokens(jsonSecretsRedacted(urlUserinfoRedacted(command))) { scan.next($0) }
+        return tokenPrefixesRedacted(ReviewSanitizer.redactCredentials(in: scanned))
     }
 
     // MARK: - Token scan
@@ -45,9 +48,10 @@ package enum CommandLineRedaction {
         case userPassword
         /// The next token starts a header (`-H 'Name: value'`).
         case header
-        /// Tokens of a secret header's value, until `closing` (a quote) or,
-        /// with no quote, this one token.
-        case headerValue(closing: Character?)
+        /// Tokens of a secret value a quote opened (a header's value, a
+        /// quoted password), until the token holding `closing`; with no
+        /// quote, this one token.
+        case rest(closing: Character?)
     }
 
     private struct Scan {
@@ -57,9 +61,14 @@ package enum CommandLineRedaction {
         /// `docker exec db mysql -pX`, `sudo -u root mysql -pX`,
         /// `sh -c "mysql -pX"`.
         var words: Set<String> = []
+        /// The previous token's word, folded, as written (before any
+        /// redaction): `bearer` makes the next token a secret.
+        var previousWord = ""
 
         mutating func next(_ token: String) -> String {
             let quoted = Quoted(token)
+            let afterScheme = Self.schemeWords.contains(previousWord)
+            previousWord = Self.fold(quoted.body)
             if let pending {
                 self.pending = nil
                 switch pending {
@@ -68,13 +77,14 @@ package enum CommandLineRedaction {
                     // took none (a boolean, or a missing value). Never eat
                     // a flag; read this one as itself.
                     if Self.isFlag(quoted.body) || Self.separators.contains(quoted.body) { break }
+                    continueQuote(quoted)
                     if case .value = pending { return quoted.replacingBody(with: placeholder) }
                     return quoted.redactingAfterColon()
                 case .header:
                     return header(quoted)
-                case .headerValue(let closing):
+                case .rest(let closing):
                     if let closing, quoted.trailing.contains(closing) == false {
-                        self.pending = .headerValue(closing: closing)
+                        self.pending = .rest(closing: closing)
                     }
                     return quoted.replacingBody(with: placeholder)
                 }
@@ -82,6 +92,16 @@ package enum CommandLineRedaction {
             if Self.separators.contains(quoted.body) {
                 words = []
                 return token
+            }
+            // `Bearer x`, `Basic x`, `token x`: the sanitizer's scheme rule,
+            // on the words as written.
+            if afterScheme, Self.isFlag(quoted.body) == false {
+                continueQuote(quoted)
+                return quoted.replacingBody(with: placeholder)
+            }
+            // `aws configure set aws_secret_access_key VALUE`.
+            if Self.isFlag(quoted.body) == false, words.contains("configure"), Self.isSecretKey(quoted.body) {
+                pending = .value
             }
             let shown = Self.isFlag(quoted.body) ? flag(quoted, token: token) : token
             if Self.isFlag(quoted.body) == false {
@@ -93,6 +113,14 @@ package enum CommandLineRedaction {
             return shown
         }
 
+        /// A value token that opens a quote it does not close: the value
+        /// runs on to the token that closes it (`-p 'my secret'`).
+        private mutating func continueQuote(_ quoted: Quoted) {
+            if let opening = quoted.leading.last, quoted.trailing.isEmpty {
+                pending = .rest(closing: opening)
+            }
+        }
+
         private mutating func flag(_ quoted: Quoted, token: String) -> String {
             let body = quoted.body
             if body == "-H" || body == "--header" {
@@ -101,7 +129,7 @@ package enum CommandLineRedaction {
             }
             if body.hasPrefix("--header=") {
                 let value = String(body.dropFirst("--header=".count))
-                return quoted.leading + "--header=" + headerText(value) + quoted.trailing
+                return quoted.leading + "--header=" + header(Quoted(value)) + quoted.trailing
             }
             if Self.userFlags.contains(body) {
                 pending = .userPassword
@@ -143,17 +171,22 @@ package enum CommandLineRedaction {
             // A quote this token opens and does not close: the value runs
             // on to the token that closes it.
             if let opening = quoted.leading.last, quoted.trailing.isEmpty {
-                pending = .headerValue(closing: opening)
+                pending = .rest(closing: opening)
             } else if quoted.leading.isEmpty, valueHere == false {
-                pending = .headerValue(closing: nil)
+                pending = .rest(closing: nil)
             }
             return valueHere ? quoted.leading + name + ":" + placeholder + quoted.trailing : quoted.text
         }
 
-        private func headerText(_ value: String) -> String {
-            guard let colon = value.firstIndex(of: ":") else { return value }
-            let name = String(value[..<colon])
-            return Self.isSecretHeader(name) ? name + ":" + placeholder : value
+        /// Words after which the next token is a credential (HTTP auth
+        /// schemes; `token` as gh and others spell it).
+        static let schemeWords: Set<String> = ["bearer", "basic", "token", "digest"]
+
+        /// A positional key that names a secret (`aws_secret_access_key`).
+        static func isSecretKey(_ word: String) -> Bool {
+            let folded = fold(word)
+            return secretFlagNames.contains(folded)
+                || ["secret", "password", "passwd", "token"].contains { folded.contains($0) }
         }
 
         static let separators: Set<String> = ["&&", "||", ";", "|", "&"]
@@ -203,6 +236,7 @@ package enum CommandLineRedaction {
             "token", "api_token", "auth_token", "access_token", "refresh_token", "bearer_token",
             "session_token", "id_token", "github_token", "oauth_token", "personal_access_token",
             "api_key", "apikey", "access_key", "access_key_id", "private_key", "auth", "authorization",
+            "bearer", "oauth2_bearer", "aws_secret_access_key", "aws_session_token",
         ]
 
         static func isSecretHeader(_ name: String) -> Bool {
@@ -229,7 +263,9 @@ package enum CommandLineRedaction {
 
         init(_ text: String) {
             self.text = text
-            let quotes: Set<Character> = ["'", "\""]
+            // A backslash-escaped quote (`\"` inside `bash -c "…"`) is a
+            // quote too.
+            let quotes: Set<Character> = ["'", "\"", "\\"]
             let lead = text.prefix(while: { quotes.contains($0) })
             let afterLead = text.dropFirst(lead.count)
             let trail = String(afterLead.reversed().prefix(while: { quotes.contains($0) }).reversed())
@@ -250,6 +286,106 @@ package enum CommandLineRedaction {
     }
 
     // MARK: - Text helpers
+
+    /// Words that start a known credential, wherever they sit: inside
+    /// quotes, after `=`, `:` or `/`. Each must be followed by enough token
+    /// characters to be one (`sk-learn` is a word, not a key).
+    static let tokenPrefixes: [(prefix: String, minimumTail: Int)] = [
+        ("github_pat_", 8), ("ghp_", 8), ("gho_", 8), ("ghu_", 8), ("ghs_", 8), ("ghr_", 8),
+        ("sk-", 8), ("sk_live_", 8), ("sk_test_", 8), ("rk_live_", 8),
+        ("xoxb-", 8), ("xoxp-", 8), ("xoxa-", 8), ("xoxr-", 8), ("xoxs-", 8), ("xoxe-", 8),
+        ("glpat-", 8), ("npm_", 8), ("AKIA", 12), ("ASIA", 12),
+    ]
+
+    /// Each known token prefix at a word boundary, with the token
+    /// characters after it, becomes the placeholder.
+    private static func tokenPrefixesRedacted(_ text: String) -> String {
+        let characters = Array(text)
+        var output = ""
+        var index = 0
+        func isTokenCharacter(_ character: Character) -> Bool {
+            character.isASCII && (character.isLetter || character.isNumber || character == "_" || character == "-")
+        }
+        while index < characters.count {
+            let atBoundary = index == 0 || isTokenCharacter(characters[index - 1]) == false
+            if atBoundary, let match = tokenPrefixes.first(where: { entry in
+                let prefix = Array(entry.prefix)
+                return characters.count - index >= prefix.count && Array(characters[index..<index + prefix.count]) == prefix
+            }) {
+                var end = index + match.prefix.count
+                while end < characters.count, isTokenCharacter(characters[end]) { end += 1 }
+                if end - index - match.prefix.count >= match.minimumTail {
+                    output += placeholder
+                    index = end
+                    continue
+                }
+            }
+            output.append(characters[index])
+            index += 1
+        }
+        return output
+    }
+
+    /// A JSON value under a secret-named key (`{"token":"x"}`,
+    /// `{"password": "x y"}`, and `{\"token\":\"x\"}` inside a quoted
+    /// script) becomes the placeholder. A value whose closing quote never
+    /// comes (the command was cut) is hidden to the end.
+    private static func jsonSecretsRedacted(_ text: String) -> String {
+        let characters = Array(text)
+        guard characters.contains(":") else { return text }
+        var output = ""
+        var index = 0
+        func isKeyCharacter(_ character: Character) -> Bool {
+            character.isASCII && (character.isLetter || character.isNumber || "_.-".contains(character))
+        }
+        while index < characters.count {
+            // `"` or `\"` opening a key.
+            let escaped = characters[index] == "\\" && index + 1 < characters.count && characters[index + 1] == "\""
+            guard characters[index] == "\"" || escaped else {
+                output.append(characters[index])
+                index += 1
+                continue
+            }
+            let quoteWidth = escaped ? 2 : 1
+            var cursor = index + quoteWidth
+            let keyStart = cursor
+            while cursor < characters.count, isKeyCharacter(characters[cursor]) { cursor += 1 }
+            let key = String(characters[keyStart..<cursor])
+            func quote(at position: Int) -> Bool {
+                escaped
+                    ? position + 1 < characters.count && characters[position] == "\\" && characters[position + 1] == "\""
+                    : position < characters.count && characters[position] == "\""
+            }
+            guard key.isEmpty == false, quote(at: cursor) else {
+                output.append(characters[index])
+                index += 1
+                continue
+            }
+            cursor += quoteWidth
+            while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+            guard cursor < characters.count, characters[cursor] == ":" else {
+                output += String(characters[index..<cursor])
+                index = cursor
+                continue
+            }
+            cursor += 1
+            while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+            guard quote(at: cursor), Scan.isSecretKey(key) || Scan.isSecretHeader(key) else {
+                output += String(characters[index..<cursor])
+                index = cursor
+                continue
+            }
+            let valueStart = cursor + quoteWidth
+            var valueEnd = valueStart
+            while valueEnd < characters.count, quote(at: valueEnd) == false {
+                // In a plain JSON string, `\"` is an escaped quote, not the end.
+                valueEnd += escaped == false && characters[valueEnd] == "\\" ? 2 : 1
+            }
+            output += String(characters[index..<valueStart]) + placeholder
+            index = min(valueEnd, characters.count)
+        }
+        return output
+    }
 
     /// `scheme://user:password@host` keeps the user and hides the
     /// password (up to the last `@` of the authority, so a password may

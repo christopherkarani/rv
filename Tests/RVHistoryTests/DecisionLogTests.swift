@@ -87,6 +87,56 @@ struct DecisionRedactionTests {
         #expect(DecisionRedaction.command(shown, home: home) == shown)
     }
 
+    /// Inputs the #675 review found leaking, each with what must survive.
+    static let leaks: [(command: String, secret: String, kept: String)] = [
+        // A scheme word's value, with the header's quotes escaped or absent.
+        (#"bash -c "curl -H \"Authorization: Bearer tokSECRETC\" https://api""#, "SECRETC", "https://api"),
+        (#"docker run alpine sh -c "wget --header \"Authorization: Bearer SECRETW\" https://x""#, "SECRETW", "https://x"),
+        ("curl -H Authorization: Bearer tokSECRETD https://x", "SECRETD", "https://x"),
+        ("curl -H 'Authorization: Basic SECRETB' https://x", "SECRETB", "https://x"),
+        // Known token prefixes inside quotes.
+        (#"echo "ghp_0123456789abcdefghijABCDEFGHIJ012345" | gh auth login --with-token"#, "0123456789abcdef", "gh auth login"),
+        ("export KEY='sk-live0123456789abcdef' && run", "live0123456789", "&& run"),
+        (#"curl -H "X-Slack: xoxb-1234567890-abcdefghij" https://x"#, "1234567890-abc", "https://x"),
+        ("echo AKIAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE", "echo"),
+        // JSON values under secret-named keys.
+        (#"curl -d '{"token":"SECRETL"}' https://x"#, "SECRETL", "https://x"),
+        ("cat <<EOF > c.json\n{\"password\": \"SECRETK and more\"}\nEOF", "SECRETK", "c.json"),
+        (#"bash -c "curl -d '{\"api_key\":\"SECRETJ\"}' https://x""#, "SECRETJ", "https://x"),
+        // A header in `--header="…"`.
+        (#"wget --header="X-Api-Key: SECRETM" https://x"#, "SECRETM", "https://x"),
+        // A quoted value with a space.
+        ("sshpass -p 'my SECRETN' ssh host", "SECRETN", "ssh host"),
+        ("curl -u 'bob:my SECRETU' https://x", "SECRETU", "https://x"),
+        // More flags and positional keys.
+        ("curl --oauth2-bearer SECRETO https://x", "SECRETO", "https://x"),
+        ("aws configure set aws_secret_access_key SECRETP", "SECRETP", "aws configure set"),
+    ]
+
+    @Test(arguments: leaks.indices)
+    func reviewedLeaksAreHidden(_ index: Int) {
+        let leak = Self.leaks[index]
+        let shown = DecisionRedaction.command(leak.command, home: home)
+        #expect(shown.contains(leak.secret) == false, "\(shown)")
+        #expect(shown.contains(leak.kept), "\(shown)")
+        #expect(shown.contains("[redacted]"))
+        #expect(DecisionRedaction.command(shown, home: home) == shown)
+    }
+
+    /// The 2 KB pre-cut can land inside a URL password, before its `@`:
+    /// the token it cuts through is dropped, not shown.
+    @Test func theCutNeverShowsHalfAToken() {
+        let command = "X_TOKEN=" + String(repeating: "a", count: 1990) + " git clone https://bob:SECRETQ"
+            + String(repeating: "p", count: 40) + "@github.com/x"
+        #expect(command.utf8.count > DecisionRedaction.maxScannedBytes)
+        let shown = DecisionRedaction.command(command, home: home, maxBytes: 4096)
+        #expect(shown.contains("SECRETQ") == false, "\(shown.suffix(80))")
+        #expect(shown.hasSuffix("git clone…"))
+        // A cut quoted JSON value is hidden to the end.
+        let json = String(repeating: "x", count: 2030) + #" -d '{"password": "SECRETR aaaaaaaaaaaaaaaaaaaaaaa"#
+        #expect(DecisionRedaction.command(json, home: home, maxBytes: 4096).contains("SECRETR") == false)
+    }
+
     @Test func liveEventsAndTheLogHideTheSame() {
         for form in Self.forms {
             #expect(DecisionRedaction.command(form.command, home: nil) == CommandLineRedaction.redact(form.command))
@@ -109,6 +159,49 @@ struct DecisionRedactionTests {
         #expect(shown.utf8.count <= DecisionRedaction.maxCommandBytes + "…".utf8.count)
         // Ten runs; one must stay far inside the budget even in a debug build.
         #expect(elapsed < .milliseconds(500), "\(elapsed) for 10 runs")
+    }
+}
+
+@Suite("Decision ids")
+struct DecisionIDTests {
+    static let bad = ["\u{1B}c", "A7C835000001", "a7c83500000", "a7c835000001x", "a7c-83500000", ""]
+
+    @Test func anIDThatIsNot12HexDigitsIsDroppedWhenRead() throws {
+        for bad in Self.bad {
+            var record = row(.denied, at: noon)
+            record.id = "a7c835000001"
+            let good = try #require(String(data: DecisionLog.encoder.encode(record), encoding: .utf8))
+            let forged = good.replacingOccurrences(
+                of: #""id":"a7c835000001""#, with: #""id":"# + String(data: try JSONEncoder().encode(bad), encoding: .utf8)!)
+            #expect(forged != good)
+            let decoded = try DecisionLog.decoder.decode(DecisionRecord.self, from: Data(forged.utf8))
+            #expect(decoded.id == nil && decoded.code == nil, "\(bad.debugDescription)")
+            #expect(try DecisionLog.decoder.decode(DecisionRecord.self, from: Data(good.utf8)).code == "a7c-835")
+        }
+    }
+
+    @Test func aLedgerRowsIDIsCheckedToo() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = DenialLedgerRecord(
+            timestamp: noon, host: .hook(.claude), tool: .bash, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            category: .pack(.coreGit), path: "", id: "a7c835000001")
+        let good = try #require(String(data: encoder.encode(record), encoding: .utf8))
+        #expect(try decoder.decode(DenialLedgerRecord.self, from: Data(good.utf8)).code == "a7c-835")
+        for bad in Self.bad {
+            let forged = good.replacingOccurrences(
+                of: #""id":"a7c835000001""#, with: #""id":"# + String(data: try JSONEncoder().encode(bad), encoding: .utf8)!)
+            let decoded = try decoder.decode(DenialLedgerRecord.self, from: Data(forged.utf8))
+            #expect(decoded.id == nil && decoded.code == nil, "\(bad.debugDescription)")
+        }
+        // A row with no id has no code: never one made from its fields.
+        var bare = record
+        bare.id = nil
+        #expect(bare.code == nil)
+        #expect(DecisionStamp.validID(DecisionStamp.mintID()) != nil)
     }
 }
 

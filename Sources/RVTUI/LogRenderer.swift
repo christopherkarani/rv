@@ -16,18 +16,18 @@ public struct LogFrame: Equatable, Sendable {
 }
 
 /// Paints `rv log`: a `◆` heading with the count, one row per decision in
-/// fixed columns (time, agent, verdict, rule, command, code), a muted day
-/// line above rows from an earlier day, one summary line, then the next
+/// fixed columns (time, agent, verdict, rule, command, code), a day line
+/// above rows from an earlier day, one summary line, then the next
 /// command. Columns are as wide as their widest cell, in terminal columns
 /// (`TerminalWidth`). When a row is too wide the command is cut first (to
 /// `minimumCommand`), then the rule (to `minimumRule`), then the code
 /// column goes, then the command is cut again; a cut cell ends in `…`. Lines of
 /// prose wrap. Without color the glyphs and words carry the meaning.
 ///
-/// Colors follow v5c's rv term frame through `Palette`: `✕ Stopped` red
-/// (`deny`), `◐ Would stop` amber (`mark`), `→` blue (`trace`), `◆`
-/// in the heading ink. `colorOffPalette` (piped, `NO_COLOR`, `TERM=dumb`)
-/// paints nothing.
+/// Only the glyphs carry ink, as in v5c's rv term frame, through
+/// `Palette`: `✕` red (`deny`), `◐` amber (`mark`), `→` blue (`trace`),
+/// `◆` in the heading ink. Every word stays plain. `colorOffPalette`
+/// (piped, `NO_COLOR`, `TERM=dumb`) paints nothing.
 public struct LogRenderer: FrameRenderer {
     public init() {}
 
@@ -42,46 +42,45 @@ public struct LogRenderer: FrameRenderer {
     public func render(_ frame: LogFrame, palette: Palette) -> [String] {
         let model = frame.model
         let widths = Self.widths(model.rows, columns: frame.columns)
-        let prose = frame.columns.map { max(1, $0 - Self.indent.count) }
-        func dim(_ text: String) -> [String] {
-            Self.wrapped(text, width: prose).map { Self.indent + paint($0, slot: palette.muted, reset: palette.reset) }
+        let proseWidth = frame.columns.map { max(1, $0 - Self.indent.count) }
+        func prose(_ text: String) -> [String] {
+            Self.wrapped(text, width: proseWidth).map { Self.indent + $0 }
         }
         var lines = [""]
         lines.append(heading(model, width: frame.columns.map { min($0, widths.total) } ?? widths.total, palette: palette))
         lines.append("")
         if let empty = model.emptyMessage {
-            lines += Self.wrapped(empty, width: prose).map { Self.indent + $0 }
+            lines += prose(empty)
         } else {
             var day: String?
             for row in model.rows {
                 if let label = row.dayLabel, label != day {
                     day = label
-                    lines.append(Self.indent + paint(label, slot: palette.muted, reset: palette.reset))
+                    lines.append(Self.indent + label)
                 }
                 lines.append(self.row(for: row, widths: widths, palette: palette))
             }
         }
         if model.ledgerOff == false, model.rows.isEmpty == false || model.judgeNotesHidden > 0 {
             lines.append("")
-            lines += Self.summaryLines(model.summaryParts, width: prose)
-                .map { Self.indent + paint($0, slot: palette.muted, reset: palette.reset) }
+            lines += Self.summaryLines(model.summaryParts, width: proseWidth).map { Self.indent + $0 }
         }
         if let skipped = model.skippedNote {
-            lines += dim(skipped)
+            lines += prose(skipped)
         }
         if let next = model.next {
             lines.append("")
-            // v5c: the → glyph blue, the command bold, the reason dim.
+            // v5c: the → glyph blue; the command and the reason plain.
             let command = CommandVocabulary.Glyph.next.rawValue + " " + next.command
             let painted = Self.indent
                 + paint(CommandVocabulary.Glyph.next.rawValue, slot: palette.trace, reset: palette.reset) + " "
-                + paint(next.command, slot: palette.fact, reset: palette.reset)
+                + next.command
             let oneLine = Self.indent.count + TerminalWidth.of(command) + 3 + TerminalWidth.of(next.why)
             if let columns = frame.columns, oneLine > columns {
                 lines.append(painted)
-                lines.append(Self.indent + "  " + paint(next.why, slot: palette.muted, reset: palette.reset))
+                lines.append(Self.indent + "  " + next.why)
             } else {
-                lines.append(painted + "   " + paint(next.why, slot: palette.muted, reset: palette.reset))
+                lines.append(painted + "   " + next.why)
             }
         }
         return lines
@@ -92,33 +91,38 @@ public struct LogRenderer: FrameRenderer {
         let right = model.rows.isEmpty ? "" : model.countLabel
         let room = max(2, width - Self.indent.count - TerminalWidth.of(left) - TerminalWidth.of(right))
         let glyph = paint(CommandVocabulary.Glyph.rv.rawValue, slot: palette.heading, reset: palette.reset)
-        return Self.indent + glyph + " " + paint(model.spanLabel, slot: palette.fact, reset: palette.reset)
-            + (right.isEmpty ? "" : String(repeating: " ", count: room) + paint(right, slot: palette.muted, reset: palette.reset))
+        return Self.indent + glyph + " " + model.spanLabel
+            + (right.isEmpty ? "" : String(repeating: " ", count: room) + right)
     }
 
     private func row(for row: LogRow, widths: Widths, palette: Palette) -> String {
-        let verdictSlot = row.verdict == .stopped ? palette.deny : palette.mark
-        let commandSlot = row.verdict == .stopped ? palette.fact : ""
-        // Ink covers the text only; the padding after it stays plain.
-        func cell(_ text: String, _ width: Int, _ slot: String, padded: Bool = true) -> String {
+        // Only the verdict's glyph carries ink; its word and every other
+        // cell stay plain.
+        let glyph = row.verdict.glyph.rawValue
+        let ink = row.verdict == .stopped ? palette.deny : palette.mark
+        func cell(_ text: String, _ width: Int, padded: Bool = true) -> String {
             let shown = TerminalWidth.clip(text, to: width)
-            let pad = padded ? String(repeating: " ", count: max(0, width - TerminalWidth.of(shown))) : ""
-            return paint(shown, slot: slot, reset: palette.reset) + pad
+            return padded ? TerminalWidth.pad(shown, to: width) : shown
         }
+        let verdict = cell(row.verdict.label, widths.verdict)
         var cells = [
-            cell(row.timeLabel, widths.time, palette.muted),
-            cell(DisplayedText.field(row.agent), widths.agent, ""),
-            cell(row.verdict.label, widths.verdict, verdictSlot),
-            cell(DisplayedText.field(row.rule), widths.rule, palette.silver),
+            cell(row.timeLabel, widths.time),
+            cell(DisplayedText.field(row.agent), widths.agent),
+            verdict.hasPrefix(glyph)
+                ? paint(glyph, slot: ink, reset: palette.reset) + verdict.dropFirst(glyph.count)
+                : verdict,
+            cell(DisplayedText.field(row.rule), widths.rule),
         ]
         let command = Self.command(row, to: widths.command)
         if widths.code > 0 {
-            cells.append(cell(command, widths.command, commandSlot))
-            cells.append(paint(row.code, slot: palette.muted, reset: palette.reset))
+            cells.append(cell(command, widths.command))
+            cells.append(DisplayedText.field(row.code ?? ""))
         } else {
-            cells.append(cell(command, widths.command, commandSlot, padded: false))
+            cells.append(cell(command, widths.command, padded: false))
         }
-        return Self.indent + cells.joined(separator: Self.gap)
+        let line = Self.indent + cells.joined(separator: Self.gap)
+        // A row with no code ends in its padding.
+        return row.code == nil ? String(line.reversed().drop(while: { $0 == " " }).reversed()) : line
     }
 
     struct Widths: Equatable {
@@ -151,7 +155,7 @@ public struct LogRenderer: FrameRenderer {
             verdict: widest(\.verdict.label),
             rule: rule,
             command: command,
-            code: widest(\.code)
+            code: widest { DisplayedText.field($0.code ?? "") }
         )
         guard let columns else { return widths }
         func over() -> Int { widths.total - columns }

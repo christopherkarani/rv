@@ -22,12 +22,13 @@ public struct LogEntry: Equatable, Sendable {
     /// The shell command as the decision log recorded it, redacted; nil
     /// when nothing was recorded.
     public var command: String?
-    public var code: String
+    /// The call's code (`a7c-835`); nil when its row carries no id.
+    public var code: String?
     public var session: String?
 
     public init(
         time: Date, agent: String, stopped: Bool, wouldAsk: Bool = false, rule: String,
-        isJudge: Bool = false, tool: String, target: String, command: String? = nil, code: String,
+        isJudge: Bool = false, tool: String, target: String, command: String? = nil, code: String?,
         session: String? = nil
     ) {
         self.time = time
@@ -120,7 +121,7 @@ public struct LogRow: Equatable, Sendable {
     public var recordedCommand: String?
     public var tool: String
     public var target: String
-    public var code: String
+    public var code: String?
     public var session: String?
 }
 
@@ -327,7 +328,7 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         public var rule: String
         /// The recorded shell command, redacted; null when none was.
         public var command: String?
-        public var code: String
+        public var code: String?
         public var tool: String
         public var target: String
         /// Would-stop rows only: `ask` when guarding would have asked.

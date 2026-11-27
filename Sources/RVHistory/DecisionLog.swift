@@ -45,6 +45,22 @@ public struct DecisionRecord: Sendable, Equatable, Codable {
         case wouldBe = "would_be"
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        time = try container.decode(Date.self, forKey: .time)
+        verdict = try container.decode(DecisionVerdict.self, forKey: .verdict)
+        host = try container.decode(LedgerHost.self, forKey: .host)
+        tool = try container.decode(LedgerTool.self, forKey: .tool)
+        command = try container.decodeIfPresent(String.self, forKey: .command)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        rule = try container.decodeIfPresent(String.self, forKey: .rule)
+        session = try container.decodeIfPresent(String.self, forKey: .session)
+        // Only an id as rv mints it: anything else would reach a terminal.
+        id = try container.decodeIfPresent(String.self, forKey: .id).flatMap(DecisionStamp.validID)
+        wouldBe = try container.decodeIfPresent(DecisionWouldBe.self, forKey: .wouldBe)
+    }
+
     public init(
         time: Date,
         verdict: DecisionVerdict,
@@ -88,13 +104,23 @@ public enum DecisionRedaction {
     static let maxScannedBytes = 4 * maxCommandBytes
 
     public static func command(_ raw: String, home: HomePath?, maxBytes: Int = maxCommandBytes) -> String {
-        let scanned = raw.utf8.count > maxScannedBytes ? cut(raw, bytes: maxScannedBytes) : raw
+        // A cut can land inside a token (a URL password before its `@`),
+        // where no rule can see it is a secret: the partial last token goes.
+        let wasCut = raw.utf8.count > maxScannedBytes
+        let scanned = wasCut ? droppingPartialLastToken(cut(raw, bytes: maxScannedBytes)) : raw
         let flattened = String(String.UnicodeScalarView(scanned.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) ? " " : $0
         }))
         let redacted = homeShown(in: CommandLineRedaction.redact(flattened), home: home)
         let shown = capped(redacted.trimmingCharacters(in: .whitespaces), bytes: maxBytes)
-        return scanned.utf8.count < raw.utf8.count && shown.hasSuffix("…") == false ? shown + "…" : shown
+        return wasCut && shown.hasSuffix("…") == false ? shown + "…" : shown
+    }
+
+    /// `text` up to its last whitespace: the token the cut went through is
+    /// dropped whole.
+    static func droppingPartialLastToken(_ text: String) -> String {
+        guard let last = text.lastIndex(where: \.isWhitespace) else { return "" }
+        return String(text[..<last])
     }
 
     public static func path(_ raw: String, home: HomePath?, maxBytes: Int = maxCommandBytes) -> String {

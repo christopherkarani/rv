@@ -41,6 +41,12 @@ public struct DecisionStamp: Sendable, Equatable, Hashable {
         return String(repeating: "0", count: 12 - hex.count) + hex
     }
 
+    /// `raw` when it is an id as `mintID` makes them (12 lowercase hex
+    /// digits), else nil.
+    public static func validID(_ raw: String) -> String? {
+        raw.utf8.count == 12 && raw.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) } ? raw : nil
+    }
+
     /// `a7c-835`: the code `rv log` prints for an id.
     public static func code(forID id: String) -> String {
         String(id.prefix(3)) + "-" + String(id.dropFirst(3).prefix(3))

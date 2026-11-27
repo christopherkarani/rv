@@ -251,7 +251,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
         wouldBe = try container.decodeIfPresent(LedgerWouldBe.self, forKey: .wouldBe) ?? .deny
         session = try container.decodeIfPresent(String.self, forKey: .session)
-        id = try container.decodeIfPresent(String.self, forKey: .id)
+        // Only an id as rv mints it: anything else would reach a terminal.
+        id = try container.decodeIfPresent(String.self, forKey: .id).flatMap(DecisionStamp.validID)
     }
 
     public func encode(to encoder: Encoder) throws {

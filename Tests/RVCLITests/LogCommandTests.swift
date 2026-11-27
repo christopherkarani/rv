@@ -80,18 +80,21 @@ struct LogCommandTests {
         #expect(all.split(separator: "\n").filter { $0.contains("core.judge:") }.count == 2)
     }
 
-    @Test("the code column is the row's code, the same on every read")
+    @Test("the code column is the call's code: from its id, the same on every read; none without one")
     func codes() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         Self.seed(home)
-        let records = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home)).records(asOf: Self.now)
-        let codes = records.map(\.code)
-        #expect(Set(codes).count == codes.count)
+        let ledger = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        // Rows written before ids carry no code.
+        #expect(ledger.records(asOf: Self.now).allSatisfy { $0.code == nil })
+        Self.seedDecisions(home)
+        let codes = ledger.records(asOf: Self.now).compactMap(\.code)
+        #expect(codes.count == 5 && Set(codes).count == 5)
         #expect(codes.allSatisfy { $0.wholeMatch(of: /[0-9a-f]{3}-[0-9a-f]{3}/) != nil })
-        let text = try output(home, LogQuery(all: true))
+        let text = try wide(home, LogQuery(all: true))
         for code in codes { #expect(text.contains(code)) }
-        #expect(try output(home, LogQuery(all: true)) == text)
+        #expect(try wide(home, LogQuery(all: true)) == text)
     }
 
     @Test("--json is one stable object with the rows shown")
@@ -327,10 +330,16 @@ struct LogCommandTests {
         }
         let ink = Palette(for: ColorCapability(colorsEnabled: true))
         let tty = try render(probe(tty: true))
-        #expect(tty.contains(ink.deny + "✕ Stopped" + ink.reset))
-        #expect(tty.contains(ink.mark + "◐ Would stop" + ink.reset))
-        #expect(tty.contains(ink.trace + "→" + ink.reset))
-        #expect(tty.contains(ink.heading + "◆" + ink.reset))
+        #expect(tty.contains(ink.deny + "✕" + ink.reset + " Stopped"))
+        #expect(tty.contains(ink.mark + "◐" + ink.reset + " Would stop"))
+        #expect(tty.contains(ink.trace + "→" + ink.reset + " rv log --all"))
+        #expect(tty.contains(ink.heading + "◆" + ink.reset + " today"))
+        // Only the glyphs carry ink.
+        var words = tty
+        for (glyph, slot) in [("✕", ink.deny), ("◐", ink.mark), ("→", ink.trace), ("◆", ink.heading)] {
+            words = words.replacingOccurrences(of: slot + glyph + ink.reset, with: glyph)
+        }
+        #expect(words.contains("\u{1B}") == false)
         for plain in [probe(tty: false), probe(tty: true, noColorEnv: true), probe(tty: true, termDumb: true)] {
             let text = try render(plain)
             #expect(text.contains("\u{1B}") == false)

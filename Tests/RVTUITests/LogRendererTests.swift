@@ -152,7 +152,7 @@ struct LogRendererTests {
         #expect(rendered.contains("  2 stopped · 3 would stop · 3 judge notes in shadow · commands not recorded"))
         let dim = Palette(for: ColorCapability(colorsEnabled: true))
         let painted = LogRenderer().render(LogFrame(model: model), palette: dim)
-        #expect(painted.contains { $0.contains(dim.muted + "2 stopped") && $0.contains("commands not recorded") })
+        #expect(painted.contains("  2 stopped · 3 would stop · 3 judge notes in shadow · commands not recorded"))
         #expect(Self.lines().contains { $0.contains("not recorded") } == false)
         // At 60 columns the summary wraps between its parts.
         let narrow = LogRenderer().render(LogFrame(model: model, columns: 60), palette: colorOffPalette)
@@ -193,19 +193,50 @@ struct LogRendererTests {
         #expect(TerminalWidth.clip("日本語", to: 4) == "日…")
     }
 
-    @Test("with color, a stop is red, a would-stop amber, → blue; the words stay")
+    /// `lines` with each glyph's own ink taken out: what is left must
+    /// carry no escape at all.
+    static func outsideGlyphs(_ lines: [String], _ palette: Palette) -> String {
+        var text = lines.joined(separator: "\n")
+        for (glyph, ink) in [("✕", palette.deny), ("◐", palette.mark), ("→", palette.trace), ("◆", palette.heading)] {
+            text = text.replacingOccurrences(of: ink + glyph + palette.reset, with: glyph)
+        }
+        return text
+    }
+
+    @Test("with color only the glyphs carry ink: ✕ red, ◐ amber, → blue, ◆ heading; every word plain")
     func colors() {
         let palette = Palette(for: ColorCapability(colorsEnabled: true))
-        let rendered = Self.lines(palette: palette)
-        let stopped = rendered.first { $0.contains("✕ Stopped") } ?? ""
-        let wouldStop = rendered.first { $0.contains("◐ Would stop") } ?? ""
-        #expect(stopped.contains(palette.deny + "✕ Stopped"))
-        #expect(wouldStop.contains(palette.mark + "◐ Would stop"))
-        #expect(wouldStop.contains(palette.deny) == false)
-        #expect(rendered.contains { $0.contains(palette.trace + "→" + palette.reset) })
-        #expect(rendered.contains { $0.contains(palette.heading + "◆" + palette.reset) })
+        let rendered = Self.lines(LogQuery(all: true), palette: palette)
+        let stopped = rendered.first { $0.contains("Stopped") } ?? ""
+        let wouldStop = rendered.first { $0.contains("Would stop") } ?? ""
+        #expect(stopped.contains(palette.deny + "✕" + palette.reset + " Stopped"))
+        #expect(wouldStop.contains(palette.mark + "◐" + palette.reset + " Would stop"))
+        #expect(rendered.contains { $0.contains(palette.trace + "→" + palette.reset + " rv log") } == false)
+        #expect(rendered.contains { $0.contains(palette.heading + "◆" + palette.reset + " last 7 days") })
+        #expect(Self.outsideGlyphs(rendered, palette).contains("\u{1B}") == false)
+        // The → line, when there is one.
+        let folded = Self.lines(palette: palette)
+        #expect(folded.contains { $0.contains(palette.trace + "→" + palette.reset + " rv log --all") })
+        #expect(Self.outsideGlyphs(folded, palette).contains("\u{1B}") == false)
         // No color: not one escape.
         #expect(Self.lines(palette: colorOffPalette).joined().contains("\u{1B}") == false)
+    }
+
+    @Test("a code is shown as text, and a row with none ends at its command")
+    func codesAreFielded() {
+        let model = LogViewModel(
+            entries: [
+                LogEntry(time: Self.at(14, 0), agent: "claude", stopped: true, rule: "core.git:reset-hard",
+                         tool: "Bash", target: "", command: "git reset --hard", code: "\u{1B}c"),
+                LogEntry(time: Self.at(13, 0), agent: "claude", stopped: true, rule: "core.git:reset-hard",
+                         tool: "Bash", target: "", command: "git reset --hard", code: nil),
+            ],
+            query: LogQuery(), now: Self.now, calendar: Self.utc
+        )
+        let rendered = LogRenderer().render(LogFrame(model: model), palette: colorOffPalette)
+        #expect(rendered.joined().contains("\u{1B}") == false)
+        #expect(rendered.allSatisfy { $0.hasSuffix(" ") == false })
+        #expect(rendered.contains { $0.hasSuffix("git reset --hard") })
     }
 
     @Test("terminal escapes in a cell are shown, not sent")
