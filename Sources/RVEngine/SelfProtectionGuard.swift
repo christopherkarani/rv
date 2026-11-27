@@ -14,7 +14,9 @@ import RVDomain
 /// wall (`rv workspace upload|download`), or switching rv to observe
 /// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
-/// agent. Reads of rv's config dir are a separate secret-path rule.
+/// agent. Reads of rv's config dir are a separate secret-path rule. A bare
+/// help request (`rv uninstall --help`, `isHelpPageRequest`) runs nothing
+/// and is not weakening.
 ///
 /// rv may also run where the launcher parser cannot follow
 /// (`SelfProtectionScripts`): an interpreter or shell runner's script
@@ -340,6 +342,7 @@ private let maxVerbCandidates = 256
 
 private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bool {
     guard let program = rawArgv.first, headMayBeRV || rvProgramNames.contains(program) else { return false }
+    if headMayBeRV == false, isHelpPageRequest(rawArgv.dropFirst()) { return false }
     let args = rawArgv.dropFirst().map(foldedWord)
     guard let firstWord = args.firstIndex(where: { $0.hasPrefix("-") == false }) else { return false }
     // An option before the verb may take a value (`rv --config x uninstall`),
@@ -348,6 +351,22 @@ private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bo
     // Each candidate scans the tail: past a bound, fail closed instead of going quadratic.
     if verbIndexes.count > maxVerbCandidates { return true }
     return verbIndexes.contains { isWeakeningVerb(args, at: $0) }
+}
+
+/// `rv <verb> --help` or `rv <verb> <sub> --help`: rv prints the help page
+/// and runs nothing, so an agent may read how a guarded command works. Only
+/// one or two plain lowercase command words come before the help flag: no
+/// option (whose value the flag could be), no `--`, no positional a
+/// passthrough command could capture (`rv allow-once mint rm x --help`
+/// mints), and nothing a shell expands. Anything else stays judged.
+private func isHelpPageRequest(_ args: ArraySlice<String>) -> Bool {
+    guard let last = args.last, last == "--help" || last == "-h" else { return false }
+    let words = args.dropLast()
+    guard (1...2).contains(words.count) else { return false }
+    return words.allSatisfy { word in
+        word.utf8.first.map { (UInt8(ascii: "a")...UInt8(ascii: "z")).contains($0) } == true
+            && word.utf8.allSatisfy { (UInt8(ascii: "a")...UInt8(ascii: "z")).contains($0) || $0 == UInt8(ascii: "-") }
+    }
 }
 
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
