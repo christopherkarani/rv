@@ -100,6 +100,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - An agent may read `rv <command> --help` (one or two plain command words, then the help flag) and run `rvd --version`; self-protection still judges anything else shaped like them.
 - The egress footer says "network rules in use: not reported yet" instead of "supervisor has not reported".
 
+### Internal
+
+- The parked-polls test of rv's events client (`parkedPollsDoNotDelayOtherRequests`) no longer fails on a loaded runner. It gave its polls a fixed 20 s to park and its other request a fixed 2 s to answer; when other suites held the cooperative pool, the polls could not start in time. It now waits for the polls to park, and times the request beside the same request on an idle client. It still fails if the request waits on a parked poll.
+
 ## [0.2.2] - 2026-11-18
 
 ### Changed
