@@ -222,8 +222,9 @@ private func words(_ text: String) -> Int {
 @Test func hostDenyText_indeterminateNamesItsReason() {
     let reasons: [IndeterminateReason] = [
         .budgetExhausted, .commandTooLarge, .corePacksUnavailable, .inlineProgramNeedsJudge,
-        .selfProtection, .packageScriptUnresolved, .unresolvedInvocation,
+        .packageScriptUnresolved, .unresolvedInvocation,
     ]
+    // Self-protection has its own verdict and text (B2, SelfProtectionStopTests).
     for reason in reasons {
         let text = hostDenyText(from: EvaluationResult(outcome: .indeterminate(reason)), command: resetHard)
         let lines = text?.split(separator: "\n").map(String.init) ?? []

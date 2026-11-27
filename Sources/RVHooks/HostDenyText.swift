@@ -50,6 +50,9 @@ public struct StopVoice: Sendable {
 
 /// One stop, in the shape every host shows.
 public struct StopNotice: Sendable, Equatable {
+    /// The verdict word after the glyph: `Stopped`, or self-protection's
+    /// own `rv protects itself` (B2).
+    public var verdict: String
     /// The command (first line, escaped) or path; nil for a stop that has
     /// no command (an unreadable hook request).
     public var subject: String?
@@ -62,7 +65,11 @@ public struct StopNotice: Sendable, Equatable {
     /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
     public var who: String
 
-    public init(subject: String?, rule: String, why: String, safer: String? = nil, who: String) {
+    public init(
+        verdict: String = CommandVocabulary.Glyph.stopped.word,
+        subject: String?, rule: String, why: String, safer: String? = nil, who: String
+    ) {
+        self.verdict = verdict
         self.subject = subject
         self.rule = rule
         self.why = why
@@ -83,7 +90,7 @@ public struct StopNotice: Sendable, Equatable {
 
     /// `✕ Stopped   <command> (<rule>)`.
     public var verdictLine: String {
-        let head = "\(CommandVocabulary.Glyph.stopped.rawValue) \(CommandVocabulary.Glyph.stopped.word)   "
+        let head = "\(CommandVocabulary.Glyph.stopped.rawValue) \(verdict)   "
         guard let subject, subject.isEmpty == false else {
             return "\(head)(\(rule))"
         }
@@ -392,7 +399,7 @@ private func stopNotice(
     unlock: AllowOnceUnlockMint?,
     voice: StopVoice
 ) -> StopNotice {
-    let advice = voice.advice(deny.ruleID)
+    let advice = voice.advice(deny.ruleID) ?? builtinStopAdvice(deny.ruleID)
     return StopNotice(
         subject: subject,
         rule: deny.ruleID.slashDisplay,
@@ -465,7 +472,10 @@ public func indeterminateStopNotice(
     command: ShellCommand?,
     voice: StopVoice = .plain
 ) -> StopNotice {
-    StopNotice(
+    if reason == .selfProtection {
+        return selfProtectionStopNotice(command: command, voice: voice)
+    }
+    return StopNotice(
         subject: command.map(hookDenyCommandPreview),
         rule: reason.map(indeterminateStopRule) ?? "rv.indeterminate/incomplete",
         why: reason.map(indeterminateStopWhy) ?? "rv could not finish checking it",

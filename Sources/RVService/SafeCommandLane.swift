@@ -149,6 +149,23 @@ public enum SafeCommandLane {
         #"make( (build|test|lint|check|all))?"#,
         #"docker (ps|images)( \S+)*"#,
         #"(node|npm|pnpm|yarn|bun|python3?|pip3?|go|cargo|rustc|git|docker|java|ruby|swift) (--version|-v|-V|version)"#,
+    ] + rvReadOnlyPatterns
+
+    /// B2: rv's own read-only verbs, so an agent can look at rv (status,
+    /// log, why, doctor, help, box list) without the judge in the way. Each
+    /// is spelled out with the only flags it takes: a write verb, or a
+    /// read verb with any other flag, does not match. The lane only waives
+    /// the judge: a command self-protection floors never reaches it, since
+    /// the packs did not allow it.
+    static let rvReadOnlyPatterns: [String] = [
+        #"rv( (status|doctor))?( --(json|robot|plain))?"#,
+        #"rv (log|blocks)( (--json|--robot|--plain|--all|--rule [a-z0-9][a-z0-9._:/-]*|--host [a-z]+|-n [0-9]+))*"#,
+        #"rv why [0-9a-f-]{3,20}( --(json|robot|plain))?"#,
+        #"rv explain( \S+)+"#,
+        #"rv box list( --(json|robot|plain))?"#,
+        #"rv (service|policy) status( --(json|robot|plain))?"#,
+        #"rv( [a-z][a-z-]*){1,2} (--help|-h)"#,
+        #"rv (--help|-h|--version|version|help( [a-z][a-z-]*){0,2})"#,
     ]
 
     private static func regexSearch(_ pattern: String, in text: String) -> Bool {
