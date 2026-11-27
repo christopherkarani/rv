@@ -73,6 +73,7 @@ extension [MCPGatewayOutput] {
     var toUpstream: [(String, JSONValue)] { compactMap { if case .toUpstream(let s, let m) = $0 { (s, m) } else { nil } } }
     var audits: [MCPCallRecord] { compactMap { if case .audit(let r) = $0 { r } else { nil } } }
     var logs: [String] { compactMap { if case .log(let l) = $0 { l } else { nil } } }
+    var notices: [String] { compactMap { if case .notice(let l) = $0 { l } else { nil } } }
     var stopped: [String] { compactMap { if case .stopUpstream(let s) = $0 { s } else { nil } } }
 }
 
