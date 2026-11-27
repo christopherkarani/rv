@@ -570,10 +570,10 @@ private func modesSplit() -> WorkspaceTUIState {
 
         transition = modesPress(state, .control("b"), .character("["))
         #expect(transition.state.mode == .terminal)
-        #expect(transition.state.feedback == "Unknown Ctrl-B command")
+        #expect(transition.state.feedback == "Unknown ^B command")
 
         transition = modesPress(state, .control("b"), .character("!"))
-        #expect(transition.state.feedback == "Unknown Ctrl-B command")
+        #expect(transition.state.feedback == "Unknown ^B command")
     }
 
     @Test func emptyViewLauncherSelectionCreatesATab() {
@@ -600,7 +600,7 @@ private func modesSplit() -> WorkspaceTUIState {
             return
         }
         transition = modesPress(transition.state, .enter)
-        #expect(transition.state.feedback == "Open a tab first (Ctrl-B c)")
+        #expect(transition.state.feedback == "Open a tab first (^B c)")
     }
 
     @Test func runCommandSubmitReplacesLivePane() {

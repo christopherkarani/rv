@@ -40,6 +40,8 @@ public actor ServiceRuntime {
     /// cooperative pool; nil without a home.
     let hookLocalSpool: HookLocalSpoolDrainer?
     private let clock: @Sendable () -> Date
+    /// Every hook decision, for `rv term` (`DecisionLog`). Nil outside rvd.
+    private let decisionLog: DecisionLogRecorder?
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     /// Operator launch ceremonies (proposal → review → permit). Shared with
@@ -117,7 +119,8 @@ public actor ServiceRuntime {
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
         policyStatusService: PolicyStatusService = PolicyStatusService(),
-        judge: any JudgePort = LiveJudgePort()
+        judge: any JudgePort = LiveJudgePort(),
+        recordsDecisions: Bool = false
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -157,6 +160,9 @@ public actor ServiceRuntime {
             })
         }
         self.clock = clock
+        // rvd only (`RVDProcess`): tests and in-process runtimes never
+        // write the decision log.
+        self.decisionLog = recordsDecisions ? DecisionLogRecorder.live(home: resolvedHome, clock: clock) : nil
         self.pendingApprovals = Self.resolvePendingApprovals(
             pendingApprovals,
             home: resolvedHome
@@ -829,6 +835,10 @@ public actor ServiceRuntime {
             )
             // Once, after the reply is final; off the reply's path.
             tap.publish(to: events, timedOut: deadline.requiresTimeoutReply, home: configHome)
+            // The decision log reads the same capture, also detached.
+            if let decisionLog, let capture = tap.capture {
+                decisionLog.record(capture, timedOut: deadline.requiresTimeoutReply)
+            }
             return .success(reply)
         } catch let error as IPCError {
             return .failure(error)

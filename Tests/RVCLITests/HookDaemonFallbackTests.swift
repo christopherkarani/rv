@@ -4,6 +4,7 @@ import RVDomain
 import RVHooks
 import RVIPC
 import RVService
+import RVXPC
 @testable import RVCLI
 
 /// Swift twin of `Sources/rv-c/tests/hook_fallback_test.c`: a daemon miss
