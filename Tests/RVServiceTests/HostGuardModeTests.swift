@@ -154,22 +154,22 @@ struct HostGuardModeTests {
         #expect(ledgerRows(home).map(\.observed) == [true])
     }
 
-    @Test("observe host: file door allows a secret read and writes an observed row")
+    @Test("observe host: file door still denies a secret read, like a block host")
     func observeHostFileDoor() throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
         defer { remove(home) }
         let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: home.rawValue + "/.env"))
-        let observed = GatedEvaluate().runFile(action, home: home, host: .hook(.claude), now: Self.now)
-        #expect(observed.decision == .allow)
-        let enforced = GatedEvaluate().runFile(action, home: home, host: .hook(.cursor), now: Self.now)
-        guard case .deny = enforced.decision else {
-            Issue.record("block host file door must deny, got \(enforced.decision)")
-            return
+        for host in [LedgerHost.hook(.claude), .hook(.cursor)] {
+            let result = GatedEvaluate().runFile(action, home: home, host: host, now: Self.now)
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("\(host) file door must deny a .env read, got \(result.decision)")
+                continue
+            }
+            #expect(deny.ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
         }
         let rows = ledgerRows(home)
-        #expect(rows.first { $0.host == .hook(.claude) }?.observed == true)
-        #expect(rows.first { $0.host == .hook(.claude) }?.category == .secret(.environment))
-        #expect(rows.first { $0.host == .hook(.cursor) }?.observed == false)
+        #expect(rows.count == 2)
+        #expect(rows.allSatisfy { $0.observed == false && $0.category == .secret(.environment) })
     }
 
     @Test("observed rows respect blocks.enabled; the audit chain still records them")

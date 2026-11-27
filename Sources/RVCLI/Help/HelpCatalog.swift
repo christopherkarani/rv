@@ -635,6 +635,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
+                HelpRow(name: "rv run --secret <name> -- <command>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
@@ -650,6 +651,7 @@ enum HelpCatalog {
                 HelpRow(name: "--refresh", description: "Gateway only: re-read the value this often in running sessions, e.g. 15m"),
             ]),
             HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "use", description: "Run a command with a secret through rv: rv run --secret NAME -- <command>. It gets a stand-in, never the value"),
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
                 HelpRow(
                     name: "gateway",
@@ -739,7 +741,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "allow",
-                    description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
+                    description: "You only: silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config --local rv.secretsScan false. rv stops agents' git config and shell edits of these"
                 ),
                 HelpRow(
                     name: "audit",
@@ -752,6 +754,7 @@ enum HelpCatalog {
             "rv secrets set GITHUB_TOKEN --provider github",
             "rv secrets check",
             "rv secrets scan .",
+            "rv run --secret OPENAI_API_KEY -- codex",
         ]
     )
 
