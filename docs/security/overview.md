@@ -196,8 +196,10 @@ allow-once redemption and owner confirmation require an owner check that
 
 **Stops.** Shell commands that match a blocking rule in an enabled rule
 pack, commands whose `package.json` scripts would run such a command, and
-(on macOS with the judge installed) pack-allowed commands the judge scores
-as risky.
+(on macOS with the judge installed, and only when `judge.mode` is `live` in
+`config.json`) pack-allowed commands the judge scores as risky. By default
+the judge runs in shadow: it scores and logs to `judge-log.jsonl`, and
+never stops or asks.
 
 **How.**
 
@@ -222,10 +224,14 @@ as risky.
   budget exhausted (1,500 ms CPU, 150 ms per search, 6 s wall) **[C40]**,
   core packs that failed to load **[C41]**. The policy gate never turns
   indeterminate into allow **[C42]**.
-- **Judge (macOS, source only).** It sees only pack-allowed calls, can
+- **Judge (macOS, source only).** Unless `judge.mode` is `live`, the judge
+  is in shadow (the default): every pack-allowed call it scores gets the
+  packs-only answer, in enforce and observe, on rvd and on the hook-local
+  path, and its verdict only reaches `judge-log.jsonl` with a `shadow`
+  note. Live, it sees only pack-allowed calls, can
   raise but never lower a verdict, and a judge block cannot be overridden
-  **[C43]**. While the judge loads, when its queue (12) is full, or when a
-  prediction fails, the call goes to review (ask) **[C44]**. It runs a local
+  **[C43]**. While a live judge loads, when its queue (12) is full, or when
+  a prediction fails, the call goes to review (ask) **[C44]**. It runs a local
   CoreML model; no networking code was found in the judge module **[C23]**.
 - **Policy gate override ladder**: rebase recovery, pinned check,
   allowlist, allow-once, contained delete (only `rm -rf` variants at the
@@ -687,7 +693,7 @@ gives the hook no signal for auto-run, background agents or
 | `rvd` fails its identity check, sends a malformed reply, or skews in major version; hook input invalid | Deny **[C153]** | Deny |
 | `rvd` exceeds its own 7 s budget | Side effects attempted after 7 s are skipped and the reply becomes a timeout deny, unless an allow-once grant was already spent (its allow is sent); a slow reply that attempted no side effect is returned as computed **[C156]** | Same |
 | Pattern budget exhausted, command over 64 KiB, core packs missing | Indeterminate (not overridable) **[C39] [C40] [C41]** | Same |
-| Judge loading, queue full, or prediction failed (macOS) | Ask **[C44]** | Recorded as observed |
+| Judge loading, queue full, or prediction failed (macOS) | With `judge.mode` `live`: ask **[C44]**. In shadow (the default): packs-only, logged | Live: recorded as observed. Shadow: packs-only, logged |
 | Judge bundle missing or unloadable; Linux | Packs-only evaluation, not fail-closed **[C50]** | Same |
 | Audit append fails: deny | Deny stands; its record is lost; one stderr line per kind per minute **[C157]** | — |
 | Audit append fails: override (allow-once, allowlist, rebase recovery, contained delete) | Override not applied; command stays denied **[C158]** | — |

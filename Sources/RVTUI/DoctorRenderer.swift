@@ -164,9 +164,11 @@ public struct DoctorRenderer: FrameRenderer {
             slot: configInk,
             reset: palette.reset
         )
+        let judge = model.judgeLive ? "judge  live" : "judge  shadow · logs only"
         var lines = [
             heading("Config", palette: palette),
             "  \(body)",
+            "  \(paint(judge, slot: palette.fact, reset: palette.reset))",
         ]
         if model.config == .unreadable {
             lines.append("  \(fixLine("chmod u+rwx ~/.config/rv", palette: palette))")
