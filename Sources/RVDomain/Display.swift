@@ -4,7 +4,7 @@ public let incompleteEvalSentence =
 
 /// Hook voice for the observe floor (`IndeterminateReason.observeUnanalyzable`).
 public let observeUnanalyzableSentence =
-    "rv could not see what this command runs, so observe mode sends it to Terminal. Run it in Terminal."
+    "rv could not see what this command runs, so watch mode sends it to Terminal. Run it in Terminal."
 
 /// The sentence a person reads for an indeterminate verdict.
 public func indeterminateSentence(_ reason: IndeterminateReason) -> String {

@@ -55,14 +55,22 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var steps: [ExplainStep]
     public var suggestions: [ExplainSuggestion]
     public var semantic: ExplainSemanticView?
-    /// Observe-mode note, when observe let a would-be block or ask run.
+    /// Observe-mode note, when observe mode was read for a verdict that is
+    /// not an allow: watched (it ran) or stopped (in every mode).
     package var observeNote: String?
+    /// The observe note says the observe floor stopped it (in every mode),
+    /// not that observe let it run.
+    package var observeStopped = false
     /// Typed rules that also match but did not decide, shown before Next.
     package var alsoMatches: [ExplainAlsoMatch] = []
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
-    public var explainDecisionWord: String { decision.emphasizedName }
+    /// Under observe, the decision line names what happened instead of the
+    /// bare verdict word: `◐ Would stop`
+    /// (it ran) or `✕ Stopped, in every mode` (it did not).
+    package var observeDecisionWords: String?
+    public var explainDecisionWord: String { observeDecisionWords ?? decision.emphasizedName }
     public var decisionTone: DecisionTone { decision.tone }
     public var ruleDisplay: String? { ruleID.map(\.slashDisplay) }
     public var packDisplay: String? { packID?.rawValue }
@@ -83,7 +91,8 @@ public struct ExplainViewModel: Equatable, Sendable {
         regex: String? = nil,
         suggestions: [ExplainSuggestion] = [],
         semantic: ExplainSemanticView? = nil,
-        observeNote: String? = nil
+        observeNote: String? = nil,
+        observeStopped: Bool = false
     ) {
         self.command = command
         self.normalized = normalized
@@ -100,16 +109,17 @@ public struct ExplainViewModel: Equatable, Sendable {
         self.suggestions = suggestions
         self.semantic = semantic
         self.observeNote = observeNote
+        self.observeStopped = observeStopped && observeNote != nil
     }
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run, which
-/// enforce would have authorized this way; adds the observe note.
+/// `observed`: what observe mode did with `result` (watched: the would-be
+/// verdict ran; stopped: the observe floor kept it); adds the observe note.
 public func explainViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
     normalized: String? = nil,
-    observed: HookAuthorization? = nil
+    observed: ObserveOutcome? = nil
 ) -> ExplainViewModel {
     let fact: String
     let next: String?
@@ -120,22 +130,28 @@ public func explainViewModel(
     case .deny(let deny, _):
         fact = factSentence(from: deny.reason)
         next = denyNextAction
-    case .indeterminate:
-        fact = incompleteEvalSentence
+    case .indeterminate(let reason):
+        // A stop only observe makes (stopping rvd) was evaluated, not left
+        // unfinished: say why it stopped.
+        fact = observed == .stoppedInObserve ? observeOnlyStopSentence : indeterminateSentence(reason)
         next = nil
     }
+    // A watched verdict ran: no "run it in Terminal, or rv allow-once"
+    // advice for a command observe already let through.
+    let watched: Bool
+    if case .watched = observed, result.decision != .allow { watched = true } else { watched = false }
     let packID = result.outcome.explainPackID
     let ruleID = result.outcome.explainRuleID
     let match = result.matched
 
-    return ExplainViewModel(
+    var model = ExplainViewModel(
         command: command,
         normalized: normalized ?? command.rawValue,
         decision: result.decision,
         packID: packID,
         ruleID: ruleID,
         fact: fact,
-        nextAction: next,
+        nextAction: watched ? nil : next,
         steps: explainSteps(from: result),
         patternName: match?.patternName,
         severity: match?.severity,
@@ -143,8 +159,13 @@ public func explainViewModel(
         regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis),
-        observeNote: observed.flatMap { observeNote(for: result.decision, authorization: $0) }
+        observeNote: observed.flatMap { observeNote(for: result.decision, outcome: $0, leadingWords: false) },
+        observeStopped: (observed?.isStop ?? false) && result.decision != .allow
     )
+    if result.decision != .allow {
+        model.observeDecisionWords = observed.map { observeDecisionWords(for: $0, decisionLine: true) }
+    }
+    return model
 }
 
 package func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {

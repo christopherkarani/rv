@@ -80,13 +80,15 @@ enum ObserveFloor {
     /// 1. the texts run out of budget: `observe.floor:unanalyzable`, read
     ///    nothing (so does reading them past `Context.budget`, at 2 or 4);
     /// 2. any text stops rvd or writes rv's install: "run it in Terminal";
-    /// 3. the verdict, or the command as written, touches rv's own
-    ///    protection: the verdict, enforced;
+    /// 3. the verdict is catastrophic (`ObserveCatastrophe`), or it or
+    ///    the command as written touches rv's own protection: the
+    ///    verdict, enforced;
     /// 4. any other text (program text the command feeds a shell or
     ///    interpreter, a guard reading) does: "run it in Terminal", since
     ///    the engine never read that text;
     /// 5. the command runs a program rv cannot see:
-    ///    `observe.floor:unanalyzable`.
+    ///    `observe.floor:unanalyzable`, over an allow or a watched-class
+    ///    deny (`watchedClasses`); any other deny is kept.
     /// The file door reads one path: 2 and 3 only.
     static func rule(_ result: EvaluationResult, door: Door, context: Context) -> Ruling {
         switch door {
@@ -113,7 +115,8 @@ enum ObserveFloor {
             if stopsOrInstalls(text, rvdPIDs: rvdPIDs, context: context) { return .enforce(floored(result)) }
         }
         var protection = OwnProtection(result: result, command: command, store: store, context: context)
-        if holds(result) || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
+        if holds(result) || ObserveCatastrophe.isCatastrophic(result, home: context.home)
+            || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
             return .enforce(result)
         }
         for text in set.texts where text.origin != .command {
@@ -227,8 +230,26 @@ enum ObserveFloor {
             // allows these verbs unchecked everywhere else: only a write
             // there holds. A command proven to only read (`ObserveReadProof`)
             // feeds no shell or interpreter, so the proof covers its texts.
-            guard words.contains(where: { namesWiring($0) }) else { return false }
+            // A delete, move or mode change of a directory above a wiring
+            // file (`rm -rf ~/.claude`) unhooks rv for that host as surely
+            // as editing the file inside (`RVWiringPaths.matchesAncestor`).
+            let namesWiringFile = words.contains(where: { namesWiring($0) })
+            let unhooksAncestor = namesWiringFile == false
+                && words.contains(where: { Self.unhookingVerbs.contains($0) })
+                && words.contains(where: { namesWiringAncestor($0) })
+            guard namesWiringFile || unhooksAncestor else { return false }
             return provesCommandOnlyReads() == false
+        }
+
+        /// Verbs that delete, move or re-mode what they name.
+        private static let unhookingVerbs: Set<String> = [
+            "rm", "rmdir", "mv", "unlink", "shred", "srm", "trash", "chmod", "chown", "chflags", "-delete",
+        ]
+
+        private func namesWiringAncestor(_ word: String) -> Bool {
+            guard let home else { return false }
+            let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
+            return RVWiringPaths.matchesAncestor(path, home: home.rawValue)
         }
 
         private mutating func provesCommandOnlyReads() -> Bool {
@@ -278,18 +299,40 @@ enum ObserveFloor {
         .unresolvedInvocation, .budgetExhausted, .commandTooLarge,
     ]
 
-    /// An allow, or an "unanalyzable" indeterminate, becomes "run it in
-    /// Terminal" under its own rule id; it never becomes a hard deny.
+    /// An allow, an "unanalyzable" indeterminate, or a watched-class deny
+    /// (`watchedClasses`) becomes "run it in Terminal" under its own rule
+    /// id; it never becomes a hard deny. Any other deny is kept.
+    ///
+    /// A watched-class deny is no reason to stop in observe (Q5: only
+    /// catastrophic commands and rv's own protection stop there); the
+    /// command stops only because rv cannot see what it runs, so the stop
+    /// carries that reason. Never weaker: like the pinned deny it replaces,
+    /// the indeterminate takes no allow-once, ask or allowlist entry.
     private static func unanalyzable(_ result: EvaluationResult) -> EvaluationResult {
         switch result.decision {
         case .allow:
             break
         case .indeterminate(let reason) where unanalyzableReasons.contains(reason):
             break
+        case .deny(let deny) where isWatchedClass(deny.ruleID):
+            break
         case .deny, .indeterminate:
             return result
         }
         return EvaluationResult(outcome: .indeterminate(.observeUnanalyzable), matchingView: result.matchingView)
+    }
+
+    /// Built-in denies that observe watches (logs as a would-be stop and
+    /// lets run) instead of stopping: an unresolved path, a write outside
+    /// the repository, and wrapper or interpreter nesting past the unwrap
+    /// limit. Enforce still stops each. Observe stops one of them only when
+    /// it is also catastrophic or touches rv's own protection (rules 2 to
+    /// 4 keep the deny then) or rv cannot see what it runs (rule 5, as
+    /// `observe.floor:unanalyzable`).
+    static let watchedClasses: Set<BuiltinRule> = [.unresolvedPath, .outOfRepoWrite, .unwrapLimited]
+
+    static func isWatchedClass(_ ruleID: RuleID) -> Bool {
+        BuiltinRule(ruleID).map { watchedClasses.contains($0) } ?? false
     }
 
     /// An allow becomes "run it in Terminal"; anything else is kept.
