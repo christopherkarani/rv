@@ -335,6 +335,93 @@ struct SecretsEveryModeTests {
         #expect(await Self.apply(command, home: home, cwd: cwd).decision == .allow, "\(command)")
     }
 
+    // MARK: A search's report of allow comments, only into scratch space
+
+    /// The test home lives under the temporary directory, so its `repo` is
+    /// a checkout under `/tmp` (or `/var/folders`): a report written into
+    /// it, by any spelling, writes marker lines into the repository.
+    @Test("a search's report into a repository under a temporary directory stops", arguments: [
+        "inside", "dotdot", "symlink", "hardlink", "fd",
+    ])
+    func searchReportIntoTemporaryRepositoryStops(form: String) async throws {
+        for config in [Self.block, Self.observe] {
+            let home = try Self.home(config)
+            defer { remove(home) }
+            let cwd = try Self.repo(in: home, hook: .none)
+            let fm = FileManager.default
+            let src = cwd.rawValue + "/src"
+            try fm.createDirectory(atPath: src, withIntermediateDirectories: true)
+            try Data("let k = 1\n".utf8).write(to: URL(fileURLWithPath: src + "/a.ts"))
+            let target: String
+            switch form {
+            case "inside":
+                target = src + "/a.ts"
+            case "dotdot":
+                let root = try #require(SecretsScanGuard.temporaryRoots.first { cwd.rawValue.hasPrefix($0) })
+                // `/tmp/../tmp/…/repo/src/a.ts`
+                let up = String(repeating: "../", count: root.split(separator: "/").count)
+                target = root + up + cwd.rawValue.dropFirst() + "/src/a.ts"
+            case "symlink":
+                try fm.createSymbolicLink(atPath: home.rawValue + "/link", withDestinationPath: src)
+                target = home.rawValue + "/link/a.ts"
+            case "hardlink":
+                try fm.linkItem(atPath: src + "/a.ts", toPath: home.rawValue + "/hits.txt")
+                target = home.rawValue + "/hits.txt"
+            default:
+                target = "/dev/fd/3"
+            }
+            let command = "grep -rn rv-secrets:allow . > \(target)"
+            let result = await Self.apply(command, home: home, cwd: cwd)
+            guard case .deny = result.decision else {
+                Issue.record("\(config) \(form) \(command): expected a deny, got \(result.decision)")
+                continue
+            }
+            #expect(HookAuthorization.isPinned(result), "\(config) \(form) \(command): not pinned")
+        }
+    }
+
+    @Test("a search's report into scratch space is not the commit check's stop")
+    func searchReportIntoScratchIsAllowed() async throws {
+        for config in [Self.block, Self.observe] {
+            let home = try Self.home(config)
+            defer { remove(home) }
+            let cwd = try Self.repo(in: home, hook: .none)
+            let scratch = home.rawValue + "/scratch"
+            try FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+            for command in [
+                "grep -rn rv-secrets:allow . > \(scratch)/hits",
+                "grep -rn rv-secrets:allow . > /dev/null",
+            ] {
+                let result = await Self.apply(command, home: home, cwd: cwd)
+                if case .deny(let deny) = result.decision {
+                    #expect(deny.ruleID != SecretsScanGuard.ruleID, "\(config) \(command)")
+                }
+            }
+        }
+    }
+
+    @Test("scratch space: a plain temporary path, through no symlink, in no repository")
+    func scratchPaths() throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let fm = FileManager.default
+        let base = home.rawValue
+        try fm.createDirectory(atPath: base + "/plain", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: base + "/repo/.git", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: base + "/link", withDestinationPath: base + "/plain")
+        try Data("x".utf8).write(to: URL(fileURLWithPath: base + "/plain/one"))
+        try fm.linkItem(atPath: base + "/plain/one", toPath: base + "/plain/two")
+        #expect(SecretsScanHookProbe.isScratch(base + "/plain/hits"))
+        #expect(SecretsScanHookProbe.isScratch(base + "/plain/new/dir/hits"))
+        #expect(SecretsScanHookProbe.isScratch(base + "/repo/hits") == false)
+        #expect(SecretsScanHookProbe.isScratch(base + "/repo/src/hits") == false)
+        #expect(SecretsScanHookProbe.isScratch(base + "/link/hits") == false)
+        #expect(SecretsScanHookProbe.isScratch(base + "/plain/two") == false)
+        #expect(SecretsScanHookProbe.isScratch(base + "/plain/../repo/hits") == false)
+        #expect(SecretsScanHookProbe.isScratch("/home/user/hits") == false)
+        #expect(SecretsScanHookProbe.isScratch("/dev/fd/3") == false)
+    }
+
     @Test("a plain commit stays allowed where rv's hook is installed")
     func plainCommitAllowed() async throws {
         let home = try Self.home(Self.block)

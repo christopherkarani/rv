@@ -70,11 +70,19 @@ public enum SecretsScanGuard {
     /// `leavingGitInternals`: writes inside a `.git` directory are left to
     /// the protected-path rule, already pinned, which names them as git
     /// internals (the engine's own fold, before filesystem semantics run).
+    ///
+    /// `isScratch(path)` answers whether a write target spelled under a
+    /// temporary directory really is scratch space: no symlink takes it
+    /// elsewhere and no repository holds it. Only then may a search's
+    /// report of marker lines go there (`grep -rn rv-secrets:allow . >
+    /// /tmp/hits`). The engine alone cannot look, so it trusts the spelling;
+    /// the service answers from the filesystem and fails closed.
     public static func weakensScan(
         _ command: ShellCommand,
         home: HomePath? = nil,
         cwd: WorkingDirectory? = nil,
         leavingGitInternals: Bool = false,
+        isScratch: (String) -> Bool = { _ in true },
         installedHook: (String) -> String? = { _ in nil }
     ) -> Bool {
         let raw = command.rawValue
@@ -128,7 +136,7 @@ public enum SecretsScanGuard {
         if plain.contains("git_config"), launched().contains(where: setsConfigThroughEnvironment) { return true }
         return writesScanControls(
             text, plain: plain, launched: launched, home: home, cwd: cwd,
-            leavingGitInternals: leavingGitInternals, hook: hook
+            leavingGitInternals: leavingGitInternals, isScratch: isScratch, hook: hook
         )
     }
 

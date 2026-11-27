@@ -113,11 +113,38 @@ enum SecretsScanHookProbe {
         let key = Recent.Key(command: command.rawValue, cwd: cwd?.rawValue, home: home?.rawValue)
         let now = Date()
         if let known = recent.withLock({ $0.answer(for: key, at: now) }) { return known }
-        let answer = SecretsScanGuard.weakensScan(command, home: home, cwd: cwd) { directory in
+        let answer = SecretsScanGuard.weakensScan(command, home: home, cwd: cwd, isScratch: isScratch) { directory in
             installedHook(near: directory, home: home)
         }
         recent.withLock { $0.remember(answer, for: key, at: now) }
         return answer
+    }
+
+    /// Whether a write target under a temporary directory is scratch
+    /// space: below the temporary root no component is a symlink, an
+    /// existing file has no other hard link, and no repository holds it
+    /// (a checkout under `/tmp` is not scratch). Anything rv cannot check
+    /// is not scratch.
+    static func isScratch(_ path: String) -> Bool {
+        guard let root = SecretsScanGuard.temporaryRoots.first(where: { path.hasPrefix($0) }) else { return false }
+        let parts = path.dropFirst(root.count).split(separator: "/").map(String.init)
+        guard parts.isEmpty == false, parts.allSatisfy({ $0 != ".." && $0 != "." }) else { return false }
+        var current = String(root.dropLast())
+        var deepestDirectory = current
+        for part in parts {
+            current += "/" + part
+            var info = stat()
+            guard lstat(current, &info) == 0 else {
+                guard errno == ENOENT else { return false }
+                break
+            }
+            switch info.st_mode & S_IFMT {
+            case S_IFLNK: return false
+            case S_IFDIR: deepestDirectory = current
+            default: if info.st_nlink > 1 { return false }
+            }
+        }
+        return FilesystemLiveProbe.discoverRepositoryRoot(from: deepestDirectory) == nil
     }
 
     private static let recent = Mutex(Recent())

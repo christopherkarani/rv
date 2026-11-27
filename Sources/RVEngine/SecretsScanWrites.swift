@@ -102,6 +102,7 @@ extension SecretsScanGuard {
         home: HomePath?,
         cwd: WorkingDirectory?,
         leavingGitInternals: Bool,
+        isScratch: (String) -> Bool,
         hook: ([String]) -> String?
     ) -> Bool {
         let namesControl = controlWords.contains { plain.contains($0) }
@@ -124,14 +125,19 @@ extension SecretsScanGuard {
         for command in heads where command.truncated == false && command.headIsDynamic == false {
             mutations += mutatedPaths(rebuilt(command), context: context) + chmodTargets(command, context: context)
         }
-        // A search's report of marker lines may go to a temporary file
-        // (`grep -rn rv-secrets:allow . > /tmp/hits`); anywhere else its
-        // output is marker lines written into a file.
-        let marksAllow = plain.contains(allowMarker)
-            && (markerIsOnlySearched(plain, heads) == false || mutations.contains { isTemporary($0.path) == false })
-        mutations.removeAll { $0.path.hasPrefix("/dev/") || (leavingGitInternals && isGitInternalPath($0.path)) }
+        mutations.removeAll { discardingSinks.contains($0.path) || (leavingGitInternals && isGitInternalPath($0.path)) }
+        // A search's report of marker lines may go to scratch space
+        // (`grep -rn rv-secrets:allow . > /tmp/hits`); anywhere else,
+        // `/dev/fd/3` included, its output is marker lines written into a
+        // file.
+        if plain.contains(allowMarker), mutations.isEmpty == false,
+           markerIsOnlySearched(plain, heads) == false
+            || mutations.contains(where: { isScratchTarget($0, isScratch: isScratch) == false })
+        {
+            return true
+        }
+        mutations.removeAll { $0.path.hasPrefix("/dev/") }
         guard mutations.isEmpty == false else { return false }
-        if marksAllow { return true }
         if mutations.contains(where: { protectsFile($0.path, home: home?.rawValue) }) { return true }
         // rv's hook where `core.hooksPath` puts it (`.husky/pre-commit`): a
         // write of a `pre-commit` file, or a delete or move above one.
@@ -169,8 +175,16 @@ extension SecretsScanGuard {
         return searched > 0 && plain.components(separatedBy: allowMarker).count - 1 <= searched
     }
 
-    private static func isTemporary(_ path: String) -> Bool {
-        ["/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/", "/dev/"].contains { path.hasPrefix($0) }
+    /// Writes that land nowhere a file can hold them.
+    private static let discardingSinks: Set<String> = ["/dev/null", "/dev/stdout", "/dev/stderr"]
+    public static let temporaryRoots = ["/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/"]
+
+    /// Spelled under a temporary directory with no `..` (`/tmp/../repo`,
+    /// `/tmp/link/../a.ts` may land anywhere), and scratch by `isScratch`.
+    private static func isScratchTarget(_ mutation: Mutation, isScratch: (String) -> Bool) -> Bool {
+        mutation.traversesParent == false
+            && temporaryRoots.contains(where: { mutation.path.hasPrefix($0) })
+            && isScratch(mutation.path)
     }
 
     private static func lastComponent(_ path: String) -> String {
@@ -307,6 +321,8 @@ extension SecretsScanGuard {
     struct Mutation {
         let path: String
         let removesBelow: Bool
+        /// The word as typed has a `..` component.
+        var traversesParent = false
 
         func reaches(_ hook: String) -> Bool {
             path == hook || (removesBelow && (path == "/" || hook.hasPrefix(path + "/")))
@@ -322,14 +338,21 @@ extension SecretsScanGuard {
                 case .read:
                     return []
                 case .delete(let targets, _, _):
-                    return targets.map { Mutation(path: $0.canonical, removesBelow: true) }
+                    return targets.map { mutation($0, removesBelow: true) }
                 case .move(let sources, let destination):
-                    return sources.map { Mutation(path: $0.canonical, removesBelow: true) }
-                        + [Mutation(path: destination.canonical, removesBelow: false)]
+                    return sources.map { mutation($0, removesBelow: true) }
+                        + [mutation(destination, removesBelow: false)]
                 case .overwrite(let targets), .chmod(let targets, _, _), .create(let targets):
-                    return targets.map { Mutation(path: $0.canonical, removesBelow: false) }
+                    return targets.map { mutation($0, removesBelow: false) }
                 }
             }
+    }
+
+    private static func mutation(_ target: FilesystemTarget, removesBelow: Bool) -> Mutation {
+        Mutation(
+            path: target.canonical, removesBelow: removesBelow,
+            traversesParent: target.apparent.split(separator: "/").contains("..")
+        )
     }
 
     /// A launched command as shell text again, each word quoted.

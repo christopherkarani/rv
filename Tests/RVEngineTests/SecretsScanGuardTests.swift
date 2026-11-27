@@ -116,6 +116,11 @@ struct SecretsScanGuardTests {
         "cat <<'EOF' | cat >> f\nk // rv-secrets:allow\nEOF",
         "grep -h rv-secrets:allow a.ts | tee -a b.ts",
         "grep -rn rv-secrets:allow . > hits.txt",
+        // A report only counts as scratch at a plain temporary path.
+        "grep -rn rv-secrets:allow . > /dev/fd/3",
+        "grep -rn rv-secrets:allow . > /dev/tty",
+        "grep -rn rv-secrets:allow . > /tmp/link/../a.ts",
+        "grep -rn rv-secrets:allow . > /tmp/../work/repo/src/a.ts",
         // Interpreter code that names .git/config or .git/hooks is a write.
         #"python3 -c 'print("[rv]\n\tsecretsScan = false", file=open(".git/config","at"))'"#,
         #"perl -e 'open(F, "+<", ".git/config"); seek(F, 0, 2); print F "x"'"#,
@@ -123,6 +128,7 @@ struct SecretsScanGuardTests {
         #"ruby -e 'File.new(".git/config","a+").puts("x")'"#,
         #"python3 -c 'open(".git/hooks/pre-commit","wt").write("")'"#,
         #"python3 -c "print(open('.git/config').read())""#,
+        #"python3 -c 'import configparser; c = configparser.ConfigParser(); c.read(".git/config")'"#,
         // A user- or machine-wide alias that skips hooks reaches every repository.
         "git config --global alias.ci 'commit --no-verify'",
         "git config --system alias.ci 'commit -nm'",
@@ -189,6 +195,8 @@ struct SecretsScanGuardTests {
         // A search for the marker writes a report, not a marker.
         "grep -rn 'rv-secrets:allow' . > /tmp/hits",
         "rg -n rv-secrets:allow src | tee /tmp/hits",
+        "grep -rn rv-secrets:allow . > /dev/null",
+        "grep -rn rv-secrets:allow . > /dev/stdout 2> /dev/stderr",
         // Interpreters that only read git config.
         "awk '/url/' .git/config",
         "perl -ne 'print if /url/' .git/config",
@@ -227,6 +235,7 @@ struct SecretsScanGuardTests {
         "git --exec-path /tmp/x commit -m x",
         "git --exec-path=/tmp/x merge topic",
         "git am 0001-fix.patch",
+        "git am < patch.mbox",
         "git hash-object -t commit -w --stdin < c.txt",
         "git hash-object --type=commit -w c.txt",
         "git fast-import < stream.fi",
@@ -253,6 +262,23 @@ struct SecretsScanGuardTests {
         let cwd = WorkingDirectory(validating: "/repo")
         #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) { _ in hook }, "\(command)")
         #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) { _ in nil } == false, "\(command)")
+    }
+
+    /// The service answers whether a temporary path is scratch (no symlink,
+    /// no repository): where it is not, a search's report is marker lines
+    /// written into a file.
+    @Test("a search's report goes only to scratch space", arguments: [
+        "grep -rn rv-secrets:allow . > /tmp/hits",
+        "rg -n rv-secrets:allow src | tee /tmp/repo/src/a.ts",
+        "grep -rn rv-secrets:allow . > /var/folders/x/T/link/a.ts",
+    ])
+    func searchReportsNeedScratch(_ command: String) {
+        let shell = ShellCommand(rawValue: command)
+        let cwd = WorkingDirectory(validating: "/work")
+        var asked: [String] = []
+        #expect(SecretsScanGuard.weakensScan(shell, cwd: cwd, isScratch: { asked.append($0); return false }), "\(command)")
+        #expect(asked.isEmpty == false, "\(command)")
+        #expect(SecretsScanGuard.weakensScan(shell, cwd: cwd, isScratch: { _ in true }) == false, "\(command)")
     }
 
     @Test("the repository each command acts on", arguments: [
