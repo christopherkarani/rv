@@ -271,7 +271,7 @@ remains in this repository's history under Apache 2.0, up to commit
 ```sh
 rv test 'rm -rf /'          # evaluate a command, don't run it
 rv explain 'rm -rf /'       # why would this block?
-rv packs                    # browse the 95 packs
+rv packs                    # what is on; rv packs --all browses the 95 packs
 rv blocks                   # what got denied lately?
 rv host list                # per-host mode (block / observe / off) and wiring
 rv workspace vms            # micro-VM runtime sessions, newest first

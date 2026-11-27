@@ -980,7 +980,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv packs [list] [--enabled] [--verbose] [--json]"),
+                HelpRow(name: "rv packs [list] [--all] [--enabled] [--category <c>] [--search <text>] [--verbose] [--json]"),
                 HelpRow(name: "rv packs enable <pack>"),
                 HelpRow(name: "rv packs disable <pack>"),
                 HelpRow(name: "rv packs info <pack>"),
