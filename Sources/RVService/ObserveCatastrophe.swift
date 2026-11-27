@@ -12,14 +12,17 @@ import RVPolicy
 /// kin) matches any path under `/` or `~`, so it is catastrophic only
 /// when a target is that root itself (`rm -rf ~`, `rm -rf /usr`), never
 /// for `rm -rf ~/project/build`. A disk rule (`system.disk`) is always
-/// device-wide.
+/// device-wide, and so is any write onto a whole disk device under
+/// another rule (`cat /dev/zero > /dev/sda`). `ObserveFloor` also reads
+/// each segment of a compound command, since a pack deny ends evaluation
+/// at the first one (`git push --force; dd of=/dev/sda`).
 enum ObserveCatastrophe {
     /// Device-wide wipes, formats, erases and partition-table writes.
     static let diskRules: Set<RuleID> = Set([
         "dd-device", "dd-wipe", "mkfs", "mkfs-variants", "mkswap", "wipefs", "blkdiscard",
         "sgdisk-destroy", "sfdisk-write", "fdisk-edit", "parted-modify", "nvme-erase", "sg-format",
         "hdparm-erase", "cryptsetup-destroy", "badblocks-write", "diskutil-erase", "diskutil-partition",
-        "diskutil-apfs-delete", "zpool-destroy", "mdadm-zero-superblock",
+        "diskutil-apfs-delete", "zpool-destroy", "mdadm-zero-superblock", "gdisk-edit", "ddrescue-force",
     ].map { RuleID(pack: .systemDisk, pattern: $0) })
 
     /// Recursive or bulk deletes, catastrophic only on a root target.
@@ -37,19 +40,158 @@ enum ObserveCatastrophe {
         "/private", "/private/etc", "/private/var",
     ]
 
-    static func isCatastrophic(_ result: EvaluationResult, home: HomeDirectory?) -> Bool {
+    /// Whether `result`, the verdict for `command` (the whole command, or
+    /// one segment of it), is catastrophic. `command` nil reads the
+    /// verdict alone.
+    ///
+    /// - A disk rule or a fork bomb always is.
+    /// - Any deny whose analyzed write, delete or move target is a whole
+    ///   disk device (`cat /dev/zero > /dev/sda`, `shred /dev/sda`,
+    ///   `cp /dev/zero /dev/sda`), or whose words write one
+    ///   (`writesDiskDevice`), is: a disk wipe under another rule.
+    /// - A root-delete rule is when a target is a root (`rm -rf /usr/*`
+    ///   reads as `/usr`). With no analyzed target (`xargs rm -rf ~`), its
+    ///   words decide: one names a root, or one rv cannot expand (`$X`,
+    ///   `$(…)`), fails closed as catastrophic.
+    static func isCatastrophic(_ result: EvaluationResult, command: String? = nil, home: HomeDirectory?) -> Bool {
         guard case .deny(let deny) = result.decision else { return false }
         if diskRules.contains(deny.ruleID) || deny.ruleID == forkBomb { return true }
+        if let action = result.analysis.filesystemAction, writesTargets(action).contains(where: { target in
+            [target.canonical, target.apparent].contains(where: isDiskDevice)
+        }) {
+            return true
+        }
+        if let command, writesDiskDevice(command) { return true }
         guard rootDeleteRules.contains(deny.ruleID) else { return false }
         let targets = result.analysis.filesystemAction?.targets ?? []
-        return targets.contains { target in
-            [target.canonical, target.apparent].contains { isRoot($0, home: home) }
+        guard targets.isEmpty else {
+            return targets.contains { target in
+                [target.canonical, target.apparent].contains { isRoot($0, home: home) }
+            }
+        }
+        guard let command else { return true }
+        return words(command).contains { word in
+            isRoot(word, home: home) || word.contains("$") || word.contains("`")
         }
     }
 
+    /// The targets an action writes, deletes or moves onto (a read or a
+    /// mode change wipes nothing).
+    private static func writesTargets(_ action: FilesystemAction) -> [FilesystemTarget] {
+        switch action {
+        case .read, .chmod: []
+        case .move(let sources, let destination): sources + [destination]
+        case .delete, .overwrite, .create: action.targets
+        }
+    }
+
+    // MARK: Disk devices
+
+    /// A whole disk or one of its partitions: `/dev/sda`, `/dev/sdb1`,
+    /// `/dev/nvme0n1`, `/dev/nvme0n1p2`, `/dev/disk2`, `/dev/rdisk2s1`,
+    /// `/dev/mmcblk0p1`, `/dev/vda`, `/dev/xvda`, `/dev/hda`. Never
+    /// `/dev/null`, `/dev/zero` or a tty.
+    static func isDiskDevice(_ path: String) -> Bool {
+        guard path.hasPrefix("/dev/") else { return false }
+        let name = String(path.dropFirst("/dev/".count))
+        func digits(_ text: Substring) -> Bool { text.isEmpty == false && text.allSatisfy { $0.isASCII && $0.isNumber } }
+        func letters(_ text: Substring) -> Bool { text.isEmpty == false && text.allSatisfy { $0 >= "a" && $0 <= "z" } }
+        // sd/hd/vd/xvd + letters + optional partition digits.
+        for prefix in ["xvd", "sd", "hd", "vd"] where name.hasPrefix(prefix) {
+            let rest = name.dropFirst(prefix.count)
+            let head = rest.prefix { $0 >= "a" && $0 <= "z" }
+            let tail = rest.dropFirst(head.count)
+            return letters(head) && (tail.isEmpty || digits(tail))
+        }
+        // nvme<N>[n<N>[p<N>]], mmcblk<N>[p<N>], [r]disk<N>[s<N>...].
+        let patterns: [(String, [Character])] = [("nvme", ["n", "p"]), ("mmcblk", ["p"]), ("rdisk", ["s"]), ("disk", ["s"])]
+        for (prefix, separators) in patterns where name.hasPrefix(prefix) {
+            let parts = name.dropFirst(prefix.count).split(omittingEmptySubsequences: false) { separators.contains($0) }
+            return parts.allSatisfy(digits)
+        }
+        return false
+    }
+
+    /// Verbs that write every disk-device operand they name.
+    private static let deviceWriters: Set<String> = [
+        "shred", "truncate", "wipefs", "blkdiscard", "mkswap", "tee",
+    ]
+    /// Verbs whose last operand is the destination they write.
+    private static let deviceCopiers: Set<String> = ["cp", "install", "rsync", "mv"]
+
+    /// Whether any segment of `command` writes a disk device: a redirect
+    /// onto one (`> /dev/sda`), `dd of=/dev/sda`, a format or wipe verb
+    /// (`mkfs*`, `shred`, `truncate`, `wipefs`, …) naming one, or a copy
+    /// whose destination is one (`cp /dev/zero /dev/sda`). Lexical and
+    /// conservative: it only ever adds a stop to a would-be deny.
+    static func writesDiskDevice(_ command: String) -> Bool {
+        shellChainSegments(command).contains { segment in
+            let tokens = redirectTokens(segment)
+            for (index, token) in tokens.enumerated() {
+                if redirectOperators.contains(token), index + 1 < tokens.count, isDiskDevice(tokens[index + 1]) {
+                    return true
+                }
+                if token.hasPrefix("of="), isDiskDevice(String(token.dropFirst(3))) { return true }
+            }
+            let names = tokens.map { $0.split(separator: "/").last.map(String.init) ?? $0 }
+            if let verb = names.firstIndex(where: { deviceWriters.contains($0) || $0.hasPrefix("mkfs") }),
+               tokens[(verb + 1)...].contains(where: isDiskDevice) {
+                return true
+            }
+            if names.contains(where: deviceCopiers.contains), let last = tokens.last, isDiskDevice(last) {
+                return true
+            }
+            return false
+        }
+    }
+
+    private static let redirectOperators: Set<String> = [">", ">>", ">|", "&>", "&>>", "1>", "2>", "1>>", "2>>"]
+
+    /// Words of one segment, quotes removed, with a redirect operator split
+    /// from the word it is glued to (`>/dev/sda` → `>`, `/dev/sda`).
+    private static func redirectTokens(_ segment: String) -> [String] {
+        var spaced = ""
+        var previous: Character = " "
+        for character in segment where character != "'" && character != "\"" {
+            if character == ">" && previous != ">" && previous != "&" && previous != "1" && previous != "2" {
+                spaced.append(" ")
+            }
+            spaced.append(character)
+            if character == ">" { spaced.append(" ") }
+            previous = character
+        }
+        // `> >` from `>>` and `> |` from `>|` are glued back.
+        let raw = spaced.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        var tokens: [String] = []
+        for token in raw {
+            if let last = tokens.last, last.hasSuffix(">"), token == ">" || token == "|" {
+                tokens[tokens.count - 1] = last + token
+            } else {
+                tokens.append(token)
+            }
+        }
+        return tokens
+    }
+
+    /// The words of `command`, split at shell punctuation, quotes removed.
+    private static func words(_ command: String) -> [String] {
+        command.filter { $0 != "'" && $0 != "\"" }
+            .split(whereSeparator: { " \t\n\r;|&()<>,".contains($0) })
+            .map(String.init)
+    }
+
+    // MARK: Roots
+
+    /// `/`, home, or a top-level system directory, after trailing `/*`
+    /// globs and slashes are dropped (`/usr/*` and `/usr/` are `/usr`).
     private static func isRoot(_ path: String, home: HomeDirectory?) -> Bool {
         var trimmed = path
-        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+        while true {
+            if trimmed.hasSuffix("/*") { trimmed.removeLast(2); continue }
+            if trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast(); continue }
+            break
+        }
+        if trimmed.isEmpty { trimmed = "/" }
         if systemRoots.contains(trimmed) || ["~", "$HOME", "${HOME}"].contains(trimmed) { return true }
         guard let home else { return false }
         var homePath = home.rawValue

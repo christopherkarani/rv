@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 import RVEngine
 import RVPolicy
@@ -45,19 +46,28 @@ enum ObserveFloor {
         let rvdPIDs: () -> Set<Int32>?
         let provesRead: (ShellCommand, SemanticAnalysis) -> Bool
         let budget: Duration
+        /// The verdict for one segment of a compound command, read on its
+        /// own (the gate's pack and semantic evaluation). A pack deny ends
+        /// evaluation at its segment, so `git push --force; dd
+        /// of=/dev/sda` reports only the push; each segment is read for a
+        /// catastrophe too. nil: segments are not read (the file door, and
+        /// tests of the rule alone).
+        let segmentVerdict: ((ShellCommand) -> EvaluationResult)?
 
         init(
             home: HomeDirectory?,
             cwd: WorkingDirectory?,
             rvdPIDs: @escaping () -> Set<Int32>? = runningRVDaemonPIDs,
             provesRead: @escaping (ShellCommand, SemanticAnalysis) -> Bool = { ObserveReadProof.proves($0, analysis: $1) },
-            budget: Duration = ObserveFloor.lifecycleBudget
+            budget: Duration = ObserveFloor.lifecycleBudget,
+            segmentVerdict: ((ShellCommand) -> EvaluationResult)? = nil
         ) {
             self.home = home
             self.cwd = cwd
             self.rvdPIDs = rvdPIDs
             self.provesRead = provesRead
             self.budget = budget
+            self.segmentVerdict = segmentVerdict
         }
     }
 
@@ -82,7 +92,8 @@ enum ObserveFloor {
     /// 2. any text stops rvd or writes rv's install: "run it in Terminal";
     /// 3. the verdict is catastrophic (`ObserveCatastrophe`), or it or
     ///    the command as written touches rv's own protection: the
-    ///    verdict, enforced;
+    ///    verdict, enforced; or, for a deny, one segment of the command
+    ///    read on its own is catastrophic: that segment's verdict;
     /// 4. any other text (program text the command feeds a shell or
     ///    interpreter, a guard reading) does: "run it in Terminal", since
     ///    the engine never read that text;
@@ -115,9 +126,25 @@ enum ObserveFloor {
             if stopsOrInstalls(text, rvdPIDs: rvdPIDs, context: context) { return .enforce(floored(result)) }
         }
         var protection = OwnProtection(result: result, command: command, store: store, context: context)
-        if holds(result) || ObserveCatastrophe.isCatastrophic(result, home: context.home)
+        if holds(result) || ObserveCatastrophe.isCatastrophic(result, command: command.rawValue, home: context.home)
             || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
             return .enforce(result)
+        }
+        // A deny that ended evaluation early may hide a catastrophic later
+        // segment: each is read on its own, and the first catastrophic one
+        // is enforced under its own rule.
+        if case .deny = result.decision, let verdict = context.segmentVerdict {
+            let segments = shellChainSegments(command.rawValue)
+                .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+            if segments.count > 1 {
+                for segment in segments {
+                    guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
+                    let read = verdict(ShellCommand(rawValue: segment))
+                    if ObserveCatastrophe.isCatastrophic(read, command: segment, home: context.home) {
+                        return .enforce(read)
+                    }
+                }
+            }
         }
         for text in set.texts where text.origin != .command {
             guard clock.now < deadline else { return .enforce(unanalyzable(result)) }

@@ -247,6 +247,28 @@ struct ObserveWatchedClassesTests {
         #expect(observed.wouldBe.map { $0.result.decision != .allow } == true)
     }
 
+    @Test("catastrophic: a whole disk device, never /dev/null or a tty", arguments: [
+        ("/dev/sda", true), ("/dev/sdb1", true), ("/dev/nvme0n1", true), ("/dev/nvme0n1p2", true),
+        ("/dev/disk2", true), ("/dev/rdisk2s1", true), ("/dev/mmcblk0p1", true), ("/dev/vda", true),
+        ("/dev/xvda", true), ("/dev/hda", true),
+        ("/dev/null", false), ("/dev/zero", false), ("/dev/tty", false), ("/dev/stdout", false),
+        ("/dev/disk", false), ("/tmp/sda", false),
+    ])
+    func diskDevice(path: String, device: Bool) {
+        #expect(ObserveCatastrophe.isDiskDevice(path) == device, "\(path)")
+    }
+
+    @Test("catastrophic: words that write a disk device, never ones that read it", arguments: [
+        ("cat /dev/zero >/dev/sda", true), ("echo x >> /dev/sdb", true), ("dd if=x of=/dev/disk2", true),
+        ("sudo shred -n1 /dev/sda", true), ("cp image.img /dev/sdb", true), ("mkfs.ext4 /dev/sdb1", true),
+        ("git status; truncate -s0 /dev/nvme0n1", true),
+        ("dd if=/dev/sda of=disk.img", false), ("cat /dev/sda > disk.img", false),
+        ("echo hi > /dev/null", false), ("cp /dev/sda backup.img", false), ("ls -l /dev/sda", false),
+    ])
+    func writesDiskDevice(command: String, writes: Bool) {
+        #expect(ObserveCatastrophe.writesDiskDevice(command) == writes, "\(command)")
+    }
+
     @Test("catastrophic: the disk set is all system.disk rules the pack ships")
     func diskRulesExist() throws {
         let shipped = Set(dayOneDestructiveRuleIDs(pack: .systemDisk))
