@@ -18,6 +18,10 @@ struct RVMenuApplication: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
+        // Intents get their own read-only reader and no freeze until rvd has the verb.
+        GlanceIntentEnvironment.services = GlanceIntentServices(reader: GlanceReader(wire: XPCGlanceWire())) {
+            GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
+        }
     }
 
     var body: some Scene {
@@ -39,7 +43,7 @@ struct RVMenuApplication: App {
         guard !Self.started else { return }
         Self.started = true
         let reader = GlanceReader(wire: XPCGlanceWire())
-        model.start(reader: reader) {
+        model.start(reader: reader, notices: UserNotificationSink()) {
             GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
         }
     }

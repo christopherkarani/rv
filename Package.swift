@@ -160,6 +160,9 @@ let coreLibraryTargets: [Target] = [
     // the events long poll. No SwiftUI, so it builds and tests on Linux.
     .target(name: "RVGlance", dependencies: ["RVDomain", "RVIPC"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
+    // rv term's pure core: views, navigation and the tally of audit events.
+    // No terminal I/O here; the full-screen view sits on top of it.
+    .target(name: "RVTerm", dependencies: ["RVHistory"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVMCP", dependencies: ["RVDomain", "RVFileStore", "RVHistory", "RVIsolation", "RVPolicy"]),
     // The Laya judge worker pool (docs/architecture/judge-pool.md): wire,
@@ -198,6 +201,7 @@ let coreProducts: [Product] = [
     .library(name: "RVTUI", targets: ["RVTUI"]),
     .library(name: "RVWorkspaceTUI", targets: ["RVWorkspaceTUI"]),
     .library(name: "RVHistory", targets: ["RVHistory"]),
+    .library(name: "RVTerm", targets: ["RVTerm"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
     .library(name: "RVMCP", targets: ["RVMCP"]),
     .library(name: "RVJudgePool", targets: ["RVJudgePool"]),
@@ -241,6 +245,7 @@ let coreTestTargets: [Target] = [
         dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"], exclude: ["Fixtures"]),
+    .testTarget(name: "RVTermTests", dependencies: ["RVTerm"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
     .testTarget(name: "RVMCPTests", dependencies: mcpTestDependencies),
     .testTarget(
@@ -342,7 +347,7 @@ let cliTargets: [Target] = [
         name: "RVCLI",
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
-            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
+            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory", "RVTerm",
             "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore", "RVXPC",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],

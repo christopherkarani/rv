@@ -207,3 +207,28 @@ private let readyService = DoctorServiceView(
     #expect(Set(linux.keys) == ["applicable"])
     #expect(linux["applicable"] as? Bool == false)
 }
+
+@Test func doctorRobotPayload_downServiceIsOneProblemNotTwo() throws {
+    var down = readyService
+    down.state = .down
+    var model = DoctorViewModel(
+        service: down,
+        packs: DoctorPacksView(enabled: dayOnePackIDs, registry: .ready),
+        hosts: [],
+        config: .readable
+    )
+    func ids() throws -> [String] {
+        let problems = try object(from: doctorRobotPayload(from: model))["problems"] as? [[String: Any]] ?? []
+        return problems.compactMap { $0["id"] as? String }
+    }
+    // Nothing else names the fault: the service row says rvd is down.
+    #expect(try ids() == ["service-down"])
+    // A problem that already says why rvd is not answering is not repeated.
+    for id in ["rvd-missing", "rvd-startup-backoff"] {
+        model.problems = [DoctorProblem(id: id, severity: .fail, summary: "s", fix: "f")]
+        #expect(try ids() == [id], "\(id)")
+    }
+    // Any other problem keeps the service row, first.
+    model.problems = [DoctorProblem(id: "config-dir", severity: .warn, summary: "s", fix: "f")]
+    #expect(try ids() == ["service-down", "config-dir"])
+}

@@ -86,7 +86,7 @@ struct CommandContext: Sendable {
                 plainFlag: plain,
                 noColorFlag: noColor
             ),
-            requested: requested(json: json, robot: robot, plain: plain),
+            requested: requested(json: json, robot: robot, plain: plain, noColor: noColor),
             explicitRobot: json || robot,
             home: CLIProcess.home()
         )
@@ -123,9 +123,11 @@ struct CommandContext: Sendable {
     /// Explicit `--json`/`--robot` wins over `--plain`; explicit `--plain`
     /// requests human (pretty, color-off) output and beats the piped/CI
     /// automatic robot fallback.
-    static func requested(json: Bool, robot: Bool, plain: Bool = false) -> RequestedMode {
+    /// `--plain` and `--no-color` both ask for human output: piped, they
+    /// keep the human text (without color) instead of switching to JSON.
+    static func requested(json: Bool, robot: Bool, plain: Bool = false, noColor: Bool = false) -> RequestedMode {
         if json || robot { return .robot }
-        if plain { return .pretty }
+        if plain || noColor { return .pretty }
         return .automatic
     }
 
@@ -152,7 +154,7 @@ struct CommandContext: Sendable {
                 plainFlag: plain,
                 noColorFlag: noColor
             ),
-            requested: requested(json: json, robot: robot, plain: plain)
+            requested: requested(json: json, robot: robot, plain: plain, noColor: noColor)
         )
     }
 

@@ -131,10 +131,14 @@ private func object(from stdout: String) throws -> [String: Any] {
     let packs = try #require(doctorJSON["packs"] as? [String: Any])
 
     #expect(doctorJSON["schema"] as? String == "rv.doctor.v1")
-    #expect(Set(doctorJSON.keys) == ["schema", "service", "packs", "hosts", "config", "grade", "ok"])
+    #expect(Set(doctorJSON.keys) == ["schema", "service", "packs", "hosts", "config", "grade", "ok", "problems"])
     #expect(Set(service.keys) == [
         "state", "protocol", "local_packs_ready", "launch_agent", "warning",
     ])
+    // A down rvd is a problem too, so a script reading only problems sees it.
+    let problems = try #require(doctorJSON["problems"] as? [[String: Any]])
+    #expect(problems.first?["id"] as? String == "service-down")
+    #expect(problems.first?["severity"] as? String == "fail")
     #expect(Set(packs.keys) == ["registry", "day_one_ready", "enabled", "extras_enabled"])
 
     let row = PacksRobotRow(

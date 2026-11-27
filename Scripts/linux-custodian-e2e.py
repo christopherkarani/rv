@@ -150,6 +150,17 @@ class Gateway:
     def stderr(self):
         return open(self.err).read()
 
+    def codes(self, at_least=1, timeout=10):
+        """Confirmation codes printed so far, waiting until there are
+        `at_least`: rv writes stderr through an async queue, after the
+        reply, so the line can land a moment after the call returns."""
+        deadline = time.monotonic() + timeout
+        while True:
+            found = re.findall(r"confirmation code ([A-Z0-9]{5}-[A-Z0-9]{5})", self.stderr())
+            if len(found) >= at_least or time.monotonic() >= deadline:
+                return found
+            time.sleep(0.1)
+
     def close(self):
         try:
             self.p.stdin.close()
@@ -237,9 +248,9 @@ asked = text_of(reply)
 found = re.search(r"rv mcp approve (\S+?)`", asked)
 step("a tool that asks is not run and names its approval", found is not None and "ran write_note" not in asked, asked or reply)
 approval = found.group(1) if found else "missing"
-code_line = re.search(r"confirmation code ([A-Z0-9]{5}-[A-Z0-9]{5})", g.stderr())
-step("the gateway printed a confirmation code", code_line is not None, last(g.stderr()))
-typed = code_line.group(1) if code_line else "AAAAA-AAAAA"
+printed = g.codes(at_least=1)
+step("the gateway printed a confirmation code", len(printed) >= 1, last(g.stderr()))
+typed = printed[-1] if printed else "AAAAA-AAAAA"
 r = rv("mcp", "pending")
 step("pending lists the call", approval in r.stdout and "write_note" in r.stdout, last(r.stdout + r.stderr))
 
@@ -250,7 +261,8 @@ code, out = owner(["mcp", "approve", approval], [("confirmation code", typed), (
 step("approve with a wrong password is refused", code != 0 and "authentication failed" in out, last(out))
 reply = g.call(4, "write_note", {"note": "x"})
 step("the call still asks", "ran write_note" not in text_of(reply), text_of(reply) or reply)
-code_line = re.findall(r"confirmation code ([A-Z0-9]{5}-[A-Z0-9]{5})", g.stderr())
+# A reused pending request mints a fresh code; only the newest works.
+code_line = g.codes(at_least=len(printed) + 1)
 typed = code_line[-1] if code_line else typed
 
 # 8. the agent talks to the key daemon itself

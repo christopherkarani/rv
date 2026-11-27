@@ -294,10 +294,33 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
         grade: model.grade.rawValue,
         isHealthy: model.isHealthy,
         leftovers: model.leftovers.map(doctorRobotLeftovers),
-        problems: model.problems.isEmpty ? nil : model.problems.map {
-            DoctorRobotPayload.Problem(id: $0.id, severity: $0.severity.rawValue, summary: $0.summary, fix: $0.fix)
-        }
+        problems: doctorRobotProblems(model)
     )
+}
+
+/// Install problems that already say why rvd is not answering; with one of
+/// these, a `service-<state>` row would report the same fault twice.
+let doctorRvdFaultProblemIDs: Set<String> = ["rvd-missing", "rvd-startup-backoff"]
+
+/// Every reason doctor fails, the service included: a script that reads
+/// only `problems` must not miss an rvd that is down, skewed or missing.
+private func doctorRobotProblems(_ model: DoctorViewModel) -> [DoctorRobotPayload.Problem]? {
+    var problems = model.problems.map {
+        DoctorRobotPayload.Problem(id: $0.id, severity: $0.severity.rawValue, summary: $0.summary, fix: $0.fix)
+    }
+    let faultAlreadyNamed = model.problems.contains { doctorRvdFaultProblemIDs.contains($0.id) }
+    if model.service.state != .running, faultAlreadyNamed == false {
+        problems.insert(
+            DoctorRobotPayload.Problem(
+                id: "service-\(model.service.state.rawValue)",
+                severity: DoctorProblemSeverity.fail.rawValue,
+                summary: model.service.warning ?? "rvd is \(model.service.state.rawValue); agent commands are refused",
+                fix: model.service.fix ?? (model.service.state == .notInstalled ? "rv setup" : "rv service restart")
+            ),
+            at: 0
+        )
+    }
+    return problems.isEmpty ? nil : problems
 }
 
 private func doctorRobotLeftovers(_ view: DoctorLeftoversView) -> DoctorRobotPayload.Leftovers {

@@ -160,7 +160,8 @@ public struct DoctorRenderer: FrameRenderer {
         let configInk = model.config == .readable ? palette.fact : palette.deny
         let ledger = model.blocksEnabled ? "on" : "off"
         let body = paint(
-            "\(model.config.rawValue) · grade \(model.grade.rawValue) · safety \(model.safety.rawValue) · block ledger \(ledger)",
+            (model.modeWord.map { "\($0) · " } ?? "")
+                + "\(model.config.rawValue) · grade \(model.grade.rawValue) · safety \(model.safety.rawValue) · block ledger \(ledger)",
             slot: configInk,
             reset: palette.reset
         )
@@ -208,6 +209,13 @@ public struct DoctorRenderer: FrameRenderer {
     /// Disabled day-one packs are a config flip, not a setup rewrite.
     private func nextActions(for model: DoctorViewModel) -> [String] {
         var actions: [String] = []
+        // Most severe first: without rvd every agent command is refused,
+        // so its repair leads, before housekeeping.
+        if model.service.state != .running {
+            // A bare command, pasteable as is; the full fix is under Service.
+            let command = model.service.state == .down ? "rv service restart" : "rv setup"
+            actions.append("\(command)    rvd is \(serviceStateText(model.service.state))")
+        }
         if model.packs.registry == .ready, model.packs.missingDayOne.isEmpty == false {
             let ids = model.packs.missingDayOne.map(\.rawValue).sorted().joined(separator: " ")
             actions.append("rv packs enable \(ids)")
@@ -284,12 +292,14 @@ public struct DoctorRenderer: FrameRenderer {
 
     private func serviceMeta(_ service: DoctorServiceView) -> String {
         switch service.state {
+        // `serviceSemver` is the IPC service API version, not rv's release
+        // version: label it so 1.0.0 is not read as the rvd build.
         case .running:
-            "\(service.serviceSemver ?? "unknown") · \(service.protocolName)"
+            "\(service.protocolName) · api \(service.serviceSemver ?? "unknown")"
         case .skew:
-            service.serviceSemver.map { "\($0) · \(service.protocolName)" } ?? service.protocolName
+            service.serviceSemver.map { "\(service.protocolName) · api \($0)" } ?? service.protocolName
         case .down, .notInstalled:
-            service.serviceSemver.map { "\($0) · unavailable" } ?? "unavailable"
+            service.serviceSemver.map { "api \($0) · unavailable" } ?? "unavailable"
         }
     }
 

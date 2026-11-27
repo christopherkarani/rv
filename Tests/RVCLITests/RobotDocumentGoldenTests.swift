@@ -71,7 +71,7 @@ private func decoded(_ json: String) throws -> NSDictionary {
     )
     #expect(
         try RobotDocument.doctor(doctorRobotPayload(from: doctor)).render()
-            == #"{"config":"unreadable","grade":"hook","hosts":{"pi":"wired"},"ok":false,"packs":{"day_one_ready":false,"enabled":["core.git"],"extras_enabled":[],"registry":"broken"},"schema":"rv.doctor.v1","service":{"launch_agent":"missing","local_packs_ready":false,"protocol":"rv.ipc.v1","state":"down","warning":"service reported an error"}}"#
+            == #"{"config":"unreadable","grade":"hook","hosts":{"pi":"wired"},"ok":false,"packs":{"day_one_ready":false,"enabled":["core.git"],"extras_enabled":[],"registry":"broken"},"problems":[{"fix":"rv service restart","id":"service-down","severity":"fail","summary":"service reported an error"}],"schema":"rv.doctor.v1","service":{"launch_agent":"missing","local_packs_ready":false,"protocol":"rv.ipc.v1","state":"down","warning":"service reported an error"}}"#
     )
 }
 
