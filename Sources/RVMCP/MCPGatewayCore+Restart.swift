@@ -62,7 +62,7 @@ extension MCPGatewayCore {
         guard recent.count < Self.maximumRelaunches else {
             let minutes = Self.seconds(Self.restartWindow / 60)
             let final = "it went away again after \(recent.count) restarts within \(minutes) minutes, "
-                + "so rv stopped restarting it; restart the MCP client to start it again"
+                + "so rv stopped restarting it; ask the user to restart the MCP client to start it again"
             return setPhase(server, .failed(final)) + [.log("MCP server \(shown): \(final)")]
         }
         let delay = Self.restartDelay(afterRelaunches: recent.count)

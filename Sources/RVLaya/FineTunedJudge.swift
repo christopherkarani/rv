@@ -92,13 +92,20 @@ public final class FineTunedJudge: @unchecked Sendable {
         // Before any bundle work: a nearly full disk refuses (review), whatever
         // else is wrong with the bundle.
         try coreML.requireDiskSpace()
-        let fm = FileManager.default
+        // No bundle at all (ENOENT) is genuine absence (packs-only); a bundle
+        // path that cannot be checked refuses (review).
+        guard try BundleFilePresence.exists(bundleDir, recordingOn: coreML) else {
+            throw LayaError.bundleMissing("no bundle at \(bundleDir.path)")
+        }
+        // Presence by `lstat`: only ENOENT is absent; a path that cannot be
+        // checked refuses (review) rather than falling through to the other
+        // layout or reading as missing.
         let directTok = bundleDir.appendingPathComponent("tokenizer.json")
         let nestedTok = bundleDir.appendingPathComponent("tokenizer/tokenizer.json")
         let tokURL: URL
-        if fm.fileExists(atPath: directTok.path) {
+        if try BundleFilePresence.exists(directTok, recordingOn: coreML) {
             tokURL = directTok
-        } else if fm.fileExists(atPath: nestedTok.path) {
+        } else if try BundleFilePresence.exists(nestedTok, recordingOn: coreML) {
             tokURL = nestedTok
         } else {
             throw LayaError.badBundle("tokenizer.json missing in \(bundleDir.path)")
@@ -113,8 +120,9 @@ public final class FineTunedJudge: @unchecked Sendable {
         let configURL = bundleDir.appendingPathComponent("config.json")
         // Absent config keeps the shipped defaults. A present config that
         // cannot be read, or whose label order is not a valid permutation,
-        // is a bad bundle: guessing the order could read block as allow.
-        if fm.fileExists(atPath: configURL.path) {
+        // is a bad bundle: guessing the order could read block as allow. A
+        // config that cannot be checked refuses: it is not an absent one.
+        if try BundleFilePresence.exists(configURL, recordingOn: coreML) {
             guard let data = try? Data(contentsOf: configURL),
                   let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw LayaError.badBundle("config.json unreadable in \(bundleDir.path)")
@@ -146,8 +154,8 @@ public final class FineTunedJudge: @unchecked Sendable {
         self.calibration = calibration
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
-        // ENOENT only is a missing model (packs-only); any other lstat error
-        // refuses (review).
+        // A bundle dir without its model is broken, not absent (badBundle,
+        // review); any other lstat error refuses too.
         guard try CompiledModelStore<Never>.packageExists(package, recordingOn: coreML) else {
             throw LayaError.badBundle("model.mlpackage missing in \(bundleDir.path)")
         }

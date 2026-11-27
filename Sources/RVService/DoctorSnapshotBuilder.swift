@@ -64,7 +64,8 @@ public enum DoctorSnapshotBuilder {
     /// bundle should be installed. A judge on behind an open circuit
     /// (`JudgeCircuit`) is a warning: judged calls go to review meanwhile.
     static func judgeCheck(
-        home: HomeDirectory?, circuit: JudgeCircuit.Status = JudgeCircuit.live.status
+        home: HomeDirectory?, circuit: JudgeCircuit.Status = JudgeCircuit.live.status,
+        poolBound: Bool = JudgeRuntime.boundClient != nil
     ) -> DoctorCheck {
         let mode = GuardModeResolution.resolve(
             GuardConfig.read(home: home), host: nil, environment: ProcessInfo.processInfo.environment)
@@ -78,7 +79,9 @@ public enum DoctorSnapshotBuilder {
                 : "judged calls go to review"
             // rvd's own Core ML guard only matters when rvd loads the model
             // itself; with the pool bound, `judgePool` reports the workers.
-            let notes = JudgeRuntime.boundClient == nil ? coreMLNotes(JudgeRuntime.coreMLGuard.status) : []
+            // The model cache is on disk for both, so it is always checked.
+            let notes = (poolBound ? [] : coreMLNotes(JudgeRuntime.coreMLGuard.status))
+                + modelCacheNotes(home: home)
             let base = ([on] + notes).joined(separator: "; ")
             switch circuit {
             case .closed:
@@ -106,13 +109,17 @@ public enum DoctorSnapshotBuilder {
             // (config labels): the pool cannot load it, and judged calls go
             // to review. One it does not select leaves it packs-only.
             #if canImport(CoreML)
-            let effect = JudgeRuntime.selectsBundle(home: home) ? "judged calls go to review" : "packs only"
+            let selected = JudgeRuntime.selectsBundle(home: home)
+            let effect = selected ? "judged calls go to review" : "packs only"
+            let notes = selected ? modelCacheNotes(home: home) : []
             #else
             let effect = "packs only"
+            let notes: [String] = []
             #endif
             return DoctorCheck(
                 id: .judge, status: .warning,
-                message: "laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); \(effect) (guard \(mode.rawValue))"
+                message: (["laya-\(engine.rawValue) bundle invalid at \(dir.path): \(problems.joined(separator: ", ")); \(effect) (guard \(mode.rawValue))"] + notes)
+                    .joined(separator: "; ")
             )
         case .missing(let engine, let expected):
             return DoctorCheck(
@@ -169,6 +176,23 @@ public enum DoctorSnapshotBuilder {
             notes.append("last judge load refused: \(reason)")
         }
         return notes
+    }
+
+    /// The owner's fix for a model cache it cannot open (mode 0000, say):
+    /// every judge load refuses until it is restored, in rvd and in the pool
+    /// workers alike. A plain `lstat` of `home`'s cache, never the guard's
+    /// started state (which takes the crash marker).
+    static func modelCacheNotes(home: HomeDirectory?) -> [String] {
+        guard let home,
+              let cache = CoreMLGuard.inaccessibleModelCache(
+                  stateRoot: CoreMLGuard.stateRoot(configDirectory: RVPolicyPaths.configDirectory(home: home)))
+        else { return [] }
+        return ["judge model cache \(cache.path) is not accessible to its owner; restore it with `chmod 700 \(shellWord(cache.path))`"]
+    }
+
+    /// `text` as one POSIX shell word: single-quoted, each `'` as `'\''`.
+    static func shellWord(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
     private static var dayOnePacksLoadedMessage: String {
