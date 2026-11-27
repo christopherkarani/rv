@@ -48,12 +48,12 @@ struct LinuxUnixSocketTests {
 
         let client = try retryUnixConnect(path: socketURL.path)
         defer { client.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
 
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(resetHardRequest()))
+            from: await client.exchange(body: try IPCJSON.encode(resetHardRequest()))
         )
         // Same-UID SDK socket runs evaluate. Generic dispatch still denies it
         // (SocketPeerAuthorizationTests.socketPeerHasNoControlOrEvalAuthority).
@@ -68,7 +68,7 @@ struct LinuxUnixSocketTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func silentIdleConnectionDoesNotStarveSecondClient() throws {
+    @Test func silentIdleConnectionDoesNotStarveSecondClient() async throws {
         let xdg = try makeInjectedXDG("idle")
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
@@ -89,11 +89,11 @@ struct LinuxUnixSocketTests {
         let box = LinuxReplyBox()
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(second)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
             done.signal()
         }
-        guard done.wait(timeout: .now() + 5) == .success, let data = box.get() else {
+        guard await signaled(done, within: 5), let data = box.get() else {
             Issue.record("second client was not served while an idle connection was open")
             return
         }
@@ -104,7 +104,7 @@ struct LinuxUnixSocketTests {
     /// hook's connect then succeeds into the backlog and its read times out
     /// (TIMEOUT: ask/deny), never ENOENT/ECONNREFUSED (UNREACHABLE, which
     /// observe mode steps aside for).
-    @Test func boundButNotAcceptingQueuesClientsUntilAccepting() throws {
+    @Test func boundButNotAcceptingQueuesClientsUntilAccepting() async throws {
         let xdg = try makeInjectedXDG("hold")
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
@@ -121,13 +121,13 @@ struct LinuxUnixSocketTests {
         let box = LinuxReplyBox()
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(client)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
             done.signal()
         }
-        #expect(done.wait(timeout: .now() + 1.5) == .timedOut, "nothing answers before accepting")
+        #expect(await signaled(done, within: 1.5) == false, "nothing answers before accepting")
         listener.startAccepting()
-        guard done.wait(timeout: .now() + 5) == .success, let data = box.get() else {
+        guard await signaled(done, within: 5), let data = box.get() else {
             Issue.record("queued client was not served once the listener accepted")
             return
         }
@@ -136,7 +136,7 @@ struct LinuxUnixSocketTests {
 
     /// After a backoff wait, connections that queued during it are hung up,
     /// not served late; a client connecting once rvd accepts is served.
-    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() throws {
+    @Test func droppedQueuedClientsAreHungUpAndLaterOnesServed() async throws {
         let xdg = try makeInjectedXDG("drop")
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
@@ -154,22 +154,22 @@ struct LinuxUnixSocketTests {
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(client)
         let hello = try IPCJSON.encode(Hello())
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: hello))
             done.signal()
         }
-        #expect(done.wait(timeout: .now() + 0.5) == .timedOut, "nothing answers before accepting")
+        #expect(await signaled(done, within: 0.5) == false, "nothing answers before accepting")
         listener.dropQueued()
         listener.startAccepting()
-        #expect(done.wait(timeout: .now() + 5) == .success)
+        #expect(await signaled(done, within: 5))
         #expect(box.get() == nil, "a queued client is hung up, not served")
 
         let later = try retryUnixConnect(path: socketURL.path)
         defer { later.close() }
-        #expect(try IPCJSON.decode(HelloAck.self, from: try later.send(body: hello)).status == .ok)
+        #expect(try IPCJSON.decode(HelloAck.self, from: try await later.exchange(body: hello)).status == .ok)
     }
 
-    @Test func stopWhileNotAcceptingRemovesTheSocket() throws {
+    @Test func stopWhileNotAcceptingRemovesTheSocket() async throws {
         let xdg = try makeInjectedXDG("holdstop")
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
@@ -184,7 +184,7 @@ struct LinuxUnixSocketTests {
         #expect(FileManager.default.fileExists(atPath: socketURL.path) == false)
     }
 
-    @Test func stopWithoutStartRemovesNothing() throws {
+    @Test func stopWithoutStartRemovesNothing() async throws {
         let xdg = try makeInjectedXDG("nostart")
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
@@ -233,11 +233,11 @@ struct LinuxUnixSocketTests {
 
         let client = try retryUnixConnect(path: socketURL.path, attempts: 80)
         defer { client.close() }
-        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        let ack = try IPCJSON.decode(HelloAck.self, from: await client.exchange(body: try IPCJSON.encode(Hello())))
         #expect(ack.status == .ok)
         let response = try IPCJSON.decode(
             IPCResponse.self,
-            from: client.send(body: try IPCJSON.encode(resetHardRequest()))
+            from: await client.exchange(body: try IPCJSON.encode(resetHardRequest()))
         )
         guard case .evaluate(let reply) = response.result else {
             Issue.record("rvd --socket evaluate must return evaluate, got \(response.result)")
@@ -256,7 +256,7 @@ struct LinuxUnixSocketTests {
     /// (`UnixSocketPathTests` covers that against a fixture root; a process
     /// test must never bind the real one). Set but empty still fails closed,
     /// with no /tmp fallback.
-    @Test func rvdSocketWithEmptyXDGExitsWithoutTmpSocket() throws {
+    @Test func rvdSocketWithEmptyXDGExitsWithoutTmpSocket() async throws {
         let rvd = try #require(findRVDExecutable(), "rvd binary must be built with the Linux graph")
         let home = try isolatedHomeDirectory()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -294,6 +294,21 @@ private struct LinuxUncheckedClient: @unchecked Sendable {
 
     init(_ client: UnixEvaluateClient) {
         self.client = client
+    }
+}
+
+/// Whether `semaphore` is signaled within `seconds`, waiting off the
+/// cooperative pool: the listener answers from a `Task` on that pool.
+private func signaled(_ semaphore: DispatchSemaphore, within seconds: Double) async -> Bool {
+    await offPool { semaphore.wait(timeout: .now() + seconds) == .success }
+}
+
+extension UnixEvaluateClient {
+    /// `send(body:)` off the cooperative pool. The listener answers from a
+    /// `Task`, so a test blocked in recv on a pool thread can starve it.
+    fileprivate func exchange(body: Data) async throws -> Data {
+        let held = LinuxUncheckedClient(self)
+        return try await offPool { try held.client.send(body: body) }
     }
 }
 
