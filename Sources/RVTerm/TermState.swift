@@ -43,6 +43,9 @@ public enum TermEvent: Equatable, Sendable {
 public struct TermRow: Equatable, Sendable {
     /// What a row says when only the audit log knew about it.
     public static let notLogged = "(command not logged)"
+    /// Why, for the details panel: rv 0.2.2 and older wrote only the
+    /// audit log, which keeps the rule and never the command.
+    public static let notLoggedReason = "Command not logged: the rvd that saw it kept only the rule. A newer rvd keeps the command too."
 
     /// Stable while the row lives, so the Stream selection can follow it.
     public var id: Int

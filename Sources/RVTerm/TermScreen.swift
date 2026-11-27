@@ -326,7 +326,7 @@ public enum TermScreen {
                 column = canvas.put(column, y, pad(fit(row.agent, 9), 9), .agent)
             }
             let ran = row.event == .ran
-            canvas.put(column, y, fit(row.display, x + span - column), ran || !row.isLogged ? .soft : .fg, bold: !ran && row.isLogged)
+            canvas.put(column, y, fit(row.display, x + span - column), row.isLogged ? (ran ? .soft : .fg) : .mute, bold: !ran && row.isLogged)
         }
         if inspectorWidth > 0, let row = list[safe: selected] {
             inspector(&canvas, row, x: width - inspectorWidth - 1, y: top - 1, width: inspectorWidth + 1, height: room + 2,
@@ -354,9 +354,16 @@ public enum TermScreen {
         line += 2
         canvas.segs(left, line, [TermSpan(row.agent, .agent, bold: true), TermSpan(row.project.map { "  " + $0 } ?? "", .mute)], limit: inner)
         line += 1
-        for text in wrap(row.text, inner).prefix(3) {
-            canvas.put(left, line, text, row.isLogged ? .fg : .ghost, bold: row.isLogged)
-            line += 1
+        if row.isLogged {
+            for text in wrap(row.text, inner).prefix(3) {
+                canvas.put(left, line, text, .fg, bold: true)
+                line += 1
+            }
+        } else {
+            for text in wrap(TermRow.notLoggedReason, inner).prefix(3) {
+                canvas.put(left, line, text, .mute)
+                line += 1
+            }
         }
         line += 1
         var facts: [(String, String)] = []
