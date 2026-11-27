@@ -11,7 +11,7 @@ import RVTUI
 struct Packs: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "packs",
-        abstract: "List and enable or disable packs.",
+        abstract: "List, test, and turn packs on or off (everyday: rv protect <tool>).",
         subcommands: [List.self, Enable.self, Disable.self, Info.self, TestPack.self],
         defaultSubcommand: List.self
     )
@@ -135,7 +135,8 @@ struct Packs: AsyncParsableCommand {
     struct Enable: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "enable",
-            abstract: "Enable pack, category, or preset IDs."
+            abstract: "Enable pack, category, or preset IDs.",
+            aliases: ["on"]
         )
 
         @Argument(help: "Pack, category, or preset IDs.")
@@ -149,7 +150,8 @@ struct Packs: AsyncParsableCommand {
     struct Disable: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "disable",
-            abstract: "Disable pack, category, or preset IDs."
+            abstract: "Disable pack, category, or preset IDs (asks the owner).",
+            aliases: ["off"]
         )
 
         @Argument(help: "Pack, category, or preset IDs.")
@@ -261,7 +263,7 @@ enum PackTestReport {
                     failures: run.failures.map { "\($0.label.rawValue): \(DisplayedText.field($0.command)) \($0.got)" }
                 )
             },
-            turnOn: enabled ? nil : "\(CommandVocabulary.Command.packs.invocation) enable \(packID.rawValue)"
+            turnOn: enabled ? nil : ProtectTurnOn.command(packID)
         )
     }
 
@@ -324,11 +326,27 @@ private func mutate(ids: [String], enabling: Bool) async throws {
     // Check every name and the config before asking the owner anything:
     // a typo fails in a second, not after Touch ID.
     try preflightPackMutation(ids: ids)
-    let authorization = try await OwnerConfirmation.require(
-        "\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
-    try await ConfigChangeAudit.$authorization.withValue(authorization) {
-        try applyPackMutation(ids: ids, enabling: enabling)
+    // G6: adding protection asks nobody (an agent may add it); only turning
+    // packs off needs the owner. The enable path refuses any change that
+    // would leave a pack off (`PacksFacade.enableTightening`).
+    guard enabling == false else {
+        try applyPackMutation(ids: ids, enabling: true)
+        return
     }
+    guard let authorization = try await packsOffAuthorization("disable packs \(ids.joined(separator: ", "))") else {
+        return
+    }
+    try await ConfigChangeAudit.$authorization.withValue(authorization) {
+        try applyPackMutation(ids: ids, enabling: false)
+    }
+}
+
+/// The one owner gate for turning packs off, from `rv packs disable/off`
+/// and `rv protect <tool> off`. Returns how the owner was checked, or nil
+/// when the change was filed for the owner instead and nothing may be
+/// changed now (F2's proposal route plugs in here). A refusal exits 77.
+func packsOffAuthorization(_ summary: String) async throws -> String? {
+    try await OwnerConfirmation.require(summary)
 }
 
 /// Fails, with the fix, on what `applyPackMutation` would refuse anyway:
@@ -365,6 +383,8 @@ func failPackMutation(_ error: PacksCommandError, home: HomeDirectory) throws ->
     case .configUnreadable:
         try CommandContext.fail(
             "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    case .wouldLoosen:
+        try CommandContext.fail("rv: that change would turn a pack off, which needs the owner; nothing changed.\n")
     case .packNotFound, .configUnwritable:
         throw ExitCode(1)
     }
@@ -379,7 +399,7 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     let result: PacksMutationResult
     do {
         result = enabling
-            ? try PacksFacade.enable(home: home, ids: ids)
+            ? try PacksFacade.enableTightening(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
     } catch let error as PacksCommandError where error != .configUnwritable {
         try failPackMutation(error, home: home)

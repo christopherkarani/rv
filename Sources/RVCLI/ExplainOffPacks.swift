@@ -24,8 +24,8 @@ enum ExplainOffPacks {
         }
     }
 
-    /// `rv packs enable database.redis`
+    /// `rv protect redis`
     static func turnOnCommand(_ packID: PackID) -> String {
-        "\(CommandVocabulary.Command.packs.invocation) enable \(packID.rawValue)"
+        ProtectTurnOn.command(packID)
     }
 }

@@ -85,11 +85,9 @@ struct PacksCommandRunTests {
             await #expect(throws: ExitCode(1)) {
                 try await unknown.run()
             }
-            // A real name still reaches the owner check, which refuses here.
-            let known = try Packs.Enable.parse(["core.git"])
-            await #expect(throws: ExitCode(EX_NOPERM)) {
-                try await known.run()
-            }
+            // G6: a real name is enabled with no owner check.
+            let known = try Packs.Enable.parse(["database.redis"])
+            try await known.run()
         }
     }
 

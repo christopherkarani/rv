@@ -14,7 +14,7 @@ struct ExplainOffPacksTests {
         #expect(result.stdout.contains("Decision: ALLOW"))
         #expect(result.stdout.contains("Packs that are off"))
         #expect(result.stdout.contains("Would stop if database.redis were on (database.redis:flushall)"))
-        #expect(result.stdout.contains("$ rv packs enable database.redis"))
+        #expect(result.stdout.contains("$ rv protect redis"))
         #expect(result.exitCode == 0)
     }
 
@@ -35,7 +35,7 @@ struct ExplainOffPacksTests {
         let rows = try #require(object["off_packs"] as? [[String: String]])
         #expect(rows.contains {
             $0 == ["pack_id": "database.redis", "rule_id": "database.redis:flushall",
-                   "turn_on": "rv packs enable database.redis"]
+                   "turn_on": "rv protect redis"]
         })
         #expect(object["schema"] as? String == "rv.explain.v1")
         #expect(object["decision"] as? String == "allow")
@@ -78,7 +78,7 @@ struct ExplainOffPacksTests {
         let rows = ExplainOffPacks.rows([
             OffPackHit(packID: PackID(rawValue: "containers.docker"), ruleID: RuleID(rawValue: "containers.docker:system-prune")!),
         ])
-        #expect(rows.map(\.turnOn) == ["rv packs enable containers.docker"])
+        #expect(rows.map(\.turnOn) == ["rv protect docker"])
         #expect(rows.first?.display == "Would stop if containers.docker were on (containers.docker:system-prune)")
     }
 }

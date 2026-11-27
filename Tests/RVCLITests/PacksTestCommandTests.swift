@@ -22,7 +22,7 @@ struct PacksTestCommandTests {
         let lines = capture.stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         #expect(lines.contains { $0.hasPrefix("  ✓ flushall ") && $0.hasSuffix("stops 1 · allows 2") })
         #expect(lines.contains { $0.hasPrefix("  – stdin-unverified ") && $0.hasSuffix("no examples") })
-        #expect(lines.filter { $0.isEmpty == false }.last == "  ✓ Ready. rv packs enable database.redis")
+        #expect(lines.filter { $0.isEmpty == false }.last == "  ✓ Ready. rv protect redis")
     }
 
     @Test func packOn_readyHasNoCommand() async throws {

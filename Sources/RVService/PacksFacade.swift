@@ -54,6 +54,8 @@ public enum PacksCommandError: Error, Equatable, Sendable {
     /// `[packs]` holds lines rv does not read as written. Saving over it
     /// would drop them, so nothing is written until the owner fixes them.
     case configInvalid([PolicyDocumentProblem])
+    /// A change made without the owner check would turn a pack off.
+    case wouldLoosen
 }
 
 /// In-process packs list / enable / disable for CLI and tests (temp HOME).
@@ -141,6 +143,16 @@ public enum PacksFacade {
         try mutate(home: home, ids: ids, enabling: true)
     }
 
+    /// `enable` for a caller that ran no owner check (`rv protect <tool>`,
+    /// `rv packs enable`): the same change, refused before anything is
+    /// written unless every pack that was on stays on.
+    public static func enableTightening(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
+        let index = try PackRegistry.loadIndex()
+        return try mutate(
+            home: home, selections: selectionTokens(ids, index: index), enabling: true, index: index,
+            requireTightening: true)
+    }
+
     public static func disable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
         try mutate(home: home, ids: ids, enabling: false)
     }
@@ -210,7 +222,8 @@ public enum PacksFacade {
         home: HomeDirectory,
         selections: [SelectionToken],
         enabling: Bool,
-        index: PackIndex
+        index: PackIndex,
+        requireTightening: Bool = false
     ) throws -> PacksMutationResult {
         let expansion: Set<PackID>
         do {
@@ -256,6 +269,17 @@ public enum PacksFacade {
             let named = Set(selections.map(\.rawValue))
             config.enabled = config.enabled.filter { !named.contains($0) }
             config.disabled = mergeUnique(config.disabled, selections.map(\.rawValue))
+        }
+
+        if requireTightening {
+            let planned = Set(
+                try PackSet.effectiveOrdered(
+                    enabled: selectionTokens(config.enabled, index: index),
+                    disabled: selectionTokens(config.disabled, index: index),
+                    index: index
+                )
+            )
+            guard planned.isSuperset(of: before) else { throw PacksCommandError.wouldLoosen }
         }
 
         do {
