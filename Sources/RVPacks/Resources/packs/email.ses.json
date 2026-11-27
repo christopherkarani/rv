@@ -144,70 +144,165 @@
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ses\\s+delete-identity\\b",
       "severity": "high",
       "description": "aws ses delete-identity removes a verified email identity.",
-      "explanation": "Deleting a verified identity prevents sending from that address or domain. Applications using this identity will fail to send emails. Re-verification requires DNS changes and propagation time.\n\nSafer alternatives:\n- aws ses list-identities: Review identities first\n- Check which applications use this identity\n- Create new identity before deleting old one"
+      "explanation": "Deleting a verified identity prevents sending from that address or domain. Applications using this identity will fail to send emails. Re-verification requires DNS changes and propagation time.\n\nSafer alternatives:\n- aws ses list-identities: Review identities first\n- Check which applications use this identity\n- Create new identity before deleting old one",
+      "safer_command": "aws ses list-identities",
+      "examples": {
+        "stop": [
+          "aws ses delete-identity"
+        ],
+        "allow": [
+          "aws ses list-identities",
+          "aws ses describe-identity"
+        ]
+      }
     },
     {
       "name": "ses-delete-template",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ses\\s+delete-template\\b",
       "severity": "medium",
       "description": "aws ses delete-template removes an email template.",
-      "explanation": "Deleting a template breaks any applications that reference it. Emails using this template will fail to send until the template is recreated.\n\nSafer alternatives:\n- aws ses get-template: Export template before deletion\n- Verify no active campaigns use this template\n- Create replacement template before deleting"
+      "explanation": "Deleting a template breaks any applications that reference it. Emails using this template will fail to send until the template is recreated.\n\nSafer alternatives:\n- aws ses get-template: Export template before deletion\n- Verify no active campaigns use this template\n- Create replacement template before deleting",
+      "safer_command": "aws ses get-template --template-name TEMPLATE",
+      "examples": {
+        "stop": [
+          "aws ses delete-template"
+        ],
+        "allow": [
+          "aws ses get-template",
+          "aws ses describe-template"
+        ]
+      }
     },
     {
       "name": "ses-delete-configuration-set",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ses\\s+delete-configuration-set\\b",
       "severity": "high",
       "description": "aws ses delete-configuration-set removes a configuration set.",
-      "explanation": "Deleting a configuration set removes tracking and event destinations. Applications using this set will lose metrics, bounce handling, and complaint processing.\n\nSafer alternatives:\n- aws ses describe-configuration-set: Review configuration\n- Migrate applications to a new configuration set first\n- Document event destinations before deletion"
+      "explanation": "Deleting a configuration set removes tracking and event destinations. Applications using this set will lose metrics, bounce handling, and complaint processing.\n\nSafer alternatives:\n- aws ses describe-configuration-set: Review configuration\n- Migrate applications to a new configuration set first\n- Document event destinations before deletion",
+      "examples": {
+        "stop": [
+          "aws ses delete-configuration-set"
+        ],
+        "allow": [
+          "aws ses describe-configuration-set",
+          "aws ses get-configuration-set"
+        ]
+      }
     },
     {
       "name": "ses-delete-receipt-rule-set",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ses\\s+delete-receipt-rule-set\\b",
       "severity": "critical",
       "description": "aws ses delete-receipt-rule-set removes a receipt rule set.",
-      "explanation": "Deleting a receipt rule set stops all email receiving configured by that set. Incoming emails may bounce or be lost. This affects all receipt rules in the set.\n\nSafer alternatives:\n- aws ses describe-receipt-rule-set: Review rules first\n- Create replacement rule set before deletion\n- Test with a non-active rule set"
+      "explanation": "Deleting a receipt rule set stops all email receiving configured by that set. Incoming emails may bounce or be lost. This affects all receipt rules in the set.\n\nSafer alternatives:\n- aws ses describe-receipt-rule-set: Review rules first\n- Create replacement rule set before deletion\n- Test with a non-active rule set",
+      "examples": {
+        "stop": [
+          "aws ses delete-receipt-rule-set"
+        ],
+        "allow": [
+          "aws ses describe-receipt-rule-set",
+          "aws ses get-receipt-rule-set"
+        ]
+      }
     },
     {
       "name": "ses-delete-receipt-rule",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ses\\s+delete-receipt-rule(?:\\s|$)",
       "severity": "high",
       "description": "aws ses delete-receipt-rule removes a receipt rule.",
-      "explanation": "Deleting a receipt rule changes how incoming emails are processed. Actions like S3 storage, Lambda triggers, or SNS notifications will stop for matching emails.\n\nSafer alternatives:\n- aws ses describe-receipt-rule: Review rule configuration\n- Disable the rule before deleting\n- Ensure no critical workflows depend on this rule"
+      "explanation": "Deleting a receipt rule changes how incoming emails are processed. Actions like S3 storage, Lambda triggers, or SNS notifications will stop for matching emails.\n\nSafer alternatives:\n- aws ses describe-receipt-rule: Review rule configuration\n- Disable the rule before deleting\n- Ensure no critical workflows depend on this rule",
+      "safer_command": "aws ses describe-receipt-rule --rule-set-name RULE_SET --rule-name RULE",
+      "examples": {
+        "stop": [
+          "aws ses delete-receipt-rule"
+        ],
+        "allow": [
+          "aws ses describe-receipt-rule",
+          "aws ses get-receipt-rule"
+        ]
+      }
     },
     {
       "name": "sesv2-delete-email-identity",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sesv2\\s+delete-email-identity\\b",
       "severity": "high",
       "description": "aws sesv2 delete-email-identity removes a verified email identity.",
-      "explanation": "Deleting a verified identity prevents sending from that address or domain. DKIM and SPF records become orphaned. Applications will fail until a new identity is verified.\n\nSafer alternatives:\n- aws sesv2 get-email-identity: Review identity configuration\n- Verify replacement identity before deletion\n- Update applications to use new identity first"
+      "explanation": "Deleting a verified identity prevents sending from that address or domain. DKIM and SPF records become orphaned. Applications will fail until a new identity is verified.\n\nSafer alternatives:\n- aws sesv2 get-email-identity: Review identity configuration\n- Verify replacement identity before deletion\n- Update applications to use new identity first",
+      "safer_command": "aws sesv2 get-email-identity --email-identity IDENTITY",
+      "examples": {
+        "stop": [
+          "aws sesv2 delete-email-identity"
+        ],
+        "allow": [
+          "aws sesv2 get-email-identity",
+          "aws sesv2 describe-email-identity"
+        ]
+      }
     },
     {
       "name": "sesv2-delete-email-template",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sesv2\\s+delete-email-template\\b",
       "severity": "medium",
       "description": "aws sesv2 delete-email-template removes an email template.",
-      "explanation": "Deleting a template breaks any send operations referencing it. Bulk email sends and transactional emails using this template will fail.\n\nSafer alternatives:\n- aws sesv2 get-email-template: Export template content\n- Check for active campaigns using this template\n- Version templates rather than deleting"
+      "explanation": "Deleting a template breaks any send operations referencing it. Bulk email sends and transactional emails using this template will fail.\n\nSafer alternatives:\n- aws sesv2 get-email-template: Export template content\n- Check for active campaigns using this template\n- Version templates rather than deleting",
+      "safer_command": "aws sesv2 get-email-template --template-name TEMPLATE",
+      "examples": {
+        "stop": [
+          "aws sesv2 delete-email-template"
+        ],
+        "allow": [
+          "aws sesv2 get-email-template",
+          "aws sesv2 describe-email-template"
+        ]
+      }
     },
     {
       "name": "sesv2-delete-configuration-set",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sesv2\\s+delete-configuration-set\\b",
       "severity": "high",
       "description": "aws sesv2 delete-configuration-set removes a configuration set.",
-      "explanation": "Deleting a configuration set removes all event destinations, tracking options, and delivery settings. Applications using this set lose visibility into email delivery.\n\nSafer alternatives:\n- aws sesv2 get-configuration-set: Export configuration\n- Migrate to new configuration set first\n- Document all event destinations"
+      "explanation": "Deleting a configuration set removes all event destinations, tracking options, and delivery settings. Applications using this set lose visibility into email delivery.\n\nSafer alternatives:\n- aws sesv2 get-configuration-set: Export configuration\n- Migrate to new configuration set first\n- Document all event destinations",
+      "examples": {
+        "stop": [
+          "aws sesv2 delete-configuration-set"
+        ],
+        "allow": [
+          "aws sesv2 describe-configuration-set",
+          "aws sesv2 get-configuration-set"
+        ]
+      }
     },
     {
       "name": "sesv2-delete-contact-list",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sesv2\\s+delete-contact-list\\b",
       "severity": "high",
       "description": "aws sesv2 delete-contact-list removes a contact list.",
-      "explanation": "Deleting a contact list permanently removes all contacts and their preferences. Subscription management and list-based sending will fail. This cannot be undone.\n\nSafer alternatives:\n- Export contact list data before deletion\n- Check for active campaigns using this list\n- Use list segmentation instead of deletion"
+      "explanation": "Deleting a contact list permanently removes all contacts and their preferences. Subscription management and list-based sending will fail. This cannot be undone.\n\nSafer alternatives:\n- Export contact list data before deletion\n- Check for active campaigns using this list\n- Use list segmentation instead of deletion",
+      "examples": {
+        "stop": [
+          "aws sesv2 delete-contact-list"
+        ],
+        "allow": [
+          "aws sesv2 describe-contact-list",
+          "aws sesv2 get-contact-list"
+        ]
+      }
     },
     {
       "name": "sesv2-delete-dedicated-ip-pool",
       "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sesv2\\s+delete-dedicated-ip-pool\\b",
       "severity": "critical",
       "description": "aws sesv2 delete-dedicated-ip-pool removes a dedicated IP pool.",
-      "explanation": "Deleting a dedicated IP pool releases the IPs back to the shared pool. Email reputation built on these IPs is lost. Configuration sets using this pool will fall back to shared IPs.\n\nSafer alternatives:\n- Migrate configuration sets to a new pool first\n- Document IP addresses and reputation metrics\n- Contact AWS support if IPs need to be preserved"
+      "explanation": "Deleting a dedicated IP pool releases the IPs back to the shared pool. Email reputation built on these IPs is lost. Configuration sets using this pool will fall back to shared IPs.\n\nSafer alternatives:\n- Migrate configuration sets to a new pool first\n- Document IP addresses and reputation metrics\n- Contact AWS support if IPs need to be preserved",
+      "examples": {
+        "stop": [
+          "aws sesv2 delete-dedicated-ip-pool"
+        ],
+        "allow": [
+          "aws sesv2 describe-dedicated-ip-pool",
+          "aws sesv2 get-dedicated-ip-pool"
+        ]
+      }
     }
   ]
 }
