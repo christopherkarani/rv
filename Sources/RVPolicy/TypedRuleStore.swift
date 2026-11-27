@@ -1036,23 +1036,16 @@ public struct TypedRuleStore: Sendable {
         documentProblem(toml: Self.repoFileURL(workspace: workspace), json: Self.repoLegacyJSONURL(workspace: workspace))
     }
 
-    /// Throws `PolicyLoadStatus.Problem`.
+    /// Throws `PolicyLoadStatus.Problem`. Reads by `documentResult`.
     private static func readDocument(toml: URL, json: URL) throws -> PolicyDocument {
-        if let text = try readPolicyFile(toml, as: { String(validating: $0, as: UTF8.self) }, else: .notUTF8) {
-            do {
-                return try PolicyDocumentTOML.parse(text)
-            } catch {
-                throw PolicyLoadStatus.Problem.unparseable
-            }
-        }
-        return try readLegacyJSON(from: json)
+        try documentResult(toml: toml, json: json).mapError(\.reason.loadProblem).get()
     }
 
     /// Nil when no file exists at `url`. A missing parent directory, or a
     /// path component that is a file, is absent too (as `fileExists` was).
     /// A final symlink is followed; its target must still be a regular
     /// file within the cap. Throws `PolicyLoadStatus.Problem`.
-    private static func readPolicyFile<T>(
+    static func readPolicyFile<T>(
         _ url: URL, as decode: ([UInt8]) -> T?, else undecodable: PolicyLoadStatus.Problem
     ) throws -> T? {
         let bytes: [UInt8]?
@@ -1078,7 +1071,7 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Throws `PolicyLoadStatus.Problem`.
-    private static func readLegacyJSON(from url: URL) throws -> PolicyDocument {
+    static func readLegacyJSON(from url: URL) throws -> PolicyDocument {
         guard let data = try readPolicyFile(url, as: { Data($0) }, else: .unreadable) else {
             return PolicyDocument()
         }
