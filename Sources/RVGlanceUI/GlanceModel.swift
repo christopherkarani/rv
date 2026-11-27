@@ -54,13 +54,19 @@ public final class GlanceModel {
     func explainLastStop() {
         guard let stop = state.lastStop else { return }
         let request = PlainRequest(stop)
-        guard plainLines[request] == nil else { return }
+        // Every publish calls this; one session per request, not per publish.
+        guard plainLines[request] == nil, !explaining.contains(request) else { return }
+        explaining.insert(request)
         let explainer = explainer
         Task { [weak self] in
             let line = await explainer.explain(request)
+            self?.explaining.remove(request)
             self?.remember(line, for: request)
         }
     }
+
+    /// Requests being worked out now. Internal for tests.
+    @ObservationIgnored var explaining: Set<PlainRequest> = []
 
     private func remember(_ line: PlainLine, for request: PlainRequest) {
         if plainLines.count >= Self.plainCacheLimit { plainLines.removeAll() }

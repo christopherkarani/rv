@@ -5,12 +5,15 @@ import Foundation
 /// reply is untrusted: it must be one line, describe an effect ("Would…"),
 /// and never claim or suggest a decision.
 public enum PlainSanitizer {
-    /// Words and phrases that judge, decide or advise. Matched on word
-    /// boundaries, case-insensitively.
+    /// Words and phrases that judge, decide, reassure or advise. Matched
+    /// as whole words, case-insensitively, after normalisation.
     static let decisionClaims: [String] = [
         "allow", "allowed", "allows", "allowing", "approve", "approved", "approves", "permit", "permitted",
         "deny", "denied", "block", "blocked", "reject", "rejected", "refuse", "refused",
-        "safe", "unsafe", "harmless", "dangerous", "risky", "malicious",
+        "safe", "safely", "unsafe", "harmless", "harmful", "benign", "dangerous", "risky", "risk", "malicious",
+        "fine", "ok", "okay", "trusted", "trustworthy", "legitimate", "legit", "expected", "intended",
+        "false positive", "mistake", "ignore", "ignored", "warning", "warnings", "worry", "concern",
+        "nothing bad", "no harm", "no problem", "not a problem", "just",
         "i will", "i ll", "i can", "i cannot", "i can t", "i won t", "i would",
         "you should", "should not", "shouldn t", "recommend", "advise", "as an ai",
     ]
@@ -18,17 +21,41 @@ public enum PlainSanitizer {
     /// Characters stripped from both ends.
     static let wrappers = CharacterSet(charactersIn: "\"'`“”‘’*_#>-• ").union(.whitespacesAndNewlines)
 
-    public static func clean(_ raw: String) -> String? {
-        var text = raw.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+    /// `raw` as a line, or nil. `command` is the action text the model
+    /// was shown: a non-ASCII character it does not contain cannot be a
+    /// faithful copy of it, so the line is refused (homoglyphs, smuggled
+    /// scripts).
+    public static func clean(_ raw: String, command: String = "") -> String? {
+        var text = normalized(raw)
+        text = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         for marker in ["**", "__", "`"] {
             text = text.replacingOccurrences(of: marker, with: "")
         }
         text = text.trimmingCharacters(in: wrappers)
         if text.hasSuffix(".") { text.removeLast() }
         text = text.trimmingCharacters(in: wrappers)
-        guard !text.isEmpty else { return nil }
-        guard startsWithWould(text), !claimsADecision(text) else { return nil }
+        guard !text.isEmpty, startsWithWould(text), !claimsADecision(text),
+              onlyCopiesNonASCII(text, from: normalized(command)) else { return nil }
         return PlainText.clamp(text)
+    }
+
+    /// NFKC (so look-alike forms fold to plain letters before matching),
+    /// then without control or format scalars (zero-width, bidi overrides).
+    public static func normalized(_ text: String) -> String {
+        let folded = text.precomposedStringWithCompatibilityMapping
+        let kept = folded.unicodeScalars.filter { scalar in
+            switch scalar.properties.generalCategory {
+            case .control: scalar == "\n" || scalar == "\t"
+            case .format: false
+            default: true
+            }
+        }
+        return String(String.UnicodeScalarView(kept))
+    }
+
+    static func onlyCopiesNonASCII(_ text: String, from command: String) -> Bool {
+        let allowed = Set(command.unicodeScalars.filter { !$0.isASCII })
+        return text.unicodeScalars.allSatisfy { $0.isASCII || allowed.contains($0) || $0 == "…" }
     }
 
     static func startsWithWould(_ text: String) -> Bool {

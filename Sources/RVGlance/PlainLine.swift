@@ -98,7 +98,7 @@ public struct PlainFallback<Primary: PlainExplainer>: PlainExplainer {
         case .onDevice:
             // Sanitized again here: a primary that skipped it still cannot
             // put a decision claim or a second line on screen.
-            guard let text = PlainSanitizer.clean(line.text) else { return template }
+            guard let text = PlainSanitizer.clean(line.text, command: request.text) else { return template }
             return PlainLine(text: text, source: .onDevice)
         }
     }

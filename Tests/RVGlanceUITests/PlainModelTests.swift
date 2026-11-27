@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && canImport(AppKit)
 import Foundation
+import Synchronization
 import Testing
 import RVGlance
 @testable import RVGlanceUI
@@ -18,6 +19,28 @@ struct PlainModelTests {
         }
         #expect(model.lastStopPlain == PlainLine(text: "Would echo git reset --hard", source: .onDevice))
     }
+
+    @Test func repeatedPublishesStartOneExplanation() async throws {
+        let counter = Counting()
+        let model = GlanceModel(
+            state: GlanceSamples.state(.guarding), now: GlanceSamples.now, calendar: GlanceSamples.calendar,
+            explainer: counter)
+        for _ in 0..<5 { model.explainLastStop() }
+        #expect(model.explaining.count == 1)
+        for _ in 0..<200 where model.lastStopPlain == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.explainLastStop()
+        #expect(counter.calls.withLock { $0 } == 1)
+        #expect(model.explaining.isEmpty)
+    }
+
+    #if canImport(FoundationModels)
+    @Test func theModelsEffectsMatchPlainEffect() {
+        guard #available(macOS 26.0, *) else { return }
+        #expect(GenerableEffect.allCases.map(\.rawValue) == PlainEffect.allCases.map(\.rawValue))
+    }
+    #endif
 
     /// Opt-in: `RV_PLAIN_ONDEVICE=1` runs Apple's on-device model once.
     /// Never needed in CI; skipped when the model is unavailable.
@@ -38,6 +61,15 @@ struct PlainModelTests {
             #expect(!line.text.isEmpty)
         }
         #endif
+    }
+}
+
+private final class Counting: PlainExplainer, Sendable {
+    let calls = Mutex(0)
+    func explain(_ request: PlainRequest) async -> PlainLine {
+        calls.withLock { $0 += 1 }
+        try? await Task.sleep(for: .milliseconds(20))
+        return PlainLine(text: "Would count", source: .onDevice)
     }
 }
 

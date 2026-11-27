@@ -33,7 +33,8 @@ public struct PlainTemplate: PlainExplainer {
         let text = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch request.tool {
         case .bash:
-            return known(request) ?? (text.isEmpty ? "Would run a shell command" : "Would run \(text)")
+            let command = PlainShell.strippingComments(text)
+            return known(request) ?? (command.isEmpty ? "Would run a shell command" : "Would run \(command)")
         case .read:
             guard !text.isEmpty else { return hint(request.rule) ?? "Would read a file" }
             return PlainPath.isSecret(text)
@@ -46,20 +47,90 @@ public struct PlainTemplate: PlainExplainer {
     }
 
     /// What the rule id says, when the action text does not.
+    ///
+    /// A rule id is `<pack>:<pattern>` (`core.git:reset-hard`). A pattern
+    /// name only means something inside its own pack: `rm-force` deletes a
+    /// container in `containers.docker` and files in `core.filesystem`,
+    /// and `secret-remove` in a CI pack reads no file. So each hint is
+    /// scoped to the pack family that owns the meaning, and the pattern is
+    /// matched as whole `-`/`.`/`_` tokens, never substrings. Every other
+    /// pack gets no hint and falls through to the generic line.
     static func hint(_ rule: String?) -> String? {
-        guard let rule = rule?.lowercased(), !rule.hasPrefix("rv.") else { return nil }
-        let table: [(keys: [String], line: String)] = [
-            (["reset-hard"], PlainCommand.resetHard),
-            (["force-push", "push-force"], PlainCommand.rewriteRemote),
-            (["clean"], PlainCommand.cleanUntracked),
-            (["curl", "pipe", "remote-script"], PlainCommand.downloadedScript),
-            (["rm-rf", "recursive-delete", "rm"], "Would delete files and folders"),
-            (["secret", "credential", "dotenv"], "Would read a secrets file"),
-            (["chmod", "world-writable"], "Would let anyone change files"),
-            (["sudo"], "Would run a command with admin rights"),
-            (["drop", "database"], "Would delete database data"),
-        ]
-        return table.first { entry in entry.keys.contains { rule.contains($0) } }?.line
+        guard let rule = rule?.lowercased(), !rule.hasPrefix("rv."),
+              let colon = rule.firstIndex(of: ":") else { return nil }
+        let pack = String(rule[..<colon])
+        let pattern = String(rule[rule.index(after: colon)...])
+        let tokens = PlainRuleTokens(pattern)
+        switch pack {
+        case "core.git", "strict_git": return gitHint(tokens)
+        case "core.filesystem": return filesystemHint(tokens)
+        case "system.permissions": return permissionsHint(tokens)
+        case _ where pack.hasPrefix("database."): return databaseHint(tokens)
+        default: return nil
+        }
+    }
+
+    private static func gitHint(_ tokens: PlainRuleTokens) -> String? {
+        if tokens.has("reset", "hard") || tokens.has("reset", "merge") || tokens.has("checkout", "discard")
+            || tokens.has("restore", "worktree") {
+            return PlainCommand.resetHard
+        }
+        if tokens.has("push", "force") { return PlainCommand.rewriteRemote }
+        if tokens.has("clean", "force") { return PlainCommand.cleanUntracked }
+        if tokens.has("branch", "force", "delete") { return "Would delete a branch" }
+        if tokens.has("stash", "drop") || tokens.has("stash", "clear") { return "Would throw away stashed changes" }
+        return nil
+    }
+
+    private static func filesystemHint(_ tokens: PlainRuleTokens) -> String? {
+        let home = tokens.has("root", "home") || tokens.has("glob", "home")
+        if tokens.first == "rm" || tokens.has("find", "delete") || tokens.first == "unlink" || tokens.first == "shred" {
+            return home ? "Would delete files in your home folder or the whole disk" : "Would delete files and folders"
+        }
+        if tokens.has("truncate", "zero") || tokens.has("redirect", "truncate") { return "Would empty files" }
+        if tokens.has("dd", "overwrite") { return "Would overwrite files" }
+        return nil
+    }
+
+    private static func permissionsHint(_ tokens: PlainRuleTokens) -> String? {
+        if tokens.run("chmod", "777") { return "Would let anyone change files" }
+        if tokens.run("chmod", "recursive", "root") { return "Would change permissions across the whole disk" }
+        return nil
+    }
+
+    /// Only names that drop the thing itself: `alter-table-drop-column`
+    /// drops a column, and `mysqldump-add-drop-*` writes a dump that drops
+    /// only when someone restores it.
+    private static func databaseHint(_ tokens: PlainRuleTokens) -> String? {
+        guard tokens.first != "mysqldump" else { return nil }
+        if tokens.run("drop", "database") || tokens.tokens == ["dropdb", "cli"] || tokens.tokens == ["mysqladmin", "drop"] {
+            return "Would delete a whole database"
+        }
+        if tokens.tokens == ["drop", "table"] { return "Would delete a database table" }
+        if tokens.tokens == ["truncate", "table"] { return "Would empty a database table" }
+        return nil
+    }
+}
+
+/// A rule pattern name split into whole tokens on `-`, `.`, `_` and `:`.
+struct PlainRuleTokens {
+    let tokens: [String]
+
+    init(_ pattern: String) {
+        tokens = pattern.split(whereSeparator: { "-._:".contains($0) }).map(String.init)
+    }
+
+    var first: String? { tokens.first }
+
+    /// True when every one of `words` is a whole token of the name.
+    func has(_ words: String...) -> Bool {
+        words.allSatisfy(tokens.contains)
+    }
+
+    /// True when `words` appear next to each other, in order.
+    func run(_ words: String...) -> Bool {
+        guard words.count <= tokens.count else { return false }
+        return (0...(tokens.count - words.count)).contains { Array(tokens[$0..<($0 + words.count)]) == words }
     }
 }
 
@@ -72,14 +143,46 @@ enum PlainCommand {
     static let downloadedScript = "Would run a script downloaded from the internet"
     static let adminSuffix = " with admin rights"
 
+    /// The most severe thing the command would do, not the first: in
+    /// `npm install x && rm -rf ~` the delete is the line. Other commands
+    /// in the same line are counted ("…, and 1 more command").
     static func explain(_ command: String) -> String? {
+        let command = PlainShell.strippingComments(command)
         guard !command.isEmpty else { return nil }
         let lower = command.lowercased()
-        if runsDownloadedScript(lower) { return downloadedScript }
-        for words in segments(command) {
-            if let line = segment(words) { return line }
+        let parts = segments(command)
+        var found = parts.compactMap(segment)
+        if runsDownloadedScript(lower) { found.insert(downloadedScript, at: 0) }
+        if found.isEmpty, let line = sql(lower) { found.append(line) }
+        // `max` keeps the first of equals, so ties go to the earlier command.
+        guard let worst = found.enumerated().max(by: { lhs, rhs in
+            severity(lhs.element) < severity(rhs.element)
+                || (severity(lhs.element) == severity(rhs.element) && lhs.offset > rhs.offset)
+        })?.element else { return nil }
+        return withOthers(worst, others: commandCount(command) - 1)
+    }
+
+    /// How bad a line's effect is; higher wins. Lines are this file's own
+    /// sentences, so their openings are known.
+    static func severity(_ line: String) -> Int {
+        if line.hasPrefix("Would delete everything") || line.contains("your home folder") { return 6 }
+        if line == downloadedScript { return 5 }
+        if ["Would delete", "Would empty", "Would throw away", "Would rewrite"].contains(where: line.hasPrefix) {
+            return 4
         }
-        return sql(lower)
+        if line.hasPrefix("Would let anyone") { return 3 }
+        if line.hasSuffix(adminSuffix) { return 2 }
+        return 1
+    }
+
+    /// `line` plus how many other commands ran with it, kept whole: the
+    /// count is dropped before the line is ever cut.
+    static func withOthers(_ line: String, others: Int) -> String {
+        guard others > 0 else { return line }
+        let full = "\(line), and \(others) more \(others == 1 ? "command" : "commands")"
+        if full.count <= PlainLine.maxLength { return full }
+        let short = "\(line) +\(others) more"
+        return short.count <= PlainLine.maxLength ? short : line
     }
 
     /// `curl … | sh`, `bash <(curl …)`, `sh -c "$(curl …)"`.
@@ -104,6 +207,19 @@ enum PlainCommand {
             text = text.replacingOccurrences(of: separator, with: "\u{0}")
         }
         return text.split(separator: "\u{0}").map { words(String($0)) }.filter { !$0.isEmpty }
+    }
+
+    /// Commands, not pipeline stages: `curl … | sh` is one command, and a
+    /// `cd` only sets where the next one runs.
+    static func commandCount(_ command: String) -> Int {
+        var text = command
+        for separator in ["&&", "||", ";", "\n"] {
+            text = text.replacingOccurrences(of: separator, with: "\u{0}")
+        }
+        let navigation: Set<String> = ["cd", "pushd", "popd"]
+        return max(1, text.split(separator: "\u{0}").filter { part in
+            words(String(part)).first.map { !navigation.contains($0) } ?? false
+        }.count)
     }
 
     static func words(_ text: String) -> [String] {
