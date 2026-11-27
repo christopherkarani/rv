@@ -16,7 +16,7 @@ enum BoxWall: String, Equatable, Sendable, CaseIterable {
 
     /// The OCI image `--linux` boots; pulled and cached on first use.
     static let linuxImage = "alpine:3.20"
-    /// The prepared image `--mac` clones (`rv-macvm prepare --image dev`).
+    /// The prepared image `--mac` clones (`rv box setup mac` builds it).
     static let macImage = "dev"
 
     /// The VM this wall launches, or nil for the cage. Default sizes.
@@ -38,7 +38,7 @@ enum BoxWall: String, Equatable, Sendable, CaseIterable {
     }
 }
 
-/// What `rv box` was asked to put in the box.
+/// What `rv box` was asked to do.
 enum BoxTarget: Equatable, Sendable {
     /// `rv box`: the workspace shell for the project.
     case shell
@@ -46,6 +46,10 @@ enum BoxTarget: Equatable, Sendable {
     case agent(String, arguments: [String])
     /// `rv box -- npm test`: any command.
     case command(String, arguments: [String])
+    /// `rv box list [--json]`: the words after `list`.
+    case list([String])
+    /// `rv box setup mac`: build the Mac image now.
+    case setupMac
 }
 
 /// Why a box did not start, as one line and the one thing to do next.
@@ -73,21 +77,41 @@ struct BoxRefusal: Error, Equatable, Sendable {
 }
 
 /// One contained launch, fully resolved: what `WorkspaceCommandRun`
-/// hands the workspace host.
+/// hands the workspace host, and the keys line rv prints for it.
 struct BoxLaunch: Equatable, Sendable {
     var wall: BoxWall
-    /// Canonical project root the box is for.
+    /// Canonical project root the box is for. The runtime starts here.
     var project: String
     var executable: String
     var arguments: [String]
     var hook: HookHost?
     var profile: RuntimeResourceProfile?
+    /// The keys line, and the step that stages keys when there are none.
+    var keys: BoxKeys
+}
+
+/// What the keys line says.
+enum BoxKeys: Equatable, Sendable {
+    /// Every staged secret is a placeholder the gateway swaps; nothing
+    /// else from the host is copied in.
+    case placeholders([String])
+    /// Secrets, files or keychain values from this profile.
+    case profile(id: String, secrets: [String])
+    /// Nothing staged; `next` is the command that would stage keys.
+    case none(next: String)
 }
 
 /// What `rv box` resolved to.
 enum BoxStart: Equatable, Sendable {
     case shell(project: String)
     case launch(BoxLaunch)
+}
+
+/// An executable found on the host PATH: the path as PATH names it (kept as
+/// argv[0], so version-manager shims keep working) and where it resolves.
+struct BoxPathHit: Equatable, Sendable {
+    var path: String
+    var resolved: String
 }
 
 /// What the resolver reads from the machine. Production fills it from
@@ -99,10 +123,12 @@ struct BoxSurroundings {
     var home: String?
     /// Owner resource profiles (runtime-resources.json); `.empty` when none.
     var policy: RuntimeResourcePolicy
+    /// secrets.json, to tell placeholders from copied values.
+    var secrets: SecretsConfiguration = .empty
     /// Whether `<directory>/.git` exists (a directory, or a worktree's file).
     var hasGitEntry: (String) -> Bool
     /// An executable named `name` in the host PATH's absolute directories.
-    var findOnPath: (String) -> String?
+    var findOnPath: (String) -> BoxPathHit?
 }
 
 /// The functional core of `rv box`: argument resolution, the project root,
@@ -138,6 +164,13 @@ enum BoxPlan {
             }
             return .success(.command(command, arguments: Array(rest.dropFirst())))
         }
+        if first == "list" { return .success(.list(rest)) }
+        if first == "setup" {
+            guard rest == ["mac"] else {
+                return .failure(BoxRefusal(why: "Only Mac boxes need a setup.", fix: "rv box setup mac", exitCode: 64))
+            }
+            return .success(.setupMac)
+        }
         if rest.first == "--" { rest.removeFirst() }
         if first.hasPrefix("-") {
             return .failure(BoxRefusal(
@@ -157,11 +190,39 @@ enum BoxPlan {
         return .success(.agent(first, arguments: rest))
     }
 
+    /// Flags that would be silently ignored are refused instead.
+    static func checkFlags(
+        linux: Bool, mac: Bool, profile: String?, target: BoxTarget
+    ) -> BoxRefusal? {
+        switch target {
+        case .list, .setupMac:
+            guard linux || mac || profile != nil else { return nil }
+            let command = target == .setupMac ? "rv box setup mac" : "rv box list"
+            return BoxRefusal(why: "\(command) takes no --linux, --mac or --profile.", fix: command, exitCode: 64)
+        case .shell:
+            if linux || mac {
+                let wall: BoxWall = linux ? .linux : .mac
+                return BoxRefusal(
+                    why: "The box shell runs in the cage; --linux and --mac need something to run.",
+                    fix: invocation(wall: wall, target: .command("sh", arguments: [])), exitCode: 64)
+            }
+            if let profile {
+                return BoxRefusal(
+                    why: "The box shell picks its own profile; --profile needs something to run.",
+                    fix: invocation(wall: .cage, target: .agent("claude", arguments: []), profile: profile),
+                    exitCode: 64)
+            }
+            return nil
+        case .agent, .command:
+            return nil
+        }
+    }
+
     /// The `rv box …` line that asks for `target` behind `wall`, for fixes.
     static func invocation(wall: BoxWall, target: BoxTarget, profile: String? = nil) -> String {
         var words = ["rv", "box"]
         if let flag = wall.flag { words.append(flag) }
-        if let profile { words += ["--profile", profile] }
+        if let profile { words += ["--profile", InitRun.shellWord(profile)] }
         switch target {
         case .shell:
             break
@@ -171,25 +232,40 @@ enum BoxPlan {
             words += arguments.map(InitRun.shellWord)
         case .command(let command, let arguments):
             words += ["--", InitRun.shellWord(command)] + arguments.map(InitRun.shellWord)
+        case .list(let rest):
+            words += ["list"] + rest.map(InitRun.shellWord)
+        case .setupMac:
+            words += ["setup", "mac"]
         }
         return words.joined(separator: " ")
     }
 
     // MARK: Project
 
+    static let elsewhere = "cd into a project folder, then run rv box again"
+
+    /// The current folder could not be read (it was deleted or moved).
+    static let missingFolder = BoxRefusal(why: "This folder no longer exists.", fix: elsewhere)
+
     /// The project a box is for: the nearest directory at or above
     /// `directory` that holds `.git`, else `directory` itself. The home
     /// folder is never a project, so the walk stops below it (a dotfiles
-    /// repository in `~` does not swallow every folder under it).
+    /// repository in `~` does not swallow every folder under it), and
+    /// neither is any folder that holds home: the box could read it all.
     static func projectRoot(
         from directory: String, home: String?, hasGitEntry: (String) -> Bool
     ) -> Result<String, BoxRefusal> {
         let start = normalized(directory)
         let home = home.map(normalized)
-        if start == "/" || start == home {
+        if start == "/" {
+            return .failure(BoxRefusal(why: "The root folder can't be a box.", fix: elsewhere))
+        }
+        if start == home {
+            return .failure(BoxRefusal(why: "Your home folder can't be a box.", fix: elsewhere))
+        }
+        if let home, home.hasPrefix(start + "/") {
             return .failure(BoxRefusal(
-                why: start == "/" ? "The root folder can't be a box." : "Your home folder can't be a box.",
-                fix: "cd into a project folder, then run rv box again"))
+                why: "\(DisplayedText.field(start)) holds your home folder, so it can't be a box.", fix: elsewhere))
         }
         var candidate = start
         while candidate != "/", candidate != home {
@@ -204,25 +280,37 @@ enum BoxPlan {
     /// The owner resource profile the box stages. `named` must serve this
     /// project. Otherwise an agent takes the one profile that serves it
     /// here (by its `agents` marks, or its link names when it has none,
-    /// as the workspace shell's launcher decides); if none does, or for a
-    /// shell or a plain command, the policy's `defaultProfile` when it
-    /// serves this project. No profile means no credentials are staged.
+    /// as the workspace shell's launcher decides); if none does, the
+    /// policy's `defaultProfile` when it serves this project and its marks
+    /// allow the agent. A plain command takes the `defaultProfile` too.
+    /// A VM sees only the workspace, so VM walls never pick a profile that
+    /// grants host paths (the host would refuse the launch). No profile
+    /// means no credentials are staged.
     static func profile(
         for target: BoxTarget, named explicit: String?, wall: BoxWall,
         policy: RuntimeResourcePolicy, project: String, workingDirectory: String
     ) -> Result<RuntimeResourceProfile?, BoxRefusal> {
-        let eligible = policy.profiles.filter { $0.projects.contains(project) }
+        let serving = policy.profiles.filter { $0.projects.contains(project) }
+        let usable = wall == .cage ? serving : serving.filter { $0.grantsHostPaths == false }
         if let explicit {
-            if let profile = eligible.first(where: { $0.id == explicit }) { return .success(profile) }
+            if let profile = usable.first(where: { $0.id == explicit }) { return .success(profile) }
+            if serving.contains(where: { $0.id == explicit }) {
+                return .failure(BoxRefusal(
+                    why: "Profile \(DisplayedText.field(explicit)) shares host files, which a VM box can't see.",
+                    fix: invocation(wall: .cage, target: target, profile: explicit)))
+            }
             return .failure(BoxRefusal(
                 why: "No profile \(DisplayedText.field(explicit)) serves \(DisplayedText.field(displayPath(project))).",
-                fix: initCommand(project: project, workingDirectory: workingDirectory, profileID: explicit)))
+                fix: initCommand(
+                    project: project, workingDirectory: workingDirectory,
+                    profileID: freeProfileID(explicit, policy: policy))))
         }
-        let fallback = policy.defaultProfile.flatMap { id in eligible.first { $0.id == id } }
+        let fallback = policy.defaultProfile.flatMap { id in usable.first { $0.id == id } }
         guard case .agent(let name, _) = target else { return .success(fallback) }
-        let claiming = eligible.filter { claims($0, agent: name) }
+        let claiming = usable.filter { claims($0, agent: name) }
         switch claiming.count {
         case 0:
+            guard let fallback, fallback.agents.isEmpty || fallback.agents.contains(name) else { return .success(nil) }
             return .success(fallback)
         case 1:
             return .success(claiming[0])
@@ -243,16 +331,58 @@ enum BoxPlan {
             : profile.agents.contains(name)
     }
 
+    /// `base`, or `base-2`, `base-3`… when the policy already has it.
+    static func freeProfileID(_ base: String, policy: RuntimeResourcePolicy) -> String {
+        let taken = Set(policy.profiles.map(\.id))
+        guard taken.contains(base) else { return base }
+        var number = 2
+        while taken.contains("\(base)-\(number)") { number += 1 }
+        return "\(base)-\(number)"
+    }
+
+    /// What the keys line says for `profile`.
+    static func keys(
+        _ profile: RuntimeResourceProfile?, secrets: SecretsConfiguration, wall: BoxWall, target: BoxTarget,
+        policy: RuntimeResourcePolicy, project: String, workingDirectory: String
+    ) -> BoxKeys {
+        guard let profile else {
+            // `rv init` writes links and credential files, which a VM
+            // refuses; keys for a VM need a profile written by hand.
+            let next = wall == .cage
+                ? initCommand(
+                    project: project, workingDirectory: workingDirectory,
+                    profileID: freeProfileID("main", policy: policy))
+                : "keys need the cage: " + invocation(wall: .cage, target: target)
+            return .none(next: next)
+        }
+        let placeholders = profile.secrets.isEmpty == false
+            && profile.credentials.isEmpty && profile.keychain.isEmpty
+            && profile.environment.allSatisfy { $0.hostVariable == nil }
+            && profile.secrets.allSatisfy { name in
+                switch secrets.secret(named: name)?.delivery {
+                case .gateway, .awsSigV4: true
+                case .environment, nil: false
+                }
+            }
+        return placeholders ? .placeholders(profile.secrets) : .profile(id: profile.id, secrets: profile.secrets)
+    }
+
     // MARK: Launch
 
     /// What to run in the box. In the cage an agent runs from its
-    /// profile's link, else from the host PATH, and a bare command from the
-    /// host PATH. A VM has its own file system, so a bare name is looked
-    /// up on the guest's PATH by `/usr/bin/env`. A relative path is taken
-    /// from the current directory, which the box shares.
+    /// profile's link, else from the host PATH as PATH names it, and a
+    /// bare command from the host PATH. A VM has its own file system, so a
+    /// bare name is looked up on the guest's PATH by `/usr/bin/env`. A
+    /// relative path is made absolute from the current folder (the box
+    /// shares the project at the same path); the runtime itself starts in
+    /// the project root, which the ready line names.
+    ///
+    /// With a profile staged, a PATH hit inside the project is refused: a
+    /// repo can put its own `claude` first on PATH (direnv, `.venv/bin`),
+    /// and it would run with the profile's keys.
     static func launch(
         _ target: BoxTarget, wall: BoxWall, project: String, profile: RuntimeResourceProfile?,
-        workingDirectory: String, findOnPath: (String) -> String?
+        keys: BoxKeys, workingDirectory: String, findOnPath: (String) -> BoxPathHit?
     ) -> Result<BoxStart, BoxRefusal> {
         let name: String
         let arguments: [String]
@@ -260,6 +390,8 @@ enum BoxPlan {
         switch target {
         case .shell:
             return .success(.shell(project: project))
+        case .list, .setupMac:
+            return .failure(BoxRefusal(why: "Nothing to launch.", fix: "rv box --help", exitCode: 64))
         case .agent(let agent, let rest):
             (name, arguments, hook) = (agent, rest, HookHost(rawValue: agent))
         case .command(let command, let rest):
@@ -278,8 +410,13 @@ enum BoxPlan {
         } else if case .agent = target,
                   let link = profile?.executableLinks.first(where: { $0.name == name }) {
             executable = link.target
-        } else if let found = findOnPath(name) {
-            executable = found
+        } else if let hit = findOnPath(name) {
+            if let profile, isInside(hit.path, project) || isInside(hit.resolved, project) {
+                return .failure(BoxRefusal(
+                    why: "The \(DisplayedText.field(name)) on your PATH is inside this project, so it can't have profile \(DisplayedText.field(profile.id))'s keys.",
+                    fix: "link \(DisplayedText.field(name)) in profile \(DisplayedText.field(profile.id)) (executableLinks in ~/.config/rv/runtime-resources.json)"))
+            }
+            executable = hit.path
         } else {
             return .failure(BoxRefusal(
                 why: "No \(DisplayedText.field(name)) on your PATH.",
@@ -287,7 +424,7 @@ enum BoxPlan {
         }
         return .success(.launch(BoxLaunch(
             wall: wall, project: project, executable: executable, arguments: argv,
-            hook: hook, profile: profile)))
+            hook: hook, profile: profile, keys: keys)))
     }
 
     /// The whole resolution, from parsed flags and captured words.
@@ -303,14 +440,12 @@ enum BoxPlan {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): target = value
         }
+        if let refusal = checkFlags(linux: linux, mac: mac, profile: explicit, target: target) {
+            return .failure(refusal)
+        }
         switch Self.wall(linux: linux, mac: mac, target: target) {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): wall = value
-        }
-        if target == .shell, wall != .cage {
-            return .failure(BoxRefusal(
-                why: "The box shell runs in the cage; --linux and --mac need something to run.",
-                fix: invocation(wall: wall, target: .command("sh", arguments: [])), exitCode: 64))
         }
         switch projectRoot(
             from: surroundings.workingDirectory, home: surroundings.home, hasGitEntry: surroundings.hasGitEntry)
@@ -325,8 +460,11 @@ enum BoxPlan {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): profile = value
         }
+        let keys = Self.keys(
+            profile, secrets: surroundings.secrets, wall: wall, target: target, policy: surroundings.policy,
+            project: project, workingDirectory: surroundings.workingDirectory)
         return launch(
-            target, wall: wall, project: project, profile: profile,
+            target, wall: wall, project: project, profile: profile, keys: keys,
             workingDirectory: surroundings.workingDirectory, findOnPath: surroundings.findOnPath)
     }
 
@@ -354,14 +492,18 @@ enum BoxPlan {
             BoxRefusal(
                 why: "Mac boxes need rv-macvm, and this rv was built without it.",
                 fix: "build it with the macOS 27 SDK: Scripts/build-microvm.sh")
-        case .notPrepared(let options):
+        case .notPrepared:
             BoxRefusal(
                 mark: .setup,
                 why: "Mac boxes need a one-time setup: about 26 GB to download.",
-                fix: WorkspaceMicroVM.prepareInstruction(options))
-        case .prepareFailed(let image, let status):
+                fix: "rv box setup mac")
+        case .prepareFailed(let options, let status) where options.guest == .macOS:
             BoxRefusal(
-                why: "The Linux image \(DisplayedText.field(image)) could not be fetched (rv-microvm exit \(status)).",
+                why: "The Mac image could not be set up (rv-macvm exit \(status)).",
+                fix: "rv doctor")
+        case .prepareFailed(let options, let status):
+            BoxRefusal(
+                why: "The Linux image \(DisplayedText.field(options.image)) could not be fetched (rv-microvm exit \(status)).",
                 fix: "rv doctor")
         case .helperUnstartable(let path, let detail):
             BoxRefusal(
@@ -370,45 +512,84 @@ enum BoxPlan {
         }
     }
 
-    // MARK: Words
-
-    /// The lines before the agent takes the terminal.
-    static func startLines(_ launch: BoxLaunch, home: String?, workingDirectory: String) -> String {
-        let place = DisplayedText.field(displayPath(launch.project, home: home))
-        let header: String
-        let network: String
-        switch launch.wall {
-        case .cage:
-            header = "◆ rv · box for \(place)"
-            network = "public HTTPS through rv · LAN closed"
-        case .linux:
-            header = "◆ rv · linux box for \(place) · \(BoxWall.linuxImage.replacingOccurrences(of: ":", with: " "))"
-            network = "public HTTPS through rv · no network card"
-        case .mac:
-            header = "◆ rv · mac box for \(place) · image \(BoxWall.macImage)"
-            network = "public HTTPS through rv · no network card"
+    /// A refusal from the workspace host (`rv workspace run`'s words),
+    /// as one line and one fix. The peer-trust refusal gets the v4
+    /// "can't start" frame; any other message keeps its first clause as
+    /// the reason and the first `rv …` command it names as the fix.
+    static func hostRefusal(_ message: String) -> BoxRefusal {
+        if message.hasPrefix("the workspace host was refused") {
+            return BoxRefusal(
+                why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
+                fix: "see the fix (it needs an administrator): rv doctor")
         }
-        let keys: String
-        if let profile = launch.profile {
-            let id = DisplayedText.field(profile.id)
-            keys = profile.secrets.isEmpty
-                ? "  ✓ keys      from profile \(id)"
-                : "  ✓ keys      \(profile.secrets.map { DisplayedText.field($0) }.joined(separator: ", ")) via rv · profile \(id)"
-        } else {
-            let command = initCommand(project: launch.project, workingDirectory: workingDirectory, profileID: nil)
-            keys = "  ◐ keys      none staged · to stage them: \(command)"
+        if message.hasPrefix("the workspace host this start launched is still mounting or recovering") {
+            return BoxRefusal(
+                mark: .setup,
+                why: "The box is still starting in the background.",
+                fix: "run rv box again once it is ready: rv workspace status")
         }
-        return [
-            header,
-            "  ✓ sealed    writes stay in the box until you bring them home",
-            keys,
-            "  ✓ network   \(network)",
-        ].joined(separator: "\n") + "\n"
+        let reason = message.components(separatedBy: "; ").first ?? message
+        return BoxRefusal(why: sentence(reason), fix: firstCommand(in: message) ?? "rv doctor")
     }
 
-    /// Once the host has launched it.
-    static func readyLine(seconds: Double) -> String {
-        "  ready in \(String(format: "%.1f", max(0, seconds))) s\n"
+    /// The first `'rv …'` command quoted in `message`.
+    static func firstCommand(in message: String) -> String? {
+        let parts = message.components(separatedBy: "'")
+        guard parts.count >= 3 else { return nil }
+        return stride(from: 1, to: parts.count - 1, by: 2).map { parts[$0] }.first { $0.hasPrefix("rv ") }
+    }
+
+    private static func sentence(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        let capitalized = first.uppercased() + text.dropFirst()
+        return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+    }
+
+    // MARK: Words
+
+    /// The line before the host launches anything.
+    static func headerLine(_ launch: BoxLaunch, home: String?) -> String {
+        let place = DisplayedText.field(displayPath(launch.project, home: home))
+        switch launch.wall {
+        case .cage:
+            return "◆ rv · box for \(place)\n"
+        case .linux:
+            return "◆ rv · linux box for \(place) · \(BoxWall.linuxImage.replacingOccurrences(of: ":", with: " "))\n"
+        case .mac:
+            return "◆ rv · mac box for \(place) · image \(BoxWall.macImage)\n"
+        }
+    }
+
+    /// The lines once the host has launched it: the walls, the time, and
+    /// the step that stages keys when none are, last.
+    static func launchedLines(
+        _ launch: BoxLaunch, seconds: Double, home: String?, workingDirectory: String
+    ) -> String {
+        let network = launch.wall == .cage
+            ? "public HTTPS through rv · LAN closed"
+            : "public HTTPS through rv · no network card"
+        var lines = ["  ✓ sealed    writes stay in the box until you bring them home"]
+        var next: String?
+        switch launch.keys {
+        case .placeholders(let names):
+            let shown = names.map { DisplayedText.field($0) }.joined(separator: ", ")
+            lines.append("  ✓ keys      \(shown) via rv · \(names.count == 1 ? "the value never enters" : "the values never enter")")
+        case .profile(let id, let secrets):
+            lines.append(secrets.isEmpty
+                ? "  ✓ keys      from profile \(DisplayedText.field(id))"
+                : "  ✓ keys      \(secrets.map { DisplayedText.field($0) }.joined(separator: ", ")) via rv · profile \(DisplayedText.field(id))")
+        case .none(let command):
+            lines.append("  ◐ keys      none staged")
+            next = command
+        }
+        lines.append("  ✓ network   \(network)")
+        var ready = "  ready in \(String(format: "%.1f", max(0, seconds))) s"
+        if normalized(workingDirectory) != launch.project {
+            ready += " · starts in \(DisplayedText.field(displayPath(launch.project, home: home)))"
+        }
+        lines.append(ready)
+        if let next { lines.append("  → \(next)") }
+        return lines.joined(separator: "\n") + "\n"
     }
 
     /// After the runtime exits: its writes are still on the volume.
@@ -419,6 +600,10 @@ enum BoxPlan {
         }
         return "  → bring the writes home: \(command)\n"
     }
+
+    /// `rv box setup mac`, before and after the helper's own progress.
+    static let setupStartLine = "◆ rv · setting up Mac boxes · about 26 GB to download, in the foreground\n"
+    static let setupDoneLine = "  ✓ Mac boxes are ready.\n"
 
     // MARK: Paths
 
@@ -440,13 +625,14 @@ enum BoxPlan {
         return InitRun.shellWord(path)
     }
 
-    /// `rv init`, pointed at the project when the shell is elsewhere.
-    static func initCommand(project: String, workingDirectory: String, profileID: String?) -> String {
+    /// `rv init`, pointed at the project when the shell is elsewhere, with
+    /// `--profile-id` when the id is not init's default.
+    static func initCommand(project: String, workingDirectory: String, profileID: String) -> String {
         var command = "rv init"
         if normalized(workingDirectory) != project {
             command += " --project " + InitRun.shellWord(project)
         }
-        if let profileID { command += " --profile-id " + InitRun.shellWord(profileID) }
+        if profileID != "main" { command += " --profile-id " + InitRun.shellWord(profileID) }
         return command
     }
 
@@ -461,6 +647,10 @@ enum BoxPlan {
             }
         }
         return "/" + parts.joined(separator: "/")
+    }
+
+    private static func isInside(_ path: String, _ directory: String) -> Bool {
+        normalized(path).hasPrefix(directory + "/")
     }
 
     private static func parent(of path: String) -> String {

@@ -167,6 +167,19 @@ func microVMHelperEnvironment(_ environment: [String], profile: MicroVMProfile) 
 /// Contained launch in a micro-VM. Pure checks first, then the same
 /// workspace resolution and inode-alias scan the Seatbelt path runs.
 ///
+extension RuntimeResourceProfile {
+    /// Whether the profile grants host paths (links, read/write trees,
+    /// credential files). A VM guest sees only the workspace, so a VM
+    /// launch refuses such a profile.
+    package var grantsHostPaths: Bool {
+        executableLinks.isEmpty == false
+            || readFiles.isEmpty == false
+            || readTrees.isEmpty == false
+            || writeTrees.isEmpty == false
+            || credentials.isEmpty == false
+    }
+}
+
 /// Resource profiles may carry environment, keychain and secret entries,
 /// which reach the guest as environment. Grants of host paths (links,
 /// read/write trees, credential files) are refused: the guest sees only
@@ -181,12 +194,7 @@ func prepareMicroVM(
         return .failure(.profileNotApplicable)
     }
     if let profile = resourceProfile {
-        let grantsHostPaths = profile.executableLinks.isEmpty == false
-            || profile.readFiles.isEmpty == false
-            || profile.readTrees.isEmpty == false
-            || profile.writeTrees.isEmpty == false
-            || profile.credentials.isEmpty == false
-        if grantsHostPaths {
+        if profile.grantsHostPaths {
             return .failure(.resourceStagingFailed(
                 "resource profile \(profile.id) grants host paths, which micro-VM launches cannot share"
             ))

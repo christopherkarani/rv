@@ -51,8 +51,8 @@ enum WorkspaceMicroVM {
         case helperMissing(MicroVMGuest)
         /// A macOS image is built only on request (about 26 GB).
         case notPrepared(MicroVMLaunchOptions)
-        /// Pulling a Linux image failed with the helper's exit status.
-        case prepareFailed(image: String, status: Int32)
+        /// Preparing the image failed with the helper's exit status.
+        case prepareFailed(MicroVMLaunchOptions, status: Int32)
         /// The helper could not be started at all.
         case helperUnstartable(path: String, detail: String)
 
@@ -66,8 +66,10 @@ enum WorkspaceMicroVM {
                     + "build it with Scripts/build-microvm.sh using the macOS 27 SDK"
             case .notPrepared(let options):
                 "macOS image \(options.image) is not prepared; build it once with: \(prepareInstruction(options))"
-            case .prepareFailed(let image, let status):
-                "micro-VM image \(image) could not be prepared (rv-microvm exit \(status))"
+            case .prepareFailed(let options, let status) where options.guest == .macOS:
+                "macOS image \(options.image) could not be prepared (\(MicroVMHelper.executableName(for: .macOS)) exit \(status))"
+            case .prepareFailed(let options, let status):
+                "micro-VM image \(options.image) could not be prepared (rv-microvm exit \(status))"
             case .helperUnstartable(let path, let detail):
                 "cannot start \(path): \(detail)"
             }
@@ -97,7 +99,19 @@ enum WorkspaceMicroVM {
         }
         let status = try run(helper, prepareArguments(image: options.image), output: true, errors: true)
         guard status == 0 else {
-            throw .prepareFailed(image: options.image, status: status)
+            throw .prepareFailed(options, status: status)
+        }
+    }
+
+    /// Builds or pulls the image now, in the foreground, with the helper's
+    /// progress on stderr (`rv box setup mac`).
+    static func prepare(_ options: MicroVMLaunchOptions, project: String) throws(Unready) {
+        guard let helper = MicroVMHelper.locate(workspace: project, guest: options.guest) else {
+            throw .helperMissing(options.guest)
+        }
+        let status = try run(helper, prepareArguments(image: options.image), output: true, errors: true)
+        guard status == 0 else {
+            throw .prepareFailed(options, status: status)
         }
     }
 

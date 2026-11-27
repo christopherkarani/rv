@@ -12,17 +12,23 @@ import Testing
 struct BoxPlanTests {
     static let home = "/Users/chris"
     static let app = "/Users/chris/code/app"
+    static let onPath = [
+        "claude": BoxPathHit(path: "/opt/homebrew/bin/claude", resolved: "/opt/homebrew/Cellar/claude/1/bin/claude"),
+        "npm": BoxPathHit(path: "/opt/homebrew/bin/npm", resolved: "/opt/homebrew/lib/node_modules/npm/bin/npm-cli.js"),
+    ]
 
     static func surroundings(
         in directory: String = app,
         policy: RuntimeResourcePolicy = .empty,
+        secrets: SecretsConfiguration = .empty,
         repos: Set<String> = [app],
-        path: [String: String] = ["claude": "/opt/homebrew/bin/claude", "npm": "/opt/homebrew/bin/npm"]
+        path: [String: BoxPathHit] = onPath
     ) -> BoxSurroundings {
         BoxSurroundings(
             workingDirectory: directory,
             home: home,
             policy: policy,
+            secrets: secrets,
             hasGitEntry: { repos.contains($0) },
             findOnPath: { path[$0] }
         )
@@ -30,12 +36,21 @@ struct BoxPlanTests {
 
     static func profile(
         _ id: String, project: String = app, agents: [String] = [],
-        links: [String: String] = [:], secrets: [String] = []
+        links: [String: String] = [:], credentials: Bool = false, secrets: [String] = []
     ) -> RuntimeResourceProfile {
         RuntimeResourceProfile(
             id: id, projects: [project], agents: agents,
             executableLinks: links.sorted { $0.key < $1.key }.map { .init(name: $0.key, target: $0.value) },
+            credentials: credentials
+                ? [.init(source: "/Users/chris/.claude/.credentials.json", destination: ".claude/.credentials.json")] : [],
             secrets: secrets)
+    }
+
+    static func start(
+        linux: Bool = false, mac: Bool = false, profile: String? = nil, _ captured: [String],
+        _ surroundings: BoxSurroundings = surroundings()
+    ) -> Result<BoxStart, BoxRefusal> {
+        BoxPlan.start(linux: linux, mac: mac, profile: profile, captured: captured, surroundings: surroundings)
     }
 
     static func launch(_ start: Result<BoxStart, BoxRefusal>) throws -> BoxLaunch {
@@ -56,15 +71,17 @@ struct BoxPlanTests {
 
     // MARK: Arguments
 
-    @Test("captured words become a shell, an agent or a command")
+    @Test("captured words become a shell, an agent, a command, list or setup")
     func targets() {
         #expect(BoxPlan.target([]) == .success(.shell))
         #expect(BoxPlan.target(["claude"]) == .success(.agent("claude", arguments: [])))
         #expect(BoxPlan.target(["claude", "--resume"]) == .success(.agent("claude", arguments: ["--resume"])))
         #expect(BoxPlan.target(["claude", "--", "--help"]) == .success(.agent("claude", arguments: ["--help"])))
         #expect(BoxPlan.target(["--", "npm", "test"]) == .success(.command("npm", arguments: ["test"])))
-        #expect(BoxPlan.target(["--", "./migrate.sh"]) == .success(.command("./migrate.sh", arguments: [])))
+        #expect(BoxPlan.target(["--", "list"]) == .success(.command("list", arguments: [])))
         #expect(BoxPlan.target(["./migrate.sh", "up"]) == .success(.command("./migrate.sh", arguments: ["up"])))
+        #expect(BoxPlan.target(["list", "--json"]) == .success(.list(["--json"])))
+        #expect(BoxPlan.target(["setup", "mac"]) == .success(.setupMac))
     }
 
     @Test("a wrong command line is one line, one fix, exit 64")
@@ -72,6 +89,7 @@ struct BoxPlanTests {
         guard case .failure(let dash) = BoxPlan.target(["--"]),
               case .failure(let flag) = BoxPlan.target(["--foo"]),
               case .failure(let name) = BoxPlan.target(["my agent"]),
+              case .failure(let setup) = BoxPlan.target(["setup", "linux"]),
               case .failure(let walls) = BoxPlan.wall(linux: true, mac: true, target: .agent("claude", arguments: []))
         else {
             Issue.record("expected refusals")
@@ -80,8 +98,23 @@ struct BoxPlanTests {
         #expect(dash.text == "✕ Nothing to run after --.\n  → rv box --help\n")
         #expect(flag.text == "✕ rv box has no --foo option.\n  → rv box --help\n")
         #expect(name.text == "✕ my agent isn't an agent name.\n  → rv box -- 'my agent'\n")
+        #expect(setup.text == "✕ Only Mac boxes need a setup.\n  → rv box setup mac\n")
         #expect(walls.text == "✕ Pick one wall: --linux or --mac.\n  → rv box --linux claude\n")
-        #expect([dash, flag, name, walls].allSatisfy { $0.exitCode == 64 })
+        #expect([dash, flag, name, setup, walls].allSatisfy { $0.exitCode == 64 })
+    }
+
+    @Test("flags that would be ignored are refused")
+    func ignoredFlags() throws {
+        let shellProfile = try Self.refusal(Self.start(profile: "main", []))
+        #expect(shellProfile.text
+            == "✕ The box shell picks its own profile; --profile needs something to run.\n  → rv box --profile main claude\n")
+        let shellVM = try Self.refusal(Self.start(linux: true, []))
+        #expect(shellVM.text
+            == "✕ The box shell runs in the cage; --linux and --mac need something to run.\n  → rv box --linux -- sh\n")
+        #expect(BoxPlan.checkFlags(linux: true, mac: false, profile: nil, target: .list([]))?.text
+            == "✕ rv box list takes no --linux, --mac or --profile.\n  → rv box list\n")
+        #expect(BoxPlan.checkFlags(linux: false, mac: false, profile: "x", target: .setupMac)?.exitCode == 64)
+        #expect(BoxPlan.checkFlags(linux: false, mac: false, profile: nil, target: .list(["--json"])) == nil)
     }
 
     @Test("--linux and --mac pick the VMs; nothing picks the cage")
@@ -115,226 +148,318 @@ struct BoxPlanTests {
         #expect(BoxPlan.projectRoot(from: "/srv/site", home: Self.home, hasGitEntry: { $0 == "/srv" }) == .success("/srv"))
     }
 
-    @Test("home and / refuse with one line")
-    func homeRefuses() {
-        let expected = BoxRefusal(
-            why: "Your home folder can't be a box.", fix: "cd into a project folder, then run rv box again")
+    @Test("home, a folder above home, and / refuse with one line")
+    func homeRefuses() throws {
+        let expected = BoxRefusal(why: "Your home folder can't be a box.", fix: BoxPlan.elsewhere)
         #expect(BoxPlan.projectRoot(from: Self.home, home: Self.home, hasGitEntry: { _ in true }) == .failure(expected))
         #expect(BoxPlan.projectRoot(from: Self.home + "/", home: Self.home, hasGitEntry: { _ in true }) == .failure(expected))
+        let above = try Self.refusal(Self.start(["claude"], Self.surroundings(in: "/Users", repos: [])))
+        #expect(above.text == "✕ /Users holds your home folder, so it can't be a box.\n  → cd into a project folder, then run rv box again\n")
+        // A repo at /Users would not help: the folder itself is refused first.
+        #expect(BoxPlan.projectRoot(from: "/Users", home: Self.home, hasGitEntry: { _ in true }) == .failure(
+            BoxRefusal(why: "/Users holds your home folder, so it can't be a box.", fix: BoxPlan.elsewhere)))
         guard case .failure(let root) = BoxPlan.projectRoot(from: "/", home: Self.home, hasGitEntry: { _ in false }) else {
             Issue.record("/ must refuse")
             return
         }
         #expect(root.text == "✕ The root folder can't be a box.\n  → cd into a project folder, then run rv box again\n")
+        #expect(BoxPlan.missingFolder.text == "✕ This folder no longer exists.\n  → cd into a project folder, then run rv box again\n")
     }
 
     // MARK: Profile
 
     static func chosen(
-        _ target: BoxTarget, _ policy: RuntimeResourcePolicy, named: String? = nil
+        _ target: BoxTarget, _ policy: RuntimeResourcePolicy, named: String? = nil, wall: BoxWall = .cage
     ) -> Result<RuntimeResourceProfile?, BoxRefusal> {
         BoxPlan.profile(
-            for: target, named: named, wall: .cage, policy: policy, project: app, workingDirectory: app)
+            for: target, named: named, wall: wall, policy: policy, project: app, workingDirectory: app)
     }
+
+    static let claude = BoxTarget.agent("claude", arguments: [])
 
     @Test("an agent takes the one profile that serves it here")
     func profileClaimedByAgent() {
-        let claude = Self.profile("main", agents: ["claude", "codex"])
+        let main = Self.profile("main", agents: ["claude", "codex"])
         let other = Self.profile("ops", agents: ["muse"])
         let elsewhere = Self.profile("site", project: "/Users/chris/code/site", agents: ["claude"])
-        let policy = RuntimeResourcePolicy(profiles: [other, claude, elsewhere])
-        #expect(Self.chosen(.agent("claude", arguments: []), policy) == .success(claude))
+        let policy = RuntimeResourcePolicy(profiles: [other, main, elsewhere])
+        #expect(Self.chosen(Self.claude, policy) == .success(main))
         // Legacy profiles claim by link name.
         let legacy = Self.profile("old", links: ["claude": "/opt/claude-wrapper"])
-        #expect(Self.chosen(.agent("claude", arguments: []), RuntimeResourcePolicy(profiles: [legacy])) == .success(legacy))
+        #expect(Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [legacy])) == .success(legacy))
     }
 
-    @Test("with no claim, the operator default serves this project or nothing does")
+    @Test("with no claim, the operator default serves this project if its marks allow the agent")
     func profileDefault() {
         let shell = Self.profile("shell")
         let foreign = Self.profile("foreign", project: "/elsewhere")
         let policy = RuntimeResourcePolicy(profiles: [shell, foreign], defaultProfile: "shell")
-        #expect(Self.chosen(.agent("claude", arguments: []), policy) == .success(shell))
+        #expect(Self.chosen(Self.claude, policy) == .success(shell))
         #expect(Self.chosen(.shell, policy) == .success(shell))
         #expect(Self.chosen(.command("npm", arguments: []), policy) == .success(shell))
-        let noDefault = RuntimeResourcePolicy(profiles: [shell])
-        #expect(Self.chosen(.agent("claude", arguments: []), noDefault) == .success(nil))
-        let foreignDefault = RuntimeResourcePolicy(profiles: [foreign], defaultProfile: "foreign")
-        #expect(Self.chosen(.agent("claude", arguments: []), foreignDefault) == .success(nil))
-        #expect(Self.chosen(.agent("claude", arguments: []), .empty) == .success(nil))
+        #expect(Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [shell])) == .success(nil))
+        #expect(Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [foreign], defaultProfile: "foreign")) == .success(nil))
+        #expect(Self.chosen(Self.claude, .empty) == .success(nil))
+        // A default marked for other agents does not serve claude.
+        let museOnly = Self.profile("muse", agents: ["muse"])
+        #expect(Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [museOnly], defaultProfile: "muse")) == .success(nil))
     }
 
     @Test("two claiming profiles: the default breaks the tie, else one line names --profile")
     func profileAmbiguous() {
         let a = Self.profile("a", agents: ["claude"])
         let b = Self.profile("b", agents: ["claude"])
-        #expect(Self.chosen(.agent("claude", arguments: []), RuntimeResourcePolicy(profiles: [a, b], defaultProfile: "b")) == .success(b))
-        guard case .failure(let refusal) = Self.chosen(.agent("claude", arguments: []), RuntimeResourcePolicy(profiles: [b, a])) else {
+        #expect(Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [a, b], defaultProfile: "b")) == .success(b))
+        guard case .failure(let refusal) = Self.chosen(Self.claude, RuntimeResourcePolicy(profiles: [b, a])) else {
             Issue.record("ambiguous profiles must refuse")
             return
         }
         #expect(refusal.text == "✕ 2 profiles serve claude here: a, b.\n  → rv box --profile a claude\n")
     }
 
-    @Test("--profile must serve this project")
+    @Test("--profile must serve this project; the rv init fix names a free id")
     func profileExplicit() {
         let main = Self.profile("main")
         let site = Self.profile("site", project: "/Users/chris/code/site")
         let policy = RuntimeResourcePolicy(profiles: [main, site])
-        #expect(Self.chosen(.agent("claude", arguments: []), policy, named: "main") == .success(main))
-        guard case .failure(let refusal) = Self.chosen(.agent("claude", arguments: []), policy, named: "site") else {
-            Issue.record("a profile for another project must refuse")
+        #expect(Self.chosen(Self.claude, policy, named: "main") == .success(main))
+        guard case .failure(let taken) = Self.chosen(Self.claude, policy, named: "site"),
+              case .failure(let fresh) = BoxPlan.profile(
+                for: Self.claude, named: "x", wall: .cage, policy: policy, project: Self.app,
+                workingDirectory: Self.app + "/src")
+        else {
+            Issue.record("a profile that does not serve this project must refuse")
             return
         }
-        #expect(refusal.text == "✕ No profile site serves /Users/chris/code/app.\n  → rv init --profile-id site\n")
-        let fromSubfolder = BoxPlan.profile(
-            for: .shell, named: "x", wall: .cage, policy: policy, project: Self.app,
-            workingDirectory: Self.app + "/src")
-        #expect((try? fromSubfolder.get()) == nil)
-        if case .failure(let sub) = fromSubfolder {
-            #expect(sub.fix == "rv init --project /Users/chris/code/app --profile-id x")
-        }
+        #expect(taken.text == "✕ No profile site serves /Users/chris/code/app.\n  → rv init --profile-id site-2\n")
+        #expect(fresh.fix == "rv init --project /Users/chris/code/app --profile-id x")
+        #expect(BoxPlan.freeProfileID("main", policy: .empty) == "main")
+        #expect(BoxPlan.freeProfileID("main", policy: RuntimeResourcePolicy(profiles: [main, Self.profile("main-2")])) == "main-3")
+    }
+
+    @Test("a VM wall never picks a profile that shares host files")
+    func vmSkipsHostPathProfiles() throws {
+        let initStyle = Self.profile("main", agents: ["claude"], links: ["claude": "/opt/homebrew/bin/claude"], credentials: true)
+        let secretsOnly = Self.profile("keys", agents: ["claude"], secrets: ["ANTHROPIC_API_KEY"])
+        // Implicit: skipped, and the keys hint points at the cage, not rv init.
+        let skipped = try Self.launch(Self.start(
+            linux: true, ["claude"], Self.surroundings(policy: RuntimeResourcePolicy(profiles: [initStyle]))))
+        #expect(skipped.profile == nil)
+        #expect(skipped.keys == .none(next: "keys need the cage: rv box claude"))
+        // A secrets-only profile still serves the VM.
+        let kept = try Self.launch(Self.start(
+            mac: true, ["claude"], Self.surroundings(policy: RuntimeResourcePolicy(profiles: [initStyle, secretsOnly]))))
+        #expect(kept.profile == secretsOnly)
+        // Explicit: refused up front, with the cage as the fix.
+        let refused = try Self.refusal(Self.start(
+            linux: true, profile: "main", ["claude"],
+            Self.surroundings(policy: RuntimeResourcePolicy(profiles: [initStyle]))))
+        #expect(refused.text == "✕ Profile main shares host files, which a VM box can't see.\n  → rv box --profile main claude\n")
     }
 
     // MARK: Launch
 
-    @Test("rv box claude from a subfolder: repo root, PATH agent, hook, no flags")
+    @Test("rv box claude from a subfolder: repo root, PATH agent as PATH names it, hook, no flags")
     func cageAgent() throws {
-        let start = BoxPlan.start(
-            linux: false, mac: false, profile: nil, captured: ["claude", "--resume"],
-            surroundings: Self.surroundings(in: Self.app + "/src"))
-        let launch = try Self.launch(start)
+        let launch = try Self.launch(Self.start(["claude", "--resume"], Self.surroundings(in: Self.app + "/src")))
         #expect(launch == BoxLaunch(
             wall: .cage, project: Self.app, executable: "/opt/homebrew/bin/claude",
-            arguments: ["--resume"], hook: .claude, profile: nil))
+            arguments: ["--resume"], hook: .claude, profile: nil,
+            keys: .none(next: "rv init --project /Users/chris/code/app")))
     }
 
     @Test("a profile's link wins over PATH in the cage")
     func cageAgentFromLink() throws {
         let main = Self.profile("main", agents: ["claude"], links: ["claude": "/Users/chris/.local/bin/claude-wrapper"])
-        let launch = try Self.launch(BoxPlan.start(
-            linux: false, mac: false, profile: nil, captured: ["claude"],
-            surroundings: Self.surroundings(policy: RuntimeResourcePolicy(profiles: [main]))))
+        let launch = try Self.launch(Self.start(["claude"], Self.surroundings(policy: RuntimeResourcePolicy(profiles: [main]))))
         #expect(launch.executable == "/Users/chris/.local/bin/claude-wrapper")
         #expect(launch.profile == main)
+        #expect(launch.keys == .profile(id: "main", secrets: []))
+    }
+
+    @Test("with a profile staged, a PATH hit inside the project is refused")
+    func plantedBinary() throws {
+        let main = Self.profile("main", agents: ["claude"])
+        let planted = ["claude": BoxPathHit(path: Self.app + "/.venv/bin/claude", resolved: Self.app + "/.venv/bin/claude")]
+        let refusal = try Self.refusal(Self.start(
+            ["claude"], Self.surroundings(policy: RuntimeResourcePolicy(profiles: [main]), path: planted)))
+        #expect(refusal.text == """
+            ✕ The claude on your PATH is inside this project, so it can't have profile main's keys.
+              → link claude in profile main (executableLinks in ~/.config/rv/runtime-resources.json)
+
+            """)
+        // A symlink outside that resolves inside counts too.
+        let linked = ["claude": BoxPathHit(path: "/Users/chris/bin/claude", resolved: Self.app + "/node_modules/.bin/claude")]
+        #expect(throws: Never.self) {
+            _ = try Self.refusal(Self.start(
+                ["claude"], Self.surroundings(policy: RuntimeResourcePolicy(profiles: [main]), path: linked)))
+        }
+        // Without a profile there are no keys to take: it runs.
+        let keyless = try Self.launch(Self.start(["claude"], Self.surroundings(path: planted)))
+        #expect(keyless.executable == Self.app + "/.venv/bin/claude")
     }
 
     @Test("commands: bare names from PATH, relative paths from here, absolute as is")
     func cageCommands() throws {
         let here = Self.surroundings(in: Self.app + "/scripts")
-        let npm = try Self.launch(BoxPlan.start(linux: false, mac: false, profile: nil, captured: ["--", "npm", "test"], surroundings: here))
+        let npm = try Self.launch(Self.start(["--", "npm", "test"], here))
         #expect(npm.executable == "/opt/homebrew/bin/npm")
         #expect(npm.arguments == ["test"])
         #expect(npm.hook == nil)
-        let relative = try Self.launch(BoxPlan.start(linux: false, mac: false, profile: nil, captured: ["--", "./migrate.sh"], surroundings: here))
+        let relative = try Self.launch(Self.start(["--", "./migrate.sh"], here))
         #expect(relative.executable == Self.app + "/scripts/migrate.sh")
-        let absolute = try Self.launch(BoxPlan.start(linux: false, mac: false, profile: nil, captured: ["--", "/bin/zsh", "-l"], surroundings: here))
+        let absolute = try Self.launch(Self.start(["--", "/bin/zsh", "-l"], here))
         #expect(absolute.executable == "/bin/zsh")
         #expect(absolute.arguments == ["-l"])
     }
 
     @Test("an agent rv knows no hook for runs untagged")
     func untaggedAgent() throws {
-        let launch = try Self.launch(BoxPlan.start(
-            linux: false, mac: false, profile: nil, captured: ["aider"],
-            surroundings: Self.surroundings(path: ["aider": "/usr/local/bin/aider"])))
+        let launch = try Self.launch(Self.start(
+            ["aider"], Self.surroundings(path: ["aider": BoxPathHit(path: "/usr/local/bin/aider", resolved: "/usr/local/bin/aider")])))
         #expect(launch.hook == nil)
         #expect(launch.executable == "/usr/local/bin/aider")
     }
 
     @Test("a missing agent is one line and one fix")
     func agentMissing() throws {
-        let refusal = try Self.refusal(BoxPlan.start(
-            linux: false, mac: false, profile: nil, captured: ["codex"], surroundings: Self.surroundings()))
+        let refusal = try Self.refusal(Self.start(["codex"]))
         #expect(refusal.text == "✕ No codex on your PATH.\n  → rv box -- /full/path/to/codex\n")
         #expect(refusal.exitCode == 1)
     }
 
     @Test("VMs look names up on the guest's PATH")
     func vmLaunches() throws {
-        let linux = try Self.launch(BoxPlan.start(
-            linux: true, mac: false, profile: nil, captured: ["--", "npm", "test"], surroundings: Self.surroundings()))
+        let linux = try Self.launch(Self.start(linux: true, ["--", "npm", "test"]))
         #expect(linux.wall == .linux)
         #expect(linux.executable == "/usr/bin/env")
         #expect(linux.arguments == ["npm", "test"])
-        let mac = try Self.launch(BoxPlan.start(
-            linux: false, mac: true, profile: nil, captured: ["claude", "run the UI test"], surroundings: Self.surroundings()))
+        let mac = try Self.launch(Self.start(mac: true, ["claude", "run the UI test"]))
         #expect(mac.wall == .mac)
         #expect(mac.executable == "/usr/bin/env")
         #expect(mac.arguments == ["claude", "run the UI test"])
         #expect(mac.hook == .claude)
-        let script = try Self.launch(BoxPlan.start(
-            linux: true, mac: false, profile: nil, captured: ["--", "./migrate.sh"], surroundings: Self.surroundings()))
+        let script = try Self.launch(Self.start(linux: true, ["--", "./migrate.sh"]))
         #expect(script.executable == Self.app + "/migrate.sh")
         #expect(script.arguments.isEmpty)
     }
 
-    @Test("rv box alone is the shell, in the cage only")
-    func shell() throws {
-        #expect(BoxPlan.start(linux: false, mac: false, profile: nil, captured: [], surroundings: Self.surroundings(in: Self.app + "/src"))
-            == .success(.shell(project: Self.app)))
-        let refusal = try Self.refusal(BoxPlan.start(
-            linux: true, mac: false, profile: nil, captured: [], surroundings: Self.surroundings()))
-        #expect(refusal.text == "✕ The box shell runs in the cage; --linux and --mac need something to run.\n  → rv box --linux -- sh\n")
+    @Test("rv box alone is the shell")
+    func shell() {
+        #expect(Self.start([], Self.surroundings(in: Self.app + "/src")) == .success(.shell(project: Self.app)))
     }
 
     // MARK: Words
 
+    static func secret(_ name: String, gateway: Bool) -> SecretDefinition {
+        SecretDefinition(
+            name: name, source: .keychain(service: "rv", account: name),
+            delivery: gateway
+                ? .gateway(SecretGatewayBinding(upstream: URL(string: "https://api.anthropic.com")!, baseURLEnv: "ANTHROPIC_BASE_URL"))
+                : .environment)
+    }
+
+    @Test("the keys line says the value never enters only for gateway placeholders")
+    func keysWords() {
+        let gateway = SecretsConfiguration(secrets: [Self.secret("ANTHROPIC_API_KEY", gateway: true), Self.secret("PLAIN", gateway: false)])
+        func keys(_ profile: RuntimeResourceProfile?) -> BoxKeys {
+            BoxPlan.keys(profile, secrets: gateway, wall: .cage, target: Self.claude, policy: .empty,
+                         project: Self.app, workingDirectory: Self.app)
+        }
+        #expect(keys(Self.profile("main", secrets: ["ANTHROPIC_API_KEY"])) == .placeholders(["ANTHROPIC_API_KEY"]))
+        #expect(keys(Self.profile("main", secrets: ["ANTHROPIC_API_KEY", "PLAIN"])) == .profile(id: "main", secrets: ["ANTHROPIC_API_KEY", "PLAIN"]))
+        #expect(keys(Self.profile("main", credentials: true, secrets: ["ANTHROPIC_API_KEY"])) == .profile(id: "main", secrets: ["ANTHROPIC_API_KEY"]))
+        #expect(keys(Self.profile("main", secrets: ["UNDEFINED"])) == .profile(id: "main", secrets: ["UNDEFINED"]))
+        #expect(keys(nil) == .none(next: "rv init"))
+        let mainTaken = RuntimeResourcePolicy(profiles: [Self.profile("main", project: "/elsewhere")])
+        #expect(BoxPlan.keys(nil, secrets: .empty, wall: .cage, target: Self.claude, policy: mainTaken,
+                             project: Self.app, workingDirectory: Self.app) == .none(next: "rv init --profile-id main-2"))
+    }
+
+    static func launchFor(_ wall: BoxWall, keys: BoxKeys, profile: RuntimeResourceProfile? = nil) -> BoxLaunch {
+        BoxLaunch(wall: wall, project: app, executable: "/opt/homebrew/bin/claude", arguments: [],
+                  hook: .claude, profile: profile, keys: keys)
+    }
+
     @Test("the start lines match v4 Contained")
     func startLines() {
-        let main = Self.profile("main", agents: ["claude"], secrets: ["ANTHROPIC_API_KEY"])
-        let launch = BoxLaunch(
-            wall: .cage, project: Self.app, executable: "/opt/homebrew/bin/claude", arguments: [],
-            hook: .claude, profile: main)
-        #expect(BoxPlan.startLines(launch, home: Self.home, workingDirectory: Self.app) == """
-            ◆ rv · box for ~/code/app
+        let launch = Self.launchFor(.cage, keys: .placeholders(["ANTHROPIC_API_KEY"]))
+        #expect(BoxPlan.headerLine(launch, home: Self.home) == "◆ rv · box for ~/code/app\n")
+        #expect(BoxPlan.launchedLines(launch, seconds: 0.43, home: Self.home, workingDirectory: Self.app) == """
               ✓ sealed    writes stay in the box until you bring them home
-              ✓ keys      ANTHROPIC_API_KEY via rv · profile main
+              ✓ keys      ANTHROPIC_API_KEY via rv · the value never enters
               ✓ network   public HTTPS through rv · LAN closed
+              ready in 0.4 s
 
             """)
-        #expect(BoxPlan.readyLine(seconds: 0.43) == "  ready in 0.4 s\n")
         #expect(BoxPlan.exitLine(project: Self.app, workingDirectory: Self.app, home: Self.home)
             == "  → bring the writes home: rv workspace close\n")
         #expect(BoxPlan.exitLine(project: Self.app, workingDirectory: Self.app + "/src", home: Self.home)
             == "  → bring the writes home: rv workspace close --workspace ~/code/app\n")
     }
 
-    @Test("no profile says so, with rv init last")
+    @Test("no keys: the state, then the step last; a subfolder start names the root")
     func startLinesWithoutKeys() {
-        var launch = BoxLaunch(
-            wall: .linux, project: Self.app, executable: "/usr/bin/env", arguments: ["npm", "test"],
-            hook: nil, profile: nil)
-        #expect(BoxPlan.startLines(launch, home: Self.home, workingDirectory: Self.app + "/src") == """
-            ◆ rv · linux box for ~/code/app · alpine 3.20
+        let linux = Self.launchFor(.linux, keys: .none(next: "keys need the cage: rv box claude"))
+        #expect(BoxPlan.headerLine(linux, home: Self.home) == "◆ rv · linux box for ~/code/app · alpine 3.20\n")
+        #expect(BoxPlan.launchedLines(linux, seconds: 1.04, home: Self.home, workingDirectory: Self.app + "/src") == """
               ✓ sealed    writes stay in the box until you bring them home
-              ◐ keys      none staged · to stage them: rv init --project /Users/chris/code/app
+              ◐ keys      none staged
               ✓ network   public HTTPS through rv · no network card
+              ready in 1.0 s · starts in ~/code/app
+              → keys need the cage: rv box claude
 
             """)
-        launch.wall = .mac
-        launch.profile = Self.profile("main")
-        #expect(BoxPlan.startLines(launch, home: Self.home, workingDirectory: Self.app) == """
-            ◆ rv · mac box for ~/code/app · image dev
-              ✓ sealed    writes stay in the box until you bring them home
-              ✓ keys      from profile main
-              ✓ network   public HTTPS through rv · no network card
-
-            """)
+        let mac = Self.launchFor(.mac, keys: .profile(id: "main", secrets: ["A", "B"]))
+        #expect(BoxPlan.headerLine(mac, home: Self.home) == "◆ rv · mac box for ~/code/app · image dev\n")
+        #expect(BoxPlan.launchedLines(mac, seconds: 0, home: Self.home, workingDirectory: Self.app)
+            .contains("  ✓ keys      A, B via rv · profile main\n"))
     }
 
     @Test("VM start failures are one line and one fix")
     func vmRefusals() {
         let mac = MicroVMLaunchOptions(image: "dev", guest: .macOS)!
+        let linux = MicroVMLaunchOptions(image: "alpine:3.20")!
         #expect(BoxPlan.refusal(.notPrepared(mac)).text
-            == "◐ Mac boxes need a one-time setup: about 26 GB to download.\n  → rv-macvm prepare --image dev\n")
+            == "◐ Mac boxes need a one-time setup: about 26 GB to download.\n  → rv box setup mac\n")
         #expect(BoxPlan.refusal(.helperMissing(.linux)).text
             == "✕ Linux boxes need rv-microvm next to rv.\n  → reinstall rv, or build it: Scripts/build-microvm.sh\n")
-        #expect(BoxPlan.refusal(.prepareFailed(image: "alpine:3.20", status: 3)).text
+        #expect(BoxPlan.refusal(.prepareFailed(linux, status: 3)).text
             == "✕ The Linux image alpine:3.20 could not be fetched (rv-microvm exit 3).\n  → rv doctor\n")
+        #expect(BoxPlan.refusal(.prepareFailed(mac, status: 1)).text
+            == "✕ The Mac image could not be set up (rv-macvm exit 1).\n  → rv doctor\n")
         // rv workspace run keeps its own words.
         #expect(WorkspaceMicroVM.Unready.notPrepared(mac).message
             == "macOS image dev is not prepared; build it once with: rv-macvm prepare --image dev")
+        #expect(WorkspaceMicroVM.Unready.prepareFailed(linux, status: 3).message
+            == "micro-VM image alpine:3.20 could not be prepared (rv-microvm exit 3)")
+    }
+
+    @Test("every host failure gets a → fix")
+    func hostRefusals() {
+        let trustText = "the workspace host was refused: pinned to another build; any host this start launched "
+            + "was stopped; run 'rv doctor', and 'rv workspace leftovers' for anything it left"
+        let startingText = "the workspace host this start launched is still mounting or recovering; it keeps running "
+            + "in the background — run 'rv workspace status' to see when it is ready, then "
+            + "'rv workspace start' again to attach"
+        let timedOutText = "workspace host did not become ready in time; run 'rv workspace status' to check it, "
+            + "or 'rv doctor' if it persists"
+        #if os(macOS)
+        // The host texts are macOS-only; pin the copies above to them.
+        #expect(WorkspaceCommandRun.ensureFailureText(.control(.unauthorizedClient), hostTrustReason: "pinned to another build") == trustText)
+        #expect(WorkspaceCommandRun.ensureFailureText(.stillStarting, hostTrustReason: nil) == startingText)
+        #expect(WorkspaceCommandRun.ensureFailureText(.timedOut, hostTrustReason: nil) == timedOutText)
+        #endif
+        #expect(BoxPlan.hostRefusal(trustText).text
+            == "✕ Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.\n  → see the fix (it needs an administrator): rv doctor\n")
+        #expect(BoxPlan.hostRefusal(WorkspaceCommandRun.hostNotReachableText).text
+            == "✕ Workspace host is not reachable.\n  → rv workspace status\n")
+        #expect(BoxPlan.hostRefusal(timedOutText).text
+            == "✕ Workspace host did not become ready in time.\n  → rv workspace status\n")
+        #expect(BoxPlan.hostRefusal(startingText).text
+            == "◐ The box is still starting in the background.\n  → run rv box again once it is ready: rv workspace status\n")
+        #expect(BoxPlan.hostRefusal("runtime resource profile 'main' is unavailable for this project").text
+            == "✕ Runtime resource profile 'main' is unavailable for this project.\n  → rv doctor\n")
     }
 
     @Test("paths show under ~ and copy back safely")
@@ -394,9 +519,8 @@ struct BoxListTests {
         let box = BoxListing(project: "/p", workspace: UUID(), state: .open,
                              lastActive: Date(timeIntervalSince1970: 0), walls: ["cage"])
         let text = try RobotJSON.encode(BoxListRender.document([box]), options: .compactISO8601)
-        #expect(text.contains(#""schema":"rv.boxes.v1""#))
-        #expect(text.contains(#""state":"open""#))
-        #expect(text.contains(#""last_active":"1970-01-01T00:00:00Z""#))
+        #expect(text == #"{"boxes":[{"last_active":"1970-01-01T00:00:00Z","project":"/p","state":"open","walls":["cage"]}],"schema":"rv.boxes.v1"}"#)
+        #expect(try RobotJSON.encode(BoxListRender.document([]), options: .compactISO8601) == #"{"boxes":[],"schema":"rv.boxes.v1"}"#)
     }
 }
 
@@ -425,6 +549,8 @@ struct BoxCommandTests {
     func help() {
         #expect(HelpDispatch.topic(arguments: ["box", "--help"]) == .box)
         #expect(HelpDispatch.topic(arguments: ["help", "box"]) == .box)
+        #expect(HelpDispatch.topic(arguments: ["help", "box", "list"]) == .box)
+        #expect(HelpDispatch.topic(arguments: ["help", "box", "setup", "mac"]) == .box)
         // Captured; `BoxCommand` answers it with this page itself.
         #expect(HelpDispatch.topic(arguments: ["box", "list", "--help"]) == nil)
         #expect(HelpDispatch.topic(arguments: ["box", "--linux", "--help"]) == .box)
@@ -432,6 +558,8 @@ struct BoxCommandTests {
         let page = HelpDispatch.text(.box, palette: colorOffPalette)
         #expect(page.contains("rv box [--linux | --mac] [--profile <id>] [<agent> [args...]]"))
         #expect(page.contains("rv box list [--json]"))
+        #expect(page.contains("rv box setup mac"))
+        #expect(page.contains("rv-macvm") == false)
         let root = HelpCatalog.page(.root).sections.flatMap(\.rows).map(\.name)
         #expect(root.contains("box"))
     }
