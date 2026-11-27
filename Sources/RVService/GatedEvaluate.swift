@@ -673,8 +673,14 @@ public struct GatedEvaluate: Sendable {
         // deadline the check trips it and `HookDoor` swaps in the timeout
         // deny, so no denial row is emitted for a reply nobody reads.
         let denialInTime = verb.recordsDenial && HookDeadline.permitsSideEffects()
-        if denialInTime, let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
-            effects.append(row)
+        if denialInTime, case .denialRow(var row)? = Self.denialRow(
+            for: finished, path: nil, host: host, tool: tool, now: now
+        ) {
+            // An enforced deny the host shows as an ask is listed as one.
+            if case .deny = finished.decision, HookAuthorization.project(result: finished, cwd: cwd) == .ask {
+                row.asked = true
+            }
+            effects.append(.denialRow(row))
         }
         // An allow-once grant spent in time keeps its reply even when the
         // deadline passes after (`HookDoor` sends no timeout deny then), so
@@ -775,6 +781,23 @@ public struct GatedEvaluate: Sendable {
     /// running a program rv cannot see is sent to Terminal
     /// (`observe.floor:unanalyzable`) whatever its verdict, since observe
     /// would have let it run.
+    /// The observe floor's reader for one segment of a shell command: the
+    /// same pack and semantic evaluation as the whole command, with its
+    /// audit rows dropped (the whole command's verdict records them).
+    private func segmentVerdict(
+        _ door: Door, cwd: WorkingDirectory?, home: HomeDirectory?, now: Date
+    ) -> ((ShellCommand) -> EvaluationResult)? {
+        guard case .shell(let request, let inputs, _) = door else { return nil }
+        return { segment in
+            var inner = request
+            inner.command = segment
+            var dropped: [GatedEffect] = []
+            return self.evaluateWithSemantics(
+                inner, cwd: cwd, home: home, store: inputs.store, now: now, effects: &dropped
+            )
+        }
+    }
+
     private func posture(
         _ evaluated: EvaluationResult,
         door: Door,
@@ -789,7 +812,8 @@ public struct GatedEvaluate: Sendable {
         var floorRaised = false
         if guardMode == .observe,
            case .enforce(let floored) = ObserveFloor.rule(
-               evaluated, door: door.observeFloor, context: ObserveFloor.Context(home: home, cwd: cwd)
+               evaluated, door: door.observeFloor,
+               context: ObserveFloor.Context(home: home, cwd: cwd, segmentVerdict: segmentVerdict(door, cwd: cwd, home: home, now: now))
            )
         {
             result = floored
@@ -1296,8 +1320,9 @@ public struct GatedEvaluate: Sendable {
                 // writes then sees the chained row and drops the blocks copy.
                 auditDenial(row, home: home)
                 // The ledger is rule-oriented (`rv blocks`; the review queue
-                // offers allow-once): an indeterminate refusal is neither.
-                if row.indeterminate == nil { recordDenial(row, home: home) }
+                // offers allow-once): an indeterminate refusal is neither,
+                // except the observe floor's own stop (`ledgerRow`).
+                if let ledgerRow = row.ledgerRow { recordDenial(ledgerRow, home: home) }
             case .overrideAudit(let row):
                 let wait = lockWait()
                 guard auditOverride(row, home: home, wait: wait) == false else { continue }
@@ -1476,6 +1501,7 @@ public struct GatedEvaluate: Sendable {
             path: DenialPathRedaction.redact(row.path, home: home),
             observed: row.observed,
             wouldBe: row.wouldBe,
+            asked: row.asked,
             session: row.session
         )
         let ledger = DenialLedger(configDirectory: configDir)

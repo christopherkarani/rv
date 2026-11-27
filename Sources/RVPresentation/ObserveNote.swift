@@ -22,6 +22,9 @@ package let observeRobotStoppedEffective = "deny"
 package let stoppedWords = "\(CommandVocabulary.Glyph.stopped.rawValue) Stopped"
 package let stoppedInEveryModeWords = stoppedWords + ", in every mode"
 package let wouldStopWords = "\(CommandVocabulary.Glyph.watched.rawValue) Would stop"
+/// A guard-mode deny the host showed as an ask (`rv blocks`): the person
+/// may have let it run, so it never reads as a stop.
+package let asksWords = "\(CommandVocabulary.Glyph.ask.rawValue) \(CommandVocabulary.Glyph.ask.word)"
 
 /// How observe mode treated a verdict that is not an allow.
 public enum ObserveOutcome: Sendable, Equatable {
@@ -84,7 +87,8 @@ package func observeNote(
     case (.indeterminate, .stopped):
         return "Guard mode stops it too."
     case (_, .stopped):
-        return "It always stops a disk wipe, rm -rf ~ or /, and rv's own files\(rule)."
+        // The rule sits with the verdict it decided, not after the list.
+        return "Guard mode stops it too\(rule). \(stoppedTail)"
     case (_, .stoppedInObserve):
         return "Guard mode lets it run: without rvd, every call asks first\(rule)."
     }
