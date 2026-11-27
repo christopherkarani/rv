@@ -149,7 +149,10 @@ struct OperatorCommandRunTests {
         try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
             try Policy.Validate.parse([]).run()
             let missingFile = workspace.appendingPathComponent("absent.toml")
-            try Policy.Validate.parse([missingFile.path]).run()
+            // A missing file is an error, never a pass (CI must not pass a typo).
+            await #expect(throws: ExitCode(2)) {
+                try Policy.Validate.parse([missingFile.path]).run()
+            }
             try await Policy.Export.parse([]).run()
             try await Policy.Export.parse(["--output", out.path]).run()
             #expect(FileManager.default.fileExists(atPath: out.path))

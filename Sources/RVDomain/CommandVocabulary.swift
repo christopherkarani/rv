@@ -20,6 +20,7 @@ public enum CommandVocabulary {
         case opencode
         case workspace
         case test
+        case `try`
         case explain
         case packs
         case policy
