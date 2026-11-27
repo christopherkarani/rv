@@ -10,18 +10,24 @@ import Testing
 struct UnavailableWorkspaceCommandTests {
     @Test func workspaceHelpMarksUnavailableCommands() {
         let text = HelpDispatch.text(.workspace, palette: colorOffPalette)
-        let lines = text.split(separator: "\n").map(String.init)
+        let rawLines = text.split(separator: "\n").map(String.init)
+        // A long usage name wraps its description onto the next line, so
+        // each row is read as its line plus the one after it.
+        func row(_ name: String) -> String? {
+            guard let index = rawLines.firstIndex(where: { $0.contains(name) }) else { return nil }
+            return rawLines[index] + (index + 1 < rawLines.count ? "\n" + rawLines[index + 1] : "")
+        }
         for command in ["rv workspace agent", "rv workspace custom"] {
-            let line = lines.first { $0.contains(command) }
+            let line = row(command)
             #expect(
                 line?.contains("(not yet available)") == true,
                 "\(command) help row must be marked (not yet available)"
             )
         }
         // Abandon works now, behind owner authentication.
-        let abandon = lines.first { $0.contains("rv workspace abandon") }
+        let abandon = row("rv workspace abandon")
         #expect(abandon?.contains("(asks for owner authentication)") == true)
-        let custom = lines.first { $0.contains("rv workspace custom") }
+        let custom = row("rv workspace custom")
         #expect(
             custom?.contains(
                 "Launch an ad-hoc definition (not yet available); executable image verification is deferred"
