@@ -45,6 +45,8 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     package var mode: String? = nil
     /// What the hook did instead (`allow`); set with `mode`.
     package var effective: String? = nil
+    /// Typed rules that also match but did not decide; omitted when none.
+    package var typedRules: [ExplainAlsoMatch]? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -56,6 +58,7 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
         case nextAction = "next_action"
         case mode
         case effective
+        case typedRules = "typed_rules"
     }
 }
 
@@ -259,7 +262,8 @@ public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPay
         explanation: model.explanation,
         nextAction: model.nextAction,
         mode: observed ? observeRobotMode : nil,
-        effective: observed ? observeRobotEffective : nil
+        effective: observed ? observeRobotEffective : nil,
+        typedRules: model.alsoMatches.isEmpty ? nil : model.alsoMatches
     )
 }
 

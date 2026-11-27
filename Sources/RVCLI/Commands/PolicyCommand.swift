@@ -70,7 +70,8 @@ struct Policy: AsyncParsableCommand {
                     ? try PolicyShowRun.load(home: home, workspace: workspace)
                     : nil
             } catch {
-                try ctx.fail("rv policy show: invalid policy file\n")
+                try ctx.fail(PolicyFileErrorText.layers(
+                    PolicyWorkspace(home: home, workspace: workspace).documentFailures(), command: "policy show"))
             }
             let effectiveRules: [TypedRule]?
             do {
@@ -80,7 +81,8 @@ struct Policy: AsyncParsableCommand {
             } catch let error as PolicyCeilingError {
                 try ctx.fail("rv policy show: refused: \(error.refusal)\n")
             } catch {
-                try ctx.fail("rv policy show: invalid policy file\n")
+                try ctx.fail(PolicyFileErrorText.layers(
+                    PolicyWorkspace(home: home, workspace: workspace).documentFailures(), command: "policy show"))
             }
             let exemptions = PolicyShowRun.loadExemptions(home: home, workspace: workspace)
             let text: String
@@ -167,7 +169,7 @@ struct Policy: AsyncParsableCommand {
         )
 
         static let usage = [
-            HelpRow(name: "rv policy validate"),
+            HelpRow(name: "rv policy validate [<policy.toml>]"),
         ]
 
         @Argument(help: "Path to policy.toml. Defaults to the machine file.")
@@ -185,7 +187,7 @@ struct Policy: AsyncParsableCommand {
             do {
                 report = try PolicyValidateRun.riskReport(target)
             } catch {
-                try CommandContext.fail("rv policy validate: invalid policy file\n", exitCode: 2)
+                try CommandContext.fail(PolicyValidateRun.failureText(error, target: target, path: path), exitCode: 2)
             }
             let validateWorkspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
@@ -235,7 +237,7 @@ struct Policy: AsyncParsableCommand {
                     ? try session.loadRepoDocument()
                     : try session.loadMachineDocument()
             } catch {
-                try CommandContext.fail("rv policy export: invalid policy file\n")
+                try CommandContext.fail(PolicyFileErrorText.layers(session.documentFailures(), command: "policy export"))
             }
             let text = PolicyDocumentTOML.render(document)
             if let output {
@@ -288,7 +290,7 @@ struct Policy: AsyncParsableCommand {
             do {
                 incoming = try PolicyDocumentRun.load(URL(fileURLWithPath: path))
             } catch {
-                try CommandContext.fail("rv policy apply: invalid policy file\n")
+                try CommandContext.fail(PolicyDocumentRun.failureText(error, path: path))
             }
             let session = PolicyWorkspace(home: home, workspace: workspace)
             let layer: PolicyDocumentLayer = repo ? .repo : .machine
@@ -298,13 +300,13 @@ struct Policy: AsyncParsableCommand {
                     ? try session.loadRepoDocument()
                     : try session.loadMachineDocument()
             } catch {
-                try CommandContext.fail("rv policy apply: invalid policy file\n")
+                try CommandContext.fail(PolicyFileErrorText.layers(session.documentFailures(), command: "policy apply"))
             }
             let merged: PolicyDocument
             do {
                 merged = try session.mergeIncoming(incoming, layer: layer, save: false)
             } catch {
-                try CommandContext.fail("rv policy apply: invalid policy file\n")
+                try CommandContext.fail(PolicyFileErrorText.layers(session.documentFailures(), command: "policy apply"))
             }
             // Share-ask risk, not post-merge outcome: the merge is tighten-only,
             // so diffing the merged result could never flag a relaxation. A
@@ -573,7 +575,13 @@ enum PolicyListRun {
 }
 
 enum PolicyDocumentRun {
+    /// No file at the path a command was given.
+    struct MissingFile: Error, Equatable {}
+
     static func load(_ url: URL) throws -> PolicyDocument {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw MissingFile()
+        }
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
@@ -581,6 +589,18 @@ enum PolicyDocumentRun {
             throw PolicyDocumentError.invalidFile
         }
         return try PolicyDocumentTOML.parse(text)
+    }
+
+    /// Stderr text for a share file `load` refused: no file, the line and
+    /// fix, or (unreadable) the file name and a fix.
+    static func failureText(_ error: Error, path: String) -> String {
+        if error is MissingFile {
+            return PolicyFileErrorText.missing(path)
+        }
+        if let problem = (error as? PolicyDocumentError)?.problem {
+            return PolicyFileErrorText.text(problem, file: path)
+        }
+        return "  ✕ \(DisplayedText.field(path))  cannot be read as UTF-8 text\n  → check the path and that it is a text file\n"
     }
 }
 
@@ -592,7 +612,7 @@ enum PolicyValidateRun {
 
     /// Default (no path) uses the same machine load as `policy show` / evaluate:
     /// `policy.toml` if present, else legacy `typed-rules.json`. An explicit path
-    /// is a share file: missing is valid; present must parse as TOML.
+    /// is a share file: it must exist and parse as TOML.
     static func validate(_ target: Target) throws {
         let report = try riskReport(target)
         if report.hasBlockingFindings {
@@ -617,12 +637,20 @@ enum PolicyValidateRun {
                 newDocument: document
             )
         case .file(let url, let home):
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                return .clean
-            }
             let document = try PolicyDocumentRun.load(url)
             let baseline = try PolicyWorkspace(home: home).loadMachineDocument()
             return PolicyDiffRisk.evaluateShare(existing: baseline, incoming: document)
+        }
+    }
+
+    /// Stderr text for a validate that could not read its target.
+    static func failureText(_ error: Error, target: Target, path: String?) -> String {
+        switch target {
+        case .file:
+            return PolicyDocumentRun.failureText(error, path: path ?? "")
+        case .machine(let home):
+            return PolicyFileErrorText.layers(
+                PolicyWorkspace(home: home).documentFailures(), command: "policy validate")
         }
     }
 

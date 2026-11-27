@@ -70,6 +70,22 @@ public struct PolicyWorkspace: Sendable {
         )
     }
 
+    /// Each layer file that does not load (machine first), with the line,
+    /// key and fix for a parse error. Read-only; for error messages after a
+    /// load already failed.
+    public func documentFailures() -> [PolicyFileFailure] {
+        var failures: [PolicyFileFailure] = []
+        if let directory = machineDirectory,
+            let failure = TypedRuleStore(baseDirectory: directory).machineDocumentFailure()
+        {
+            failures.append(failure)
+        }
+        if let workspace, let failure = repoStore(workspace: workspace).repoDocumentFailure(workspace: workspace) {
+            failures.append(failure)
+        }
+        return failures
+    }
+
     /// Merged typed rules. The owner's policy ceiling goes last as a
     /// restrict-only overlay, so its deny and ask rules hold whatever the
     /// layers say, at O(rules) per action. An unreadable or invalid ceiling

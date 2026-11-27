@@ -986,7 +986,7 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "draft",
-                    description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
+                    description: "A plain sentence to a typed rule preview: git push, reset, clean or restore, rm or mv. Rules only add stops; an allow rule never loosens rv or a pack."
                 ),
                 HelpRow(
                     name: "apply",
@@ -1008,7 +1008,7 @@ enum HelpCatalog {
         ],
         examples: [
             "rv policy show",
-            "rv policy draft --english 'never allow force-push to main'",
+            "rv policy draft 'never force-push to main'",
             "rv policy rollback r2",
             "rv policy check --ceiling",
         ]
