@@ -198,6 +198,9 @@ struct CommandContextTests {
         #expect(CommandContext.requested(json: true, robot: false, plain: true) == .robot)
         #expect(CommandContext.requested(json: false, robot: true, plain: true) == .robot)
         #expect(CommandContext.requested(json: false, robot: false, plain: false) == .automatic)
+        // --no-color asks for human text too: piped, it must not turn into JSON.
+        #expect(CommandContext.requested(json: false, robot: false, noColor: true) == .pretty)
+        #expect(CommandContext.requested(json: true, robot: false, noColor: true) == .robot)
     }
 
     @Test func current_plainPipedIsPrettyNotRobot() throws {
