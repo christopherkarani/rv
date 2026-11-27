@@ -39,6 +39,7 @@ enum HelpCatalog {
         case .run: run
         case .opencode: opencode
         case .workspace: workspace
+        case .box: box
         case .`operator`: operatorHelp
         case .egress: egress
         case .login: login
@@ -53,6 +54,7 @@ enum HelpCatalog {
                 heading: "Get started",
                 rows: [
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
+                    HelpRow(name: "box", description: "Run an agent in a box for this repo (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
                     HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
