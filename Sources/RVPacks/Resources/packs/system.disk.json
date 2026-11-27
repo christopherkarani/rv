@@ -218,334 +218,888 @@
       "name": "dd-device",
       "pattern": "dd\\s+.*of=['\"]?/dev/",
       "severity": "high",
-      "description": "dd to a block device will OVERWRITE all data on that device. Extremely dangerous!"
+      "description": "dd to a block device will OVERWRITE all data on that device. Extremely dangerous!",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "dd of=/dev/sda"
+        ],
+        "allow": [
+          "lsblk -f",
+          "dd --help"
+        ]
+      }
     },
     {
       "name": "dd-wipe",
       "pattern": "dd\\s+.*if=['\"]?/dev/(?:zero|urandom|random).*of=['\"]?/dev/",
       "severity": "high",
-      "description": "dd from /dev/zero or /dev/urandom to a device will WIPE all data!"
+      "description": "dd from /dev/zero or /dev/urandom to a device will WIPE all data!",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "dd if=/dev/zero of=/dev/sdb bs=1M"
+        ],
+        "allow": [
+          "lsblk -f",
+          "dd --help"
+        ]
+      }
     },
     {
       "name": "fdisk-edit",
       "pattern": "fdisk\\s+['\"]?/dev/(?!.*-l)",
       "severity": "high",
-      "description": "fdisk can modify partition tables and cause data loss."
+      "description": "fdisk can modify partition tables and cause data loss.",
+      "safer_command": "fdisk -l",
+      "examples": {
+        "stop": [
+          "fdisk /dev/sdb"
+        ],
+        "allow": [
+          "fdisk -l",
+          "fdisk --help"
+        ]
+      }
     },
     {
       "name": "parted-modify",
       "pattern": "parted\\b[^\\n;&|]*?['\"]?/dev/\\S+['\"]?(?:\\s+--)?\\s+(?:(?!\\s*(?:align-check|help|h|print|p|quit|q|select|unit|u)\\b)|[^\\n;&|]*\\b(?:print|p)\\b\\s+(?:(?:devices|free|list|all|\\d+)\\s+\\S+|(?!devices\\b|free\\b|list\\b|all\\b|\\d+\\b)\\S+)|[^\\n;&|]*\\b(?:disk_set|disk_toggle|mklabel|mktable|mkpart|name|rescue|resizepart|rm|set|toggle|type)\\b)",
       "severity": "high",
-      "description": "parted can modify partition tables and cause data loss."
+      "description": "parted can modify partition tables and cause data loss.",
+      "safer_command": "parted -l",
+      "examples": {
+        "stop": [
+          "parted /dev/sdb rm 1",
+          "parted /dev/sdb mklabel gpt"
+        ],
+        "allow": [
+          "parted -l",
+          "parted --help"
+        ]
+      }
     },
     {
       "name": "mkfs",
       "pattern": "mkfs(?:\\.[a-z0-9]+)?\\s+",
       "severity": "high",
-      "description": "mkfs formats a partition/device and ERASES all existing data."
+      "description": "mkfs formats a partition/device and ERASES all existing data.",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "mkfs.ext4 /dev/sdb1",
+          "mkfs -t ext4 /dev/sdb1"
+        ],
+        "allow": [
+          "lsblk -f",
+          "mkfs --help"
+        ]
+      }
     },
     {
       "name": "mkswap",
       "pattern": "mkswap\\s+",
       "severity": "high",
-      "description": "mkswap formats a partition as a swap area, ERASING any existing data."
+      "description": "mkswap formats a partition as a swap area, ERASING any existing data.",
+      "safer_command": "swapon --show",
+      "examples": {
+        "stop": [
+          "mkswap /dev/sdb2"
+        ],
+        "allow": [
+          "swapon --show",
+          "mkswap --help"
+        ]
+      }
     },
     {
       "name": "wipefs",
       "pattern": "wipefs\\s+",
       "severity": "high",
-      "description": "wipefs removes filesystem signatures. Use with extreme caution."
+      "description": "wipefs removes filesystem signatures. Use with extreme caution.",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "wipefs -a /dev/sdb"
+        ],
+        "allow": [
+          "lsblk -f",
+          "wipefs --help"
+        ]
+      }
     },
     {
       "name": "mount-bind-root",
       "pattern": "mount\\s+.*--bind\\s+.*\\s+['\"]?/(?:$|[^a-z])",
       "severity": "high",
-      "description": "mount --bind to root directory can have system-wide effects."
+      "description": "mount --bind to root directory can have system-wide effects.",
+      "safer_command": "findmnt",
+      "examples": {
+        "stop": [
+          "mount --bind /mnt /"
+        ],
+        "allow": [
+          "findmnt",
+          "mount --help"
+        ]
+      }
     },
     {
       "name": "umount-force",
       "pattern": "umount\\s+.*-[a-z]*f",
       "severity": "high",
-      "description": "umount -f force unmounts which may cause data loss if device is in use."
+      "description": "umount -f force unmounts which may cause data loss if device is in use.",
+      "safer_command": "findmnt",
+      "examples": {
+        "stop": [
+          "umount -f /dev/sda"
+        ],
+        "allow": [
+          "findmnt",
+          "umount --help"
+        ]
+      }
     },
     {
       "name": "losetup-device",
       "pattern": "losetup\\s+['\"]?/dev/loop",
       "severity": "high",
-      "description": "losetup modifies loop device associations. Verify before proceeding."
+      "description": "losetup modifies loop device associations. Verify before proceeding.",
+      "safer_command": "losetup -l",
+      "examples": {
+        "stop": [
+          "losetup /dev/loop0 disk.img"
+        ],
+        "allow": [
+          "losetup -l",
+          "losetup --help"
+        ]
+      }
     },
     {
       "name": "mdadm-stop",
       "pattern": "mdadm\\s+(?:.*\\s+)?(?:--stop|-S)\\b",
       "severity": "high",
-      "description": "mdadm --stop shuts down a RAID array. Data may become inaccessible."
+      "description": "mdadm --stop shuts down a RAID array. Data may become inaccessible.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm --stop /dev/md0"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "mdadm-remove",
       "pattern": "mdadm\\s+(?:.*\\s+)?--remove\\b",
       "severity": "high",
-      "description": "mdadm --remove removes a drive from a RAID array. May cause data loss if redundancy is lost."
+      "description": "mdadm --remove removes a drive from a RAID array. May cause data loss if redundancy is lost.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm /dev/md0 --remove /dev/sdb1"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "mdadm-fail",
       "pattern": "mdadm\\s+(?:.*\\s+)?(?:--fail|-f)\\b",
       "severity": "high",
-      "description": "mdadm --fail marks a device as failed. Use only for intentional drive replacement."
+      "description": "mdadm --fail marks a device as failed. Use only for intentional drive replacement.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm /dev/md0 --fail /dev/sdb1"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "mdadm-zero-superblock",
       "pattern": "mdadm\\s+(?:.*\\s+)?--zero-superblock\\b",
       "severity": "high",
-      "description": "mdadm --zero-superblock PERMANENTLY erases RAID metadata. Array cannot be reassembled."
+      "description": "mdadm --zero-superblock PERMANENTLY erases RAID metadata. Array cannot be reassembled.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm --zero-superblock /dev/sdb1"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "mdadm-create",
       "pattern": "mdadm\\s+(?:.*\\s+)?(?:--create|-C)\\b",
       "severity": "high",
-      "description": "mdadm --create initializes a new RAID array, ERASING existing data on member devices."
+      "description": "mdadm --create initializes a new RAID array, ERASING existing data on member devices.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sdb1 /dev/sdc1"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "mdadm-grow",
       "pattern": "mdadm\\s+(?:.*\\s+)?--grow\\b",
       "severity": "high",
-      "description": "mdadm --grow reshapes a RAID array. Interruption can cause data loss. Backup first."
+      "description": "mdadm --grow reshapes a RAID array. Interruption can cause data loss. Backup first.",
+      "safer_command": "cat /proc/mdstat",
+      "examples": {
+        "stop": [
+          "mdadm --grow /dev/md0 --raid-devices=3"
+        ],
+        "allow": [
+          "cat /proc/mdstat",
+          "mdadm --help"
+        ]
+      }
     },
     {
       "name": "btrfs-subvolume-delete",
       "pattern": "btrfs\\b.*?\\s+subvolume\\s+delete\\b",
       "severity": "high",
-      "description": "btrfs subvolume delete PERMANENTLY removes a subvolume and all its data."
+      "description": "btrfs subvolume delete PERMANENTLY removes a subvolume and all its data.",
+      "safer_command": "btrfs subvolume list /",
+      "examples": {
+        "stop": [
+          "btrfs subvolume delete /mnt/data/snap"
+        ],
+        "allow": [
+          "btrfs subvolume list /",
+          "btrfs subvolume get /mnt/data/snap"
+        ]
+      }
     },
     {
       "name": "btrfs-device-remove",
       "pattern": "btrfs\\b.*?\\s+device\\s+(?:remove|delete)\\b",
       "severity": "high",
-      "description": "btrfs device remove redistributes data off a device. Interruption causes data loss."
+      "description": "btrfs device remove redistributes data off a device. Interruption causes data loss.",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs device remove /dev/sdc /mnt/data"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs device list /dev/sdc /mnt/data"
+        ]
+      }
     },
     {
       "name": "btrfs-device-add",
       "pattern": "btrfs\\b.*?\\s+device\\s+add\\b",
       "severity": "high",
-      "description": "btrfs device add incorporates a device into the filesystem. Verify the device is correct."
+      "description": "btrfs device add incorporates a device into the filesystem. Verify the device is correct.",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs device add /dev/sdc /mnt/data"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs --help"
+        ]
+      }
     },
     {
       "name": "btrfs-balance",
       "pattern": "btrfs\\b.*?\\s+balance\\s+start\\b",
       "severity": "high",
-      "description": "btrfs balance redistributes data across devices. Can be slow and disruptive."
+      "description": "btrfs balance redistributes data across devices. Can be slow and disruptive.",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs balance start /mnt/data"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs --help"
+        ]
+      }
     },
     {
       "name": "btrfs-check-repair",
       "pattern": "btrfs\\b.*?\\s+check\\s+(?:.*\\s+)?--repair\\b",
       "severity": "high",
-      "description": "btrfs check --repair is DANGEROUS and can cause data loss. Backup first!"
+      "description": "btrfs check --repair is DANGEROUS and can cause data loss. Backup first!",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs check --repair /dev/sdb"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs --help"
+        ]
+      }
     },
     {
       "name": "btrfs-rescue",
       "pattern": "btrfs\\b.*?\\s+rescue\\b",
       "severity": "high",
-      "description": "btrfs rescue operations modify filesystem metadata. Use only as last resort."
+      "description": "btrfs rescue operations modify filesystem metadata. Use only as last resort.",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs rescue zero-log /dev/sdb"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs --help"
+        ]
+      }
     },
     {
       "name": "btrfs-filesystem-resize",
       "pattern": "btrfs\\b.*?\\s+filesystem\\s+resize\\b",
       "severity": "high",
-      "description": "btrfs filesystem resize can shrink a filesystem. Data loss if size is too small."
+      "description": "btrfs filesystem resize can shrink a filesystem. Data loss if size is too small.",
+      "safer_command": "btrfs filesystem show",
+      "examples": {
+        "stop": [
+          "btrfs filesystem resize -10g /mnt/data"
+        ],
+        "allow": [
+          "btrfs filesystem show",
+          "btrfs --help"
+        ]
+      }
     },
     {
       "name": "dmsetup-remove",
       "pattern": "dmsetup\\b.*?\\s+remove\\b",
       "severity": "high",
-      "description": "dmsetup remove detaches a device-mapper device. May cause data loss if in use."
+      "description": "dmsetup remove detaches a device-mapper device. May cause data loss if in use.",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup remove vg0-data"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup list vg0-data"
+        ]
+      }
     },
     {
       "name": "dmsetup-remove-all",
       "pattern": "dmsetup\\b.*?\\s+remove_all\\b",
       "severity": "high",
-      "description": "dmsetup remove_all removes ALL device-mapper devices. Extremely dangerous!"
+      "description": "dmsetup remove_all removes ALL device-mapper devices. Extremely dangerous!",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup remove_all"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup --help"
+        ]
+      }
     },
     {
       "name": "dmsetup-wipe-table",
       "pattern": "dmsetup\\b.*?\\s+wipe_table\\b",
       "severity": "high",
-      "description": "dmsetup wipe_table replaces the device table, causing all I/O to fail."
+      "description": "dmsetup wipe_table replaces the device table, causing all I/O to fail.",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup wipe_table"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup --help"
+        ]
+      }
     },
     {
       "name": "dmsetup-clear",
       "pattern": "dmsetup\\b.*?\\s+clear\\b",
       "severity": "high",
-      "description": "dmsetup clear removes the mapping table from a device."
+      "description": "dmsetup clear removes the mapping table from a device.",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup clear vg0-data"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup list vg0-data"
+        ]
+      }
     },
     {
       "name": "dmsetup-load",
       "pattern": "dmsetup\\b.*?\\s+load\\b",
       "severity": "high",
-      "description": "dmsetup load changes device mapping. Verify the new table is correct."
+      "description": "dmsetup load changes device mapping. Verify the new table is correct.",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup load vg0-data table.txt"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup --help"
+        ]
+      }
     },
     {
       "name": "dmsetup-create",
       "pattern": "dmsetup\\b.*?\\s+create\\b",
       "severity": "high",
-      "description": "dmsetup create sets up a new device-mapper device. Verify parameters carefully."
+      "description": "dmsetup create sets up a new device-mapper device. Verify parameters carefully.",
+      "safer_command": "dmsetup ls",
+      "examples": {
+        "stop": [
+          "dmsetup create vg0-data table.txt"
+        ],
+        "allow": [
+          "dmsetup ls",
+          "dmsetup --help"
+        ]
+      }
     },
     {
       "name": "nbd-client-disconnect",
       "pattern": "nbd-client\\s+(?:.*\\s+)?-d\\b",
       "severity": "high",
-      "description": "nbd-client -d disconnects a network block device. Data loss if not properly unmounted."
+      "description": "nbd-client -d disconnects a network block device. Data loss if not properly unmounted.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "nbd-client -d"
+        ],
+        "allow": [
+          "lsblk",
+          "nbd-client --help"
+        ]
+      }
     },
     {
       "name": "nbd-client-connect",
       "pattern": "nbd-client\\s+\\S+\\s+\\d+\\s+['\"]?/dev/nbd",
       "severity": "high",
-      "description": "nbd-client connecting a device can expose or overwrite data. Verify server and device."
+      "description": "nbd-client connecting a device can expose or overwrite data. Verify server and device.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "nbd-client host 10809 /dev/nbd0"
+        ],
+        "allow": [
+          "lsblk",
+          "nbd-client --help"
+        ]
+      }
     },
     {
       "name": "pvremove",
       "pattern": "\\bpvremove\\b",
       "severity": "high",
-      "description": "pvremove ERASES LVM metadata from a physical volume. Data becomes inaccessible."
+      "description": "pvremove ERASES LVM metadata from a physical volume. Data becomes inaccessible.",
+      "safer_command": "pvs",
+      "examples": {
+        "stop": [
+          "pvremove /dev/sdb1"
+        ],
+        "allow": [
+          "pvs",
+          "pvremove --help"
+        ]
+      }
     },
     {
       "name": "vgremove",
       "pattern": "\\bvgremove\\b",
       "severity": "high",
-      "description": "vgremove DELETES a volume group and all logical volumes within it."
+      "description": "vgremove DELETES a volume group and all logical volumes within it.",
+      "safer_command": "vgs",
+      "examples": {
+        "stop": [
+          "vgremove vg0"
+        ],
+        "allow": [
+          "vgs",
+          "vgremove --help"
+        ]
+      }
     },
     {
       "name": "lvremove",
       "pattern": "\\blvremove\\b",
       "severity": "high",
-      "description": "lvremove PERMANENTLY deletes a logical volume and ALL its data."
+      "description": "lvremove PERMANENTLY deletes a logical volume and ALL its data.",
+      "safer_command": "lvs",
+      "examples": {
+        "stop": [
+          "lvremove /dev/vg0/data"
+        ],
+        "allow": [
+          "lvs",
+          "lvremove --help"
+        ]
+      }
     },
     {
       "name": "vgreduce",
       "pattern": "\\bvgreduce\\b",
       "severity": "high",
-      "description": "vgreduce removes a physical volume from a volume group. Data may be lost."
+      "description": "vgreduce removes a physical volume from a volume group. Data may be lost.",
+      "safer_command": "vgs",
+      "examples": {
+        "stop": [
+          "vgreduce vg0 /dev/sdb1"
+        ],
+        "allow": [
+          "vgs",
+          "vgreduce --help"
+        ]
+      }
     },
     {
       "name": "lvreduce",
       "pattern": "\\blvreduce\\b",
       "severity": "high",
-      "description": "lvreduce SHRINKS a logical volume. Data loss if filesystem isn't resized first!"
+      "description": "lvreduce SHRINKS a logical volume. Data loss if filesystem isn't resized first!",
+      "safer_command": "lvs",
+      "examples": {
+        "stop": [
+          "lvreduce -L 10G /dev/vg0/data"
+        ],
+        "allow": [
+          "lvs",
+          "lvreduce --help"
+        ]
+      }
     },
     {
       "name": "lvresize-shrink",
       "pattern": "lvresize\\s+(?:.*\\s+)?(?:-L\\s*-|-l\\s*-|--size\\s+\\S*-)",
       "severity": "high",
-      "description": "lvresize with negative size SHRINKS the volume. Resize filesystem first or lose data!"
+      "description": "lvresize with negative size SHRINKS the volume. Resize filesystem first or lose data!",
+      "safer_command": "lvs",
+      "examples": {
+        "stop": [
+          "lvresize -L -5G /dev/vg0/data",
+          "lvresize --size -5G /dev/vg0/data"
+        ],
+        "allow": [
+          "lvs",
+          "lvresize --help"
+        ]
+      }
     },
     {
       "name": "pvmove",
       "pattern": "\\bpvmove\\b",
       "severity": "high",
-      "description": "pvmove migrates data between physical volumes. Do NOT interrupt or data may be lost."
+      "description": "pvmove migrates data between physical volumes. Do NOT interrupt or data may be lost.",
+      "safer_command": "pvs",
+      "examples": {
+        "stop": [
+          "pvmove /dev/sdb1"
+        ],
+        "allow": [
+          "pvs",
+          "pvmove --help"
+        ]
+      }
     },
     {
       "name": "lvconvert-merge",
       "pattern": "lvconvert\\s+(?:.*\\s+)?--merge\\b",
       "severity": "high",
-      "description": "lvconvert --merge reverts LV to snapshot state, discarding changes since snapshot."
+      "description": "lvconvert --merge reverts LV to snapshot state, discarding changes since snapshot.",
+      "safer_command": "lvs",
+      "examples": {
+        "stop": [
+          "lvconvert --merge /dev/vg0/data-snap"
+        ],
+        "allow": [
+          "lvs",
+          "lvconvert --help"
+        ]
+      }
     },
     {
       "name": "diskutil-erase",
       "pattern": "(?i)diskutil\\s+(?:eraseDisk|eraseVolume|reformat|zeroDisk|randomDisk|secureErase)\\b",
       "severity": "critical",
       "description": "diskutil erase operations DESTROY all data on the target disk or volume.",
-      "explanation": "diskutil eraseDisk/eraseVolume/reformat/zeroDisk/randomDisk/secureErase overwrite the target's contents. On APFS this removes every volume in the container. There is no recovery without backups.\n\nInspect the target first: diskutil list diskutil info <disk>"
+      "explanation": "diskutil eraseDisk/eraseVolume/reformat/zeroDisk/randomDisk/secureErase overwrite the target's contents. On APFS this removes every volume in the container. There is no recovery without backups.\n\nInspect the target first: diskutil list diskutil info <disk>",
+      "safer_command": "diskutil list",
+      "examples": {
+        "stop": [
+          "diskutil eraseDisk APFS Blank disk4"
+        ],
+        "allow": [
+          "diskutil list",
+          "diskutil --help"
+        ]
+      }
     },
     {
       "name": "diskutil-partition",
       "pattern": "(?i)diskutil\\s+(?:partitionDisk|splitPartition|mergePartitions|resetFusion)\\b",
       "severity": "critical",
       "description": "diskutil partitioning operations rewrite the partition map and erase data.",
-      "explanation": "diskutil partitionDisk erases the entire disk before writing the new partition map; splitPartition and mergePartitions destroy the contents of the partitions they reshape (merge preserves only the first when asked); resetFusion wipes both constituent devices.\n\nPreview the current layout first: diskutil list <disk>"
+      "explanation": "diskutil partitionDisk erases the entire disk before writing the new partition map; splitPartition and mergePartitions destroy the contents of the partitions they reshape (merge preserves only the first when asked); resetFusion wipes both constituent devices.\n\nPreview the current layout first: diskutil list <disk>",
+      "safer_command": "diskutil list",
+      "examples": {
+        "stop": [
+          "diskutil partitionDisk disk4 GPT APFS Data 100%"
+        ],
+        "allow": [
+          "diskutil list",
+          "diskutil --help"
+        ]
+      }
     },
     {
       "name": "diskutil-apfs-delete",
       "pattern": "(?i)diskutil\\s+(?:apfs|ap)\\s+(?:deleteContainer|deleteVolume|eraseVolume|deleteSnapshot)\\b",
       "severity": "critical",
       "description": "diskutil apfs delete/erase operations permanently remove APFS containers, volumes, or snapshots.",
-      "explanation": "Deleting an APFS container destroys every volume inside it; deleting or erasing a volume destroys that volume's data; deleting a snapshot removes a restore point. None of these are recoverable without backups.\n\nList APFS structure first: diskutil apfs list"
+      "explanation": "Deleting an APFS container destroys every volume inside it; deleting or erasing a volume destroys that volume's data; deleting a snapshot removes a restore point. None of these are recoverable without backups.\n\nList APFS structure first: diskutil apfs list",
+      "safer_command": "diskutil apfs list",
+      "examples": {
+        "stop": [
+          "diskutil apfs deleteVolume disk1s1"
+        ],
+        "allow": [
+          "diskutil apfs list",
+          "diskutil --help"
+        ]
+      }
     },
     {
       "name": "mkfs-variants",
       "pattern": "(?:^|[^\\w./-])(?:mke2fs|mkntfs|mkdosfs|mkexfatfs|mkexfat|mkudffs|mkreiserfs|mkfatfs|mkhfs)\\s+",
       "severity": "high",
-      "description": "This formatter writes a new filesystem over a partition or device and ERASES all existing data."
+      "description": "This formatter writes a new filesystem over a partition or device and ERASES all existing data.",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "mke2fs -t ext4 /dev/sdb1"
+        ],
+        "allow": [
+          "lsblk -f",
+          "mke2fs --help"
+        ]
+      }
     },
     {
       "name": "blkdiscard",
       "pattern": "(?:^|[^\\w./-])blkdiscard\\s+",
       "severity": "high",
-      "description": "blkdiscard discards every block on a device: the data is gone immediately and cannot be recovered."
+      "description": "blkdiscard discards every block on a device: the data is gone immediately and cannot be recovered.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "blkdiscard /dev/sdb"
+        ],
+        "allow": [
+          "lsblk",
+          "blkdiscard --help"
+        ]
+      }
     },
     {
       "name": "sgdisk-destroy",
       "pattern": "(?:^|[^\\w./-])sgdisk\\b[^\\n;&|]*\\s(?:-[A-Za-z]*[ZzodnNlR][A-Za-z]*|--(?:zap|zap-all|clear|delete|new|largest-new|load-backup|replicate))(?=[\\s=]|$)",
       "severity": "high",
-      "description": "sgdisk with --zap-all/--clear/--delete/--new rewrites or destroys the partition table."
+      "description": "sgdisk with --zap-all/--clear/--delete/--new rewrites or destroys the partition table.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "sgdisk --zap-all /dev/sdb"
+        ],
+        "allow": [
+          "lsblk",
+          "sgdisk --help"
+        ]
+      }
     },
     {
       "name": "sfdisk-write",
       "pattern": "(?:^|[^\\w./-])sfdisk\\b(?![^\\n;&|]*\\s(?:-l|--list|-d|--dump|-J|--json|-s|--show-size|-g|--show-geometry|-V|--verify|-T|--list-types|-F|--list-free|-h|--help|-v|--version)(?=\\s|$))[^\\n;&|]*\\s['\\\"]?/dev/",
       "severity": "high",
-      "description": "sfdisk without a read-only flag writes (or deletes) the partition table on a device."
+      "description": "sfdisk without a read-only flag writes (or deletes) the partition table on a device.",
+      "safer_command": "sfdisk -l",
+      "examples": {
+        "stop": [
+          "sfdisk --delete /dev/sda"
+        ],
+        "allow": [
+          "sfdisk -l",
+          "sfdisk --help"
+        ]
+      }
     },
     {
       "name": "gdisk-edit",
       "pattern": "(?:^|[^\\w./-])gdisk\\s+(?!-l\\b)['\\\"]?/dev/",
       "severity": "high",
-      "description": "gdisk edits the GPT partition table on a device and can destroy it."
+      "description": "gdisk edits the GPT partition table on a device and can destroy it.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "gdisk /dev/sdb"
+        ],
+        "allow": [
+          "lsblk",
+          "gdisk --help"
+        ]
+      }
     },
     {
       "name": "nvme-erase",
       "pattern": "(?:^|[^\\w./-])nvme\\s+(?:format|sanitize|delete-ns|detach-ns)\\b",
       "severity": "high",
-      "description": "nvme format/sanitize/delete-ns erases an NVMe namespace or the whole drive."
+      "description": "nvme format/sanitize/delete-ns erases an NVMe namespace or the whole drive.",
+      "safer_command": "nvme list",
+      "examples": {
+        "stop": [
+          "nvme format /dev/nvme0n1"
+        ],
+        "allow": [
+          "nvme list",
+          "nvme --help"
+        ]
+      }
     },
     {
       "name": "sg-format",
       "pattern": "(?:^|[^\\w./-])sg_(?:format|sanitize)\\b",
       "severity": "high",
-      "description": "sg_format/sg_sanitize low-level formats or sanitizes a SCSI/SAS drive, erasing everything on it."
+      "description": "sg_format/sg_sanitize low-level formats or sanitizes a SCSI/SAS drive, erasing everything on it.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "sg_format --format /dev/sg0"
+        ],
+        "allow": [
+          "lsblk",
+          "sg_format --help"
+        ]
+      }
     },
     {
       "name": "hdparm-erase",
       "pattern": "(?:^|[^\\w./-])hdparm\\b[^\\n;&|]*\\s--(?:security-erase(?:-enhanced)?|trim-sector-ranges(?:-stdin)?|write-sector|make-bad-sector|dco-restore|dco-setmax)\\b",
       "severity": "high",
-      "description": "hdparm security-erase/trim/write-sector destroys data on the drive."
+      "description": "hdparm security-erase/trim/write-sector destroys data on the drive.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "hdparm --security-erase pass /dev/sdb"
+        ],
+        "allow": [
+          "lsblk",
+          "hdparm --help"
+        ]
+      }
     },
     {
       "name": "cryptsetup-destroy",
       "pattern": "(?:^|[^\\w./-])cryptsetup\\b[^\\n;&|]*\\s(?:luksFormat|erase|luksErase|luksKillSlot)\\b",
       "severity": "high",
-      "description": "cryptsetup luksFormat/erase destroys the encrypted volume's keys; its data becomes unrecoverable."
+      "description": "cryptsetup luksFormat/erase destroys the encrypted volume's keys; its data becomes unrecoverable.",
+      "safer_command": "lsblk -f",
+      "examples": {
+        "stop": [
+          "cryptsetup luksFormat /dev/sdb1",
+          "cryptsetup erase /dev/sdb1"
+        ],
+        "allow": [
+          "lsblk -f",
+          "cryptsetup list /dev/sdb1"
+        ]
+      }
     },
     {
       "name": "ddrescue-force",
       "pattern": "(?:^|[^\\w./-])ddrescue\\b[^\\n;&|]*\\s(?:-[A-Za-z]*f[A-Za-z]*|--force)(?=\\s|$)",
       "severity": "high",
-      "description": "ddrescue --force overwrites a block device as its output."
+      "description": "ddrescue --force overwrites a block device as its output.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "ddrescue --force /dev/sda /dev/sdb rescue.log"
+        ],
+        "allow": [
+          "lsblk",
+          "ddrescue --help"
+        ]
+      }
     },
     {
       "name": "badblocks-write",
       "pattern": "(?:^|[^\\w./-])badblocks\\b[^\\n;&|]*\\s-[A-Za-z]*w",
       "severity": "high",
-      "description": "badblocks -w runs a destructive write test that overwrites the whole device."
+      "description": "badblocks -w runs a destructive write test that overwrites the whole device.",
+      "safer_command": "lsblk",
+      "examples": {
+        "stop": [
+          "badblocks -wsv /dev/sdb"
+        ],
+        "allow": [
+          "lsblk",
+          "badblocks --help"
+        ]
+      }
     },
     {
       "name": "zpool-destroy",
       "pattern": "(?:^|[^\\w./-])zpool\\s+(?:destroy|labelclear)\\b",
       "severity": "high",
-      "description": "zpool destroy/labelclear destroys a ZFS pool and every dataset in it."
+      "description": "zpool destroy/labelclear destroys a ZFS pool and every dataset in it.",
+      "safer_command": "zpool status",
+      "examples": {
+        "stop": [
+          "zpool destroy tank"
+        ],
+        "allow": [
+          "zpool status",
+          "zpool plan tank"
+        ]
+      }
     },
     {
       "name": "zfs-destroy",
       "pattern": "(?:^|[^\\w./-])zfs\\s+destroy\\b",
       "severity": "high",
-      "description": "zfs destroy permanently deletes a dataset, volume or snapshot."
+      "description": "zfs destroy permanently deletes a dataset, volume or snapshot.",
+      "safer_command": "zfs list",
+      "examples": {
+        "stop": [
+          "zfs destroy tank/data"
+        ],
+        "allow": [
+          "zfs list",
+          "zfs plan tank/data"
+        ]
+      }
     }
   ]
 }

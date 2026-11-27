@@ -122,109 +122,261 @@
       "name": "npm-publish",
       "pattern": "\\bnpm(?:\\.(?:cmd|exe|com))?\\b(?:\\s+--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?)*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
       "severity": "high",
-      "description": "npm publish releases a package publicly. Use --dry-run first."
+      "description": "npm publish releases a package publicly. Use --dry-run first.",
+      "examples": {
+        "stop": [
+          "npm publish"
+        ],
+        "allow": [
+          "npm --help"
+        ]
+      }
     },
     {
       "name": "yarn-publish",
       "pattern": "\\byarn(?:\\.(?:cmd|exe|com))?\\b(?:\\s+(?:--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?|workspace\\s+[^\\s;|&]+|npm\\b))*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
       "severity": "high",
-      "description": "yarn publish releases a package publicly. Verify package.json first."
+      "description": "yarn publish releases a package publicly. Verify package.json first.",
+      "examples": {
+        "stop": [
+          "yarn publish"
+        ],
+        "allow": [
+          "yarn --help"
+        ]
+      }
     },
     {
       "name": "pnpm-publish",
       "pattern": "\\bpnpm(?:\\.(?:cmd|exe|com))?\\b(?:\\s+(?:--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?|recursive\\b))*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
       "severity": "high",
-      "description": "pnpm publish releases a package publicly."
+      "description": "pnpm publish releases a package publicly.",
+      "examples": {
+        "stop": [
+          "pnpm publish"
+        ],
+        "allow": [
+          "pnpm --help"
+        ]
+      }
     },
     {
       "name": "npm-unpublish",
       "pattern": "\\bnpm\\b.*?\\bunpublish(?=\\s|$)",
       "severity": "high",
-      "description": "npm unpublish removes a published package. This can break dependent projects."
+      "description": "npm unpublish removes a published package. This can break dependent projects.",
+      "examples": {
+        "stop": [
+          "npm unpublish my-app"
+        ],
+        "allow": [
+          "npm view my-app",
+          "npm view"
+        ]
+      }
     },
     {
       "name": "pip-uninstall",
       "pattern": "\\bpip(?:3)?\\b.*?\\buninstall(?=\\s|$)",
       "severity": "high",
-      "description": "pip uninstall removes installed packages. Verify dependencies before removing."
+      "description": "pip uninstall removes installed packages. Verify dependencies before removing.",
+      "examples": {
+        "stop": [
+          "pip uninstall my-app"
+        ],
+        "allow": [
+          "pip list my-app",
+          "pip status my-app"
+        ]
+      }
     },
     {
       "name": "pip-url",
       "pattern": "\\bpip\\b.*?\\binstall\\s+.*(?:https?://|git\\+)",
       "severity": "high",
-      "description": "pip install from URL can install unvetted code. Verify the source first."
+      "description": "pip install from URL can install unvetted code. Verify the source first.",
+      "examples": {
+        "stop": [
+          "pip install https:// git"
+        ],
+        "allow": [
+          "pip --help"
+        ]
+      }
     },
     {
       "name": "pip-system",
       "pattern": "\\bpip\\b.*?\\binstall\\s+.*--(?:system|target\\s*/usr)",
       "severity": "high",
-      "description": "pip install to system directories requires careful review."
+      "description": "pip install to system directories requires careful review.",
+      "examples": {
+        "stop": [
+          "pip install --system target /usr"
+        ],
+        "allow": [
+          "pip --help"
+        ]
+      }
     },
     {
       "name": "apt-remove",
       "pattern": "\\bapt(?:-get)?\\b.*?\\b(?:remove|purge|autoremove)(?=\\s|$)",
       "severity": "high",
-      "description": "apt remove/purge removes packages. Verify no critical packages are affected."
+      "description": "apt remove/purge removes packages. Verify no critical packages are affected.",
+      "examples": {
+        "stop": [
+          "apt remove my-app"
+        ],
+        "allow": [
+          "apt list my-app",
+          "apt show my-app"
+        ]
+      }
     },
     {
       "name": "yum-remove",
       "pattern": "\\b(?:yum|dnf)\\b.*?\\b(?:remove|erase|autoremove)(?=\\s|$)",
       "severity": "high",
-      "description": "yum/dnf remove removes packages. Verify no critical packages are affected."
+      "description": "yum/dnf remove removes packages. Verify no critical packages are affected.",
+      "examples": {
+        "stop": [
+          "yum remove my-app"
+        ],
+        "allow": [
+          "yum list my-app",
+          "yum show my-app"
+        ]
+      }
     },
     {
       "name": "cargo-publish",
       "pattern": "\\bcargo\\b.*?\\bpublish\\b(?!.*--dry-run(?:=true)?(?:\\s|$))",
       "severity": "high",
-      "description": "cargo publish releases a crate to crates.io. Use --dry-run first."
+      "description": "cargo publish releases a crate to crates.io. Use --dry-run first.",
+      "examples": {
+        "stop": [
+          "cargo publish"
+        ],
+        "allow": [
+          "cargo --help"
+        ]
+      }
     },
     {
       "name": "cargo-yank",
       "pattern": "\\bcargo\\b.*?\\byank(?=\\s|$)",
       "severity": "high",
-      "description": "cargo yank marks a version as unavailable. This can break dependent projects."
+      "description": "cargo yank marks a version as unavailable. This can break dependent projects.",
+      "examples": {
+        "stop": [
+          "cargo yank"
+        ],
+        "allow": [
+          "cargo --help"
+        ]
+      }
     },
     {
       "name": "gem-push",
       "pattern": "\\bgem\\b.*?\\bpush\\b",
       "severity": "high",
-      "description": "gem push releases a gem to rubygems.org. Verify before publishing."
+      "description": "gem push releases a gem to rubygems.org. Verify before publishing.",
+      "examples": {
+        "stop": [
+          "gem push"
+        ],
+        "allow": [
+          "gem --help"
+        ]
+      }
     },
     {
       "name": "brew-uninstall",
       "pattern": "\\bbrew\\b.*?\\b(?:uninstall|remove)(?=\\s|$)",
       "severity": "high",
-      "description": "brew uninstall removes packages. Verify no dependent packages are affected."
+      "description": "brew uninstall removes packages. Verify no dependent packages are affected.",
+      "examples": {
+        "stop": [
+          "brew uninstall my-app"
+        ],
+        "allow": [
+          "brew list my-app",
+          "brew status my-app"
+        ]
+      }
     },
     {
       "name": "poetry-publish",
       "pattern": "\\bpoetry\\b.*?\\bpublish\\b(?!.*--dry-run(?:=true)?(?:\\s|$))",
       "severity": "high",
-      "description": "poetry publish releases a package. Use --dry-run first."
+      "description": "poetry publish releases a package. Use --dry-run first.",
+      "examples": {
+        "stop": [
+          "poetry publish"
+        ],
+        "allow": [
+          "poetry --help"
+        ]
+      }
     },
     {
       "name": "poetry-remove",
       "pattern": "\\bpoetry\\b.*?\\bremove(?=\\s|$)",
       "severity": "high",
-      "description": "poetry remove uninstalls a dependency. Verify no critical packages are affected."
+      "description": "poetry remove uninstalls a dependency. Verify no critical packages are affected.",
+      "examples": {
+        "stop": [
+          "poetry remove my-app"
+        ],
+        "allow": [
+          "poetry list my-app",
+          "poetry show my-app"
+        ]
+      }
     },
     {
       "name": "maven-deploy",
       "pattern": "\\b(?:mvn|mvnw)\\b.*?\\bdeploy\\b",
       "severity": "high",
-      "description": "mvn deploy publishes artifacts to a remote repository. Verify target repository."
+      "description": "mvn deploy publishes artifacts to a remote repository. Verify target repository.",
+      "examples": {
+        "stop": [
+          "mvn deploy",
+          "mvn clean deploy -DskipTests"
+        ],
+        "allow": [
+          "mvn --help"
+        ]
+      }
     },
     {
       "name": "maven-release-perform",
       "pattern": "\\b(?:mvn|mvnw)\\s+.*release:perform\\b",
       "severity": "high",
-      "description": "mvn release:perform publishes a release. Verify version and repository."
+      "description": "mvn release:perform publishes a release. Verify version and repository.",
+      "examples": {
+        "stop": [
+          "mvn release:prepare release:perform",
+          "mvn -B release:perform"
+        ],
+        "allow": [
+          "mvn --help"
+        ]
+      }
     },
     {
       "name": "gradle-publish",
       "pattern": "\\b(?:gradle|gradlew)\\s+.*\\bpublish\\b",
       "severity": "high",
-      "description": "gradle publish uploads artifacts. Use --dry-run first when possible."
+      "description": "gradle publish uploads artifacts. Use --dry-run first when possible.",
+      "examples": {
+        "stop": [
+          "gradle publish"
+        ],
+        "allow": [
+          "gradle --help"
+        ]
+      }
     }
   ]
 }
