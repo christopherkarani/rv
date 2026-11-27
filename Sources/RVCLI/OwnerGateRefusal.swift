@@ -105,7 +105,7 @@ enum OwnerGateRefusal: Sendable, Equatable {
 
     func text(subject: Subject) -> String {
         switch self {
-        case .ttyRequired: return "requires an interactive TTY (stdin and stdout)"
+        case .ttyRequired: return "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal"
         case .robotRefused: return "--json/--robot refused"
         case .changedDuringReview:
             switch subject {
