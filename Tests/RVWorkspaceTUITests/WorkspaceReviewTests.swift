@@ -739,10 +739,48 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         #expect(WorkspaceReviewText.clean(long + "\u{1b}") == long)
     }
 
-    @Test func badgeShowsOnlyPendingCount() {
-        #expect(WorkspaceReviewText.badge(openReview([block("b1", ageSeconds: 1)]).review) == nil)
+    @Test func inlineAskNamesTheOldestPendingHost() {
+        #expect(WorkspaceReviewText.ask(openReview([block("b1", ageSeconds: 1)]).review, cells: 80) == nil)
         let pending = openReview([egress("p1", "a.example.com", ageSeconds: 1), egress("p2", "b.example.com", ageSeconds: 2)])
-        #expect(WorkspaceReviewText.badge(pending.review) == "2 pending · Ctrl-B R")
+        #expect(WorkspaceReviewText.ask(pending.review, cells: 80)
+            == "◐ wants out b.example.com:443 · +1 more · ^B R answer")
+        let one = openReview([egress("p1", "api.stripe.com", ageSeconds: 1)])
+        #expect(WorkspaceReviewText.ask(one.review, cells: 80) == "◐ wants out api.stripe.com:443 · ^B R answer")
+    }
+
+    @Test func inlineAskNeverCutsTheRegistrableTail() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let host = Self.longHost + ":443"
+        let tail = WorkspaceReviewText.registrableTailLength(host)
+        for cells in [20, 40, 60, 80, 200] {
+            guard let ask = WorkspaceReviewText.ask(state.review, cells: cells) else {
+                #expect(cells < "◐ wants out · ^B R".count)
+                continue
+            }
+            #expect(ask.count <= cells)
+            if ask.contains("443") {
+                #expect(ask.contains(String(host.suffix(tail))))
+            } else {
+                #expect(ask == "◐ wants out · ^B R")
+            }
+        }
+    }
+
+    @Test func inlineAskStripsEscapesFromTheHost() {
+        let state = openReview([egress("p1", "evil\u{1b}[2Jexample.com", ageSeconds: 1)])
+        let ask = WorkspaceReviewText.ask(state.review, cells: 120)
+        #expect(ask?.contains("\u{1b}") == false)
+    }
+
+    @Test func inlineAskTakesNoKeyOfItsOwn() {
+        // A bare a/A/d in terminal mode still belongs to the pane's shell:
+        // approving stays in the review pane behind ^B R.
+        let state = press(openReview([egress("p1", "api.stripe.com", ageSeconds: 1)]), .escape).state
+        #expect(state.mode == .terminal)
+        #expect(WorkspaceReviewText.ask(state.review, cells: 80) != nil)
+        let pressed = press(state, .character("a"))
+        #expect(pressed.state.mode == .terminal)
+        #expect(pressed.effects.contains { "\($0)".contains("approve") } == false)
     }
 }
 

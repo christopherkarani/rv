@@ -480,7 +480,7 @@ private func connectedState(
 
         let invalid = WorkspaceTUIReducer.reduce(prefixed.state, .key(.character("s")))
         #expect(invalid.effects.isEmpty)
-        #expect(invalid.state.feedback == "Unknown Ctrl-B command")
+        #expect(invalid.state.feedback == "Unknown ^B command")
         var state = invalid.state
         for _ in 0..<60 { state = WorkspaceTUIReducer.reduce(state, .tick(now: Date())).state }
         #expect(state.feedback == nil)
