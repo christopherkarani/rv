@@ -730,11 +730,7 @@ jobs:
             product="${run%%:*}"
             filter="${run#*:}"
             printf '== %s (filter %s)\n' "$product" "$filter"
-            # Diagnostic: sample RVServiceTests while it runs, to name what
-            # holds the cooperative pool (starved-pool test failures).
-            sample_at=''
-            [ "$product" = RVServiceTests ] && sample_at='15 30 50 75'
-            if ! RV_WATCHDOG_SAMPLE_AT="$sample_at" Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
+            if ! Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
               --test-product "$product" --filter "$filter" --skip "$skip" 2>&1 \
               | tee "$RUNNER_TEMP/darwin-swift-$product.log"; then
               failed="$failed $product"
