@@ -99,21 +99,24 @@ public struct LogRenderer: FrameRenderer {
     private func row(for row: LogRow, widths: Widths, palette: Palette) -> String {
         let verdictSlot = row.verdict == .stopped ? palette.deny : palette.mark
         let commandSlot = row.verdict == .stopped ? palette.fact : ""
-        var cells: [String] = [
-            paint(TerminalWidth.pad(row.timeLabel, to: widths.time), slot: palette.muted, reset: palette.reset),
-            TerminalWidth.pad(TerminalWidth.clip(DisplayedText.field(row.agent), to: widths.agent), to: widths.agent),
-            paint(TerminalWidth.pad(row.verdict.label, to: widths.verdict), slot: verdictSlot, reset: palette.reset),
-            paint(
-                TerminalWidth.pad(TerminalWidth.clip(DisplayedText.field(row.rule), to: widths.rule), to: widths.rule),
-                slot: palette.silver, reset: palette.reset
-            ),
+        // Ink covers the text only; the padding after it stays plain.
+        func cell(_ text: String, _ width: Int, _ slot: String, padded: Bool = true) -> String {
+            let shown = TerminalWidth.clip(text, to: width)
+            let pad = padded ? String(repeating: " ", count: max(0, width - TerminalWidth.of(shown))) : ""
+            return paint(shown, slot: slot, reset: palette.reset) + pad
+        }
+        var cells = [
+            cell(row.timeLabel, widths.time, palette.muted),
+            cell(DisplayedText.field(row.agent), widths.agent, ""),
+            cell(row.verdict.label, widths.verdict, verdictSlot),
+            cell(DisplayedText.field(row.rule), widths.rule, palette.silver),
         ]
         let command = Self.command(row, to: widths.command)
         if widths.code > 0 {
-            cells.append(paint(TerminalWidth.pad(command, to: widths.command), slot: commandSlot, reset: palette.reset))
+            cells.append(cell(command, widths.command, commandSlot))
             cells.append(paint(row.code, slot: palette.muted, reset: palette.reset))
         } else {
-            cells.append(paint(command, slot: commandSlot, reset: palette.reset))
+            cells.append(cell(command, widths.command, commandSlot, padded: false))
         }
         return Self.indent + cells.joined(separator: Self.gap)
     }
