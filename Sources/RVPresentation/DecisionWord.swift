@@ -13,35 +13,28 @@ extension Decision {
     public var displayName: String {
         switch self {
         case .allow:
-            "allow"
+            CommandVocabulary.Verdict.allow
         case .deny:
-            "deny"
+            CommandVocabulary.Verdict.deny
         case .indeterminate:
-            "incomplete"
+            CommandVocabulary.Verdict.incomplete
         }
     }
 
     /// Uppercase decision word for explain headings.
     public var emphasizedName: String {
-        switch self {
-        case .allow:
-            "ALLOW"
-        case .deny:
-            "DENY"
-        case .indeterminate:
-            "INCOMPLETE"
-        }
+        displayName.uppercased()
     }
 
     /// Test-result word painted on the test frame.
     public var testResultName: String {
         switch self {
         case .allow:
-            "ALLOWED"
+            CommandVocabulary.Verdict.allowed.uppercased()
         case .deny:
-            "BLOCKED"
+            CommandVocabulary.Verdict.blocked.uppercased()
         case .indeterminate:
-            "INCOMPLETE"
+            CommandVocabulary.Verdict.incomplete.uppercased()
         }
     }
 

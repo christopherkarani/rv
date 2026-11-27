@@ -59,6 +59,16 @@ public struct ExplainRenderer: FrameRenderer {
             )
         }
 
+        if !model.alsoMatches.isEmpty {
+            children.append(
+                .group(
+                    label: "Also matches",
+                    emphasis: .mark,
+                    children: model.alsoMatches.map { .leaf(label: $0.label, value: $0.display, emphasis: .plain) }
+                )
+            )
+        }
+
         if let next = model.nextAction {
             children.append(.leaf(label: "Next", value: next, emphasis: .plain))
         }

@@ -45,7 +45,10 @@ struct PolicyCheck: AsyncParsableCommand, CommandUsage {
         } catch PolicyCeilingError.invalidFile {
             try ctx.fail("rv policy check: the policy ceiling (ceiling.toml) is invalid\n", exitCode: Self.invalidExitCode)
         } catch {
-            try ctx.fail("rv policy check: invalid policy file\n", exitCode: Self.invalidExitCode)
+            let text = path.map { PolicyDocumentRun.failureText(error, path: $0) }
+                ?? PolicyFileErrorText.layers(
+                    PolicyWorkspace(home: home, workspace: workspace).documentFailures(), command: "policy check")
+            try ctx.fail(text, exitCode: Self.invalidExitCode)
         }
         if ctx.explicitRobot {
             do {
@@ -237,11 +240,13 @@ enum PolicyCeilingRun {
     /// layer's own error for an unreadable policy file.
     static func check(home: HomeDirectory, workspace: URL, file: URL?) throws -> PolicyCeilingReport {
         let session = PolicyWorkspace(home: home, workspace: workspace)
+        // A named file must exist and parse even with no ceiling to check
+        // it against, so CI never passes a broken file.
+        let shared = try file.map(PolicyDocumentRun.load)
         guard let ceiling = try session.loadCeiling() else {
             return PolicyCeilingReport(ceilingSet: false, layers: [])
         }
-        if let file {
-            let document = try PolicyDocumentRun.load(file)
+        if let file, let document = shared {
             return PolicyCeilingReport(
                 ceilingSet: true,
                 layers: [PolicyCeilingLayerResult(layer: file.path, ceiling: ceiling, document: document)]

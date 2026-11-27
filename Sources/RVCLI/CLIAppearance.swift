@@ -12,3 +12,13 @@ enum CLIAppearance: Equatable, Sendable {
         CommandContext.resolveAppearance(probe: probe, requested: requested)
     }
 }
+
+extension CLIAppearance {
+    /// The pretty palette, or no color when output is piped or robot.
+    var palette: Palette {
+        switch self {
+        case .robot: return colorOffPalette
+        case .pretty(let palette): return palette
+        }
+    }
+}

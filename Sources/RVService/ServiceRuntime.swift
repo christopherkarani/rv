@@ -61,6 +61,12 @@ public actor ServiceRuntime {
     let hookBudget: Duration
     /// `policyStatus` loads: off the cooperative pool, at most two at once.
     let policyStatusService: PolicyStatusService
+    /// Live events (`events`): every hook decision rvd replies with, and
+    /// every pending ask and resolution. In-process consumers subscribe
+    /// here (`LiveEventBus.subscribe`); none writes on the hook path.
+    package nonisolated let events: LiveEventBus
+    /// Finishes once the pending store's events reach `events`.
+    nonisolated let pendingEventsForwarded: Task<Void, Never>?
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -155,6 +161,9 @@ public actor ServiceRuntime {
             pendingApprovals,
             home: resolvedHome
         )
+        let events = LiveEventBus()
+        self.events = events
+        self.pendingEventsForwarded = self.pendingApprovals.map { LivePendingEvents.forward($0, to: events) }
         self.approvals = ApprovalRuntime(
             allowOnce: self.allowOnce,
             clock: clock,
@@ -322,7 +331,7 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot, .policyStatus,
             .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
-            .proposeWorkspaceLaunch, .launchProposalStatus:
+            .proposeWorkspaceLaunch, .launchProposalStatus, .events:
             return nil
         case .attestTTYRedemption(let params):
             return params.clientSemver
@@ -350,6 +359,7 @@ public actor ServiceRuntime {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
         }
         let allowed = Self.sameUIDSocketSession(request.method, enabled: sameUIDSocket)
+            || Self.socketSessionReadsEvents(request.method, enabled: sameUIDSocket, context: context)
             || ServiceMethodAuthorization.permits(request.method, context: context)
         guard allowed else {
             return IPCResponse(id: request.id, result: .error(.authorizationDenied))
@@ -430,6 +440,8 @@ public actor ServiceRuntime {
             result = await confirmOwnerAction(params, context: context)
         case .mintAllowOnce(let params):
             result = await mintAllowOnce(params, context: context)
+        case .events(let params):
+            result = .events(await liveEvents(params, context: context, sameUIDSocket: sameUIDSocket))
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -444,7 +456,8 @@ public actor ServiceRuntime {
     static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
         guard enabled else { return false }
         switch ServiceMethodAuthorization.requirement(for: method) {
-        case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm:
+        // `ownerEvents` checks the uid: `socketSessionReadsEvents`.
+        case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm, .ownerEvents:
             return false
         case .diagnostic, .agent, .hookConsult, .controlRead:
             return true
@@ -799,10 +812,11 @@ public actor ServiceRuntime {
         deadline: HookDeadline
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
+            let tap = HookDecisionTap()
             let reply = try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
-                world: HookEvaluateWorld.live(
+                world: tap.tapping(HookEvaluateWorld.live(
                     world: readyWorld(
                         wanted: EvaluationWorld.walkedPackIDs(home: configHome)
                     ),
@@ -810,9 +824,11 @@ public actor ServiceRuntime {
                     pending: pendingApprovals,
                     clock: clock,
                     recordDecision: analyticsRecorder()
-                ),
+                ), host: params.host, clock: clock),
                 deadline: deadline
             )
+            // Once, after the reply is final; off the reply's path.
+            tap.publish(to: events, timedOut: deadline.requiresTimeoutReply, home: configHome)
             return .success(reply)
         } catch let error as IPCError {
             return .failure(error)
@@ -1065,6 +1081,8 @@ public actor ServiceRuntime {
             method = "confirmOwnerAction"
         case .mintAllowOnce:
             method = "mintAllowOnce"
+        case .events:
+            method = "events"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

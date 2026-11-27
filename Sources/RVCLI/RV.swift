@@ -11,6 +11,7 @@ public struct RV: AsyncParsableCommand {
             OpenCode.self,
             Workspace.self,
             Test.self,
+            Try.self,
             Explain.self,
             Packs.self,
             Policy.self,

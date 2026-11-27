@@ -161,6 +161,124 @@ enum ManagedRun {
         return .success(status(state, directory: directory.path))
     }
 
+    /// What `rv managed verify` checked on a candidate bundle, and what it
+    /// cannot check from here. Every line it prints is one of these.
+    struct VerifyReport: Encodable, Equatable {
+        var directory: String
+        var organization: String?
+        var serial: Int?
+        var sha256: String
+        /// 1-based key in the bundle's own `org-key.pub` that verified the
+        /// signature, or nil when no key was there to check against.
+        var signingKey: Int?
+        /// A `policy.json.sig` sits in the bundle with no `org-key.pub`, so
+        /// nothing checked it.
+        var signatureUnchecked: Bool
+        var restrictions: [String]
+        var checked: [String]
+        var notChecked: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case state, directory, organization, serial, sha256, signed, signingKey, signatureUnchecked
+            case restrictions, checked, notChecked
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("verified", forKey: .state)
+            try container.encode(directory, forKey: .directory)
+            try container.encodeIfPresent(organization, forKey: .organization)
+            try container.encodeIfPresent(serial, forKey: .serial)
+            try container.encode(sha256, forKey: .sha256)
+            try container.encode(signingKey != nil, forKey: .signed)
+            try container.encodeIfPresent(signingKey, forKey: .signingKey)
+            try container.encode(signatureUnchecked, forKey: .signatureUnchecked)
+            try container.encode(restrictions, forKey: .restrictions)
+            try container.encode(checked, forKey: .checked)
+            try container.encode(notChecked, forKey: .notChecked)
+        }
+    }
+
+    /// `verify`, with each claim tied to the check that backs it.
+    static func verifyReport(directory: URL) -> Result<VerifyReport, CommandFailure> {
+        func read(_ name: String) -> Data? {
+            try? Data(contentsOf: directory.appendingPathComponent(name))
+        }
+        guard let policyData = read(ManagedPolicyLocation.policyFile) else {
+            return .failure(CommandFailure("\(DisplayedText.field(directory.path)) has no \(ManagedPolicyLocation.policyFile)"))
+        }
+        let signature = read(ManagedPolicyLocation.signatureFile)
+        let state = ManagedPolicyVerifier.verify(
+            policy: policyData, signature: signature,
+            publicKey: read(ManagedPolicyLocation.publicKeyFile), directory: directory.path)
+        guard case .active(let bundle) = state else {
+            return .failure(CommandFailure(state.invalidReason ?? "\(ManagedPolicyLocation.policyFile) is not valid"))
+        }
+        let pub = ManagedPolicyLocation.publicKeyFile
+        let sig = ManagedPolicyLocation.signatureFile
+        var checked = [
+            "\(ManagedPolicyLocation.policyFile) parses as an organization policy this rv reads",
+        ]
+        var notChecked: [String] = []
+        if let key = bundle.signingKey {
+            checked.append("\(sig) verifies against key \(key) in this bundle's \(pub)")
+            notChecked.append(
+                "that this \(pub) is your organization's key (compare it with "
+                    + "\(ManagedPolicyLocation.installedDirectory)/\(pub) on a managed machine)")
+        } else if signature != nil {
+            notChecked.append("\(sig): this bundle has no \(pub) to check it against, so it installs unsigned")
+        } else {
+            notChecked.append("a signature: this bundle has no \(sig), so it installs unsigned")
+        }
+        notChecked += [
+            "anti-rollback: each machine refuses a serial lower than one it already accepted",
+            "owner and permissions once installed (root-owned, not writable by others)",
+        ]
+        return .success(VerifyReport(
+            directory: bundle.directory, organization: bundle.policy.organization, serial: bundle.policy.serial,
+            sha256: bundle.sha256, signingKey: bundle.signingKey,
+            signatureUnchecked: bundle.signingKey == nil && signature != nil,
+            restrictions: policyRestrictions(bundle.policy), checked: checked, notChecked: notChecked))
+    }
+
+    /// The bundle's restrictions as the policy states them. Unlike
+    /// `restrictions`, nothing here depends on the host running the check.
+    static func policyRestrictions(_ policy: ManagedPolicy) -> [String] {
+        restrictions(policy, sandboxEnforced: false).map { line in
+            line.hasPrefix("mcp: no MCP server sandbox on this host")
+                ? (policy.mcp.requireSandbox ? "mcp: every local server must be sandboxed (remote servers are exempt)" : "")
+                : line.replacingOccurrences(of: "not bundled packs, so not enforced", with: "packs this rv does not bundle")
+        }.filter { $0.isEmpty == false }
+    }
+
+    static func verifyText(_ report: VerifyReport) -> String {
+        var lines = [
+            "policy bundle \(DisplayedText.field(report.directory)): "
+                + DisplayedText.field(report.organization ?? "unnamed")
+                + (report.serial.map { " serial \($0)" } ?? "") + " sha256 \(report.sha256)",
+        ]
+        lines += report.checked.map { "  ✓ \($0)" }
+        lines += report.restrictions.map { "    " + DisplayedText.field($0) }
+        lines += report.notChecked.map { "  ◐ not checked: \($0)" }
+        lines.append("  → " + verifyNext(report))
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The one next step after a verify: sign it, add the key that checks
+    /// the signature, or deploy it and read it back on a managed machine.
+    static func verifyNext(_ report: VerifyReport) -> String {
+        let policy = URL(fileURLWithPath: report.directory, isDirectory: true)
+            .appendingPathComponent(ManagedPolicyLocation.policyFile).path
+        if report.signatureUnchecked {
+            return "add \(ManagedPolicyLocation.publicKeyFile) to the bundle, then: rv managed verify "
+                + DisplayedText.field(report.directory)
+        }
+        if report.signingKey == nil {
+            return "rv managed sign \(DisplayedText.field(policy)) --key org-key.private"
+        }
+        return "after deploying to \(ManagedPolicyLocation.installedDirectory), on that Mac: rv managed status"
+    }
+
     static func keygen(directory: URL) -> Result<String, CommandFailure> {
         let publicURL = directory.appendingPathComponent(ManagedPolicyLocation.publicKeyFile)
         let privateURL = directory.appendingPathComponent("org-key.private")
@@ -246,13 +364,13 @@ struct ManagedVerify: AsyncParsableCommand {
 
     func run() throws {
         let ctx = CommandContext.current(command: "managed verify", format: format)
-        switch ManagedRun.verify(directory: URL(fileURLWithPath: directory, isDirectory: true)) {
+        switch ManagedRun.verifyReport(directory: URL(fileURLWithPath: directory, isDirectory: true)) {
         case .failure(let failure): try ctx.fail("rv managed verify: \(failure.message)\n")
-        case .success(let status):
+        case .success(let report):
             ctx.writeStdout(
                 ctx.explicitRobot
-                    ? try RobotJSON.encode(status, options: .pretty)
-                    : ManagedRun.statusText(status))
+                    ? try RobotJSON.encode(report, options: .pretty)
+                    : ManagedRun.verifyText(report))
         }
     }
 }

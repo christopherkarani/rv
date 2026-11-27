@@ -235,7 +235,7 @@ public final class UnixEvaluateListener: Sendable {
         let listenFD = state.withLock { $0.listenFD }
         let client = Glibc.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
-        guard limits.applyReceiveTimeout(to: client), slots.acquire() else {
+        guard limits.applyTimeouts(to: client), slots.acquire() else {
             _ = Glibc.close(client)
             return
         }
@@ -288,8 +288,11 @@ public final class UnixEvaluateListener: Sendable {
             }
             let incoming = gate.wait()
             handshakeOK = incoming.handshakeAccepted
-            try? UnixFrameIO.writeFrame(fd: fd, body: incoming.frame)
+            // A reply the peer did not take within the send timeout leaves
+            // the stream mid-frame: close the connection, freeing its slot.
+            let sent = (try? UnixFrameIO.writeFrame(fd: fd, body: incoming.frame)) != nil
             watchdog.endRequest()
+            guard sent else { return }
         }
     }
 }

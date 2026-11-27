@@ -17,7 +17,10 @@ public struct RoutedEvaluation: Sendable, Equatable {
 }
 
 public struct ServiceClient: Sendable {
-    private let transport: (any ServiceTransport)?
+    let transport: (any ServiceTransport)?
+    /// `events` long polls go here: a connection of their own, so a parked
+    /// poll never shares a lock or a connection with owner actions.
+    let eventsTransport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
     private let home: HomeDirectory?
@@ -81,6 +84,7 @@ public struct ServiceClient: Sendable {
         clock: @escaping @Sendable () -> Date
     ) {
         self.transport = resolvedTransport
+        self.eventsTransport = resolvedTransport?.longPollChannel()
         if let session {
             self.door = GatedEvaluate(session)
         } else {
@@ -101,6 +105,7 @@ public struct ServiceClient: Sendable {
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
+        self.eventsTransport = transport?.longPollChannel()
         self.door = GatedEvaluate(lazySession: lazySession)
         self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory, home: home)
         self.home = home
@@ -197,17 +202,23 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
-    private enum IPCCallError: Error, Sendable, Equatable {
+    enum IPCCallError: Error, Sendable, Equatable {
         case identityMismatch
         case unexpectedResult
         case service(IPCError)
     }
 
-    private func send<C: IPCCall>(
+    /// `undecodableIsServiceError`: an rvd that cannot decode the request
+    /// (one that predates its method) answers `decodeFailed`, or
+    /// `handshakeRequired` before a hello, under a fresh id, since it never
+    /// read the request's. With this set those answers throw `.service`
+    /// instead of `.identityMismatch`, so the caller can act on them.
+    func send<C: IPCCall>(
         _ call: C,
         using transport: any ServiceTransport,
         timeoutMs: Int? = nil,
-        hookConsult: Bool = false
+        hookConsult: Bool = false,
+        undecodableIsServiceError: Bool = false
     ) async throws -> C.Reply {
         let request = IPCRequest(method: call.method)
         let body = try IPCJSON.encode(request)
@@ -221,6 +232,12 @@ public struct ServiceClient: Sendable {
             data = try await transport.send(body)
         }
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        if undecodableIsServiceError, response.protocolName == request.protocolName,
+           case .error(let error) = response.result,
+           error == .decodeFailed || error == .protocolSkew(.handshakeRequired)
+        {
+            throw IPCCallError.service(error)
+        }
         guard response.id == request.id, response.protocolName == request.protocolName else {
             throw IPCCallError.identityMismatch
         }
@@ -357,7 +374,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
+    func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
         switch error {
         case .identityMismatch:
             return .transport("identityMismatch")

@@ -553,7 +553,9 @@ struct OperatorRedemptionTests {
             .confirmOwnerAction,
             // Pre-arms an allow-once code after the owner check; writes a
             // pending row, never consumes a permit.
-            .mintAllowOnce:
+            .mintAllowOnce,
+            // Reads the live event ring; writes nothing.
+            .events:
             return false
         }
     }
