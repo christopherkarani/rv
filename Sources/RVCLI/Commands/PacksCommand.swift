@@ -55,6 +55,13 @@ struct Packs: AsyncParsableCommand {
             if (try? PacksConfigStore.load(home: home)) == nil {
                 ctx.writeStderr(
                     "warning: \(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+            } else if let problems = try? PacksFacade.configProblems(home: home), problems.isEmpty == false {
+                // The doors skip these lines; say so instead of listing a
+                // pack the owner thinks is on as off without a word.
+                let file = DisplayedText.field(PacksConfigStore.configURL(home: home).path)
+                let lines = ["warning: [packs] has lines rv does not read; rv skips them:"]
+                    + problems.flatMap { $0.lines(file: file) }
+                ctx.writeStderr(lines.joined(separator: "\n") + "\n")
             }
             let filtered = PacksListFilter.apply(
                 full,
@@ -314,10 +321,52 @@ enum PacksListFilter {
 }
 
 private func mutate(ids: [String], enabling: Bool) async throws {
+    // Check every name and the config before asking the owner anything:
+    // a typo fails in a second, not after Touch ID.
+    try preflightPackMutation(ids: ids)
     let authorization = try await OwnerConfirmation.require(
         "\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
     try await ConfigChangeAudit.$authorization.withValue(authorization) {
         try applyPackMutation(ids: ids, enabling: enabling)
+    }
+}
+
+/// Fails, with the fix, on what `applyPackMutation` would refuse anyway:
+/// a name that is no pack, category or preset, or a `[packs]` section rv
+/// does not read as written. Asks nobody and writes nothing.
+func preflightPackMutation(ids: [String]) throws {
+    guard !ids.isEmpty else {
+        throw ValidationError("missing pack id")
+    }
+    let home = try CommandContext.requireHome(command: "packs")
+    do {
+        try PacksFacade.preflight(home: home, ids: ids)
+    } catch let error as PacksCommandError {
+        try failPackMutation(error, home: home)
+    }
+}
+
+/// One stderr block per refusal, then exit 1.
+func failPackMutation(_ error: PacksCommandError, home: HomeDirectory) throws -> Never {
+    switch error {
+    case .unknownSelection(let name, let suggestion):
+        var text = "rv: no pack, category or preset is named \(DisplayedText.field(name))."
+        if let suggestion { text += " Did you mean \(suggestion)?" }
+        try CommandContext.fail(text + " rv packs --all lists every pack.\n")
+    case .configInvalid(let problems):
+        let file = DisplayedText.field(PacksConfigStore.configURL(home: home).path)
+        let lines = ["rv: [packs] has lines rv does not read, so nothing was changed:"]
+            + problems.flatMap { $0.lines(file: file) }
+        try CommandContext.fail(lines.joined(separator: "\n") + "\n")
+    case .unknownID(let token):
+        try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
+    case .criticalPatternUncompilable(let rule):
+        try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
+    case .configUnreadable:
+        try CommandContext.fail(
+            "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    case .packNotFound, .configUnwritable:
+        throw ExitCode(1)
     }
 }
 
@@ -332,13 +381,8 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
         result = enabling
             ? try PacksFacade.enable(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
-    } catch PacksCommandError.unknownID(let token) {
-        try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
-    } catch PacksCommandError.criticalPatternUncompilable(let rule) {
-        try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
-    } catch PacksCommandError.configUnreadable {
-        try CommandContext.fail(
-            "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    } catch let error as PacksCommandError where error != .configUnwritable {
+        try failPackMutation(error, home: home)
     } catch let unrecorded as ConfigChangeUnrecorded {
         try ConfigChangeRefusal.fail(command: "packs", unrecorded)
     } catch {

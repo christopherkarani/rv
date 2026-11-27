@@ -65,11 +65,12 @@ struct PacksCommandRunTests {
         #expect(same.totalCount == 0)
     }
 
-    @Test func enable_missingHomeEmptyAndUnknown() async throws {
-        // The owner gate refuses (EX_NOPERM) before any mutation path runs.
+    @Test func enable_missingHomeEmptyAndUnknown_failBeforeTheOwnerCheck() async throws {
+        // G3: names and config are checked before the owner is asked, so
+        // these fail with their own error, not the owner refusal.
         try await withCLIProcess(environment: [:]) {
             let home = try Packs.Enable.parse(["core.git"])
-            await #expect(throws: ExitCode(EX_NOPERM)) {
+            await #expect(throws: ExitCode(1)) {
                 try await home.run()
             }
         }
@@ -77,12 +78,17 @@ struct PacksCommandRunTests {
         try await withCLIProcess(home: isolated) {
             var empty = Packs.Enable()
             empty.ids = []
-            await #expect(throws: ExitCode(EX_NOPERM)) {
+            await #expect(throws: (any Error).self) {
                 try await empty.run()
             }
             let unknown = try Packs.Enable.parse(["not-a-pack"])
-            await #expect(throws: ExitCode(EX_NOPERM)) {
+            await #expect(throws: ExitCode(1)) {
                 try await unknown.run()
+            }
+            // A real name still reaches the owner check, which refuses here.
+            let known = try Packs.Enable.parse(["core.git"])
+            await #expect(throws: ExitCode(EX_NOPERM)) {
+                try await known.run()
             }
         }
     }
