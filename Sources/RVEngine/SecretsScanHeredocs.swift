@@ -23,7 +23,11 @@ struct DataHeredocs {
     }
 
     private enum Context: Equatable {
-        case single, double, substitution, paren, backtick, arithmetic
+        case single, double, substitution, paren, backtick
+        /// `$((…))` or `((…))`; `arithmeticParen` is a `(` inside one.
+        case arithmetic, arithmeticParen
+        /// `${…}` and `$[…]`: a `<<` inside is not a heredoc.
+        case parameter, bracket
     }
 
     private struct Operator {
@@ -48,6 +52,8 @@ struct DataHeredocs {
             output.append(lines[lineIndex])
             lineIndex += 1
             var operators: [Operator] = []
+            // `>(sh)`, `<(…)`: a heredoc on this line may feed a program.
+            var processSubstitution = false
             var index = 0
             func take(_ count: Int = 1) {
                 commands[commands.count - 1] += String(line[index..<min(index + count, line.count)])
@@ -77,6 +83,9 @@ struct DataHeredocs {
                             commands.append("")
                             index += 2
                         }
+                    } else if character == "$", next == "{" || next == "[" {
+                        stack.append(next == "{" ? .parameter : .bracket)
+                        index += 2
                     } else if character == "`" {
                         stack.append(.backtick)
                         commands.append("")
@@ -85,10 +94,58 @@ struct DataHeredocs {
                         take()
                     }
                     continue
-                case .arithmetic:
-                    if character == ")", next == ")" {
+                case .arithmetic, .arithmeticParen:
+                    if character == "(" {
+                        stack.append(.arithmeticParen)
+                        index += 1
+                    } else if character == ")", stack.last == .arithmeticParen {
+                        stack.removeLast()
+                        index += 1
+                    } else if character == ")" {
+                        // `))` closes; a lone `)` is not shell rv can follow.
+                        guard next == ")" else { return nil }
                         stack.removeLast()
                         index += 2
+                    } else {
+                        index += 1
+                    }
+                    continue
+                case .bracket:
+                    if character == "[" {
+                        stack.append(.bracket)
+                    } else if character == "]" {
+                        stack.removeLast()
+                    }
+                    index += 1
+                    continue
+                case .parameter:
+                    if character == "\\" {
+                        index += 2
+                    } else if character == "'" {
+                        stack.append(.single)
+                        index += 1
+                    } else if character == "\"" {
+                        stack.append(.double)
+                        index += 1
+                    } else if character == "$", next == "{" || next == "[" {
+                        stack.append(next == "{" ? .parameter : .bracket)
+                        index += 2
+                    } else if character == "$", next == "(" {
+                        if third == "(" {
+                            stack.append(.arithmetic)
+                            index += 3
+                        } else {
+                            stack.append(.substitution)
+                            commands.append("")
+                            index += 2
+                        }
+                    } else if character == "`" {
+                        stack.append(.backtick)
+                        commands.append("")
+                        index += 1
+                    } else if character == "}" {
+                        stack.removeLast()
+                        index += 1
                     } else {
                         index += 1
                     }
@@ -114,6 +171,9 @@ struct DataHeredocs {
                         commands.append("")
                         index += 2
                     }
+                case "$" where next == "{" || next == "[":
+                    stack.append(next == "{" ? .parameter : .bracket)
+                    take(2)
                 case "`":
                     if stack.last == .backtick {
                         stack.removeLast()
@@ -150,13 +210,20 @@ struct DataHeredocs {
                         continue
                     }
                     index += 2
-                    guard let found = readOperator(line, from: &index, command: commands, stack: stack) else {
+                    guard var found = readOperator(line, from: &index, command: commands, stack: stack) else {
                         return nil
                     }
+                    if processSubstitution { found.isData = false }
                     operators.append(found)
                     commands[commands.count - 1] += " <<" + found.delimiter + " "
-                case ">":
-                    for slot in operators.indices { operators[slot].writes = true }
+                case ">", "<":
+                    if next == "(" {
+                        processSubstitution = true
+                        for slot in operators.indices { operators[slot].isData = false }
+                    }
+                    if character == ">" {
+                        for slot in operators.indices { operators[slot].writes = true }
+                    }
                     take()
                 default:
                     take()
@@ -255,16 +322,22 @@ struct DataHeredocs {
             .map(commandName)
     }
 
-    /// `git commit -m "`, `git tag -a v1 --message=`: the text before a
-    /// `$(` that is a message option's value.
+    /// `git commit -m "`, `git tag -a v1 --message=`, `gh pr create --body
+    /// "`: the text before a `$(` that is a message option's value.
     private static func isMessageValue(_ outer: String) -> Bool {
         let words = outer.split(whereSeparator: { $0 == " " || $0 == "\t" })
             .map { $0.filter { $0 != "\"" && $0 != "'" } }
             .filter { $0.isEmpty == false }
-        guard let head = words.first(where: { isAssignmentWord($0) == false }), commandName(head) == "git",
-              words.contains(where: { ["commit", "tag", "notes"].contains($0) }),
-              let option = words.last
-        else { return false }
+        guard let head = words.first(where: { isAssignmentWord($0) == false }), let option = words.last else {
+            return false
+        }
+        if commandName(head) == "gh" {
+            return words.contains(where: { ["pr", "issue", "release"].contains($0) })
+                && ["--body", "--body=", "-b", "--title", "--title=", "-t", "--notes", "--notes=", "-n"].contains(option)
+        }
+        guard commandName(head) == "git", words.contains(where: { ["commit", "tag", "notes"].contains($0) }) else {
+            return false
+        }
         if ["--message", "--message=", "-m"].contains(option) { return true }
         return option.hasPrefix("-") && option.hasPrefix("--") == false && option.hasSuffix("m")
             && option.dropFirst().allSatisfy(\.isLetter)

@@ -104,6 +104,13 @@ struct SecretsEveryModeTests {
         "git config --global core.hooksPath /dev/null",
         "git config --global include.path /tmp/evil",
         "echo rv.secretsScan false | xargs git config",
+        // Third review: interpreter writes the observe floor let through.
+        #"python3 -c 'print("[rv]\n\tsecretsScan = false", file=open(".git/config","at"))'"#,
+        #"perl -e 'open(F, "+<", ".git/config"); seek(F, 0, 2); print F "x"'"#,
+        #"ruby -e 'File.new(".git/config","a+").puts("x")'"#,
+        #"python3 -c 'open(".git/hooks/pre-commit","wt").write("")'"#,
+        "printf '%s\\n' '// rv-secrets:allow' | cat >> src/a.ts",
+        "git config --global alias.ci 'commit --no-verify'",
         "git -c alias.x='!git config rv.secretsScan false' x",
         "chmod -x .git/hooks/pre-commit",
         "rm .git/hooks/pre-commit",

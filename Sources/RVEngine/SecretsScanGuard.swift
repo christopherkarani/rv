@@ -56,6 +56,9 @@ public enum SecretsScanGuard {
 
     /// Directories probed for rv's hook in one evaluation, at most.
     static let maximumProbes = 8
+    /// What `hook(near:)` answers past `maximumProbes`: a repository rv did
+    /// not look at, which may hold rv's hook.
+    static let unprobedHook = "\u{0}unprobed"
 
     /// `installedHook(directory)` answers the absolute path of the
     /// `pre-commit` holding rv's block for the repository at or above
@@ -90,11 +93,13 @@ public enum SecretsScanGuard {
         var probed: [String: String?] = [:]
         func hook(near directories: [String]) -> String? {
             for directory in directories {
+                if directory == unknownDirectory { return unprobedHook }
                 if let known = probed[directory] {
                     if let known { return known }
                     continue
                 }
-                guard probed.count < maximumProbes else { return nil }
+                // Past the cap the repository is unknown: fail closed.
+                guard probed.count < maximumProbes else { return unprobedHook }
                 let found = installedHook(directory)
                 probed[directory] = .some(found)
                 if let found { return found }
@@ -112,8 +117,12 @@ public enum SecretsScanGuard {
                 case .whereHookIs: gated.append(entry)
                 }
             }
-            for entry in gated where hook(near: gitDirectories(entry.command, from: entry.directories, home: home)) != nil {
-                return true
+            for entry in gated {
+                // A target rv cannot place (`-C {}`, `-C $R`, xargs input) may be any repository.
+                guard let directories = gitDirectories(entry.command, from: entry.directories, home: home) else {
+                    return true
+                }
+                if hook(near: directories) != nil { return true }
             }
         }
         if plain.contains("git_config"), launched().contains(where: setsConfigThroughEnvironment) { return true }
@@ -230,9 +239,12 @@ public enum SecretsScanGuard {
         let argv = launched.guardArgv
         guard let head = argv.first, launched.headIsDynamic || commandName(head) == "git" else { return .none }
         var reach = Reach.none
+        // `--exec-path=DIR`: git runs its commit programs from DIR.
+        var execPath = false
         var index = 1
         while index < argv.count {
             let word = unescapeBackslashPairs(argv[index])
+            if word == "--exec-path" || word.hasPrefix("--exec-path=") { execPath = true }
             if word.hasPrefix("--config-env=") {
                 reach = max(reach, environmentEntryReach(String(word.dropFirst("--config-env=".count))))
                 index += 1
@@ -252,16 +264,25 @@ public enum SecretsScanGuard {
                 continue
             }
             let args = Array(argv[(index + 1)...]).map(unescapeBackslashPairs)
-            switch foldedWord(word) {
+            let subcommand = foldedWord(word)
+            if execPath, commitFamily.contains(subcommand) { reach = max(reach, .whereHookIs) }
+            switch subcommand {
             case "config":
                 reach = max(reach, configReach(GitConfigCall(args), plain: plain))
             case "commit":
                 if commitArgsSkipHooks(args) || chainSetsEnvironment || setsHookEnvironment(launched.assignments) {
                     reach = max(reach, .whereHookIs)
                 }
-            case "commit-tree":
-                // Writes a commit object no hook ever sees.
+            case "commit-tree", "fast-import":
+                // Writes commit objects no hook ever sees.
                 reach = max(reach, .whereHookIs)
+            case "am":
+                // Commits patches without the pre-commit hook.
+                if args.contains(where: { ["--abort", "--quit", "--show-current-patch"].contains($0) }) == false {
+                    reach = max(reach, .whereHookIs)
+                }
+            case "hash-object":
+                if writesCommitObject(args) { reach = max(reach, .whereHookIs) }
             default:
                 // `git $(echo config) …`, `git $SUB`: any subcommand.
                 if launched.headIsDynamic == false, isDynamic(word) {
@@ -274,10 +295,23 @@ public enum SecretsScanGuard {
         return reach
     }
 
+    /// Subcommands that make commits, which `--exec-path` can redirect.
+    private static let commitFamily: Set<String> = [
+        "commit", "commit-tree", "merge", "am", "cherry-pick", "revert", "rebase", "pull",
+    ]
+
+    /// `git hash-object -t commit` (`-tcommit`, `--type=commit`): a commit
+    /// object built by hand, then pointed at with `update-ref`.
+    private static func writesCommitObject(_ args: [String]) -> Bool {
+        zip(args, args.dropFirst()).contains { ($0 == "-t" || $0 == "--type") && foldedWord($1) == "commit" }
+            || args.contains { ["-tcommit", "--type=commit"].contains(foldedWord($0)) }
+    }
+
     /// The directories whose repository a git command acts on: each place
     /// it may run from, with `-C` applied in order, or its `--git-dir`
-    /// (`GIT_DIR`).
-    private static func gitDirectories(_ launched: LaunchedCommand, from directories: [String], home: HomePath?) -> [String] {
+    /// (`GIT_DIR`). Nil when a target is a placeholder or variable rv cannot
+    /// place (`find -exec git -C {}`, `xargs -I{} git -C {}`, `-C $R`).
+    private static func gitDirectories(_ launched: LaunchedCommand, from directories: [String], home: HomePath?) -> [String]? {
         // With no directory known, an absolute `-C`/`--git-dir` still places it.
         var places: [String?] = directories.isEmpty ? [nil] : directories
         var gitDir = launched.assignments.compactMap { word -> String? in
@@ -290,7 +324,8 @@ public enum SecretsScanGuard {
             let word = unescapeBackslashPairs(argv[index])
             let next = index + 1 < argv.count ? unescapeBackslashPairs(argv[index + 1]) : nil
             if word == "-C", let next {
-                if isDynamic(next) == false { places = places.map { resolving(next, in: $0, home: home) } }
+                guard isPlaceholder(next) == false else { return nil }
+                places = places.map { $0 == unknownDirectory ? $0 : resolving(next, in: $0, home: home) }
                 index += 2
             } else if word.hasPrefix("--git-dir=") {
                 gitDir = String(word.dropFirst("--git-dir=".count))
@@ -306,8 +341,13 @@ public enum SecretsScanGuard {
                 break
             }
         }
-        guard let gitDir, isDynamic(gitDir) == false, gitDir.isEmpty == false else { return places.compactMap { $0 } }
-        return places.compactMap { resolving(gitDir, in: $0, home: home) }
+        guard let gitDir, gitDir.isEmpty == false else { return places.compactMap { $0 } }
+        guard isPlaceholder(gitDir) == false else { return nil }
+        return places.compactMap { $0 == unknownDirectory ? $0 : resolving(gitDir, in: $0, home: home) }
+    }
+
+    private static func isPlaceholder(_ word: String) -> Bool {
+        isDynamic(word) || word.contains("{}")
     }
 
     /// The keys an agent's config may not write.
@@ -350,7 +390,9 @@ public enum SecretsScanGuard {
         case .hooksPath:
             return widensScope ? .always : .whereHookIs
         case .alias:
-            guard let value else { return .whereHookIs }
+            guard let value else { return widensScope ? .always : .whereHookIs }
+            // A user- or machine-wide alias reaches every repository.
+            if widensScope, aliasCertainlySkips(value) { return .always }
             // `!git config rv.secretsScan false`: a shell alias is judged by
             // what it names, everywhere.
             if value.drop(while: { $0 == " " || $0 == "\t" }).hasPrefix("!"),
@@ -390,6 +432,18 @@ public enum SecretsScanGuard {
 
     static func isDynamic(_ word: String) -> Bool {
         word.contains("$") || word.contains("`")
+    }
+
+    /// An alias body that skips hooks for sure: a commit that skips them,
+    /// `commit-tree`, or a shell alias that runs one (or a word rv cannot
+    /// read).
+    private static func aliasCertainlySkips(_ body: String) -> Bool {
+        let trimmed = body.drop { $0 == " " || $0 == "\t" }
+        guard trimmed.hasPrefix("!") else { return aliasSkipsHooks(body) }
+        let shell = String(trimmed.dropFirst())
+        let folded = plainText(shell)
+        return isDynamic(shell) || folded.contains("--no-verify") || folded.contains("commit-tree")
+            || skipsCommitHook(ShellCommand(rawValue: shell))
     }
 
     /// An alias body that runs a shell (`!…`) or a commit that skips hooks.

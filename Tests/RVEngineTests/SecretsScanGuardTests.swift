@@ -98,6 +98,35 @@ struct SecretsScanGuardTests {
         #"python3 -c "import os; os.remove('.rv-secrets-ignore')""#,
         #"node -e "require('fs').writeFileSync('.rv-secrets-ignore', '')""#,
         #"awk '{print > ".rv-secrets-ignore"}' list.txt"#,
+        // Third review: `<<` inside `${…}`, `$[…]`, `$((…))` is no heredoc.
+        "cat ${x/<<EOF/} /dev/null\ngit config rv.secretsScan false\nEOF/}",
+        "cat $[1<<EOF] /dev/null\ngit config rv.secretsScan false\nEOF]",
+        "cat $(( (1<<EOF) )) /dev/null\ngit config rv.secretsScan false\nEOF",
+        "echo \"${x:-<<EOF}\"\ngit config rv.secretsScan false\nEOF",
+        // A data heredoc a process substitution runs.
+        "tee >(sh) <<'EOF'\ngit config rv.secretsScan false\nEOF",
+        "cat <<'EOF' > >(sh)\ngit config rv.secretsScan false\nEOF",
+        "cat <<'EOF' >(bash)\ngit config rv.secretsScan false\nEOF",
+        // The marker plus any write, wherever on the line it is.
+        "printf '%s\\n' '// rv-secrets:allow' | cat >> src/a.ts",
+        "echo 'k // rv-secrets:allow' | sed -n p >> f",
+        "{ echo '// rv-secrets:allow'; } >> f",
+        "(echo '// rv-secrets:allow') >> f",
+        "cp /dev/stdin f <<'EOF'\nk // rv-secrets:allow\nEOF",
+        "cat <<'EOF' | cat >> f\nk // rv-secrets:allow\nEOF",
+        "grep -h rv-secrets:allow a.ts | tee -a b.ts",
+        "grep -rn rv-secrets:allow . > hits.txt",
+        // Interpreter code that names .git/config or .git/hooks is a write.
+        #"python3 -c 'print("[rv]\n\tsecretsScan = false", file=open(".git/config","at"))'"#,
+        #"perl -e 'open(F, "+<", ".git/config"); seek(F, 0, 2); print F "x"'"#,
+        #"perl -pe 'BEGIN{$^I=""}' .git/config"#,
+        #"ruby -e 'File.new(".git/config","a+").puts("x")'"#,
+        #"python3 -c 'open(".git/hooks/pre-commit","wt").write("")'"#,
+        #"python3 -c "print(open('.git/config').read())""#,
+        // A user- or machine-wide alias that skips hooks reaches every repository.
+        "git config --global alias.ci 'commit --no-verify'",
+        "git config --system alias.ci 'commit -nm'",
+        "git config --global alias.x '!git commit -n'",
     ]
 
     static let harmless: [String] = [
@@ -164,8 +193,10 @@ struct SecretsScanGuardTests {
         "awk '/url/' .git/config",
         "perl -ne 'print if /url/' .git/config",
         #"python3 -c "import configparser" && cat .git/config"#,
-        #"python3 -c "print(open('.git/config').read())""#,
         "git config --get alias.ci",
+        "git config --global alias.lg 'log --oneline'",
+        "gh pr create --title t --body \"$(cat <<'EOF'\n## Summary\nrm .git/hooks/pre-commit\ngit config rv.secretsScan false\nEOF\n)\"",
+        "git tag -a v1 -m \"$(cat <<'EOF'\nrelease\nrm .git/hooks/pre-commit\nEOF\n)\"",
     ]
 
     @Test(arguments: weakening)
@@ -190,7 +221,17 @@ struct SecretsScanGuardTests {
         "git -c alias.ci='commit -nm' ci x",
         #"git -c alias.x='!sh -c "git commit -n -m x"' x"#,
         "git config alias.ci 'commit --no-verify'",
-        "git config --global alias.x '!git commit -n'",
+        "git config --global alias.lg '!git log --oneline'",
+        // Commit programs from another directory, commits no hook sees.
+        "git --exec-path=/tmp/x commit -m x",
+        "git --exec-path /tmp/x commit -m x",
+        "git --exec-path=/tmp/x merge topic",
+        "git am 0001-fix.patch",
+        "git hash-object -t commit -w --stdin < c.txt",
+        "git hash-object --type=commit -w c.txt",
+        "git fast-import < stream.fi",
+        "cat $[1<<EOF] /dev/null\ngit commit --no-verify -m x\nEOF]",
+        "tee >(sh) <<'EOF'\ngit commit --no-verify -m x\nEOF",
         "git --config-env=alias.ci=CI ci",
         // A commit no hook sees, or one whose hook runs with another home or PATH.
         "git commit-tree HEAD^{tree} -m x",
@@ -233,6 +274,13 @@ struct SecretsScanGuardTests {
         ("cd other && git commit -n", false),
         ("git config core.hooksPath /dev/null", false),
         ("rm -rf other/.husky", false),
+        // A placeholder target may be any repository.
+        (#"find . -maxdepth 1 -exec git -C {} commit -n \;"#, true),
+        ("echo repo | xargs -I{} git -C {} commit -n", true),
+        ("git -C \"$R\" commit -n", true),
+        ("git --git-dir={}/.git commit -n", true),
+        // Past the probe cap the repository is unknown.
+        ("(cd d1); (cd d2); (cd d3); (cd d4); (cd d5); (cd d6); (cd d7); (cd d8); cd repo; (cd d9); git commit -n", true),
     ])
     func followsTheTargetRepository(_ command: String, weakens: Bool) {
         let cwd = WorkingDirectory(validating: "/work")
@@ -250,14 +298,45 @@ struct SecretsScanGuardTests {
         #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: "git -C repo commit -n"), installedHook: probe) == false)
     }
 
-    @Test func probesAreBounded() {
+    @Test func probesAreBoundedAndThePastTheCapRepositoryFailsClosed() {
         var asked = 0
         let cds = (0..<40).map { "cd /d\($0)" }.joined(separator: "; ")
-        _ = SecretsScanGuard.weakensScan(ShellCommand(rawValue: cds + "; git commit -n"), cwd: WorkingDirectory(validating: "/work")) { _ in
+        let weakens = SecretsScanGuard.weakensScan(
+            ShellCommand(rawValue: cds + "; git commit -n"), cwd: WorkingDirectory(validating: "/work")
+        ) { _ in
             asked += 1
             return nil
         }
         #expect(asked <= SecretsScanGuard.maximumProbes)
+        #expect(weakens)
+    }
+
+    @Test("with rv's hook installed, everyday commits stay allowed", arguments: [
+        "git commit -am x",
+        "git commit --amend -m x",
+        "git commit --amend --no-edit",
+        "git commit -F msg.txt",
+        "git commit -S -m x",
+        "git commit --fixup HEAD",
+        "git -c user.name=Dev commit -m x",
+        "git commit -m \"$(cat <<'EOF'\nTidy\n\nrm .git/hooks/pre-commit\ngit commit -n\nEOF\n)\"",
+        "git tag -a v1 -m \"$(cat <<'EOF'\nrelease notes\nEOF\n)\"",
+        "gh pr create --title t --body \"$(cat <<'EOF'\n## Summary\ngit commit --no-verify\nEOF\n)\"",
+        "git config --get core.hooksPath",
+        "git config --list",
+        "awk '/url/' .git/config",
+        #"python3 -c "import configparser" && cat .git/config"#,
+        "git ls-files -m | xargs git add",
+        "npx husky install",
+        "npx husky init",
+        "lefthook install",
+        "git --exec-path",
+        "git am --abort",
+    ])
+    func everydayCommitsWithRVHook(_ command: String) {
+        let cwd = WorkingDirectory(validating: "/repo")
+        #expect(SecretsScanGuard.weakensScan(ShellCommand(rawValue: command), cwd: cwd) { _ in "/repo/.git/hooks/pre-commit" } == false,
+                "\(command)")
     }
 
     @Test func aCommandTooLargeToEvaluateIsLeftToTheEngine() {

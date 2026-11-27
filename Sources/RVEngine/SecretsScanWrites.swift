@@ -15,13 +15,22 @@ extension SecretsScanGuard {
     }
 
     /// `cd`, `pushd` and `popd` followed in order (`-`, `popd` and a dynamic
-    /// operand leave the directory unknown).
+    /// operand leave the directory unknown). Only the first
+    /// `maximumProbes` other directories are kept, since no more are ever
+    /// probed; past them, and past a path longer than `maximumPathBytes`,
+    /// `unknownDirectory` stands in (probing it fails closed). Linear in the
+    /// number of commands.
     static func placing(_ commands: [LaunchedCommand], cwd: WorkingDirectory?, home: HomePath?) -> [Placed] {
         var current = cwd?.rawValue
         var seen = cwd.map { [$0.rawValue] } ?? []
+        var overflowed = false
         var out: [Placed] = []
+        out.reserveCapacity(commands.count)
         for command in commands {
-            out.append(Placed(command: command, directories: (current.map { [$0] } ?? []) + seen.filter { $0 != current }))
+            var directories = current.map { [$0] } ?? []
+            directories += seen.filter { $0 != current }
+            if overflowed { directories.append(unknownDirectory) }
+            out.append(Placed(command: command, directories: directories))
             guard let head = command.guardArgv.first,
                   ["cd", "pushd", "popd", "chdir"].contains(commandName(head)) else { continue }
             let operand = command.guardArgv.dropFirst().map(unescapeBackslashPairs)
@@ -33,10 +42,19 @@ extension SecretsScanGuard {
             } else {
                 current = home?.rawValue
             }
-            if let current, seen.contains(current) == false { seen.append(current) }
+            if let path = current, path.utf8.count > maximumPathBytes {
+                current = nil
+                overflowed = true
+            }
+            guard let current, seen.contains(current) == false else { continue }
+            if seen.count < maximumProbes { seen.append(current) } else { overflowed = true }
         }
         return out
     }
+
+    /// Stands in for directories `placing` did not keep.
+    static let unknownDirectory = "\u{0}unknown"
+    static let maximumPathBytes = 4096
 
     /// `word` as an absolute path from `base`, or nil when it stays relative.
     static func resolving(_ word: String, in base: String?, home: HomePath?) -> String? {
@@ -76,9 +94,6 @@ extension SecretsScanGuard {
         "grep", "egrep", "fgrep", "rg", "ag", "ack", "git", "find", "fd", "less", "more", "head", "tail", "wc",
         "cat", "bat", "ls", "sort", "uniq", "test", "[", "jq", "yq", "diff", "cmp", "file", "stat",
     ]
-    /// Writers that copy their input: a marker the command before them
-    /// prints lands in their file (`printf '… rv-secrets:allow' | tee -a f`).
-    private static let inputWriters: Set<String> = ["tee", "sponge", "dd"]
 
     static func writesScanControls(
         _ text: String,
@@ -98,7 +113,7 @@ extension SecretsScanGuard {
         // A very long command is not parsed path by path (`rm` with 32k
         // operands): a writer that names a control is enough there.
         guard text.utf8.count <= maximumParsedBytes else {
-            let controls = [".rv-secrets-ignore", "/.gitconfig", ".config/git/config"]
+            let controls = [".rv-secrets-ignore", "/.gitconfig", ".config/git/config", allowMarker]
                 + (leavingGitInternals ? [] : [".git/"])
             return controls.contains { plain.contains($0) }
         }
@@ -106,13 +121,14 @@ extension SecretsScanGuard {
         // The command with `cd` followed, and each command it launches
         // (`sh -c '…'`, `sudo`, `rv run -- …`, xargs) on its own.
         var mutations = mutatedPaths(text, context: context)
-        var marksAllow = false
-        let copiesInput = heads.contains { $0.guardArgv.first.map { inputWriters.contains(commandName($0)) } == true }
         for command in heads where command.truncated == false && command.headIsDynamic == false {
-            let own = mutatedPaths(rebuilt(command), context: context) + chmodTargets(command, context: context)
-            mutations += own
-            if carriesAllowMarker(command), own.isEmpty == false || copiesInput { marksAllow = true }
+            mutations += mutatedPaths(rebuilt(command), context: context) + chmodTargets(command, context: context)
         }
+        // A search's report of marker lines may go to a temporary file
+        // (`grep -rn rv-secrets:allow . > /tmp/hits`); anywhere else its
+        // output is marker lines written into a file.
+        let marksAllow = plain.contains(allowMarker)
+            && (markerIsOnlySearched(plain, heads) == false || mutations.contains { isTemporary($0.path) == false })
         mutations.removeAll { $0.path.hasPrefix("/dev/") || (leavingGitInternals && isGitInternalPath($0.path)) }
         guard mutations.isEmpty == false else { return false }
         if marksAllow { return true }
@@ -125,20 +141,36 @@ extension SecretsScanGuard {
             let parent = parentPath(mutation.path)
             if directories.contains(parent) == false { directories.append(parent) }
         }
-        for directory in directories.prefix(maximumProbes) {
+        for directory in directories {
             guard let hook = hook([directory]) else { continue }
-            if reaching.contains(where: { $0.reaches(hook) }) { return true }
+            if hook == unprobedHook || reaching.contains(where: { $0.reaches(hook) }) { return true }
         }
         return false
     }
 
     static let maximumParsedBytes = 8192
 
-    /// An `rv-secrets:allow` in the words of a command that is not a search
-    /// or reader.
-    private static func carriesAllowMarker(_ command: LaunchedCommand) -> Bool {
-        guard let head = command.guardArgv.first, readers.contains(commandName(head)) == false else { return false }
-        return command.guardArgv.contains { plainText($0).contains(allowMarker) }
+    /// Whether every `rv-secrets:allow` on the line is an argument of a
+    /// search or reader (`grep -rn rv-secrets:allow . > /tmp/hits`). Any
+    /// other place it appears (an `echo` or `printf` feeding a pipe or a
+    /// group, a heredoc body, a comment) may reach the file the line
+    /// writes, so the marker plus any write is the stop.
+    private static func markerIsOnlySearched(_ plain: String, _ heads: [LaunchedCommand]) -> Bool {
+        var seen: Set<[String]> = []
+        var searched = 0
+        for command in heads where seen.insert(command.guardArgv).inserted {
+            let carrying = command.guardArgv.filter { plainText($0).contains(allowMarker) }.count
+            guard carrying > 0 else { continue }
+            guard let head = command.guardArgv.first, readers.contains(commandName(head)),
+                  command.truncated == false, command.headIsDynamic == false
+            else { return false }
+            searched += carrying
+        }
+        return searched > 0 && plain.components(separatedBy: allowMarker).count - 1 <= searched
+    }
+
+    private static func isTemporary(_ path: String) -> Bool {
+        ["/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/", "/dev/"].contains { path.hasPrefix($0) }
     }
 
     private static func lastComponent(_ path: String) -> String {
@@ -181,14 +213,24 @@ extension SecretsScanGuard {
         ">", "system", "write", "append", "unlink", "remove", "delete", "rename", "rmtree", "rmdir", "rmsync",
         "rm(", "chmod", "truncate", "spawn", "exec", "eval", "popen", "subprocess", "shutil", "copy", "move",
         "symlink", "link(", "| \"", "|\"", "|&", "`", "'w'", "\"w\"", "'wb'", "\"wb\"", "'a'", "\"a\"", "'ab'",
-        "\"ab\"", "'x'", "\"x\"", "'w+'", "'r+'", "\"r+\"", "'a+'", "mode=",
+        "\"ab\"", "'x'", "\"x\"", "'w+'", "'r+'", "\"r+\"", "'a+'", "\"a+\"", "\"w+\"", "'at'", "\"at\"", "'wt'",
+        "\"wt\"", "'xt'", "\"xt\"", "mode=", "$^i", "+<", "+>", "inplace", "sysopen", "seek", "fopen", "file.new",
+        "file_put_contents", "io.open", "os.open",
+    ]
+
+    /// Controls whose name in a program's own code makes it a write: rv
+    /// cannot tell a read from a write in another language (`open(…,
+    /// "at")`, perl `+<`, ruby `File.new(…, "a+")`), so it fails closed.
+    private static let codeMentions = [
+        allowMarker, ".rv-secrets-ignore", "secretsscan", "hookspath", ".git/config", ".git/hooks", "gitconfig",
+        "git/config", "pre-commit",
     ]
 
     /// `python3 -c`, `perl -pi -e`, `node -e`, `awk '…'`: a program rv does
-    /// not read as shell. It counts when a scan control is named (in the
-    /// code or as an operand) and the program edits in place or its code
-    /// writes; `awk '/url/' .git/config` and `perl -ne 'print if /x/'
-    /// .git/config` only read.
+    /// not read as shell. It counts when its code names a scan control, or
+    /// an operand does and the program edits in place or its code writes;
+    /// `awk '/url/' .git/config` and `perl -ne 'print if /x/' .git/config`
+    /// only read.
     private static func inlineProgramWritesControl(_ launched: LaunchedCommand) -> Bool {
         guard let head = launched.guardArgv.first else { return false }
         let name = commandName(head)
@@ -201,7 +243,10 @@ extension SecretsScanGuard {
         if editsInPlace(name, words) { return true }
         return programCode(name, words).contains { code in
             let folded = plainText(code)
-            return writeHints.contains { folded.contains($0) }
+            if codeMentions.contains(where: { folded.contains($0) }) { return true }
+            // Quotes carry the file modes (`'at'`), so read the code as typed too.
+            let typed = code.lowercased()
+            return writeHints.contains { folded.contains($0) || typed.contains($0) }
         }
     }
 
