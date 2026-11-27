@@ -57,7 +57,7 @@ struct LogViewModelTests {
         let folded = model(entries)
         #expect(folded.rows.count == 1)
         #expect(folded.judgeNotesHidden == 41)
-        #expect(folded.summary == "1 stopped · 0 would stop · judge: 41 notes in shadow, hidden")
+        #expect(folded.summary == "1 stopped · 0 would stop · 41 judge notes in shadow")
         #expect(folded.next?.command == "rv log --all")
         #expect(folded.next?.why == "every row, judge notes too")
         #expect(model(entries, LogQuery(all: true)).rows.count == 20 + 22)
@@ -113,18 +113,45 @@ struct LogViewModelTests {
         #expect(model([Self.entry(minutesAgo: 60 * 24, stopped: true)]).spanLabel == "last 7 days")
     }
 
-    @Test("a recorded command is the command; the note shows only without the decision log")
+    @Test("a recorded command is the command; the summary says so only without the decision log")
     func recordedCommand() {
         let entries = [LogEntry(time: Self.now, agent: "claude", stopped: true, rule: "core.git:reset-hard",
                                 tool: "Bash", target: "", command: "git reset --hard origin/main", code: "a")]
         let recorded = model(entries)
         #expect(recorded.rows.first?.command == "git reset --hard origin/main")
-        #expect(recorded.commandsNote == nil)
+        #expect(recorded.rows.first?.recordedCommand == "git reset --hard origin/main")
+        #expect(recorded.commandsMissing == false)
         let missing = LogViewModel(entries: [Self.entry(minutesAgo: 1, stopped: true)], query: LogQuery(),
                                    now: Self.now, calendar: Self.utc, commandsRecorded: false)
         #expect(missing.rows.first?.command == "Bash")
-        #expect(missing.commandsNote == "Commands aren't recorded: rvd is older or its decision log is off.")
+        #expect(missing.rows.first?.recordedCommand == nil)
+        #expect(missing.summary == "1 stopped · 0 would stop · commands not recorded")
         #expect(LogRobotPayload(missing).commandsRecorded == false)
+        #expect(LogRobotPayload(missing).rows.first?.command == nil)
+    }
+
+    @Test("the rows, the counts and the header cover one window")
+    func oneWindow() {
+        let inside = Self.entry(minutesAgo: 60 * 24 * 6, stopped: true)
+        let outside = Self.entry(minutesAgo: 60 * 24 * 7 + 1, stopped: true)
+        let shown = model([inside, outside, Self.entry(minutesAgo: 1, stopped: false)])
+        #expect(shown.matching == 2 && shown.stopped == 1 && shown.wouldStop == 1)
+        #expect(shown.rows.count == 2)
+        #expect(shown.spanLabel == "last 7 days")
+        // A source that keeps less than the window (the ledger at its cap)
+        // names where its rows begin.
+        let capped = LogViewModel(entries: [inside], query: LogQuery(), now: Self.now, calendar: Self.utc,
+                                  coveredFrom: inside.time)
+        #expect(capped.spanLabel == "since Mon 16 Nov")
+    }
+
+    @Test("decision-log days too large to read get one note")
+    func skippedDays() {
+        let one = LogViewModel(entries: [], query: LogQuery(), now: Self.now, calendar: Self.utc,
+                               skippedDays: ["2026-11-20"])
+        #expect(one.skippedNote == "Skipped 1 decision-log day over 64 MB: 2026-11-20.")
+        #expect(model([]).skippedNote == nil)
+        #expect(LogRobotPayload(one).skippedDays == ["2026-11-20"])
     }
 
     @Test("empty, filtered and switched-off logs each say so")
@@ -150,8 +177,8 @@ struct LogViewModelTests {
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let json = try #require(String(data: encoder.encode(payload), encoding: .utf8))
-        #expect(json.hasPrefix(#"{"commands_recorded":true,"judge_notes_hidden":1,"matching":2,"rows":[{"agent":"claude","code":"abc-1","command":"Bash","rule":"core.git:reset-hard","target":"","time":"2026-11-22T14:29:00Z","tool":"Bash","verdict":"stopped"}"#))
+        #expect(json.hasPrefix(#"{"commands_recorded":true,"judge_notes_hidden":1,"matching":2,"rows":[{"agent":"claude","code":"abc-1","command":null,"rule":"core.git:reset-hard","session":null,"target":"","time":"2026-11-22T14:29:00Z","tool":"Bash","verdict":"stopped","would_be":null}"#))
         #expect(json.contains(#""verdict":"would_stop","would_be":"ask""#))
-        #expect(json.hasSuffix(#""schema":"rv.log.v1","stopped":1,"would_stop":1}"#))
+        #expect(json.hasSuffix(#""schema":"rv.log.v1","skipped_days":[],"stopped":1,"would_stop":1}"#))
     }
 }

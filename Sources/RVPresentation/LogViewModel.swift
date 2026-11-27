@@ -225,15 +225,16 @@ public struct LogViewModel: Equatable, Sendable {
     }
 
     /// The one summary line, as parts joined with ` · `: `1 stopped`,
-    /// `2 would stop`, `judge: 41 notes in shadow, hidden`, and `commands
-    /// not recorded` when the decision log is off or missing.
+    /// `2 would stop`, `41 judge notes in shadow` (folded away), and
+    /// `commands not recorded` when the decision log is off or missing
+    /// (`rv help log` says why).
     public var summaryParts: [String] {
         var parts = ["\(stopped) stopped", "\(wouldStop) would stop"]
         if judgeNotesHidden > 0 {
-            parts.append("judge: \(judgeNotesHidden) \(judgeNotesHidden == 1 ? "note" : "notes") in shadow, hidden")
+            parts.append("\(judgeNotesHidden) judge \(judgeNotesHidden == 1 ? "note" : "notes") in shadow")
         }
         if commandsMissing {
-            parts.append("commands not recorded (decision log off or missing)")
+            parts.append("commands not recorded")
         }
         return parts
     }

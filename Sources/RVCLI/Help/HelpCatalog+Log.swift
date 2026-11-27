@@ -23,12 +23,12 @@ extension HelpCatalog {
                 HelpRow(name: "agent", description: "The host that sent the command"),
                 HelpRow(name: "verdict", description: "✕ Stopped: it did not run. ◐ Would stop: watch mode let it run"),
                 HelpRow(name: "rule", description: "The rule that matched"),
-                HelpRow(name: "command", description: "The command, credentials redacted, from rvd's decision log; the file for a file tool. Without the log, the tool"),
-                HelpRow(name: "code", description: "Names the row; the same row always has the same code. Not an unlock code"),
+                HelpRow(name: "command", description: "The command, credentials redacted, from rvd's decision log; the file for a file tool. Without the log, the tool. Cut with … to fit a terminal, whole when piped"),
+                HelpRow(name: "code", description: "Names the call: the same code its rv blocks row and decision-log row carry. Not an unlock code"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "judge", description: "The judge's notes in shadow fold into one count; --all or --rule core.judge lists them"),
-                HelpRow(name: "ledger", description: "The same rows as rv blocks, plus stops only the decision log has: the last 7 days, paths with ~ for home"),
+                HelpRow(name: "source", description: "rvd's decision log, the last 7 days, paths with ~ for home. Without it (an older rvd, or decisions.enabled off) the rv blocks ledger, and the summary says commands are not recorded"),
             ]),
         ],
         examples: [

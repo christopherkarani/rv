@@ -39,6 +39,21 @@ enum LogRun {
         return PrettyWriter.join(LogRenderer().render(LogFrame(model: model, columns: columns), palette: palette))
     }
 
+    /// The ink for `appearance`: the terminal's palette at a TTY, none when
+    /// piped (`robot`) or when `NO_COLOR`, `--no-color`, `--plain` or
+    /// `TERM=dumb` turned color off (`pretty(colorOffPalette)`).
+    static func palette(for appearance: CLIAppearance) -> Palette {
+        switch appearance {
+        case .robot: colorOffPalette
+        case .pretty(let painted): painted
+        }
+    }
+
+    /// The terminal's width at a TTY; nil (every cell whole) when piped.
+    static func columns(stdoutIsTTY: Bool, probe: ThemeProbe) -> Int? {
+        stdoutIsTTY ? probe.columns : nil
+    }
+
     /// rvd's stops and would-stops from the window, or nil when there is
     /// no log to read: `decisions.enabled` is false, or this rvd never
     /// wrote one (its directory is missing).
@@ -74,20 +89,13 @@ struct Log: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: CommandVocabulary.Command.log.rawValue, format: format)
         let home = try ctx.requireHome()
-        let palette: Palette
-        switch ctx.appearance {
-        case .robot:
-            palette = colorOffPalette
-        case .pretty(let painted):
-            palette = painted
-        }
         ctx.writeStdout(
             try LogRun.output(
                 home: home,
                 query: LogQuery(all: all, rule: rule, host: host),
                 json: ctx.explicitRobot,
-                palette: palette,
-                columns: ctx.tty.stdoutIsTTY ? ctx.probe.columns : nil
+                palette: LogRun.palette(for: ctx.appearance),
+                columns: LogRun.columns(stdoutIsTTY: ctx.tty.stdoutIsTTY, probe: ctx.probe)
             )
         )
     }

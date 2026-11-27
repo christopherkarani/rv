@@ -1,10 +1,9 @@
 import Foundation
-import RVDomain
 
-/// Credential redaction for a command line that leaves rvd as text (live
-/// events now; the local decision log adopts it when J1b lands, so both
-/// hide the same things). One implementation: change it here, not in a
-/// caller.
+/// Credential redaction for a command line that rv keeps or shows as text:
+/// rvd's live events and the local decision log (both through
+/// `DecisionRedaction.command`), and `rv log` again on read. One
+/// implementation: change it here, not in a caller.
 ///
 /// On top of `ReviewSanitizer.redactCredentials` (`KEY=value` with a
 /// secret-shaped key, known token prefixes, `Bearer x`, PEM blocks) it
@@ -29,10 +28,12 @@ package enum CommandLineRedaction {
     package static let placeholder = ReviewSanitizer.redactedPlaceholder
 
     package static func redact(_ command: String) -> String {
-        let base = ReviewSanitizer.redactCredentials(in: urlUserinfoRedacted(command))
-        if base == placeholder { return base }
+        // The token scan runs first, on the quotes as written: the
+        // sanitizer takes a `Bearer` value whole, closing quote and all,
+        // and a header value whose quote is gone would run to the end.
         var scan = Scan()
-        return mapTokens(base) { scan.next($0) }
+        let scanned = mapTokens(urlUserinfoRedacted(command)) { scan.next($0) }
+        return ReviewSanitizer.redactCredentials(in: scanned)
     }
 
     // MARK: - Token scan

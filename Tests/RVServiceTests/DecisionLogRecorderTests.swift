@@ -43,6 +43,32 @@ struct DecisionLogRecorderTests {
         #expect(late.rule == DecisionLogRecorder.timeoutRule)
     }
 
+    @Test func theBoundStampGivesTheIDAndAnAllowsWouldBe() {
+        let stamp = DecisionStamp(id: "a7c835000001")
+        stamp.note(DecisionWouldBe(verdict: .denied, rule: "core.git:force-push", ask: true))
+        let (allowed, denied, late) = DecisionStamp.$current.withValue(stamp) {
+            (
+                DecisionLogRecorder.shellRecord(
+                    EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "git push -f"),
+                    cwd: nil, host: .hook(.claude), home: Self.home, at: Self.now, timedOut: false),
+                Self.record(EvaluationResult(outcome: .deny(Deny(ruleID: Self.rule, reason: "no"), matched: nil))),
+                DecisionLogRecorder.shellRecord(
+                    EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "git push -f"),
+                    cwd: nil, host: .hook(.claude), home: Self.home, at: Self.now, timedOut: true)
+            )
+        }
+        #expect(allowed.id == "a7c835000001")
+        #expect(allowed.wouldBe == DecisionWouldBe(verdict: .denied, rule: "core.git:force-push", ask: true))
+        // Only an allow carries a would-be; a stop is its own verdict.
+        #expect(denied.wouldBe == nil && late.wouldBe == nil)
+        #expect(late.id == "a7c835000001")
+        #expect(allowed.code == "a7c-835")
+        // No stamp bound: no id, no would-be.
+        let bare = Self.record(EvaluationResult(outcome: .plain))
+        #expect(bare.id == nil && bare.wouldBe == nil)
+        #expect(DecisionStamp().id != DecisionStamp().id)
+    }
+
     @Test func shellRowIsRedactedAndCarriesTheBoundSession() async throws {
         let (stream, continuation) = AsyncStream.makeStream(of: DecisionRecord.self)
         let recorder = DecisionLogRecorder(home: Self.home) { continuation.yield($0) }

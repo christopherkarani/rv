@@ -20,9 +20,14 @@ public struct LogFrame: Equatable, Sendable {
 /// line above rows from an earlier day, one summary line, then the next
 /// command. Columns are as wide as their widest cell, in terminal columns
 /// (`TerminalWidth`). When a row is too wide the command is cut first (to
-/// `minimumCommand`), then the code column goes, then the rule is cut (to
-/// `minimumRule`), then the command again; a cut cell ends in `…`. Lines of
+/// `minimumCommand`), then the rule (to `minimumRule`), then the code
+/// column goes, then the command is cut again; a cut cell ends in `…`. Lines of
 /// prose wrap. Without color the glyphs and words carry the meaning.
+///
+/// Colors follow v5c's rv term frame through `Palette`: `✕ Stopped` red
+/// (`deny`), `◐ Would stop` amber (`mark`), `→` blue (`trace`), `◆`
+/// in the heading ink. `colorOffPalette` (piped, `NO_COLOR`, `TERM=dumb`)
+/// paints nothing.
 public struct LogRenderer: FrameRenderer {
     public init() {}
 
@@ -66,8 +71,11 @@ public struct LogRenderer: FrameRenderer {
         }
         if let next = model.next {
             lines.append("")
+            // v5c: the → glyph blue, the command bold, the reason dim.
             let command = CommandVocabulary.Glyph.next.rawValue + " " + next.command
-            let painted = Self.indent + paint(command, slot: palette.heading, reset: palette.reset)
+            let painted = Self.indent
+                + paint(CommandVocabulary.Glyph.next.rawValue, slot: palette.trace, reset: palette.reset) + " "
+                + paint(next.command, slot: palette.fact, reset: palette.reset)
             let oneLine = Self.indent.count + TerminalWidth.of(command) + 3 + TerminalWidth.of(next.why)
             if let columns = frame.columns, oneLine > columns {
                 lines.append(painted)
@@ -146,10 +154,10 @@ public struct LogRenderer: FrameRenderer {
         func over() -> Int { widths.total - columns }
         // 1. The command gives, down to its minimum.
         widths.command = max(min(command, minimumCommand), command - max(0, over()))
-        // 2. Then the code column goes.
-        if over() > 0 { widths.code = 0 }
-        // 3. Then the rule gives, down to its minimum.
+        // 2. Then the rule, down to its minimum.
         if over() > 0 { widths.rule = max(min(rule, minimumRule), rule - over()) }
+        // 3. Then the code column goes.
+        if over() > 0 { widths.code = 0 }
         // 4. Then the command again, keeping one column.
         if over() > 0 { widths.command = max(1, widths.command - over()) }
         return widths

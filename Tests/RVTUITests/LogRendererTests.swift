@@ -40,18 +40,23 @@ struct LogRendererTests {
                  tool: "Edit", target: "~/code/app/Sources/Payments/Internal/.env.production", code: "c08-d3a"),
     ]
 
-    static func lines(_ query: LogQuery = LogQuery(), columns: Int = 80, palette: Palette = colorOffPalette) -> [String] {
+    static func lines(_ query: LogQuery = LogQuery(), columns: Int? = 80, palette: Palette = colorOffPalette) -> [String] {
         let model = LogViewModel(entries: fixture, query: query, now: now, calendar: utc)
         return LogRenderer().render(LogFrame(model: model, columns: columns), palette: palette)
+    }
+
+    /// Every line fits `columns` in terminal cells and ends in no space.
+    static func expectFits(_ rendered: [String], _ columns: Int, sourceLocation: SourceLocation = #_sourceLocation) {
+        for line in rendered {
+            #expect(TerminalWidth.of(line) <= columns, "\(TerminalWidth.of(line)): \(line)", sourceLocation: sourceLocation)
+            #expect(line.hasSuffix(" ") == false, "trailing space: \(line)", sourceLocation: sourceLocation)
+        }
     }
 
     @Test("80 columns, no color: fixed columns, judge notes folded, one summary line")
     func goldenAt80() {
         let rendered = Self.lines()
-        for line in rendered {
-            #expect(line.count <= 80, "\(line.count): \(line)")
-            #expect(line.hasSuffix(" ") == false, "trailing space: \(line)")
-        }
+        Self.expectFits(rendered, 80)
         #expect(rendered.joined(separator: "\n") == Self.golden80)
     }
 
@@ -66,13 +71,43 @@ struct LogRendererTests {
           Sat 21 Nov
           09:12  codex   ◐ Would stop  core.secrets:env      Edit …v.production  c08-d3a
 
-          2 stopped · 3 would stop · judge: 3 notes in shadow, hidden
+          2 stopped · 3 would stop · 3 judge notes in shadow
+
+          → rv log --all   every row, judge notes too
+        """
+
+    @Test("60 columns: the rule keeps its minimum, the code column goes, prose wraps")
+    func goldenAt60() {
+        let rendered = Self.lines(columns: 60)
+        Self.expectFits(rendered, 60)
+        let widths = LogRenderer.widths(
+            LogViewModel(entries: Self.fixture, query: LogQuery(), now: Self.now, calendar: Self.utc).rows, columns: 60
+        )
+        #expect(widths.rule >= LogRenderer.minimumRule)
+        #expect(widths.code == 0)
+        #expect(widths.total <= 60)
+        #expect(rendered.joined(separator: "\n") == Self.golden60)
+    }
+
+    static let golden60 = """
+
+          ◆ last 7 days                                            5
+
+          14:02  claude  ✕ Stopped     core.git:re…  git reset --ha…
+          13:47  codex   ◐ Would stop  core.git:pu…  git push --for…
+          12:15  cursor  ✕ Stopped     core.secret…  …ssh/id_ed25519
+          11:20  claude  ◐ Would stop  core.filesy…  rm -rf ./dist …
+          Sat 21 Nov
+          09:12  codex   ◐ Would stop  core.secret…  …env.production
+
+          2 stopped · 3 would stop · 3 judge notes in shadow
 
           → rv log --all   every row, judge notes too
         """
 
     @Test("120 columns: whole commands and rule ids; a file keeps the end of its path")
     func goldenAt120() {
+        Self.expectFits(Self.lines(columns: 120), 120)
         #expect(Self.lines(columns: 120).joined(separator: "\n") == Self.golden120)
     }
 
@@ -87,12 +122,21 @@ struct LogRendererTests {
           Sat 21 Nov
           09:12  codex   ◐ Would stop  core.secrets:env               Edit …p/Sources/Payments/Internal/.env.production  c08-d3a
 
-          2 stopped · 3 would stop · judge: 3 notes in shadow, hidden
+          2 stopped · 3 would stop · 3 judge notes in shadow
 
           → rv log --all   every row, judge notes too
         """
 
-    @Test("without rvd's decision log, shell rows show the tool and one dim note says why")
+    @Test("piped (no width): every cell whole, nothing cut, so grep sees full commands")
+    func piped() {
+        let rendered = Self.lines(LogQuery(all: true), columns: nil)
+        #expect(rendered.joined().contains("…") == false)
+        #expect(rendered.contains { $0.contains("git reset --hard origin/main") && $0.hasSuffix("a7c-835") })
+        #expect(rendered.contains { $0.contains("Edit ~/code/app/Sources/Payments/Internal/.env.production") })
+        #expect(rendered.contains { $0.contains("core.filesystem:rm-rf-general") })
+    }
+
+    @Test("without rvd's decision log, shell rows show the tool and the summary says so on one line")
     func commandsNotRecorded() {
         let model = LogViewModel(
             entries: Self.fixture.map { entry in
@@ -103,26 +147,27 @@ struct LogRendererTests {
             query: LogQuery(), now: Self.now, calendar: Self.utc, commandsRecorded: false
         )
         let rendered = LogRenderer().render(LogFrame(model: model), palette: colorOffPalette)
+        Self.expectFits(rendered, 80)
         #expect(rendered.contains { $0.hasPrefix("  14:02  claude  ✕ Stopped") && $0.contains("  Bash  ") })
-        let summary = rendered.firstIndex { $0.hasPrefix("  2 stopped") } ?? 0
-        #expect(rendered[summary + 1] == "  Commands aren't recorded: rvd is older or its decision log is off.")
+        #expect(rendered.contains("  2 stopped · 3 would stop · 3 judge notes in shadow · commands not recorded"))
         let dim = Palette(for: ColorCapability(colorsEnabled: true))
         let painted = LogRenderer().render(LogFrame(model: model), palette: dim)
-        #expect(painted.contains { $0.contains(dim.muted + "Commands aren't recorded") })
-        #expect(LogRenderer().render(LogFrame(model: LogViewModel(
-            entries: Self.fixture, query: LogQuery(), now: Self.now, calendar: Self.utc
-        )), palette: colorOffPalette).contains { $0.contains("Commands aren't") } == false)
+        #expect(painted.contains { $0.contains(dim.muted + "2 stopped") && $0.contains("commands not recorded") })
+        #expect(Self.lines().contains { $0.contains("not recorded") } == false)
+        // At 60 columns the summary wraps between its parts.
+        let narrow = LogRenderer().render(LogFrame(model: model, columns: 60), palette: colorOffPalette)
+        Self.expectFits(narrow, 60)
+        #expect(narrow.contains("  2 stopped · 3 would stop · 3 judge notes in shadow"))
+        #expect(narrow.contains("  commands not recorded"))
     }
 
-    @Test("rows stay one line each at any width; the command ends in … when cut")
+    @Test("rows stay one line each and fit at any width; the command ends in … when cut")
     func narrowAndWide() {
-        for columns in [60, 80, 120, 200] {
+        for columns in [60, 72, 80, 100, 120, 200] {
             let rendered = Self.lines(LogQuery(all: true), columns: columns)
             let rows = rendered.filter { $0.contains("Stopped") || $0.contains("Would stop") }
             #expect(rows.count == Self.fixture.count)
-            if columns >= 80 {
-                #expect(rendered.allSatisfy { $0.count <= columns }, "\(columns)")
-            }
+            Self.expectFits(rendered, columns)
         }
         let narrow = Self.lines(columns: 80).joined(separator: "\n")
         #expect(narrow.contains("…"))
@@ -130,7 +175,25 @@ struct LogRendererTests {
         #expect(wide.contains("Edit ~/code/app/Sources/Payments/Internal/.env.production"))
     }
 
-    @Test("with color, a stop is red and a would-stop amber; the words stay")
+    @Test("wide characters count two columns, so a row still fits")
+    func displayWidth() {
+        let model = LogViewModel(
+            entries: [LogEntry(time: Self.at(14, 0), agent: "claude", stopped: true, rule: "core.git:reset-hard",
+                               tool: "Bash", target: "", command: "echo 日本語のコミットメッセージ && git reset --hard 🚀🚀",
+                               code: "abc-def")],
+            query: LogQuery(), now: Self.now, calendar: Self.utc
+        )
+        let rendered = LogRenderer().render(LogFrame(model: model, columns: 80), palette: colorOffPalette)
+        Self.expectFits(rendered, 80)
+        let row = rendered.first { $0.contains("✕ Stopped") } ?? ""
+        #expect(row.hasSuffix("abc-def"))
+        #expect(TerminalWidth.of("日本") == 4)
+        #expect(TerminalWidth.of("e\u{301}") == 1)
+        #expect(TerminalWidth.of("🚀") == 2)
+        #expect(TerminalWidth.clip("日本語", to: 4) == "日…")
+    }
+
+    @Test("with color, a stop is red, a would-stop amber, → blue; the words stay")
     func colors() {
         let palette = Palette(for: ColorCapability(colorsEnabled: true))
         let rendered = Self.lines(palette: palette)
@@ -139,6 +202,10 @@ struct LogRendererTests {
         #expect(stopped.contains(palette.deny + "✕ Stopped"))
         #expect(wouldStop.contains(palette.mark + "◐ Would stop"))
         #expect(wouldStop.contains(palette.deny) == false)
+        #expect(rendered.contains { $0.contains(palette.trace + "→" + palette.reset) })
+        #expect(rendered.contains { $0.contains(palette.heading + "◆" + palette.reset) })
+        // No color: not one escape.
+        #expect(Self.lines(palette: colorOffPalette).joined().contains("\u{1B}") == false)
     }
 
     @Test("terminal escapes in a cell are shown, not sent")
@@ -154,7 +221,7 @@ struct LogRendererTests {
 
     @Test("clip keeps the width and ends in …")
     func clip() {
-        #expect(LogRenderer.clip("git reset --hard origin/main", to: 10) == "git reset…")
-        #expect(LogRenderer.clip("Bash", to: 10) == "Bash")
+        #expect(TerminalWidth.clip("git reset --hard origin/main", to: 10) == "git reset…")
+        #expect(TerminalWidth.clip("Bash", to: 10) == "Bash")
     }
 }
