@@ -123,12 +123,16 @@ public enum CommandRun {
             command: ShellCommand(rawValue: raw),
             cwd: cwd
         )
+        let alsoMatches = kind == .explain
+            ? ExplainTypedRules.matches(result: verdict.shown, command: ShellCommand(rawValue: raw), cwd: cwd, home: home)
+            : []
         return try render(
             kind: kind,
             verdict: verdict,
             command: ShellCommand(rawValue: raw),
             probe: probe,
-            requested: requested
+            requested: requested,
+            alsoMatches: alsoMatches
         )
     }
 
@@ -200,7 +204,8 @@ public enum CommandRun {
         verdict: GatedVerdict,
         command: ShellCommand,
         probe: ThemeProbe,
-        requested: RequestedMode
+        requested: RequestedMode,
+        alsoMatches: [ExplainAlsoMatch] = []
     ) throws -> CLIResult {
         let result = verdict.shown
         let observed = verdict.observeOverrode
@@ -213,20 +218,21 @@ public enum CommandRun {
 
         if mode == .robot {
             return try robotResult(
-                kind: kind, result: result, observed: authorization, command: command, exitCode: exitCode
+                kind: kind, result: result, observed: authorization, command: command, exitCode: exitCode,
+                alsoMatches: alsoMatches
             )
         }
 
+        var explain = explainViewModel(
+            from: result,
+            command: command,
+            normalized: result.matchingView.rawValue,
+            observed: authorization
+        )
+        // The person's own rules that also match, which a pack deny hides.
+        explain.alsoMatches = alsoMatches
         let lines = kind.usesExplainFrame
-            ? ExplainRenderer().render(
-                explainViewModel(
-                    from: result,
-                    command: command,
-                    normalized: result.matchingView.rawValue,
-                    observed: authorization
-                ),
-                palette: palette
-            )
+            ? ExplainRenderer().render(explain, palette: palette)
             : TestRenderer().render(
                 testViewModel(from: result, command: command, columns: probe.columns, observed: authorization),
                 palette: palette
@@ -239,21 +245,22 @@ public enum CommandRun {
         result: EvaluationResult,
         observed: HookAuthorization?,
         command: ShellCommand,
-        exitCode: Int32
+        exitCode: Int32,
+        alsoMatches: [ExplainAlsoMatch]
     ) throws -> CLIResult {
         // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
         // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
         let text: String
         switch kind {
         case .explain:
-            let payload = explainRobotPayload(
-                from: explainViewModel(
-                    from: result,
-                    command: command,
-                    normalized: result.matchingView.rawValue,
-                    observed: observed
-                )
+            var model = explainViewModel(
+                from: result,
+                command: command,
+                normalized: result.matchingView.rawValue,
+                observed: observed
             )
+            model.alsoMatches = alsoMatches
+            let payload = explainRobotPayload(from: model)
             text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:
             text = try RobotDocument.test(testRobotPayload(from: result, observed: observed != nil)).render()
