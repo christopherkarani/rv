@@ -6,18 +6,22 @@ import RVPacks
 
 /// Every rule's guidance is proven by the engine it describes.
 ///
-/// - A safer command is advice rv must not block. It must allow under the
-///   pack evaluate with every catalog pack on except `strict_git` (which
-///   denies even `--force-with-lease` by design) and under the hook door
-///   (`evaluateWithSemantics`) with its own pack on. A rule with no safe
-///   variant carries no safer command.
+/// - A safer command is advice rv must not block. With each `<placeholder>`
+///   filled in, it must allow under the pack evaluate with every catalog
+///   pack on except `strict_git` (which denies even `--force-with-lease` by
+///   design) and under the hook door (`evaluateWithSemantics`) with its own
+///   pack on. It never reads or prints a secret value. A rule with no safe
+///   variant carries no safer command; every `core.*` rule carries a safer
+///   command or `who_acts` instead.
 /// - A `stop` example must make its own rule fire with its pack on; at
 ///   critical or high severity that is a deny. A shadowed rule (another
 ///   rule, often a core pack, always fires first on its commands) instead
 ///   needs its own pattern to match and the command to be denied; the
 ///   shadowed set is pinned in `shadowedRules`.
-/// - An `allow` example must allow with its pack on, and its rule must not
-///   fire, on the pack evaluate or the door.
+/// - An `allow` example must allow with its pack on, on the pack evaluate
+///   and the door, and its rule must not fire on either.
+/// - No example pastes a rule's regex alternatives side by side
+///   (`gh secret delete remove`): each is a command a person would type.
 ///
 /// Rules no command can reach today carry no examples: placeholder `(?!)`
 /// patterns that only a semantic analyzer could emit, and packs with no
@@ -103,6 +107,9 @@ struct RuleGuidanceTests {
                         unreachable += 1
                     }
                     #expect(guidance.examples == RuleExamples(), "\(id) can never fire; its examples could not pass")
+                    // A semantic analyzer can still emit a placeholder id
+                    // (core.git:git-alias-semantic-unverified), so it may
+                    // say who acts, but it has no command to suggest.
                     #expect(guidance.saferCommand == nil, "\(id) can never fire; nothing would show its advice")
                     continue
                 }
@@ -143,7 +150,9 @@ struct RuleGuidanceTests {
                 for command in guidance.examples.allow {
                     let pin = harness.pin(command, enabled: enabled)
                     let door = harness.door(command, enabled: enabled)
-                    if pin.decision != .allow || pin.outcome.explainRuleID == id || door.outcome.explainRuleID == id {
+                    if pin.decision != .allow || door.decision != .allow
+                        || pin.outcome.explainRuleID == id || door.outcome.explainRuleID == id
+                    {
                         failures += 1
                         Issue.record(
                             "\(id.rawValue) allow example \(command) gave pin \(describeDecision(pin)), door \(describeDecision(door))"
@@ -168,25 +177,87 @@ struct RuleGuidanceTests {
                 let id = guidance.ruleID.rawValue
                 #expect(safer.isEmpty == false, "\(id) has an empty safer command")
                 #expect(guidance.examples.stop.contains(safer) == false, "\(id) suggests its own stop example")
-                let packs = harness.pin(safer, enabled: catalogMinusStrict)
-                #expect(packs.decision == .allow, "\(id) suggests \(safer), packs give \(describeDecision(packs))")
-                let door = harness.door(safer, enabled: enabled)
-                #expect(door.decision == .allow, "\(id) suggests \(safer), the door gives \(describeDecision(door))")
+                let filled = fillingPlaceholders(safer)
+                #expect(guidance.examples.stop.contains(filled) == false, "\(id) suggests its own stop example")
+                let packs = harness.pin(filled, enabled: catalogMinusStrict)
+                #expect(packs.decision == .allow, "\(id) suggests \(filled), packs give \(describeDecision(packs))")
+                let door = harness.door(filled, enabled: enabled)
+                #expect(door.decision == .allow, "\(id) suggests \(filled), the door gives \(describeDecision(door))")
             }
         }
         #expect(checked > 0)
     }
 
-    /// The force-push advice in core.git's explanation (`--force-with-lease`)
-    /// is a pack-level allow, but the built-in action policy sends every
-    /// remote push to a human. So the force-push rules offer no safer
-    /// command, and both forms of force still stop.
+    /// A safer command is shown to an agent and may be run as is. It may
+    /// list, describe or dry-run; it must never print a secret's value.
+    static let secretReaders = [
+        #"get-secret-value"#, #"\bkv\s+get\b"#, #"(^|\s)read(\s|$)"#, #"\bdownload\b"#,
+        #"\bdocument\s+get\b"#, #"\btoken\s+lookup\b"#, #"\bsecrets\s+get\b"#, #"\bitem\s+get\b"#,
+        #"get-parameters?\b"#, #"--with-decryption"#, #"--reveal"#, #"--include-values?\b"#, #"--plain\b"#,
+    ]
+    /// In a secrets.* pack nothing may fetch at all: a `get` other than
+    /// `kv metadata get` (versions, not values), a lookup or an export.
+    static let secretPackFetchers = [#"(?<!metadata )\bget\b"#, #"\blookup\b"#, #"\bexport\b"#]
+
+    @Test func noSaferCommand_readsASecret() throws {
+        let documents = try PackRegistry.loadAllDocuments()
+        // The check itself must catch the commands it exists for.
+        for leak in ["aws secretsmanager get-secret-value --secret-id x", "vault kv get secret/db", "vault read secret/db",
+                     "doppler secrets download", "doppler secrets get DB", "op document get doc", "vault token lookup"] {
+            #expect(readsSecret(leak, inSecretsPack: false), "\(leak) slipped past the secret check")
+        }
+        #expect(readsSecret("vault kv metadata get secret/db", inSecretsPack: true) == false)
+        for document in documents {
+            let secretsPack = document.id.rawValue.hasPrefix("secrets.")
+            for guidance in document.guidance {
+                guard let safer = guidance.saferCommand else { continue }
+                #expect(
+                    readsSecret(safer, inSecretsPack: secretsPack) == false,
+                    "\(guidance.ruleID.rawValue) suggests \(safer), which can print a secret"
+                )
+            }
+        }
+    }
+
+    /// The plan: every stop shows a safer command, or exactly who has to act.
+    @Test func everyCoreRule_offersASaferCommandOrSaysWhoActs() throws {
+        var checked = 0
+        for document in try PackRegistry.loadAllDocuments() where document.id.rawValue.hasPrefix("core.") {
+            for guidance in document.guidance {
+                checked += 1
+                let offers = guidance.saferCommand != nil || guidance.whoActs != nil
+                #expect(offers, "\(guidance.ruleID.rawValue) has neither a safer command nor who_acts")
+            }
+        }
+        #expect(checked > 0)
+    }
+
+    @Test func noExample_pastesRegexAlternativesSideBySide() throws {
+        #expect(pastesAlternatives("gh secret delete remove my-app", pattern: #"gh\s+secret\s+(?:delete|remove)\b"#))
+        #expect(pastesAlternatives("gh secret delete MY_SECRET", pattern: #"gh\s+secret\s+(?:delete|remove)\b"#) == false)
+        for document in try PackRegistry.loadAllDocuments() {
+            for (rule, guidance) in zip(document.destructive, document.guidance) {
+                for command in guidance.examples.stop + guidance.examples.allow {
+                    #expect(
+                        pastesAlternatives(command, pattern: rule.pattern) == false,
+                        "\(guidance.ruleID.rawValue) example \(command) pastes the pattern's alternatives"
+                    )
+                }
+            }
+        }
+    }
+
+    /// `--force-with-lease` is a pack-level allow, but the built-in action
+    /// policy sends every remote push to a human. So the force-push rules
+    /// offer no safer command (they say who acts), their descriptions no
+    /// longer advise it, and both forms of force still stop.
     @Test func forcePush_stillStops_andOffersNoSaferCommand() throws {
         let harness = try StressHarness.catalog()
         let guidance = try PackRegistry.loadRuleGuidance()
         for name in ["push-force-long", "push-force-short"] {
             let rule = try #require(guidance[RuleID(pack: .coreGit, pattern: name)])
             #expect(rule.saferCommand == nil)
+            #expect(rule.whoActs?.isEmpty == false)
         }
         let stops: [(String, String)] = [
             ("git push --force origin main", "push-force-long"),
@@ -202,6 +273,10 @@ struct RuleGuidanceTests {
             #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: name))
         }
         #expect(harness.pin("git push --force-with-lease").decision == .allow)
+        let git = try PackRegistry.loadDocument(.coreGit)
+        for rule in git.destructive where rule.name.hasPrefix("push-force") {
+            #expect(rule.reason.contains("force-with-lease") == false)
+        }
         guard case .deny(let door) = harness.door("git push --force-with-lease origin feature").decision else {
             Issue.record("the door must still send force-with-lease to a human")
             return
@@ -216,6 +291,34 @@ extension StressHarness {
               let rule = pack.destructive.first(where: { $0.rule.name == id.pattern })
         else { return false }
         return engine.matches(rule.compiled, in: Normalize.matchingView(of: command).rawValue)
+    }
+}
+
+/// A safer command with each `<name>` placeholder replaced by the bare name,
+/// as a person would fill it in: `aws s3 ls s3://<bucket>` evaluates as
+/// `aws s3 ls s3://bucket`.
+func fillingPlaceholders(_ command: String) -> String {
+    command.replacingOccurrences(of: #"<([^<>\s]+)>"#, with: "$1", options: .regularExpression)
+}
+
+private func readsSecret(_ command: String, inSecretsPack: Bool) -> Bool {
+    let patterns = RuleGuidanceTests.secretReaders + (inSecretsPack ? RuleGuidanceTests.secretPackFetchers : [])
+    return patterns.contains { command.range(of: $0, options: .regularExpression) != nil }
+}
+
+/// True when two different words from one `(a|b|c)` group of the rule's
+/// pattern sit next to each other in the command (`delete remove`).
+private func pastesAlternatives(_ command: String, pattern: String) -> Bool {
+    guard let group = try? NSRegularExpression(pattern: #"\((?:\?:)?([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)+)\)"#) else {
+        return false
+    }
+    let range = NSRange(pattern.startIndex..., in: pattern)
+    let groups = group.matches(in: pattern, range: range).compactMap { match -> Set<String>? in
+        Range(match.range(at: 1), in: pattern).map { Set(pattern[$0].split(separator: "|").map(String.init)) }
+    }
+    let words = command.split(whereSeparator: \.isWhitespace).map(String.init)
+    return zip(words, words.dropFirst()).contains { first, second in
+        first != second && groups.contains { $0.contains(first) && $0.contains(second) }
     }
 }
 
