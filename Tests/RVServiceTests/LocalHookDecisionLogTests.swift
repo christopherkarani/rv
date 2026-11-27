@@ -121,9 +121,13 @@ struct LocalHookDecisionLogTests {
 
     @Test func inWatchModeAWouldStopGoesToRvdAndLogsNothingHere() async throws {
         let fixture = try LocalHookFixture(guardMode: "observe")
-        let stdin = claudeFile("Read", path: fixture.workspace + "/.env", cwd: fixture.workspace)
+        // Not `.env`: watch mode stops secret reads outright.
+        let stdin = claudeBash("git reset --hard", cwd: fixture.workspace)
         let local = await fixture.decider.decide(host: .claude, stdin: stdin)
-        #expect(local == .escalate(.observe))
+        guard case .escalate = local else {
+            Issue.record("a watch-mode would-stop goes to rvd, got \(local)")
+            return
+        }
         #expect(fixture.decisionRows().isEmpty)
     }
 
@@ -133,7 +137,7 @@ struct LocalHookDecisionLogTests {
         let fixture = try LocalHookFixture(guardMode: "observe")
         let runtime = hookTestRuntime(
             home: fixture.home, allowOnceDirectory: try isolatedAllowOnceDirectory(), recordsDecisions: true)
-        let stdin = claudeFile("Read", path: fixture.workspace + "/.env", cwd: fixture.workspace)
+        let stdin = claudeBash("git reset --hard", cwd: fixture.workspace)
         _ = await runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .claude, stdin: stdin))),
             context: peerHookContext()

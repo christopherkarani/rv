@@ -131,11 +131,15 @@ enum WorkspaceStatusLabel {
 
     /// Agents rv knows by name. Display only: the name picks the title's
     /// colour and `⏺`, nothing else.
-    static let agentNames = ["claude", "codex", "opencode", "gemini", "cursor", "aider", "goose", "copilot"]
+    static let agentNames: Set<String> = ["claude", "codex", "opencode", "gemini", "cursor", "aider", "goose", "copilot"]
 
+    /// True when the title's first word is an agent's name: `✳ Claude
+    /// Code`, `/usr/local/bin/aider --yes`, `Codex: fixing tests`. A name
+    /// later in the title (`vim claude.md`) is not the agent running.
     static func isAgent(_ title: String) -> Bool {
-        let lower = title.lowercased()
-        return agentNames.contains { lower.contains($0) }
+        let words = title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "/" && $0 != "-" })
+        guard let first = words.first?.split(separator: "/").last else { return false }
+        return agentNames.contains(String(first))
     }
 }
 
