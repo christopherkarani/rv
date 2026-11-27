@@ -73,9 +73,39 @@ public enum AuditLog {
             self.init(timeout: Duration.seconds(seconds), now: now, pause: pause)
         }
 
-        var expired: Bool {
+        /// A wait that ends at `deadline`, however far off or past it is
+        /// (past: one attempt, no wait).
+        package init(
+            deadline: ContinuousClock.Instant,
+            now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+            pause: @escaping @Sendable () -> Void = { usleep(2_000) }
+        ) {
+            self.now = now
+            self.pause = pause
+            self.deadline = deadline
+        }
+
+        package var expired: Bool {
             guard let deadline else { return false }
             return now() >= deadline
+        }
+
+        /// What is left before the deadline (zero once it has passed); nil
+        /// when there is no deadline.
+        package var remaining: Duration? {
+            deadline.map { max(.zero, $0 - now()) }
+        }
+
+        /// Runs `attempt` until it returns a value or the deadline passes,
+        /// pausing between tries; at least one try. For non-blocking lock
+        /// attempts, so a lock another process holds costs at most what is
+        /// left of this wait. Without a deadline it tries until a value comes.
+        package func retrying<T>(_ attempt: () -> T?) -> T? {
+            while true {
+                if let value = attempt() { return value }
+                if expired { return nil }
+                pause()
+            }
         }
     }
 
@@ -108,14 +138,16 @@ public enum AuditLog {
         // process holds, or writing a long line, keeps no other log in this
         // process waiting.
         return AppendLock.withLock(log, wait) {
-            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            // O_NONBLOCK: a FIFO or device at the path must fail, not hang
+            // a caller that has to answer; only a regular file is the log.
+            let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
             guard fd >= 0 else { return false }
             // The file reached through another directory (a hard link, or
             // this one swapped since the `stat`) is still one log: its own
             // entry, always taken second, so a thread holding a file's
             // entry never waits for a directory's.
             var file = stat()
-            guard fstat(fd, &file) == 0 else {
+            guard fstat(fd, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG else {
                 close(fd)
                 return false
             }

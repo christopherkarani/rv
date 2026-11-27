@@ -927,7 +927,7 @@ EOF
   as_owner rv mcp check > "$WORK/mcp-check.log" 2>&1; st=$?
   [[ "$st" != 0 ]] && grep -q "edited outside rv" "$WORK/mcp-check.log"
   check mcp "a hand-written mcp.json is untrusted (rv mcp check fails)" $? "$(head -2 "$WORK/mcp-check.log")"
-  as_agent rv mcp serve > "$WORK/mcp-untrusted.log" 2>&1
+  as_agent rv mcp serve < /dev/null > "$WORK/mcp-untrusted.log" 2>&1
   grep -q "not launching MCP servers" "$WORK/mcp-untrusted.log"
   check mcp "untrusted mcp.json: rv mcp serve launches nothing" $?
   as_owner "$TOOLS/pty_run.py" 90 assword wrong-password -- rv mcp trust > "$WORK/trust-wrong.log" 2>&1; [[ $? != 0 ]]

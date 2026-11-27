@@ -20,6 +20,8 @@ public enum IPCMethod: Sendable, Equatable {
     case attestTTYRedemption(AttestTTYRedemptionParams)
     case confirmOwnerAction(ConfirmOwnerActionParams)
     case mintAllowOnce(MintAllowOnceParams)
+    /// Live events long poll (`IPCEvents.swift`).
+    case events(EventsParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -41,6 +43,7 @@ public enum IPCResult: Sendable, Equatable {
     case attestTTYRedemption(AttestTTYRedemptionReply)
     case confirmOwnerAction(ConfirmOwnerActionReply)
     case mintAllowOnce(MintAllowOnceReply)
+    case events(EventsReply)
     case uiRegistered(UIRegisteredDTO)
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
@@ -82,6 +85,7 @@ extension IPCMethod: Codable {
         case attestTTYRedemption = "redeemAllowOnceOwnerChecked"
         case confirmOwnerAction
         case mintAllowOnce
+        case events
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -123,6 +127,8 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .confirmOwnerAction)
         case .mintAllowOnce(let params):
             try container.encode(params, forKey: .mintAllowOnce)
+        case .events(let params):
+            try container.encode(params, forKey: .events)
         }
     }
 
@@ -169,6 +175,8 @@ extension IPCMethod: Codable {
         } else if let params = try container.decodeIfPresent(
             MintAllowOnceParams.self, forKey: .mintAllowOnce) {
             self = .mintAllowOnce(params)
+        } else if let params = try container.decodeIfPresent(EventsParams.self, forKey: .events) {
+            self = .events(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -197,6 +205,7 @@ extension IPCResult: Codable {
         case attestTTYRedemption
         case confirmOwnerAction
         case mintAllowOnce
+        case events
         case uiRegistered
         case uiReviewList
         case uiChallengeBundle
@@ -252,6 +261,8 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .confirmOwnerAction)
         case .mintAllowOnce(let reply):
             try container.encode(reply, forKey: .mintAllowOnce)
+        case .events(let reply):
+            try container.encode(reply, forKey: .events)
         case .uiRegistered(let reply):
             try container.encode(reply, forKey: .uiRegistered)
         case .uiReviewList(let reply):
@@ -326,6 +337,8 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             MintAllowOnceReply.self, forKey: .mintAllowOnce) {
             self = .mintAllowOnce(reply)
+        } else if let reply = try container.decodeIfPresent(EventsReply.self, forKey: .events) {
+            self = .events(reply)
         } else if let reply = try container.decodeIfPresent(
             UIRegisteredDTO.self, forKey: .uiRegistered) {
             self = .uiRegistered(reply)

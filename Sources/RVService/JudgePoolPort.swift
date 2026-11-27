@@ -51,6 +51,13 @@ extension JudgeRuntime {
         now: ContinuousClock.Instant = .now
     ) -> JudgeRun {
         guard let budget = poolBudget(deadline: deadline, now: now) else { return .late }
+        return runPool(call, client: client, budget: budget)
+    }
+
+    /// One judged call through the pool with an explicit budget (the
+    /// hook-local evaluator's, cut to its own deadline). The client returns
+    /// by `budget` plus `JudgePoolWire.transportSlack`.
+    static func runPool(_ call: JudgeCall, client: any JudgeClient, budget: Duration) -> JudgeRun {
         let key = ModelKey(engine: call.engine.rawValue, bundle: call.bundle.path)
         let input = JudgeInput(command: call.command, contextLines: call.context.lines())
         return read(client.judge(key: key, input: input, budget: budget))
@@ -70,7 +77,9 @@ extension JudgeRuntime {
         case .late: return .late
         case .warming: return .warming
         case .loadFailed(let failure):
-            return .refused("Laya judge pool could not load the model (\(failure.message)); judged calls go to review. Run `rv doctor`.")
+            // A worker's own refusal reason is already a full sentence.
+            if failure.message.hasPrefix("Laya judge:") { return .refused(failure.message) }
+            return .refused("Laya judge pool could not load the model (\(failure.message)); judged calls go to review. Ask the owner to run `rv doctor`.")
         case .failed: return .failed
         }
     }

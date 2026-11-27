@@ -48,10 +48,16 @@ public protocol ServiceTransport: Sendable {
     func helloHookConsult(clientSemver: String) async throws -> HelloAckView
     /// Drops the current transport connection after a failed or skewed handshake.
     func invalidate()
+    /// A transport for `events` long polls: its own connection where the
+    /// transport has one, so a poll parked in rvd never holds the lock or
+    /// the connection other requests use. Default: this transport.
+    func longPollChannel() -> any ServiceTransport
 }
 
 extension ServiceTransport {
     public var oneShotEvaluateTimeoutMs: Int { 700 }
+
+    public func longPollChannel() -> any ServiceTransport { self }
 
     public func send(_ body: Data, timeoutMs: Int) async throws -> Data {
         _ = timeoutMs
@@ -137,6 +143,11 @@ public struct XPCServiceTransport: ServiceTransport {
     public func invalidate() {
         session.invalidate()
         hookSession.invalidate()
+    }
+
+    /// A transport with XPC sessions of its own.
+    public func longPollChannel() -> any ServiceTransport {
+        XPCServiceTransport(connectTimeoutMs: connectTimeoutMs, requestTimeoutMs: requestTimeoutMs)
     }
 
     var openedConnectionCount: Int { session.openedConnectionCount }

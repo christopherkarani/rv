@@ -76,7 +76,9 @@ public struct JudgeInput: Sendable, Codable, Equatable {
 }
 
 /// Why no worker could load the bundle. Mirrors `LayaError.badBundle` /
-/// `.modelUnavailable` (a broken install or an invalid private cache).
+/// `.modelUnavailable` (a broken install or an invalid private cache);
+/// `LayaError.bundleMissing` (no bundle dir at all) travels as
+/// `.modelUnavailable`.
 /// rvd maps it to a failed judge run, so judged calls go to review; doctor
 /// shows the cause.
 public struct LoadFailure: Sendable, Codable, Equatable {
