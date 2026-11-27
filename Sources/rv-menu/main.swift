@@ -37,7 +37,7 @@ struct RVMenuApplication: App {
         guard !Self.started else { return }
         Self.started = true
         let reader = GlanceReader(wire: XPCGlanceWire())
-        model.start(reader: reader) {
+        model.start(reader: reader, notices: UserNotificationSink()) {
             GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
         }
     }

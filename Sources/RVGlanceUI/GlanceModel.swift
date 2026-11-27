@@ -14,6 +14,10 @@ public final class GlanceModel {
 
     @ObservationIgnored private var feedTask: Task<Void, Never>?
     @ObservationIgnored private var clockTask: Task<Void, Never>?
+    @ObservationIgnored private var etiquette = GlanceEtiquette()
+    @ObservationIgnored private var notices: (any GlanceNoticeSink)?
+    /// Deliveries run one after another, in the order they were planned.
+    @ObservationIgnored private var delivery: Task<Void, Never>?
     /// Between events the clock only moves idle labels along.
     static let idleTick: TimeInterval = 15
 
@@ -25,9 +29,15 @@ public final class GlanceModel {
 
     public var glyph: GlanceGlyph { state.glyph(at: now) }
 
-    /// Starts polling rvd through `reader`. Calling it again restarts.
-    public func start(reader: GlanceReader, posture: @escaping @Sendable () -> GlancePosture) {
+    /// Starts polling rvd through `reader`, sending what the etiquette
+    /// allows to `notices`. Calling it again restarts.
+    public func start(
+        reader: GlanceReader,
+        notices: (any GlanceNoticeSink)? = nil,
+        posture: @escaping @Sendable () -> GlancePosture
+    ) {
         stop()
+        self.notices = notices
         let calendar = calendar
         // The task holds the model until `stop` cancels it; the app keeps
         // one model for its whole life.
@@ -48,9 +58,20 @@ public final class GlanceModel {
     }
 
     private func publish(_ state: GlanceState) {
+        let old = self.state
         self.state = state
         now = Date()
+        notify(etiquette.plan(from: old, to: state, now: now))
         rescheduleClock()
+    }
+
+    private func notify(_ actions: [GlanceNoticeAction]) {
+        guard let notices, !actions.isEmpty else { return }
+        let previous = delivery
+        delivery = Task {
+            await previous?.value
+            await notices.deliver(actions)
+        }
     }
 
     /// Wakes when the stop flash ends, else after `idleTick`.
