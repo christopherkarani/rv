@@ -113,9 +113,11 @@ enum SecretsScanHookProbe {
         let key = Recent.Key(command: command.rawValue, cwd: cwd?.rawValue, home: home?.rawValue)
         let now = Date()
         if let known = recent.withLock({ $0.answer(for: key, at: now) }) { return known }
-        let answer = SecretsScanGuard.weakensScan(command, home: home, cwd: cwd, isScratch: isScratch) { directory in
-            installedHook(near: directory, home: home)
-        }
+        let answer = SecretsScanGuard.weakensScan(
+            command, home: home, cwd: cwd,
+            installedHook: { installedHook(near: $0, home: home) },
+            isScratch: isScratch
+        )
         recent.withLock { $0.remember(answer, for: key, at: now) }
         return answer
     }

@@ -82,8 +82,8 @@ public enum SecretsScanGuard {
         home: HomePath? = nil,
         cwd: WorkingDirectory? = nil,
         leavingGitInternals: Bool = false,
-        isScratch: (String) -> Bool = { _ in true },
-        installedHook: (String) -> String? = { _ in nil }
+        installedHook: (String) -> String? = { _ in nil },
+        isScratch: (String) -> Bool = { _ in true }
     ) -> Bool {
         let raw = command.rawValue
         // The engine refuses a longer command before any rule runs.
