@@ -119,6 +119,7 @@ struct DestructiveFile: Decodable {
     var explanation: String?
     var reason: String?
     var saferCommand: String?
+    var whoActs: String?
     var examples: ExamplesFile?
 
     enum CodingKeys: String, CodingKey {
@@ -129,6 +130,7 @@ struct DestructiveFile: Decodable {
         case explanation
         case reason
         case saferCommand = "safer_command"
+        case whoActs = "who_acts"
         case examples
     }
 
@@ -149,14 +151,47 @@ struct DestructiveFile: Decodable {
         }
         explanation = try container.decodeIfPresent(String.self, forKey: .explanation)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
-        saferCommand = try container.decodeIfPresent(String.self, forKey: .saferCommand)
+        // An empty value says nothing; it must not render as advice.
+        saferCommand = try container.decodeIfPresent(String.self, forKey: .saferCommand).flatMap(nonBlank)
+        whoActs = try container.decodeIfPresent(String.self, forKey: .whoActs).flatMap(nonBlank)
         examples = try container.decodeIfPresent(ExamplesFile.self, forKey: .examples)
     }
 }
 
+private func nonBlank(_ text: String) -> String? {
+    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+}
+
+/// `examples` holds `stop` and `allow` only. Any other key (`allowed`,
+/// `deny`) is a typo that would silently drop examples, so it fails the load.
 struct ExamplesFile: Decodable {
     var stop: [String]?
     var allow: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case stop
+        case allow
+    }
+
+    init(from decoder: Decoder) throws {
+        let any = try decoder.container(keyedBy: AnyKey.self)
+        if let unknown = any.allKeys.first(where: { CodingKeys(stringValue: $0.stringValue) == nil }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: unknown, in: any,
+                debugDescription: "unknown examples key \(unknown.stringValue); expected stop or allow"
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stop = try container.decodeIfPresent([String].self, forKey: .stop)
+        allow = try container.decodeIfPresent([String].self, forKey: .allow)
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
 }
 
 public enum PackJSON {
@@ -187,6 +222,7 @@ public enum PackJSON {
             RuleGuidance(
                 ruleID: RuleID(pack: packID, pattern: row.name),
                 saferCommand: row.saferCommand,
+                whoActs: row.whoActs,
                 examples: RuleExamples(
                     stop: row.examples?.stop ?? [],
                     allow: row.examples?.allow ?? []
