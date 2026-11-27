@@ -169,6 +169,15 @@ struct RVDLifecycleGuardTests {
         #expect(RVDStopGuard.stopsRVD(command), "\(command)")
     }
 
+    @Test("rvd --version only prints; other rvd launches stay flagged")
+    func rvdVersionIsNotALaunch() {
+        #expect(RVDStopGuard.stopsRVD("rvd --version") == false)
+        #expect(RVDStopGuard.stopsRVD("~/.local/bin/rvd --version") == false)
+        for command in ["rvd --help", "rvd -h", "rvd --version --socket /tmp/x", "rvd --version; rvd", "rvd --version & rvd"] {
+            #expect(RVDStopGuard.stopsRVD(command), "\(command)")
+        }
+    }
+
     @Test("everyday process and service commands are not", arguments: benign + benignR2)
     func benignPass(command: String) {
         #expect(RVDStopGuard.stopsRVD(command) == false, "\(command)")

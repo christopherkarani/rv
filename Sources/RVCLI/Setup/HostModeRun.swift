@@ -50,7 +50,8 @@ enum HostModeRun {
         return guardMode == .observe ? .observe : .block
     }
 
-    static func list(_ env: SetupEnvironment, json: Bool) -> SetupOutcome {
+    /// `only`: show one host (`rv host mode claude`); nil shows every host.
+    static func list(_ env: SetupEnvironment, json: Bool, only: HookHost? = nil) -> SetupOutcome {
         do {
             let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
             // An unreadable config shows every host under the global mode,
@@ -63,6 +64,7 @@ enum HostModeRun {
             let guardMode = GuardModeResolution.resolve(
                 GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
             let rows = HookHost.allCases
+                .filter { only == nil || $0 == only }
                 .sorted { $0.rawValue < $1.rawValue }
                 .map { host in
                     Row(
@@ -84,6 +86,7 @@ enum HostModeRun {
                 lines.append("organization gate pins enforce: observe and off do not change evaluation")
                 // A gate that arrived after a host went off does not re-wire it.
                 let unwired = HookHost.allCases
+                    .filter { only == nil || $0 == only }
                     .filter { modes[$0] == .off && installations.state(for: $0) != .wired }
                     .map(\.rawValue)
                     .sorted()

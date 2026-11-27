@@ -70,7 +70,7 @@ struct EgressReviewTests {
     @Test func prettyPendingMentionsHostPort() async throws {
         #expect(
             EgressReviewRun.prettyPending([])
-                == "No pending network proposals.\nloaded: unknown (supervisor has not reported)\n"
+                == "No pending network proposals.\nnetwork rules in use: not reported yet (a sandboxed workspace session reports them once it runs)\n"
         )
         let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
         _ = try await egressCLIProposal(store: store, host: "a.example.com", port: 8443)
@@ -472,7 +472,7 @@ struct EgressReviewTests {
         #expect(withLoaded.contains("generation 7"))
         #expect(withLoaded.contains("1 rule"))
         let withoutLoaded = EgressReviewRun.prettyPending([], loaded: nil)
-        #expect(withoutLoaded.contains("unknown"))
+        #expect(withoutLoaded.contains("not reported yet"))
     }
 
     @Test func prettyShowMarksLoadedRule() throws {

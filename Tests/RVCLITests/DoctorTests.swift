@@ -400,7 +400,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.stdout.contains("launch-agent loaded"))
-        #expect(outcome.stdout.contains("1.0.0 · rv.ipc.v1"))
+        #expect(outcome.stdout.contains("rv.ipc.v1 · api 1.0.0"))
         #expect(outcome.stdout.contains("dev.rv.evaluate"))
     }
 }
@@ -1087,4 +1087,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 #else
     #expect(DoctorEnvironment.liveLeftovers() == .notApplicable)
 #endif
+}
+
+@Test func doctor_modeWordUsesTheVocabulary() {
+    #expect(DoctorRun.modeWord(.enforce) == CommandVocabulary.PlannedWord.guarding)
+    #expect(DoctorRun.modeWord(.observe) == CommandVocabulary.PlannedWord.watching)
 }

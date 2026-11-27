@@ -222,7 +222,7 @@ enum EgressReviewRun {
 
     static func loadedFooter(_ loaded: EgressLoadedSnapshot?) -> String {
         guard let loaded else {
-            return "loaded: unknown (supervisor has not reported)"
+            return "network rules in use: not reported yet (a sandboxed workspace session reports them once it runs)"
         }
         let rules = loaded.rules.count == 1 ? "1 rule" : "\(loaded.rules.count) rules"
         let approvals =

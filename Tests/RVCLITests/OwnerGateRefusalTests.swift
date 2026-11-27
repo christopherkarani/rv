@@ -63,9 +63,9 @@ struct OwnerGateRefusalTests {
     }
 
     private static let golden: [(OwnerGateRefusal, OwnerGateRefusal.Subject, String)] = [
-        (.ttyRequired, .grant, "requires an interactive TTY (stdin and stdout)"),
-        (.ttyRequired, .proposal, "requires an interactive TTY (stdin and stdout)"),
-        (.ttyRequired, .allowlistEntry, "requires an interactive TTY (stdin and stdout)"),
+        (.ttyRequired, .grant, "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal"),
+        (.ttyRequired, .proposal, "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal"),
+        (.ttyRequired, .allowlistEntry, "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal"),
         (.robotRefused, .grant, "--json/--robot refused"),
         (.robotRefused, .proposal, "--json/--robot refused"),
         (.robotRefused, .allowlistEntry, "--json/--robot refused"),
@@ -82,7 +82,7 @@ struct OwnerGateRefusalTests {
         (.storeUnavailable, .proposal, "store unavailable"),
         (.storeUnavailable, .allowlistEntry, "store unavailable"),
         (.storeUnavailable, .newCode, "store unavailable"),
-        (.ttyRequired, .newCode, "requires an interactive TTY (stdin and stdout)"),
+        (.ttyRequired, .newCode, "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal"),
         (.robotRefused, .newCode, "--json/--robot refused"),
         (.changedDuringReview, .newCode, "grant changed during review; retry with a fresh code"),
         (.authRequired, .newCode, "device-owner authentication required"),
@@ -204,7 +204,7 @@ struct OwnerGateRefusalTests {
             }
         }
         #expect(out.stderr == "rv egress approve: too many authentication prompts; wait and retry\n"
-            + "rv egress approve: requires an interactive TTY (stdin and stdout)\n")
+            + "rv egress approve: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func failOwnerGateRethrowsOtherErrorsUnchanged() throws {

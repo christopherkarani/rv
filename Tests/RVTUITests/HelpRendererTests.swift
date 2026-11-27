@@ -124,3 +124,22 @@ import RVTheme
     #expect(lines.contains("Examples") == false)
     #expect(lines.contains("Next") == false)
 }
+
+@Test func helpRenderer_longNameWrapsItsDescriptionInsteadOfPaddingTheSection() throws {
+    let long = "rv workspace start [--workspace <absolute-path>] [--resource-profile <id>] [--json]"
+    let model = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv workspace status", description: "Is the host answering?"),
+                HelpRow(name: long, description: "Start the host"),
+            ]),
+        ]
+    )
+    let lines = HelpRenderer().render(model, palette: colorOffPalette)
+    #expect(lines.contains("  rv workspace status  Is the host answering?"))
+    let index = try #require(lines.firstIndex(of: "  " + long))
+    #expect(lines[index + 1] == "  " + String(repeating: " ", count: "rv workspace status".count) + "  Start the host")
+    #expect(lines.allSatisfy { $0.count <= long.count + 2 })
+}
