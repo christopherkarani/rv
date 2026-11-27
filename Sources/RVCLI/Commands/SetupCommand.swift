@@ -30,7 +30,27 @@ struct Setup: AsyncParsableCommand {
     @Flag(name: .customLong("observe"), help: "Log what rv would block instead of blocking (guard.mode observe).")
     var observe = false
 
+    @Flag(name: .customLong("dry-run"), help: "Print what setup would write, and write nothing.")
+    var dryRun = false
+
+    func validate() throws {
+        if dryRun && (json || robot) {
+            throw ValidationError("--dry-run prints text only; drop --json/--robot")
+        }
+    }
+
     func run() async throws {
+        if dryRun {
+            // The same read-only inspection setup plans from; nothing is
+            // written and nothing is started.
+            guard let env = SetupEnvironment.live() else {
+                try CommandContext.failHomeMissing(command: "setup")
+            }
+            let paths = OwnedPaths(home: env.home)
+            let snapshot = try SetupRun.inspectInstallations(layout: paths, env: env)
+            CommandContext.writeStdout(SetupDryRun.text(snapshot: snapshot, paths: paths, force: force, observe: observe))
+            return
+        }
         // Step 8B P9: one-click install. `rv setup` only writes rv-owned
         // hooks, the LaunchAgent, and config — it adds oversight and cannot
         // manufacture ALLOW — so it runs without device-owner
