@@ -101,8 +101,8 @@ check_empty() {
 
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
-  #   class  — RVService/RVXPC (XPC/NSObject) and RVWorkspaceTUI/RVOperatorUI
-  #            (framework/session adapters).
+  #   class  — RVService/RVXPC (XPC/NSObject) and RVWorkspaceTUI/RVOperatorUI/
+  #            RVGlanceUI (framework/session adapters).
   #   actor  — RVService, RVPolicy, RVAnalytics, and RVIsolation (LocalExecutor).
   #            Domain/Engine/Packs/Presentation remain value-only.
   #   RVMCP/MCPGatewayRuntime.swift — owns upstream processes and reader
@@ -149,7 +149,7 @@ check_value_types() {
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVXPC/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
     | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' | grep -v 'Sources/RVLaya/' \
-    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCPCustodianCore/' | grep -v 'Sources/RVJudgePool/' \
+    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVGlanceUI/' | grep -v 'Sources/RVMCPCustodianCore/' | grep -v 'Sources/RVJudgePool/' \
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
@@ -416,7 +416,7 @@ check_no_main_in_library() {
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-menu/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
@@ -432,7 +432,7 @@ check_no_main_in_library() {
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' | grep -v 'Sources/rv-mcp-probe/' | grep -v 'Sources/rv-mcp-signal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-menu/' | grep -v 'Sources/rv-judge/' | grep -v 'Sources/rv-hook-local/' \
     | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
