@@ -1,6 +1,6 @@
 ---
 name: rv
-description: How to behave when rv blocks you. Use when a tool call or shell command is denied with "RV · Blocked", asks for human approval, mentions an allow-once code, or when a network request returns an rv.egress.denied.v1 body or a Proxy-Status header naming rv-egress.
+description: How to behave when rv blocks you. Use when a tool call or shell command is denied with "RV · Blocked", asks for human approval, mentions an allow-once code, or when a network request returns an rv.egress.denied.v1 body or a Proxy-Status header naming rv-egress. Also use when a command needs an API key or other secret: run it with rv run --secret.
 ---
 
 # Working under rv
@@ -40,6 +40,25 @@ not an error to work around.
 4. Retry only after the human says they granted it, and retry the exact
    command that was blocked, not a variant.
 
+## Using keys
+
+The human keeps API keys in rv, not in files or your environment. To call an
+API that needs one, run the command through rv:
+
+    rv run --secret OPENAI_API_KEY -- npm test
+
+The command gets a stand-in that only works from its own processes, toward
+that key's API. The real value never reaches you or the transcript.
+
+- `rv secrets describe --json` lists the keys you can use and where each one
+  sends; it never shows a value.
+- Do not read `.env` files or other secret files to find a key; rv stops it.
+- A key rv does not have yet: ask the human to keep it in rv (the command is
+  under "Commands only the human runs").
+- The commit check stops a key in a commit: take the key out of the file and
+  ask the human to keep it in rv. Never switch the check off or mark the line
+  as allowed.
+
 ## Commands you may run
 
 These only read. If rv does not run where you are (for example inside a
@@ -48,6 +67,8 @@ sandbox), quote them for the human instead.
 - `rv explain <command>` shows why rv allows or blocks a command.
 - `rv egress pending` lists egress proposals waiting for review.
 - `rv egress denials` lists recent egress refusals.
+- `rv secrets describe --json` lists the keys you can use, never a value.
+- `rv run --secret NAME -- <command>` runs a command with a key's stand-in.
 
 ## Commands only the human runs
 
@@ -56,6 +77,7 @@ yourself; rv blocks agents from running them.
 
 - `rv allow-once <code>` redeems the code from a hook deny, once.
 - `rv egress approve <id>` approves the egress proposal named in `next_step`.
+- `rv secrets set NAME` keeps a new key in rv.
 
 ## Never
 
@@ -71,6 +93,8 @@ Do not try to get around rv. In particular, never:
   `rv host mode <host> off`, `rv packs disable <pack>`,
   `rv allowlist add <rule> --reason <reason>`, `rv safety normal`, or
   `rv policy apply <policy.toml>`;
+- switch off or silence the commit check: `git config rv.secretsScan false`,
+  an `rv-secrets:allow` comment, or a `.rv-secrets-ignore` entry;
 - disable hooks in your host's settings, or ask the human to do it for you.
 
 If you think a rule is wrong, say so to the human and let them decide.

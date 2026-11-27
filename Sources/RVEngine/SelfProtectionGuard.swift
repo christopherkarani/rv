@@ -74,6 +74,50 @@ private let xargsStdinWord = "$xargs-stdin"
 
 private let xargsProgramNames: Set<String> = ["xargs", "gxargs"]
 
+/// The stdin stand-in, for other guards that follow xargs.
+let xargsStandIn = xargsStdinWord
+
+/// `launched` plus the commands each `xargs` among them runs (nested
+/// xargs too, up to `maxXargsDepth`): its program as written and with
+/// every replace string swapped for the stdin stand-in, the stand-in
+/// appended unless replace mode alone is in effect, re-fed through the
+/// shared launcher resolver. When xargs's options do not parse exactly,
+/// every word from one that names git (or is dynamic) on is taken as the
+/// program (fail closed).
+func followingXargs(_ launched: [LaunchedCommand]) -> [LaunchedCommand] {
+    var out = launched
+    var depths = Array(repeating: 0, count: launched.count)
+    var index = 0
+    while index < out.count {
+        let (command, depth) = (out[index], depths[index])
+        index += 1
+        guard depth < maxXargsDepth, let head = command.guardArgv.first,
+              xargsProgramNames.contains(commandName(head)) else { continue }
+        for argv in xargsPrograms(Array(command.guardArgv.dropFirst())) {
+            let fed = launchedCommandHeads(argv: argv, depth: depth + 1)
+            out += fed
+            depths += Array(repeating: depth + 1, count: fed.count)
+        }
+    }
+    return out
+}
+
+private func xargsPrograms(_ words: [String]) -> [[String]] {
+    guard let parsed = parseXargsOptions(words) else {
+        return words.indices.filter { index in
+            let word = unescapeBackslashPairs(words[index])
+            return commandName(word) == "git" || word.hasPrefix("$")
+        }.map { Array(words[$0...]) + [xargsStdinWord] }
+    }
+    guard let start = parsed.programStart else { return [] }
+    let program = Array(words[start...])
+    let stdin = parsed.appendsStdin ? [xargsStdinWord] : []
+    var variants = [program + stdin]
+    let substituted = substitutingReplaceStrings(parsed.replaceStrings, in: program)
+    if substituted != program { variants.append(substituted + stdin) }
+    return variants
+}
+
 /// xargs feeding xargs feeding…: past this, fail closed.
 private let maxXargsDepth = 4
 
