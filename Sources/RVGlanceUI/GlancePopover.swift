@@ -11,12 +11,18 @@ public struct GlancePopover: View {
     let state: GlanceState
     let now: Date
     let calendar: Calendar
+    /// The last stop's plain-English line; nil shows the template line.
+    let plain: String?
     let onQuit: (() -> Void)?
 
-    public init(state: GlanceState, now: Date, calendar: Calendar = .current, onQuit: (() -> Void)? = nil) {
+    public init(
+        state: GlanceState, now: Date, calendar: Calendar = .current, plain: String? = nil,
+        onQuit: (() -> Void)? = nil
+    ) {
         self.state = state
         self.now = now
         self.calendar = calendar
+        self.plain = plain
         self.onQuit = onQuit
     }
 
@@ -44,7 +50,7 @@ public struct GlancePopover: View {
                 if let stop = state.lastStop {
                     GlanceSeparator()
                     GlanceSectionTitle("Last stop")
-                    GlanceStopRow(stop: stop, now: now, calendar: calendar)
+                    GlanceStopRow(stop: stop, plain: plain, now: now, calendar: calendar)
                 }
                 if state.missed > 0 {
                     Text("rv dropped \(state.missed) events while this menu was behind.")
