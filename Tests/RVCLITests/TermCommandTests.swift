@@ -51,8 +51,8 @@ struct TermCommandTests {
         #expect(lines.count == 24)
         #expect(lines.allSatisfy { $0.count <= 80 })
         #expect(lines.contains { $0.contains("Nothing needs you.") })
-        #expect(lines.contains { $0.contains("5 commands checked today, 1 stopped.") })
-        #expect(lines.contains { $0.contains("latest") && $0.contains("ls -la") })
+        #expect(lines.contains { $0.contains("5 commands checked today  ·  1 stopped") })
+        #expect(lines.contains { $0.contains("claude   ls -la   ✓") })
     }
 
     @Test func streamPairsTheWouldStopWithItsCommand() throws {
@@ -63,7 +63,8 @@ struct TermCommandTests {
         sources.refresh(&state)
         let lines = Self.text(TermScreen.render(state, width: 100, height: 24))
         print(lines.joined(separator: "\n"))
-        #expect(lines.contains { $0.contains("◐") && $0.contains("rm -rf build") && $0.contains("core.filesystem:rm-rf") })
+        #expect(lines.contains { $0.contains("◐  claude   rm -rf build") })
+        #expect(state.rows.first { $0.text == "rm -rf build" }?.rule == "core.filesystem:rm-rf")
         #expect(lines.contains { $0.contains("✕") && $0.contains("git reset --hard") })
         #expect(lines.filter { $0.contains("git reset --hard") }.count == 1)
         #expect(!lines.contains { $0.contains("(command not logged)") })
@@ -92,21 +93,35 @@ struct TermCommandTests {
     }
 
     @Test func keysDecode() {
-        #expect(TermKey.decode([0x1B]) == [.navigation(.escape)])
-        #expect(TermKey.decode([0x1B, 0x5B, 0x5A]) == [.navigation(.backTab)])
-        #expect(TermKey.decode([0x1B, 0x5B, 0x41]) == [.other])
-        #expect(TermKey.decode(Array("2 f?q".utf8)) == [
-            .navigation(.digit(2)), .navigation(.space), .filter, .keys, .quit,
+        #expect(TermKey.decode([0x1B]) == [.input(.navigation(.escape))])
+        #expect(TermKey.decode([0x1B, 0x5B, 0x5A]) == [.input(.navigation(.backTab))])
+        #expect(TermKey.decode([0x1B, 0x5B, 0x41]) == [.input(.up)])
+        #expect(TermKey.decode([0x1B, 0x5B, 0x44]) == [.input(.left)])
+        #expect(TermKey.decode([0x1B, 0x5B, 0x31, 0x7E]) == [.other])
+        #expect(TermKey.decode(Array("2 f?qjG".utf8)) == [
+            .input(.navigation(.digit(2))), .input(.navigation(.space)), .input(.filter), .input(.keys), .input(.quit),
+            .input(.down), .input(.startGuarding),
         ])
-        #expect(TermKey.decode([0x03]) == [.quit])
-        #expect(TermKey.decode([0x09]) == [.navigation(.tab)])
+        #expect(TermKey.decode([0x0D]) == [.input(.enter)])
+        #expect(TermKey.decode([0x03]) == [.exit])
+        #expect(TermKey.decode([0x09]) == [.input(.navigation(.tab))])
     }
 
     @Test func paintedFramesStayPlainWithoutColour() {
-        let frame: [TermLine] = [[TermSpan("✓ ", .ok), TermSpan("ran", .soft)]]
-        #expect(TermPaint.frame(frame, depth: .none, raw: false) == "✓ ran\n")
-        let painted = TermPaint.frame(frame, depth: .truecolor, raw: true)
-        #expect(painted.contains("\u{1B}[38;2;48;209;88m✓ \u{1B}[0m"))
+        let frame: [TermLine] = [[TermSpan("✓ ", .ok), TermSpan("ran", .soft, bold: true)]]
+        #expect(TermPaint.frame(frame, palette: .init(depth: .none), raw: false) == "✓ ran\n")
+        let painted = TermPaint.frame(frame, palette: .init(depth: .truecolor), raw: true)
+        #expect(painted.contains("\u{1B}[38;2;110;231;183m✓ \u{1B}[0m"))
+        #expect(painted.contains("\u{1B}[1;38;2;185;185;195mran\u{1B}[0m"))
         #expect(painted.hasSuffix("\u{1B}[K"))
+    }
+
+    @Test func theCurrentTabAndTheModePillHaveABackground() {
+        let tab: [TermLine] = [[TermSpan(" 1 Glance ", .fg, bold: true, fill: .sel)]]
+        #expect(TermPaint.frame(tab, palette: .init(depth: .truecolor), raw: false)
+            == "\u{1B}[1;38;2;236;236;241;48;2;31;29;51m 1 Glance \u{1B}[0m\n")
+        #expect(TermPaint.frame(tab, palette: .init(depth: .ansi16), raw: false) == "\u{1B}[1;7m 1 Glance \u{1B}[0m\n")
+        let faded: [TermLine] = [[TermSpan("x", .fg, faded: true)]]
+        #expect(TermPaint.frame(faded, palette: .init(depth: .ansi16), raw: false) == "\u{1B}[2mx\u{1B}[0m\n")
     }
 }

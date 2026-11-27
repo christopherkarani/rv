@@ -206,7 +206,9 @@ enum HelpCatalog {
             HelpSection(heading: "Keys", rows: [
                 HelpRow(name: "1 2 3", description: "Glance, Stream, Needs you"),
                 HelpRow(name: "space", description: "Swap Glance and Stream"),
+                HelpRow(name: "↑↓ ⏎", description: "Stream: move, and why a command ran or stopped"),
                 HelpRow(name: "f", description: "Stream: would-stops and stops only"),
+                HelpRow(name: "?", description: "Every key"),
                 HelpRow(name: "esc / q", description: "Back / quit"),
             ]),
             HelpSection(heading: "Notes", rows: [
