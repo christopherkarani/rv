@@ -13,7 +13,7 @@ import RVCLI
 @main
 enum RVEntry {
     static func main() async {
-        let args = Array(CommandLine.arguments.dropFirst())
+        let args = VersionSpelling.normalized(Array(CommandLine.arguments.dropFirst()))
         if args.isEmpty {
             // Piped, in CI, or from an agent, bare `rv` prints the command
             // list instead of failing with "requires an interactive
@@ -38,6 +38,6 @@ enum RVEntry {
             await HookDispatch.run(arguments: Array(args.dropFirst()))
             return
         }
-        await RV.main()
+        await RV.main(args)
     }
 }
