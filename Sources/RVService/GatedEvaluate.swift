@@ -52,17 +52,33 @@ package struct GatedVerdict: Sendable, Equatable {
     /// The guard mode the evaluation read (enforce when none was read).
     package let guardMode: GuardMode
 
-    package init(result: EvaluationResult, wouldBe: WouldBe? = nil, guardMode: GuardMode = .enforce) {
+    /// The observe floor stopped what enforce lets run: stopping rvd or
+    /// writing rv's install (`ObserveFloor` rule 2) and other raised
+    /// allows. Enforce needs no such floor, since without rvd its hooks
+    /// fail closed (ask or deny, never allow).
+    package let observeOnlyStop: Bool
+
+    package init(
+        result: EvaluationResult, wouldBe: WouldBe? = nil, guardMode: GuardMode = .enforce,
+        observeOnlyStop: Bool = false
+    ) {
         self.result = result
         self.wouldBe = wouldBe
         self.guardMode = guardMode
+        self.observeOnlyStop = observeOnlyStop
     }
 
     /// Observe was read, yet the enforce branch decided and did not allow:
-    /// the observe floor (`ObserveFloor.rule`) stopped it, so it is
-    /// stopped in every mode and must never read like a watched verdict.
-    package var stoppedInEveryMode: Bool {
+    /// the observe floor (`ObserveFloor.rule`) stopped it, so it must never
+    /// read like a would-be verdict. `stoppedInEveryMode` narrows it to a
+    /// stop enforce makes too.
+    package var stoppedInObserve: Bool {
         guardMode == .observe && wouldBe == nil && result.decision != .allow
+    }
+
+    /// Stopped under observe, and enforce stops it too.
+    package var stoppedInEveryMode: Bool {
+        stoppedInObserve && observeOnlyStop == false
     }
 
     /// The verdict to show: the would-be one under observe, else the result.
@@ -207,7 +223,7 @@ public struct GatedEvaluate: Sendable {
                 effects.append(row)
             }
             return (observed, effects)
-        case .enforced(let enforced):
+        case .enforced(let enforced, _):
             // Checked on every enforced result, exactly as before effects
             // became values: past the deadline the check trips it, so
             // `HookDoor` swaps in the timeout deny even for an allow.
@@ -483,7 +499,10 @@ public struct GatedEvaluate: Sendable {
             await JudgeOffload.run { Self.perform(effects, home: home) }
         }
         let result = overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
-        return GatedVerdict(result: result, wouldBe: decided.wouldBe, guardMode: decided.guardMode)
+        return GatedVerdict(
+            result: result, wouldBe: decided.wouldBe, guardMode: decided.guardMode,
+            observeOnlyStop: decided.observeOnlyStop
+        )
     }
 
     /// Why an override whose `command.override` row was not written stays a deny.
@@ -545,7 +564,8 @@ public struct GatedEvaluate: Sendable {
         result: EvaluationResult,
         effects: [GatedEffect],
         wouldBe: GatedVerdict.WouldBe?,
-        guardMode: GuardMode
+        guardMode: GuardMode,
+        observeOnlyStop: Bool
     ) {
         let verb: PolicyVerb
         switch intent {
@@ -594,6 +614,7 @@ public struct GatedEvaluate: Sendable {
         }
         var effects = offloaded
         let candidate: EvaluationResult
+        var observeOnlyStop = false
         switch screened {
         case .observed(let observed, let unfloored, let floorsWouldBe):
             // The would-be verdict through a Policy-gate preview (an
@@ -613,7 +634,7 @@ public struct GatedEvaluate: Sendable {
                 // reaches the Policy gate as a ledger row, not even a preview.
                 effects.append(row)
             }
-            guard recordsDenial || previewsWouldBe else { return (observed, effects, nil, guardMode) }
+            guard recordsDenial || previewsWouldBe else { return (observed, effects, nil, guardMode, false) }
             // The packs-only floor only turns an allow indeterminate, so it
             // never changes whether a denial row is recorded: it runs here,
             // where the would-be is consumed, not on every observed allow.
@@ -632,10 +653,12 @@ public struct GatedEvaluate: Sendable {
                 effects.append(row)
             }
             return (
-                observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization), guardMode
+                observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization), guardMode,
+                false
             )
-        case .enforced(let enforced):
+        case .enforced(let enforced, let floorRaised):
             candidate = enforced
+            observeOnlyStop = floorRaised
         }
         let decision = await HookTiming.measure(.gate) {
             await Self.policyFinish(
@@ -663,7 +686,7 @@ public struct GatedEvaluate: Sendable {
                                         withDenial: denialInTime || override == .allowOnce) {
             effects.append(row)
         }
-        return (finished, effects, nil, guardMode)
+        return (finished, effects, nil, guardMode, observeOnlyStop && finished.decision != .allow)
     }
 
     /// The Policy gate over a candidate verdict. Fast path: allow and
@@ -728,7 +751,10 @@ public struct GatedEvaluate: Sendable {
     /// acts on (Policy gate, denial row).
     private enum Posture {
         case observed(EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool)
-        case enforced(EvaluationResult)
+        /// `floorRaised`: the observe floor stopped what enforce would let
+        /// run (stopping rvd, writing rv's install: enforce fails closed
+        /// without rvd instead), so the stop is observe's alone.
+        case enforced(EvaluationResult, floorRaised: Bool = false)
     }
 
     /// The one observe/enforce branch, shared by every door.
@@ -760,6 +786,7 @@ public struct GatedEvaluate: Sendable {
     ) -> Posture {
         var result = evaluated
         var mode = guardMode
+        var floorRaised = false
         if guardMode == .observe,
            case .enforce(let floored) = ObserveFloor.rule(
                evaluated, door: door.observeFloor, context: ObserveFloor.Context(home: home, cwd: cwd)
@@ -767,16 +794,32 @@ public struct GatedEvaluate: Sendable {
         {
             result = floored
             mode = .enforce
+            floorRaised = evaluated.decision == .allow && floored.decision != .allow
         }
         switch (mode, door) {
         case (.observe, .file):
             return .observed(result.observedAllow, wouldBe: result, floorsWouldBe: false)
         case (.enforce, .file):
-            return .enforced(result)
+            return .enforced(result, floorRaised: floorRaised)
         case (.observe, .shell(let request, let inputs, let isPeek)):
             let screened = scriptScreen(
                 result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
             )
+            if inputs.judge.shadow {
+                // Shadow judge: the would-be is the packs-only answer
+                // enforce gives (`floorsWouldBe`, as `JudgeRuntime.apply`
+                // returns under shadow), so `rv blocks` never shows a
+                // judge stop enforce would not make; the judge's opinion
+                // only reaches the judge log.
+                let log = JudgeRuntime.shadow(
+                    screened.result, command: request.command,
+                    inputs: inputs, judge: judge, provenance: request.provenance, now: now,
+                    cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+                    lateLog: Self.lateJudgeLog(home: home)
+                )
+                effects.append(.judgeLog(log))
+                return .observed(screened.result.observedAllow, wouldBe: screened.result, floorsWouldBe: true)
+            }
             let observed = JudgeRuntime.observe(
                 wouldBe: screened.result, command: request.command,
                 inputs: inputs, judge: judge, provenance: request.provenance, now: now,
@@ -790,7 +833,7 @@ public struct GatedEvaluate: Sendable {
                 result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
             )
             if screened.scriptDenied {
-                return .enforced(screened.result)
+                return .enforced(screened.result, floorRaised: floorRaised)
             }
             let judged = JudgeRuntime.apply(
                 to: screened.result, command: request.command,
@@ -801,7 +844,7 @@ public struct GatedEvaluate: Sendable {
             if let log = judged.log {
                 effects.append(.judgeLog(log))
             }
-            return .enforced(judged.result)
+            return .enforced(judged.result, floorRaised: floorRaised)
         }
     }
 
@@ -1003,7 +1046,7 @@ public struct GatedEvaluate: Sendable {
             now: now,
             effects: &effects
         ) {
-        case .observed(let final, _, _), .enforced(let final):
+        case .observed(let final, _, _), .enforced(let final, _):
             return (final, effects)
         }
     }

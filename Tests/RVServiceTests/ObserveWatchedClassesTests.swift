@@ -161,7 +161,175 @@ struct ObserveWatchedClassesTests {
         #expect(enforced.stoppedInEveryMode == false)
     }
 
+    // MARK: Catastrophic (Mac stress run of #674)
+
+    /// A device-wide wipe, format or erase, or a delete of the root, the
+    /// home directory or a top-level system directory, stops in observe as
+    /// in enforce, under its own pack rule (`ObserveCatastrophe`).
+    @Test(
+        "catastrophic: disk wipes and root deletes stop in every mode, under their own rule",
+        arguments: [
+            ("dd if=/dev/zero of=/dev/disk0", "system.disk:dd-device"),
+            ("dd if=image.iso of=/dev/disk2 bs=1m", "system.disk:dd-device"),
+            ("mkfs.ext4 /dev/sdb1", "system.disk:mkfs"),
+            ("wipefs -a /dev/sdb", "system.disk:wipefs"),
+            ("diskutil eraseDisk APFS Blank disk2", "system.disk:diskutil-erase"),
+            ("diskutil apfs deleteContainer disk3", "system.disk:diskutil-apfs-delete"),
+            ("rm -rf /usr", "core.filesystem:rm-rf-root-home"),
+            ("rm -rf $HOME", "core.filesystem:rm-rf-root-home"),
+            (":(){ :|:& };:", "core.filesystem:fork-bomb"),
+        ]
+    )
+    func catastrophicStopsInEveryMode(command: String, rule: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        guard case .deny(let deny) = observed.result.decision else {
+            Issue.record("\(command): observe must stop it, got \(observed.result.decision)")
+            return
+        }
+        #expect(deny.ruleID.rawValue == rule, "\(command)")
+        #expect(observed.stoppedInEveryMode, "\(command)")
+        let enforced = await Self.verdict(command, home: place.enforce, cwd: place.cwd)
+        #expect(enforced.result.decision == observed.result.decision, "\(command)")
+    }
+
+    /// The same delete rules on a path under the root, not the root
+    /// itself, are not catastrophic: watched in observe.
+    @Test(
+        "not catastrophic: a delete under home or /tmp is watched in observe",
+        arguments: ["rm -rf ~/project/build", "rm -rf /tmp/rv-watched-dir"]
+    )
+    func deleteUnderRootIsWatched(command: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        #expect(observed.result.decision == .allow, "\(command)")
+        #expect(observed.stoppedInEveryMode == false, "\(command)")
+    }
+
+    /// Review of #674: deleting a host's hook wiring turns rv off for that
+    /// agent, so it is rv's own files: stopped in observe.
+    @Test(
+        "rv's own files: deleting or moving a host's hook directory stops in observe",
+        arguments: [
+            "rm -rf ~/.claude",
+            "rv --version; rm -rf ~/.claude",
+            "mv ~/.codex ~/.codex.bak",
+            "rm -rf ~/.config/opencode",
+        ]
+    )
+    func hookWiringDirectoryStops(command: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        #expect(observed.result.decision != .allow, "\(command)")
+        #expect(observed.stoppedInObserve, "\(command)")
+    }
+
+    @Test(
+        "rv's own files: reading or creating beside a hook directory is not stopped",
+        arguments: ["ls ~/.claude", "cat ~/.claude/CLAUDE.md", "mkdir -p ~/.config/rv-watched-dir"]
+    )
+    func hookWiringNeighboursRun(command: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        #expect(observed.stoppedInObserve == false, "\(command): \(observed.result.decision)")
+    }
+
+    @Test("not catastrophic: rm -rf ~/Documents runs under observe (the note says exactly what always stops)")
+    func documentsDeleteIsWatched() async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict("rm -rf ~/Documents", home: place.observe, cwd: place.cwd)
+        #expect(observed.result.decision == .allow)
+        #expect(observed.wouldBe.map { $0.result.decision != .allow } == true)
+    }
+
+    @Test("catastrophic: the disk set is all system.disk rules the pack ships")
+    func diskRulesExist() throws {
+        let shipped = Set(dayOneDestructiveRuleIDs(pack: .systemDisk))
+        #expect(ObserveCatastrophe.diskRules.isSubset(of: shipped), "\(ObserveCatastrophe.diskRules.subtracting(shipped))")
+        let filesystem = Set(dayOneDestructiveRuleIDs(pack: .coreFilesystem))
+        #expect(ObserveCatastrophe.rootDeleteRules.isSubset(of: filesystem))
+        #expect(filesystem.contains(ObserveCatastrophe.forkBomb))
+    }
+
+    /// A catastrophic stop under observe is enforce's own deny, so the
+    /// unlock enforce offers works the same: an allow-once grant for that
+    /// exact command lets it through (`rv explain`'s Next line is honest).
+    @Test("catastrophic: an allow-once grant unlocks it under observe, as in enforce")
+    func allowOnceUnlocksCatastrophicStop() async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let command = "dd if=/dev/zero of=/dev/disk0"
+        for home in [place.observe, place.enforce] {
+            let grants = EphemeralAllowOnceTable()
+            #expect(await grants.plant(matchingView: MatchingView(command), cwd: place.cwd, codeHash: "c", now: Self.now) == .planted)
+            let verdict = await GatedEvaluate().peekVerdict(
+                command: ShellCommand(rawValue: command), cwd: place.cwd, home: home,
+                grants: grants, now: Self.now, allowlist: { AllowlistSnapshot(entries: []) }
+            )
+            #expect(verdict.result.decision == .allow)
+        }
+    }
+
+    // MARK: Stopping rvd (Mac stress run of #674)
+
+    /// Stopping rvd stops in observe only, by design: an observe hook lets
+    /// every later call run unchecked while rvd is absent, so observe
+    /// floors it. Enforce does not, because there a missing rvd fails
+    /// closed: the hook asks or denies (`RV_HOOK_WHEN_DOWN` has no allow
+    /// value), and `rv-hook-local` escalates anything it cannot decide to
+    /// that same fallback. Pinned here so a change to either side is seen.
+    @Test(
+        "rvd stop: stopped in observe, evaluated as an allow in enforce (enforce fails closed without rvd)",
+        arguments: [
+            "pkill rvd",
+            "launchctl bootout gui/501/dev.rv.evaluate",
+            "rv doctor && pkill rvd",
+        ]
+    )
+    func rvdStopIsObserveOnly(command: String) async throws {
+        let place = try Self.place()
+        defer { remove(place.observe); remove(place.enforce) }
+        let observed = await Self.verdict(command, home: place.observe, cwd: place.cwd)
+        #expect(observed.result.decision != .allow, "\(command)")
+        #expect(observed.stoppedInObserve, "\(command)")
+        // Enforce lets it run, so the words never say "in every mode".
+        #expect(observed.stoppedInEveryMode == false, "\(command)")
+        let enforced = await Self.verdict(command, home: place.enforce, cwd: place.cwd)
+        #expect(enforced.result.decision == .allow, "\(command)")
+    }
+
+    // MARK: Secrets (coordination with #668)
+
+    /// No secrets rule is ever a watched class: when #668 lands its
+    /// `core.secrets:*` denies, observe can never relabel them watched.
+    @Test("secrets: no core.secrets rule is a watched class")
+    func secretsAreNeverWatched() {
+        for rule in SecretPathCatalog.dayOne.rules {
+            let id = SecretPathMatch(rule).ruleID
+            #expect(ObserveFloor.isWatchedClass(id) == false, "\(id.rawValue)")
+        }
+        for pattern in ["env-file", "ssh-private-key", "home-rv-config", "git-hooks", "anything"] {
+            #expect(ObserveFloor.isWatchedClass(RuleID(pack: .coreSecrets, pattern: pattern)) == false)
+        }
+        #expect(ObserveFloor.watchedClasses.allSatisfy { $0.ruleID.pack != .coreSecrets })
+    }
+
     // MARK: Helpers
+
+    /// The destructive rule ids a day-one pack ships, read from its JSON.
+    private func dayOneDestructiveRuleIDs(pack: PackID, file: String = #filePath) -> [RuleID] {
+        let url = URL(fileURLWithPath: file).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/RVPacks/Resources/packs/\(pack.rawValue).json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = object["destructive_patterns"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { ($0["name"] as? String).map { RuleID(pack: pack, pattern: $0) } }
+    }
 
     private static func builtin(_ rule: BuiltinRule) -> Deny {
         switch rule {
@@ -246,6 +414,59 @@ struct JudgeShadowModeTests {
             return
         }
         #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    }
+
+    /// Review of #674: under observe a shadow judge's block became the
+    /// would-be (`core.judge:laya-block`, `wouldBe=deny`), so `rv blocks`
+    /// showed a stop enforce never makes. Under shadow the would-be is the
+    /// packs-only answer enforce gives; the judge only reaches the log.
+    @Test("shadow under observe: the would-be is enforce's packs-only answer; no judge row in rv blocks")
+    func shadowObserveWouldBeIsPacksOnly() async throws {
+        let home = try guardHome(mode: "observe")
+        defer { remove(home) }
+        let shadowed = await observedBlockingJudge("brew list", home: home, shadow: true)
+        #expect(shadowed.result.decision == .allow)
+        #expect(shadowed.wouldBe.map { $0.result.decision == .allow } ?? true, "\(String(describing: shadowed.wouldBe))")
+        #expect(ledgerRows(home).isEmpty, "\(ledgerRows(home))")
+        let rows = try judgeLog(home)
+        #expect(rows.count == 1)
+        #expect((rows.first?["note"] as? String)?.hasPrefix("shadow") == true, "\(rows)")
+
+        // Live, the same judge block is the would-be, as before.
+        let liveHome = try guardHome(mode: "observe")
+        defer { remove(liveHome) }
+        let live = await observedBlockingJudge("brew list", home: liveHome, shadow: false)
+        #expect(live.result.decision == .allow)
+        #expect(live.wouldBe.map { $0.result.decision != .allow } == true)
+        #expect(ledgerRows(liveHome).count == 1)
+    }
+
+    private func observedBlockingJudge(
+        _ command: String, home: HomeDirectory, shadow: Bool
+    ) async -> (result: EvaluationResult, wouldBe: GatedVerdict.WouldBe?) {
+        let block: JudgeRuntime.JudgeRun
+        do {
+            block = .verdict(try effectVerdict(choice: "block", risk: 1.0))
+        } catch {
+            Issue.record("verdict: \(error)")
+            return (EvaluationResult(outcome: .plain), nil)
+        }
+        let inputs = EvaluationInputs(
+            guardMode: .observe,
+            judge: JudgeSelection(
+                engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true),
+                shadow: shadow
+            ),
+            store: .gather(home: home, cwd: nil)
+        )
+        let verdict = await GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: block)).gatedVerdict(
+            .apply,
+            EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+            cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Date(timeIntervalSince1970: 1_800_000_000),
+            allowlist: { .empty }, host: .hook(.claude), tool: .bash, previewsWouldBe: true, inputs: inputs
+        )
+        return (verdict.result, verdict.wouldBe)
     }
 
     private func blockingJudge(_ command: String, home: HomeDirectory, shadow: Bool) async -> EvaluationResult {

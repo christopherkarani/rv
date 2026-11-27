@@ -80,8 +80,9 @@ enum ObserveFloor {
     /// 1. the texts run out of budget: `observe.floor:unanalyzable`, read
     ///    nothing (so does reading them past `Context.budget`, at 2 or 4);
     /// 2. any text stops rvd or writes rv's install: "run it in Terminal";
-    /// 3. the verdict, or the command as written, touches rv's own
-    ///    protection: the verdict, enforced;
+    /// 3. the verdict is catastrophic (`ObserveCatastrophe`), or it or
+    ///    the command as written touches rv's own protection: the
+    ///    verdict, enforced;
     /// 4. any other text (program text the command feeds a shell or
     ///    interpreter, a guard reading) does: "run it in Terminal", since
     ///    the engine never read that text;
@@ -114,7 +115,8 @@ enum ObserveFloor {
             if stopsOrInstalls(text, rvdPIDs: rvdPIDs, context: context) { return .enforce(floored(result)) }
         }
         var protection = OwnProtection(result: result, command: command, store: store, context: context)
-        if holds(result) || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
+        if holds(result) || ObserveCatastrophe.isCatastrophic(result, home: context.home)
+            || protection.touched(by: command.rawValue, matchingView: result.matchingView.rawValue) {
             return .enforce(result)
         }
         for text in set.texts where text.origin != .command {
@@ -228,8 +230,26 @@ enum ObserveFloor {
             // allows these verbs unchecked everywhere else: only a write
             // there holds. A command proven to only read (`ObserveReadProof`)
             // feeds no shell or interpreter, so the proof covers its texts.
-            guard words.contains(where: { namesWiring($0) }) else { return false }
+            // A delete, move or mode change of a directory above a wiring
+            // file (`rm -rf ~/.claude`) unhooks rv for that host as surely
+            // as editing the file inside (`RVWiringPaths.matchesAncestor`).
+            let namesWiringFile = words.contains(where: { namesWiring($0) })
+            let unhooksAncestor = namesWiringFile == false
+                && words.contains(where: { Self.unhookingVerbs.contains($0) })
+                && words.contains(where: { namesWiringAncestor($0) })
+            guard namesWiringFile || unhooksAncestor else { return false }
             return provesCommandOnlyReads() == false
+        }
+
+        /// Verbs that delete, move or re-mode what they name.
+        private static let unhookingVerbs: Set<String> = [
+            "rm", "rmdir", "mv", "unlink", "shred", "srm", "trash", "chmod", "chown", "chflags", "-delete",
+        ]
+
+        private func namesWiringAncestor(_ word: String) -> Bool {
+            guard let home else { return false }
+            let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
+            return RVWiringPaths.matchesAncestor(path, home: home.rawValue)
         }
 
         private mutating func provesCommandOnlyReads() -> Bool {
