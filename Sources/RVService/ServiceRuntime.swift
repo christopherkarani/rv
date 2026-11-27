@@ -40,6 +40,8 @@ public actor ServiceRuntime {
     /// cooperative pool; nil without a home.
     let hookLocalSpool: HookLocalSpoolDrainer?
     private let clock: @Sendable () -> Date
+    /// Every hook decision, for `rv term` (`DecisionLog`). Nil outside rvd.
+    private let decisionLog: DecisionLogRecorder?
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     /// Operator launch ceremonies (proposal → review → permit). Shared with
@@ -117,7 +119,8 @@ public actor ServiceRuntime {
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
         policyStatusService: PolicyStatusService = PolicyStatusService(),
-        judge: any JudgePort = LiveJudgePort()
+        judge: any JudgePort = LiveJudgePort(),
+        recordsDecisions: Bool = false
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -157,6 +160,9 @@ public actor ServiceRuntime {
             })
         }
         self.clock = clock
+        // rvd only (`RVDProcess`): tests and in-process runtimes never
+        // write the decision log.
+        self.decisionLog = recordsDecisions ? DecisionLogRecorder.live(home: resolvedHome, clock: clock) : nil
         self.pendingApprovals = Self.resolvePendingApprovals(
             pendingApprovals,
             home: resolvedHome
@@ -813,7 +819,11 @@ public actor ServiceRuntime {
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
             let tap = HookDecisionTap()
-            let reply = try await HookDoor.run(
+            // One id per call, minted before evaluation: the ledger row the
+            // effects write and the decision-log row share it, and a watch
+            // mode would-be is noted on it.
+            let call = DecisionCall()
+            let reply = try await DecisionCall.$current.withValue(call) { try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
                 world: tap.tapping(HookEvaluateWorld.live(
@@ -826,9 +836,13 @@ public actor ServiceRuntime {
                     recordDecision: analyticsRecorder()
                 ), host: params.host, clock: clock),
                 deadline: deadline
-            )
+            ) }
             // Once, after the reply is final; off the reply's path.
             tap.publish(to: events, timedOut: deadline.requiresTimeoutReply, home: configHome)
+            // The decision log reads the same capture, also detached.
+            if let decisionLog, let capture = tap.capture {
+                decisionLog.record(capture, timedOut: deadline.requiresTimeoutReply, call: call)
+            }
             return .success(reply)
         } catch let error as IPCError {
             return .failure(error)

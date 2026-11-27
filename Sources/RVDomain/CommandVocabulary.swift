@@ -36,6 +36,8 @@ public enum CommandVocabulary {
         case egress
         case safety
         case blocks
+        /// `rv log`: the same ledger as `blocks`, in fixed columns.
+        case log
         case host
         case audit
         case secrets
@@ -145,7 +147,6 @@ public enum CommandVocabulary {
         PlannedName(spelling: "rv protect <tool>", today: "rv packs enable <pack>", status: .decided),
         PlannedName(spelling: "rv protect <tool> off", today: "rv packs disable <pack>", status: .decided),
         PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
-        PlannedName(spelling: "rv log", today: "rv blocks", status: .recommended),
         PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
         PlannedName(spelling: "rv guard <host>", today: "rv host mode <host> block", status: .recommended),
         PlannedName(spelling: "rv watch <host>", today: "rv host mode <host> observe", status: .recommended),
