@@ -43,43 +43,106 @@
       "name": "elbv2-delete-load-balancer",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-load-balancer\\b",
       "severity": "high",
-      "description": "aws elbv2 delete-load-balancer permanently deletes the load balancer."
+      "description": "aws elbv2 delete-load-balancer permanently deletes the load balancer.",
+      "examples": {
+        "stop": [
+          "aws elbv2 delete-load-balancer"
+        ],
+        "allow": [
+          "aws elbv2 describe-load-balancer",
+          "aws elbv2 get-load-balancer"
+        ]
+      }
     },
     {
       "name": "elbv2-delete-target-group",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-target-group\\b",
       "severity": "high",
-      "description": "aws elbv2 delete-target-group permanently deletes the target group."
+      "description": "aws elbv2 delete-target-group permanently deletes the target group.",
+      "examples": {
+        "stop": [
+          "aws elbv2 delete-target-group"
+        ],
+        "allow": [
+          "aws elbv2 describe-target-group",
+          "aws elbv2 get-target-group"
+        ]
+      }
     },
     {
       "name": "elbv2-deregister-targets",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+deregister-targets\\b",
       "severity": "high",
-      "description": "aws elbv2 deregister-targets removes targets from the load balancer, impacting live traffic."
+      "description": "aws elbv2 deregister-targets removes targets from the load balancer, impacting live traffic.",
+      "examples": {
+        "stop": [
+          "aws elbv2 deregister-targets"
+        ],
+        "allow": [
+          "aws elbv2 describe-targets",
+          "aws elbv2 get-targets"
+        ]
+      }
     },
     {
       "name": "elbv2-delete-listener",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-listener\\b",
       "severity": "high",
-      "description": "aws elbv2 delete-listener deletes a listener, potentially breaking traffic routing."
+      "description": "aws elbv2 delete-listener deletes a listener, potentially breaking traffic routing.",
+      "examples": {
+        "stop": [
+          "aws elbv2 delete-listener"
+        ],
+        "allow": [
+          "aws elbv2 describe-listener",
+          "aws elbv2 get-listener"
+        ]
+      }
     },
     {
       "name": "elbv2-delete-rule",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-rule\\b",
       "severity": "high",
-      "description": "aws elbv2 delete-rule deletes a listener rule, potentially breaking routing."
+      "description": "aws elbv2 delete-rule deletes a listener rule, potentially breaking routing.",
+      "examples": {
+        "stop": [
+          "aws elbv2 delete-rule"
+        ],
+        "allow": [
+          "aws elbv2 describe-rule",
+          "aws elbv2 get-rule"
+        ]
+      }
     },
     {
       "name": "elb-delete-load-balancer",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elb\\s+delete-load-balancer\\b",
       "severity": "high",
-      "description": "aws elb delete-load-balancer permanently deletes the classic load balancer."
+      "description": "aws elb delete-load-balancer permanently deletes the classic load balancer.",
+      "examples": {
+        "stop": [
+          "aws elb delete-load-balancer"
+        ],
+        "allow": [
+          "aws elb describe-load-balancer",
+          "aws elb get-load-balancer"
+        ]
+      }
     },
     {
       "name": "elb-deregister-instances",
       "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elb\\s+deregister-instances-from-load-balancer\\b",
       "severity": "high",
-      "description": "aws elb deregister-instances-from-load-balancer removes instances from the load balancer, impacting live traffic."
+      "description": "aws elb deregister-instances-from-load-balancer removes instances from the load balancer, impacting live traffic.",
+      "examples": {
+        "stop": [
+          "aws elb deregister-instances-from-load-balancer"
+        ],
+        "allow": [
+          "aws elb describe-instances-from-load-balancer",
+          "aws elb get-instances-from-load-balancer"
+        ]
+      }
     }
   ]
 }
