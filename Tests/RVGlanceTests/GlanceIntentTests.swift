@@ -64,7 +64,7 @@ struct GlanceIntentTests {
         let today = "412 commands checked, 3 stopped today"
         #expect(sentence(.guarding) == "rv is guarding · 2 agents · \(today)")
         #expect(sentence(.watching) == "rv is watching · Codex in watch mode · \(today)")
-        #expect(sentence(.needsYou) == "rv needs you · 2 asks waiting · \(today)")
+        #expect(sentence(.needsYou) == "rv needs you · 1 request · claude is waiting · \(today)")
         #expect(sentence(.justStopped)
             == "rv just stopped a command · Claude Code · 412 commands checked, 4 stopped today")
         #expect(sentence(.boxed) == "rv is guarding a box · 1 box running · \(today)")
@@ -93,7 +93,7 @@ struct GlanceIntentTests {
         }
         let services = GlanceIntentServices(reader: GlanceReader(wire: wire), calendar: GlanceSamples.calendar)
         let said = await services.statusSentence(now: GlanceSamples.now)
-        #expect(said == "rv needs you · 1 ask waiting · 1 command checked, 1 stopped today")
+        #expect(said == "rv needs you · 1 request · claude is waiting · 1 command checked, 1 stopped today")
         guard wire.methods.count == 2, case .pendingList = wire.methods[0],
               case .events(let params) = wire.methods[1]
         else {
@@ -121,7 +121,7 @@ struct GlanceIntentTests {
         }
         let state = await GlanceReader(wire: wire).status(now: GlanceSamples.now, calendar: GlanceSamples.calendar)
         #expect(state.link == .liveWithoutEvents)
-        #expect(state.pending == [ApprovalID(rawValue: "ask-9")])
+        #expect(state.pending == [ApprovalID(rawValue: "ask-9"): GlanceFeedTests.item("ask-9").host])
     }
 
     @Test func withoutAReaderStatusSaysItIsNotConnected() async {

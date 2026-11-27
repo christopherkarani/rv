@@ -25,25 +25,34 @@ public struct GlancePopover: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GlanceHeader(glyph: glyph, headline: GlanceHeadline(state, now: now, calendar: calendar))
-            if case .down(let reason) = state.link {
+            if glyph == .connecting {
+                // Nothing is confirmed yet: no numbers, no agents, no stop.
+                Text("Waiting for rvd's first reply.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            } else if case .down(let reason) = state.link {
                 GlanceFixRow(reason: reason)
                 GlanceSeparator()
             } else {
                 GlanceStats(today: state.today)
             }
-            GlanceSectionTitle("Now")
-            GlanceAgentRows(agents: state.recentAgents, now: now, unguarded: glyph == .notRunning)
-            if let stop = state.lastStop {
-                GlanceSeparator()
-                GlanceSectionTitle("Last stop")
-                GlanceStopRow(stop: stop, now: now, calendar: calendar)
-            }
-            if state.missed > 0 {
-                Text("rv dropped \(state.missed) events while this menu was behind.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
+            if glyph != .connecting {
+                GlanceSectionTitle("Now")
+                GlanceAgentRows(agents: state.recentAgents, now: now, unguarded: glyph == .notRunning)
+                if let stop = state.lastStop {
+                    GlanceSeparator()
+                    GlanceSectionTitle("Last stop")
+                    GlanceStopRow(stop: stop, now: now, calendar: calendar)
+                }
+                if state.missed > 0 {
+                    Text("rv dropped \(state.missed) events while this menu was behind.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 6)
+                }
             }
             GlanceFooter(onQuit: onQuit)
         }
@@ -79,6 +88,7 @@ struct GlanceHeader: View {
         let colors: [Color] = switch glyph {
         case .notRunning, .justStopped: [Color(hex: 0xFFB4B4), Color(hex: 0xFF6B6B)]
         case .needsYou, .watching: [Color(hex: 0xFFE2A8), Color(hex: 0xFFB23F)]
+        case .connecting: [Color(hex: 0xE4E4EA), Color(hex: 0xA9A9B4)]
         default: [Color(hex: 0xD3C9FF), Color(hex: 0x7D6BFF)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -206,11 +216,17 @@ struct GlanceTile: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // `glassEffect` exists only in the macOS 26 SDK (Swift 6.2+);
+        // Xcode 16 on macOS 15 builds the plain tile.
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *), !isStatic {
             content.glassEffect(.regular, in: shape)
         } else {
             content.background(.quaternary.opacity(0.6), in: shape)
         }
+        #else
+        content.background(.quaternary.opacity(0.6), in: shape)
+        #endif
     }
 }
 #endif

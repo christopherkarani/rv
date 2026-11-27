@@ -23,7 +23,7 @@ public enum GlanceSamples {
         case .watching:
             state.posture = .watching([.codex])
         case .needsYou:
-            state.pending = [ApprovalID(rawValue: "ask-1"), ApprovalID(rawValue: "ask-2")]
+            state.pending = [ApprovalID(rawValue: "ask-1"): .claude]
         case .justStopped:
             state.lastStop = GlanceStop(
                 host: .claude, action: "git push --force origin main", rule: "core.git:force-push", at: now)
@@ -33,7 +33,9 @@ public enum GlanceSamples {
         case .paused:
             state.pausedUntil = now.addingTimeInterval(3600)
         case .notRunning:
-            state.link = .down("rvd isn't answering")
+            state.markDown("rvd isn't answering", at: now.addingTimeInterval(-2 * 60))
+        case .connecting:
+            state = GlanceState(now: now, calendar: calendar)
         }
         return state
     }

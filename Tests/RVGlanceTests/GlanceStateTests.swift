@@ -16,21 +16,32 @@ struct GlanceStateTests {
         #expect(GlanceSamples.state(glyph).glyph(at: now) == glyph)
     }
 
-    @Test func connectingIsNeverGuarding() {
+    @Test func connectingIsNeitherGuardingNorDown() {
         let state = GlanceState(now: now, calendar: calendar)
-        #expect(state.glyph(at: now) == .notRunning)
+        #expect(state.glyph(at: now) == .connecting)
     }
 
     @Test func downOutranksAQuestion() {
         var state = GlanceSamples.state(.needsYou)
-        state.link = .down("gone")
+        state.markDown("gone", at: now)
         #expect(state.glyph(at: now) == .notRunning)
+        #expect(state.pending.isEmpty)
+        #expect(state.downSince == now)
+    }
+
+    @Test func downSinceKeepsTheFirstFailureAndClearsWhenBack() {
+        var state = GlanceSamples.state(.guarding)
+        state.markDown("gone", at: now)
+        state.markDown("still gone", at: now.addingTimeInterval(30))
+        #expect(state.downSince == now)
+        state.link = .live
+        #expect(state.downSince == nil)
     }
 
     @Test func aQuestionOutranksAStopAndWatchMode() {
         var state = GlanceSamples.state(.justStopped)
         state.posture = .watching([])
-        state.pending = [ApprovalID(rawValue: "a")]
+        state.pending = [ApprovalID(rawValue: "a"): .claude]
         #expect(state.glyph(at: now) == .needsYou)
     }
 

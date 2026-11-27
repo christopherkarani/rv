@@ -85,9 +85,17 @@ public struct GlanceState: Sendable, Equatable {
     /// Rows in the popover's Now section.
     public static let agentRows = 4
 
-    public var link: GlanceLink = .connecting
+    public var link: GlanceLink = .connecting {
+        didSet {
+            if case .down = link { return }
+            downSince = nil
+        }
+    }
+    /// When a live rvd stopped answering; nil when it never answered.
+    public private(set) var downSince: Date?
     public var posture: GlancePosture = .guarding
-    public var pending: Set<ApprovalID> = []
+    /// Each ask waiting for a human, and the agent that asked.
+    public var pending: [ApprovalID: HookHost] = [:]
     public var agents: [HookHost: GlanceAgent] = [:]
     public var today: GlanceToday
     public var lastStop: GlanceStop?
@@ -110,7 +118,8 @@ public struct GlanceState: Sendable, Equatable {
     /// and a question outranks a stop that already happened.
     public func glyph(at now: Date) -> GlanceGlyph {
         switch link {
-        case .connecting, .down: return .notRunning
+        case .connecting: return .connecting
+        case .down: return .notRunning
         case .live, .liveWithoutEvents: break
         }
         if !pending.isEmpty { return .needsYou }
@@ -134,6 +143,21 @@ public struct GlanceState: Sendable, Equatable {
         agents.values.filter { !$0.isIdle(at: now) }.count
     }
 
+    /// The agents with an ask waiting, in a stable order.
+    public var waitingHosts: [HookHost] {
+        Set(pending.values).sorted { $0.rawValue < $1.rawValue }
+    }
+
+    /// rvd stopped answering. The time is kept only when it was answering
+    /// before, so "stopped 2 min ago" is never a guess.
+    public mutating func markDown(_ reason: String, at now: Date) {
+        let wasUp = link == .live || link == .liveWithoutEvents
+        let since = wasUp ? now : downSince
+        link = .down(reason)
+        downSince = since
+        pending = [:]
+    }
+
     /// Starts today's counts over once local midnight has passed.
     public mutating func roll(to now: Date, calendar: Calendar) {
         let day = calendar.startOfDay(for: now)
@@ -153,8 +177,8 @@ public struct GlanceState: Sendable, Equatable {
     }
 
     /// Replaces the asks with what `pendingList` holds.
-    public mutating func replacePending(_ ids: [ApprovalID]) {
-        pending = Set(ids)
+    public mutating func replacePending(_ asks: [ApprovalID: HookHost]) {
+        pending = asks
     }
 
     private mutating func apply(_ event: LiveEvent) {
@@ -164,10 +188,10 @@ public struct GlanceState: Sendable, Equatable {
         case .decision(let decision):
             note(decision, at: at, countsToday: counts)
         case .ask(let ask):
-            pending.insert(ask.item.id)
+            pending[ask.item.id] = ask.item.host
             if counts { today.asked += 1 }
         case .resolution(let resolution):
-            pending.remove(resolution.id)
+            pending[resolution.id] = nil
         case .unknown:
             break
         }

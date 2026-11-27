@@ -6,10 +6,10 @@ public enum GlanceStatusSentence {
     public static func make(_ state: GlanceState, now: Date, calendar: Calendar) -> String {
         let glyph = state.glyph(at: now)
         switch glyph {
+        case .connecting:
+            return "rv is connecting to rvd — nothing is confirmed yet"
         case .notRunning:
-            return state.link == .connecting
-                ? "rv is connecting to rvd — nothing is confirmed yet"
-                : "rv isn't running — agents are unguarded"
+            return "rv isn't running — agents are unguarded"
         default:
             break
         }
@@ -30,6 +30,7 @@ public enum GlanceStatusSentence {
         case .boxed: "rv is guarding a box"
         case .paused: "rv is paused"
         case .notRunning: "rv isn't running"
+        case .connecting: "rv is connecting to rvd"
         }
     }
 
@@ -49,11 +50,11 @@ extension GlanceReader {
     ) async -> GlanceState {
         var state = GlanceState(now: now, calendar: calendar)
         state.posture = posture
-        switch await pendingIDs() {
-        case .success(let ids):
-            state.replacePending(ids)
+        switch await pendingAsks() {
+        case .success(let asks):
+            state.replacePending(asks)
         case .failure(let failure):
-            state.link = .down(failure.reason)
+            state.markDown(failure.reason, at: now)
             return state
         }
         switch await events(EventsParams(after: 0, waitMs: 0)) {
@@ -62,8 +63,7 @@ extension GlanceReader {
         case .unsupported:
             state.link = .liveWithoutEvents
         case .down(let reason):
-            state.link = .down(reason)
-            state.pending = []
+            state.markDown(reason, at: now)
         }
         return state
     }

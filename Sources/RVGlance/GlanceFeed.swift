@@ -81,9 +81,9 @@ public struct GlanceFeed: Sendable {
     }
 
     private mutating func reloadPending() async -> Duration? {
-        switch await reader.pendingIDs() {
-        case .success(let ids):
-            state.replacePending(ids)
+        switch await reader.pendingAsks() {
+        case .success(let asks):
+            state.replacePending(asks)
             needsPending = false
             return nil
         case .failure(let failure):
@@ -92,8 +92,7 @@ public struct GlanceFeed: Sendable {
     }
 
     private mutating func wentDown(_ reason: String) -> Duration {
-        state.link = .down(reason)
-        state.pending = []
+        state.markDown(reason, at: now())
         needsPending = true
         let pause = backoff
         backoff = min(backoff * 2, Self.maxBackoff)

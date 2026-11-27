@@ -1,12 +1,12 @@
 #if canImport(SwiftUI) && canImport(AppKit) && canImport(XPC)
 import AppKit
 import Foundation
-import RVCLI
 import RVDomain
 import RVGlance
 import RVGlanceUI
 import RVIPC
 import RVPolicy
+import RVXPC
 import SwiftUI
 
 /// rv in the menu bar (K1, Glyph and Glance): the diamond and the Glance
@@ -65,27 +65,44 @@ struct GlanceMenuLabel: View {
     }
 }
 
-/// rvd's XPC transport, on a long-poll channel of its own so a parked
-/// `events` poll never holds the connection a pending read uses.
+/// rvd over RVXPC's client, which proves the daemon's identity on every
+/// reply. The menu bar's own connection: GlanceReader decides what it may
+/// ask (events and the pending list), this only carries the bytes.
 struct XPCGlanceWire: GlanceWire {
-    private let transport: any ServiceTransport
-
-    init() {
-        transport = XPCServiceTransport(connectTimeoutMs: 500, requestTimeoutMs: 2_000).longPollChannel()
-    }
+    static let helloTimeoutMs = 500
+    private let client = XPCEvaluateClient()
 
     func hello() async throws -> Bool {
-        try await transport.hello(clientSemver: ProtocolVersion.serviceSemver).status == .ok
+        let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: ProtocolVersion.serviceSemver)
+        let reply = try await send(try IPCJSON.encode(hello), timeoutMs: Self.helloTimeoutMs)
+        return try IPCJSON.decode(HelloAck.self, from: reply).status == .ok
     }
 
     func send(_ body: Data, timeoutMs: Int) async throws -> Data {
-        try await transport.send(body, timeoutMs: timeoutMs)
+        let client = client
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask { try await client.perform(body) }
+            group.addTask {
+                try await Task.sleep(for: .milliseconds(timeoutMs))
+                throw XPCGlanceWireTimeout()
+            }
+            defer { group.cancelAll() }
+            do {
+                guard let first = try await group.next() else { throw XPCGlanceWireTimeout() }
+                return first
+            } catch {
+                client.invalidate()
+                throw error
+            }
+        }
     }
 
     func invalidate() {
-        transport.invalidate()
+        client.invalidate()
     }
 }
+
+struct XPCGlanceWireTimeout: Error {}
 #else
 import Foundation
 
