@@ -4,19 +4,27 @@ import RVDomain
 import RVHistory
 import RVPolicy
 import RVPresentation
+import RVService
+import RVTheme
 
 struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
     static let configuration = CommandConfiguration(
         commandName: "draft",
-        abstract: "Compile English into a typed rule preview."
+        abstract: "Turn a plain sentence into a typed rule preview."
     )
 
     static let usage = [
-        HelpRow(name: "rv policy draft --english <text> [--repo] [--save [--wait [--wait-timeout <seconds>]]]"),
+        HelpRow(name: "rv policy draft \"<sentence>\" [--repo] [--save [--wait [--wait-timeout <seconds>]]]"),
+        HelpRow(name: "rv policy draft --english <sentence> ..."),
     ]
 
-    @Option(name: .customLong("english"), help: "English to compile into a typed rule.")
-    var english: String
+    @Argument(help: "The rule, in plain words: \"never force-push to main\".")
+    var sentence: String?
+
+    @Option(name: .customLong("english"), help: "The same sentence, as an option.")
+    var englishOption: String?
+
+    var english: String { englishOption ?? sentence ?? "" }
 
     @Flag(name: .customLong("save"), help: "Write the compiled typed rule.")
     var save = false
@@ -31,13 +39,16 @@ struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
     var waitFlags: PolicyWaitFlags
 
     func validate() throws {
+        if sentence != nil, englishOption != nil {
+            throw ValidationError("give the sentence once: either \"<sentence>\" or --english")
+        }
         try waitFlags.check(save: save)
     }
 
     func run() async throws {
         let ctx = CommandContext.current(command: "policy draft", format: format)
         guard save == false || english.isEmpty == false else {
-            try ctx.fail("rv policy draft: --save requires --english\n")
+            try ctx.fail("rv policy draft: --save needs a sentence: rv policy draft \"never force-push to main\" --save\n")
         }
         let home = try ctx.requireHome()
         let workspace = URL(
@@ -54,7 +65,8 @@ struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
                 robot: ctx.explicitRobot,
                 home: home,
                 workspace: workspace,
-                compiler: compiler
+                compiler: compiler,
+                palette: ctx.appearance.palette
             )
         } catch let error as PolicyCeilingError {
             try ctx.fail("rv policy draft: refused: \(error.refusal)\n")
@@ -72,6 +84,8 @@ struct PolicyDraftCommand: AsyncParsableCommand, CommandUsage {
                     command: "policy draft", layer: repo ? .repo : .machine, hash: savedHash,
                     flags: waitFlags, robot: ctx.explicitRobot)
             }
+        case .refuse(.alreadyBuiltIn) where result.alreadyOn:
+            return
         case .refuse:
             throw ExitCode(1)
         }
@@ -83,6 +97,8 @@ struct PolicyDraftResult: Equatable, Sendable {
     var outcome: PolicyDraftOutcome
     /// `PolicyRevisionIdentity.hash` of the layer document the save wrote.
     var savedHash: String? = nil
+    /// A built-in rule already stops what the sentence asked for, here.
+    var alreadyOn = false
 }
 
 enum PolicyDraftOutcome: Equatable, Sendable {
@@ -98,20 +114,36 @@ enum PolicyDraftRun {
         robot: Bool,
         home: HomeDirectory,
         workspace: URL,
-        compiler: some EnglishCompiler
+        compiler: some EnglishCompiler,
+        palette: Palette = colorOffPalette
     ) async throws -> PolicyDraftResult {
-        var authorization: String?
-        if save { authorization = try await OwnerConfirmation.require("save a policy rule drafted from English") }
-        let compiled = try await compiler.compile(english)
+        // Compile first: the owner approves the rule they can see, and a
+        // sentence with nothing to save never asks.
+        let compiled: EnglishCompileResult
+        var why: String?
+        if let reasoned = compiler as? any ReasonedEnglishCompiler {
+            let answer = try await reasoned.compileWithReason(english)
+            compiled = answer.result
+            why = answer.reason
+        } else {
+            compiled = try await compiler.compile(english)
+        }
         switch compiled {
         case .refuse(let reason):
+            let alreadyOn = reason == .alreadyBuiltIn && coreFilesystemOn(home: home)
             return PolicyDraftResult(
-                text: try render(compiled, robot: robot),
-                outcome: .refuse(reason)
+                text: try render(
+                    compiled, english: english, alreadyOn: alreadyOn, robot: robot,
+                    reason: why ?? refusalReason(reason, english: english), palette: palette),
+                outcome: .refuse(reason),
+                alreadyOn: alreadyOn
             )
         case .preview(let preview):
             var savedDocument: PolicyDocument?
             if save, preview.allowedToSave {
+                // The typed rule, never the model's words, goes in the prompt.
+                let authorization = try await OwnerConfirmation.require(
+                    "save the policy rule \(formatDocumentRule(preview.rule))")
                 savedDocument = try await ConfigChangeAudit.$authorization.withValue(authorization) {
                     try PolicyWorkspace(home: home, workspace: workspace).upsert(
                         preview.rule,
@@ -120,33 +152,81 @@ enum PolicyDraftRun {
                 }
             }
             return PolicyDraftResult(
-                text: try render(compiled, robot: robot),
+                text: try render(
+                    compiled, english: english, alreadyOn: false, robot: robot, reason: nil, palette: palette),
                 outcome: .preview(saved: savedDocument != nil),
                 savedHash: savedDocument.map(PolicyRevisionIdentity.hash)
             )
         }
     }
 
-    private static func render(_ result: EnglishCompileResult, robot: Bool) throws -> String {
+    /// The out-of-repo stop belongs to `core.filesystem`; off, nothing stops it.
+    private static func coreFilesystemOn(home: HomeDirectory) -> Bool {
+        (try? PacksFacade.effectiveIDs(home: home))?.contains(.coreFilesystem) ?? false
+    }
+
+    private static func render(
+        _ result: EnglishCompileResult, english: String, alreadyOn: Bool, robot: Bool, reason why: String?,
+        palette: Palette
+    ) throws -> String {
         if robot {
             switch result {
             case .preview(let preview):
                 return try RobotJSON.encode(preview)
             case .refuse(let reason):
-                return try RobotJSON.encode(PolicyDraftRobotRefuse(refuse: reason))
+                return try RobotJSON.encode(PolicyDraftRobotRefuse(
+                    refuse: reason, reason: why ?? refusalReason(reason, english: english)))
             }
         }
         switch result {
         case .preview(let preview):
-            return "\(preview.sentence)\n\(formatDocumentRule(preview.rule))"
+            return PolicyDraftPreview.lines(preview, palette: palette).joined(separator: "\n")
+        case .refuse(.alreadyBuiltIn):
+            if alreadyOn {
+                return "✓ Already on: rv stops deletes and moves outside this repo "
+                    + "(\(BuiltinRule.outOfRepoWrite.ruleID.rawValue)). Nothing to save."
+            }
+            return PolicyDraftPreview.refusalLines(
+                .alreadyBuiltIn,
+                reason: "only the core.filesystem pack stops changes outside this repo, and it is off here; "
+                    + "rv packs enable core.filesystem",
+                palette: palette
+            ).joined(separator: "\n")
         case .refuse(let reason):
-            return "refused: \(reason.rawValue)"
+            return PolicyDraftPreview.refusalLines(
+                reason, reason: why ?? refusalReason(reason, english: english), palette: palette
+            ).joined(separator: "\n")
+        }
+    }
+
+    /// One line: the grammar's own reason when it has one, else the kind's.
+    static func refusalReason(_ reason: EnglishCompileRefusal, english: String) -> String {
+        switch PlainEnglishRuleCompiler().draft(english) {
+        case .refused(_, let why), .unreadable(let why):
+            return why
+        case .rule, .builtIn:
+            break
+        }
+        switch reason {
+        case .empty:
+            return "nothing to draft; say a rule, like \"never force-push to main\""
+        case .uncompilable:
+            return "can't tell which command this is about; name one: git push, git reset, git clean, git restore, rm or mv"
+        case .unsupported, .unsupportedPredicate:
+            return "that isn't something a rule covers yet; drafts cover git push, reset, clean and restore, "
+                + "and deleting or moving files"
+        case .hardStop:
+            return "rv always stops this, and a rule cannot change it"
+        case .alreadyBuiltIn:
+            return "rv already stops this with a built-in rule"
         }
     }
 }
 
 struct PolicyDraftRobotRefuse: Equatable, Sendable, Codable {
     var refuse: EnglishCompileRefusal
+    /// One line saying why, as the text output prints it.
+    var reason: String
 }
 
 func formatDocumentRule(_ rule: PolicyDocumentRule) -> String {

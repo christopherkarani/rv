@@ -144,7 +144,9 @@ struct PolicyExemptionsSurfacingTests {
             #expect(PolicyValidateRun.exemptionNotes(.file(file, home), workspace: workspace) == [])
 
             let missing = workspace.appendingPathComponent("missing.toml")
-            try PolicyValidateRun.validate(.file(missing, home))
+            #expect(throws: PolicyDocumentRun.MissingFile.self) {
+                try PolicyValidateRun.validate(.file(missing, home))
+            }
             #expect(PolicyValidateRun.exemptionNotes(.file(missing, home), workspace: workspace) == [])
         }
     }
