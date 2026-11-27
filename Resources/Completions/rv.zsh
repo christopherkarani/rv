@@ -8,6 +8,7 @@ _rv() {
     'box:Run an agent in a box for this repo'
     'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'
+    'try:Watch rv stop a fake agent in a throwaway repo'
     'explain:Explain a decision'
     'packs:List and enable packs'
     'policy:Typed rules'

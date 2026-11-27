@@ -28,6 +28,9 @@ public enum EnglishCompileRefusal: String, Sendable, Equatable, Codable {
     case unsupported
     case unsupportedPredicate
     case hardStop
+    /// rv already stops this with a built-in rule (for example writes
+    /// outside the repo); there is nothing to save.
+    case alreadyBuiltIn
 }
 
 public enum EnglishCompilerError: Error, Sendable, Equatable {
