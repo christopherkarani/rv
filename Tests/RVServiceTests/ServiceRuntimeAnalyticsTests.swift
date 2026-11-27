@@ -114,10 +114,13 @@ struct ServiceRuntimeAnalyticsTests {
         #expect(reply.exitCode == 0)
         #expect(reply.stdout.contains("\"decision\":\"deny\""))
 
+        // The deny is counted on rvd's analytics task; the hook-local spool
+        // drain may note the packs and flush a day before it lands.
         guard let daily = await flushUntilDailyEvent(
             coordinator: fixture.coordinator,
             sink: fixture.sink,
-            containsCoreGit: true
+            containsCoreGit: true,
+            requiring: { $0.properties["deny_count"] == .int(1) }
         ) else {
             return
         }
@@ -187,14 +190,22 @@ private func makeAnalyticsFixture() throws -> AnalyticsFixture {
     )
 }
 
+/// Flushes one new day at a time until a daily event with (or without)
+/// core.git that also satisfies `requiring` arrives, for up to 60 s: on a
+/// starved pool rvd's analytics task, and the hook-local spool drain that
+/// notes the packs and flushes too, can run late and in either order.
 private func flushUntilDailyEvent(
     coordinator: AnalyticsCoordinator,
     sink: RecordingAnalyticsSink,
     afterEventCount: Int = 0,
-    containsCoreGit: Bool
+    containsCoreGit: Bool,
+    requiring: @escaping @Sendable (AnalyticsPayload) -> Bool = { _ in true }
 ) async -> AnalyticsPayload? {
-    for offset in 0..<64 {
+    let deadline = ContinuousClock.now + .seconds(60)
+    var offset = 0
+    while ContinuousClock.now < deadline {
         await coordinator.flushDailyIfNeeded(now: analyticsDay(offset: offset))
+        offset += 1
         let events = await sink.events
         if let event = events.dropFirst(afterEventCount).last(where: { payload in
             guard payload.event == AnalyticsPayload.dailyActiveEvent,
@@ -202,7 +213,7 @@ private func flushUntilDailyEvent(
             else {
                 return false
             }
-            return enabledPacks.contains("core.git") == containsCoreGit
+            return enabledPacks.contains("core.git") == containsCoreGit && requiring(payload)
         }) {
             return event
         }

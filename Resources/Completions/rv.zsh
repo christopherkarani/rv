@@ -7,6 +7,7 @@ _rv() {
     'opencode:Launch OpenCode with workspace write containment'
     'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'
+    'try:Watch rv stop a fake agent in a throwaway repo'
     'explain:Explain a decision'
     'packs:List and enable packs'
     'policy:Typed rules'

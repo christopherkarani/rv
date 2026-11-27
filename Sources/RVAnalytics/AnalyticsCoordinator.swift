@@ -82,6 +82,20 @@ public actor AnalyticsCoordinator {
         schedulePersist()
     }
 
+    /// Adds decisions counted elsewhere (the hook-local evaluator's spool)
+    /// with one persist.
+    public func recordDecisions(_ counts: [AnalyticsDecisionKind: Int]) {
+        guard preferences.isEnabled, counts.isEmpty == false else { return }
+        for (kind, count) in counts where count > 0 {
+            switch kind {
+            case .allow: state.allowCount += count
+            case .deny: state.denyCount += count
+            case .indeterminate: state.indeterminateCount += count
+            }
+        }
+        persistState()
+    }
+
     /// Records enabled pack identifiers for the next daily flush.
     ///
     /// - Parameter packIDs: Pack identifier strings (`PackID.rawValue`); this

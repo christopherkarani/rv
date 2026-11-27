@@ -554,9 +554,10 @@ fetch_model_bundle() {
   [ -z "${RV_INSTALL_BIN:-}" ] || return 0
   [ "${RV_INSTALL_NO_MODELS:-}" != "1" ] || return 0
   dest="$HOME/.config/rv/models/$models_bundle"
-  # A partial bundle does not count: JudgeRuntime.ftBundleDir requires the
-  # model AND the tokenizer, so re-running the installer must repair a
-  # partial bundle instead of skipping it.
+  # A partial bundle does not count as installed: rv selects any bundle dir
+  # that is there and sends judged calls to review until it loads, so
+  # re-running the installer must repair a partial bundle (model or
+  # tokenizer missing) instead of skipping it.
   if [ -d "$dest/model.mlpackage" ] && { [ -f "$dest/tokenizer.json" ] || [ -f "$dest/tokenizer/tokenizer.json" ]; }; then
     return 0
   fi

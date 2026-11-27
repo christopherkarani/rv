@@ -57,6 +57,8 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var semantic: ExplainSemanticView?
     /// Observe-mode note, when observe let a would-be block or ask run.
     package var observeNote: String?
+    /// Typed rules that also match but did not decide, shown before Next.
+    package var alsoMatches: [ExplainAlsoMatch] = []
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }

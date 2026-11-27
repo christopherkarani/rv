@@ -145,8 +145,8 @@ an answer. The pool keeps both workers loaded.
   runs the in-process judge: no fallback, so killing the pool cannot move
   rvd back onto the crash-prone path. `rv test` and the bench CLI keep the
   in-process judge (`JudgeSlot`, its `NSLock`), since they have no pool.
-  Known difference: when the bundle fails to load, `rv test` shows the
-  in-process path's packs-only result, while the live hook gets review.
+  A bundle that is there but fails to load is review on both paths; only
+  a bundle dir that is not there at all is packs-only.
 - The client keeps one verified connection. The budget sent is computed
   after the connection is obtained: `min(1.5 s, hook deadline − now − 400 ms
   − 250 ms transport slack)`; nothing left is `late` without asking. The
@@ -171,8 +171,8 @@ an answer. The pool keeps both workers loaded.
 
 Every row but a verdict is review. A missing bundle never reaches the pool:
 rvd decides that first (`engine-missing`, packs-only, as before). A bundle
-that is present but fails to load in the worker is review, not the in-process
-path's packs-only floor: the failure can be induced (a full disk, a corrupt
+that is present but fails to load in the worker is review, as in-process,
+never the packs-only floor: the failure can be induced (a full disk, a corrupt
 compile cache), and the floor would make it an unjudged allow. The
 `judgePool` doctor check names the load failure, and the worker retries the
 load every 60 s.
@@ -188,6 +188,15 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 | No manifest (one-click install) | same euid and exact on-disk bytes of `rvd` beside `rv-judge` (canonical path + CDHash) | same euid and exact bytes of `rv-judge` beside `rvd` |
 | Manifest present but invalid | never | never |
 
+The hook-local evaluator (`rv-hook-local`, `docs/architecture/hook-local-decide.md`)
+is a second, judge-only client. The supervisor accepts it, with a manifest,
+when its live code is hardened, non-adhoc, Developer ID signed
+`dev.rv.rv-hook-local` from the team the `service` entry names (the identity
+the C hook pins; the manifest has no entry of its own for it), and without
+one when it is the exact bytes of `rv-hook-local` beside `rv-judge`. It may
+send `judge` requests only: `warm` and `status` are refused, and its client
+never warms. It verifies the supervisor exactly as rvd does.
+
 - **A manifest without a `judge` entry verifies no supervisor.** rvd then
   treats the pool as unreachable and every judged call goes to review; it
   does not fall back to a sibling pin or to the in-process judge. Add a
@@ -200,7 +209,8 @@ on each message's audit token, `ProtectedPeerTrustConfiguration`):
 - Before each spawn the supervisor compares the on-disk `rv-judge`'s CDHash
   with its own running code (`SecCodeCopySelf`), not only the file identity.
 - The C hook validates a `judge` entry like Swift does (it is a known role in
-  `daemon_trust.c`), though the hook itself never talks to the pool.
+  `daemon_trust.c`), though the C hook itself never talks to the pool (its
+  `rv-hook-local` child does).
 - Every message on the listener is authorized before it is read; the Mach
   service connection only performs the hello and hands out an anonymous
   endpoint, and requests are refused on any connection that has not

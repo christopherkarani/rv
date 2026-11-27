@@ -17,8 +17,9 @@ import RVPolicy
 /// even when its bundle is missing — a missing bundle for the SELECTED
 /// engine is packs-only with an `engine-missing` log note, never
 /// fail-closed. With no explicit engine the fine-tuned judge is the
-/// default whenever its bundle validates (`model.mlpackage` present);
-/// otherwise the gate falls back to the stock Laya bundle. Each engine is
+/// default whenever its bundle dir is there at all (a broken one refuses
+/// on load; it is never skipped); otherwise the gate falls back to the
+/// stock Laya bundle. Each engine is
 /// slot-cached separately.
 ///
 /// The judge runs whenever the selected engine's bundle is installed: it
@@ -140,13 +141,12 @@ public enum JudgeRuntime {
                 ? .ok(engine: resolved.engine, bundle: resolved.bundle)
                 : .invalid(engine: resolved.engine, dir: resolved.bundle, problems: problems)
         }
-        // No runnable bundle. If an install dir exists at all, it is a
+        // No selected bundle. If an install dir exists at all, it is a
         // broken install, not an absence. Check the explicit engine,
-        // else FT (production default) before stock — the resolver
-        // falls back to stock precisely because FT did not validate.
+        // else FT (production default) before stock.
         for engine in config.judgeEngine.map { [$0] } ?? [JudgeEngine.ft, .laya] {
             if let expected = expectedBundleDir(engine: engine, home: home),
-               FileManager.default.fileExists(atPath: expected.path) {
+               BundleFilePresence.of(expected) != .absent {
                 return .invalid(
                     engine: engine, dir: expected,
                     problems: bundleProblems(engine: engine, dir: expected)
@@ -163,18 +163,25 @@ public enum JudgeRuntime {
     }
 
     static func bundleProblems(engine: JudgeEngine, dir: URL) -> [String] {
-        let fm = FileManager.default
         var problems: [String] = []
-        if !fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path) {
+        // Presence by `lstat`, as the loader checks it: a path that cannot be
+        // checked is named as such, never as missing.
+        func presence(_ name: String) -> BundleFilePresence {
+            let found = BundleFilePresence.of(dir.appendingPathComponent(name))
+            if case .unknown(let why) = found { problems.append("\(name) cannot be checked (\(why))") }
+            return found
+        }
+        if presence("model.mlpackage") == .absent {
             problems.append("model.mlpackage missing")
         }
         switch engine {
         case .ft:
-            let tok = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
-                || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
-            if !tok { problems.append("tokenizer.json missing") }
+            let direct = presence("tokenizer.json")
+            if direct == .absent, presence("tokenizer/tokenizer.json") == .absent {
+                problems.append("tokenizer.json missing")
+            }
             let configURL = dir.appendingPathComponent("config.json")
-            if fm.fileExists(atPath: configURL.path) {
+            if presence("config.json") == .present {
                 if let data = try? Data(contentsOf: configURL),
                    let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     do { _ = try LayaVerdict.Action.configLabels(cfg) }
@@ -184,7 +191,7 @@ public enum JudgeRuntime {
                 }
             }
         case .laya:
-            if !fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path) {
+            if presence("tokenizer/tokenizer.json") == .absent {
                 problems.append("tokenizer/tokenizer.json missing")
             }
         }
@@ -200,36 +207,28 @@ public enum JudgeRuntime {
             .appendingPathComponent("models/\(name)", isDirectory: true)
     }
 
-    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`. A
-    /// directory only counts when `model.mlpackage` is in it.
+    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`, whenever
+    /// that path is there at all (`selectable`).
     static func ftBundleDir(home: HomeDirectory?) -> URL? {
-        func valid(_ dir: URL) -> URL? {
-            let fm = FileManager.default
-            let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
-            let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
-                || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
-            return hasModel && hasTokenizer ? dir : nil
-        }
-        guard let expected = expectedBundleDir(engine: .ft, home: home) else { return nil }
-        return valid(expected)
+        expectedBundleDir(engine: .ft, home: home).flatMap(selectable)
     }
 
-    /// A directory only counts as a bundle when a model artifact is in it;
-    /// anything else (unset, empty, wrong path) means packs-only.
+    /// Stock bundle: the installed `models/laya-multilingual-coreml`,
+    /// whenever that path is there at all (`selectable`). Only the CoreML
+    /// judge is wired; a dir without `model.mlpackage` (ONNX-only, say)
+    /// refuses on load rather than reading as judge-on.
     static func bundleDir(home: HomeDirectory?) -> URL? {
-        func valid(_ dir: URL) -> URL? {
-            // Only the CoreML judge is wired; an ONNX-only directory is
-            // not a runnable bundle and must not read as judge-on.
-            let fm = FileManager.default
-            let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
-            let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
-            return hasModel && hasTokenizer ? dir : nil
-        }
-        guard let home else { return nil }
-        return valid(
-            RVPolicyPaths.configDirectory(home: home)
-                .appendingPathComponent("models/laya-multilingual-coreml", isDirectory: true)
-        )
+        expectedBundleDir(engine: .laya, home: home).flatMap(selectable)
+    }
+
+    /// `dir` unless the bundle dir itself is absent (`lstat` ENOENT): only
+    /// no install at all is packs-only. A dir that is there in any form
+    /// (empty, partial, a symlink, even one to nowhere, or a path that
+    /// cannot be checked) is a broken install: selected, so its load
+    /// refuses (review), and with no explicit engine a broken FT dir never
+    /// falls back to the stock judge.
+    static func selectable(_ dir: URL) -> URL? {
+        BundleFilePresence.of(dir) == .absent ? nil : dir
     }
 
     /// v1 runtime context. Only signals already available at this layer:
@@ -308,10 +307,11 @@ public enum JudgeRuntime {
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
         // only when a loaded judge errors mid-prediction (`.failed`).
-        // A bundle that is invalid or has no model is unavailable:
-        // packs-only plus a note (doctor surfaces it), never an eternal Ask
-        // loop. Core ML failing on a model that is there refuses
-        // (`CoreMLLoadRefusal`, review): an agent can provoke that.
+        // A selected bundle dir that is gone (ENOENT) is unavailable:
+        // packs-only plus a note. A selected bundle that is there
+        // but cannot load (corrupt, unreadable, uncheckable), or Core ML
+        // failing on a model that is there, refuses (review): an agent can
+        // provoke those (`loadFailureRun`).
         guard let bundle = selection.bundle else {
             return (packsOnlyFloor(result, command: command), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),
@@ -482,9 +482,12 @@ public enum JudgeRuntime {
         )
     }
 
-    /// Load failure is distinct from prediction failure: the first is a
-    /// broken install (packs-only, doctor-visible), the second is a
-    /// loaded judge that cannot answer this input (fail-closed Ask).
+    /// `unavailable` is the packs-only floor, an allow without a judge. It
+    /// comes only from genuine absence: the selected bundle dir is gone
+    /// (ENOENT), or no Core ML on this platform. A selected bundle that is
+    /// there but cannot load (no model, corrupt config or tokenizer, an
+    /// uncheckable path) is `refused` (review, doctor-visible); a loaded judge that
+    /// cannot answer this input is `failed` (fail-closed Ask).
     ///
     /// `warming` is a load still in progress past the bounded wait. It goes
     /// to a human (review), never packs-only: a same-user agent could
@@ -552,22 +555,42 @@ public enum JudgeRuntime {
                         catch { return .failed }
                     }
                 }
-            } catch JudgeLoadError.warming {
-                return .warming
-            } catch let refusal as any CoreMLRefusal {
-                return .refused(refusal.reason)
-            } catch let error as LayaError {
-                switch error {
-                case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
-                case .predictionFailed: return .failed
-                }
             } catch {
-                return .unavailable("load failed")
+                return loadFailureRun(error)
             }
         }
         #else
         return .unavailable("CoreML unavailable on this platform")
         #endif
+    }
+
+    /// What a judge load that threw means. Only genuine absence
+    /// (`LayaError.bundleMissing`: the selected bundle dir is gone, ENOENT)
+    /// is `.unavailable`, the packs-only floor that allows. A bundle that is
+    /// there but incomplete, corrupt, unreadable or uncheckable, and any
+    /// error not named here, refuses (review): an agent can provoke those.
+    static func loadFailureRun(_ error: any Error) -> JudgeRun {
+        switch error {
+        case JudgeLoadError.warming:
+            return .warming
+        case let refusal as any CoreMLRefusal:
+            return .refused(refusal.reason)
+        case LayaError.bundleMissing(let why):
+            return .unavailable(why)
+        case LayaError.predictionFailed:
+            return .failed
+        case LayaError.badBundle(let why), LayaError.modelUnavailable(let why):
+            return .refused(bundleRefusal(why))
+        default:
+            return .refused(bundleRefusal("load failed: \(error)"))
+        }
+    }
+
+    /// Refusal reason for a selected bundle that could not load. It reaches
+    /// the agent: it sends the agent to the owner, never to a repair.
+    static func bundleRefusal(_ why: String) -> String {
+        "Laya judge: the installed judge bundle could not be loaded (\(why)); judged calls go to review "
+            + "until the owner repairs it. Ask the owner to run `rv doctor`."
     }
 
     /// Inference through the live admission, bounded by this request's hook
@@ -798,12 +821,14 @@ public enum JudgeRuntime {
 
     /// Appends one row to `<config>/judge-log.jsonl`. Best effort: a row
     /// that does not land is reported through `dropLog`, and the verdict
-    /// stands.
+    /// stands. Returns whether the row landed.
+    @discardableResult
     static func appendLog(
         _ row: GatedEffect.JudgeLogRow,
         home: HomeDirectory,
+        lockTimeout: Duration = logLockTimeout,
         dropLog: AuditDropLog = .shared
-    ) {
+    ) -> Bool {
         let file = RVPolicyPaths.configDirectory(home: home).appendingPathComponent("judge-log.jsonl")
         var object: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: row.at),
@@ -831,15 +856,17 @@ public enum JudgeRuntime {
             object["ms"] = score.milliseconds
             if score.truncated { object["truncated"] = true }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return false }
         // rvd and the hook-local evaluator both append here: a flocked
         // O_APPEND write keeps every row whole across processes, and never
         // replaces a file another writer just created. Best effort, so a
         // lock another process holds costs at most `logLockTimeout`.
         do {
-            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: logLockTimeout)
+            try JSONLAppendLog.append(data, to: file, sync: false, lockTimeout: lockTimeout)
+            return true
         } catch {
             dropLog.report(.judgeLog, file: file, consequence: "the verdict stood without its judge-log record")
+            return false
         }
     }
 }
