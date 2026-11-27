@@ -17,17 +17,33 @@ public enum UnknownCommand {
         return (table + parsed).filter { seen.insert($0).inserted }
     }
 
+    /// Commands rv runs for a program, not a person: the hook entry point
+    /// agent hosts call, and machine-to-machine identity launches. They
+    /// stay known, so they are never refused, but a typo never suggests one.
+    static let internalCommands: Set<CommandVocabulary.Command> = [.hook, .operator]
+
+    /// What a typo may be corrected to: every known spelling but the
+    /// internal commands.
+    static var candidates: [String] {
+        let hidden = Set(internalCommands.map(\.rawValue))
+        return known.filter { hidden.contains($0) == false }
+    }
+
     /// The message for `arguments` when its first word is not a command,
     /// or `nil` when ArgumentParser should handle it (a flag, a real
     /// command, or no arguments).
-    public static func message(arguments: [String], known: [String]? = nil) -> String? {
+    public static func message(
+        arguments: [String], known: [String]? = nil, candidates: [String]? = nil
+    ) -> String? {
         guard let first = arguments.first, first.hasPrefix("-") == false else { return nil }
+        if let refusal = VersionSpelling.refusal(arguments) { return refusal }
         let names = known ?? Self.known
         guard names.contains(first) == false else { return nil }
+        let suggestible = candidates ?? (known == nil ? Self.candidates : names)
         let program = CommandVocabulary.program
         let shown = DisplayedText.field(first)
         var text = "\(program): unknown command '\(shown)'."
-        if let match = suggestion(for: first, among: names) {
+        if let match = suggestion(for: first, among: suggestible) {
             text += " Did you mean '\(program) \(match)'?"
         }
         return text + " Run \(program) --help to see every command.\n"

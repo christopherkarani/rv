@@ -26,6 +26,18 @@ struct UnknownCommandTests {
         }
     }
 
+    @Test func internalCommandsAreKnownButNeverSuggested() {
+        for typo in ["hok", "hoook", "opertor", "operater"] {
+            let text = UnknownCommand.message(arguments: [typo])
+            #expect(text?.contains("Did you mean") == false, "\(typo): \(text ?? "nil")")
+        }
+        #expect(UnknownCommand.message(arguments: ["hook", "--host", "claude"]) == nil)
+        #expect(UnknownCommand.message(arguments: ["operator"]) == nil)
+        #expect(UnknownCommand.candidates.contains("hook") == false)
+        #expect(UnknownCommand.candidates.contains("operator") == false)
+        #expect(UnknownCommand.candidates.contains("doctor"))
+    }
+
     @Test func aTypedControlCharacterIsEscapedNotEchoed() {
         let text = UnknownCommand.message(arguments: ["x\u{1B}[2J"])
         #expect(text?.contains("\u{1B}") == false)

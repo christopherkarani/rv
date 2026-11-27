@@ -51,7 +51,7 @@ enum RVD {
             // Usage error: exit at once (no supervisor backoff; launchd
             // and systemd never pass an argument rvd does not take).
             try? FileHandle.standardError.write(contentsOf: Data(
-                "rvd: unknown argument '\(argument)'. rvd --help lists what it takes; manage rvd with rv service.\n".utf8))
+                RVDLaunch.unknownArgumentMessage(argument).utf8))
             Foundation.exit(64)
         } catch RVDLaunchError.homeRequired {
             try? FileHandle.standardError.write(contentsOf: Data(homeRequired.utf8))

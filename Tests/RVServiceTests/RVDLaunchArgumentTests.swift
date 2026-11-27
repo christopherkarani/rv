@@ -21,6 +21,13 @@ struct RVDLaunchArgumentTests {
         }
     }
 
+    @Test func anUnknownArgumentIsEscapedBeforeItIsPrinted() {
+        let message = RVDLaunch.unknownArgumentMessage("--x\u{1B}[2J")
+        #expect(message.contains("\u{1B}") == false)
+        #expect(message.hasPrefix("rvd: unknown argument '--x"))
+        #expect(message.hasSuffix("manage rvd with rv service.\n"))
+    }
+
     @Test func theArgumentsLaunchdAndSetupPassStillParse() throws {
         #expect(try RVDLaunch.parse(arguments: ["rvd"]).printHelp == false)
         #expect(try RVDLaunch.parse(arguments: ["rvd", "--version"]).printVersion)

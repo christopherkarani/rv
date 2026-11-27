@@ -61,6 +61,13 @@ public enum RVDLaunch {
 
         """
 
+    /// What rvd prints for an argument it does not take. The argument is
+    /// escaped as rv escapes any typed text, so it cannot redraw the terminal.
+    public static func unknownArgumentMessage(_ argument: String) -> String {
+        "rvd: unknown argument '\(DisplayedText.field(argument))'. "
+            + "rvd --help lists what it takes; manage rvd with rv service.\n"
+    }
+
     public static func parse(arguments: [String]) throws -> RVDConfiguration {
         if arguments.contains(where: { $0 == "--socket" || $0.hasPrefix("--socket=") }) {
             #if os(Linux)

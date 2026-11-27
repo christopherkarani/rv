@@ -705,10 +705,11 @@ grep -Eq '^claude +block +wired' "$WORK/hosts.txt"
 check install "rv host list: claude block wired" $? "$(head -3 "$WORK/hosts.txt" | tr '\n' ' ')"
 
 as_owner rv service restart > "$WORK/svc.log" 2>&1
-r1=$?; as_owner rv service status | grep -q 'state=running'
+r1=$?; out=$(as_owner rv service status); [[ $out == *state=running* ]]
 check install "rv service restart restarts rvd" $(( r1 | $? ))
 pkill -TERM -u "$OWNER" -x rvd; for _ in $(seq 30); do pgrep -u "$OWNER" -x rvd >/dev/null || break; sleep 0.2; done
-as_owner rv service status | grep -q 'state=down'
+# rv service status exits 1 while rvd is down; read its text, not its status.
+out=$(as_owner rv service status || true); [[ $out == *state=down* ]]
 check install "stopping rvd (no 'rv service stop' exists: kill it) shows state=down" $?
 STOPPED_FOR_GATE=1
 
@@ -736,7 +737,7 @@ out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{
 [[ "$st" == "2" && "$out" == *'"decision":"block"'* ]]
 check gate "rvd down, Codex host: block and exit 2" $? "exit $st $out"
 as_owner rv service start > "$WORK/svc-start.log" 2>&1
-as_owner rv service status | grep -q 'state=running'
+out=$(as_owner rv service status); [[ $out == *state=running* ]]
 check gate "rv service start brings rvd back" $?
 
 audit_lines_before=0; [[ -f "$OWNER_HOME/.config/rv/audit.jsonl" ]] && audit_lines_before=$(wc -l < "$OWNER_HOME/.config/rv/audit.jsonl")
