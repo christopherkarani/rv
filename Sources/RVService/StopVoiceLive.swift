@@ -20,8 +20,9 @@ private func passwdGecos() -> String? {
     var entry = passwd()
     var result: UnsafeMutablePointer<passwd>?
     var buffer = [CChar](repeating: 0, count: 16 * 1024)
-    let status = buffer.withUnsafeMutableBufferPointer { pointer in
-        getpwuid_r(getuid(), &entry, pointer.baseAddress!, pointer.count, &result)
+    let status = buffer.withUnsafeMutableBufferPointer { pointer -> Int32 in
+        guard let base = pointer.baseAddress else { return ERANGE }
+        return getpwuid_r(getuid(), &entry, base, pointer.count, &result)
     }
     guard status == 0, result != nil, let gecos = entry.pw_gecos else { return nil }
     return String(validatingCString: gecos)
