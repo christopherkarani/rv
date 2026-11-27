@@ -109,13 +109,41 @@ enum WorkspaceReviewText {
         let more = pending.count > 1 ? " · +\(pending.count - 1) more" : ""
         let keys = " · ^B R answer"
         let host = clean(oldest.summary)
-        let tail = registrableTailLength(host)
-        let budget = cells - lead.count - more.count - keys.count
-        if budget >= tail {
-            return lead + shortened(host, to: budget, keepingTail: tail) + more + keys
+        let budget = cells - WorkspaceCells.width(lead + more + keys)
+        if let shown = fitted(host, cells: budget, keepingTail: registrableTailLength(host)) {
+            return lead + shown + more + keys
         }
         let bare = "◐ wants out · ^B R"
-        return bare.count <= cells ? bare : nil
+        return WorkspaceCells.width(bare) <= cells ? bare : nil
+    }
+
+    /// `host` within `cells` terminal cells: whole when it fits, else cut
+    /// in the middle with `…`, keeping at least its last `minimumTail`
+    /// characters. Nil when even `…` and the tail do not fit, so the
+    /// caller's keys are never the part that is cut.
+    private static func fitted(_ host: String, cells: Int, keepingTail minimumTail: Int) -> String? {
+        if WorkspaceCells.width(host) <= cells { return host }
+        let characters = Array(host)
+        let required = WorkspaceCells.width(String(characters.suffix(minimumTail)))
+        guard cells >= required + 1 else { return nil }
+        let tailCells = max(required, (cells - 1) / 2)
+        var tail: [Character] = []
+        var used = 0
+        for character in characters.reversed() {
+            let width = WorkspaceCells.width(of: character)
+            if tail.count >= minimumTail, used + width > tailCells { break }
+            tail.insert(character, at: 0)
+            used += width
+        }
+        var head = ""
+        var headCells = 0
+        for character in characters.dropLast(tail.count) {
+            let width = WorkspaceCells.width(of: character)
+            guard headCells + width <= cells - 1 - used else { break }
+            head.append(character)
+            headCells += width
+        }
+        return head + "…" + String(tail)
     }
 
     static func header(_ review: WorkspaceReviewState) -> String {
