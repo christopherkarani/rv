@@ -95,10 +95,6 @@ enum GatedEffect: Sendable, Equatable {
         /// The hook request's host session id, when it is an opaque token
         /// (`DenialLedgerRecord.attributableSession`); nil otherwise.
         var session: String?
-        /// Enforced rows: the host showed this deny as an ask
-        /// (`HookAuthorization.project`), so the person may have let it run.
-        var asked = false
-
         /// The row the rule-oriented denial ledger keeps: a rule deny as
         /// it is; the observe floor's own stop for a program rv cannot see
         /// under its rule id (`observe.floor:unanalyzable`), so `rv blocks`

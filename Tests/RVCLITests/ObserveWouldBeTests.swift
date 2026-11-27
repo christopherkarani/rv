@@ -254,7 +254,12 @@ struct ObserveWouldBeTests {
         ("git push --force origin main; dd if=/dev/zero of=/dev/sda", "✕ Stopped, in every mode"),
         ("git reset --hard && mkfs.ext4 /dev/sdb1", "✕ Stopped, in every mode"),
         ("git reset --hard; rm -rf ~", "✕ Stopped, in every mode"),
+        // The same inside program text fed to a shell.
+        ("sh -c 'git reset --hard; rm -rf /usr/*'", "✕ Stopped, in every mode"),
+        ("bash -c 'git push --force origin main; dd if=/dev/zero of=/dev/sda'", "✕ Stopped, in every mode"),
+        ("zsh -c 'git reset --hard && rm -rf ~'", "✕ Stopped, in every mode"),
         // A root delete with no analyzed target reads its words.
+        ("echo x | xargs -I{} rm -rf ~/{}", "✕ Stopped, in every mode"),
         ("echo x | xargs rm -rf ~", "✕ Stopped, in every mode"),
         ("xargs rm -rf / < /dev/null", "✕ Stopped, in every mode"),
         ("echo x | xargs rm -rf $HOME", "✕ Stopped, in every mode"),
@@ -263,6 +268,9 @@ struct ObserveWouldBeTests {
         ("shred -n1 -z /dev/sda", "✕ Stopped, in every mode"),
         ("cp /dev/zero /dev/sda", "✕ Stopped, in every mode"),
         ("truncate -s0 /dev/sda", "✕ Stopped, in every mode"),
+        ("cat /dev/zero > /dev/mapper/vg-root", "✕ Stopped, in every mode"),
+        ("shred -n1 /dev/loop0", "✕ Stopped, in every mode"),
+        ("cp /dev/zero /dev/disk/by-id/ata-disk0", "✕ Stopped, in every mode"),
         // A glob below a root folder is that folder.
         ("rm -rf /usr/*", "✕ Stopped, in every mode"),
         // A program rv cannot see.
@@ -272,6 +280,9 @@ struct ObserveWouldBeTests {
         ("git reset --hard; rm -rf ~/project/build", "◐ Would stop"),
         ("echo x | xargs rm -rf ~/project/build", "◐ Would stop"),
         ("rm -rf ~/project/build/*", "◐ Would stop"),
+        ("sh -c 'git reset --hard; rm -rf ~/project/build'", "◐ Would stop"),
+        ("bash -c 'git reset --hard'", "◐ Would stop"),
+        ("cd $PROJ && echo x | xargs rm -rf ~/project/build", "◐ Would stop"),
         ("git reset --hard", "◐ Would stop"),
         ("git push --force origin main", "◐ Would stop"),
         ("touch /etc/rv-watch-test", "◐ Would stop"),
@@ -310,10 +321,11 @@ struct ObserveWouldBeTests {
         #expect(text.contains("✕ Stopped  claude  Bash  observe.floor:unanalyzable"), "\(text)")
     }
 
-    /// Guard mode: a deny the host shows as an ask is listed as `⏺ Asks`
-    /// (the person may have let it run), never as `✕ Stopped`.
-    @Test("rv blocks in guard mode shows an ask as an ask")
-    func guardModeAskIsListedAsAsk() async throws {
+    /// Guard mode: no host pauses for a policy ask (the hook sends it as a
+    /// deny), so an unlockable deny did not run and reads `✕ Stopped`; a
+    /// later approval is its own override row.
+    @Test("rv blocks in guard mode lists an unlockable deny as stopped")
+    func guardModeUnlockableDenyReadsStopped() async throws {
         let home = try Self.home(observe: false)
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date()
@@ -322,12 +334,9 @@ struct ObserveWouldBeTests {
             cwd: WorkingDirectory(validating: "/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) }, host: .hook(.claude)
         )
-        let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home)).records(asOf: now)
-        #expect(rows.map(\.asked) == [true])
         let text = try BlocksRun.list(home: home, json: false, now: now)
-        #expect(text.contains("⏺ Asks  claude  Bash  core.git:reset-hard"), "\(text)")
-        #expect(!text.contains("Stopped"))
-        #expect(try BlocksRun.list(home: home, json: true, now: now).contains("\"asked\":true"))
+        #expect(text.contains("✕ Stopped  claude  Bash  core.git:reset-hard"), "\(text)")
+        #expect(!text.contains("Asks"))
     }
 
     @Test("an allow under observe is byte-identical to enforce")
