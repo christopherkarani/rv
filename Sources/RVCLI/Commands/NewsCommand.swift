@@ -152,7 +152,8 @@ struct NewsReport: Equatable, Sendable {
     var robot: Robot {
         Robot(
             version: version, checked: week.checked, refused: week.refused, stopped: week.stopped,
-            watched: week.watched, notes: notes.map(\.text)
+            watched: week.watched, busiest: week.busiest.map { Robot.Busiest(host: $0.host, percent: $0.percent) },
+            notes: notes.map(\.text)
         )
     }
 
@@ -164,11 +165,31 @@ struct NewsReport: Equatable, Sendable {
         var refused: Int
         var stopped: Int
         var watched: Int
+        /// The host that asked rv the most this week; null with no decisions.
+        var busiest: Busiest?
         var notes: [String]
 
+        struct Busiest: Encodable, Equatable {
+            var host: String
+            var percent: Int
+        }
+
         enum CodingKeys: String, CodingKey {
-            case schema, version, checked, refused, stopped, watched, notes
+            case schema, version, checked, refused, stopped, watched, busiest, notes
             case windowDays = "window_days"
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(schema, forKey: .schema)
+            try container.encode(windowDays, forKey: .windowDays)
+            try container.encode(version, forKey: .version)
+            try container.encode(checked, forKey: .checked)
+            try container.encode(refused, forKey: .refused)
+            try container.encode(stopped, forKey: .stopped)
+            try container.encode(watched, forKey: .watched)
+            try container.encode(busiest, forKey: .busiest)
+            try container.encode(notes, forKey: .notes)
         }
     }
 

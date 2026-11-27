@@ -46,12 +46,16 @@ enum PromptState: Equatable, Sendable {
     case down
     /// An agent waits on a person. `host` when exactly one agent asked.
     case needsYou(count: Int, host: HookHost?)
+    /// Some host's guard is off: rv neither stops nor records it.
+    /// `host` when exactly one host is off.
+    case off(count: Int, host: HookHost?)
     /// Some host is in watch (observe) mode; `today` would-stops so far.
     case watching(today: Int)
+    /// rvd did not answer within the budget: neither up nor down is known.
+    /// Ranked below off and watching so it never hides them.
+    case unknown
     /// Every host is guarding.
     case guarding
-    /// rvd did not answer within the budget: neither up nor down is known.
-    case unknown
 
     init(rvd: PromptLiveness, posture: PromptPosture, waiting: [HookHost], watchedToday: Int) {
         if rvd == .down {
@@ -59,10 +63,12 @@ enum PromptState: Equatable, Sendable {
         } else if waiting.isEmpty == false {
             let hosts = Set(waiting)
             self = .needsYou(count: waiting.count, host: hosts.count == 1 ? hosts.first : nil)
-        } else if rvd == .unknown {
-            self = .unknown
+        } else if case .off(let hosts) = posture {
+            self = .off(count: hosts.count, host: hosts.count == 1 ? hosts.first : nil)
         } else if posture == .watching {
             self = .watching(today: watchedToday)
+        } else if rvd == .unknown {
+            self = .unknown
         } else {
             self = .guarding
         }
@@ -72,11 +78,20 @@ enum PromptState: Equatable, Sendable {
 enum PromptPosture: Equatable, Sendable {
     case guarding
     case watching
+    /// The hosts whose guard is off, in name order.
+    case off([HookHost])
 
-    /// Watching when any host, or the machine, is in observe mode.
+    /// Off when any host is off; else watching when any host, or the
+    /// machine, is in observe mode.
     init(config: GuardConfig) {
-        let observing = config.hosts.values.contains(.observe) || config.machineMode == .observe
-        self = observing ? .watching : .guarding
+        let off = config.hosts.filter { $0.value == .off }.keys.sorted { $0.rawValue < $1.rawValue }
+        if off.isEmpty == false {
+            self = .off(off)
+        } else if config.hosts.values.contains(.observe) || config.machineMode == .observe {
+            self = .watching
+        } else {
+            self = .guarding
+        }
     }
 }
 
@@ -98,6 +113,9 @@ enum PromptSegment {
         case .needsYou(let count, let host):
             if count == 1, let host { return (.ask, "\(host.rawValue) waiting") }
             return (.ask, "\(count) waiting")
+        case .off(let count, let host):
+            if count == 1, let host { return (.stopped, "\(host.rawValue) off") }
+            return (.stopped, "\(count) off")
         case .watching(let today):
             return (.watched, today > 0 ? "\(today)" : "")
         case .guarding:
@@ -107,7 +125,7 @@ enum PromptSegment {
         }
     }
 
-    /// `◆`, `◐ 2`, `⏺ claude waiting`, `✕ rv down`. With a shell, the
+    /// `◆`, `◐ 2`, `⏺ claude waiting`, `✕ claude off`, `✕ rv down`. With a shell, the
     /// glyph and its words take rv's colour for that state, wrapped so the
     /// shell does not count the escapes.
     static func text(_ state: PromptState, shell: PromptShell?, depth: ColorDepth) -> String {
@@ -124,6 +142,7 @@ enum PromptSegment {
     private static func colorCode(_ state: PromptState, depth: ColorDepth) -> String? {
         let ink: TermInk = switch state {
         case .down: .stop
+        case .off: .stop
         case .needsYou: .watch
         case .watching: .watch
         case .guarding: .rv

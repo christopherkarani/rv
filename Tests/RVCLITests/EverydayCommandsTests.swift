@@ -30,6 +30,50 @@ struct CheckCommandTests {
         #expect(throws: CheckPlan.Problem.self) { try CheckPlan.steps(arguments: [long], stdin: nil).get() }
     }
 
+    @Test("stdin is not read when commands are passed, even from an open pipe")
+    func argumentsSkipStdin() throws {
+        let pipe = Pipe()
+        defer { try? pipe.fileHandleForWriting.close() }
+        // The write end stays open: reading would block forever.
+        let input = CheckPlan.input(arguments: ["ls"], stdinIsTTY: false, stdin: pipe.fileHandleForReading)
+        #expect(try input.get() == nil)
+        #expect(try CheckPlan.input(arguments: [], stdinIsTTY: true, stdin: pipe.fileHandleForReading).get() == nil)
+    }
+
+    @Test("stdin is read to its end, and refused past the limit")
+    func stdinLimit() throws {
+        let small = Pipe()
+        small.fileHandleForWriting.write(Data("ls\npwd\n".utf8))
+        try small.fileHandleForWriting.close()
+        #expect(try CheckPlan.input(arguments: [], stdinIsTTY: false, stdin: small.fileHandleForReading).get() == "ls\npwd\n")
+
+        let large = Pipe()
+        let writer = Thread {
+            large.fileHandleForWriting.write(Data(repeating: UInt8(ascii: "a"), count: 4096))
+            try? large.fileHandleForWriting.close()
+        }
+        writer.start()
+        let refused = CheckPlan.input(arguments: [], stdinIsTTY: false, stdin: large.fileHandleForReading, limit: 1024)
+        #expect(throws: CheckPlan.Problem.self) { try refused.get() }
+        #expect(CheckPlan.maxStdinBytes == CheckPlan.maxSteps * CheckPlan.maxStepBytes)
+        #expect(CheckPlan.maxSteps == 20)
+    }
+
+    @Test("an agent's check sees its own guard mode")
+    func checksAsTheHost() async throws {
+        let home = try isolatedHome()
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try Data(#"{"guard":{"hosts":{"claude":"observe"}}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
+        #expect(GuardConfig.read(home: home).hosts[.claude] == .observe)
+        let cwd = WorkingDirectory(validating: home.path)
+        // A deny watch mode relaxes (unlike the observe floor's `rm -rf /`).
+        let asClaude = await CheckRun.report(steps: ["git clean -fdx"], cwd: cwd, home: home, host: .hook(.claude))
+        let asPerson = await CheckRun.report(steps: ["git clean -fdx"], cwd: cwd, home: home)
+        #expect(asClaude.steps[0].outcome == .wouldStop)
+        #expect(asPerson.steps[0].outcome.needsPerson)
+    }
+
     @Test("exit 0 when only fine and watched steps; 1 when a step needs a person")
     func exitCodes() {
         let fine = CheckStep(command: "ls", outcome: .fine)
@@ -106,25 +150,42 @@ struct CheckCommandTests {
 
 @Suite("rv prompt")
 struct PromptCommandTests {
-    @Test("down beats needs-you beats unknown beats watching beats guarding")
+    @Test("down beats needs-you beats off beats watching beats unknown beats guarding")
     func priority() {
-        #expect(PromptState(rvd: .down, posture: .watching, waiting: [.claude], watchedToday: 3) == .down)
-        #expect(PromptState(rvd: .unknown, posture: .watching, waiting: [.claude], watchedToday: 3)
+        #expect(PromptState(rvd: .down, posture: .off([.claude]), waiting: [.claude], watchedToday: 3) == .down)
+        #expect(PromptState(rvd: .unknown, posture: .off([.claude]), waiting: [.claude], watchedToday: 3)
             == .needsYou(count: 1, host: .claude))
         #expect(PromptState(rvd: .up, posture: .guarding, waiting: [.claude, .grok], watchedToday: 0)
             == .needsYou(count: 2, host: nil))
         #expect(PromptState(rvd: .up, posture: .guarding, waiting: [.claude, .claude], watchedToday: 0)
             == .needsYou(count: 2, host: .claude))
-        #expect(PromptState(rvd: .unknown, posture: .watching, waiting: [], watchedToday: 3) == .unknown)
+        #expect(PromptState(rvd: .unknown, posture: .off([.claude]), waiting: [], watchedToday: 0)
+            == .off(count: 1, host: .claude))
+        #expect(PromptState(rvd: .up, posture: .off([.claude, .grok]), waiting: [], watchedToday: 0)
+            == .off(count: 2, host: nil))
+        #expect(PromptState(rvd: .unknown, posture: .watching, waiting: [], watchedToday: 3) == .watching(today: 3))
         #expect(PromptState(rvd: .up, posture: .watching, waiting: [], watchedToday: 3) == .watching(today: 3))
+        #expect(PromptState(rvd: .unknown, posture: .guarding, waiting: [], watchedToday: 0) == .unknown)
         #expect(PromptState(rvd: .up, posture: .guarding, waiting: [], watchedToday: 0) == .guarding)
     }
 
-    @Test("watching when any host or the machine observes")
+    @Test("off when any host is off; else watching when any host or the machine observes")
     func posture() {
         #expect(PromptPosture(config: GuardConfig()) == .guarding)
         #expect(PromptPosture(config: GuardConfig(hosts: [.claude: .observe])) == .watching)
         #expect(PromptPosture(config: GuardConfig(mode: .observe)) == .watching)
+        #expect(PromptPosture(config: GuardConfig(hosts: [.claude: .off])) == .off([.claude]))
+        #expect(PromptPosture(config: GuardConfig(mode: .observe, hosts: [.grok: .off, .claude: .off]))
+            == .off([.claude, .grok]))
+    }
+
+    @Test("an off host is never shown as ◆: it takes the stop glyph and stop ink")
+    func offIsNeverGuarding() {
+        #expect(PromptSegment.text(.off(count: 1, host: .claude), shell: nil, depth: .none) == "✕ claude off")
+        #expect(PromptSegment.text(.off(count: 2, host: nil), shell: nil, depth: .none) == "✕ 2 off")
+        let off = PromptSegment.text(.off(count: 1, host: .claude), shell: .zsh, depth: .ansi16)
+        let down = PromptSegment.text(.down, shell: .zsh, depth: .ansi16)
+        #expect(off.prefix(while: { $0 != "✕" }) == down.prefix(while: { $0 != "✕" }))
     }
 
     @Test("plain segments", arguments: [
@@ -275,6 +336,17 @@ struct NewsCommandTests {
         let json = try RobotJSON.encode(NewsReport(version: "1", week: NewsWeek(checked: nil, refused: 0, stopped: 0, watched: 0), notes: []).robot)
         #expect(json.contains("rv.news.v1"))
         #expect(json.contains("window_days"))
+        #expect(json.contains("busiest"))
+    }
+
+    @Test("robot JSON names the busiest host")
+    func robotBusiest() throws {
+        let week = NewsWeek(checked: 4, refused: 0, stopped: 0, watched: 0, busiest: .init(host: "claude", percent: 75))
+        let data = Data(try RobotJSON.encode(NewsReport(version: "1", week: week, notes: []).robot).utf8)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let busiest = try #require(object["busiest"] as? [String: Any])
+        #expect(busiest["host"] as? String == "claude")
+        #expect(busiest["percent"] as? Int == 75)
     }
 }
 

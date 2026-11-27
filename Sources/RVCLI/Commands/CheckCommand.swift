@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVService
 
@@ -21,16 +22,17 @@ struct CheckCommand: AsyncParsableCommand {
     @OptionGroup
     var format: FormatFlags
 
+    @Option(name: .long, help: "Check each step as this agent's hook would (claude, codex, …). Default: a person at this terminal.")
+    var host: HookHost?
+
     @Argument(help: "Commands to check, one per argument. With none, one per line on stdin.")
     var commands: [String] = []
 
     func run() async throws {
         let ctx = CommandContext.current(command: "check", format: format)
         let steps: [String]
-        switch CheckPlan.steps(
-            arguments: commands,
-            stdin: CLIProcess.stdinIsTTY() ? nil : CLIProcess.standardInputText()
-        ) {
+        switch CheckPlan.input(arguments: commands, stdinIsTTY: CLIProcess.stdinIsTTY(), stdin: .standardInput)
+            .flatMap({ CheckPlan.steps(arguments: commands, stdin: $0) }) {
         case .success(let parsed):
             steps = parsed
         case .failure(let problem):
@@ -39,7 +41,8 @@ struct CheckCommand: AsyncParsableCommand {
         let report = await CheckRun.report(
             steps: steps,
             cwd: WorkingDirectory(validating: CLIProcess.workspacePath()),
-            home: ctx.home
+            home: ctx.home,
+            host: host.map(LedgerHost.hook) ?? .tty
         )
         if ctx.explicitRobot {
             try ctx.emit(stdout: try RobotJSON.encode(report.robot) + "\n", exitCode: report.exitCode)
@@ -51,13 +54,40 @@ struct CheckCommand: AsyncParsableCommand {
 
 /// The steps of a plan: the arguments, or the lines of stdin.
 enum CheckPlan {
-    /// More than this is not a plan an agent should ask about at once.
-    static let maxSteps = 100
+    /// More than this is not a plan an agent should ask about at once, and
+    /// keeps a check's cost close to a few `rv explain` runs.
+    static let maxSteps = 20
     /// A step longer than this is refused rather than checked in part.
     static let maxStepBytes = 16 * 1024
+    /// The most stdin `rv check` reads before refusing the plan.
+    static let maxStdinBytes = maxSteps * maxStepBytes
 
     struct Problem: Error, Equatable {
         let message: String
+    }
+
+    /// The plan's stdin text, read only when no commands were passed and
+    /// stdin is not a terminal, so an agent's open stdin pipe never holds
+    /// a check that has its commands. Reading stops past `limit`.
+    static func input(
+        arguments: [String], stdinIsTTY: Bool, stdin: FileHandle, limit: Int = maxStdinBytes
+    ) -> Result<String?, Problem> {
+        guard arguments.isEmpty, stdinIsTTY == false else { return .success(nil) }
+        var data = Data()
+        do {
+            while let chunk = try stdin.read(upToCount: 64 * 1024), chunk.isEmpty == false {
+                data.append(chunk)
+                if data.count > limit {
+                    return .failure(Problem(message: "stdin is longer than \(limit / 1024) KB. Check the plan in parts."))
+                }
+            }
+        } catch {
+            return .failure(Problem(message: "could not read stdin: \(error.localizedDescription)"))
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            return .failure(Problem(message: "stdin is not UTF-8 text."))
+        }
+        return .success(text)
     }
 
     /// Arguments win. With none, every stdin line that is not blank or a
@@ -145,11 +175,15 @@ struct CheckStep: Equatable, Sendable {
 
 enum CheckRun {
     /// Every step through the explain peek, in order.
-    static func report(steps: [String], cwd: WorkingDirectory?, home: HomeDirectory?, now: Date = Date()) async -> CheckReport {
+    /// `host` is who the steps are checked for: an agent's hook sees its
+    /// own guard mode, `.tty` a person at the terminal.
+    static func report(
+        steps: [String], cwd: WorkingDirectory?, home: HomeDirectory?, host: LedgerHost = .tty, now: Date = Date()
+    ) async -> CheckReport {
         let world = LiveEvaluateWorld(home: home, store: CommandInvocation.allowOnceStore(home: home), clock: { now })
         var checked: [CheckStep] = []
         for step in steps {
-            let verdict = await world.peekVerdict(command: ShellCommand(rawValue: step), cwd: cwd)
+            let verdict = await world.peekVerdict(command: ShellCommand(rawValue: step), cwd: cwd, host: host)
             checked.append(Self.step(step, verdict: verdict, cwd: cwd))
         }
         return CheckReport(steps: checked)

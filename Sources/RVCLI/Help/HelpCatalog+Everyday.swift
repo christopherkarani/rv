@@ -9,6 +9,7 @@ extension HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv check \"cmd\" \"cmd\" …", description: "What rv would do with each step, in order"),
                 HelpRow(name: "rv check < plan.txt", description: "One command per line; blank lines and # comments are skipped"),
+                HelpRow(name: "--host claude", description: "Check as that agent's hook would, in its own guard mode"),
                 HelpRow(name: "--json", description: "rv.check.v1: each step's outcome, rule and reason"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -26,7 +27,7 @@ extension HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv prompt", description: "◆ guarding · ◐ 2 watching, 2 would-stops today · ⏺ claude waiting · ✕ rv down"),
+                HelpRow(name: "rv prompt", description: "◆ guarding · ◐ 2 watching, 2 would-stops today · ⏺ claude waiting · ✕ claude off · ✕ rv down"),
                 HelpRow(name: "rv prompt --shell zsh", description: "Coloured, wrapped in %{ %} for PROMPT (bash: \\[ \\] for PS1)"),
             ]),
             HelpSection(heading: "Notes", rows: [
