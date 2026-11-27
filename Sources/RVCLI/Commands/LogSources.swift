@@ -3,67 +3,34 @@ import RVDomain
 import RVHistory
 import RVPresentation
 
-/// Where `rv log` gets its rows: the denial ledger (every stop and
-/// would-stop, no command text) joined with rvd's decision log (every
-/// hook decision, its command redacted when written). Pure: the CLI
-/// reads both files and hands the rows in.
+/// Where `rv log` gets its rows. Pure: the CLI reads the files and hands
+/// the rows in.
+///
+/// When rvd's decision log is there it is the one source: a stop is a
+/// denied or refused row, a would-stop an allowed row with a would-be. Its
+/// commands are redacted again on read, so a row written by an older
+/// redactor is held to today's. The denial ledger adds only what the log
+/// lacks, matched on the call's id and never on time: a row whose id the
+/// log does not have (its write was lost), and a row with no id from
+/// before the log began. With no decision log (an older rvd, or
+/// `decisions.enabled: false`) the ledger is the source, without commands.
 enum LogSources {
-    /// How far a decision-log row's time may sit from its ledger row's.
-    /// The decision is timed before evaluation and the ledger row after it,
-    /// and the ledger keeps whole seconds.
-    static let stopWindow: ClosedRange<TimeInterval> = -2...10
-    /// Tighter for a would-stop: its decision row is an allow, with no rule
-    /// to match, so only a row this close and alone in the window counts.
-    static let wouldStopWindow: ClosedRange<TimeInterval> = -1...3
-
-    /// `ledger` rows as log entries, each with its command when exactly one
-    /// decision-log row matches it, plus the decision log's stops that have
-    /// no ledger row (the ledger is off, or pruned past its cap). `decisions`
-    /// nil means there was no decision log to read.
-    static func entries(ledger: [DenialLedgerRecord], decisions: [DecisionRecord]?) -> [LogEntry] {
-        guard let decisions else { return ledger.map { entry($0, command: nil) } }
-        var used = Set<Int>()
-        var entries: [LogEntry] = []
-        for record in ledger {
-            let match = self.match(record, in: decisions, excluding: used)
-            if let match { used.insert(match) }
-            entries.append(entry(record, command: match.flatMap { decisions[$0].command }))
+    static func entries(
+        ledger: [DenialLedgerRecord], decisions: DecisionLogStops?, home: HomePath?
+    ) -> [LogEntry] {
+        guard let decisions else { return ledger.map { entry($0) } }
+        let listed = decisions.records.compactMap { entry($0, home: home) }
+        let ids = Set(decisions.records.compactMap(\.id))
+        let missing = ledger.filter { record in
+            if let id = record.id { return ids.contains(id) == false }
+            guard let startedAt = decisions.startedAt else { return false }
+            return record.timestamp < startedAt
         }
-        for (index, decision) in decisions.enumerated() where used.contains(index) == false {
-            if let stop = entry(decision) { entries.append(stop) }
-        }
-        return entries
+        return listed + missing.map { entry($0) }
     }
 
-    /// The index of the one decision-log row that is `record`'s decision:
-    /// same host, tool and session, the same path for a file tool, and
-    /// either the same rule on a deny (a stop) or an allow (a would-stop,
-    /// which watch mode let run), inside the window. Nil when none is, or
-    /// when a would-stop has more than one candidate with different
-    /// commands: a wrong command is worse than none.
-    static func match(_ record: DenialLedgerRecord, in decisions: [DecisionRecord], excluding used: Set<Int>) -> Int? {
-        let window = record.observed ? wouldStopWindow : stopWindow
-        let candidates = decisions.indices.filter { index in
-            let decision = decisions[index]
-            guard used.contains(index) == false,
-                  decision.host == record.host, decision.tool == record.tool, decision.session == record.session,
-                  window.contains(record.timestamp.timeIntervalSince(decision.time))
-            else { return false }
-            if case .file = record.tool, decision.path != record.path { return false }
-            return record.observed
-                ? decision.verdict == .allowed
-                : decision.verdict == .denied && decision.rule == record.ruleID.rawValue
-        }
-        if record.observed, Set(candidates.map { decisions[$0].command ?? decisions[$0].path ?? "" }).count > 1 {
-            return nil
-        }
-        return candidates.min { a, b in
-            abs(record.timestamp.timeIntervalSince(decisions[a].time))
-                < abs(record.timestamp.timeIntervalSince(decisions[b].time))
-        }
-    }
-
-    static func entry(_ record: DenialLedgerRecord, command: String?) -> LogEntry {
+    /// A ledger row: no command text.
+    static func entry(_ record: DenialLedgerRecord) -> LogEntry {
         LogEntry(
             time: record.timestamp,
             agent: record.host.rawValue,
@@ -73,26 +40,40 @@ enum LogSources {
             isJudge: record.ruleID.pack == .coreJudge,
             tool: record.tool.rawValue,
             target: record.path,
-            command: record.tool == .bash ? command : nil,
+            command: nil,
             code: record.code,
             session: record.session
         )
     }
 
-    /// A stop only the decision log has: a deny, or a refusal (rv could
-    /// not finish deciding, or ran out of time). Allows are not log rows.
-    static func entry(_ decision: DecisionRecord) -> LogEntry? {
-        guard decision.verdict != .allowed else { return nil }
-        let rule = decision.rule ?? ""
+    /// A decision-log row as a stop or a would-stop, or nil for a plain
+    /// allow. The command and path are redacted again.
+    static func entry(_ decision: DecisionRecord, home: HomePath?) -> LogEntry? {
+        let stopped: Bool
+        let rule: String
+        let wouldAsk: Bool
+        switch (decision.verdict, decision.wouldBe) {
+        case (.denied, _), (.refused, _):
+            stopped = true
+            rule = decision.rule ?? ""
+            wouldAsk = false
+        case (.allowed, let wouldBe?) where wouldBe.verdict != .allowed:
+            stopped = false
+            rule = wouldBe.rule
+            wouldAsk = wouldBe.ask
+        case (.allowed, _):
+            return nil
+        }
         return LogEntry(
             time: decision.time,
             agent: decision.host.rawValue,
-            stopped: true,
+            stopped: stopped,
+            wouldAsk: wouldAsk,
             rule: rule,
             isJudge: rule.hasPrefix(PackID.coreJudge.rawValue + ":"),
             tool: decision.tool.rawValue,
-            target: decision.path ?? "",
-            command: decision.command,
+            target: decision.path.map { DecisionRedaction.path($0, home: home) } ?? "",
+            command: decision.command.map { DecisionRedaction.command($0, home: home) },
             code: decision.code,
             session: decision.session
         )

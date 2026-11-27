@@ -169,24 +169,30 @@ extension HookEvaluateWorld {
     ) -> HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
         return deadlineGuarded(HookEvaluateWorld(
+            // One id per call, minted before evaluation, so the ledger row
+            // the effects write and the decision-log row share it.
             evaluate: { command, cwd in
-                let started = clock()
-                let result = await HookTiming.measure(.evaluate) {
-                    await world.apply(command: command, cwd: cwd, host: ledger)
+                await DecisionStamp.$current.withValue(DecisionStamp()) {
+                    let started = clock()
+                    let result = await HookTiming.measure(.evaluate) {
+                        await world.apply(command: command, cwd: cwd, host: ledger)
+                    }
+                    HookTiming.current?.settle(door: "shell", rule: HookTiming.ruleID(of: result))
+                    recordDecision?(result)
+                    decisionLog?.shell(result, command: command, cwd: cwd, host: ledger, at: started)
+                    return result
                 }
-                HookTiming.current?.settle(door: "shell", rule: HookTiming.ruleID(of: result))
-                recordDecision?(result)
-                decisionLog?.shell(result, command: command, cwd: cwd, host: ledger, at: started)
-                return result
             },
             evaluateFile: { action, cwd in
-                let started = clock()
-                let result = HookTiming.measure(.evaluate) {
-                    world.runFile(action: action, cwd: cwd, host: ledger)
+                DecisionStamp.$current.withValue(DecisionStamp()) {
+                    let started = clock()
+                    let result = HookTiming.measure(.evaluate) {
+                        world.runFile(action: action, cwd: cwd, host: ledger)
+                    }
+                    HookTiming.current?.settle(door: "file", rule: HookTiming.ruleID(of: result))
+                    decisionLog?.file(result, action: action, cwd: cwd, host: ledger, at: started)
+                    return result
                 }
-                HookTiming.current?.settle(door: "file", rule: HookTiming.ruleID(of: result))
-                decisionLog?.file(result, action: action, cwd: cwd, host: ledger, at: started)
-                return result
             },
             mintOnDeny: { result, cwd in
                 await world.mintUnlockCode(for: result, cwd: cwd)

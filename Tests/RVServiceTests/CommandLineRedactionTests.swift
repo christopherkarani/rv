@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 @testable import RVService
 
 /// Credentials in the command-line forms they travel in leave rvd hidden;

@@ -1,11 +1,10 @@
 import Foundation
 import RVDomain
 
-/// One decision as `rv log` reads it. The CLI builds these from the
-/// denial ledger and rvd's decision log; nothing here reads a file. The
-/// ledger keeps no command text: `command` comes from the decision log
-/// (already redacted there) and is nil when it holds no matching row.
-/// `target` is the redacted path for a file tool.
+/// One decision as `rv log` reads it. The CLI builds these from rvd's
+/// decision log, or the denial ledger when there is none; nothing here
+/// reads a file. The ledger keeps no command text, so `command` is nil on
+/// its rows. `target` is the redacted path for a file tool.
 public struct LogEntry: Equatable, Sendable {
     public var time: Date
     /// Host raw value (`claude`, `codex`, `tty`).
@@ -20,7 +19,8 @@ public struct LogEntry: Equatable, Sendable {
     /// `Bash`, `Read`, `Edit` or `Write`.
     public var tool: String
     public var target: String
-    /// The shell command, redacted by the decision log when it was written.
+    /// The shell command as the decision log recorded it, redacted; nil
+    /// when nothing was recorded.
     public var command: String?
     public var code: String
     public var session: String?
@@ -112,9 +112,12 @@ public struct LogRow: Equatable, Sendable {
     public var verdict: LogVerdict
     public var wouldAsk: Bool
     public var rule: String
-    /// What ran or would have: the target, or the tool when the ledger
-    /// kept no target (`Bash`, `Read ~/.ssh/id_ed25519`).
+    /// What ran or would have, as the command cell shows it: the recorded
+    /// command, else the target, else the tool (`Bash`,
+    /// `Read ~/.ssh/id_ed25519`).
     public var command: String
+    /// The shell command the decision log recorded, or nil.
+    public var recordedCommand: String?
     public var tool: String
     public var target: String
     public var code: String
@@ -123,10 +126,14 @@ public struct LogRow: Equatable, Sendable {
 
 /// `rv log`: the newest decisions in fixed columns, one summary line.
 public struct LogViewModel: Equatable, Sendable {
-    /// What the header names: one day, or the ledger's whole window.
+    /// What the header names, and what the counts cover: one day, the
+    /// whole window, or a shorter stretch when the source keeps less (the
+    /// ledger's row cap).
     public enum Span: Equatable, Sendable {
         case today
         case days(Int)
+        /// `since Sat 21 Nov`.
+        case since(String)
     }
 
     /// Shown rows, newest first.
@@ -145,16 +152,25 @@ public struct LogViewModel: Equatable, Sendable {
     /// rvd's decision log was there to read: shell rows can show their
     /// command. False for an older rvd or `decisions.enabled: false`.
     public var commandsRecorded: Bool
+    /// Decision-log day files (`yyyy-MM-dd`) not read for their size.
+    public var skippedDays: [String]
 
     /// - Parameters:
-    ///   - entries: ledger rows, any order.
-    ///   - windowDays: how many days the ledger keeps.
+    ///   - entries: decisions, any order. Those older than `windowDays`
+    ///     are left out, so the rows, counts and header cover one window.
+    ///   - windowDays: how many days rv keeps.
+    ///   - coveredFrom: the oldest time the source still holds, when it
+    ///     keeps less than the window (the ledger at its row cap).
     ///   - calendar: its time zone sets the time column.
     public init(
         entries: [LogEntry], query: LogQuery, now: Date, calendar: Calendar,
-        windowDays: Int = 7, ledgerOff: Bool = false, commandsRecorded: Bool = true
+        windowDays: Int = 7, coveredFrom: Date? = nil, ledgerOff: Bool = false,
+        commandsRecorded: Bool = true, skippedDays: [String] = []
     ) {
-        let newestFirst = entries.filter(query.matches).sorted { $0.time > $1.time }
+        let windowStart = now.addingTimeInterval(-Double(windowDays) * 86_400)
+        let newestFirst = entries
+            .filter { $0.time >= windowStart && query.matches($0) }
+            .sorted { $0.time > $1.time }
         let folds = query.foldsJudgeNotes
         let listed = folds ? newestFirst.filter { $0.isShadowJudgeNote == false } : newestFirst
         let shown = query.all ? listed : Array(listed.prefix(LogQuery.defaultLimit))
@@ -164,28 +180,42 @@ public struct LogViewModel: Equatable, Sendable {
         self.stopped = listed.filter(\.stopped).count
         self.wouldStop = listed.count - stopped
         self.judgeNotesHidden = folds ? newestFirst.count - listed.count : 0
-        self.span = listed.isEmpty == false && allToday ? .today : .days(windowDays)
+        if listed.isEmpty == false, allToday {
+            self.span = .today
+        } else if let coveredFrom, coveredFrom > windowStart {
+            self.span = .since(Self.dayLabel(coveredFrom, calendar: calendar))
+        } else {
+            self.span = .days(windowDays)
+        }
         self.query = query
         self.ledgerOff = ledgerOff
         self.commandsRecorded = commandsRecorded
+        self.skippedDays = skippedDays
     }
 
-    /// A dim note under the summary when shell rows cannot show their
-    /// command, or nil.
-    public var commandsNote: String? {
-        guard commandsRecorded == false, rows.contains(where: { $0.tool == "Bash" }) else { return nil }
-        return "Commands aren't recorded: rvd is older or its decision log is off."
+    /// Shell rows are listed but rvd recorded no commands for them.
+    public var commandsMissing: Bool {
+        commandsRecorded == false && rows.contains { $0.tool == "Bash" }
+    }
+
+    /// One dim line when decision-log days were too large to read, or nil.
+    public var skippedNote: String? {
+        guard skippedDays.isEmpty == false else { return nil }
+        let days = skippedDays.count == 1 ? "day" : "days"
+        return "Skipped \(skippedDays.count) decision-log \(days) over 64 MB: "
+            + skippedDays.joined(separator: ", ") + "."
     }
 
     /// Something matched but is not on screen: past the limit, or a
     /// folded judge note.
     public var hidesRows: Bool { rows.count < matching || judgeNotesHidden > 0 }
 
-    /// `today`, `last 7 days`.
+    /// `today`, `last 7 days`, `since Sat 21 Nov`.
     public var spanLabel: String {
         switch span {
         case .today: "today"
         case .days(let days): "last \(days) days"
+        case .since(let day): "since \(day)"
         }
     }
 
@@ -194,15 +224,21 @@ public struct LogViewModel: Equatable, Sendable {
         rows.count < matching ? "\(rows.count) of \(matching)" : "\(matching)"
     }
 
-    /// The one summary line: `1 stopped · 2 would stop · judge: 41 notes
-    /// in shadow, hidden`.
-    public var summary: String {
+    /// The one summary line, as parts joined with ` · `: `1 stopped`,
+    /// `2 would stop`, `judge: 41 notes in shadow, hidden`, and `commands
+    /// not recorded` when the decision log is off or missing.
+    public var summaryParts: [String] {
         var parts = ["\(stopped) stopped", "\(wouldStop) would stop"]
         if judgeNotesHidden > 0 {
             parts.append("judge: \(judgeNotesHidden) \(judgeNotesHidden == 1 ? "note" : "notes") in shadow, hidden")
         }
-        return parts.joined(separator: " · ")
+        if commandsMissing {
+            parts.append("commands not recorded (decision log off or missing)")
+        }
+        return parts
     }
+
+    public var summary: String { summaryParts.joined(separator: " · ") }
 
     /// What to say when no row is listed, or nil when there are rows.
     public var emptyMessage: String? {
@@ -253,6 +289,7 @@ public struct LogViewModel: Equatable, Sendable {
             wouldAsk: entry.stopped == false && entry.wouldAsk,
             rule: entry.rule,
             command: command,
+            recordedCommand: entry.command.flatMap { $0.isEmpty ? nil : $0 },
             tool: entry.tool,
             target: entry.target,
             code: entry.code,
@@ -287,7 +324,8 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         public var agent: String
         public var verdict: LogVerdict
         public var rule: String
-        public var command: String
+        /// The recorded shell command, redacted; null when none was.
+        public var command: String?
         public var code: String
         public var tool: String
         public var target: String
@@ -298,6 +336,21 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         enum CodingKeys: String, CodingKey {
             case time, agent, verdict, rule, command, code, tool, target, session
             case wouldBe = "would_be"
+        }
+
+        /// Every key is always present: a missing value is `null`.
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(time, forKey: .time)
+            try container.encode(agent, forKey: .agent)
+            try container.encode(verdict, forKey: .verdict)
+            try container.encode(rule, forKey: .rule)
+            try container.encode(command, forKey: .command)
+            try container.encode(code, forKey: .code)
+            try container.encode(tool, forKey: .tool)
+            try container.encode(target, forKey: .target)
+            try container.encode(wouldBe, forKey: .wouldBe)
+            try container.encode(session, forKey: .session)
         }
     }
 
@@ -310,12 +363,15 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
     /// False when rvd's decision log was missing or off, so shell rows
     /// carry no command text.
     public var commandsRecorded: Bool
+    /// Decision-log days not read for their size.
+    public var skippedDays: [String]
 
     enum CodingKeys: String, CodingKey {
         case schema, rows, matching, stopped
         case wouldStop = "would_stop"
         case judgeNotesHidden = "judge_notes_hidden"
         case commandsRecorded = "commands_recorded"
+        case skippedDays = "skipped_days"
     }
 
     public init(_ model: LogViewModel) {
@@ -323,7 +379,7 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         rows = model.rows.map { row in
             Row(
                 time: row.time, agent: row.agent, verdict: row.verdict, rule: row.rule,
-                command: row.command, code: row.code, tool: row.tool, target: row.target,
+                command: row.recordedCommand, code: row.code, tool: row.tool, target: row.target,
                 wouldBe: row.verdict == .wouldStop ? (row.wouldAsk ? "ask" : "deny") : nil,
                 session: row.session
             )
@@ -333,5 +389,6 @@ public struct LogRobotPayload: Equatable, Sendable, Encodable {
         wouldStop = model.wouldStop
         judgeNotesHidden = model.judgeNotesHidden
         commandsRecorded = model.commandsRecorded
+        skippedDays = model.skippedDays
     }
 }

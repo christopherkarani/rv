@@ -165,6 +165,10 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     /// (`attributableSession`), so a row names the agent session. Nil for
     /// the TTY and rows written before it existed; encoded only when set.
     public var session: String?
+    /// The hook call's id (`DecisionStamp`), the same one its decision-log
+    /// row carries. Nil for the TTY and rows written before it existed;
+    /// encoded only when set.
+    public var id: String?
 
     public init(
         timestamp: Date,
@@ -175,7 +179,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         path: String,
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny,
-        session: String? = nil
+        session: String? = nil,
+        id: String? = nil
     ) {
         self.timestamp = timestamp
         self.host = host
@@ -186,6 +191,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.observed = observed
         self.wouldBe = wouldBe
         self.session = session
+        self.id = id
     }
 
     /// Longest session id a row keeps.
@@ -223,6 +229,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case observed
         case wouldBe = "would_be"
         case session
+        case id
     }
 
     public init(from decoder: Decoder) throws {
@@ -244,6 +251,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
         wouldBe = try container.decodeIfPresent(LedgerWouldBe.self, forKey: .wouldBe) ?? .deny
         session = try container.decodeIfPresent(String.self, forKey: .session)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -259,5 +267,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
             try container.encode(wouldBe, forKey: .wouldBe)
         }
         try container.encodeIfPresent(session, forKey: .session)
+        try container.encodeIfPresent(id, forKey: .id)
     }
 }

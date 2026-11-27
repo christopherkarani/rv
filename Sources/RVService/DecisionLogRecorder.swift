@@ -48,7 +48,9 @@ package struct DecisionLogRecorder: Sendable {
     }
 
     /// The row for a shell decision, redacted, filed under the hook
-    /// session bound on this task. rvd and the hook-local evaluator both
+    /// session and `DecisionStamp` bound on this task: the stamp's id is
+    /// the one the call's denial-ledger row carries, and its would-be is
+    /// what watch mode let run. rvd and the hook-local evaluator both
     /// build rows here, so a command reads the same whichever decided it.
     static func shellRecord(
         _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost,
@@ -56,7 +58,8 @@ package struct DecisionLogRecorder: Sendable {
     ) -> DecisionRecord {
         record(
             result, tool: .bash, command: DecisionRedaction.command(command.rawValue, home: home), path: nil,
-            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession)
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession,
+            stamp: DecisionStamp.current)
     }
 
     /// The row for a file-tool decision; see `shellRecord`.
@@ -67,7 +70,8 @@ package struct DecisionLogRecorder: Sendable {
         record(
             result, tool: .file(action.kind), command: nil,
             path: DecisionRedaction.path(action.path.rawValue, home: home),
-            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession)
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: currentSession,
+            stamp: DecisionStamp.current)
     }
 
     /// The hook session bound on this task, when it can be attributed.
@@ -91,7 +95,8 @@ package struct DecisionLogRecorder: Sendable {
         home: HomeDirectory?,
         at time: Date,
         timedOut: Bool,
-        session: String?
+        session: String?,
+        stamp: DecisionStamp? = nil
     ) -> DecisionRecord {
         let verdict: DecisionVerdict
         let rule: String?
@@ -112,9 +117,12 @@ package struct DecisionLogRecorder: Sendable {
             }
         }
         let shownCwd = cwd.map { DecisionRedaction.path($0.rawValue, home: home) }
+        // Only an allow carries a would-be: watch mode let it run. A deny or
+        // a refusal is what happened, whatever was noted on the way.
         return DecisionRecord(
             time: time, verdict: verdict, host: host, tool: tool, command: command, path: path,
-            cwd: shownCwd?.isEmpty == false ? shownCwd : nil, rule: rule, session: session
+            cwd: shownCwd?.isEmpty == false ? shownCwd : nil, rule: rule, session: session,
+            id: stamp?.id, wouldBe: verdict == .allowed ? stamp?.wouldBe : nil
         )
     }
 

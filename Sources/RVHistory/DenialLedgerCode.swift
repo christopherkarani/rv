@@ -3,12 +3,14 @@ import RVDomain
 
 extension DenialLedgerRecord {
     /// A short code that names this row: six lowercase hex digits split
-    /// three and three (`a7c-835`), from a SHA-256 of the row's fields.
-    /// The same row always gets the same code, so `rv log` prints it and a
-    /// reader can find the row again by it. Not an unlock code: those live
-    /// only in rvd's memory and are never written to the ledger.
+    /// three and three (`a7c-835`). From the call's `id` when the row has
+    /// one, so it matches the decision-log row and survives the ledger's
+    /// cap; else from a SHA-256 of the row's fields. The same row always
+    /// gets the same code. Not an unlock code: those live only in rvd's
+    /// memory and are never written down.
     public var code: String {
-        RowCode.make([
+        if let id { return DecisionStamp.code(forID: id) }
+        return RowCode.make([
             String(Int64(timestamp.timeIntervalSince1970.rounded(.down))),
             host.rawValue,
             tool.rawValue,
@@ -22,11 +24,11 @@ extension DenialLedgerRecord {
 }
 
 extension DecisionRecord {
-    /// The same kind of code for a decision-log row that has no ledger
-    /// row (the ledger is off, or pruned past its 200 rows). The decision
-    /// log records no id of its own, and nothing the agent saw is in it.
+    /// The same code for a decision-log row: from its `id`, or for a row
+    /// written before ids, a SHA-256 of its fields.
     public var code: String {
-        RowCode.make([
+        if let id { return DecisionStamp.code(forID: id) }
+        return RowCode.make([
             "decision",
             String(Int64(time.timeIntervalSince1970.rounded(.down))),
             host.rawValue,
