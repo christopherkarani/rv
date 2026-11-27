@@ -2,7 +2,8 @@
 import AppIntents
 import RVGlanceUI
 
-/// Siri and Spotlight phrases. Status reads; Freeze only makes rv stricter.
+/// Siri and Spotlight phrases. Status reads; Freeze (once rvd can freeze,
+/// see GlanceIntents.swift) only makes rv stricter.
 struct RVShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -10,11 +11,13 @@ struct RVShortcuts: AppShortcutsProvider {
             phrases: ["What is \(.applicationName) doing", "\(.applicationName) status"],
             shortTitle: "rv Status",
             systemImageName: "diamond")
+        #if RV_FREEZE_CONTROL
         AppShortcut(
             intent: FreezeAgentsIntent(),
             phrases: ["Freeze agents with \(.applicationName)", "\(.applicationName) freeze agents"],
             shortTitle: "Freeze Agents",
             systemImageName: "snowflake")
+        #endif
     }
 }
 

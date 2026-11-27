@@ -31,6 +31,14 @@ public struct GetRVStatusIntent: AppIntent {
     }
 }
 
+// Freeze is built but not registered. rvd has no freeze verb yet (see
+// UnavailableFreezeControl), so a "Freeze Agents" phrase or a Focus that
+// "freezes agents" would do nothing while the user believes agents are
+// stopped. App Intents registers every intent type compiled into the app,
+// so the types themselves stay out of the build until rvd exposes the
+// verb and the app wires a real GlanceFreezeControl; then build with
+// `-D RV_FREEZE_CONTROL`.
+#if RV_FREEZE_CONTROL
 /// "Freeze Agents": stops every agent rv watches. Only ever stricter.
 public struct FreezeAgentsIntent: AppIntent {
     public static var title: LocalizedStringResource { "Freeze Agents" }
@@ -74,6 +82,7 @@ public struct RVFocusFilter: SetFocusFilterIntent {
         return .result()
     }
 }
+#endif
 
 /// Lets the app's metadata include these intents.
 public struct RVGlanceIntentsPackage: AppIntentsPackage {}
