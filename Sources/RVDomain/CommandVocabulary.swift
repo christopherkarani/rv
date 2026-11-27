@@ -24,6 +24,9 @@ public enum CommandVocabulary {
         case `try`
         case term
         case explain
+        case check
+        case prompt
+        case news
         case packs
         case policy
         case scan
