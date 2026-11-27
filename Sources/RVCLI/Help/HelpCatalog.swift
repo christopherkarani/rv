@@ -14,6 +14,7 @@ enum HelpCatalog {
         case .help: helpMeta
         case .test: test
         case .`try`: tryDemo
+        case .wait: wait
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
@@ -69,6 +70,7 @@ enum HelpCatalog {
             HelpSection(heading: "Everyday", rows: [
                 HelpRow(name: "explain", description: "Why a command ran or was stopped: each step"),
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
+                HelpRow(name: "wait", description: "Wait for the person's answer to a stop, then carry on"),
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
@@ -192,6 +194,27 @@ enum HelpCatalog {
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
+    )
+
+    static let wait = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv wait <code>"),
+                HelpRow(name: "rv wait <code> --timeout <seconds>"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "who decides", description: "Only the person, with rv allow-once in a terminal or the review window. rv wait reads the answer; it can never give one"),
+                HelpRow(name: "the code", description: "The six characters in rv's stop message (a7c835 or a7c-835)"),
+                HelpRow(name: "--timeout", description: "Seconds to wait, 1 to 3600 (default 100, under an agent's 2 minute shell limit)"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Unlocked: retry the exact command"),
+                HelpRow(name: "1", description: "Still waiting, expired, already used, or rv restarted"),
+                HelpRow(name: "2", description: "No stop has this code"),
+            ]),
+        ]
     )
 
     static let tryDemo = HelpViewModel(
