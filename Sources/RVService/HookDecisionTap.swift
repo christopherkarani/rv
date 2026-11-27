@@ -135,52 +135,16 @@ extension HookDecisionTap.Capture {
     }
 }
 
-/// How a live decision hides what it must not carry: credentials in the
-/// command (`CommandLineRedaction`), the home directory
-/// (`DenialPathRedaction` for paths), control characters, and anything
-/// past `LiveDecision.maxTextBytes`. The same recipe as the local decision
-/// log (J1b `DecisionRedaction`); once both land, one calls the other.
+/// How a live decision hides what it must not carry: the local decision
+/// log's recipe (`DecisionRedaction`: `CommandLineRedaction`, the home
+/// directory, control characters), capped at `LiveDecision.maxTextBytes`.
+/// One redactor for both, so a live event never shows what the log hides.
 enum LiveEventRedaction {
     static func command(_ raw: String, home: HomePath?) -> String {
-        let flattened = String(String.UnicodeScalarView(raw.unicodeScalars.map {
-            CharacterSet.controlCharacters.contains($0) ? " " : $0
-        }))
-        let redacted = homeShown(in: CommandLineRedaction.redact(flattened), home: home)
-        return capped(redacted.trimmingCharacters(in: .whitespaces), bytes: LiveDecision.maxTextBytes)
+        DecisionRedaction.command(raw, home: home, maxBytes: LiveDecision.maxTextBytes)
     }
 
     static func path(_ raw: String, home: HomePath?) -> String {
-        capped(DenialPathRedaction.redact(raw, home: home), bytes: LiveDecision.maxTextBytes)
-    }
-
-    /// Every whole occurrence of the home path becomes `~`: followed by the
-    /// end, a separator or punctuation, never by more of a longer name
-    /// (`/Users/ann` stays in `/Users/anna`).
-    static func homeShown(in text: String, home: HomePath?) -> String {
-        guard let home, home.rawValue.count > 1 else { return text }
-        let homePath = home.rawValue.hasSuffix("/") ? String(home.rawValue.dropLast()) : home.rawValue
-        var result = ""
-        var rest = Substring(text)
-        while let range = rest.range(of: homePath) {
-            let next = rest[range.upperBound...].first
-            let continuesName = next.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." } ?? false
-            result += rest[..<range.lowerBound]
-            result += continuesName ? rest[range] : "~"
-            rest = rest[range.upperBound...]
-        }
-        return result + rest
-    }
-
-    static func capped(_ text: String, bytes limit: Int) -> String {
-        guard text.utf8.count > limit else { return text }
-        var kept = ""
-        var used = 0
-        for character in text {
-            let size = character.utf8.count
-            guard used + size <= limit else { break }
-            kept.append(character)
-            used += size
-        }
-        return kept + "…"
+        DecisionRedaction.path(raw, home: home, maxBytes: LiveDecision.maxTextBytes)
     }
 }

@@ -95,6 +95,9 @@ enum GatedEffect: Sendable, Equatable {
         /// The hook request's host session id, when it is an opaque token
         /// (`DenialLedgerRecord.attributableSession`); nil otherwise.
         var session: String?
+        /// The hook call's id (`DecisionCall.current`), so the ledger row
+        /// and the decision-log row name the same call. Nil off the hook path.
+        var id: String?
     }
 
     struct OverrideRow: Sendable, Equatable {
