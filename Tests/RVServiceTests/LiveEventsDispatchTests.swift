@@ -353,12 +353,20 @@ struct LiveEventsDispatchTests {
 
     /// The first decision published on `runtime` (decisions publish off
     /// the hook's task, so this waits for it).
+    /// The first decision event, following the reply's stream and cursor
+    /// so that each poll long-polls for what comes next. Re-reading from 0
+    /// with no stream answers at once (a resync) every time, so twenty
+    /// polls could all land before rvd's detached publish of the decision.
     private func nextDecision(_ runtime: ServiceRuntime) async throws -> LiveDecision {
+        var stream: UUID?
+        var after: UInt64 = 0
         for _ in 0..<20 {
-            let reply = try await poll(runtime, EventsParams(after: 0, waitMs: 500))
+            let reply = try await poll(runtime, EventsParams(stream: stream, after: after, waitMs: 500))
             for event in reply.events {
                 if case .decision(let decision) = event.payload { return decision }
             }
+            stream = reply.stream
+            after = reply.cursor
         }
         throw LiveEventsTestError.unexpected("no decision published")
     }
