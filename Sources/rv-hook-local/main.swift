@@ -9,6 +9,8 @@ import RVService
 // rvd (docs/architecture/hook-local-decide.md, LocalHookCommand). Any exit
 // but 0 with a final answer sends the call to rvd.
 
+// Every write ends by a deadline counted from here (LocalHookDecider).
+let started = ContinuousClock.now
 signal(SIGPIPE, SIG_IGN)
 
 guard let arguments = LocalHookCommand.parse(Array(CommandLine.arguments.dropFirst())) else {
@@ -32,7 +34,8 @@ while input.count <= LocalHookCommand.inputLimit {
     input.append(chunk)
 }
 
-let answer = await LocalHookCommand.respond(to: arguments, input: input, home: home)
+let answer = await LocalHookCommand.respond(
+    to: arguments, input: input, home: home, started: started, judge: LocalHookCommand.liveJudge())
 do {
     try FileHandle.standardOutput.write(contentsOf: answer)
 } catch {

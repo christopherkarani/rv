@@ -750,6 +750,7 @@ enum HelpCatalog {
                 HelpRow(name: "unreviewed", description: "rv has never reviewed it"),
                 HelpRow(name: "blocked", description: "Listed in mcp.json \"blocked\""),
                 HelpRow(name: "dangling", description: "Routed through rv, but mcp.json has no such server"),
+                HelpRow(name: "off", description: "Routed through rv, but `rv mcp serve` will not start it; the row says why"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),

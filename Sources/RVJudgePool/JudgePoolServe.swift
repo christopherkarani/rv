@@ -216,10 +216,12 @@ public enum JudgePoolServe {
             onUpgrade: upgraded)
         let supervisor = JudgePoolSupervisor(
             spawner: spawner, log: JudgePoolLog.line, reapedAfterKill: { _, compute in reapedAfterKill(compute) })
-        let siblingClient = ((executable as NSString).deletingLastPathComponent as NSString)
-            .appendingPathComponent("rvd")
+        let directory = (executable as NSString).deletingLastPathComponent as NSString
+        let siblingClient = directory.appendingPathComponent("rvd")
+        let siblingEvaluator = directory.appendingPathComponent("rv-hook-local")
         let listener = JudgePoolXPCListener(supervisor: supervisor) { message in
-            JudgePoolTrust.authorizeClient(message: message, siblingClientPath: siblingClient)
+            JudgePoolTrust.authorizeClient(
+                message: message, siblingClientPath: siblingClient, siblingEvaluatorPath: siblingEvaluator)
         }
         listener.start()
         JudgePoolLog.line("serving \(JudgePoolWire.machServiceName) (protocol \(JudgePoolWire.protocolVersion))")

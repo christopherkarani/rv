@@ -1084,7 +1084,8 @@ public struct MCPGatewayCore {
     /// tool is listed with only its name, this marker and an empty object
     /// schema (`exposedTool`).
     static func pinMarker(_ status: MCPToolPinStatus) -> String? {
-        let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]"
+        let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval. "
+            + "Don't guess its arguments: ask the user to run `rv mcp trust`, then restart this MCP client]"
         return switch status {
         case .pinned: nil
         case .changed: "[rv: this tool changed since the user trusted it; " + hidden

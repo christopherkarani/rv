@@ -1,7 +1,7 @@
 import RVDomain
 
 /// Unlock next-step on hook voice when no minted code exists. TTY deny next-action keeps its own casing.
-public let ttyUnlockHint = "Run it in Terminal, or rv allow-once."
+public let ttyUnlockHint = "Run it in Terminal, or \(CommandVocabulary.Command.allowOnce.invocation)."
 
 /// Same sentence as `ttyUnlockHint`. Kept so existing TTY copy sites compile.
 public let hookUnlockNext = ttyUnlockHint
@@ -24,12 +24,12 @@ public enum HookVoiceNext: Sendable, Equatable {
 /// The grant binds the normalized command (sudo/env/path spellings share
 /// one grant, B-F2), so the copy must not promise exact-spelling binding.
 public func unlockLine(for code: AllowOnceUnlockCode) -> String {
-    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks the reviewed command once, including its sudo, env, and path spellings."
+    "Paste in Terminal to allow once: \(CommandVocabulary.Command.allowOnce.invocation) \(code.rawValue). This unlocks the reviewed command once, including its sudo, env, and path spellings."
 }
 
 /// Repeat deny of the same command+cwd. Do not mint a second code.
 public let earlierPendingUnlockLine =
-    "A one-shot unlock is already pending for this command. Paste the earlier rv allow-once code in Terminal."
+    "A one-shot unlock is already pending for this command. Paste the earlier \(CommandVocabulary.Command.allowOnce.invocation) code in Terminal."
 
 /// Cursor `agent_message` on deny. User paste stays in `user_message`.
 public let cursorAgentStopLine =
@@ -106,7 +106,7 @@ func unlockHookVoiceNext(_ mint: AllowOnceUnlockMint?, fallback: HookVoiceNext =
 
 /// First `rv allow-once <6hex>` in `text`, if present.
 public func allowOnceUnlockCode(in text: String) -> AllowOnceUnlockCode? {
-    let marker = "rv allow-once "
+    let marker = CommandVocabulary.Command.allowOnce.invocation + " "
     guard let range = text.range(of: marker) else { return nil }
     let code = String(text[range.upperBound...].prefix(6))
     return AllowOnceUnlockCode(validating: code)

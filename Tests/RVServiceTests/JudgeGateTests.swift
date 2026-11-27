@@ -465,7 +465,9 @@ struct JudgeRaisePinTests {
             return
         }
         #expect(engine == .ft)
-        // Present but empty install dir: invalid, never a silent skip.
+        // Present but empty install dir: invalid, never a silent skip. It is
+        // selected (a broken install, not absence), so judged calls go to
+        // review where Core ML exists.
         let dir = try #require(JudgeRuntime.expectedBundleDir(engine: .ft, home: home))
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         guard case .invalid(_, _, let problems) = JudgeRuntime.bundleHealth(home: home) else {
@@ -473,8 +475,12 @@ struct JudgeRaisePinTests {
             return
         }
         #expect(!problems.isEmpty)
-        #expect(!JudgeRuntime.selectsBundle(home: home))
+        #expect(JudgeRuntime.selectsBundle(home: home))
+        #if canImport(CoreML)
+        #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("judged calls go to review"))
+        #else
         #expect(DoctorSnapshotBuilder.judgeCheck(home: home).message.contains("packs only"))
+        #endif
     }
 
     /// A bundle rvd selects but that fails a check (config labels) cannot
@@ -570,20 +576,16 @@ struct JudgeInvalidLabelsTests {
         }
     }
 
-    /// A bad FT config disables the judge (packs-only plus floor); it does not
-    /// fail closed to review.
-    @Test func invalidFTConfigIsUnavailable() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-ft-badcfg-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
-            .write(to: dir.appendingPathComponent("tokenizer.json"))
+    /// A bad FT config in a selected bundle is a broken install, not an
+    /// absent one: it refuses (review), never the packs-only allow.
+    @Test func invalidFTConfigIsRefused() throws {
+        let (base, dir) = try Self.fakeBundle(package: true)
+        defer { try? FileManager.default.removeItem(at: base) }
         try Data(#"{"logit_order":"allow,review,block"}"#.utf8)
             .write(to: dir.appendingPathComponent("config.json"))
-        let run = JudgeRuntime.runJudge(
-            command: "ls", context: JudgeContext(), engine: .ft, bundle: dir, wait: nil)
-        guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
+        let run = Self.runFakeBundle(dir, state: base.appendingPathComponent("state", isDirectory: true))
+        guard case .refused(let why) = run else { Issue.record("expected .refused, got \(run)"); return }
+        #expect(why.contains("judged calls go to review"))
     }
 
     /// A compiled model that cannot be placed in or verified from rv's
@@ -636,29 +638,30 @@ struct JudgeInvalidLabelsTests {
     }
 
     /// The stock engine reaches `CompiledModelCache.load`'s presence check
-    /// (the FT engine checks for the package earlier): a missing package is
-    /// absence (packs-only), a present one Core ML cannot compile refuses.
-    @Test func stockEngineMissingModelIsUnavailableBrokenModelIsRefused() throws {
+    /// (the FT engine checks for the package earlier): a bundle dir without
+    /// its package is a broken install, and a package Core ML cannot compile
+    /// is too. Both refuse; neither is the packs-only floor.
+    @Test func stockEngineMissingOrBrokenModelIsRefused() throws {
         for package in [false, true] {
             let (base, bundle) = try Self.fakeBundle(package: package, engine: .laya)
             defer { try? FileManager.default.removeItem(at: base) }
             let run = Self.runFakeBundle(
                 bundle, state: base.appendingPathComponent("state", isDirectory: true), engine: .laya)
-            switch (package, run) {
-            case (false, .unavailable), (true, .refused): break
-            default: Issue.record("package present \(package): \(run)")
+            guard case .refused = run else {
+                Issue.record("package present \(package): \(run)")
+                continue
             }
         }
     }
 
-    /// A bundle without its model is absence, not failure: packs-only, as
-    /// before (doctor names it).
-    @Test func missingModelPackageStaysUnavailable() throws {
+    /// A bundle dir without its model is a broken install, not absence:
+    /// review (doctor names it). Only no bundle dir at all is packs-only.
+    @Test func missingModelPackageIsRefused() throws {
         let (base, bundle) = try Self.fakeBundle(package: false)
         defer { try? FileManager.default.removeItem(at: base) }
         let run = Self.runFakeBundle(bundle, state: base.appendingPathComponent("state", isDirectory: true))
-        guard case .unavailable = run else {
-            Issue.record("expected .unavailable, got \(run)")
+        guard case .refused = run else {
+            Issue.record("expected .refused, got \(run)")
             return
         }
     }

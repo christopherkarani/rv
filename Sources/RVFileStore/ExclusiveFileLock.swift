@@ -22,8 +22,10 @@ public enum ExclusiveFileLock {
         {
             throw LockError.lockFailed
         }
+        // O_NONBLOCK: a FIFO or device at the lock path fails below instead
+        // of hanging the caller.
         var fd = lockURL.path.withCString { path in
-            open(path, O_RDWR | O_CREAT, 0o600)
+            open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NONBLOCK, 0o600)
         }
         if fd < 0, errno == EACCES {
             // Pre-existing mode denied the owner write access. The owner can always
@@ -37,11 +39,13 @@ public enum ExclusiveFileLock {
                 throw LockError.lockFailed
             }
             fd = lockURL.path.withCString { path in
-                open(path, O_RDWR | O_CREAT, 0o600)
+                open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NONBLOCK, 0o600)
             }
         }
         guard fd >= 0 else { throw LockError.lockFailed }
         defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw LockError.lockFailed }
         do {
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
