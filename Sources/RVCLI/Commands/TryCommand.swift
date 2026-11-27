@@ -64,7 +64,10 @@ enum TryScreen {
     static let maxWidth = 80
     /// `  ✕ Stopped   ` is 14 columns; detail lines hang under the command.
     static let hang = String(repeating: " ", count: 14)
-    static let next = "rv doctor"
+    static let next = CommandVocabulary.Command.doctor.invocation
+    private typealias Glyph = CommandVocabulary.Glyph
+    /// `✕ Stopped`: the command really did not run.
+    static let stoppedLabel = "\(Glyph.stopped.rawValue) \(Glyph.stopped.word)"
 
     static func intro(_ work: TryUnsavedWork) -> [String] {
         ["", "  A throwaway repo with \(work.files) unsaved files. Nothing real.", ""]
@@ -79,7 +82,7 @@ enum TryScreen {
         case .stopped(let agentText):
             let width = min(max(columns, 40), maxWidth)
             let told = wrap("the agent read: “\(agentText)”", width: width - hang.count)
-            return ["  \(paint("✕ Stopped", palette.deny, palette))   \(command)",
+            return ["  \(paint(stoppedLabel, palette.deny, palette))   \(command)",
                     hang + paint("would discard \(files(work.files)) · \(grouped(work.lines)) lines", palette.muted, palette)]
                 + told.map { hang + paint($0, palette.muted, palette) }
         case .letThrough:
@@ -90,15 +93,15 @@ enum TryScreen {
     static func ending(_ verdict: TryVerdict, intact: Bool, work: TryUnsavedWork, palette: Palette) -> [String] {
         var lines: [String] = [""]
         if intact {
-            lines.append("  \(paint("✓", palette.allow, palette)) All \(files(work.files)) are still here.")
+            lines.append("  \(paint(Glyph.done.rawValue, palette.allow, palette)) All \(files(work.files)) are still here.")
             lines.append("")
         }
         if case .stopped = verdict, intact {
             lines.append("  That's rv. Quiet until it matters.")
             lines.append("")
-            lines.append("  \(paint("→ \(next)", palette.heading, palette))    check rv is guarding your agents")
+            lines.append("  \(paint("\(Glyph.next.rawValue) \(next)", palette.heading, palette))    check rv is guarding your agents")
         } else {
-            lines.append("  \(paint("→ \(next)", palette.heading, palette))    find out why")
+            lines.append("  \(paint("\(Glyph.next.rawValue) \(next)", palette.heading, palette))    find out why")
         }
         return lines
     }
