@@ -45,6 +45,12 @@ public enum PackRegistry {
         return documents
     }
 
+    /// Safer commands and examples for every bundled rule, keyed by the id
+    /// a deny carries.
+    public static func loadRuleGuidance() throws -> RuleGuidanceCatalog {
+        try RuleGuidanceCatalog(documents: loadAllDocuments())
+    }
+
     public static func loadDocument(_ id: PackID) throws -> PackDocument {
         try loadDocument(id, from: PackResourceBundle.require(PackResourceBundle.located))
     }
