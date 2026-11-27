@@ -107,7 +107,7 @@
       "severity": "high",
       "description": "deck sync with --select-tag can remove entities not matching the tag.",
       "explanation": "Using --select-tag with deck sync removes entities not matching the tag in your state file. This can accidentally delete services and routes managed by other teams or systems. Entities without tags are at risk of deletion.\n\nSafer alternatives:\n- deck diff --select-tag: Preview changes first\n- Use consistent tagging across all entities\n- Consider deck sync without --select-tag to avoid surprises",
-      "safer_command": "deck diff",
+      "safer_command": "deck gateway diff",
       "examples": {
         "stop": [
           "deck sync --select-tag"

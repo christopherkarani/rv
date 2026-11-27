@@ -64,7 +64,7 @@
       "severity": "high",
       "description": "git checkout -- discards uncommitted changes permanently. Use 'git stash' first.",
       "explanation": "git checkout -- <path> discards all uncommitted changes to the specified files in your working directory. These changes are permanently lost - they cannot be recovered because they were never committed.\n\nSafer alternatives:\n- git stash: Save changes temporarily, restore later with 'git stash pop'\n- git diff <path>: Review what would be lost before discarding\n\nPreview changes first: git diff -- <path>\n\nRecovering from a failed `git pull --rebase`? Run `rv allow-once` in this repo, then retry the command. This issues a short-lived, single-shot permit that unblocks this rule only. A rebase already in progress (`.git/rebase-merge/` or `.git/rebase-apply/` present) auto-allows the same rule without a permit.",
-      "safer_command": "git stash",
+      "safer_command": "git diff",
       "examples": {
         "stop": [
           "git checkout -- ."
@@ -81,7 +81,7 @@
       "severity": "high",
       "description": "git checkout <ref> -- <path> overwrites working tree. Use 'git stash' first.",
       "explanation": "git checkout <ref> -- <path> replaces your working tree files with versions from another commit or branch. Any uncommitted changes to those files are permanently lost - they cannot be recovered.\n\nSafer alternatives:\n- git stash: Save changes first, then checkout, then restore with 'git stash pop'\n- git show <ref>:<path>: View the file content without overwriting\n\nPreview what would change: git diff HEAD <ref> -- <path>",
-      "safer_command": "git stash",
+      "safer_command": "git diff REF -- FILE",
       "examples": {
         "stop": [
           "git checkout main -- file.txt"
@@ -98,7 +98,7 @@
       "severity": "high",
       "description": "git restore discards uncommitted changes. Use 'git stash' or 'git diff' first.",
       "explanation": "git restore <path> discards uncommitted changes in your working directory, reverting files to their last committed state. Changes that were never committed are permanently lost.\n\nSafer alternatives:\n- git restore --staged <path>: Only unstage, keeps working directory changes\n- git stash: Save all changes temporarily\n- git diff <path>: Review what would be lost\n\nPreview changes first: git diff <path>\n\nRecovering from a failed `git pull --rebase`? Run `rv allow-once` in this repo, then retry the command. This issues a short-lived, single-shot permit that unblocks this rule only. A rebase already in progress (`.git/rebase-merge/` or `.git/rebase-apply/` present) auto-allows the same rule without a permit.",
-      "safer_command": "git stash",
+      "safer_command": "git diff",
       "examples": {
         "stop": [
           "git restore file.txt",
@@ -116,7 +116,7 @@
       "severity": "high",
       "description": "git restore --worktree/-W discards uncommitted changes permanently.",
       "explanation": "git restore --worktree (or -W) explicitly targets your working directory, discarding uncommitted changes. Even when combined with --staged, the worktree changes are permanently lost.\n\nSafer alternatives:\n- git restore --staged <path>: Only unstage, keeps working directory\n- git stash: Save changes first\n\nPreview changes first: git diff <path>",
-      "safer_command": "git stash",
+      "safer_command": "git diff",
       "examples": {
         "stop": [
           "git restore -S -W file.txt"
@@ -133,7 +133,7 @@
       "severity": "critical",
       "description": "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
       "explanation": "git reset --hard discards ALL uncommitted changes in your working directory AND staging area. This is one of the most dangerous git commands because changes that were never committed cannot be recovered by any means.\n\nWhat gets destroyed:\n- All modified files revert to the target commit\n- All staged changes are lost\n- Untracked files remain (use git clean to remove those)\n\nSafer alternatives:\n- git reset --soft <ref>: Move HEAD but keep all changes staged\n- git reset --mixed <ref>: Move HEAD, unstage changes, keep working dir (default)\n- git stash: Save changes before resetting\n\nPreview what would be lost: git status && git diff",
-      "safer_command": "git stash",
+      "safer_command": "git status",
       "examples": {
         "stop": [
           "git reset --hard",
@@ -151,7 +151,7 @@
       "severity": "high",
       "description": "git reset --merge can lose uncommitted changes.",
       "explanation": "git reset --merge resets the index and updates files in the working tree that differ between the target commit and HEAD, but keeps changes that are not staged. However, if there are uncommitted changes in files that need to be updated, those changes will be lost.\n\nSafer alternatives:\n- git stash: Save uncommitted changes before reset\n- git merge --abort: If in the middle of a merge, abort safely\n\nPreview what would change: git status && git diff",
-      "safer_command": "git stash",
+      "safer_command": "git status",
       "examples": {
         "stop": [
           "git reset --merge"
