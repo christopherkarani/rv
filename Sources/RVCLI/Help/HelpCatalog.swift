@@ -14,6 +14,7 @@ enum HelpCatalog {
         case .help: helpMeta
         case .test: test
         case .`try`: tryDemo
+        case .term: term
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
@@ -60,6 +61,7 @@ enum HelpCatalog {
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "try", description: "Watch rv stop a fake agent in a throwaway repo"),
+                    HelpRow(name: "term", description: "Watch what rv is doing, full screen"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
                 ],
                 accentNames: true
@@ -190,6 +192,28 @@ enum HelpCatalog {
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
+    )
+
+    static let term = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv term", description: "Glance: whether anything needs you, the last 30 minutes, the latest command"),
+                HelpRow(name: "rv term --view stream", description: "Open on Stream (or needs-you)"),
+                HelpRow(name: "rv term --once", description: "Print one frame and exit"),
+            ]),
+            HelpSection(heading: "Keys", rows: [
+                HelpRow(name: "1 2 3", description: "Glance, Stream, Needs you"),
+                HelpRow(name: "space", description: "Swap Glance and Stream"),
+                HelpRow(name: "f", description: "Stream: would-stops and stops only"),
+                HelpRow(name: "esc / q", description: "Back / quit"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "read-only", description: "Reads the audit log, the decision log and the pending requests; never writes them and never answers a request"),
+                HelpRow(name: "commands checked", description: "Needs an rvd that keeps the decision log; an older one shows only would-stops and stops"),
+            ]),
+        ]
     )
 
     static let tryDemo = HelpViewModel(

@@ -21,6 +21,7 @@ public enum CommandVocabulary {
         case workspace
         case test
         case `try`
+        case term
         case explain
         case packs
         case policy

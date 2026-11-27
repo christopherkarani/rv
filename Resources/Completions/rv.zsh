@@ -8,6 +8,7 @@ _rv() {
     'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'
     'try:Watch rv stop a fake agent in a throwaway repo'
+    'term:Watch what rv is doing, full screen'
     'explain:Explain a decision'
     'packs:List and enable packs'
     'policy:Typed rules'
