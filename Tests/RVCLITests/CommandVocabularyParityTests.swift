@@ -31,7 +31,7 @@ struct CommandVocabularyParityTests {
 
     @Test("rv --help lists only commands in the table")
     func rootHelpRowsAreCommands() {
-        let rows = HelpCatalog.page(.root).sections.flatMap(\.rows).map(\.name)
+        let rows = HelpCatalog.page(.root).sections.flatMap(\.rows).flatMap(HelpCatalog.commands(in:))
         let unknown = rows.filter { $0 != CommandVocabulary.program && Self.known.contains($0) == false }
         #expect(unknown.isEmpty, "root help rows not in CommandVocabulary: \(unknown)")
         #expect(rows.isEmpty == false)

@@ -306,6 +306,25 @@ Anonymous usage counters are on by default; opt out with
 `"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
 in `~/.config/rv/config.json`.
 
+## Words rv uses
+
+| Word | What it means |
+| --- | --- |
+| ✕ stopped | rv stopped the command. It did not run. |
+| ◐ would stop | Watching: rv logged it and let it run. |
+| ✓ ran | It ran. rv had no objection. |
+| ⏺ asks | It waits for a person to say yes. |
+| → next | The one command to type next. |
+| ◆ rv | rv speaking. |
+| guarding | An agent's mode that stops commands (`rv host mode <host> block`). |
+| watching | An agent's mode that only logs them (`rv host mode <host> observe`). |
+| rule | One pattern rv checks a command against. |
+| pack | A named set of rules, such as `core.git`. |
+| code | Six characters on a stop; a person runs it once with `rv allow-once`. |
+| incomplete | rv could not finish checking, so it stops the command. |
+
+`rv explain --help` prints the same list.
+
 ## Architecture
 
 ```text

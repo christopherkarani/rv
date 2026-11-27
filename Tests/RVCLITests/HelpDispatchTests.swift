@@ -57,25 +57,28 @@ import RVTheme
 
 @Test func helpText_root_includesGroupsAndNext() {
     let text = HelpDispatch.text(.root, palette: colorOffPalette)
-    #expect(text.contains("Get started"))
-    #expect(text.contains("Everyday"))
-    #expect(text.contains("Advanced"))
-    #expect(text.contains("Examples"))
-    #expect(text.contains("Next"))
-    #expect(text.contains("rv setup"))
-    #expect(text.contains("Open the workspace shell in the current project"))
-    #expect(text.contains("rv help setup"))
-    #expect(text.contains("allow-once"))
-    #expect(text.contains("packs"))
-    #expect(text.contains("scan"))
-    #expect(text.contains("policy"))
-    #expect(text.contains("allowlist"))
-    #expect(text.contains("safety"))
-    #expect(text.contains("blocks"))
-    #expect(text.contains("Cursor"))
-    #expect(text.contains("rv help test") == false)
+    #expect(text.hasPrefix("◆ rv  "))
+    for group in ["Get started", "Everyday", "Rules", "Team", "Advanced"] {
+        #expect(text.contains("\n\(group)\n"), "root help missing group \(group)")
+    }
+    #expect(text.hasSuffix("  → rv setup    wire your agents and start rvd\n"))
+    for name in ["allow-once", "packs", "scan", "policy", "allowlist", "safety", "blocks", "explain"] {
+        #expect(text.contains(name), "root help missing \(name)")
+    }
+    #expect(text.contains("Examples") == false)
     #expect(text.contains("OVERVIEW:") == false)
     #expect(text.contains("SUBCOMMANDS:") == false)
+}
+
+/// North Star A2: five groups in this order, under 30 lines, inside an
+/// 80-column terminal.
+@Test func helpText_root_fitsOneScreen() {
+    let page = HelpCatalog.page(.root)
+    #expect(page.sections.map(\.heading) == ["Get started", "Everyday", "Rules", "Team", "Advanced"])
+    let lines = HelpDispatch.text(.root, palette: colorOffPalette).split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+    #expect(lines.count < 30, "rv --help is \(lines.count) lines")
+    let wide = lines.filter { $0.count > 80 }
+    #expect(wide.isEmpty, "rv --help lines over 80 columns: \(wide)")
 }
 
 @Test func helpText_allowOnce_namesRedeemNotCommandMint() {
@@ -194,12 +197,16 @@ import RVTheme
     #expect(service.contains("start"))
 }
 
+/// Every command a person types is on the root page; the commands rv
+/// runs for programs (`rv hook`, `rv operator`) keep their own pages.
 @Test func helpText_root_listsEveryParserCommand() {
-    let text = HelpDispatch.text(.root, palette: colorOffPalette)
+    let listed = Set(HelpCatalog.page(.root).sections.flatMap(\.rows).flatMap(HelpCatalog.commands(in:)))
+    let hidden = Set(UnknownCommand.internalCommands.map(\.rawValue))
     let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
-    for name in names {
-        #expect(text.contains(name), "root help missing \(name)")
+    for name in names where hidden.contains(name) == false {
+        #expect(listed.contains(name), "root help missing \(name)")
     }
+    #expect(listed.isDisjoint(with: hidden))
 }
 
 @Test func helpTopic_everyParserCommand_resolvesToOwnTopic() {
