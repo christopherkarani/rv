@@ -92,6 +92,9 @@ public enum MCPImport {
             // Imported servers ask for every tool until the person allows
             // one. Defaults are inert, so this must be an ask glob.
             definition.tools.ask = ["*"]
+            // Imported local servers are sealed: no network but the package
+            // registry their launcher fetches from, and no reads of keys.
+            definition.sandbox = sealedSandbox(command: command)
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))
             for (variable, value) in entry.environment.sorted(by: { $0.key < $1.key }) {
                 guard SecretsConfiguration.isVariableName(variable) else {
@@ -117,6 +120,32 @@ public enum MCPImport {
     }
 
     struct Skip: Error { var reason: String }
+
+    /// Package launchers and the registries they fetch the server from.
+    /// Exact host names only; anything else the server needs, the person
+    /// lists in `sandbox.hosts`.
+    static let launcherHosts: [String: [String]] = [
+        "npx": ["registry.npmjs.org"], "npm": ["registry.npmjs.org"], "pnpm": ["registry.npmjs.org"],
+        "pnpx": ["registry.npmjs.org"], "yarn": ["registry.npmjs.org"], "bunx": ["registry.npmjs.org"],
+        "bun": ["registry.npmjs.org"],
+        "uvx": ["pypi.org", "files.pythonhosted.org"], "uv": ["pypi.org", "files.pythonhosted.org"],
+        "pipx": ["pypi.org", "files.pythonhosted.org"],
+    ]
+
+    /// The sandbox an imported local server gets: sealed. The network is
+    /// closed except for its launcher's package registry, writes go only to
+    /// the cage's defaults, and credential stores stay unreadable. rv's
+    /// serve refuses a local server with no sandbox where the cage is
+    /// enforced, so an unsealed import would only be a server that is off.
+    public static func sealedSandbox(command: String) -> MCPSandboxPolicy {
+        let launcher = (command as NSString).lastPathComponent.lowercased()
+        return MCPSandboxPolicy(network: false, hosts: launcherHosts[launcher] ?? [])
+    }
+
+    /// The import line's sealed note: what the sandbox lets the server reach.
+    public static func sealedNote(_ sandbox: MCPSandboxPolicy) -> String {
+        sandbox.hosts.isEmpty ? "sealed, no network" : "sealed, reaches only " + sandbox.hosts.joined(separator: ", ")
+    }
 
     /// Credential header values become `${secret:NAME}` (an auth scheme such
     /// as `Bearer ` stays literal); headers that point at host variables or

@@ -57,6 +57,36 @@ struct MCPImportTests {
         #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 3)
     }
 
+    /// E3: every imported local server is sealed. Its network is closed
+    /// except for its package launcher's registry; remote servers get none.
+    @Test func importedLocalServersAreSealed() throws {
+        let plan = MCPImport.plan(
+            entries: [
+                entry("node", transport: .stdio(command: "npx", args: ["-y", "srv"])),
+                entry("python", transport: .stdio(command: "/opt/homebrew/bin/uvx", args: ["srv"])),
+                entry("binary", transport: .stdio(command: "/usr/local/bin/wax-mcp", args: [])),
+                entry("web", transport: .remote(url: "https://mcp.example.com/mcp")),
+            ],
+            configuration: MCPConfiguration(), secrets: SecretsConfiguration())
+        func sandbox(_ name: String) -> MCPSandboxPolicy? { plan.servers.first { $0.name == name }?.sandbox }
+        #expect(sandbox("node") == MCPSandboxPolicy(network: false, hosts: ["registry.npmjs.org"]))
+        #expect(sandbox("python") == MCPSandboxPolicy(network: false, hosts: ["pypi.org", "files.pythonhosted.org"]))
+        #expect(sandbox("binary") == MCPSandboxPolicy(network: false))
+        #expect(plan.servers.first { $0.name == "web" }?.remote != nil)
+        #expect(sandbox("web") == nil)
+        #expect(MCPImport.sealedNote(MCPSandboxPolicy(network: false)) == "sealed, no network")
+        #expect(MCPImport.sealedNote(try #require(sandbox("node"))) == "sealed, reaches only registry.npmjs.org")
+
+        // What is written decodes to the same sealed sandbox, and serve's seal
+        // check, where the cage is enforced, accepts every one.
+        let configuration = MCPConfiguration(servers: plan.servers)
+        let decoded = try MCPConfiguration.decode(Data(configuration.encoded().prettyText.utf8)).get()
+        for server in decoded.servers where server.remote == nil {
+            #expect(server.sandbox == sandbox(server.name))
+            #expect(MCPLaunchPlanner.sealRefusal(server, configuration: decoded, requireSandbox: true) == nil)
+        }
+    }
+
     @Test func askImportStoresAskEvenWhenTheFileAllows() throws {
         var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
             MCPServerDefinition(name: "kept", command: "safe-bin")

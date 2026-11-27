@@ -165,8 +165,9 @@ step("untrusted serve did not run the command", not os.path.exists(MARKER))
 
 # 3. trust on a pty does not echo a code and does not sign
 r = rv("mcp", "trust", setsid=True)
-step("trust refused without device owner (setsid)",
-     r.returncode != 0 and "device owner" in r.stderr and "trusted mcp.json" not in r.stdout, r.stderr.strip())
+step("trust without a terminal fails fast with one fix (setsid)",
+     r.returncode != 0 and "has no terminal" in r.stderr and "→ rv mcp trust" in r.stderr
+     and "trusted mcp.json" not in r.stdout, r.stderr.strip())
 code, out = pty_run(["mcp", "trust"], lambda o: "AAAAAA" if "confirm" in o else None)
 step("trust on a pseudo-terminal does not sign",
      code != 0 and "device owner" in out and "Type " not in out and not os.path.exists(f"{CONFIG}/mcp-integrity.json"),

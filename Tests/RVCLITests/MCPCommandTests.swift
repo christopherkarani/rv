@@ -101,19 +101,17 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)
+        // E3: imported local servers are sealed, so serve will start them.
+        let github = try #require(try MCPRun.configuration(fixture.environment()).get().server(named: "github"))
+        #expect(github.sandbox == MCPSandboxPolicy(network: false, hosts: ["registry.npmjs.org"]))
+        #expect(imported.contains("import github: npx (credentials → rv secrets GITHUB_PERSONAL_ACCESS_TOKEN) · sealed, reaches only registry.npmjs.org"))
+        #expect(after.problems.contains { $0.message.contains("has no sandbox") } == false)
         if MCPSandbox.enforced {
-            // Imported local servers carry no sandbox yet: governed, but check
-            // stays red until one is added and the file is re-trusted.
-            #expect(after.passes == false)
-            #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
+            #expect(after.problems.contains { $0.message.contains("github") } == false)
+            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" } == false)
         } else {
-            // No cage on this host: check names the bare server as uncaged.
-            #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
-        }
-        if MCPSandbox.enforced {
-            // Serve will not start an unsealed server, so list says off.
-            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" && $0.offReason == "off · not sealed: it has no sandbox" })
-        } else {
+            // No cage on this host: check says the sandbox is not enforced here.
+            #expect(after.problems.contains { $0.message == MCPPlatformSupport.sandboxUnenforced(server: "github") })
             #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         }
         let relative = try report(fixture, rvExecutable: "")
@@ -6094,7 +6092,9 @@ struct MCPCommandTests {
             #expect(text.contains("first: \"/bin/echo\", \"\\\\n  notes: /usr/bin/true\""))
             #expect(text.contains("env NOTE=/usr/bin\\n\(trailer)\\n  hidden: true"))
             #expect(text.contains("later: \"/usr/bin/true\", \"--ok\""))
-            #expect(text.contains("no sandbox"))
+            // E3: imported local servers are sealed, and the review says so.
+            #expect(text.contains("no sandbox") == false)
+            #expect(text.contains("sandbox network false"))
             #expect(text.contains("ask before every tool"))
             Self.expectNoForgedReviewLine(text, trailer: trailer)
         }
@@ -6102,7 +6102,7 @@ struct MCPCommandTests {
         #expect(importLines.filter { $0.hasPrefix("sha256 ") }.count == 1)
         let body = importedReview.components(separatedBy: "\nsha256 ").first ?? ""
         #expect(body.contains("later: \"/usr/bin/true\", \"--ok\""))
-        #expect(body.contains("no sandbox"))
+        #expect(body.contains("sandbox network false"))
         #expect(imported.contains("wrote mcp.json"))
     }
 
