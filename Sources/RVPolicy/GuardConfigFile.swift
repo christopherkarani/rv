@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 
 /// Shell reader for the guard keys of `~/.config/rv/config.json`. Decoding
 /// and resolution are pure (`GuardConfig(_:)`, `GuardModeResolution`); this
@@ -7,10 +8,11 @@ import RVDomain
 extension GuardConfig {
     /// The guard config in `<configDirectory>/config.json`. A missing or
     /// unreadable file is `.empty` (enforce); so is any file
-    /// `GuardConfig(jsonData:)` rejects.
+    /// `GuardConfig(jsonData:)` rejects, and anything but a regular file
+    /// (a FIFO there fails at once instead of hanging the evaluation).
     public static func read(configDirectory: URL) -> GuardConfig {
         let file = configDirectory.appendingPathComponent("config.json")
-        guard let data = try? Data(contentsOf: file) else { return .empty }
+        guard let data = readRegularFile(file) else { return .empty }
         return GuardConfig(jsonData: data)
     }
 

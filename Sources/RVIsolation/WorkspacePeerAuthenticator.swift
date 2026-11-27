@@ -149,7 +149,33 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
         }
     }
 
-    private init(entries: [Entry]) { self.entries = entries }
+    init(entries: [Entry]) { self.entries = entries }
+
+    /// The hook-local evaluator's signing identifier (`RV_EVALUATOR_IDENTIFIER`).
+    public static let hookEvaluatorIdentifier = "dev.rv.rv-hook-local"
+
+    /// Whether the live `code` is the hook-local evaluator under this manifest.
+    public func isHookEvaluator(code: SecCode, identity: PeerCodeIdentity) -> Bool {
+        isHookEvaluator(identity: identity) { SecCodeCheckValidity(code, [], $0) == errSecSuccess }
+    }
+
+    /// The evaluator is not a manifest role: like the C hook
+    /// (`has_evaluator_identity`, daemon_trust.c), it is derived from the
+    /// production `service` entry. It is the hardened, uninjected,
+    /// team-signed `dev.rv.rv-hook-local` from the team rvd is pinned to.
+    /// A development (CDHash-pinned) service entry has no team to derive it
+    /// from, so it gets no evaluator.
+    func isHookEvaluator(identity: PeerCodeIdentity, satisfies: (SecRequirement) -> Bool) -> Bool {
+        guard let service = entries.first(where: { $0.role == .service }),
+              service.developmentCDHash == nil, let team = service.requiredTeamIdentifier,
+              identity.hardenedRuntime, identity.injectionExceptions.isEmpty, !identity.isAdHoc,
+              identity.identifier == Self.hookEvaluatorIdentifier, identity.teamIdentifier == team else { return false }
+        let expression = "anchor apple generic and identifier \"\(Self.hookEvaluatorIdentifier)\" and certificate leaf[subject.OU] = \"\(team)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(expression as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return satisfies(requirement)
+    }
 
     /// Only `role`'s entry, as C `has_service_role` evaluates the daemon.
     func restricted(to role: TrustedRVComponentRole) -> Self {
