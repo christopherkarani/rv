@@ -31,7 +31,8 @@ public enum RVDProcess {
             clock: { Date() },
             pendingApprovals: .automatic,
             ceremonies: ceremonies,
-            actionCeremonies: actionCeremonies
+            actionCeremonies: actionCeremonies,
+            recordsDecisions: true
         )
         runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
@@ -124,7 +125,8 @@ public enum RVDProcess {
             clock: { Date() },
             pendingApprovals: .automatic,
             ceremonies: ceremonies,
-            actionCeremonies: actionCeremonies
+            actionCeremonies: actionCeremonies,
+            recordsDecisions: true
         )
         runtime.startHookLocalSpoolTimer()
         JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)

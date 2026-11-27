@@ -13,6 +13,7 @@ public struct RV: AsyncParsableCommand {
             BoxCommand.self,
             Test.self,
             Try.self,
+            Term.self,
             Explain.self,
             Packs.self,
             Policy.self,
