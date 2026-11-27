@@ -44,14 +44,19 @@ jobs:
           path: ~/.local/share/swift
           key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
 
-      - name: Cache SwiftPM build
-        uses: actions/cache@v4
+      # Restore-only on PRs. Main saves a fresh entry per merge (save step
+      # at the end of this job): a key without the commit was written once
+      # and never again, so every PR rebuilt everything since that day.
+      - name: Restore SwiftPM build
+        id: swiftpm-build
+        uses: actions/cache/restore@v4
         with:
           path: |
             .build
             ~/.cache/org.swift.swiftpm
-          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-${{ github.sha }}
           restore-keys: |
+            swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-
             swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
 
       # InstallScriptTests mount codesign/spctl shims over /usr/bin and
@@ -229,6 +234,21 @@ jobs:
           python -m pip install -e "./sdk/python[test]"
           python -m pytest sdk/python/tests -m integration -q
 
+      # Main only, whatever the tests said: the build is still good to
+      # restore. .build/top is the throwaway test-owner-presence rvd.
+      - name: Drop the scratch rvd build (main)
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        run: rm -rf .build/top
+
+      - name: Save SwiftPM build
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: ${{ steps.swiftpm-build.outputs.cache-primary-key }}
+
   # Linux checks that need root on a real VM (the hosted container images
   # cannot remount /proc, load an AppArmor profile or change Yama). Each
   # step runs code the `swift test` job also builds; RV_LINUX_PEER_STRICT=1
@@ -247,14 +267,19 @@ jobs:
           path: ~/.local/share/swift
           key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
 
-      - name: Cache SwiftPM build
-        uses: actions/cache@v4
+      # Restore-only on PRs. Main saves a fresh entry per merge (save step
+      # at the end of this job): a key without the commit was written once
+      # and never again, so every PR rebuilt everything since that day.
+      - name: Restore SwiftPM build
+        id: swiftpm-build
+        uses: actions/cache/restore@v4
         with:
           path: |
             .build
             ~/.cache/org.swift.swiftpm
-          key: swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          key: swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-${{ github.sha }}
           restore-keys: |
+            swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-
             swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Tarball runtime deps (not apt swift)
@@ -348,312 +373,31 @@ jobs:
           sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 RV_YAMA_IRREVERSIBLE=1 \
             Scripts/linux-peer-binding-e2e.sh
 
-  # Darwin isolation only, sharded by suite/test initial: A-E (142),
-  # F-M (137), N-Z (319). 598 tests in one process collapse shared-runner
-  # throughput (blocking waits saturate the small pool and queueing
-  # spirals); shards restore headroom and narrow any wedge to ~140
-  # tests. Filters cover every test ID (verified via `swift test list`).
-  # Compile this test target before anything else; do not stage release
-  # binaries or run the CLI suite in these jobs.
-  macos-isolation-a-e:
-    name: macos isolation (A-E)
+      # Main only. The root steps leave root-owned files in .build; hand
+      # them back to the runner so the cache can read them.
+      - name: Own .build again (main)
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        run: sudo chown -R "$(id -u):$(id -g)" .build
+
+      - name: Save SwiftPM build
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: ${{ steps.swiftpm-build.outputs.cache-primary-key }}
+
+
+  # The one macOS job on PRs: Darwin XPC / LaunchAgent / CLI paths that
+  # Linux `swift test` cannot reach. Debug build only, no release staging.
+  # Isolation, MCP, the release-staged hook grade, the macOS 15 smoke and
+  # the micro-VM backend run in macos-full.yml (nightly, `ci:full` label,
+  # or by hand). One job per push keeps PRs off the macOS runner queue.
+  macos-essentials:
+    name: macos essentials
     runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      # Packages only, not compiled artifacts: a restored build plan embeds
-      # the Metal toolchain cryptex path, which is random per runner, so an
-      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
-      - name: Cache SwiftPM packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Compile RVIsolationTests
-        run: Scripts/swift-6.4 build --target RVIsolationTests
-
-      # Debug products the suite execs. After the isolation compile, so a
-      # hang in that compile still dies at the timeout. Not release.sh, and
-      # not the CLI test suite. Single full build: SPM honors only one
-      # --product per invocation, so separate calls re-plan each time.
-      - name: Build debug workspace products
-        run: Scripts/swift-6.4 build
-
-      - name: Run RVIsolationTests (A-E)
-        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[A-Ea-e]'
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  macos-isolation-f-m:
-    name: macos isolation (F-M)
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      # Packages only, not compiled artifacts: a restored build plan embeds
-      # the Metal toolchain cryptex path, which is random per runner, so an
-      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
-      - name: Cache SwiftPM packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Compile RVIsolationTests
-        run: Scripts/swift-6.4 build --target RVIsolationTests
-
-      # Debug products the suite execs. After the isolation compile, so a
-      # hang in that compile still dies at the timeout. Not release.sh, and
-      # not the CLI test suite. Single full build: SPM honors only one
-      # --product per invocation, so separate calls re-plan each time.
-      - name: Build debug workspace products
-        run: Scripts/swift-6.4 build
-
-      - name: Run RVIsolationTests (F-M)
-        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[F-Mf-m]'
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  macos-isolation-n-z:
-    name: macos isolation (N-Z)
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      # Packages only, not compiled artifacts: a restored build plan embeds
-      # the Metal toolchain cryptex path, which is random per runner, so an
-      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
-      - name: Cache SwiftPM packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Compile RVIsolationTests
-        run: Scripts/swift-6.4 build --target RVIsolationTests
-
-      # Debug products the suite execs. After the isolation compile, so a
-      # hang in that compile still dies at the timeout. Not release.sh, and
-      # not the CLI test suite. Single full build: SPM honors only one
-      # --product per invocation, so separate calls re-plan each time.
-      - name: Build debug workspace products
-        run: Scripts/swift-6.4 build
-
-      - name: Run RVIsolationTests (N-Z)
-        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # RVMCPTests and RVMCPCustodianCoreTests on Darwin. Linux `swift test`
-  # runs both, but the macOS code paths (sandbox-exec profiles, /private
-  # firmlinks, Security-framework keychain queries, NSXPC fail-closed) were
-  # only exercised at release. Neither suite needs a signed build or Touch
-  # ID: custodian tests use the file key store in place of the keychain,
-  # the XPC test targets an unregistered Mach service, and the remote /
-  # OAuth suites start Scripts/mcp-remote-fixture.py on loopback with the
-  # runner's python3. The sandbox suites also run in hook-grade; repeating
-  # them here keeps this job the one place MCP runs whole on macOS. Each
-  # product runs under the watchdog, scoped to its own test product, never
-  # an unfiltered `swift test`.
-  macos-mcp:
-    name: macos mcp
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      # Packages only, not compiled artifacts (see the isolation jobs).
-      - name: Cache SwiftPM packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-pkgs-mcp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            swiftpm-pkgs-mcp-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
-
-      # The two test targets, plus the two workspace products RVMCPTests
-      # execs: rv-mcp-probe (KERN_PROCARGS2 reads and the cage's peer
-      # checks) and rv-mcp-signal-probe (serve's real signals and
-      # dispositions); both run in a child, never in the test process.
-      # `--target` builds an executable dependency's module, not
-      # necessarily its linked binary, and the probe tests fail on a
-      # missing binary, so link both explicitly.
-      - name: Compile MCP test targets
-        run: |
-          Scripts/swift-6.4 build --target RVMCPTests
-          Scripts/swift-6.4 build --target RVMCPCustodianCoreTests
-          Scripts/swift-6.4 build --product rv-mcp-probe
-          Scripts/swift-6.4 build --product rv-mcp-signal-probe
-
-      - name: Run RVMCPTests and RVMCPCustodianCoreTests
-        run: |
-          status=0
-          for product in RVMCPTests RVMCPCustodianCoreTests; do
-            printf '== %s\n' "$product"
-            Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
-              --test-product "$product" --filter "$product\\." || status=1
-          done
-          exit "$status"
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # Compiler host is macos-26. Advertised Darwin floor is macOS 15.
-  # sequoia-smoke executes the staged binaries; it does not compile Swift.
-  hook-grade:
-    name: macos hook grade
-    runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -684,283 +428,35 @@ jobs:
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
-      # rv-guest-relay (micro-VM backend) is a static Linux binary built
-      # with zig's bundled musl; release.sh stages it.
-      - name: Install zig
-        run: brew install zig
-
-      # C hook units ran in the previous step; release.sh skips its own copy.
-      - name: Stage release binaries
-        env:
-          RV_RELEASE_SKIP_C_UNITS: "1"
-          RV_RELEASE_SIGN: dry-run
-        run: Scripts/release.sh
-
-      - name: C hook process proof
-        env:
-          RV_C_HOOK_SKIP_RELEASE: "1"
-          RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: Scripts/c-hook-proof.sh
-
-      # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
-      # and the isolated-HOME oracle only exist here. RVIsolationTests run in
-      # the parallel macos isolation job. Only the MCPSandboxCreateTests and
-      # MCPSandboxLongPathTests suites are added from RVMCPTests: they are
-      # Darwin-shaped (/private firmlinks, Seatbelt compile) and were
-      # silently never run on macOS. All of RVMCPTests and
-      # RVMCPCustodianCoreTests run in the macos-mcp job. Skip the
-      # in-process CHookPipeTests proof — this job already ran
-      # Scripts/c-hook-proof.sh. Build once, then one --skip-build run per
-      # test product under a watchdog: `swift test` block-buffers each
-      # product's output, so a stalled product used to print nothing until
-      # the job timeout. The watchdog names the product, samples the test
-      # runner (the stacks name the stuck test), and kills it. Every product
-      # still runs after one fails.
       - name: Build Darwin test products
         run: Scripts/swift-6.4 build --build-tests
 
+      # One --skip-build run per test product under the watchdog (see
+      # Scripts/ci-watchdog.sh): a stalled product is named, sampled and
+      # killed instead of eating the job timeout. Both products run even
+      # if the first fails. CHookPipeTests.cHookProof needs staged release
+      # binaries, which only macos-full builds.
       - name: Darwin Swift (XPC / CLI)
         run: |
           set -o pipefail
           skip='injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
           failed=''
-          for run in RVWorkspaceTUITests:RVWorkspaceTUITests RVOperatorUITests:RVOperatorUITests \
-                     RVLayaTests:RVLayaTests 'RVMCPTests:MCPSandboxCreateTests|MCPSandboxLongPathTests' \
-                     RVServiceTests:RVServiceTests RVCLITests:RVCLITests; do
-            product="${run%%:*}"
-            filter="${run#*:}"
-            printf '== %s (filter %s)\n' "$product" "$filter"
+          for product in RVServiceTests RVCLITests; do
+            printf '== %s\n' "$product"
             if ! Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
-              --test-product "$product" --filter "$filter" --skip "$skip" 2>&1 \
+              --test-product "$product" --filter "$product" --skip "$skip" 2>&1 \
               | tee "$RUNNER_TEMP/darwin-swift-$product.log"; then
               failed="$failed $product"
             fi
           done
-          # A later product's output buries an earlier one's failure: say
-          # what failed again at the end.
           for product in $failed; do
             Scripts/ci-test-failures.sh "$product" "$RUNNER_TEMP/darwin-swift-$product.log"
           done
           [ -z "$failed" ]
 
-      - name: Isolated-HOME oracle
-        run: Scripts/host-oracle.sh
-
-      - name: Isolated-HOME host attach
-        env:
-          RV_C_HOOK_SKIP_RELEASE: "1"
-          RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: Scripts/host-attach-proof.sh
-
-      # Live SDK integration against the staged release rvd (shipped pairing).
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Python SDK integration (macOS)
-        env:
-          RV_RVD: ${{ github.workspace }}/.build/release-stage/rvd
-        run: |
-          python -m pip install -e "./sdk/python[test]"
-          python -m pytest sdk/python/tests -m integration -q
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rv-macos-stage
-          path: .build/release-stage/
-          if-no-files-found: error
-
       # A test process killed by a signal (e.g. SIGBUS) leaves only
       # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  sequoia-smoke:
-    name: macos 15 smoke
-    runs-on: macos-15
-    needs: hook-grade
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: rv-macos-stage
-          path: stage
-
-      - name: Load commands are macOS 15
-        run: |
-          set -euo pipefail
-          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host; do
-            chmod 755 "$bin"
-            show="$(vtool -show-build "$bin")"
-            printf '%s\n' "$show" | grep -q 'minos 15.0' || {
-              printf 'sequoia: %s minos is not 15.0\n%s\n' "$bin" "$show" >&2
-              exit 1
-            }
-          done
-
-      - name: Swift binaries load on Sequoia
-        run: |
-          set -euo pipefail
-          stage/rv-cli --help > /tmp/rv-cli-help.txt
-          grep -q 'setup' /tmp/rv-cli-help.txt
-          stage/rvd --version > /tmp/rvd-version.txt
-          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' /tmp/rvd-version.txt
-          set +e
-          stage/rv-workspace-host > /tmp/rv-host-usage.txt 2>&1
-          host_status=$?
-          set -e
-          test "$host_status" -eq 2
-          grep -q 'usage: rv-workspace-host --workspace' /tmp/rv-host-usage.txt
-          # `rv test` exits 1 on a deny. Robot JSON is rv.test.v1 and does not echo the command.
-          set +e
-          stage/rv-cli test --robot 'git reset --hard' > /tmp/rv-test.json 2> /tmp/rv-test.err
-          test_status=$?
-          set -e
-          test "$test_status" -eq 0 -o "$test_status" -eq 1
-          grep -q 'rv.test.v1' /tmp/rv-test.json
-          if grep -E 'Symbol not found|Library not loaded' /tmp/rv-test.err; then
-            exit 1
-          fi
-
-      - name: C units on the Sequoia clang
-        run: Sources/rv-c/tests/run.sh
-
-  # D13 option A draft (PLAN 6.4). One switch: repo variable
-  # RV_CI_PEER_TRUST=1. Installs development peer trust with the runner's
-  # passwordless sudo, runs the 55 TRANSITIONAL-PEER-AUTH tests, and always
-  # removes the trust. Non-blocking while the tests still connect from the
-  # unhardened test runner (no component role); the D13 rewrite drives the
-  # installed, pinned rv CLI instead.
-  macos-peer-trust:
-    name: macos peer trust (draft)
-    if: vars.RV_CI_PEER_TRUST == '1'
-    runs-on: macos-26
-    timeout-minutes: 60
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      - name: Cache SwiftPM packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Build products and tests
-        run: Scripts/swift-6.4 build --build-tests
-
-      - name: Install development peer trust
-        run: |
-          set -euo pipefail
-          bin="$(Scripts/swift-6.4 build --show-bin-path)"
-          sudo Scripts/phase2a-development-trust.sh install \
-            --host "$bin/rv-workspace-host" --service "$bin/rvd" --cli "$bin/rv"
-
-      - name: TRANSITIONAL-PEER-AUTH tests
-        env:
-          RV_PEER_TRUST_CI: "1"
-        run: >-
-          Scripts/swift-6.4 test --skip-build --filter
-          'WorkspaceHostTests|RuntimeTerminalTests|RuntimeResourceAdversarialTests|LocalTerminalRestoreTests|WorkspaceTUIIntegrationTests|OpenCodeCommandTests'
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          sleep 15
-          dest="$RUNNER_TEMP/crash-reports"
-          mkdir -p "$dest"
-          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \
-            \( -name '*.ips' -o -name '*.crash' \) -mmin -180 \
-            -exec cp {} "$dest/" \; 2>/dev/null || true
-          ls -l "$dest"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: crash-reports-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/crash-reports/
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Remove development peer trust
-        if: always()
-        run: |
-          if [ -e "/Library/Application Support/RV/peer-trust.json" ]; then
-            sudo Scripts/phase2a-development-trust.sh uninstall
-          fi
-
-  # Micro-VM backend: the guest relay (native build, unix echo server) and
-  # the separate Packages/rv-microvm package (pure option tests; compiling
-  # its executable also type-checks the Containerization integration). The
-  # VM itself needs nested virtualization, which hosted runners lack; the
-  # end-to-end suite is RV_MICROVM_E2E=1 on a developer machine.
-  macos-microvm:
-    name: macos micro-VM backend
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Swift toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
-            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install Swift 6.4
-        run: Scripts/install-official-swift-macos.sh
-
-      - name: Guest relay tests
-        run: Sources/rv-guest-relay/tests/run.sh
-
-      - name: rv-microvm package tests
-        run: Scripts/swift-6.4 test --package-path Packages/rv-microvm
-
-      # A test process killed by a signal (e.g. SIGBUS) leaves only
-      # "unexpected signal code N" in the log. Keep the Darwin crash
-      # reports so the faulting thread and frame are visible. ReportCrash
-      # writes them asynchronously, hence the short wait.
+      # reports so the faulting thread and frame are visible.
       - name: Collect crash reports
         if: failure()
         run: |

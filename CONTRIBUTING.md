@@ -46,9 +46,14 @@ Tests must not touch your real `~/.config/rv`. CI checks this.
 - Say what changed and why, and how you tested it.
 - Add a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for
   user-visible changes.
-- CI runs the full suite on Linux and sharded isolation, hook, and service
-  suites on macOS ([`.github/workflows/pr.yml`](.github/workflows/pr.yml)).
-  All required checks must pass.
+- PR CI ([`.github/workflows/pr.yml`](.github/workflows/pr.yml)) runs the
+  full suite on Linux, the Linux root end-to-end checks, and one macOS job
+  ("macos essentials": the service and CLI suites). The whole macOS grade
+  (isolation, MCP, release-staged hook grade, macOS 15 smoke, micro-VM)
+  is [`.github/workflows/macos-full.yml`](.github/workflows/macos-full.yml):
+  nightly on main, by hand, or on a PR with the `ci:full` label. Add that
+  label to a PR that changes Darwin isolation, MCP sandboxing, the C hook
+  or release staging. All required checks must pass.
 
 ## Security issues
 
