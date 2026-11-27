@@ -68,42 +68,102 @@
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+(?:delete|rm)\\b",
       "severity": "critical",
       "description": "nats stream delete/rm removes a JetStream stream and all its messages.",
-      "explanation": "Deleting a JetStream stream permanently removes all stored messages, consumers, and configuration. Applications relying on this stream will lose access to historical data.\n\nSafer alternatives:\n- nats stream info: Review stream details first\n- nats stream purge: Remove messages but keep the stream\n- Back up stream configuration before deletion"
+      "explanation": "Deleting a JetStream stream permanently removes all stored messages, consumers, and configuration. Applications relying on this stream will lose access to historical data.\n\nSafer alternatives:\n- nats stream info: Review stream details first\n- nats stream purge: Remove messages but keep the stream\n- Back up stream configuration before deletion",
+      "safer_command": "nats stream info STREAM",
+      "examples": {
+        "stop": [
+          "nats stream delete my-app"
+        ],
+        "allow": [
+          "nats stream info",
+          "nats stream list my-app"
+        ]
+      }
     },
     {
       "name": "nats-stream-purge",
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+purge\\b",
       "severity": "high",
       "description": "nats stream purge deletes ALL messages from the stream.",
-      "explanation": "Purging a stream removes all messages while keeping the stream and consumer configurations intact. Consumers will have no messages to process until new ones arrive.\n\nSafer alternatives:\n- nats stream info: Check message count first\n- Use --seq to purge only messages up to a specific sequence\n- Use --keep to retain the last N messages"
+      "explanation": "Purging a stream removes all messages while keeping the stream and consumer configurations intact. Consumers will have no messages to process until new ones arrive.\n\nSafer alternatives:\n- nats stream info: Check message count first\n- Use --seq to purge only messages up to a specific sequence\n- Use --keep to retain the last N messages",
+      "safer_command": "nats stream info STREAM",
+      "examples": {
+        "stop": [
+          "nats stream purge my-app"
+        ],
+        "allow": [
+          "nats stream info",
+          "nats stream list my-app"
+        ]
+      }
     },
     {
       "name": "nats-consumer-delete",
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+consumer\\s+(?:delete|rm)\\b",
       "severity": "high",
       "description": "nats consumer delete/rm removes a JetStream consumer.",
-      "explanation": "Deleting a consumer removes its acknowledgment state and delivery tracking. Messages may be redelivered to other consumers or lost if this was the only consumer.\n\nSafer alternatives:\n- nats consumer info: Review consumer state first\n- Pause the consumer instead of deleting\n- Ensure other consumers exist for critical streams"
+      "explanation": "Deleting a consumer removes its acknowledgment state and delivery tracking. Messages may be redelivered to other consumers or lost if this was the only consumer.\n\nSafer alternatives:\n- nats consumer info: Review consumer state first\n- Pause the consumer instead of deleting\n- Ensure other consumers exist for critical streams",
+      "safer_command": "nats consumer info STREAM CONSUMER",
+      "examples": {
+        "stop": [
+          "nats consumer delete my-app"
+        ],
+        "allow": [
+          "nats consumer info",
+          "nats consumer list my-app"
+        ]
+      }
     },
     {
       "name": "nats-kv-delete",
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv\\s+(?:del|rm)\\b",
       "severity": "high",
       "description": "nats kv del/rm deletes key-value entries.",
-      "explanation": "Deleting KV entries removes data that applications may depend on. If history is disabled, the deletion is permanent and cannot be recovered.\n\nSafer alternatives:\n- nats kv get: Retrieve and back up the value first\n- nats kv history: Check if history is enabled\n- Use TTL for automatic expiration instead of manual deletion"
+      "explanation": "Deleting KV entries removes data that applications may depend on. If history is disabled, the deletion is permanent and cannot be recovered.\n\nSafer alternatives:\n- nats kv get: Retrieve and back up the value first\n- nats kv history: Check if history is enabled\n- Use TTL for automatic expiration instead of manual deletion",
+      "safer_command": "nats kv info BUCKET",
+      "examples": {
+        "stop": [
+          "nats kv del my-bucket my-key",
+          "nats kv rm my-bucket my-key"
+        ],
+        "allow": [
+          "nats kv get",
+          "nats kv history"
+        ]
+      }
     },
     {
       "name": "nats-object-delete",
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+object\\s+delete\\b",
       "severity": "high",
       "description": "nats object delete removes an object from the store.",
-      "explanation": "Deleting an object from the object store removes the file and its metadata. Applications expecting this object will receive errors.\n\nSafer alternatives:\n- nats object info: Review object details first\n- Download the object before deletion\n- Use object versioning if available"
+      "explanation": "Deleting an object from the object store removes the file and its metadata. Applications expecting this object will receive errors.\n\nSafer alternatives:\n- nats object info: Review object details first\n- Download the object before deletion\n- Use object versioning if available",
+      "safer_command": "nats object info BUCKET",
+      "examples": {
+        "stop": [
+          "nats object delete my-app"
+        ],
+        "allow": [
+          "nats object info",
+          "nats object list my-app"
+        ]
+      }
     },
     {
       "name": "nats-account-delete",
       "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+account\\s+delete\\b",
       "severity": "critical",
       "description": "nats account delete removes an account and its resources.",
-      "explanation": "Deleting a NATS account removes all streams, consumers, and permissions associated with that account. All applications using this account will lose connectivity.\n\nSafer alternatives:\n- Review account resources before deletion\n- Migrate resources to another account first\n- Disable the account instead of deleting"
+      "explanation": "Deleting a NATS account removes all streams, consumers, and permissions associated with that account. All applications using this account will lose connectivity.\n\nSafer alternatives:\n- Review account resources before deletion\n- Migrate resources to another account first\n- Disable the account instead of deleting",
+      "examples": {
+        "stop": [
+          "nats account delete my-app"
+        ],
+        "allow": [
+          "nats account list my-app",
+          "nats account get my-app"
+        ]
+      }
     }
   ]
 }

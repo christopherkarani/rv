@@ -77,56 +77,125 @@
       "pattern": "(?:terraform|tofu)\\b.*?\\bplan\\s+.*-destroy",
       "severity": "medium",
       "description": "terraform/tofu plan -destroy shows what would be destroyed. Review carefully before applying.",
-      "explanation": "terraform plan -destroy shows destruction preview:\n\n- This is a read-only operation (safe to run)\n- Shows what WOULD be destroyed if you apply\n- Review output carefully before proceeding\n\nThis is actually the safe way to preview destroy."
+      "explanation": "terraform plan -destroy shows destruction preview:\n\n- This is a read-only operation (safe to run)\n- Shows what WOULD be destroyed if you apply\n- Review output carefully before proceeding\n\nThis is actually the safe way to preview destroy.",
+      "examples": {
+        "stop": [
+          "terraform plan -out=destroy.tfplan -destroy"
+        ],
+        "allow": [
+          "terraform --help"
+        ]
+      }
     },
     {
       "name": "destroy",
       "pattern": "(?:terraform|tofu)\\b.*?\\bdestroy(?=\\s|$)",
       "severity": "critical",
       "description": "terraform/tofu destroy removes ALL managed infrastructure. Use 'terraform plan -destroy' first.",
-      "explanation": "terraform destroy removes ALL managed infrastructure:\n\n- Every resource in your state file is destroyed\n- Cloud resources (VMs, databases, networks) deleted\n- Cannot be undone without backups/recreation\n- Use -target to destroy specific resources only\n\nPreview first: terraform plan -destroy"
+      "explanation": "terraform destroy removes ALL managed infrastructure:\n\n- Every resource in your state file is destroyed\n- Cloud resources (VMs, databases, networks) deleted\n- Cannot be undone without backups/recreation\n- Use -target to destroy specific resources only\n\nPreview first: terraform plan -destroy",
+      "examples": {
+        "stop": [
+          "terraform destroy my-app"
+        ],
+        "allow": [
+          "terraform plan my-app",
+          "terraform show my-app"
+        ]
+      }
     },
     {
       "name": "apply-auto-approve",
       "pattern": "(?:terraform|tofu)\\b.*?\\bapply\\s+.*-auto-approve",
       "severity": "high",
       "description": "terraform/tofu apply -auto-approve skips confirmation. Remove -auto-approve for safety.",
-      "explanation": "terraform apply -auto-approve skips confirmation:\n\n- No opportunity to review changes before applying\n- Intended for CI/CD, not interactive use\n- Changes may destroy or recreate resources\n\nFor safety: remove -auto-approve and review the plan"
+      "explanation": "terraform apply -auto-approve skips confirmation:\n\n- No opportunity to review changes before applying\n- Intended for CI/CD, not interactive use\n- Changes may destroy or recreate resources\n\nFor safety: remove -auto-approve and review the plan",
+      "examples": {
+        "stop": [
+          "terraform apply -auto-approve",
+          "tofu apply -auto-approve"
+        ],
+        "allow": [
+          "terraform --help"
+        ]
+      }
     },
     {
       "name": "taint",
       "pattern": "(?:terraform|tofu)\\b.*?\\btaint\\b",
       "severity": "high",
       "description": "terraform/tofu taint marks a resource to be destroyed and recreated on next apply.",
-      "explanation": "terraform taint marks resource for recreation:\n\n- Resource will be destroyed on next apply\n- New resource created with same config\n- May cause downtime during recreation\n- IP addresses and identifiers may change\n\nUse -replace in plan/apply instead (Terraform 0.15.2+)"
+      "explanation": "terraform taint marks resource for recreation:\n\n- Resource will be destroyed on next apply\n- New resource created with same config\n- May cause downtime during recreation\n- IP addresses and identifiers may change\n\nUse -replace in plan/apply instead (Terraform 0.15.2+)",
+      "examples": {
+        "stop": [
+          "terraform taint"
+        ],
+        "allow": [
+          "terraform --help"
+        ]
+      }
     },
     {
       "name": "state-rm",
       "pattern": "(?:terraform|tofu)\\b.*?\\bstate\\s+rm\\b",
       "severity": "high",
       "description": "terraform/tofu state rm removes resource from state without destroying it. Resource becomes unmanaged.",
-      "explanation": "terraform state rm orphans resources:\n\n- Resource removed from Terraform state\n- Actual cloud resource still exists\n- Resource becomes 'unmanaged' (Terraform ignores it)\n- May cause drift between state and reality\n\nBack up state first: terraform state pull > backup.tfstate"
+      "explanation": "terraform state rm orphans resources:\n\n- Resource removed from Terraform state\n- Actual cloud resource still exists\n- Resource becomes 'unmanaged' (Terraform ignores it)\n- May cause drift between state and reality\n\nBack up state first: terraform state pull > backup.tfstate",
+      "examples": {
+        "stop": [
+          "terraform state rm aws_instance.web"
+        ],
+        "allow": [
+          "terraform state list",
+          "terraform state show aws_instance.web"
+        ]
+      }
     },
     {
       "name": "state-mv",
       "pattern": "(?:terraform|tofu)\\b.*?\\bstate\\s+mv\\b",
       "severity": "high",
       "description": "terraform/tofu state mv moves resources in state. Incorrect moves can cause resource recreation.",
-      "explanation": "terraform state mv moves resources in state:\n\n- Renames resource address in state file\n- Wrong move can cause destruction/recreation\n- Use -dry-run to preview the move first\n- Does not affect actual cloud resources\n\nPreview first: terraform state mv -dry-run SOURCE DEST"
+      "explanation": "terraform state mv moves resources in state:\n\n- Renames resource address in state file\n- Wrong move can cause destruction/recreation\n- Use -dry-run to preview the move first\n- Does not affect actual cloud resources\n\nPreview first: terraform state mv -dry-run SOURCE DEST",
+      "examples": {
+        "stop": [
+          "terraform state mv aws_instance.a aws_instance.b"
+        ],
+        "allow": [
+          "terraform state list",
+          "terraform --help"
+        ]
+      }
     },
     {
       "name": "force-unlock",
       "pattern": "(?:terraform|tofu)\\b.*?\\bforce-unlock\\b",
       "severity": "high",
       "description": "terraform/tofu force-unlock removes state lock. Only use if lock is stale.",
-      "explanation": "terraform force-unlock removes state locks:\n\n- Forces removal of a state lock\n- May cause corruption if another process is running\n- Only use when you're sure no other operation is active\n- Lock ID required to prevent accidents\n\nVerify no other operations: check CI/CD pipelines, other users"
+      "explanation": "terraform force-unlock removes state locks:\n\n- Forces removal of a state lock\n- May cause corruption if another process is running\n- Only use when you're sure no other operation is active\n- Lock ID required to prevent accidents\n\nVerify no other operations: check CI/CD pipelines, other users",
+      "examples": {
+        "stop": [
+          "terraform --force-unlock"
+        ],
+        "allow": [
+          "terraform --help"
+        ]
+      }
     },
     {
       "name": "workspace-delete",
       "pattern": "(?:terraform|tofu)\\b.*?\\bworkspace\\s+delete\\b",
       "severity": "medium",
       "description": "terraform/tofu workspace delete removes a workspace. Ensure it's not in use.",
-      "explanation": "terraform workspace delete removes workspace:\n\n- Workspace and its state file deleted\n- Does NOT destroy actual infrastructure\n- Resources become unmanaged (orphaned)\n- Cannot be undone without state backup\n\nDestroy resources first: terraform destroy, then delete workspace"
+      "explanation": "terraform workspace delete removes workspace:\n\n- Workspace and its state file deleted\n- Does NOT destroy actual infrastructure\n- Resources become unmanaged (orphaned)\n- Cannot be undone without state backup\n\nDestroy resources first: terraform destroy, then delete workspace",
+      "examples": {
+        "stop": [
+          "terraform workspace delete my-app"
+        ],
+        "allow": [
+          "terraform workspace plan my-app",
+          "terraform workspace show my-app"
+        ]
+      }
     }
   ]
 }
