@@ -65,49 +65,106 @@
       "pattern": "scp\\b.*\\s-[A-Za-z0-9]*r[A-Za-z0-9]*\\b.*\\s(?:(?:\\S+@)?\\S+:)?/\\s*$",
       "severity": "critical",
       "description": "scp -r to root (/) is extremely dangerous.",
-      "explanation": "Recursive copy to the root filesystem can overwrite critical system files, potentially rendering the system unbootable. This affects all system directories including /etc, /bin, /lib, and /boot.\n\nSafer alternatives:\n- Specify a target subdirectory instead of /\n- Use rsync with --dry-run to preview changes\n- Copy to /tmp first and move files individually"
+      "explanation": "Recursive copy to the root filesystem can overwrite critical system files, potentially rendering the system unbootable. This affects all system directories including /etc, /bin, /lib, and /boot.\n\nSafer alternatives:\n- Specify a target subdirectory instead of /\n- Use rsync with --dry-run to preview changes\n- Copy to /tmp first and move files individually",
+      "examples": {
+        "stop": [
+          "scp -r ./build deploy@web1:/",
+          "scp -r backup root@host:/"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-etc",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/etc(?:/\\S*)?\\s*$",
       "severity": "high",
       "description": "scp to /etc/ can overwrite system configuration.",
-      "explanation": "The /etc directory contains critical system configuration files including passwd, shadow, fstab, and network settings. Overwriting these can lock you out of the system or cause services to fail.\n\nSafer alternatives:\n- Copy to a staging directory first\n- Back up existing files before overwriting\n- Use configuration management tools (Ansible, etc.)"
+      "explanation": "The /etc directory contains critical system configuration files including passwd, shadow, fstab, and network settings. Overwriting these can lock you out of the system or cause services to fail.\n\nSafer alternatives:\n- Copy to a staging directory first\n- Back up existing files before overwriting\n- Use configuration management tools (Ansible, etc.)",
+      "examples": {
+        "stop": [
+          "scp /etc"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-var",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/var(?:/\\S*)?\\s*$",
       "severity": "high",
       "description": "scp to /var/ can overwrite system data.",
-      "explanation": "The /var directory contains variable data including logs, databases, mail spools, and application state. Overwriting this data can cause data loss and service disruptions.\n\nSafer alternatives:\n- Use /var/tmp for temporary staging\n- Stop affected services before modifying their data\n- Back up existing data first"
+      "explanation": "The /var directory contains variable data including logs, databases, mail spools, and application state. Overwriting this data can cause data loss and service disruptions.\n\nSafer alternatives:\n- Use /var/tmp for temporary staging\n- Stop affected services before modifying their data\n- Back up existing data first",
+      "examples": {
+        "stop": [
+          "scp /var"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-boot",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/boot(?:/\\S*)?\\s*$",
       "severity": "critical",
       "description": "scp to /boot/ can corrupt boot configuration.",
-      "explanation": "The /boot directory contains the kernel, initramfs, and bootloader configuration. Corrupting these files will prevent the system from booting, requiring rescue media to recover.\n\nSafer alternatives:\n- Use package manager for kernel updates\n- Keep backup kernels available\n- Test changes in a VM first"
+      "explanation": "The /boot directory contains the kernel, initramfs, and bootloader configuration. Corrupting these files will prevent the system from booting, requiring rescue media to recover.\n\nSafer alternatives:\n- Use package manager for kernel updates\n- Keep backup kernels available\n- Test changes in a VM first",
+      "examples": {
+        "stop": [
+          "scp /boot"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-usr",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/usr(?:/\\S*)?\\s*$",
       "severity": "high",
       "description": "scp to /usr/ can overwrite system binaries.",
-      "explanation": "The /usr directory contains system binaries, libraries, and shared resources. Overwriting files here can break system utilities and installed applications.\n\nSafer alternatives:\n- Use /usr/local for custom installations\n- Use package managers for system updates\n- Install to user directories when possible"
+      "explanation": "The /usr directory contains system binaries, libraries, and shared resources. Overwriting files here can break system utilities and installed applications.\n\nSafer alternatives:\n- Use /usr/local for custom installations\n- Use package managers for system updates\n- Install to user directories when possible",
+      "examples": {
+        "stop": [
+          "scp /usr"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-bin",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/(?:bin|sbin)(?:/\\S*)?\\s*$",
       "severity": "critical",
       "description": "scp to /bin/ or /sbin/ can overwrite system binaries.",
-      "explanation": "The /bin and /sbin directories contain essential system binaries required for basic operation. Overwriting these can make the system unusable and require rescue mode recovery.\n\nSafer alternatives:\n- Install custom scripts to /usr/local/bin\n- Use package managers for system updates\n- Test binaries in user directories first"
+      "explanation": "The /bin and /sbin directories contain essential system binaries required for basic operation. Overwriting these can make the system unusable and require rescue mode recovery.\n\nSafer alternatives:\n- Install custom scripts to /usr/local/bin\n- Use package managers for system updates\n- Test binaries in user directories first",
+      "examples": {
+        "stop": [
+          "scp file root@host:/bin/"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     },
     {
       "name": "scp-to-lib",
       "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/lib(?:64)?(?:/\\S*)?\\s*$",
       "severity": "critical",
       "description": "scp to /lib/ can overwrite system libraries.",
-      "explanation": "The /lib and /lib64 directories contain shared libraries required by system binaries. Overwriting these can cause immediate system instability and prevent commands from running.\n\nSafer alternatives:\n- Use package managers for library updates\n- Install custom libraries to /usr/local/lib\n- Use LD_LIBRARY_PATH for testing"
+      "explanation": "The /lib and /lib64 directories contain shared libraries required by system binaries. Overwriting these can cause immediate system instability and prevent commands from running.\n\nSafer alternatives:\n- Use package managers for library updates\n- Install custom libraries to /usr/local/lib\n- Use LD_LIBRARY_PATH for testing",
+      "examples": {
+        "stop": [
+          "scp /lib"
+        ],
+        "allow": [
+          "scp --help"
+        ]
+      }
     }
   ]
 }

@@ -11,6 +11,9 @@ public struct PackDocument: Equatable, Sendable {
     public var safe: [NamedPattern]
     public var destructive: [DestructiveRule]
     public var enabledByDefault: Bool
+    /// One entry per destructive rule, in file order. Not part of
+    /// `snapshot`: the engine never sees it.
+    public var guidance: [RuleGuidance]
 
     public init(
         id: PackID,
@@ -20,7 +23,8 @@ public struct PackDocument: Equatable, Sendable {
         keywords: [String],
         safe: [NamedPattern],
         destructive: [DestructiveRule],
-        enabledByDefault: Bool
+        enabledByDefault: Bool,
+        guidance: [RuleGuidance] = []
     ) {
         self.id = id
         self.name = name
@@ -30,6 +34,12 @@ public struct PackDocument: Equatable, Sendable {
         self.safe = safe
         self.destructive = destructive
         self.enabledByDefault = enabledByDefault
+        self.guidance = guidance
+    }
+
+    /// Guidance for one of this pack's rules, by pattern name.
+    public func guidance(forRule name: String) -> RuleGuidance? {
+        guidance.first { $0.ruleID.pattern == name }
     }
 
     public var snapshot: PackSnapshot {
@@ -108,6 +118,9 @@ struct DestructiveFile: Decodable {
     var description: String
     var explanation: String?
     var reason: String?
+    var saferCommand: String?
+    var whoActs: String?
+    var examples: ExamplesFile?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -116,6 +129,9 @@ struct DestructiveFile: Decodable {
         case description
         case explanation
         case reason
+        case saferCommand = "safer_command"
+        case whoActs = "who_acts"
+        case examples
     }
 
     init(from decoder: Decoder) throws {
@@ -135,6 +151,46 @@ struct DestructiveFile: Decodable {
         }
         explanation = try container.decodeIfPresent(String.self, forKey: .explanation)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        // An empty value says nothing; it must not render as advice.
+        saferCommand = try container.decodeIfPresent(String.self, forKey: .saferCommand).flatMap(nonBlank)
+        whoActs = try container.decodeIfPresent(String.self, forKey: .whoActs).flatMap(nonBlank)
+        examples = try container.decodeIfPresent(ExamplesFile.self, forKey: .examples)
+    }
+}
+
+private func nonBlank(_ text: String) -> String? {
+    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+}
+
+/// `examples` holds `stop` and `allow` only. Any other key (`allowed`,
+/// `deny`) is a typo that would silently drop examples, so it fails the load.
+struct ExamplesFile: Decodable {
+    var stop: [String]?
+    var allow: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case stop
+        case allow
+    }
+
+    init(from decoder: Decoder) throws {
+        let any = try decoder.container(keyedBy: AnyKey.self)
+        if let unknown = any.allKeys.first(where: { CodingKeys(stringValue: $0.stringValue) == nil }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: unknown, in: any,
+                debugDescription: "unknown examples key \(unknown.stringValue); expected stop or allow"
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stop = try container.decodeIfPresent([String].self, forKey: .stop)
+        allow = try container.decodeIfPresent([String].self, forKey: .allow)
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
     }
 }
 
@@ -162,6 +218,17 @@ public enum PackJSON {
                 explanation: row.explanation
             )
         }
+        let guidance = file.destructivePatterns.map { row in
+            RuleGuidance(
+                ruleID: RuleID(pack: packID, pattern: row.name),
+                saferCommand: row.saferCommand,
+                whoActs: row.whoActs,
+                examples: RuleExamples(
+                    stop: row.examples?.stop ?? [],
+                    allow: row.examples?.allow ?? []
+                )
+            )
+        }
         let enabledByDefault =
             file.enabledByDefault
             ?? dayOnePackIDs.contains(packID)
@@ -173,7 +240,8 @@ public enum PackJSON {
             keywords: file.keywords,
             safe: safe,
             destructive: destructive,
-            enabledByDefault: enabledByDefault
+            enabledByDefault: enabledByDefault,
+            guidance: guidance
         )
     }
 }

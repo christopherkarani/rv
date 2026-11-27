@@ -74,67 +74,164 @@
       "name": "glab-repo-delete",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+delete\\b",
       "severity": "high",
-      "description": "glab repo delete permanently deletes a GitLab project."
+      "description": "glab repo delete permanently deletes a GitLab project.",
+      "examples": {
+        "stop": [
+          "glab repo delete my-app"
+        ],
+        "allow": [
+          "glab repo list my-app",
+          "glab repo get my-app"
+        ]
+      }
     },
     {
       "name": "glab-repo-archive",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+archive\\b",
       "severity": "high",
-      "description": "glab repo archive makes a GitLab project read-only."
+      "description": "glab repo archive makes a GitLab project read-only.",
+      "examples": {
+        "stop": [
+          "glab repo archive my-app"
+        ],
+        "allow": [
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "glab-release-delete",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+release\\s+delete\\b",
       "severity": "high",
-      "description": "glab release delete removes GitLab releases."
+      "description": "glab release delete removes GitLab releases.",
+      "examples": {
+        "stop": [
+          "glab release delete my-app"
+        ],
+        "allow": [
+          "glab release list my-app",
+          "glab release get my-app"
+        ]
+      }
     },
     {
       "name": "glab-variable-delete",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variable\\s+(?:delete|remove)\\b",
       "severity": "high",
-      "description": "glab variable delete removes GitLab CI/CD variables."
+      "description": "glab variable delete removes GitLab CI/CD variables.",
+      "examples": {
+        "stop": [
+          "glab variable delete my-app"
+        ],
+        "allow": [
+          "glab variable list my-app",
+          "glab variable get my-app"
+        ]
+      }
     },
     {
       "name": "glab-api-delete-project",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+(?:\\s|$)",
       "severity": "high",
-      "description": "glab api DELETE /projects/* deletes a GitLab project."
+      "description": "glab api DELETE /projects/* deletes a GitLab project.",
+      "examples": {
+        "stop": [
+          "glab api -X DELETE projects/1"
+        ],
+        "allow": [
+          "glab api -X GET projects/1",
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "glab-api-delete-release",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+/releases/",
       "severity": "high",
-      "description": "glab api DELETE releases removes GitLab releases."
+      "description": "glab api DELETE releases removes GitLab releases.",
+      "examples": {
+        "stop": [
+          "glab api -X DELETE projects/1/releases/v1"
+        ],
+        "allow": [
+          "glab api -X GET projects/1/releases/v1",
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "glab-api-delete-variable",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+/variables/",
       "severity": "high",
-      "description": "glab api DELETE variables removes CI/CD variables."
+      "description": "glab api DELETE variables removes CI/CD variables.",
+      "examples": {
+        "stop": [
+          "glab api -X DELETE projects/1/variables/K"
+        ],
+        "allow": [
+          "glab api -X GET projects/1/variables/K",
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "glab-api-delete-protected-branch",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?protected_branches/",
       "severity": "high",
-      "description": "glab api DELETE protected_branches removes branch protections."
+      "description": "glab api DELETE protected_branches removes branch protections.",
+      "examples": {
+        "stop": [
+          "glab api -X DELETE projects/1/protected_branches/main"
+        ],
+        "allow": [
+          "glab api -X GET projects/1/protected_branches/main",
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "glab-api-delete-hook",
       "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?hooks/",
       "severity": "high",
-      "description": "glab api DELETE hooks removes GitLab webhooks."
+      "description": "glab api DELETE hooks removes GitLab webhooks.",
+      "examples": {
+        "stop": [
+          "glab api -X DELETE projects/1/hooks/1"
+        ],
+        "allow": [
+          "glab api -X GET projects/1/hooks/1",
+          "glab --help"
+        ]
+      }
     },
     {
       "name": "gitlab-rails-runner-destructive",
       "pattern": "gitlab-rails\\s+runner\\b.*\\b(?:destroy_all|delete_all|\\.destroy\\b|\\.delete\\b|truncate|drop)\\b",
       "severity": "high",
-      "description": "gitlab-rails runner destructive operations can remove data."
+      "description": "gitlab-rails runner destructive operations can remove data.",
+      "examples": {
+        "stop": [
+          "gitlab-rails runner destroy_all delete_all .destroy .delete truncate drop my-app"
+        ],
+        "allow": [
+          "gitlab-rails --help"
+        ]
+      }
     },
     {
       "name": "gitlab-rake-destructive",
       "pattern": "gitlab-rake\\b.*\\b(?:gitlab:)?backup:restore\\b|gitlab-rake\\b.*\\b(?:gitlab:)?db:(?:drop|reset)\\b",
       "severity": "high",
-      "description": "gitlab-rake destructive maintenance tasks can delete or replace data."
+      "description": "gitlab-rake destructive maintenance tasks can delete or replace data.",
+      "examples": {
+        "stop": [
+          "gitlab-rake gitlab:backup:restore",
+          "gitlab-rake db:drop"
+        ],
+        "allow": [
+          "gitlab-rake --help"
+        ]
+      }
     }
   ]
 }
