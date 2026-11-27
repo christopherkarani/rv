@@ -8,6 +8,9 @@ import RVDomain
 import RVHooks
 import RVPolicy
 import RVService
+#if canImport(XPC)
+import RVXPC
+#endif
 
 /// `RV_HOOK_WHEN_DOWN`: how a hook renders when rvd is absent, slow or the
 /// connection failed (`.unreachable` / `.timeout` / `.connection`). Exactly

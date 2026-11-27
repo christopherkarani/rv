@@ -68,6 +68,14 @@ struct HostCommandTests {
         }
     }
 
+    @Test func hostAloneAndModeWithoutArgumentsAreQuestionsNotErrors() throws {
+        #expect(HostCommand.configuration.defaultSubcommand == HostListCommand.self)
+        let bare = try HostModeCommand.parse([])
+        #expect(bare.host == nil && bare.mode == nil)
+        let one = try HostModeCommand.parse(["claude"])
+        #expect(one.host == "claude" && one.mode == nil)
+    }
+
     @Test func listJSON_everyHostSortedWithModeAndWiring() throws {
         try withTempHome { home, layout, launchctl in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)

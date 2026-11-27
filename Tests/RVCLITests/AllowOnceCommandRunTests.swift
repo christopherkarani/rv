@@ -35,7 +35,7 @@ struct AllowOnceCommandRunTests {
                 try await command.run()
             }
         }
-        #expect(out.stderr == "rv allow-once: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv allow-once: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func redeem_robotRefused() async throws {
@@ -314,7 +314,7 @@ struct AllowOnceCommandRunTests {
                 try await tty.run()
             }
         }
-        #expect(ttyOut.stderr == "rv allow-once mint: requires an interactive TTY (stdin and stdout)\n")
+        #expect(ttyOut.stderr == "rv allow-once mint: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
         let robotOut = CLIOutputCapture()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: robotOut) {
             var robot = try AllowOnceMint.parse(["--robot", "git", "status"])
@@ -424,7 +424,7 @@ struct AllowOnceCommandRunTests {
                 try await tty.run()
             }
         }
-        #expect(out.stderr == "rv allow-once clear: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv allow-once clear: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
             var ok = try AllowOnceClear.parse([])
             try await ok.run()

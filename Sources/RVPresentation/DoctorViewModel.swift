@@ -258,6 +258,9 @@ public struct DoctorViewModel: Equatable, Sendable {
     public var leftovers: DoctorLeftoversView?
     /// Install/runtime problems in display order; empty when none were found.
     public var problems: [DoctorProblem]
+    /// The machine-wide guard mode in rv's words, `guarding` (enforce) or
+    /// `watching` (observe), when doctor read it.
+    public var modeWord: String? = nil
 
     /// Creates a complete doctor health model.
     public init(

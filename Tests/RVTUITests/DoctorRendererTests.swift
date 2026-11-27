@@ -31,7 +31,7 @@ private let doctorRendererFixture = DoctorViewModel(
 
     #expect(lines == [
         "  Service",
-        "  •  running        1.0.0 · rv.ipc.v1",
+        "  •  running        rv.ipc.v1 · api 1.0.0",
         "                    dev.rv.evaluate · launch-agent loaded · local packs ready",
         "",
         "  Hosts",
@@ -192,7 +192,7 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(
         DoctorRenderer().render(runningUnknown, palette: colorOffPalette)
             .joined(separator: "\n")
-            .contains("unknown · rv.ipc.v1")
+            .contains("rv.ipc.v1 · api unknown")
     )
 
     var skewBare = doctorRendererFixture
@@ -210,7 +210,7 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(
         DoctorRenderer().render(downVersioned, palette: colorOffPalette)
             .joined(separator: "\n")
-            .contains("1.2.3 · unavailable")
+            .contains("api 1.2.3 · unavailable")
     )
 }
 
@@ -229,7 +229,7 @@ private let doctorRendererFixture = DoctorViewModel(
     skew.service.serviceSemver = "0.9.0"
     skew.service.warning = ""
     let skewText = DoctorRenderer().render(skew, palette: colorOffPalette).joined(separator: "\n")
-    #expect(skewText.contains("0.9.0 · rv.ipc.v1"))
+    #expect(skewText.contains("rv.ipc.v1 · api 0.9.0"))
     #expect(skewText.contains("peer closed") == false)
 }
 
@@ -336,4 +336,21 @@ private let doctorRendererFixture = DoctorViewModel(
     let linux = DoctorRenderer().render(fixture, palette: colorOffPalette)
     #expect(linux.contains("    not applicable (macOS workspaces only)"))
     #expect(linux.contains("  Next") == false)
+}
+
+@Test func doctorRenderer_nextLeadsWithTheServiceFixAndShowsTheModeWord() {
+    var fixture = doctorRendererFixture
+    fixture.hosts = [DoctorHostView(host: .grok, state: .wired)]
+    fixture.service.state = .down
+    fixture.service.fix = "rv service restart; if it stays down, rv setup"
+    fixture.problems = [DoctorProblem(id: "x", severity: .warn, summary: "s", fix: "f")]
+    fixture.leftovers = .summary(DoctorLeftoversSummary(sessions: 1, strandedImages: 0, unattachedImageFiles: 0))
+    fixture.modeWord = "watching"
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let next = Array(lines.suffix(2))
+    #expect(next[0] == "  →  rv service restart    rvd is down")
+    #expect(next[1].contains("rv workspace leftovers"))
+    #expect(lines.contains { $0.contains("watching · readable") })
+    // Next names only commands; the problems carry their own fixes.
+    #expect(lines.contains { $0.contains("Problems above") } == false)
 }

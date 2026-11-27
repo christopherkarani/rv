@@ -3,6 +3,9 @@ import RVTheme
 
 /// Vercel-quiet help: silver chrome + bold names. Green only on “start here” names.
 public struct HelpRenderer: FrameRenderer {
+    /// Widest name column a section pads to.
+    static let nameColumnCap = 36
+
     public init() {}
 
     public func render(_ model: HelpViewModel, palette: Palette) -> [String] {
@@ -14,7 +17,11 @@ public struct HelpRenderer: FrameRenderer {
         for section in model.sections where section.rows.isEmpty == false {
             appendBlank(&lines)
             lines.append(paint(section.heading, slot: palette.silver, reset: palette.reset))
-            let nameWidth = section.rows.map(\.name.count).max() ?? 0
+            // One long name (a full usage line) must not push every
+            // description in the section far right: names past the cap get
+            // their description on the next line instead.
+            let fitting = section.rows.map(\.name.count).filter { $0 <= Self.nameColumnCap }
+            let nameWidth = fitting.max() ?? Self.nameColumnCap
             let nameInk = section.accentNames ? palette.allow : palette.fact
             for row in section.rows {
                 lines.append(contentsOf: renderRow(
@@ -74,9 +81,13 @@ public struct HelpRenderer: FrameRenderer {
         if row.description.isEmpty {
             return ["  \(row.name)"]
         }
+        let desc = paint(row.description, slot: palette.silver, reset: palette.reset)
+        if row.name.count > nameWidth {
+            let paintedName = paint(row.name, slot: nameInk, reset: palette.reset)
+            return ["  \(paintedName)", "  \(String(repeating: " ", count: nameWidth))  \(desc)"]
+        }
         let name = padRight(row.name, to: nameWidth)
         let paintedName = paint(name, slot: nameInk, reset: palette.reset)
-        let desc = paint(row.description, slot: palette.silver, reset: palette.reset)
         return ["  \(paintedName)  \(desc)"]
     }
 }

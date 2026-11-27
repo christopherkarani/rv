@@ -203,7 +203,24 @@ package struct LocalHookDecider: Sendable {
         HookLocalSpool.write(
             HookLocalSpool.Batch(decision: decision, drops: recorded.drops, audits: recorded.audits),
             home: home, lockTimeout: min(HookLocalSpool.lockTimeout, left))
+        if let row = live.decisionRow { logDecision(row, deadline: deadline) }
         return live.outcome
+    }
+
+    /// The most the decision log's lock may hold a final answer up.
+    static let decisionLogLockTimeout: Duration = .milliseconds(50)
+
+    /// rvd's decision-log row for this call (`DecisionLogRecorder`), so
+    /// `rv term` sees the calls rvd never hears about. Last, and only with
+    /// time left before `deadline`: a row that cannot land is dropped, as
+    /// rvd drops one. Pruning is left to rvd (this process lives one call).
+    private func logDecision(_ row: DecisionRecord, deadline: ContinuousClock.Instant) {
+        let left = deadline - ContinuousClock.now
+        guard left > .zero else { return }
+        let configDirectory = RVPolicyPaths.configDirectory(home: home)
+        guard DecisionLog.isEnabled(inConfigDirectory: configDirectory) else { return }
+        DecisionLog(configDirectory: configDirectory).append(
+            row, now: clock(), lockTimeout: min(Self.decisionLogLockTimeout, left), prunes: false)
     }
 
     private struct Run {
@@ -214,6 +231,8 @@ package struct LocalHookDecider: Sendable {
         /// What rvd's analytics recorder counts for this pass: the shell
         /// door's decision (rvd records none for the file door).
         let analytics: AnalyticsDecisionKind?
+        /// The decision-log row rvd would write for this pass.
+        let decisionRow: DecisionRecord?
     }
 
     /// One pass of rvd's hook door with probe ports. `environment` stands
@@ -254,6 +273,9 @@ package struct LocalHookDecider: Sendable {
                     inputs: inputs
                 )
                 probe.record(.shell(decided.result, cwd: cwd), effects: decided.effects)
+                probe.recordDecisionRow(DecisionLogRecorder.shellRecord(
+                    decided.result, command: command, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
+                    session: DecisionLogRecorder.currentSession))
                 return decided.result
             },
             evaluateFile: { action, cwd in
@@ -264,6 +286,9 @@ package struct LocalHookDecider: Sendable {
                 let decided = gated.decideFile(
                     action, home: home, cwd: cwd, host: ledger, now: now, guardMode: mode)
                 probe.record(.file(decided.result), effects: decided.effects)
+                probe.recordDecisionRow(DecisionLogRecorder.fileRecord(
+                    decided.result, action: action, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
+                    session: DecisionLogRecorder.currentSession))
                 return decided.result
             },
             mintOnDeny: { _, _ in
@@ -283,7 +308,7 @@ package struct LocalHookDecider: Sendable {
         let classified = probe.classify(Self.reply(wire))
         return Run(
             outcome: classified.outcome, effects: classified.effects, guardMode: probe.guardMode,
-            analytics: probe.analyticsDecision)
+            analytics: probe.analyticsDecision, decisionRow: probe.decisionRow)
     }
 
     /// The reply rvd builds from a wire (`HookDoor`).
@@ -306,6 +331,7 @@ private final class LocalHookProbe: JudgePort, Sendable {
         var guardMode: GuardMode?
         var door: Door?
         var effects: [GatedEffect] = []
+        var decisionRow: DecisionRecord?
     }
 
     private let state = UnfairLock(State())
@@ -339,6 +365,15 @@ private final class LocalHookProbe: JudgePort, Sendable {
         case .deny: return .deny
         case .indeterminate: return .indeterminate
         }
+    }
+
+    /// The decision-log row for the one evaluation this pass ran.
+    func recordDecisionRow(_ row: DecisionRecord) {
+        state.withLock { $0.decisionRow = row }
+    }
+
+    var decisionRow: DecisionRecord? {
+        state.withLock { $0.decisionRow }
     }
 
     func record(_ door: Door, effects: [GatedEffect]) {

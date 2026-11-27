@@ -324,7 +324,8 @@ struct GatedEffectTests {
     /// apply result. An unlockable deny asks; a pinned one (secret) denies.
     @Test("observe apply: the observed row's would_be matches the enforced hook projection", arguments: [
         ("git reset --hard", LedgerWouldBe.ask),
-        ("cat ~/.aws/credentials", LedgerWouldBe.deny),
+        // A secret read is not observed: it denies in every mode.
+        ("rm -r .git", LedgerWouldBe.deny),
     ])
     func observeWouldBeMatchesEnforcedProjection(_ command: String, _ expected: LedgerWouldBe) async throws {
         let cwd = try #require(WorkingDirectory(validating: "/nonexistent/rv-effects-ws"))
@@ -417,7 +418,7 @@ struct GatedEffectTests {
         #expect(row.isPeek == false)
     }
 
-    @Test("file door: enforce asks for an unredacted secret denial row; observe asks for an observed one")
+    @Test("file door: enforce and observe both ask for an unredacted secret denial row")
     func fileDoor() throws {
         let path = "/nonexistent/rv-effects/.env"
         let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: path))
@@ -434,16 +435,12 @@ struct GatedEffectTests {
                 category: .secret(.environment), path: path
             )),
         ])
+        // A secret read denies in every mode: observe records it enforced.
         let observe = GatedEvaluate().decideFile(
             action, home: nil, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .observe
         )
-        #expect(observe.result.decision == .allow)
-        #expect(observe.effects == [
-            .denialRow(GatedEffect.DenialRow(
-                at: Self.now, host: .hook(.claude), tool: .file(.read), ruleID: deny.ruleID,
-                category: .secret(.environment), path: path, observed: true, wouldBe: .deny
-            )),
-        ])
+        #expect(observe.result.decision == enforce.result.decision)
+        #expect(observe.effects == enforce.effects)
     }
 
     /// Parity with the inline writes: an enforced file read checks the hook

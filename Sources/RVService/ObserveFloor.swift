@@ -8,10 +8,12 @@ import RVPolicy
 /// An observe host allows and records what enforcement would deny, but it
 /// must not be able to loosen another host or the global guard. So an rv
 /// admin command that weakens rv (`SelfProtectionGuard`), a touch of rv's
-/// config dir (`core.secrets:home-rv-config`, the only catalog rule that
-/// guards rv's own state), of rv's Linux secret store
+/// config dir (`core.secrets:home-rv-config`), of rv's Linux secret store
 /// (`core.secrets:secret-service`) or of rv's wiring files (`RVWiringPaths`)
-/// stays enforced.
+/// stays enforced. So does every secret-path rule (`SecretPathCatalog`:
+/// `.env`, keys, cloud and host logins): a watched read still hands the
+/// agent the value. And so does switching off or silencing the commit
+/// check (`SecretsScanGuard`).
 ///
 /// Observe alone also floors stopping or retuning rvd (`RVDStopGuard`) and writing
 /// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
@@ -158,12 +160,19 @@ enum ObserveFloor {
 
     // MARK: The verdict
 
-    static let ruleIDs: Set<RuleID> = [
-        RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID, SecretServiceGuard.ruleID,
-    ]
+    private static let rvConfigRuleID = RuleID(pack: .coreSecrets, pattern: "home-rv-config")
 
-    private static let catalog = SecretPathCatalog(
-        rules: SecretPathCatalog.dayOne.rules.filter { ruleIDs.contains(SecretPathMatch($0).ruleID) }
+    /// Every secret file rv knows (`SecretPathCatalog.dayOne`: `.env`, ssh
+    /// keys, cloud and host logins, rv's config), rv's Linux secret store,
+    /// rv's wiring, and the commit check's off switch. A secret read is
+    /// stopped in every mode: watching it would hand the agent the value
+    /// it exists to keep away.
+    static let ruleIDs: Set<RuleID> = Set(SecretPathCatalog.dayOne.rules.map { SecretPathMatch($0).ruleID })
+        .union([RVWiringPaths.ruleID, SecretServiceGuard.ruleID, SecretsScanGuard.ruleID])
+
+    /// rv's config dir alone: any word naming it holds, read or not.
+    private static let rvConfigCatalog = SecretPathCatalog(
+        rules: SecretPathCatalog.dayOne.rules.filter { SecretPathMatch($0).ruleID == rvConfigRuleID }
     )
 
     /// The verdict alone says it (all the file door has).
@@ -215,6 +224,9 @@ enum ObserveFloor {
     /// door's exemptions and alias resolution.
     private struct OwnProtection {
         let rvConfig: SecretPathDecider
+        /// The whole secret-path catalog, with the door's exemptions: what
+        /// enforce denies in a command's view.
+        let secretPaths: SecretPathDecider
         let home: HomeDirectory?
         let cwd: WorkingDirectory?
         let command: ShellCommand
@@ -225,13 +237,16 @@ enum ObserveFloor {
         private var provenRead: Bool?
 
         init(result: EvaluationResult, command: ShellCommand, store: PolicyStoreInputs, context: Context) {
-            rvConfig = SecretPathDecider(
-                catalog: ObserveFloor.catalog,
+            secretPaths = SecretPathDecider(
+                catalog: .dayOne,
                 safety: store.safety,
                 allowPaths: store.allowPaths.effective,
                 home: context.home,
                 resolution: SecretPathCandidateResolver.resolution(home: context.home, cwd: context.cwd)
             )
+            var rvConfig = secretPaths
+            rvConfig.catalog = ObserveFloor.rvConfigCatalog
+            self.rvConfig = rvConfig
             home = context.home
             cwd = context.cwd
             self.command = command
@@ -241,9 +256,14 @@ enum ObserveFloor {
 
         mutating func touched(by text: String, matchingView: String? = nil) -> Bool {
             let shell = ShellCommand(rawValue: text)
-            if SelfProtectionGuard.weakensPolicy(shell) || SecretServiceGuard.touchesSecretService(shell) {
+            if SelfProtectionGuard.weakensPolicy(shell) || SecretServiceGuard.touchesSecretService(shell)
+                || SecretsScanHookProbe.weakensScan(shell, cwd: cwd, home: home)
+            {
                 return true
             }
+            // A secret file read an earlier pack deny hid (`git reset --hard;
+            // cat .env`), or one in program text the command feeds a shell.
+            if secretPaths.firstHit(in: MatchingView(matchingView ?? text)) != nil { return true }
             // Also the text with quotes removed, so `"$HOME"/.claude/x`
             // reads as one word.
             let unquoted = text.filter { $0 != "'" && $0 != "\"" }

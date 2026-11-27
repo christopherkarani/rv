@@ -5,9 +5,11 @@ _rv() {
   commands=(
     'run:Run a command with secrets as placeholders'
     'opencode:Launch OpenCode with workspace write containment'
+    'box:Run an agent in a box for this repo'
     'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'
     'try:Watch rv stop a fake agent in a throwaway repo'
+    'term:Watch what rv is doing, full screen'
     'explain:Explain a decision'
     'packs:List and enable packs'
     'policy:Typed rules'
@@ -37,6 +39,11 @@ _rv() {
     cmds) _describe -t commands 'rv command' commands ;;
     args)
       case $words[1] in
+        box)
+          local -a bx
+          bx=('list:List boxes' 'setup:Set up Mac boxes once')
+          _describe -t commands 'box' bx
+          ;;
         workspace)
           local -a ws
           ws=('start:Start or attach' 'attach:Attach until stdin closes' 'status:Show the live host' 'close:Close the workspace')

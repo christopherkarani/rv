@@ -256,6 +256,28 @@ struct SelfProtectionCaseTests {
         }
     }
 
+    @Test("an agent may read a guarded command's help page", arguments: [
+        "rv uninstall --help", "rv allow-once --help", "rv allow-once mint -h", "rv host mode --help",
+        "rv secrets set --help", "rv policy apply --help", "rv-cli packs disable --help",
+    ])
+    func helpPagesAreAllowed(command: String) throws {
+        #expect(try runEngine(command).decision == .allow, "\(command)")
+    }
+
+    @Test("help-shaped invocations that could still act stay on the floor", arguments: [
+        // a passthrough capture: mint runs with "rm x --help" as its command
+        "rv allow-once mint rm x --help",
+        // the help flag as an option's value, or after --
+        "rv secrets set --gateway --help", "rv uninstall -- --help",
+        // expanded, or a code before the flag
+        "rv $V --help", "rv allow-once 123456 --help",
+        // help flag not last; stdin appended by xargs; a dynamic head
+        "rv uninstall --help --force", "echo y | xargs rv uninstall --help", "$RV uninstall --help",
+    ])
+    func helpShapesThatActStayIndeterminate(command: String) throws {
+        #expect(try runEngine(command).decision == .indeterminate(.selfProtection), "\(command)")
+    }
+
     @Test("huge option clusters and operand lists evaluate in bounded time")
     func hugeInputsAreFast() {
         let cluster = String(repeating: "i", count: 64_000)

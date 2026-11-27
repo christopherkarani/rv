@@ -51,7 +51,7 @@ struct GuardModeCharacterizationTests {
         #expect(rows.first?["wouldBe"] as? String == "deny")
     }
 
-    @Test("observe: file door allows a secret read and records only an observed denial")
+    @Test("observe: file door still denies a secret read and records an enforced denial")
     func observeFileDoor() throws {
         let home = try guardHome(mode: "observe")
         defer { remove(home) }
@@ -59,9 +59,12 @@ struct GuardModeCharacterizationTests {
             FileToolAction(kind: .read, path: FileToolPath(rawValue: home.rawValue + "/.env")),
             home: home, host: .hook(.claude), now: Self.now
         )
-        #expect(result.decision == .allow)
-        #expect(result.outcome == .plain)
-        #expect(ledgerRows(home).map(\.observed) == [true])
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("a .env read must deny under observe, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
+        #expect(ledgerRows(home).map(\.observed) == [false])
         #expect(try judgeLog(home).isEmpty)
     }
 
