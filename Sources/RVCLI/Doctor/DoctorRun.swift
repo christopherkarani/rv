@@ -74,6 +74,24 @@ struct DoctorOutcome: Equatable, Sendable {
 }
 
 enum DoctorRun {
+    /// One `rv doctor`: rvd's snapshot is asked for while the local probes
+    /// (host files, launchd, trust, leftovers) run, so the slower of the two
+    /// sets the time, not their sum. A healthy rvd's snapshot also spares
+    /// the in-process pack compile (`ServiceClient.diagnostics`). Nil when
+    /// there is no HOME to inspect.
+    static func collect(
+        environment: () -> DoctorEnvironment?,
+        client: ServiceClient,
+        appearance: CLIAppearance
+    ) async -> DoctorOutcome? {
+        async let diagnostics = client.diagnostics()
+        guard let environment = environment() else {
+            _ = await diagnostics
+            return nil
+        }
+        return run(environment: environment, diagnostics: await diagnostics, appearance: appearance)
+    }
+
     static func run(
         environment: DoctorEnvironment,
         diagnostics: ServiceDiagnosticResult,
