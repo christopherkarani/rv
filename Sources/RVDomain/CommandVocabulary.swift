@@ -22,6 +22,7 @@ public enum CommandVocabulary {
         case box
         case test
         case `try`
+        case term
         case explain
         case packs
         case policy
