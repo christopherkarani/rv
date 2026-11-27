@@ -167,6 +167,9 @@ public protocol HostCodec: Sendable {
     func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
     func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire
+    /// Session-start reply carrying rv's house rules (B4). Hosts with no
+    /// session-start context wire keep the default, an allow.
+    func encodeHouseRules(_ text: String) -> HookWire
 }
 
 /// One switch for production codecs. Step 8B: every host is deny/allow
@@ -231,6 +234,11 @@ extension HostCodec {
     /// Returns empty stdout and exit 0.
     public func encodeAllow() -> HookWire {
         HookWire(stdout: "", exitCode: 0)
+    }
+
+    /// No session-start context wire: the event passes like a foreign one.
+    public func encodeHouseRules(_ text: String) -> HookWire {
+        encodeAllow()
     }
 
     /// Grok / Pi / OpenCode / OpenClaw / Hermes / Antigravity honor JSON (`decision` key).

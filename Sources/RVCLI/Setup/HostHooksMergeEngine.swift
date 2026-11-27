@@ -46,6 +46,12 @@ struct HostWiringDescriptor: Sendable {
     var isFingerprintedCommand: @Sendable (String) -> Bool
     /// Builds one hook entry; the matcher is non-nil for nested/grouped layouts.
     var buildEntry: @Sendable (HookCommandContext, String?) -> HookEntry
+    /// Nested layouts only (B4): a second list under the same hooks root
+    /// (`SessionStart`) that gets one matcher-less group with the same
+    /// adapter, so the host hands rv its session-start event and the agent
+    /// hears the house rules. Stripped with the pre-tool list on every
+    /// merge and uninstall. Inspection still reads the pre-tool list only.
+    var sessionStartListKey: String? = nil
 }
 
 /// One fingerprinted hook found in a parsed root.
@@ -177,17 +183,21 @@ enum HostHooksMergeEngine {
     ) -> [String: JSONValue] {
         switch descriptor.layout {
         case .nested(let hooksRootKey, let listKey):
-            guard var hooksRoot = root[hooksRootKey]?.asObject,
-                  let list = hooksRoot[listKey]?.asArray
-            else {
+            guard var hooksRoot = root[hooksRootKey]?.asObject else {
                 return root
             }
-            let nextEntries = stripGroups(in: list, descriptor: descriptor)
-            if nextEntries.isEmpty {
-                hooksRoot.removeValue(forKey: listKey)
-            } else {
-                hooksRoot[listKey] = .array(nextEntries)
+            var stripped = false
+            for key in [listKey] + [descriptor.sessionStartListKey].compactMap({ $0 }) {
+                guard let list = hooksRoot[key]?.asArray else { continue }
+                stripped = true
+                let nextEntries = stripGroups(in: list, descriptor: descriptor)
+                if nextEntries.isEmpty {
+                    hooksRoot.removeValue(forKey: key)
+                } else {
+                    hooksRoot[key] = .array(nextEntries)
+                }
             }
+            guard stripped else { return root }
             var next = root
             if hooksRoot.isEmpty {
                 next.removeValue(forKey: hooksRootKey)
@@ -278,6 +288,13 @@ enum HostHooksMergeEngine {
                 ]))
             }
             hooksRoot[listKey] = .array(list)
+            if let sessionKey = descriptor.sessionStartListKey {
+                var sessionList = hooksRoot[sessionKey]?.asArray ?? []
+                sessionList.append(.object([
+                    "hooks": .array([hookValue(descriptor.buildEntry(context, nil))]),
+                ]))
+                hooksRoot[sessionKey] = .array(sessionList)
+            }
             next[hooksRootKey] = .object(hooksRoot)
             return next
         case .grouped(let hookName, let listKey):

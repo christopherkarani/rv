@@ -208,6 +208,13 @@ extension HookEvaluateWorld {
                     invocationDisplay: Normalize.invocationDisplay(of: command),
                     rawCommand: command.rawValue
                 )
+            },
+            // B4: the session-start house rules, read with rvd's own
+            // launch environment so the mode named is the one enforced.
+            houseRules: { cwd in
+                HouseRules.gather(
+                    home: world.home, cwd: cwd, host: host,
+                    environment: ProcessInfo.processInfo.environment)
             }
         ))
     }
@@ -234,7 +241,8 @@ extension HookEvaluateWorld {
                 guard HookDeadline.permitsSideEffects() else { return }
                 try await world.recordHostAsk(request, action)
             },
-            mintOnDenyWithCommand: mintWithCommand
+            mintOnDenyWithCommand: mintWithCommand,
+            houseRules: world.houseRules
         )
     }
 }

@@ -15,6 +15,8 @@ enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
     static let preToolUseKey = "PreToolUse"
+    /// B4: the adapter also hears SessionStart and replies with rv's house rules.
+    static let sessionStartKey = "SessionStart"
     static let fingerprintLegacy = "hook --host claude"
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
@@ -31,7 +33,8 @@ enum ClaudeSettingsMerge {
         isFingerprintedCommand: { isFingerprinted(command: $0) },
         buildEntry: { context, _ in
             hookEntry(rvPath: context.rvPath ?? "", interpreter: context.interpreter, adapterPath: context.adapterPath)
-        }
+        },
+        sessionStartListKey: sessionStartKey
     )
 
     static let mergeDescriptor = SettingsMergeDescriptor(

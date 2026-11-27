@@ -157,9 +157,61 @@ def _is_pre_tool_event(event, pre_tool_event):
     return _canonical(event, (pre_tool_event,)) == pre_tool_event
 
 
+# B4 house rules: rv's SessionStart reply carries them as additionalContext.
+# The hello never blocks and never decides a tool: anything but that exact
+# shape from rv (rv missing, slow, down, odd output) says nothing.
+_SESSION_START = "SessionStart"
+_HOUSE_RULES_MAX = 2048
+
+
+def _is_event(event, name):
+    # Exact name or a near-variant; absent or blank is never this event.
+    if not isinstance(event, str) or not _wire_key(event):
+        return False
+    return _canonical(event, (name,)) == name
+
+
+def _house_rules(host, raw):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=raw,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+        if completed.returncode != 0:
+            return None
+        parsed = json.loads((completed.stdout or "").strip(), object_pairs_hook=_reject_duplicate_keys)
+        hook = parsed.get("hookSpecificOutput") if isinstance(parsed, dict) else None
+        if not isinstance(hook, dict) or hook.get("hookEventName") != _SESSION_START:
+            return None
+        text = hook.get("additionalContext")
+        if not isinstance(text, str) or not text.strip() or len(text) > _HOUSE_RULES_MAX:
+            return None
+        return text
+    except Exception:
+        return None
+
+
+def _emit_house_rules(text):
+    if text is None:
+        return
+    payload = {"hookSpecificOutput": {"hookEventName": _SESSION_START, "additionalContext": text}}
+    try:
+        sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def main():
     try:
         raw = sys.stdin.read()
+        envelope = _parse(raw)
+        if envelope is not None and _is_event(envelope.get("hook_event_name"), _SESSION_START):
+            _emit_house_rules(_house_rules("claude", raw))
+            return
         mapped = _guard(raw)
         if mapped["action"] == "allow":
             return

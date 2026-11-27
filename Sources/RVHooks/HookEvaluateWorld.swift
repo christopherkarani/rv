@@ -17,6 +17,10 @@ public struct HookEvaluateWorld: Sendable {
     /// its payload digest is stored in the row.
     public var mintOnDenyWithCommand:
         (@Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?)?
+    /// B4: the facts rv tells an agent at session start, for the session's
+    /// cwd. Nil (the port, or its answer) sends no house rules: the event
+    /// passes like a foreign one. Read-only; it never changes policy.
+    public var houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)?
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
@@ -25,12 +29,14 @@ public struct HookEvaluateWorld: Sendable {
         recordHostAsk: @escaping @Sendable (HookRequest, ProposedAction) async throws -> Void,
         mintOnDenyWithCommand: (
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
-        )? = nil
+        )? = nil,
+        houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)? = nil
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
         self.mintOnDeny = mintOnDeny
         self.recordHostAsk = recordHostAsk
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
+        self.houseRules = houseRules
     }
 }

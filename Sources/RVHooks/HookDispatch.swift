@@ -41,6 +41,9 @@ private func hookBody(
         }
     case .foreign:
         return codec.encodeAllow()
+    case .sessionStart(let cwd):
+        guard let rules = await world.houseRules?(cwd) else { return codec.encodeAllow() }
+        return codec.encodeHouseRules(rules.text)
     case .malformed(let malformation):
         return codec.encodeDeny(
             HookDenyPresentation(reason: malformedHookSentence(malformation))
