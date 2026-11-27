@@ -52,6 +52,8 @@ enum BoxTarget: Equatable, Sendable {
     case list([String])
     /// `rv box setup mac`: build the Mac image now.
     case setupMac
+    /// `rv box tidy [--yes]`: leftovers to the 7-day trash.
+    case tidy(yes: Bool)
 }
 
 /// Why a box did not start, as one line and the one thing to do next.
@@ -184,6 +186,16 @@ enum BoxPlan {
             if let refusal = listRefusal(rest) { return .failure(refusal) }
             return .success(.list(rest))
         }
+        if first == "tidy" {
+            if rest.contains(where: isWallOrProfileFlag) { return .failure(wallFlagsRefusal("rv box tidy")) }
+            if let stray = rest.first(where: { BoxTidyRun.words.contains($0) == false }) {
+                let why = stray.hasPrefix("-")
+                    ? "rv box tidy has no \(DisplayedText.field(stray)) option."
+                    : "rv box tidy takes no \(DisplayedText.field(stray))."
+                return .failure(BoxRefusal(why: why, fix: "rv box tidy", exitCode: 64))
+            }
+            return .success(.tidy(yes: rest.contains("--yes") || rest.contains("-y")))
+        }
         if first == "setup" {
             if rest.first == "mac", rest.dropFirst().contains(where: isWallOrProfileFlag) {
                 return .failure(wallFlagsRefusal("rv box setup mac"))
@@ -238,9 +250,13 @@ enum BoxPlan {
         linux: Bool, mac: Bool, profile: String?, target: BoxTarget
     ) -> BoxRefusal? {
         switch target {
-        case .list, .setupMac:
+        case .list, .setupMac, .tidy:
             guard linux || mac || profile != nil else { return nil }
-            return wallFlagsRefusal(target == .setupMac ? "rv box setup mac" : "rv box list")
+            switch target {
+            case .setupMac: return wallFlagsRefusal("rv box setup mac")
+            case .tidy: return wallFlagsRefusal("rv box tidy")
+            default: return wallFlagsRefusal("rv box list")
+            }
         case .shell:
             if linux || mac {
                 let wall: BoxWall = linux ? .linux : .mac
@@ -278,6 +294,8 @@ enum BoxPlan {
             words += ["list"] + rest.map(InitRun.shellWord)
         case .setupMac:
             words += ["setup", "mac"]
+        case .tidy(let yes):
+            words += yes ? ["tidy", "--yes"] : ["tidy"]
         }
         return words.joined(separator: " ")
     }
@@ -465,7 +483,7 @@ enum BoxPlan {
         switch target {
         case .shell:
             return .success(.shell(project: project))
-        case .list, .setupMac:
+        case .list, .setupMac, .tidy:
             return .failure(BoxRefusal(why: "Nothing to launch.", fix: "rv box --help", exitCode: 64))
         case .agent(let agent, let rest):
             (name, arguments, hook) = (agent, rest, HookHost(rawValue: agent))

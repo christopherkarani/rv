@@ -38,6 +38,7 @@ complete -c rv -n "__fish_seen_subcommand_from egress" -a "deny" -d "Deny one ne
 complete -c rv -n "__fish_seen_subcommand_from egress" -a "denials" -d "Show recent proxy denials"
 complete -c rv -n "__fish_seen_subcommand_from box" -a "list" -d "List boxes"
 complete -c rv -n "__fish_seen_subcommand_from box" -a "setup" -d "Set up Mac boxes once"
+complete -c rv -n "__fish_seen_subcommand_from box" -a "tidy" -d "Move old box images to the trash"
 complete -c rv -n "__fish_seen_subcommand_from workspace" -a "start" -d "Start or attach"
 complete -c rv -n "__fish_seen_subcommand_from workspace" -a "attach" -d "Attach until stdin closes"
 complete -c rv -n "__fish_seen_subcommand_from workspace" -a "status" -d "Show the live host"

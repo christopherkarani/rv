@@ -32,6 +32,7 @@ struct BoxCommand: AsyncParsableCommand {
             description: "Run any command in the box"),
         HelpRow(name: "rv box list [--json]", description: "Every box, any strength, newest first; --json writes schema rv.boxes.v1"),
         HelpRow(name: "rv box setup mac", description: "Build the Mac box image now, in the foreground (about 26 GB)"),
+        HelpRow(name: "rv box tidy [--yes]", description: "Move old box images to a 7-day trash; boxes with unsaved work are never touched"),
     ]
 
     static let flags = [
@@ -41,7 +42,7 @@ struct BoxCommand: AsyncParsableCommand {
     ]
 
     /// Words offered after `rv box`: the known agents, `list` and `setup`.
-    static let completions = RuntimeAgentEntries.known + ["list", "setup"]
+    static let completions = RuntimeAgentEntries.known + ["list", "setup", "tidy"]
 
     @Flag(name: .long, help: "Run in a network-less Linux micro-VM.")
     var linux = false
@@ -54,7 +55,7 @@ struct BoxCommand: AsyncParsableCommand {
 
     @Argument(
         parsing: .captureForPassthrough,
-        help: "An agent name and its arguments, -- and a command, list, or setup mac.",
+        help: "An agent name and its arguments, -- and a command, list, tidy, or setup mac.",
         completion: .list(BoxCommand.completions))
     var words: [String] = []
 
@@ -77,6 +78,12 @@ struct BoxCommand: AsyncParsableCommand {
             try list.run()
         case .setupMac:
             try BoxRun.setupMac()
+        case .tidy(let yes):
+            if words.contains(where: { $0 == "--help" || $0 == "-h" }) {
+                _ = HelpDispatch.tryEmit(arguments: ["box", "--help"])
+                return
+            }
+            try BoxTidyRun.run(yes: yes)
         case .shell, .agent, .command:
             try await BoxRun.run(linux: linux, mac: mac, profile: profile, captured: words)
         }
@@ -337,6 +344,6 @@ extension HelpCatalog {
                 HelpRow(name: "platform", description: "macOS only; on Linux rv box refuses rather than use a weaker wall"),
             ]),
         ],
-        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list"]
+        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list", "rv box tidy"]
     )
 }
