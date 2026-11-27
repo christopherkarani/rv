@@ -8,6 +8,7 @@ import Foundation
 import RVDomain
 import RVIsolation
 import RVPolicy
+import RVTheme
 
 /// Seams for `rv secrets`: where config lives and how values are read and stored.
 struct SecretsEnvironment: Sendable {
@@ -826,7 +827,9 @@ enum SecretsRun {
         return .success(text)
     }
 
-    static func hookRun(workTree: URL, environment: SecretsEnvironment) -> Result<(text: String, failed: Bool), CommandFailure> {
+    static func hookRun(
+        workTree: URL, environment: SecretsEnvironment, palette: Palette = colorOffPalette
+    ) -> Result<(text: String, failed: Bool), CommandFailure> {
         let configuration: SecretsConfiguration
         switch self.configuration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -846,7 +849,8 @@ enum SecretsRun {
         let findings = report.findings
         // `✕ path:line  rule` per finding (never the value), the fix last,
         // never the off switch: whoever commits may be an agent.
-        var lines = findings.map { "✕ \(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
+        let stopped = paint(CommandVocabulary.Glyph.stopped.rawValue, palette.deny, palette)
+        var lines = findings.map { "\(stopped) \(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
         let gaps = report.tooLarge.isEmpty == false || skipped.isEmpty == false
         if findings.isEmpty {
             lines.append(gaps ? "No secrets in the staged files that were scanned." : "No secrets in staged files.")
@@ -854,11 +858,17 @@ enum SecretsRun {
         lines += report.tooLarge.map(notScanned)
         lines += skipped
         if gaps { lines.append(hookGapSummary(files: report.tooLarge.count, secrets: skipped.count)) }
-        lines += hookNextSteps(findings, defined: Set(configuration.secrets.map(\.name)))
+        let next = paint(CommandVocabulary.Glyph.next.rawValue, palette.trace, palette)
+        lines += hookNextSteps(findings, defined: Set(configuration.secrets.map(\.name))).map { "\(next) \($0)" }
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
     }
 
-    /// The hook's last lines, one per distinct name, in finding order. A
+    /// Colour only the glyph, as the policy refusals do; off palettes pass the text through.
+    static func paint(_ text: String, _ ink: String, _ palette: Palette) -> String {
+        palette.colorsEnabled && ink.isEmpty == false ? ink + text + palette.reset : text
+    }
+
+    /// The hook's last lines, before their `→`, one per distinct name, in finding order. A
     /// defined secret's value is already in rv: use it through rv run. A
     /// token pattern names the variable its issuer's SDKs read, when there
     /// is one, and is moved into rv.
@@ -866,8 +876,8 @@ enum SecretsRun {
         var seen: Set<String> = []
         return findings.compactMap { finding in
             let line = defined.contains(finding.secret)
-                ? "→ use it: rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
-                : "→ move it: rv secrets set \(patternSecretNames[finding.secret] ?? "NAME")"
+                ? "use it: rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
+                : "move it: rv secrets set \(patternSecretNames[finding.secret] ?? "NAME")"
             return seen.insert(line).inserted ? line : nil
         }
     }
@@ -1341,12 +1351,20 @@ struct SecretsHookRun: AsyncParsableCommand {
         commandName: "run", abstract: "Scan staged files. The installed hook runs this.")
 
     func run() throws {
-        let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: true, noColor: true)
+        // The same text either way; the glyphs are coloured only on a terminal
+        // (git hands the hook the committer's stderr as stdout), never when
+        // piped, in CI, under NO_COLOR or TERM=dumb. `plain` would forbid colour.
+        let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: false, noColor: false)
+        let palette: Palette
+        switch ctx.appearance {
+        case .pretty(let value): palette = value
+        case .robot: palette = colorOffPalette
+        }
         // The store is the real user's, from the passwd entry: a commit run
         // with HOME pointed elsewhere must not swap in an empty store.
         let environment = SecretsEnvironment.live(home: try Self.passwdHome() ?? ctx.requireHome())
         let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        switch SecretsRun.hookRun(workTree: workTree, environment: environment) {
+        switch SecretsRun.hookRun(workTree: workTree, environment: environment, palette: palette) {
         case .failure(let failure): try ctx.fail("rv secrets hook run: \(failure.message)\n")
         case .success(let result):
             if result.failed { try ctx.emit(stdout: result.text, exitCode: 1) }

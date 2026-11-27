@@ -7,6 +7,7 @@ import Foundation
 import RVHistory
 import RVIsolation
 import RVPolicy
+import RVTheme
 import Synchronization
 import Testing
 @testable import RVCLI
@@ -1060,6 +1061,24 @@ struct SecretsCommandTests {
         let removed = try SecretGitHook.uninstall(workTree: work).get()
         #expect(removed.contains("removed rv's block"))
         #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
+
+    @Test func hookPaintsOnlyTheGlyphsAndOnlyWithAColorPalette() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-color")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
+        try git(work, ["add", "leak.txt"])
+        let color = Palette(for: ColorCapability(colorsEnabled: true))
+        let painted = try SecretsRun.hookRun(workTree: work, environment: fixture.environment(), palette: color).get()
+        #expect(painted.failed)
+        // Red ✕ and blue →, as in the policy refusals; the rest of each line stays plain.
+        #expect(painted.text == "\u{1B}[1;31m✕\u{1B}[0m leak.txt:1  aws-access-key-id\n\u{1B}[1;34m→\u{1B}[0m move it: rv secrets set AWS_ACCESS_KEY_ID\n")
+        let plain = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(plain.text == "✕ leak.txt:1  aws-access-key-id\n→ move it: rv secrets set AWS_ACCESS_KEY_ID\n")
     }
 
     @Test func hookFindsPatternsPastTheFirstMebibyteAndReportsOversizedFiles() throws {
