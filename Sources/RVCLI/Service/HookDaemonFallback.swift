@@ -49,22 +49,54 @@ enum HookDaemonFailure: Sendable, Equatable, CaseIterable {
 /// hooks. Deny reuses each host codec's deny wire; only Claude and Cursor
 /// have a native ask, every other host falls back to its deny.
 enum HookDaemonFallback {
-    /// Same sentences as the C constants (pinned by HookDaemonFallbackTests).
-    static func message(for failure: HookDaemonFailure) -> String {
+    /// The stop's rule id (`rv.hook/<class>`); the C client prints the same.
+    static func rule(for failure: HookDaemonFailure) -> String {
         switch failure {
-        case .unreachable:
-            "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
-        case .timeout:
-            "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
-        case .untrusted:
-            "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
-        case .protocol:
-            "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
-        case .connection:
-            "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
-        case .stopped:
-            "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal."
+        case .unreachable: "rv.hook/unreachable"
+        case .timeout: "rv.hook/timeout"
+        case .untrusted: "rv.hook/untrusted"
+        case .protocol: "rv.hook/protocol"
+        case .connection: "rv.hook/connection"
+        case .stopped: "rv.hook/stopped"
         }
+    }
+
+    /// Why, in under ten words; the C client prints the same.
+    static func why(for failure: HookDaemonFailure) -> String {
+        switch failure {
+        case .unreachable: "rv's daemon is not running"
+        case .timeout: "rv's daemon did not answer in time"
+        case .untrusted: "rv's daemon failed its identity check"
+        case .protocol: "rv's daemon sent a reply rv cannot read"
+        case .connection: "rv lost its daemon before a verdict"
+        case .stopped: "rvd stopped or crashed after it last ran"
+        }
+    }
+
+    /// The one rv command the owner runs; the C client prints the same.
+    static func fix(for failure: HookDaemonFailure) -> String {
+        switch failure {
+        case .unreachable, .timeout, .connection:
+            CommandVocabulary.Command.doctor.invocation
+        case .untrusted, .protocol, .stopped:
+            "\(CommandVocabulary.Command.service.invocation) restart"
+        }
+    }
+
+    /// The stop for `failure`, in the shape every stop has (B1): no command
+    /// (the hook never read one), the rule id, why, and the owner's step.
+    static func notice(for failure: HookDaemonFailure, owner: OwnerName = .current) -> StopNotice {
+        StopNotice(
+            subject: nil,
+            rule: rule(for: failure),
+            why: why(for: failure),
+            who: ownerRunsLine(fix(for: failure), owner: owner)
+        )
+    }
+
+    /// The stop text for `failure`.
+    static func message(for failure: HookDaemonFailure, owner: OwnerName = .current) -> String {
+        notice(for: failure, owner: owner).text
     }
 
     /// `ownerObserves`: the owner's config file puts `host` in observe mode
@@ -75,9 +107,10 @@ enum HookDaemonFallback {
         host: HookHost,
         failure: HookDaemonFailure,
         mode: HookWhenDown,
-        ownerObserves: Bool = false
+        ownerObserves: Bool = false,
+        owner: OwnerName = .current
     ) -> HookWire {
-        let message = message(for: failure)
+        let message = message(for: failure, owner: owner)
         // A daemon that fails identity verification may be an impostor, and a
         // malformed reply carries no trustworthy verdict: never soften those.
         guard failure == .unreachable || failure == .timeout || failure == .connection || failure == .stopped else {

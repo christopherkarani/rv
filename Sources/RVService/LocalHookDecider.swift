@@ -276,7 +276,8 @@ package struct LocalHookDecider: Sendable {
             mintOnDenyWithCommand: { _, _, _ in
                 probe.escalate(.ask)
                 return nil
-            }
+            },
+            voice: .live
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)
         let classified = probe.classify(Self.reply(wire))

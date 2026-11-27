@@ -49,11 +49,7 @@ public struct GrokHostCodec: HostCodec {
     }
 
     public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
-        encodeLeftoverDecisionDeny(
-            reason: presentation.reason,
-            rule: presentation.rule,
-            next: presentation.next
-        )
+        encodeLeftoverDecisionDeny(presentation)
     }
 }
 

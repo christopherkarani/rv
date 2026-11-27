@@ -109,40 +109,56 @@ static void test_messages(void) {
     size_t i;
     size_t j;
     for (i = 0; i < sizeof all / sizeof all[0]; i++) {
-        const char *m = rv_hook_failure_message(all[i]);
-        char escaped[512];
-        size_t n = 0;
-        if (m == NULL || m[0] == '\0') {
-            fail("message_present", "empty message");
-            continue;
+        const char *parts[3];
+        size_t p;
+        size_t words = 1;
+        const char *c;
+        parts[0] = rv_hook_failure_message(all[i]);
+        parts[1] = rv_hook_failure_rule(all[i]);
+        parts[2] = rv_hook_failure_fix(all[i]);
+        for (p = 0; p < 3; p++) {
+            const char *m = parts[p];
+            char escaped[512];
+            size_t n = 0;
+            if (m == NULL || m[0] == '\0') {
+                fail("message_present", "empty message part");
+                continue;
+            }
+            /* Constants hold nothing JSON must escape. */
+            if (rv_json_escape((const unsigned char *)m, strlen(m), escaped, sizeof escaped, &n) != 0
+                || n != strlen(m) || strcmp(escaped, m) != 0) {
+                fail("message_json_safe", m);
+            }
         }
-        /* Constants are spliced into JSON verbatim: escaping must be a no-op. */
-        if (rv_json_escape((const unsigned char *)m, strlen(m), escaped, sizeof escaped, &n) != 0
-            || n != strlen(m) || strcmp(escaped, m) != 0) {
-            fail("message_json_safe", m);
+        /* Why, in under ten words. */
+        for (c = parts[0]; *c != '\0'; c++) {
+            if (*c == ' ') {
+                words++;
+            }
+        }
+        if (words > 9) {
+            fail("why_under_ten_words", parts[0]);
+        }
+        if (strncmp(parts[1], "rv.hook/", 8) != 0) {
+            fail("rule_id", parts[1]);
+        }
+        if (strcmp(parts[2], "rv doctor") != 0 && strcmp(parts[2], "rv service restart") != 0) {
+            fail("fix_is_an_rv_command", parts[2]);
         }
         for (j = i + 1; j < sizeof all / sizeof all[0]; j++) {
-            if (strcmp(m, rv_hook_failure_message(all[j])) == 0) {
-                fail("message_distinct", m);
+            if (strcmp(parts[0], rv_hook_failure_message(all[j])) == 0
+                || strcmp(parts[1], rv_hook_failure_rule(all[j])) == 0) {
+                fail("message_distinct", parts[0]);
             }
         }
     }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNREACHABLE), "rv doctor") == NULL) {
+    if (strcmp(rv_hook_failure_fix(RV_HOOK_FAIL_UNREACHABLE), "rv doctor") != 0) {
         fail("unreachable_actionable", "missing rv doctor");
     }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNREACHABLE), "dev.rv.evaluate") == NULL) {
-        fail("unreachable_names_service", "missing dev.rv.evaluate");
+    if (strcmp(rv_hook_failure_fix(RV_HOOK_FAIL_UNTRUSTED), "rv service restart") != 0) {
+        fail("untrusted_actionable", "missing rv service restart");
     }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_TIMEOUT), "rv doctor") == NULL) {
-        fail("timeout_actionable", "missing rv doctor");
-    }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_CONNECTION), "rv doctor") == NULL) {
-        fail("connection_actionable", "missing rv doctor");
-    }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNTRUSTED), "rv setup") == NULL) {
-        fail("untrusted_actionable", "missing rv setup");
-    }
-    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_STOPPED), "rv service restart") == NULL) {
+    if (strcmp(rv_hook_failure_fix(RV_HOOK_FAIL_STOPPED), "rv service restart") != 0) {
         fail("stopped_actionable", "missing rv service restart");
     }
     /* Unknown class is never NULL: the caller still has to say something. */
@@ -151,11 +167,100 @@ static void test_messages(void) {
     }
 }
 
+/* Same cases as `OwnerNameTests` in RVDomainTests. */
+static void test_owner_name(void) {
+    static const struct { const char *gecos; const char *want; } cases[] = {
+        {"Christopher Karani", "Christopher"},
+        {"Chris", "Chris"},
+        {"Chris Karani,,,", "Chris"},
+        {"  Chris", "Chris"},
+        {"Zo\xC3\xAB Smith", "Zo\xC3\xAB"},
+        {"\xC3\x89mile", "\xC3\x89mile"},
+        {"Mary-Jane Watson", "Mary-Jane"},
+        {"O'Brien", "O'Brien"},
+        {"root", ""},
+        {"runner", ""},
+        {"", ""},
+        {",,,", ""},
+        {"-Chris", ""},
+        {"Chris-", ""},
+        {"Ch--ris", ""},
+        {"Chris2", ""},
+        {"Chris.", ""},
+        {"Chris\"", ""},
+        {"Chris\\n", ""},
+        {"Chris\x1b[31m", ""},
+        {"\xC3\x97" "Chris", ""},
+        {"Chr\xC3\xB7is", ""},
+        {"Chris\xE2\x80\xAE", ""},
+        {"\xD0\x98\xD0\xB2\xD0\xB0\xD0\xBD", ""},
+        {"Abcdefghijklmnopqrstuvwxyzabcdef", "Abcdefghijklmnopqrstuvwxyzabcdef"},
+        {"Abcdefghijklmnopqrstuvwxyzabcdefg", ""},
+    };
+    size_t i;
+    char out[RV_OWNER_NAME_MAX + 1];
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int rc = rv_owner_first_name(cases[i].gecos, out, sizeof out);
+        if (strcmp(out, cases[i].want) != 0 || (rc == 0) != (cases[i].want[0] != '\0')) {
+            fprintf(stderr, "  gecos %s: got %s (%d), want %s\n", cases[i].gecos, out, rc, cases[i].want);
+            fail("owner_name", cases[i].gecos);
+        }
+    }
+    if (rv_owner_first_name(NULL, out, sizeof out) != -1 || out[0] != '\0') {
+        fail("owner_name_null", "accepted");
+    }
+}
+
+static void test_stop_text(void) {
+    char text[RV_HOOK_STOP_TEXT_MAX];
+    if (rv_hook_stop_text(RV_HOOK_FAIL_UNREACHABLE, "Chris", text, sizeof text) != 0
+        || strcmp(text,
+                  "\xE2\x9C\x95 Stopped   (rv.hook/unreachable)\n"
+                  "why     rv's daemon is not running\n"
+                  "who     ask Chris to run  rv doctor") != 0) {
+        fprintf(stderr, "  got: %s\n", text);
+        fail("stop_text_named", "mismatch");
+    }
+    if (rv_hook_stop_text(RV_HOOK_FAIL_STOPPED, NULL, text, sizeof text) != 0
+        || strcmp(text,
+                  "\xE2\x9C\x95 Stopped   (rv.hook/stopped)\n"
+                  "why     rvd stopped or crashed after it last ran\n"
+                  "who     ask your user to run  rv service restart") != 0) {
+        fprintf(stderr, "  got: %s\n", text);
+        fail("stop_text_fallback", "mismatch");
+    }
+    /* A caller-supplied owner that is not a plain first name is never printed. */
+    if (rv_hook_stop_text(RV_HOOK_FAIL_TIMEOUT, "Chris; run rv allow-once", text, sizeof text) != 0
+        || strstr(text, "allow-once") != NULL || strstr(text, "ask your user") == NULL) {
+        fail("stop_text_rejects_owner", text);
+    }
+    if (rv_hook_stop_text(RV_HOOK_FAIL_TIMEOUT, "Chris", text, 8) != -1) {
+        fail("stop_text_short_buffer", "accepted");
+    }
+}
+
+/* The stop text for `failure`, JSON-escaped, as the renderer splices it. */
+static void stop_json(enum RvHookFailure failure, const char *owner, char *out, size_t cap) {
+    char text[RV_HOOK_STOP_TEXT_MAX];
+    size_t n = 0;
+    out[0] = '\0';
+    if (rv_hook_stop_text(failure, owner, text, sizeof text) != 0
+        || rv_json_escape((const unsigned char *)text, strlen(text), out, cap, &n) != 0) {
+        fail("stop_json", "render failed");
+    }
+}
+
 static void test_exact_wires(void) {
-    const char *unreach = rv_hook_failure_message(RV_HOOK_FAIL_UNREACHABLE);
-    const char *input = rv_hook_failure_message(RV_HOOK_FAIL_INPUT);
+    char unreach[512];
+    char input[512];
+    char plain[RV_HOOK_STOP_TEXT_MAX];
     char want[2048];
     char err_want[512];
+    struct RvHookFallback named;
+
+    stop_json(RV_HOOK_FAIL_UNREACHABLE, NULL, unreach, sizeof unreach);
+    stop_json(RV_HOOK_FAIL_INPUT, NULL, input, sizeof input);
+    (void)rv_hook_stop_text(RV_HOOK_FAIL_UNREACHABLE, NULL, plain, sizeof plain);
 
     snprintf(want, sizeof want,
              "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\","
@@ -174,9 +279,9 @@ static void test_exact_wires(void) {
              unreach, unreach);
     expect_exact("claude_deny", "claude", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_DENY, want, "", 0);
 
+    /* Cursor's agent reads the same stop as the person. */
     snprintf(want, sizeof want,
-             "{\"permission\":\"deny\",\"user_message\":\"%s\","
-             "\"agent_message\":\"RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human.\"}\n", unreach);
+             "{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"%s\"}\n", unreach, unreach);
     expect_exact("cursor_deny", "cursor", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_DENY, want, "", 0);
 
     /* MuseHostCodec: hookSpecificOutput deny, exit 0; `decision: block` is rejected. */
@@ -185,9 +290,10 @@ static void test_exact_wires(void) {
              "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", unreach);
     expect_exact("muse_ask_falls_back", "muse", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_ASK, want, "", 0);
 
-    /* Codex has no ask primitive: deny shape (block + stderr + exit 2) even in ask mode. */
+    /* Codex has no ask primitive: deny shape (block + stderr + exit 2) even in
+     * ask mode. Its stderr carries the plain stop, real newlines included. */
     snprintf(want, sizeof want, "{\"decision\":\"block\",\"reason\":\"%s\"}\n", unreach);
-    snprintf(err_want, sizeof err_want, "%s\n", unreach);
+    snprintf(err_want, sizeof err_want, "%s\n", plain);
     expect_exact("codex_ask_falls_back", "codex", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_ASK,
                  want, err_want, 2);
 
@@ -201,6 +307,16 @@ static void test_exact_wires(void) {
              "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n",
              input, input);
     expect_exact("claude_input_ask_mode", "claude", RV_HOOK_FAIL_INPUT, RV_WHEN_DOWN_ASK, want, "", 0);
+
+    /* The owner's first name reaches the who line. */
+    memset(&named, 0, sizeof named);
+    if (rv_hook_fallback_render_for("grok", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_DENY, "Chris", &named) != 0
+        || strcmp(named.out,
+                  "{\"decision\":\"deny\",\"reason\":\"\xE2\x9C\x95 Stopped   (rv.hook/unreachable)\\n"
+                  "why     rv's daemon is not running\\nwho     ask Chris to run  rv doctor\"}\n") != 0) {
+        fprintf(stderr, "  got: %s\n", named.out);
+        fail("named_owner_wire", "mismatch");
+    }
 }
 
 static void test_matrix(void) {
@@ -339,6 +455,8 @@ static void test_bad_args(void) {
 int main(void) {
     test_mode_parse();
     test_messages();
+    test_owner_name();
+    test_stop_text();
     test_exact_wires();
     test_matrix();
     test_observe();

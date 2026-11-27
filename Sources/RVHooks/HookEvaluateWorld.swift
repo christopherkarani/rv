@@ -17,6 +17,10 @@ public struct HookEvaluateWorld: Sendable {
     /// its payload digest is stored in the row.
     public var mintOnDenyWithCommand:
         (@Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?)?
+    /// Who a stop asks to act and what each rule's pack offers (B1).
+    /// `.plain` says "your user" and offers no safer command; rvd and the
+    /// hook-local pass give the owner's first name and the pack advice.
+    public var voice: StopVoice
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
@@ -25,12 +29,14 @@ public struct HookEvaluateWorld: Sendable {
         recordHostAsk: @escaping @Sendable (HookRequest, ProposedAction) async throws -> Void,
         mintOnDenyWithCommand: (
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
-        )? = nil
+        )? = nil,
+        voice: StopVoice = .plain
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
         self.mintOnDeny = mintOnDeny
         self.recordHostAsk = recordHostAsk
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
+        self.voice = voice
     }
 }

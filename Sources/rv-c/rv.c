@@ -368,8 +368,23 @@ static int rvd_state_allows_observe(void) {
  * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
  * steps aside when the owner chose observe mode, RV_HOOK_WHEN_DOWN is not
  * deny, and the rvd state marker allows it. */
+/* The owner's first name for the stop's `who` line, from this account's
+ * passwd full name (gecos), never the environment an agent sets. Empty
+ * when the name is not one plain word (the stop then says "your user"). */
+static void owner_first_name(char *out, size_t cap) {
+    struct passwd entry;
+    struct passwd *found = NULL;
+    char buf[4096];
+    out[0] = '\0';
+    if (getpwuid_r(getuid(), &entry, buf, sizeof buf, &found) != 0 || found == NULL) {
+        return;
+    }
+    (void)rv_owner_first_name(entry.pw_gecos, out, cap);
+}
+
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
+    char owner[RV_OWNER_NAME_MAX + 1];
     enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
     /* Only an absent daemon (a slow one would still enforce rv's
      * self-protection); an explicit RV_HOOK_WHEN_DOWN=deny is stricter and wins. */
@@ -384,7 +399,8 @@ static void fail_hook(const char *host, enum RvHookFailure failure) {
             failure = RV_HOOK_FAIL_STOPPED;
         }
     }
-    if (rv_hook_fallback_render(host, failure, mode, &fallback) != 0) {
+    owner_first_name(owner, sizeof owner);
+    if (rv_hook_fallback_render_for(host, failure, mode, owner[0] != '\0' ? owner : NULL, &fallback) != 0) {
         /* Unreachable for valid hosts; exit 2 blocks on Claude and Codex. */
         _exit(2);
     }

@@ -1,10 +1,108 @@
 import RVDomain
 
-/// Unlock next-step on hook voice when no minted code exists. TTY deny next-action keeps its own casing.
-public let ttyUnlockHint = "Run it in Terminal, or \(CommandVocabulary.Command.allowOnce.invocation)."
+// MARK: - One shape for every stop (North Star B1)
+//
+// Every stop rv sends a host reads the same way, on every codec:
+//
+//     ✕ Stopped   git reset --hard (core.git/reset-hard)
+//     why     destroys uncommitted changes
+//     safer   git status
+//     who     ask Chris to run  rv allow-once a1b2c3
+//
+// The verdict and the command, the rule id, why in under ten words, one
+// safer command when the rule's pack offers one, and who acts. The text is
+// plain (it goes to an agent, not a TTY): no ANSI, no box drawing. It never
+// tells the agent to run `rv allow-once` itself: the code is for the person
+// the `who` line names. "Cost in numbers" (B3) and self-protection's own
+// words (B2) come later.
 
-/// Same sentence as `ttyUnlockHint`. Kept so existing TTY copy sites compile.
-public let hookUnlockNext = ttyUnlockHint
+/// What a rule's pack offers the agent it stops (`safer_command`,
+/// `who_acts` in pack JSON, G1). RVHooks never loads packs; the hook door's
+/// owner passes a lookup in `StopVoice`.
+public struct StopAdvice: Sendable, Equatable {
+    /// A command to run instead, copy-ready, that rv allows in the same mode.
+    public var saferCommand: String?
+    /// Who has to act when there is no unlock code, as the pack says it
+    /// ("you, in your own terminal, after checking no one else pushed").
+    public var whoActs: String?
+
+    public init(saferCommand: String? = nil, whoActs: String? = nil) {
+        self.saferCommand = saferCommand
+        self.whoActs = whoActs
+    }
+}
+
+/// Who a stop asks to act, and the advice each rule carries.
+public struct StopVoice: Sendable {
+    /// The machine owner's first name ("ask Chris"), from passwd.
+    public var owner: OwnerName
+    /// The pack advice for a rule id, or nil.
+    public var advice: @Sendable (RuleID) -> StopAdvice?
+
+    public init(owner: OwnerName, advice: @escaping @Sendable (RuleID) -> StopAdvice? = { _ in nil }) {
+        self.owner = owner
+        self.advice = advice
+    }
+
+    /// No name ("your user") and no pack advice.
+    public static let plain = StopVoice(owner: .unknown)
+}
+
+/// One stop, in the shape every host shows.
+public struct StopNotice: Sendable, Equatable {
+    /// The command (first line, escaped) or path; nil for a stop that has
+    /// no command (an unreadable hook request).
+    public var subject: String?
+    /// The rule id in slash display (`core.git/reset-hard`).
+    public var rule: String
+    /// Why, in under ten words.
+    public var why: String
+    /// One safer command, or nil.
+    public var safer: String?
+    /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
+    public var who: String
+
+    public init(subject: String?, rule: String, why: String, safer: String? = nil, who: String) {
+        self.subject = subject
+        self.rule = rule
+        self.why = why
+        self.safer = safer
+        self.who = who
+    }
+
+    /// The host text: one idea per line, the next command last.
+    public var text: String {
+        var lines = [verdictLine]
+        lines.append(stopLabel("why") + why)
+        if let safer {
+            lines.append(stopLabel("safer") + safer)
+        }
+        lines.append(stopLabel("who") + who)
+        return lines.joined(separator: "\n")
+    }
+
+    /// `✕ Stopped   <command> (<rule>)`.
+    public var verdictLine: String {
+        let head = "\(CommandVocabulary.Glyph.stopped.rawValue) \(CommandVocabulary.Glyph.stopped.word)   "
+        guard let subject, subject.isEmpty == false else {
+            return "\(head)(\(rule))"
+        }
+        return "\(head)\(subject) (\(rule))"
+    }
+}
+
+/// Label column of a stop: `why     `, `safer   `, `who     ` (8 wide, as
+/// the North Star anatomy frame sets it).
+func stopLabel(_ label: String) -> String {
+    label + String(repeating: " ", count: max(1, stopLabelWidth - label.count))
+}
+
+let stopLabelWidth = 8
+
+/// The gap the North Star frames leave before a command to copy.
+let commandGap = "  "
+
+// MARK: - Unlock next steps
 
 /// Six lowercase hex characters minted for TTY redeem.
 public func isAllowOnceUnlockCode(_ code: String) -> Bool {
@@ -19,77 +117,64 @@ public enum HookVoiceNext: Sendable, Equatable {
     case earlierPending
 }
 
-/// Returns the minted allow-once paste line for `code`.
-/// Code goes first so truncated host cards still show the paste.
+/// The `who` line for a minted code: the owner runs it, never the agent.
 /// The grant binds the normalized command (sudo/env/path spellings share
-/// one grant, B-F2), so the copy must not promise exact-spelling binding.
-public func unlockLine(for code: AllowOnceUnlockCode) -> String {
-    "Paste in Terminal to allow once: \(CommandVocabulary.Command.allowOnce.invocation) \(code.rawValue). This unlocks the reviewed command once, including its sudo, env, and path spellings."
+/// one grant, B-F2).
+public func unlockLine(for code: AllowOnceUnlockCode, owner: OwnerName = .unknown) -> String {
+    "\(askOwner(owner)) to run\(commandGap)\(CommandVocabulary.Command.allowOnce.invocation) \(code.rawValue)"
 }
 
-/// Repeat deny of the same command+cwd. Do not mint a second code.
-public let earlierPendingUnlockLine =
-    "A one-shot unlock is already pending for this command. Paste the earlier \(CommandVocabulary.Command.allowOnce.invocation) code in Terminal."
-
-/// Cursor `agent_message` on deny. User paste stays in `user_message`.
-public let cursorAgentStopLine =
-    "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
-
-/// Ask-denial suffix on every host. The policy verdict stays ASK; the wire
-/// renders deny-with-guidance because no host can pause for a human.
-/// One sentence: `hostDenyWhy` keeps sentence 1 + sentence 2 only.
-/// Linux has no approval app (RVOperatorUI is macOS-only), so the unlock
-/// code redeemed in Terminal is the only way a human approves there.
-#if os(macOS)
-public let approvalPendingLine =
-    "This action requires human approval: open RV to approve it, then retry the exact command."
-#else
-public let approvalPendingLine =
-    "This action requires human approval: the owner redeems its rv allow-once code, then retry the exact command."
-#endif
-
-/// Ask-denial suffix when the pending row could not be recorded (M-25).
-/// Promising RV approval then would be a lie — there is no row to approve —
-/// so the guidance routes to Terminal instead, where TTY redeem applies.
-public let approvalUnrecordedLine =
-    "This action requires human approval, but RV could not stage it for review. Run it in Terminal instead."
-
-/// Cursor `agent_message` on ask. Unlike a deny, the agent retries the
-/// exact command after the human approves it in RV.
-#if os(macOS)
-public let cursorAgentAskLine =
-    "RV blocked this command because it requires approval. Wait for the human to approve it in RV, then retry the exact command."
-#else
-public let cursorAgentAskLine =
-    "RV blocked this command because it requires approval. Wait for the human to approve it with rv allow-once, then retry the exact command."
-#endif
-
-/// Cursor `agent_message` when the pending row could not be recorded: no
-/// retry can succeed, so the agent waits instead of looping.
-public let cursorAgentAskUnrecordedLine =
-    "RV blocked this command because it requires approval, but RV could not stage it for review. Do not retry. Wait for the human."
-
-/// Ask-denial guidance for the record outcome: the approval-pending line
-/// when a row exists, the unrecorded line when recording failed.
-public func askPendingLine(recorded: Bool) -> String {
-    recorded ? approvalPendingLine : approvalUnrecordedLine
+/// The `who` line for a repeat stop of the same command and cwd: no second
+/// code is minted.
+public func earlierPendingUnlockLine(owner: OwnerName = .unknown) -> String {
+    "\(askOwner(owner)) to run the earlier code with\(commandGap)\(CommandVocabulary.Command.allowOnce.invocation)"
 }
 
-/// Cursor ask `agent_message` for the record outcome.
-public func cursorAgentAskMessage(recorded: Bool) -> String {
-    recorded ? cursorAgentAskLine : cursorAgentAskUnrecordedLine
+/// The `who` line when rv minted nothing and the pack names no one: the
+/// owner runs it themselves.
+public func ownTerminalLine(owner: OwnerName = .unknown) -> String {
+    "\(askOwner(owner)) to run it in their own terminal"
 }
 
-func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
+/// The `who` line for an ask staged in the RV app (macOS) with no code.
+public func approveInRVLine(owner: OwnerName = .unknown) -> String {
+    "\(askOwner(owner)) to approve it in RV"
+}
+
+/// The `who` line for a stop the owner fixes with one rv command
+/// (`rv doctor`, `rv service restart`).
+public func ownerRunsLine(_ command: String, owner: OwnerName = .unknown) -> String {
+    "\(askOwner(owner)) to run\(commandGap)\(command)"
+}
+
+private func askOwner(_ owner: OwnerName) -> String {
+    "ask \(owner.spoken)"
+}
+
+/// Pack `who_acts` for the agent: the pack writes it to the person ("you,
+/// in your own terminal"), so the agent reads it as the owner's step ("ask
+/// Chris to run it, in their own terminal"). Text that does not start with
+/// "you" ("no one: there is no safe form") is kept as written.
+func whoActsLine(_ whoActs: String, owner: OwnerName) -> String {
+    let text = singleLine(whoActs)
+    let lower = text.lowercased()
+    guard lower == "you" || lower.hasPrefix("you,") || lower.hasPrefix("you ") else {
+        return text
+    }
+    let rest = String(text.dropFirst(3)).replacingOccurrences(of: "your own", with: "their own")
+    return "\(askOwner(owner)) to run it\(rest)"
+}
+
+func hookVoiceNextSentence(_ next: HookVoiceNext, owner: OwnerName = .unknown) -> String? {
     switch next {
     case .none:
         return nil
     case .ttyHint:
-        return ttyUnlockHint
+        return ownTerminalLine(owner: owner)
     case .minted(let code):
-        return unlockLine(for: code)
+        return unlockLine(for: code, owner: owner)
     case .earlierPending:
-        return earlierPendingUnlockLine
+        return earlierPendingUnlockLine(owner: owner)
     }
 }
 
@@ -112,34 +197,15 @@ public func allowOnceUnlockCode(in text: String) -> AllowOnceUnlockCode? {
     return AllowOnceUnlockCode(validating: code)
 }
 
-func mintedUnlockNext(_ mint: AllowOnceUnlockMint?) -> String? {
-    switch mint {
-    case .code(let code):
-        return unlockLine(for: code)
-    case .earlierPending:
-        return earlierPendingUnlockLine
-    case nil:
-        return nil
-    }
-}
+// MARK: - Subjects
 
-/// Hook-voice deny sentence for a payload addressed to this host that could not
-/// be decoded. Fail-closed twin of `incompleteEvalSentence`.
-public func malformedHookSentence(_ malformation: HookMalformation) -> String {
-    switch malformation {
-    case .unreadable:
-        return "rv received a hook payload it could not read and blocked the command. Run it in Terminal."
-    case .missingCommand:
-        return "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
-    }
-}
-
-/// Max characters of the command's first line in hook deny JSON.
+/// Max characters of the command's first line in hook deny text.
 public let hookDenyCommandPreviewLimit = 96
 
 /// First line of `command` for host deny text. Extra lines and overlong
 /// first lines become a trailing ellipsis so Grok/Pi/OpenCode never paste
-/// a heredoc body into the transcript.
+/// a heredoc body into the transcript. Controls are escaped
+/// (`DisplayedText.field`), so a command cannot redraw the host's screen.
 public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
     var raw = command.rawValue
     while let last = raw.last, last == "\n" || last == "\r" {
@@ -154,7 +220,7 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
         }
         firstLine.append(ch == "\t" ? " " : ch)
     }
-    let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
+    let trimmed = DisplayedText.field(firstLine.trimmingCharacters(in: .whitespaces))
     let clipped = trimmed.count > hookDenyCommandPreviewLimit
         ? String(trimmed.prefix(hookDenyCommandPreviewLimit))
         : trimmed
@@ -164,120 +230,304 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
     return clipped
 }
 
-/// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.
-/// Command prefix stripped, sentence 1 capitalized, both clauses end with `.`.
-func hostDenyWhy(_ reason: String, command: ShellCommand?) -> String {
-    var text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-    let preview = command.map(hookDenyCommandPreview) ?? ""
-    if !preview.isEmpty, text.lowercased().hasPrefix(preview.lowercased()) {
-        text = String(text.dropFirst(preview.count))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+/// A file tool's path for the verdict line, escaped and clipped like a command.
+func hookDenyPathPreview(_ path: FileToolPath) -> String {
+    hookDenyCommandPreview(ShellCommand(rawValue: path.rawValue))
+}
 
-    let sentence1Raw: String
-    let rest: String
+// MARK: - Why, in under ten words
+
+/// Most words a `why` line carries.
+public let stopWhyWordLimit = 9
+
+/// What a stop says when the reason gives nothing it may print.
+let genericStopWhy = "a rule rv enforces stops it"
+
+/// Why, in under ten words, from a rule's reason. Takes the first sentence,
+/// drops the command words the verdict line already shows, keeps the
+/// first clause, says "catastrophic" for shouted danger, and clips past
+/// nine words with an ellipsis. A reason that names a way past rv
+/// (allow-once, unlock, a bypass) is not repeated.
+public func stopWhy(_ reason: String, command: ShellCommand?) -> String {
+    var text = firstSentence(singleLine(reason))
+    if let command {
+        text = droppingCommandWords(text, command: command)
+    }
+    text = firstClause(text)
+    text = text
+        .replacingOccurrences(of: "is EXTREMELY DANGEROUS", with: "is catastrophic")
+        .replacingOccurrences(of: "EXTREMELY DANGEROUS", with: "catastrophic")
+    var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    guard words.isEmpty == false else { return genericStopWhy }
+    if words.count > stopWhyWordLimit {
+        words = Array(words.prefix(stopWhyWordLimit))
+        words[words.count - 1] += "…"
+    }
+    if let first = words.first, isShouted(first) == false {
+        words[0] = first.prefix(1).lowercased() + first.dropFirst()
+    }
+    let why = words.joined(separator: " ")
+    return namesAWayPast(why) ? genericStopWhy : why
+}
+
+private func firstSentence(_ text: String) -> String {
+    var sentence = text
     if let end = text.firstRange(of: ". ") {
-        sentence1Raw = String(text[..<end.lowerBound])
-        rest = String(text[end.upperBound...])
-    } else if text.hasSuffix(".") {
-        sentence1Raw = String(text.dropLast())
-        rest = ""
-    } else {
-        sentence1Raw = text
-        rest = ""
+        sentence = String(text[..<end.lowerBound])
     }
-
-    var sentence1 = sentence1Raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let first = sentence1.first else {
-        return ""
+    while sentence.hasSuffix(".") {
+        sentence.removeLast()
     }
-    sentence1 = first.uppercased() + sentence1.dropFirst()
-    if !sentence1.hasSuffix(".") {
-        sentence1 += "."
-    }
-
-    var sentence2 = ""
-    if !rest.isEmpty {
-        let secondRaw: String
-        if let next = rest.firstRange(of: ". ") {
-            secondRaw = String(rest[..<next.lowerBound])
-        } else {
-            secondRaw = rest
-        }
-        sentence2 = secondRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !sentence2.isEmpty, !sentence2.hasSuffix(".") {
-            sentence2 += "."
-        }
-    }
-
-    if shouldOmitDenySentence2(sentence2, sentence1: sentence1) {
-        return sentence1
-    }
-    return "\(sentence1) \(sentence2)"
+    return sentence.trimmingCharacters(in: .whitespaces)
 }
 
-private func shouldOmitDenySentence2(_ sentence2: String, sentence1: String) -> Bool {
-    if sentence2.isEmpty { return true }
-    if sentence2.contains("allow-once") { return true }
-    if sentence2.contains("ALLOW-") { return true }
-    if sentence2.contains("redeem") { return true }
-    if sentence2.contains("RV_" + "BYPASS") { return true }
-    if sentence2.contains("Terminal") { return true }
-    if sentence2.contains("reset --soft") { return true }
-    if sentence2.contains("\n") { return true }
-
-    let why = "\(sentence1) \(sentence2)"
-    if why.unicodeScalars.count > 180 { return true }
-
-    let line = "RV · Blocked. \(why)"
-    if line.contains("\u{001B}") { return true }
-    if line.contains("═") { return true }
-    if line.contains("┌") { return true }
-    if line.contains("\n") { return true }
-    return false
+/// `git reset --hard destroys …` under the command `git reset --hard
+/// origin/main` reads `destroys …`: the verdict line shows the command.
+private func droppingCommandWords(_ text: String, command: ShellCommand) -> String {
+    let words = text.split(separator: " ", omittingEmptySubsequences: true)
+    let commandWords = hookDenyCommandPreview(command).split(separator: " ", omittingEmptySubsequences: true)
+    var shared = 0
+    while shared < words.count, shared < commandWords.count,
+          words[shared].lowercased() == commandWords[shared].lowercased()
+    {
+        shared += 1
+    }
+    guard shared > 0, shared < words.count else { return text }
+    let rest = words[shared...].joined(separator: " ")
+    // `rm -rf is destructive` reads `it is destructive`, not `is destructive`.
+    return predicateHeads.contains(words[shared].lowercased()) ? "it \(rest)" : rest
 }
 
+private let predicateHeads: Set<String> = ["is", "are", "was", "can", "could", "will", "may", "might", "has", "does"]
+
+private let clauseCuts = [" and requires", ", which", " because", " — ", " - ", "; ", ": ", " (", ", "]
+
+/// The first clause, when it keeps at least three words.
+private func firstClause(_ text: String) -> String {
+    var clause = text
+    for cut in clauseCuts {
+        guard let range = clause.range(of: cut) else { continue }
+        let head = String(clause[..<range.lowerBound])
+        if head.split(separator: " ").count >= 3 {
+            clause = head
+        }
+    }
+    return clause
+}
+
+private func isShouted(_ word: String) -> Bool {
+    let letters = word.unicodeScalars.filter { $0.properties.isAlphabetic }
+    return letters.count >= 2 && letters.allSatisfy { $0.properties.isUppercase }
+}
+
+/// Words that would read as an instruction to get past rv.
+private func namesAWayPast(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    return lower.contains("allow-once") || lower.contains("unlock") || lower.contains("redeem")
+        || lower.contains("bypass") || text.contains("RV_")
+}
+
+/// One line, controls escaped: reasons can come from a repo's policy file.
+func singleLine(_ text: String) -> String {
+    DisplayedText.field(
+        text.replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    )
+}
+
+// MARK: - Composing stops
+
+/// How a stopped command reached the host: a deny no human can lift, or an
+/// ask a human approves (with the record outcome of its pending row).
+public enum StopKind: Sendable, Equatable {
+    case deny
+    case ask(recorded: Bool)
+}
+
+/// The stop for an evaluated deny of `command`.
+public func stopNotice(
+    command: ShellCommand,
+    deny: Deny,
+    kind: StopKind = .deny,
+    unlock: AllowOnceUnlockMint? = nil,
+    voice: StopVoice = .plain
+) -> StopNotice {
+    stopNotice(
+        subject: hookDenyCommandPreview(command),
+        command: command,
+        deny: deny,
+        kind: kind,
+        unlock: unlock,
+        voice: voice
+    )
+}
+
+/// The stop for a file tool's deny of `path`.
+public func fileStopNotice(path: FileToolPath?, deny: Deny, voice: StopVoice = .plain) -> StopNotice {
+    stopNotice(
+        subject: path.map(hookDenyPathPreview),
+        command: nil,
+        deny: deny,
+        kind: .deny,
+        unlock: nil,
+        voice: voice
+    )
+}
+
+private func stopNotice(
+    subject: String?,
+    command: ShellCommand?,
+    deny: Deny,
+    kind: StopKind,
+    unlock: AllowOnceUnlockMint?,
+    voice: StopVoice
+) -> StopNotice {
+    let advice = voice.advice(deny.ruleID)
+    return StopNotice(
+        subject: subject,
+        rule: deny.ruleID.slashDisplay,
+        why: stopWhy(deny.reason, command: command),
+        safer: advice?.saferCommand.map(singleLine).flatMap(printableSafer),
+        who: stopWho(kind: kind, unlock: unlock, whoActs: advice?.whoActs, owner: voice.owner)
+    )
+}
+
+/// A safer command is printed only if it is one plain line that does not
+/// itself reach for an unlock.
+private func printableSafer(_ safer: String) -> String? {
+    safer.isEmpty || namesAWayPast(safer) ? nil : safer
+}
+
+/// Exactly one person and one step: the minted code, an earlier code, the
+/// RV app, the pack's `who_acts`, or the owner's own terminal.
+private func stopWho(kind: StopKind, unlock: AllowOnceUnlockMint?, whoActs: String?, owner: OwnerName) -> String {
+    switch unlock {
+    case .code(let code):
+        return unlockLine(for: code, owner: owner)
+    case .earlierPending:
+        return earlierPendingUnlockLine(owner: owner)
+    case nil:
+        break
+    }
+    #if os(macOS)
+    if case .ask(recorded: true) = kind {
+        return approveInRVLine(owner: owner)
+    }
+    #endif
+    if let whoActs, whoActs.trimmingCharacters(in: .whitespaces).isEmpty == false {
+        return whoActsLine(whoActs, owner: owner)
+    }
+    return ownTerminalLine(owner: owner)
+}
+
+/// The stop for an indeterminate verdict: rv could not finish, so the
+/// owner runs it. Names the reason's id, as `rv log` records it. A nil
+/// reason is an evaluation that reached deny dispatch without a verdict.
+public func indeterminateStopNotice(
+    _ reason: IndeterminateReason?,
+    command: ShellCommand?,
+    voice: StopVoice = .plain
+) -> StopNotice {
+    StopNotice(
+        subject: command.map(hookDenyCommandPreview),
+        rule: reason.map(indeterminateStopRule) ?? "rv.indeterminate/incomplete",
+        why: reason.map(indeterminateStopWhy) ?? "rv could not finish checking it",
+        who: ownTerminalLine(owner: voice.owner)
+    )
+}
+
+/// `rv.indeterminate/<reason>`, the id the denial ledger records
+/// (`rv.indeterminate:<reason>`); the observe floor keeps its own id.
+public func indeterminateStopRule(_ reason: IndeterminateReason) -> String {
+    if reason == .observeUnanalyzable {
+        return RuleID(rawValue: reason.rawValue)?.slashDisplay ?? reason.rawValue
+    }
+    return "rv.indeterminate/\(reason.rawValue)"
+}
+
+/// Why rv could not finish, in under ten words.
+public func indeterminateStopWhy(_ reason: IndeterminateReason) -> String {
+    switch reason {
+    case .budgetExhausted: "rv ran out of time checking it"
+    case .commandTooLarge: "it is too large for rv to check"
+    case .corePacksUnavailable: "rv's core rules did not load"
+    case .inlineProgramNeedsJudge: "rv could not score its inline program"
+    case .selfProtection: "it would change rv itself"
+    case .packageScriptUnresolved: "rv could not resolve its package script"
+    case .unresolvedInvocation: "rv could not tell what program it runs"
+    case .observeUnanalyzable: "rv could not see what this command runs"
+    }
+}
+
+/// A stop rv raises about the hook call itself, not the command.
+public enum HookCallStop: Sendable, Equatable {
+    /// The payload could not be decoded.
+    case malformed(HookMalformation)
+    /// rvd ran past its deadline and committed nothing.
+    case timedOut
+}
+
+/// The stop for `stop`, in the same shape. No command to show.
+public func hookCallStopNotice(_ stop: HookCallStop, voice: StopVoice = .plain) -> StopNotice {
+    let doctor = CommandVocabulary.Command.doctor.invocation
+    switch stop {
+    case .malformed(.unreadable):
+        return StopNotice(
+            subject: nil, rule: "rv.hook/unreadable",
+            why: "rv could not read this hook request",
+            who: ownerRunsLine(doctor, owner: voice.owner))
+    case .malformed(.missingCommand):
+        return StopNotice(
+            subject: nil, rule: "rv.hook/no-command",
+            why: "the shell hook carried no command",
+            who: ownerRunsLine(doctor, owner: voice.owner))
+    case .timedOut:
+        return StopNotice(
+            subject: nil, rule: "rv.timeout",
+            why: "rv timed out and committed nothing",
+            who: ownerRunsLine(doctor, owner: voice.owner))
+    }
+}
+
+/// Hook-voice text for a payload addressed to this host that could not be
+/// decoded. Fail-closed twin of the indeterminate stop.
+public func malformedHookSentence(_ malformation: HookMalformation, voice: StopVoice = .plain) -> String {
+    hookCallStopNotice(.malformed(malformation), voice: voice).text
+}
+
+// MARK: - Text
+
+/// The stop text for a shell deny.
 public func hostDenyLine(
     command: ShellCommand,
-    reason: String,
-    unlockCode: AllowOnceUnlockCode? = nil
+    deny: Deny,
+    kind: StopKind = .deny,
+    unlock: AllowOnceUnlockMint? = nil,
+    voice: StopVoice = .plain
 ) -> String {
-    hostDenyLine(command: command, reason: reason, unlock: unlockCode.map { .code($0) })
+    stopNotice(command: command, deny: deny, kind: kind, unlock: unlock, voice: voice).text
 }
 
-public func hostDenyLine(
+/// The stop text for a file tool's deny.
+public func hostFileDenyLine(path: FileToolPath? = nil, deny: Deny, voice: StopVoice = .plain) -> String {
+    fileStopNotice(path: path, deny: deny, voice: voice).text
+}
+
+/// Host text for a verdict, or nil on allow (including a medium/low match).
+/// Switch on `Decision` first: nil means allow only after that switch.
+public func hostDenyText(
+    from result: EvaluationResult,
     command: ShellCommand,
-    reason: String,
-    unlock: AllowOnceUnlockMint?
-) -> String {
-    wrappedHostDeny(why: hostDenyWhy(reason, command: command), unlock: unlock)
-}
-
-/// File-tool deny sentence. Does not preview an empty `ShellCommand`.
-public func hostFileDenyLine(reason: String, unlockCode: AllowOnceUnlockCode? = nil) -> String {
-    wrappedHostDeny(why: hostDenyWhy(reason, command: nil), unlock: unlockCode.map { .code($0) })
-}
-
-private func wrappedHostDeny(why: String, unlock: AllowOnceUnlockMint?) -> String {
-    let blocked = "RV · Blocked."
-    let withoutCode = why.isEmpty ? blocked : "\(blocked) \(why)"
-    guard let unlock = mintedUnlockNext(unlock) else {
-        return withoutCode
-    }
-    let combined = why.isEmpty ? "\(blocked) \(unlock)" : "\(blocked) \(unlock) \(why)"
-    if combined.contains("\u{001B}") || combined.contains("═") || combined.contains("┌") || combined.contains("\n") {
-        return withoutCode
-    }
-    return combined
-}
-
-public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -> String? {
+    voice: StopVoice = .plain
+) -> String? {
     switch result.decision {
     case .allow:
         return nil
     case .indeterminate(let reason):
-        return indeterminateSentence(reason)
+        return indeterminateStopNotice(reason, command: command, voice: voice).text
     case .deny(let deny):
-        return hostDenyLine(command: command, reason: deny.reason)
+        return hostDenyLine(command: command, deny: deny, voice: voice)
     }
 }
