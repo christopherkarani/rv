@@ -48,6 +48,12 @@ public enum PacksCommandError: Error, Equatable, Sendable {
     /// empty config, which would discard the owner's pack choices.
     case configUnreadable
     case criticalPatternUncompilable(RuleID)
+    /// A named pack, category or preset does not exist; `suggestion` is
+    /// the nearest real one.
+    case unknownSelection(String, suggestion: String?)
+    /// `[packs]` holds lines rv does not read as written. Saving over it
+    /// would drop them, so nothing is written until the owner fixes them.
+    case configInvalid([PolicyDocumentProblem])
 }
 
 /// In-process packs list / enable / disable for CLI and tests (temp HOME).
@@ -96,6 +102,38 @@ public enum PacksFacade {
             throw PacksCommandError.packNotFound(id)
         }
         return row
+    }
+
+    /// Every spelling `[packs]` and `rv packs enable/disable` accept: pack
+    /// ids, categories and presets.
+    public static func knownSelections(index: PackIndex) -> [String] {
+        Array(Set(index.packIDs.map(\.rawValue)).union(index.categories.keys).union(index.presets.keys)).sorted()
+    }
+
+    /// `[packs]` lines rv does not read as written; empty when the file is
+    /// absent or clean. Throws `configUnreadable` when it cannot be read.
+    public static func configProblems(home: HomeDirectory) throws -> [PolicyDocumentProblem] {
+        guard let text = try PacksConfigStore.loadText(home: home) else { return [] }
+        return PacksConfigStore.problems(in: text, known: knownSelections(index: try PackRegistry.loadIndex()))
+    }
+
+    /// Everything a pack change checks before it asks the owner anything:
+    /// every name is a real pack, category or preset (else the nearest
+    /// spelling), and `[packs]` reads exactly as written. Writes nothing.
+    public static func preflight(home: HomeDirectory, ids: [String]) throws {
+        let index = try PackRegistry.loadIndex()
+        let known = knownSelections(index: index)
+        let knownSet = Set(known)
+        for id in ids where knownSet.contains(id) == false {
+            throw PacksCommandError.unknownSelection(id, suggestion: PacksConfigStore.nearestSelection(to: id, in: known))
+        }
+        let problems: [PolicyDocumentProblem]
+        do {
+            problems = try configProblems(home: home)
+        } catch {
+            throw PacksCommandError.configUnreadable
+        }
+        if problems.isEmpty == false { throw PacksCommandError.configInvalid(problems) }
     }
 
     /// Verb-argument / XPC boundary: raw operator strings become tokens here.
@@ -182,11 +220,17 @@ public enum PacksFacade {
         }
 
         var config: PacksConfig
+        let problems: [PolicyDocumentProblem]
         do {
             config = try PacksConfigStore.load(home: home)
+            problems = try PacksConfigStore.loadText(home: home)
+                .map { PacksConfigStore.problems(in: $0, known: knownSelections(index: index)) } ?? []
         } catch {
             throw PacksCommandError.configUnreadable
         }
+        // Rewriting `[packs]` keeps only what parse read: a misspelt key
+        // or entry would vanish with no word to the owner.
+        if problems.isEmpty == false { throw PacksCommandError.configInvalid(problems) }
         let before = Set(
             try PackSet.effectiveOrdered(
                 enabled: selectionTokens(config.enabled, index: index),
