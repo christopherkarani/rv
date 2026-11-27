@@ -79,8 +79,7 @@ enum HelpCatalog {
                 HelpRow(name: "allowlist, safety", description: "Lasting exceptions; normal or strict"),
             ]),
             HelpSection(heading: "Team", rows: [
-                HelpRow(name: "managed, report", description: "Organization policy; this machine's posture (MDM)"),
-                HelpRow(name: "audit", description: "The audit trail; export it for SIEM"),
+                HelpRow(name: "managed, report, audit", description: "Org policy, this machine's posture, the audit trail"),
             ]),
             HelpSection(heading: "Advanced", rows: [
                 HelpRow(name: "mcp, login, egress, scan", description: "MCP, app logins, network, past sessions"),
