@@ -724,7 +724,7 @@ jobs:
           set -o pipefail
           skip='injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
           failed=''
-          for run in RVWorkspaceTUITests:RVWorkspaceTUITests RVOperatorUITests:RVOperatorUITests \
+          for run in RVWorkspaceTUITests:RVWorkspaceTUITests RVOperatorUITests:RVOperatorUITests RVGlanceUITests:RVGlanceUITests \
                      RVLayaTests:RVLayaTests 'RVMCPTests:MCPSandboxCreateTests|MCPSandboxLongPathTests' \
                      RVServiceTests:RVServiceTests RVCLITests:RVCLITests; do
             product="${run%%:*}"

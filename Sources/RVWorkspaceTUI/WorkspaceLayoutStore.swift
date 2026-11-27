@@ -105,6 +105,35 @@ public final class WorkspaceLayoutSession: @unchecked Sendable {
         committedView = next
         committedRevision += 1
     }
+
+    static let shellStartsName = "shell-starts"
+    static let maximumShellStarts = 1_000
+
+    /// Counts shell starts in this layout directory, this one included,
+    /// so the footer can stop teaching the keys. Display only: nil when
+    /// the count cannot be written, and a damaged count starts over.
+    ///
+    /// Two shells starting at once in one project can both read the same
+    /// count and both write `next`, so one start goes uncounted. That is
+    /// harmless: the count only decides when the footer stops teaching.
+    public func recordShellStart() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        let previous = WorkspaceLayoutStore.readCount(in: directoryFD, name: Self.shellStartsName) ?? 0
+        let next = min(Self.maximumShellStarts, previous + 1)
+        do {
+            try WorkspaceLayoutStore.atomicWrite(Data("\(next)\n".utf8), in: directoryFD,
+                                                  name: Self.shellStartsName, viewID: viewID,
+                                                  failDirectorySyncAfterRename: failDirectorySyncAfterRename)
+        } catch WorkspaceLayoutStoreError.commitUncertain {
+            // The rename landed; only the directory sync failed. The new
+            // count is what the next start reads.
+            return next
+        } catch {
+            return nil
+        }
+        return next
+    }
 }
 
 public enum WorkspaceLayoutStore {
@@ -334,6 +363,25 @@ public enum WorkspaceLayoutStore {
               Set(document.panes.map(\.id)).count == document.panes.count,
               valid(document.makeView()) else { throw DocumentError.corrupt }
         return document
+    }
+
+    /// A small decimal count from a private regular file; nil when missing
+    /// or not exactly that.
+    fileprivate static func readCount(in directoryFD: Int32, name: String) -> Int? {
+        let fd = openat(directoryFD, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { _ = close(fd) }
+        var status = stat()
+        guard fstat(fd, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
+              status.st_uid == geteuid(), status.st_mode & 0o077 == 0,
+              status.st_nlink == 1, status.st_size > 0, status.st_size <= 16 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: 16)
+        let count = read(fd, &buffer, buffer.count)
+        guard count > 0 else { return nil }
+        let text = String(decoding: buffer.prefix(count), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(text), value >= 0 else { return nil }
+        return value
     }
 
     private static func boundedJSON(_ root: JSONValue) -> Bool {

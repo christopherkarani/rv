@@ -218,7 +218,7 @@ expect_exec() {
   local log="$OUT/$name.argv"
   local st
   set +e
-  RV_C_ARGV_LOG="$log" "$PROBE/rv" "$@"
+  RV_C_ARGV_LOG="$log" "$PROBE/rv" "$@" </dev/null
   st=$?
   set -e
   if [[ "$st" -ne 17 ]]; then

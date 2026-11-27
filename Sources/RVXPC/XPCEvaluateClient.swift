@@ -4,7 +4,6 @@ import Foundation
 import Synchronization
 import RVIsolation
 import RVIPC
-import RVXPC
 @preconcurrency import XPC
 
 public final class XPCEvaluateClient: Sendable {
@@ -35,7 +34,7 @@ public final class XPCEvaluateClient: Sendable {
     }
 
     public init(
-        serviceName: String = RVService.machServiceName,
+        serviceName: String = RVMachService.name,
         daemonTrust: DaemonTrustMode = .manifestRequired,
         siblingDaemonPath: String? = nil
     ) {
