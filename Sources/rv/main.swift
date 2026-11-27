@@ -16,6 +16,10 @@ enum RVEntry {
         if HelpDispatch.tryEmit(arguments: args) {
             return
         }
+        if let unknown = UnknownCommand.message(arguments: args) {
+            FileHandle.standardError.write(Data(unknown.utf8))
+            exit(64)
+        }
         if HookDispatch.matches(args) {
             await HookDispatch.run(arguments: Array(args.dropFirst()))
             return
