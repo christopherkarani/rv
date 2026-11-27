@@ -766,6 +766,21 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         }
     }
 
+    @Test func inlineAskKeepsItsKeysAtEveryWidth() {
+        let bare = "◐ wants out · ^B R"
+        for host in [Self.longHost, "例え例え例え例え例え.example.com"] {
+            let state = openReview([egress("p1", host, ageSeconds: 5)])
+            for cells in 1...120 {
+                guard let ask = WorkspaceReviewText.ask(state.review, cells: cells) else {
+                    #expect(WorkspaceCells.width(bare) > cells)
+                    continue
+                }
+                #expect(WorkspaceCells.width(ask) <= cells, "\(cells): \(ask)")
+                #expect(ask.hasSuffix(" · ^B R answer") || ask == bare, "\(cells): \(ask)")
+            }
+        }
+    }
+
     @Test func inlineAskStripsEscapesFromTheHost() {
         let state = openReview([egress("p1", "evil\u{1b}[2Jexample.com", ageSeconds: 1)])
         let ask = WorkspaceReviewText.ask(state.review, cells: 120)

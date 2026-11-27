@@ -8,9 +8,9 @@ import SwiftTUICLI
 public enum WorkspaceTUILaunch {
     /// `background` must be detected before this call: SwiftTUI puts the
     /// terminal in raw mode and owns its input from here on.
-    /// `sessionsStarted` counts shell starts for this Mac, this one
-    /// included (nil when unknown); the footer teaches the keys while it
-    /// is small.
+    /// `sessionsStarted` counts shell starts in this project's layout
+    /// directory, this one included (nil when unknown); the footer
+    /// teaches the keys while it is small.
     @MainActor
     public static func run(
         _ model: WorkspaceTUIModel, background: TerminalBackground = .dark, sessionsStarted: Int? = nil
