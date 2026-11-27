@@ -26,7 +26,9 @@ struct RVMenuApplication: App {
 
     var body: some Scene {
         MenuBarExtra {
-            GlancePopover(state: model.state, now: model.now, calendar: model.calendar) {
+            GlancePopover(
+                state: model.state, now: model.now, calendar: model.calendar, plain: model.lastStopPlain?.text
+            ) {
                 NSApplication.shared.terminate(nil)
             }
         } label: {
