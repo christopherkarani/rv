@@ -209,6 +209,14 @@ public enum ReviewSanitizer: Sendable {
     }
 
     public static func redactCredentials(in text: String) -> String {
+        redactCredentials(in: text, matchingValuePrefixes: true)
+    }
+
+    /// With `matchingValuePrefixes: false`, known token prefixes (`ghp_`,
+    /// `sk-`, `AKIA`) are left to the caller, which matches them with a
+    /// real key's length and characters (`CommandLineRedaction`), so
+    /// `--name sk-worker-0001` stays readable.
+    package static func redactCredentials(in text: String, matchingValuePrefixes: Bool) -> String {
         if looksLikePEM(text) {
             return redactedPlaceholder
         }
@@ -218,7 +226,7 @@ public enum ReviewSanitizer: Sendable {
             if previousLower == "bearer" {
                 redacted = redactedPlaceholder
             } else {
-                redacted = redactAssignmentOrPrefix(token)
+                redacted = redactAssignmentOrPrefix(token, matchingValuePrefixes: matchingValuePrefixes)
             }
             previousLower = token.lowercased()
             return redacted
@@ -336,19 +344,22 @@ public enum ReviewSanitizer: Sendable {
         return redactCredentials(in: value)
     }
 
-    private static func redactAssignmentOrPrefix(_ token: String) -> String {
+    private static func redactAssignmentOrPrefix(_ token: String, matchingValuePrefixes: Bool) -> String {
+        func secretValue(_ text: String) -> Bool {
+            looksLikePEM(text) || (matchingValuePrefixes && containsSecretPrefix(text))
+        }
         if let equals = token.firstIndex(of: "=") {
             let key = String(token[..<equals])
             let value = String(token[token.index(after: equals)...])
             // Keep a non-secret key when only the value is credential-shaped.
             // If the key itself carries a prefix/PAT, drop the whole token.
-            if looksLikeSecretValue(key) == false,
-               looksLikeSecretKey(key) || looksLikeSecretValue(value)
+            if secretValue(key) == false,
+               looksLikeSecretKey(key) || secretValue(value)
             {
                 return "\(key)=\(redactedPlaceholder)"
             }
         }
-        if containsSecretPrefix(token) {
+        if matchingValuePrefixes, containsSecretPrefix(token) {
             return redactedPlaceholder
         }
         return token

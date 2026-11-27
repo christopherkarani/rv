@@ -112,6 +112,10 @@ public final class WorkspaceLayoutSession: @unchecked Sendable {
     /// Counts shell starts in this layout directory, this one included,
     /// so the footer can stop teaching the keys. Display only: nil when
     /// the count cannot be written, and a damaged count starts over.
+    ///
+    /// Two shells starting at once in one project can both read the same
+    /// count and both write `next`, so one start goes uncounted. That is
+    /// harmless: the count only decides when the footer stops teaching.
     public func recordShellStart() -> Int? {
         lock.lock()
         defer { lock.unlock() }
@@ -120,7 +124,11 @@ public final class WorkspaceLayoutSession: @unchecked Sendable {
         do {
             try WorkspaceLayoutStore.atomicWrite(Data("\(next)\n".utf8), in: directoryFD,
                                                   name: Self.shellStartsName, viewID: viewID,
-                                                  failDirectorySyncAfterRename: false)
+                                                  failDirectorySyncAfterRename: failDirectorySyncAfterRename)
+        } catch WorkspaceLayoutStoreError.commitUncertain {
+            // The rename landed; only the directory sync failed. The new
+            // count is what the next start reads.
+            return next
         } catch {
             return nil
         }
