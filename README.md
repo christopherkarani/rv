@@ -43,8 +43,9 @@ $ rv test 'git status'
 
 ```sh
 curl -fsSL https://rykanv.com/install | sh
-rv setup    # auto-detects your agents and wires their hooks
-rv doctor   # verify everything is live
+rv setup --dry-run   # optional: see which hooks setup would write
+rv setup             # auto-detects your agents and wires their hooks
+rv doctor            # verify everything is live
 ```
 
 Want to watch before you enforce? Install in observe mode: rv logs what it
