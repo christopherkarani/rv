@@ -43,7 +43,8 @@ enum PendingListProjection {
         }
     }
 
-    private static func item(from record: PendingApproval) -> PendingListItem {
+    /// One row as `pendingList` shows it; live ask events reuse it.
+    static func item(from record: PendingApproval) -> PendingListItem {
         PendingListItem(
             id: record.id,
             host: record.identity.agent,
