@@ -49,7 +49,7 @@ struct MCPHostConfigDoorTests {
             allowlist: { .empty }, host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
                 guardMode: .enforce,
-                judge: JudgeSelection(engine: .ft, bundle: nil),
+                judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                 store: .gather(home: home, cwd: wd(cwd))
             )
         ).result
@@ -140,7 +140,7 @@ struct MCPHostConfigDoorTests {
                         allowlist: { .empty }, host: .hook(.claude), tool: .bash,
                         inputs: EvaluationInputs(
                             guardMode: .enforce,
-                            judge: JudgeSelection(engine: .ft, bundle: nil),
+                            judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                             store: .gather(home: home, cwd: cwd)
                         )
                     ).result
