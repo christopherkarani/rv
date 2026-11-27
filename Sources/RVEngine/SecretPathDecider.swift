@@ -81,11 +81,27 @@ public struct SecretPathDecider: Sendable {
     /// (`grep "k" ".env"`, `jq . .env`). The deny keeps the matching view and
     /// never quotes the unmasked text.
     public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        // The commit check's switch is pinned even behind a pack deny: `git
+        // reset --hard && git config rv.secretsScan false` must not ride on
+        // an allow-once for the reset.
+        if case .deny(let deny, _) = result.outcome, deny.ruleID.pack != .coreSecrets,
+           catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command, leavingGitInternals: true)
+        {
+            return SecretsScanGuard.deny(searchText: result.matchingView.rawValue)
+        }
         let folded = fold(result)
         guard folded == result, escalatesToAliasPass(result) else { return folded }
         // The Linux secret store is a keyring reached over D-Bus, not a path.
         if catalog.rules.isEmpty == false, SecretServiceGuard.touchesSecretService(command) {
             let matched = SecretServiceGuard.match(searchText: result.matchingView.rawValue)
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+                matchingView: result.matchingView
+            )
+        }
+        // The commit check's off switch and allow paths are the owner's.
+        if catalog.rules.isEmpty == false, SecretsScanGuard.weakensScan(command, leavingGitInternals: true) {
+            let matched = SecretsScanGuard.match(searchText: result.matchingView.rawValue)
             return EvaluationResult(
                 outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
                 matchingView: result.matchingView
