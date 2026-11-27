@@ -30,6 +30,7 @@ enum HelpCatalog {
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .log: log
         case .host: host
         case .audit: audit
         case .secrets: secrets
@@ -70,6 +71,7 @@ enum HelpCatalog {
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
+                HelpRow(name: "log", description: "What rv stopped or would stop, newest first"),
                 HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
