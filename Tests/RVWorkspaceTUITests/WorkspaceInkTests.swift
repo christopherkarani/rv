@@ -3,20 +3,24 @@ import SwiftTUICLI
 import Testing
 @testable import RVWorkspaceTUI
 
-@Test func darkInkKeepsTheShellsNamedColors() {
-    let dark = WorkspaceInk(background: .dark)
-    #expect(dark.attention == .yellow)
-    #expect(dark.ok == .green)
-    #expect(dark.muted == .gray)
-    #expect(dark.danger == .red)
+@Test func inkUsesRvsTerminalPaletteOnDark() {
+    #expect(WorkspaceInk.hex(.rv, background: .dark) == 0xB8A9FF)
+    #expect(WorkspaceInk.hex(.watch, background: .dark) == 0xFFCF6B)
+    #expect(WorkspaceInk.hex(.stop, background: .dark) == 0xFF7A7A)
+    #expect(WorkspaceInk(background: .dark).watch == Color(hexRGB: 0xFFCF6B))
 }
 
-@Test func lightInkReplacesEveryChromeColor() {
-    let dark = WorkspaceInk(background: .dark)
-    let light = WorkspaceInk(background: .light)
-    #expect(light.attention != dark.attention)
-    #expect(light.ok != dark.ok)
-    #expect(light.muted != dark.muted)
-    #expect(light.danger != dark.danger)
+@Test func lightInkReplacesEveryToken() {
+    for token in WorkspaceInk.Token.allCases {
+        #expect(WorkspaceInk.hex(token, background: .light) != WorkspaceInk.hex(token, background: .dark), "\(token)")
+    }
+}
+
+@Test func tonesMapToTheirTokens() {
+    let ink = WorkspaceInk(background: .dark)
+    #expect(ink.color(.quiet) == ink.mute)
+    #expect(ink.color(.ok) == ink.ok)
+    #expect(ink.color(.wants) == ink.watch)
+    #expect(ink.color(.stopped) == ink.stop)
 }
 #endif

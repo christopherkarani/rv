@@ -16,7 +16,11 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case help
     case test
     case `try`
+    case term
     case explain
+    case check
+    case prompt
+    case news
     case service
     case serviceStatus
     case serviceRestart
@@ -33,6 +37,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case allowlist
     case safety
     case blocks
+    case log
     case host
     case audit
     case secrets
@@ -160,7 +165,11 @@ extension HelpTopic {
         case .help: []
         case .test: [Test.self]
         case .`try`: [Try.self]
+        case .term: [Term.self]
         case .explain: [Explain.self]
+        case .check: [CheckCommand.self]
+        case .prompt: [PromptCommand.self]
+        case .news: [NewsCommand.self]
         case .service: [Service.self]
         case .serviceStatus: [Status.self]
         case .serviceRestart: [Restart.self, Start.self]
@@ -177,6 +186,7 @@ extension HelpTopic {
         case .allowlist: [AllowlistCommand.self]
         case .safety: [Safety.self]
         case .blocks: [Blocks.self]
+        case .log: [Log.self]
         case .host: [HostCommand.self]
         case .audit: [Audit.self]
         case .secrets: [Secrets.self]

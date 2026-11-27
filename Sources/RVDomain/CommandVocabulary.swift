@@ -22,7 +22,11 @@ public enum CommandVocabulary {
         case box
         case test
         case `try`
+        case term
         case explain
+        case check
+        case prompt
+        case news
         case packs
         case protect
         case policy
@@ -38,6 +42,8 @@ public enum CommandVocabulary {
         case egress
         case safety
         case blocks
+        /// `rv log`: the same ledger as `blocks`, in fixed columns.
+        case log
         case host
         case audit
         case secrets
@@ -145,7 +151,6 @@ public enum CommandVocabulary {
         // `rv protect <tool>` (Chris, 2026-11-22) shipped in G6: it is
         // `Command.protect` now, not a planned name.
         PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
-        PlannedName(spelling: "rv log", today: "rv blocks", status: .recommended),
         PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
         PlannedName(spelling: "rv guard <host>", today: "rv host mode <host> block", status: .recommended),
         PlannedName(spelling: "rv watch <host>", today: "rv host mode <host> observe", status: .recommended),
