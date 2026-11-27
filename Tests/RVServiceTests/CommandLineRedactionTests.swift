@@ -69,6 +69,13 @@ struct CommandLineRedactionTests {
              shown: #"export API_TOKEN=[redacted] [redacted]""#, secret: "SECRETV10"),
         Case(command: #"curl --user="bob:my hunter2" https://x.example"#,
              shown: #"curl --user="bob:[redacted] [redacted]" https://x.example"#, secret: "hunter2"),
+        // A plural secret name hides the whole quoted value.
+        Case(command: #"export SECRETS="a SECRETV11""#,
+             shown: #"export SECRETS=[redacted] [redacted]""#, secret: "SECRETV11"),
+        Case(command: #"DB_PASSWORDS="a SECRETV12" ./migrate"#,
+             shown: #"DB_PASSWORDS=[redacted] [redacted]" ./migrate"#, secret: "SECRETV12"),
+        Case(command: #"API_KEYS="k1 SECRETV13" ./serve"#,
+             shown: #"API_KEYS=[redacted] [redacted]" ./serve"#, secret: "SECRETV13"),
         // `token` is a scheme after an auth header, wherever the header sits.
         Case(command: #"git -c http.extraheader="Authorization: token abc123" fetch"#,
              shown: #"git -c http.extraheader="Authorization: token [redacted]" fetch"#, secret: "abc123"),
@@ -124,6 +131,8 @@ struct CommandLineRedactionTests {
         #"{"author":"bob"}"#,
         #"curl -d '{"author":"bob"}' https://api.example.com"#,
         "curl -H 'Author: bob' https://api.example.com",
+        // A bare plural `keys` names no secret.
+        "SSH_KEYS_DIR=/etc/ssh ./sync",
     ])
     func ordinaryCommandsAreUnchanged(_ command: String) {
         #expect(CommandLineRedaction.redact(command) == command)

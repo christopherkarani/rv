@@ -288,7 +288,7 @@ package enum CommandLineRedaction {
         /// `aws_secret_access_key`, `githubtoken`. Whole words only, so
         /// `author`, `max_tokens` and `keyboard` name none.
         static func isSecretName(_ name: String) -> Bool {
-            let words = nameWords(name)
+            let words = nameWords(name).map(singular)
             if words.contains(where: { word in
                 secretNameWords.contains(word) || secretNameEndings.contains { word.hasSuffix($0) }
             }) {
@@ -304,7 +304,18 @@ package enum CommandLineRedaction {
         ]
         /// A run-together word that ends in one of these (`dbpassword`,
         /// `githubtoken`, `xapikey`).
-        static let secretNameEndings = ["password", "passwd", "secret", "token", "apikey"]
+        static let secretNameEndings = ["password", "passwd", "secret", "token", "apikey", "passwords", "secrets"]
+        /// A plural secret word read as its singular (`SECRETS`,
+        /// `DB_PASSWORDS`, `api_keys`). A bare `keys` still names none
+        /// (`SSH_KEYS_DIR`).
+        static func singular(_ word: String) -> String {
+            pluralSecretWords.contains(word) ? String(word.dropLast()) : word
+        }
+
+        static let pluralSecretWords: Set<String> = [
+            "passwords", "passwds", "passphrases", "secrets", "keys", "apikeys", "privatekeys",
+            "accesskeys", "secretkeys", "cookies", "signatures",
+        ]
         /// `<word> key` pairs that name a secret (`api_key`, `X-Access-Key`).
         static let keyQualifiers: Set<String> = ["api", "access", "private", "secret", "signing", "encryption"]
 
