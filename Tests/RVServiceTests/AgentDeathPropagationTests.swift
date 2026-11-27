@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVXPC
 import Synchronization
 import Testing
 @testable import RVIsolation

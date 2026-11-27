@@ -1,6 +1,7 @@
 import Foundation
 import RVIPC
 import RVService
+import RVXPC
 
 public struct HelloAckView: Sendable, Equatable {
     public var protocolName: String

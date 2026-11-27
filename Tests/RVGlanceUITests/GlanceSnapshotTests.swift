@@ -18,7 +18,8 @@ struct GlanceSnapshotTests {
                 state: GlanceSamples.state(glyph), now: GlanceSamples.now, calendar: GlanceSamples.calendar,
                 onQuit: {}), scheme: scheme)
             #expect(image.width == Int(GlanceTheme.popoverWidth * 2))
-            #expect(image.height > 300)
+            // Connecting shows only the header and the footer.
+            #expect(image.height > (glyph == .connecting ? 150 : 300))
             #expect(Self.inkedFraction(image) > 0.01)
             try write(image, name: "popover-\(glyph.rawValue)-\(scheme == .dark ? "dark" : "light")")
         }
@@ -35,7 +36,7 @@ struct GlanceSnapshotTests {
         try write(big, name: "glyph-\(glyph.rawValue)")
     }
 
-    @Test func theSevenGlyphsAreSevenDifferentDrawings() throws {
+    @Test func everyGlyphIsADifferentDrawing() throws {
         var seen: Set<Data> = []
         for glyph in GlanceGlyph.allCases where glyph != .needsYou {
             let image = try render(GlanceGlyphView(glyph, foreground: .black).frame(width: 32, height: 32)

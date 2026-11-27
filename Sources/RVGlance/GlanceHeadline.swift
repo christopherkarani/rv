@@ -15,15 +15,15 @@ public struct GlanceHeadline: Sendable, Equatable {
         let glyph = state.glyph(at: now)
         let rvd = Self.rvdWords(state.link)
         switch glyph {
+        case .connecting:
+            self.init(title: "Connecting to rvd", subtitle: "nothing is confirmed yet")
         case .notRunning:
-            if state.link == .connecting {
-                self.init(title: "Connecting to rvd", subtitle: "nothing is confirmed yet")
-            } else {
-                self.init(title: "rv isn't running", subtitle: "rvd isn't answering · agents are unguarded")
-            }
+            let stopped = state.downSince.map { "rvd stopped \(Self.ago($0, now: now, calendar: calendar))" }
+            self.init(title: "rv isn't running", subtitle: "\(stopped ?? "rvd isn't answering") · agents are unguarded")
         case .needsYou:
             let count = state.pending.count
-            self.init(title: glyph.title, subtitle: "\(Self.plural(count, "ask")) waiting · \(rvd)")
+            let who = Self.waitingWords(state.waitingHosts)
+            self.init(title: glyph.title, subtitle: "\(Self.plural(count, "request")) · \(who)")
         case .justStopped:
             let host = state.lastStop.map { GlanceAgent.displayName($0.host) } ?? "an agent"
             self.init(title: glyph.title, subtitle: "\(host) · \(rvd)")
@@ -54,6 +54,24 @@ public struct GlanceHeadline: Sendable, Equatable {
         guard case .watching(let hosts) = posture, !hosts.isEmpty else { return "every agent in watch mode" }
         let names = hosts.map(GlanceAgent.displayName).joined(separator: ", ")
         return "\(names) in watch mode"
+    }
+
+    /// "claude is waiting", "claude and codex are waiting", "3 agents are waiting".
+    static func waitingWords(_ hosts: [HookHost]) -> String {
+        switch hosts.count {
+        case 0: "waiting for you"
+        case 1: "\(hosts[0].rawValue) is waiting"
+        case 2: "\(hosts[0].rawValue) and \(hosts[1].rawValue) are waiting"
+        default: "\(hosts.count) agents are waiting"
+        }
+    }
+
+    /// "just now", "2 min ago", or the clock time after an hour.
+    static func ago(_ then: Date, now: Date, calendar: Calendar) -> String {
+        let seconds = now.timeIntervalSince(then)
+        if seconds < 60 { return "just now" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) min ago" }
+        return "at \(GlanceClock.time(then, calendar: calendar))"
     }
 
     static func plural(_ count: Int, _ noun: String) -> String {

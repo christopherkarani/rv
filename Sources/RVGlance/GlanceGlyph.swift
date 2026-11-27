@@ -1,8 +1,9 @@
 import RVDomain
 
-/// The menu bar diamond's seven states (Menu bar v5, "The glyph"). The
-/// icon is a monochrome template image; only `needsYou` and `justStopped`
-/// earn colour, and only `needsYou` breathes.
+/// The menu bar diamond's seven states (Menu bar v5, "The glyph"), plus
+/// `connecting`, a neutral look for the moment before rvd's first reply.
+/// The icon is a monochrome template image; only `needsYou` and
+/// `justStopped` earn colour, and only `needsYou` breathes.
 public enum GlanceGlyph: String, CaseIterable, Sendable {
     /// rv will stop destructive commands (every host in block mode).
     case guarding
@@ -16,8 +17,10 @@ public enum GlanceGlyph: String, CaseIterable, Sendable {
     case boxed
     /// The owner paused rv for a while.
     case paused
-    /// rvd is unreachable, or not confirmed yet.
+    /// rvd stopped answering.
     case notRunning
+    /// No reply from rvd yet: neither guarding nor down is confirmed.
+    case connecting
 
     /// The state name, shared with rv term.
     public var title: String {
@@ -29,6 +32,7 @@ public enum GlanceGlyph: String, CaseIterable, Sendable {
         case .boxed: "Boxed"
         case .paused: "Paused"
         case .notRunning: "Not running"
+        case .connecting: "Connecting"
         }
     }
 
@@ -42,6 +46,7 @@ public enum GlanceGlyph: String, CaseIterable, Sendable {
         case .boxed: "a box is running"
         case .paused: "you paused rv for a while"
         case .notRunning: "rvd is down or hooks are broken"
+        case .connecting: "waiting for rvd's first reply"
         }
     }
 

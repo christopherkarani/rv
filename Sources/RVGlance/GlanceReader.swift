@@ -61,11 +61,11 @@ public struct GlanceReader: Sendable {
         }
     }
 
-    /// The ids of every ask awaiting a human.
-    public func pendingIDs() async -> Result<[ApprovalID], GlanceReadFailure> {
+    /// Every ask awaiting a human, and the agent that asked.
+    public func pendingAsks() async -> Result<[ApprovalID: HookHost], GlanceReadFailure> {
         switch await call(.pendingList, timeoutMs: Self.unaryTimeoutMs) {
         case .success(.pendingList(let reply)):
-            return .success(reply.items.map(\.id))
+            return .success(Dictionary(reply.items.map { ($0.id, $0.host) }, uniquingKeysWith: { first, _ in first }))
         case .success(let other):
             return .failure(GlanceReadFailure(Self.describe(other)))
         case .failure(let text):

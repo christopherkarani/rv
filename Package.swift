@@ -343,7 +343,7 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore",
+            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore", "RVXPC",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [
@@ -371,12 +371,13 @@ let cliProducts: [Product] = [
     .executable(name: "rv-judge", targets: ["rv-judge"]),
 ]
 // The menu bar app (K1, Menu bar v5): SwiftUI and AppKit, macOS only.
-// rv-menu takes rvd's XPC transport from RVCLI and hands RVGlance a
-// read-only wire; nothing in it resolves asks or changes policy.
+// rv-menu talks to rvd over RVXPC's authenticated client (not RVCLI, which
+// carries the write clients) and hands RVGlance a read-only wire; nothing
+// in it resolves asks or changes policy.
 #if os(macOS)
 let macOSMenuTargets: [Target] = [
     .target(name: "RVGlanceUI", dependencies: ["RVGlance", "RVDomain"]),
-    .executableTarget(name: "rv-menu", dependencies: ["RVGlanceUI", "RVGlance", "RVCLI", "RVIPC", "RVPolicy", "RVDomain", "RVFileStore"]),
+    .executableTarget(name: "rv-menu", dependencies: ["RVGlanceUI", "RVGlance", "RVXPC", "RVIPC", "RVPolicy", "RVDomain"]),
 ]
 let macOSMenuProducts: [Product] = [
     .library(name: "RVGlanceUI", targets: ["RVGlanceUI"]),
