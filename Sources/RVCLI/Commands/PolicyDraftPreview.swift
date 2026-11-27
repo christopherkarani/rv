@@ -6,6 +6,8 @@ import RVTheme
 /// id dim on its own line. `✕ never git push --force → main`.
 /// The predicate fields stay in `--json`; text shows what the rule does.
 enum PolicyDraftPreview {
+    private typealias Glyph = CommandVocabulary.Glyph
+
     /// Typed rules only add stops; an allow cannot loosen rv or a pack.
     static let restrictOnlyNote = "allow only narrows: it never lets through what rv or a pack stops"
 
@@ -13,14 +15,14 @@ enum PolicyDraftPreview {
         let rule = preview.rule
         let (glyph, verb, ink): (String, String, String)
         switch rule.verdict {
-        case .deny: (glyph, verb, ink) = ("✕", "never", palette.deny)
-        case .ask: (glyph, verb, ink) = ("◐", "ask", palette.mark)
-        case .allow: (glyph, verb, ink) = ("✓", "allow", palette.allow)
+        case .deny: (glyph, verb, ink) = (Glyph.stopped.rawValue, "never", palette.deny)
+        case .ask: (glyph, verb, ink) = (Glyph.watched.rawValue, CommandVocabulary.Verdict.ask, palette.mark)
+        case .allow: (glyph, verb, ink) = (Glyph.done.rawValue, CommandVocabulary.Verdict.allow, palette.allow)
         }
         let (command, target, detail) = words(rule.predicate)
         var line = "  \(paint(glyph, ink, palette)) \(verb) \(paint(command, palette.fact, palette))"
         if let target {
-            line += " \(paint("→", palette.muted, palette)) \(paint(DisplayedText.field(target), palette.fact, palette))"
+            line += " \(paint(Glyph.next.rawValue, palette.muted, palette)) \(paint(DisplayedText.field(target), palette.fact, palette))"
         }
         for note in [detail, readAs(preview.sentence)].compactMap({ $0 }) {
             line += " " + paint("· \(note)", palette.muted, palette)
@@ -86,8 +88,8 @@ enum PolicyDraftPreview {
             .contains { lower.contains(" \($0) ") || lower.contains(" \($0),") }
         let headline = saysNo ? problem : "\(lead(refusal)): \(problem)"
         return [
-            "  \(paint("✕", palette.deny, palette)) \(headline)",
-            "  \(paint("→", palette.trace, palette)) \(fix)",
+            "  \(paint(Glyph.stopped.rawValue, palette.deny, palette)) \(headline)",
+            "  \(paint(Glyph.next.rawValue, palette.trace, palette)) \(fix)",
         ]
     }
 
