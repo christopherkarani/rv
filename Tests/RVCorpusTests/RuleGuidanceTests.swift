@@ -204,6 +204,7 @@ struct RuleGuidanceTests {
         #"get-secret-value"#, #"\bkv\s+get\b"#, #"(^|\s)read(\s|$)"#, #"\bdownload\b"#,
         #"\bdocument\s+get\b"#, #"\btoken\s+lookup\b"#, #"\bsecrets\s+get\b"#, #"\bitem\s+get\b"#,
         #"get-parameters?\b"#, #"--with-decryption"#, #"--reveal"#, #"--include-values?\b"#, #"--plain\b"#,
+        #"\bhelm\s+get\s+values\b"#, #"\bget\s+secrets?\b.*\s-o\b"#, #"(^|\s)(env|printenv)(\s|$)"#,
     ]
     /// In a secrets.* pack nothing may fetch at all: a `get` other than
     /// `kv metadata get` (versions, not values), a lookup or an export.
@@ -213,7 +214,9 @@ struct RuleGuidanceTests {
         let documents = try PackRegistry.loadAllDocuments()
         // The check itself must catch the commands it exists for.
         for leak in ["aws secretsmanager get-secret-value --secret-id x", "vault kv get secret/db", "vault read secret/db",
-                     "doppler secrets download", "doppler secrets get DB", "op document get doc", "vault token lookup"] {
+                     "doppler secrets download", "doppler secrets get DB", "op document get doc", "vault token lookup",
+                     "helm get values RELEASE", "kubectl get secret NAME -o yaml",
+                     "kubectl get secret x -o jsonpath={.data.password}", "env", "printenv", "doppler run -- env"] {
             #expect(readsSecret(leak, inSecretsPack: false), "\(leak) slipped past the secret check")
         }
         #expect(readsSecret("vault kv metadata get secret/db", inSecretsPack: true) == false)
@@ -230,16 +233,23 @@ struct RuleGuidanceTests {
     }
 
     /// A safer command only lists, describes or dry-runs. These verbs change
-    /// something (a file, a container, a remote) and are never advice.
+    /// something (a file, the work tree, a container, a remote) and are never
+    /// advice. `git stash list` and `git stash show` only read.
     static let writeVerbs = [
-        #"\bexport\b"#, #"--output\b"#, #"(^|\s)(stop|down|rm|cp|mv|tee|kill|delete|remove|destroy|purge)(\s|$)"#,
-        #"\btar\s+-[A-Za-z]*c"#, #">"#,
+        #"\bexport\b"#, #"--output\b"#,
+        #"(^|\s)(stop|down|rm|cp|mv|tee|kill|delete|remove|destroy|purge|prune|reset|truncate|disable|scale|set)(\s|$)"#,
+        #"\btar\s+-[A-Za-z]*c"#, #">"#, #"\bgit\s+stash\b(?!\s+(list|show)\b)"#,
     ]
 
     @Test func noSaferCommand_writes() throws {
         for write in ["wrangler d1 export db --output b.sql", "docker compose stop", "docker compose down",
-                      "tar -cf out.tar ./build", "echo x >> log", "mv ./build /tmp/", "cp a b", "date | tee log"] {
+                      "tar -cf out.tar ./build", "echo x >> log", "mv ./build /tmp/", "cp a b", "date | tee log",
+                      "git reset --hard", "podman system prune -f", "truncate -s 0 f", "systemctl disable x",
+                      "kubectl scale deployment web --replicas=0", "gh secret set X", "git stash", "git stash drop"] {
             #expect(writes(write), "\(write) slipped past the write check")
+        }
+        for read in ["git stash list", "git stash show -p stash@{0}", "git status", "git diff REF -- FILE"] {
+            #expect(writes(read) == false, "\(read) only reads")
         }
         for document in try PackRegistry.loadAllDocuments() {
             for guidance in document.guidance {

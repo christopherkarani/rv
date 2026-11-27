@@ -91,7 +91,7 @@ let expectedFilesystemDestructive = [
     #expect(git.guidance.map(\.ruleID.pattern) == expectedGitDestructive)
     let resetHard = try #require(git.guidance(forRule: "reset-hard"))
     #expect(resetHard.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
-    #expect(resetHard.saferCommand == "git stash")
+    #expect(resetHard.saferCommand == "git status")
     #expect(resetHard.examples.stop.contains("git reset --hard"))
     #expect(resetHard.examples.allow.isEmpty == false)
     #expect(git.guidance(forRule: "push-force-long")?.saferCommand == nil)
