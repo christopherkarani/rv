@@ -12,7 +12,7 @@ struct Packs: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "packs",
         abstract: "List and enable or disable packs.",
-        subcommands: [List.self, Enable.self, Disable.self, Info.self],
+        subcommands: [List.self, Enable.self, Disable.self, Info.self, TestPack.self],
         defaultSubcommand: List.self
     )
 
@@ -192,6 +192,91 @@ struct Packs: AsyncParsableCommand {
             ]
             ctx.writeStdout(lines.joined(separator: "\n") + "\n")
         }
+    }
+}
+
+extension Packs {
+    /// `rv packs test <pack>`: runs every example of the pack's rules and
+    /// shows which pass. Reads the bundle only; changes nothing.
+    struct TestPack: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "test",
+            abstract: "Run a pack's examples and show which rules pass."
+        )
+
+        @OptionGroup
+        var format: FormatFlags
+
+        @Argument(help: "Pack ID.")
+        var id: String
+
+        func run() async throws {
+            let ctx = CommandContext.current(command: "packs", format: format)
+            let probe: PackProbe
+            do {
+                probe = try PackProbe.bundled()
+            } catch {
+                try ctx.fail("rv: the bundled packs cannot be read. Run rv doctor.\n")
+            }
+            guard let packID = PackID(validating: id), let runs = probe.runExamples(of: packID) else {
+                let ids = probe.packIDs.map(\.rawValue)
+                var text = "rv: no pack is named \(DisplayedText.field(id))."
+                if let near = PacksConfigStore.nearestSelection(to: id, in: ids) { text += " Did you mean \(near)?" }
+                try ctx.fail(text + " rv packs --all lists every pack.\n")
+            }
+            let enabled = ctx.home.map { EvaluationWorld.walkedPackIDs(home: $0).ids } ?? dayOnePackIDs
+            let model = PackTestReport.model(packID: packID, runs: runs, enabled: enabled.contains(packID))
+            let exitCode: Int32 = model.passed ? 0 : 1
+            if ctx.explicitRobot {
+                try ctx.emit(stdout: PackTestReport.json(packID: packID, runs: runs) + "\n", exitCode: exitCode)
+                return
+            }
+            let palette: Palette
+            switch ctx.appearance {
+            case .robot: palette = colorOffPalette
+            case .pretty(let value): palette = value
+            }
+            try ctx.emit(stdout: PrettyWriter.join(PackTestRenderer().render(model, palette: palette)), exitCode: exitCode)
+        }
+    }
+}
+
+/// `rv packs test` results to the view model and `--json`.
+enum PackTestReport {
+    static func model(packID: PackID, runs: [RuleExampleRun], enabled: Bool) -> PackTestViewModel {
+        PackTestViewModel(
+            packID: packID,
+            rules: runs.map { run in
+                PackTestViewModel.Rule(
+                    name: run.ruleID.pattern,
+                    stops: run.stops,
+                    allows: run.allows,
+                    failures: run.failures.map { "\($0.label.rawValue): \(DisplayedText.field($0.command)) \($0.got)" }
+                )
+            },
+            turnOn: enabled ? nil : "\(CommandVocabulary.Command.packs.invocation) enable \(packID.rawValue)"
+        )
+    }
+
+    /// `{"schema":"rv.packs.test.v1","pack_id":…,"passed":…,"rules":[…]}`
+    static func json(packID: PackID, runs: [RuleExampleRun]) throws -> String {
+        let rules: [[String: Any]] = runs.map { run in
+            [
+                "rule_id": run.ruleID.rawValue,
+                "stops": run.stops,
+                "allows": run.allows,
+                "passed": run.passed,
+                "failures": run.failures.map { ["label": $0.label.rawValue, "command": $0.command, "got": $0.got] },
+            ]
+        }
+        let object: [String: Any] = [
+            "schema": "rv.packs.test.v1",
+            "pack_id": packID.rawValue,
+            "passed": runs.allSatisfy(\.passed),
+            "rules": rules,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
