@@ -69,7 +69,7 @@
       "severity": "critical",
       "description": "circleci context delete removes contexts and their secrets.",
       "explanation": "Deleting a CircleCI context removes all secrets stored within it. Any pipeline jobs that reference this context will fail immediately. Secret values cannot be recovered after deletion and must be manually re-entered.\n\nSafer alternatives:\n- circleci context list: Review contexts before deletion\n- circleci context show: Inspect context secrets (names only)\n- Document secret names before removing context",
-      "safer_command": "circleci context list <vcs-type> <org>",
+      "safer_command": "circleci context list VCS_TYPE ORG",
       "examples": {
         "stop": [
           "circleci context delete my-app"
@@ -86,7 +86,7 @@
       "severity": "high",
       "description": "circleci context remove-secret deletes secrets from a context.",
       "explanation": "Removing a secret from a context makes it unavailable to all jobs using that context. Pipelines depending on this secret will fail. The secret value cannot be retrieved after removal.\n\nSafer alternatives:\n- circleci context show: Review secrets in context first\n- Update the secret value instead of removing\n- Document secret value externally before removal",
-      "safer_command": "circleci context show <vcs-type> <org> <context>",
+      "safer_command": "circleci context show VCS_TYPE ORG CONTEXT",
       "examples": {
         "stop": [
           "circleci context remove-secret"
@@ -103,7 +103,7 @@
       "severity": "high",
       "description": "circleci orb delete removes an orb from the registry.",
       "explanation": "Deleting an orb removes it from the CircleCI orb registry. Any pipeline using this orb will fail on the next run. If other teams or projects depend on this orb, their CI/CD will break without warning.\n\nSafer alternatives:\n- circleci orb info: Review orb details and usage\n- Deprecate the orb instead of deleting\n- Check for dependent projects before deletion",
-      "safer_command": "circleci orb info <namespace>/<orb>",
+      "safer_command": "circleci orb info NAMESPACE/ORB",
       "examples": {
         "stop": [
           "circleci orb delete my-app"

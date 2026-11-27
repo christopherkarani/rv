@@ -54,7 +54,7 @@
       "severity": "high",
       "description": "velero backup delete removes a backup and its data.",
       "explanation": "Deleting a Velero backup removes both the backup metadata in Kubernetes and the actual backup data from object storage. Once deleted, you cannot restore your cluster or applications to that backup point. This is irreversible.\n\nSafer alternatives:\n- velero backup describe: Review backup contents before deletion\n- velero backup get: List all backups to verify target\n- Consider retaining backups with TTL policies instead of manual deletion",
-      "safer_command": "velero backup describe <backup>",
+      "safer_command": "velero backup describe BACKUP",
       "examples": {
         "stop": [
           "velero backup delete my-app"

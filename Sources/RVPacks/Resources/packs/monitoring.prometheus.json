@@ -50,7 +50,7 @@
       "severity": "critical",
       "description": "Deleting Prometheus rule/config files can break alerting and monitoring coverage.",
       "explanation": "Deleting Prometheus configuration or rule files stops alerting for the defined conditions. After Prometheus reloads, those alerts will no longer fire, potentially leaving critical conditions unmonitored.\n\nSafer alternatives:\n- promtool check rules: Validate rule files before changes\n- Back up files before deletion\n- Use version control (git) for rule files",
-      "safer_command": "promtool check rules <file>",
+      "safer_command": "promtool check rules FILE",
       "examples": {
         "stop": [
           "rm /etc/prometheus/rules.d/alerts.yml"

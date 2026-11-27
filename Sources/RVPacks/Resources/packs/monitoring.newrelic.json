@@ -41,7 +41,7 @@
       "severity": "high",
       "description": "newrelic entity delete removes a New Relic entity, impacting observability.",
       "explanation": "Deleting a New Relic entity removes all associated telemetry data, relationships, and alert configurations. Historical metrics for this entity will no longer be accessible.\n\nSafer alternatives:\n- newrelic entity search: Find and verify the entity first\n- Tag the entity as deprecated instead of deleting\n- Export entity configuration before deletion",
-      "safer_command": "newrelic entity search --name <name>",
+      "safer_command": "newrelic entity search --name NAME",
       "examples": {
         "stop": [
           "newrelic entity delete my-app"

@@ -234,7 +234,7 @@
       "severity": "high",
       "description": "kamal accessory reboot stops, removes, and recreates the accessory container (downtime).",
       "explanation": "`kamal accessory reboot [NAME]` stops, removes, and starts a new accessory container, causing downtime for that accessory (e.g. the database). Data survives only if a volume is mapped; an unmapped data directory is at risk. `NAME=all` reboots every accessory.\n\nSafer alternatives:\n- kamal accessory restart: restart the existing container without remove/recreate\n- kamal accessory details: confirm the target accessory before cycling it",
-      "safer_command": "kamal accessory details <accessory>",
+      "safer_command": "kamal accessory details ACCESSORY",
       "examples": {
         "stop": [
           "kamal accessory reboot"

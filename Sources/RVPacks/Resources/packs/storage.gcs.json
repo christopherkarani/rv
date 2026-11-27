@@ -111,7 +111,7 @@
       "severity": "high",
       "description": "gsutil rm deletes objects from GCS.",
       "explanation": "Deleting GCS objects permanently removes data unless versioning is enabled. With -r flag, entire directory trees are deleted recursively. Without versioning, deleted objects cannot be recovered.\n\nSafer alternatives:\n- gsutil ls: Preview what will be deleted\n- Enable bucket versioning for recovery options\n- gsutil mv: Move to archive bucket instead of deleting",
-      "safer_command": "gsutil ls gs://<bucket>",
+      "safer_command": "gsutil ls gs://BUCKET",
       "examples": {
         "stop": [
           "gsutil rm my-app"
@@ -143,7 +143,7 @@
       "severity": "critical",
       "description": "gcloud storage buckets delete removes a GCS bucket.",
       "explanation": "Deleting a GCS bucket removes the bucket configuration and all objects within it (if --recursive is used). The globally unique bucket name may not be immediately reclaimable. All dependent applications will fail.\n\nSafer alternatives:\n- gcloud storage buckets describe: Review bucket configuration\n- gcloud storage cp -r: Backup contents before deletion\n- Remove objects first to understand data being deleted",
-      "safer_command": "gcloud storage buckets describe gs://<bucket>",
+      "safer_command": "gcloud storage buckets describe gs://BUCKET",
       "examples": {
         "stop": [
           "gcloud storage buckets delete my-app"
@@ -160,7 +160,7 @@
       "severity": "high",
       "description": "gcloud storage objects delete removes objects from GCS.",
       "explanation": "Deleting GCS objects permanently removes data. Without object versioning, deleted files cannot be recovered. Production data should be backed up before deletion.\n\nSafer alternatives:\n- gcloud storage objects describe: Verify object before deletion\n- Enable bucket versioning for soft deletes\n- Move to archive storage class instead of deleting",
-      "safer_command": "gcloud storage objects describe gs://<bucket>/<object>",
+      "safer_command": "gcloud storage objects describe gs://BUCKET/OBJECT",
       "examples": {
         "stop": [
           "gcloud storage objects delete my-app"
@@ -177,7 +177,7 @@
       "severity": "high",
       "description": "gcloud storage rm removes objects from GCS.",
       "explanation": "The rm command deletes objects and can recursively remove entire bucket contents. Deleted objects are permanently lost unless versioning is enabled. Wildcards can unexpectedly match more files than intended.\n\nSafer alternatives:\n- gcloud storage ls: Preview files matching pattern\n- Enable bucket versioning before testing\n- gcloud storage mv: Move to archive bucket instead",
-      "safer_command": "gcloud storage ls gs://<bucket>",
+      "safer_command": "gcloud storage ls gs://BUCKET",
       "examples": {
         "stop": [
           "gcloud storage rm my-app"

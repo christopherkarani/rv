@@ -114,7 +114,7 @@
       "severity": "high",
       "description": "helm upgrade --force deletes and recreates resources, causing downtime.",
       "explanation": "The --force flag causes Helm to delete and recreate resources instead of updating them in place. This can cause service disruption:\n\n- Pods are terminated and recreated (downtime between)\n- Persistent volume claims may be deleted and recreated\n- In-flight requests are dropped during recreation\n- Service IP addresses may change\n\nSafer alternatives:\n- Remove --force to use rolling updates\n- helm upgrade --dry-run --debug: Preview changes\n- helm diff upgrade: Compare before upgrading (requires diff plugin)",
-      "safer_command": "helm diff upgrade <release> <chart>",
+      "safer_command": "helm status RELEASE",
       "examples": {
         "stop": [
           "helm upgrade --force"
@@ -131,7 +131,7 @@
       "severity": "high",
       "description": "helm upgrade --reset-values discards all previously set values.",
       "explanation": "The --reset-values flag discards all values from previous releases, using only chart defaults and explicitly provided values. This can unexpectedly change:\n\n- Resource limits and replica counts\n- Database connection strings and credentials\n- Feature flags and environment variables\n- Any customization from previous 'helm upgrade' commands\n\nSafer alternatives:\n- helm get values <release>: Review current values first\n- helm upgrade --reuse-values: Keep existing values (default)\n- helm upgrade -f values.yaml: Explicitly set all needed values",
-      "safer_command": "helm history <release>",
+      "safer_command": "helm history RELEASE",
       "examples": {
         "stop": [
           "helm upgrade --reset-values"

@@ -73,7 +73,7 @@
       "severity": "medium",
       "description": "algolia rules delete removes index rules.",
       "explanation": "Deleting Algolia rules removes search customizations like query rewrites, promotions, and filters. Search behavior may change unexpectedly for users relying on these rules for relevant results.\n\nSafer alternatives:\n- algolia rules browse: Export rules before deletion\n- Disable rules temporarily instead of deleting\n- Test rule changes on a replica index first",
-      "safer_command": "algolia rules browse <index>",
+      "safer_command": "algolia rules browse INDEX",
       "examples": {
         "stop": [
           "algolia rules delete my-app"
@@ -90,7 +90,7 @@
       "severity": "medium",
       "description": "algolia synonyms delete removes synonym entries.",
       "explanation": "Deleting Algolia synonyms removes word associations that improve search matching. Users searching with alternative terms may no longer find expected results. Synonym configurations can take time to rebuild.\n\nSafer alternatives:\n- algolia synonyms browse: Export synonyms before deletion\n- Test synonym changes on a replica index\n- Document synonym configurations for recovery",
-      "safer_command": "algolia synonyms browse <index>",
+      "safer_command": "algolia synonyms browse INDEX",
       "examples": {
         "stop": [
           "algolia synonyms delete my-app"

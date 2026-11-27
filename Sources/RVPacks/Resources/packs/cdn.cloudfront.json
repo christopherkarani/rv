@@ -79,7 +79,7 @@
       "severity": "critical",
       "description": "aws cloudfront delete-distribution removes a CloudFront distribution.",
       "explanation": "Deleting a CloudFront distribution removes your CDN endpoint. All traffic to the distribution URL will fail. You must first disable the distribution and wait for propagation. Associated origins, behaviors, and cache settings are lost.\n\nSafer alternatives:\n- aws cloudfront get-distribution: Review configuration first\n- Disable the distribution before deleting\n- Export the distribution config for backup",
-      "safer_command": "aws cloudfront get-distribution --id <distribution-id>",
+      "safer_command": "aws cloudfront get-distribution --id DISTRIBUTION_ID",
       "examples": {
         "stop": [
           "aws cloudfront delete-distribution"
@@ -96,7 +96,7 @@
       "severity": "high",
       "description": "aws cloudfront delete-cache-policy removes a cache policy.",
       "explanation": "Deleting a cache policy fails if any distribution behaviors reference it. If deletion succeeds, any caching optimizations you configured are lost. Custom TTLs, cache keys, and compression settings must be recreated.\n\nSafer alternatives:\n- aws cloudfront get-cache-policy: Review policy settings first\n- Check which distributions use this policy\n- Create a replacement policy before deleting",
-      "safer_command": "aws cloudfront get-cache-policy --id <policy-id>",
+      "safer_command": "aws cloudfront get-cache-policy --id POLICY_ID",
       "examples": {
         "stop": [
           "aws cloudfront delete-cache-policy"
@@ -113,7 +113,7 @@
       "severity": "high",
       "description": "aws cloudfront delete-origin-request-policy removes an origin request policy.",
       "explanation": "Deleting an origin request policy removes header, query string, and cookie forwarding configuration. Origins may receive different requests than expected, potentially breaking authentication or content negotiation.\n\nSafer alternatives:\n- aws cloudfront get-origin-request-policy: Review settings first\n- Verify no distributions reference this policy\n- Create replacement before deletion",
-      "safer_command": "aws cloudfront get-origin-request-policy --id <policy-id>",
+      "safer_command": "aws cloudfront get-origin-request-policy --id POLICY_ID",
       "examples": {
         "stop": [
           "aws cloudfront delete-origin-request-policy"
@@ -130,7 +130,7 @@
       "severity": "high",
       "description": "aws cloudfront delete-function removes a CloudFront function.",
       "explanation": "Deleting a CloudFront Function removes edge compute logic. Any distributions using this function will lose URL rewriting, header manipulation, or other transformations. Function code is not recoverable after deletion.\n\nSafer alternatives:\n- aws cloudfront get-function: Download function code first\n- Remove function associations from distributions first\n- Test replacements before deleting the original",
-      "safer_command": "aws cloudfront describe-function --name <function>",
+      "safer_command": "aws cloudfront describe-function --name FUNCTION",
       "examples": {
         "stop": [
           "aws cloudfront delete-function"

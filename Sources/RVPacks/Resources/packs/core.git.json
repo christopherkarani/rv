@@ -239,7 +239,7 @@
       "severity": "medium",
       "description": "git stash drop deletes a single stash. Recoverable via `git fsck` (unreachable objects).",
       "explanation": "git stash drop removes a specific stash entry from your stash list. The stashed changes become unreferenced but remain in git's object database temporarily. They can often be recovered using git fsck, but this is not guaranteed and becomes harder over time as git garbage collects.\n\nSafer alternatives:\n- git stash pop: Apply and drop in one step (only drops if apply succeeds)\n- git stash apply: Apply without dropping, verify first\n\nRecovery if needed: git fsck --unreachable | grep commit git show <commit-hash> # Inspect each to find your stash",
-      "safer_command": "git stash show -p <stash>",
+      "safer_command": "git stash show -p STASH",
       "examples": {
         "stop": [
           "git stash drop",

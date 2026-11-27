@@ -69,7 +69,7 @@
       "severity": "high",
       "description": "gh repo delete permanently deletes a GitHub repository. This cannot be undone.",
       "explanation": "Deleting a repository removes its code, issues, pull requests, releases, wiki, and Actions history together. GitHub can restore a deleted repository only within 90 days, only if the name has not been reused, and only via support — it is not a self-service undo.\n\nSafer alternatives:\n- gh repo archive: makes it read-only while keeping everything visible (the engine gates this one too, but it is reversible)\n- gh repo edit --visibility private: hides it without destroying it",
-      "safer_command": "gh repo view <owner>/<repo>",
+      "safer_command": "gh repo view OWNER/REPO",
       "examples": {
         "stop": [
           "gh repo delete my-app"

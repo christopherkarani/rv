@@ -195,7 +195,7 @@
       "severity": "critical",
       "description": "wrangler d1 delete removes a D1 database.",
       "explanation": "Deleting a D1 database permanently removes all tables, data, and schema. Workers bound to this database will fail with binding errors. D1 databases cannot be recovered after deletion.\n\nSafer alternatives:\n- wrangler d1 export: Export the database first\n- wrangler d1 info: Review database details\n- Remove Worker bindings before deletion",
-      "safer_command": "wrangler d1 export <database> --remote --output <backup>.sql",
+      "safer_command": "wrangler d1 info DATABASE",
       "examples": {
         "stop": [
           "wrangler d1 delete my-app"

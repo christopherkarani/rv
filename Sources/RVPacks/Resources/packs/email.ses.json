@@ -162,7 +162,7 @@
       "severity": "medium",
       "description": "aws ses delete-template removes an email template.",
       "explanation": "Deleting a template breaks any applications that reference it. Emails using this template will fail to send until the template is recreated.\n\nSafer alternatives:\n- aws ses get-template: Export template before deletion\n- Verify no active campaigns use this template\n- Create replacement template before deleting",
-      "safer_command": "aws ses get-template --template-name <template>",
+      "safer_command": "aws ses get-template --template-name TEMPLATE",
       "examples": {
         "stop": [
           "aws ses delete-template"
@@ -211,7 +211,7 @@
       "severity": "high",
       "description": "aws ses delete-receipt-rule removes a receipt rule.",
       "explanation": "Deleting a receipt rule changes how incoming emails are processed. Actions like S3 storage, Lambda triggers, or SNS notifications will stop for matching emails.\n\nSafer alternatives:\n- aws ses describe-receipt-rule: Review rule configuration\n- Disable the rule before deleting\n- Ensure no critical workflows depend on this rule",
-      "safer_command": "aws ses describe-receipt-rule --rule-set-name <rule-set> --rule-name <rule>",
+      "safer_command": "aws ses describe-receipt-rule --rule-set-name RULE_SET --rule-name RULE",
       "examples": {
         "stop": [
           "aws ses delete-receipt-rule"
@@ -228,7 +228,7 @@
       "severity": "high",
       "description": "aws sesv2 delete-email-identity removes a verified email identity.",
       "explanation": "Deleting a verified identity prevents sending from that address or domain. DKIM and SPF records become orphaned. Applications will fail until a new identity is verified.\n\nSafer alternatives:\n- aws sesv2 get-email-identity: Review identity configuration\n- Verify replacement identity before deletion\n- Update applications to use new identity first",
-      "safer_command": "aws sesv2 get-email-identity --email-identity <identity>",
+      "safer_command": "aws sesv2 get-email-identity --email-identity IDENTITY",
       "examples": {
         "stop": [
           "aws sesv2 delete-email-identity"
@@ -245,7 +245,7 @@
       "severity": "medium",
       "description": "aws sesv2 delete-email-template removes an email template.",
       "explanation": "Deleting a template breaks any send operations referencing it. Bulk email sends and transactional emails using this template will fail.\n\nSafer alternatives:\n- aws sesv2 get-email-template: Export template content\n- Check for active campaigns using this template\n- Version templates rather than deleting",
-      "safer_command": "aws sesv2 get-email-template --template-name <template>",
+      "safer_command": "aws sesv2 get-email-template --template-name TEMPLATE",
       "examples": {
         "stop": [
           "aws sesv2 delete-email-template"

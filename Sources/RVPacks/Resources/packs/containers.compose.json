@@ -56,7 +56,7 @@
       "severity": "critical",
       "description": "docker-compose down -v removes volumes and their data permanently.",
       "explanation": "The -v/--volumes flag causes docker-compose down to remove named volumes declared in the volumes section of the Compose file, as well as anonymous volumes attached to containers. This permanently destroys:\n\n- Database data (PostgreSQL, MySQL, MongoDB volumes)\n- User uploads and application state\n- Any persistent configuration stored in volumes\n\nSafer alternatives:\n- docker-compose down: Stops and removes containers without touching volumes\n- docker-compose stop: Stops containers, preserving everything\n- docker volume ls: List volumes before removal",
-      "safer_command": "docker compose stop",
+      "safer_command": "docker compose ps",
       "examples": {
         "stop": [
           "docker compose down -v",
@@ -74,7 +74,7 @@
       "severity": "high",
       "description": "docker-compose down --rmi all removes all images used by services.",
       "explanation": "The --rmi all flag removes all images used by services in the Compose file. This forces re-downloading or rebuilding images on next 'up':\n\n- Base images must be pulled again (bandwidth, time)\n- Custom built images need rebuilding\n- Layers not in registry are lost\n\nSafer alternatives:\n- docker-compose down: Preserves images for faster restarts\n- docker-compose down --rmi local: Only removes images without custom tag\n- docker image ls: Review images before removal",
-      "safer_command": "docker compose stop",
+      "safer_command": "docker compose ps",
       "examples": {
         "stop": [
           "docker compose down --rmi all"

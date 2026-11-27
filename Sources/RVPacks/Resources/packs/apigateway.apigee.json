@@ -157,7 +157,7 @@
       "severity": "critical",
       "description": "gcloud apigee environments delete removes an Apigee environment.",
       "explanation": "Deleting an environment removes all deployed API proxies, target servers, key-value maps, and caches within it. This is irreversible and will break all API traffic routed through this environment.\n\nSafer alternatives:\n- gcloud apigee environments describe: Review environment contents\n- Undeploy all APIs from the environment first\n- Export environment configuration and resources before deletion",
-      "safer_command": "gcloud apigee environments describe <environment>",
+      "safer_command": "gcloud apigee environments describe ENVIRONMENT",
       "examples": {
         "stop": [
           "gcloud apigee environments delete my-app"
@@ -174,7 +174,7 @@
       "severity": "high",
       "description": "gcloud apigee developers delete removes a developer from Apigee.",
       "explanation": "Deleting a developer also deletes all their apps and associated API keys. Any applications using those keys will immediately lose API access. Developer analytics and usage history are also removed.\n\nSafer alternatives:\n- gcloud apigee developers describe: Review developer details\n- Revoke individual app credentials instead of deleting the developer\n- Set developer status to inactive rather than deleting",
-      "safer_command": "gcloud apigee developers describe <developer-email>",
+      "safer_command": "gcloud apigee developers describe DEVELOPER_EMAIL",
       "examples": {
         "stop": [
           "gcloud apigee developers delete my-app"
@@ -191,7 +191,7 @@
       "severity": "high",
       "description": "gcloud apigee products delete removes an API product from Apigee.",
       "explanation": "Deleting an API product immediately revokes access for all apps subscribed to it. Quota settings, rate limits, and access controls defined in the product are lost. Apps will need to be re-subscribed to a different product.\n\nSafer alternatives:\n- gcloud apigee products describe: Review product configuration\n- Remove individual apps from the product instead\n- Set product access to private before deletion to verify impact",
-      "safer_command": "gcloud apigee products describe <product>",
+      "safer_command": "gcloud apigee products describe PRODUCT",
       "examples": {
         "stop": [
           "gcloud apigee products delete my-app"
@@ -241,7 +241,7 @@
       "severity": "high",
       "description": "apigeecli apis delete removes an API proxy from Apigee.",
       "explanation": "Deleting an API proxy removes all its revisions and deployment history. Any applications relying on this API will immediately receive errors.\n\nSafer alternatives:\n- apigeecli apis list: Review APIs before deletion\n- apigeecli apis export: Export the proxy bundle for backup\n- Undeploy from all environments first to verify impact",
-      "safer_command": "apigeecli apis list --org <org>",
+      "safer_command": "apigeecli apis list --org ORG",
       "examples": {
         "stop": [
           "apigeecli apis delete my-app"
@@ -258,7 +258,7 @@
       "severity": "high",
       "description": "apigeecli products delete removes an API product from Apigee.",
       "explanation": "Deleting an API product immediately revokes access for all subscribed apps. Quota settings and rate limits are permanently lost.\n\nSafer alternatives:\n- apigeecli products list: Review products before deletion\n- apigeecli products get: Check which apps are using the product\n- Remove apps from the product first to verify impact",
-      "safer_command": "apigeecli products list --org <org>",
+      "safer_command": "apigeecli products list --org ORG",
       "examples": {
         "stop": [
           "apigeecli products delete my-app"
@@ -275,7 +275,7 @@
       "severity": "high",
       "description": "apigeecli developers delete removes a developer from Apigee.",
       "explanation": "Deleting a developer also deletes all their apps and API keys. Applications using those keys will immediately lose access.\n\nSafer alternatives:\n- apigeecli developers list: Review developers before deletion\n- apigeecli apps list: Check developer's apps first\n- Set developer status to inactive instead of deleting",
-      "safer_command": "apigeecli developers list --org <org>",
+      "safer_command": "apigeecli developers list --org ORG",
       "examples": {
         "stop": [
           "apigeecli developers delete my-app"
@@ -324,7 +324,7 @@
       "severity": "high",
       "description": "apigeecli apps delete removes a developer app from Apigee.",
       "explanation": "Deleting an app revokes all its API keys and credentials. Any systems using those keys will immediately lose API access.\n\nSafer alternatives:\n- apigeecli apps list: Review apps before deletion\n- Revoke individual credentials instead of deleting the app\n- Set app status to revoked to disable without deleting",
-      "safer_command": "apigeecli apps list --org <org>",
+      "safer_command": "apigeecli apps list --org ORG",
       "examples": {
         "stop": [
           "apigeecli apps delete my-app"
