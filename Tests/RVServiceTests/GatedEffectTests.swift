@@ -4,6 +4,7 @@ import RVDomain
 import RVHistory
 import RVHooks
 import RVPolicy
+import RVUndo
 @testable import RVService
 import Synchronization
 
@@ -180,6 +181,7 @@ struct GatedEffectTests {
                 case .judgeLog: "judgeLog"
                 case .denialRow: "denialRow"
                 case .overrideAudit: "overrideAudit"
+                case .keepCopy: "keepCopy"
                 }
             }
         }
@@ -483,8 +485,12 @@ struct GatedEffectTests {
             return
         }
         // The redeemed allow asks for no denial row, only an override audit
-        // carrying the deny's rows for when it cannot be written.
-        #expect(first.effects == [.overrideAudit(GatedEffect.OverrideRow(
+        // carrying the deny's rows for when it cannot be written, after the
+        // undo copy (H3) an unlocked reset keeps first.
+        #expect(first.effects == [.keepCopy(UndoRequest(
+            target: .gitWorkingTree, cwd: cwd.rawValue, command: "git reset --hard",
+            host: "claude", reason: .unlocked, budget: UndoLimits.defaultBudget
+        )), .overrideAudit(GatedEffect.OverrideRow(
             at: Self.now, host: .hook(.claude),
             ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
             override: "allowOnce", workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true),
