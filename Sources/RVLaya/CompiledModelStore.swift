@@ -68,6 +68,17 @@ struct CompiledModelStore<Model> {
     let load: (URL) throws -> Model
     /// Lowercase hex SHA-256 of one regular file; nil when unreadable.
     let digest: (URL) -> String?
+    /// Longest wait for the store lock before the load refuses (review).
+    var lockWait: Duration = Self.defaultLockWait
+
+    /// Comfortably past a cold compile of the ~600 MB model by another
+    /// loader (the lock's legitimate holder); a holder past it is stuck or
+    /// hostile. The caller's own bounded wait (`loadWait`) already answers
+    /// `judge-warming` while this runs.
+    static var defaultLockWait: Duration { .seconds(120) }
+
+    /// Poll interval while another process holds the store lock.
+    static var lockPollInterval: Duration { .milliseconds(50) }
 
     /// Records each refusal on the guard (doctor shows the last one) and
     /// clears it on the next good load.
@@ -97,9 +108,11 @@ struct CompiledModelStore<Model> {
             coreML.log("rvd: judge model load failed; purging compiled-model caches and retrying once")
             // Our own lease died with the failed attempt. An entry another
             // loader still holds is kept (as the sweep does): the retry
-            // reloads it, and a second failure refuses.
+            // reloads it, and a second failure refuses. A store lock still
+            // held past `lockWait` here refuses now: the retry would only
+            // wait on it again.
             if let entry = try? entry(for: package) {
-                try? exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
+                try exclusively { if !CompiledModelLease.isHeld(entry.manifest) { discard(entry) } }
             }
             coreML.purgeCache()
         }
@@ -144,7 +157,9 @@ struct CompiledModelStore<Model> {
     /// Runs `body` holding the store's exclusive lock, `<root>.lock` in the
     /// root's parent (outside the root, so the sweep never sees it). The
     /// lock file must be this user's regular file; anything else refuses.
-    /// Blocks while another process holds it (its compile, at worst).
+    /// Waits while another process holds it (its compile, at worst), for at
+    /// most `lockWait`: any process of this user can open the file and hold
+    /// a lock on it, so past the wait the load refuses rather than block.
     private func exclusively<T>(_ body: () throws -> T) throws -> T {
         guard let root else { throw CompiledModelRefusal(detail: "no protected model cache directory") }
         let path = root.deletingLastPathComponent().appendingPathComponent(root.lastPathComponent + ".lock").path
@@ -155,19 +170,37 @@ struct CompiledModelStore<Model> {
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else {
             throw CompiledModelRefusal(detail: "the model cache lock is not this user's regular file")
         }
-        while flock(fd, LOCK_EX) != 0 {
-            guard errno == EINTR else { throw CompiledModelRefusal(detail: "could not lock the model cache") }
-        }
+        try Self.lockExclusively(fd, within: lockWait)
         return try body()
+    }
+
+    /// `flock(LOCK_EX | LOCK_NB)` retried every `lockPollInterval` until
+    /// `wait` runs out; then, or on any error but contention or EINTR,
+    /// refuses.
+    static func lockExclusively(_ fd: Int32, within wait: Duration) throws(CompiledModelRefusal) {
+        let deadline = ContinuousClock.now + wait
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            let code = errno
+            guard code == EWOULDBLOCK || code == EINTR else {
+                throw CompiledModelRefusal(detail: "could not lock the model cache")
+            }
+            guard ContinuousClock.now < deadline else {
+                throw CompiledModelRefusal(detail: "the model cache lock is held by another process")
+            }
+            Thread.sleep(forTimeInterval: Self.seconds(lockPollInterval))
+        }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let (whole, fraction) = duration.components
+        return TimeInterval(whole) + TimeInterval(fraction) / 1e18
     }
 
     /// Refuses when there is no usable protected root: the compile output
     /// is never loaded from the temp dir it lands in.
     private func entry(for package: URL) throws(CompiledModelRefusal) -> Entry {
         guard let root else { throw CompiledModelRefusal(detail: "no protected model cache directory") }
-        guard Self.usableRoot(root) else {
-            throw CompiledModelRefusal(detail: "\(root.path) is not this user's real directory")
-        }
+        guard Self.usableRoot(root) else { throw CompiledModelRefusal(detail: Self.rootProblem(root)) }
         let stamp = (try? FileManager.default.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
         let pathKey = Self.fnv1a(package.path)
         let versionKey = Self.fnv1a("\(stamp?.timeIntervalSince1970 ?? 0)|\(version)")
@@ -217,7 +250,9 @@ struct CompiledModelStore<Model> {
             throw CompiledModelRefusal(detail: "could not copy the compile output into the cache")
         }
         guard Self.restrictToOwner(partial) else {
-            throw CompiledModelRefusal(detail: "compile output holds something other than files and directories")
+            throw CompiledModelRefusal(
+                detail: "could not make the cached copy owner-only (an entry could not be walked or chmod-ed, "
+                    + "or is not a file or directory)")
         }
         guard let manifest = Self.manifest(of: partial, digest: digest),
               let data = try? JSONEncoder().encode(manifest)
@@ -331,6 +366,27 @@ struct CompiledModelStore<Model> {
         return info.st_mode & 0o077 == 0
     }
 
+    /// Why `usableRoot` refused. The refusal reaches the agent, so it names
+    /// the problem only; doctor names the owner's fix
+    /// (`CoreMLGuard.inaccessibleModelCache(stateRoot:)`).
+    static func rootProblem(_ root: URL) -> String {
+        if let mode = inaccessibleMode(root) {
+            return "the model cache \(root.path) is not accessible to its owner (mode \(String(mode, radix: 8)))"
+        }
+        return "\(root.path) is not this user's real directory"
+    }
+
+    /// The permission bits of `root` when it is this user's real directory
+    /// but its owner lacks rwx on it (mode 0000, say): a state that never
+    /// heals on its own. Nil otherwise.
+    static func inaccessibleMode(_ root: URL) -> mode_t? {
+        var info = stat()
+        guard lstat(root.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == geteuid(),
+              info.st_mode & 0o700 != 0o700
+        else { return nil }
+        return info.st_mode & 0o777
+    }
+
     /// Narrows the store's fresh copy to owner-only (directories 0700, files
     /// 0600) before it is hashed; false on anything that is not a directory
     /// or regular file, or a directory that cannot be walked.
@@ -372,17 +428,11 @@ struct CompiledModelStore<Model> {
     }
 
     /// Whether the bundle's model package is there. Only ENOENT is absence
-    /// (the packs-only floor); any other error refuses (review), so an error
+    /// (a broken bundle the caller names); any other error refuses (review), so an error
     /// an agent can provoke never reads as "no model". The refusal is
     /// recorded on `coreML` so doctor shows it.
     static func packageExists(_ url: URL, recordingOn coreML: CoreMLGuard? = nil) throws(CoreMLLoadRefusal) -> Bool {
-        var info = stat()
-        if lstat(url.path, &info) == 0 { return true }
-        let code = errno
-        if code == ENOENT { return false }
-        let refusal = CoreMLLoadRefusal(detail: "cannot check \(url.lastPathComponent): \(String(cString: strerror(code)))")
-        coreML?.noteRefusal(refusal.reason)
-        throw refusal
+        try BundleFilePresence.exists(url, recordingOn: coreML)
     }
 
     static func isOwnedDirectory(_ url: URL) -> Bool {
