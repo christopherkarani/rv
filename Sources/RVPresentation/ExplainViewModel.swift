@@ -61,6 +61,8 @@ public struct ExplainViewModel: Equatable, Sendable {
     /// The observe note says the observe floor stopped it (in every mode),
     /// not that observe let it run.
     package var observeStopped = false
+    /// Typed rules that also match but did not decide, shown before Next.
+    package var alsoMatches: [ExplainAlsoMatch] = []
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }

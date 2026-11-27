@@ -53,6 +53,8 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     /// Consumers read this field, never `mode` alone, to know whether the
     /// command ran.
     package var effective: String? = nil
+    /// Typed rules that also match but did not decide; omitted when none.
+    package var typedRules: [ExplainAlsoMatch]? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -64,6 +66,7 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
         case nextAction = "next_action"
         case mode
         case effective
+        case typedRules = "typed_rules"
     }
 }
 
@@ -269,7 +272,8 @@ public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPay
         explanation: model.explanation,
         nextAction: model.nextAction,
         mode: observed ? observeRobotMode : nil,
-        effective: observed ? effective : nil
+        effective: observed ? effective : nil,
+        typedRules: model.alsoMatches.isEmpty ? nil : model.alsoMatches
     )
 }
 
