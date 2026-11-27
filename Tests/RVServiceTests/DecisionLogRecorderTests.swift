@@ -43,23 +43,49 @@ struct DecisionLogRecorderTests {
         #expect(late.rule == DecisionLogRecorder.timeoutRule)
     }
 
-    @Test func shellRowIsRedactedAndCarriesTheBoundSession() async throws {
+    static func capture(_ result: EvaluationResult, _ subject: HookDecisionTap.Capture.Subject) -> HookDecisionTap.Capture {
+        HookDecisionTap.Capture(
+            result: result, subject: subject, cwd: nil, host: .codex, startedAt: now, session: "abc-123")
+    }
+
+    static func written(_ capture: HookDecisionTap.Capture, timedOut: Bool) async throws -> DecisionRecord {
         let (stream, continuation) = AsyncStream.makeStream(of: DecisionRecord.self)
-        let recorder = DecisionLogRecorder(home: Self.home) { continuation.yield($0) }
-        let session = try #require(SessionID(validating: "abc-123"))
-        HookSessionAttribution.$current.withValue(session) {
-            recorder.shell(
-                EvaluationResult(outcome: .plain),
-                command: ShellCommand(rawValue: "API_KEY=sk-live-0123456789abcdef0123 cat /Users/ann/.zshrc"),
-                cwd: nil, host: .hook(.codex), at: Self.now
-            )
-        }
+        let recorder = DecisionLogRecorder(home: home) { continuation.yield($0) }
+        recorder.record(capture, timedOut: timedOut)
         var iterator = stream.makeAsyncIterator()
-        let row = try #require(await iterator.next())
+        return try #require(await iterator.next())
+    }
+
+    @Test func aTappedShellCaptureIsRedactedAndKeepsItsSession() async throws {
+        let row = try await Self.written(Self.capture(
+            EvaluationResult(outcome: .plain),
+            .shell(ShellCommand(rawValue: "API_KEY=sk-live-0123456789abcdef0123 cat /Users/ann/.zshrc"))
+        ), timedOut: false)
         #expect(row.session == "abc-123")
+        #expect(row.host == .hook(.codex))
+        #expect(row.time == Self.now)
+        #expect(row.verdict == .allowed)
         #expect(row.command?.contains("sk-live") == false)
         #expect(row.command?.hasSuffix("cat ~/.zshrc") == true)
         #expect(row.cwd == nil)
+    }
+
+    /// The reply's final timeout state wins over what the evaluation found,
+    /// as it does for the live event.
+    @Test func aCaptureWhoseReplyTimedOutIsARefusal() async throws {
+        let row = try await Self.written(Self.capture(
+            EvaluationResult(outcome: .plain), .shell(ShellCommand(rawValue: "ls"))
+        ), timedOut: true)
+        #expect(row.verdict == .refused)
+        #expect(row.rule == HookDecisionTap.Capture.timeoutRule)
+    }
+
+    @Test func aFileCaptureKeepsOnlyItsRedactedPath() async throws {
+        let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: "/Users/ann/work/.env"))
+        let row = try await Self.written(Self.capture(EvaluationResult(outcome: .plain), .file(action)), timedOut: false)
+        #expect(row.tool == .file(.read))
+        #expect(row.path == "~/work/.env")
+        #expect(row.command == nil)
     }
 
     @Test func liveRecorderWritesTheConfigDirectoryLog() async throws {

@@ -493,13 +493,18 @@ public enum MCPEntryStatus: String, Sendable, Equatable {
     case blocked
     case dangling
     case disabled
+    /// Routes through rv, but `rv mcp serve` will not start it (an
+    /// untrusted mcp.json, or a server it will not run unsealed). Only
+    /// `rv mcp list` and `check` say this; `MCPInventoryRow.status` never
+    /// returns it.
+    case off
 
     /// Whether `rv mcp check` accepts this status. Nothing that runs
     /// outside rv passes: a `direct` entry is recorded, not accepted.
     public var isAcceptable: Bool {
         switch self {
         case .governed, .disabled: true
-        case .direct, .bypass, .unreviewed, .blocked, .dangling: false
+        case .direct, .bypass, .unreviewed, .blocked, .dangling, .off: false
         }
     }
 
@@ -512,6 +517,7 @@ public enum MCPEntryStatus: String, Sendable, Equatable {
         case .blocked: "blocked by mcp.json"
         case .dangling: "routes through rv, but mcp.json has no such server"
         case .disabled: "disabled in the host"
+        case .off: "routes through rv, but `rv mcp serve` will not start it, so nothing runs"
         }
     }
 }

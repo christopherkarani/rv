@@ -274,7 +274,8 @@ package struct LocalHookDecider: Sendable {
                 )
                 probe.record(.shell(decided.result, cwd: cwd), effects: decided.effects)
                 probe.recordDecisionRow(DecisionLogRecorder.shellRecord(
-                    decided.result, command: command, cwd: cwd, host: ledger, home: home, at: now, timedOut: false))
+                    decided.result, command: command, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
+                    session: DecisionLogRecorder.currentSession))
                 return decided.result
             },
             evaluateFile: { action, cwd in
@@ -286,7 +287,8 @@ package struct LocalHookDecider: Sendable {
                     action, home: home, cwd: cwd, host: ledger, now: now, guardMode: mode)
                 probe.record(.file(decided.result), effects: decided.effects)
                 probe.recordDecisionRow(DecisionLogRecorder.fileRecord(
-                    decided.result, action: action, cwd: cwd, host: ledger, home: home, at: now, timedOut: false))
+                    decided.result, action: action, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
+                    session: DecisionLogRecorder.currentSession))
                 return decided.result
             },
             mintOnDeny: { _, _ in

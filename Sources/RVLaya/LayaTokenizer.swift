@@ -331,6 +331,11 @@ public struct LayaTokenizer: Sendable {
 }
 
 public enum LayaError: Error, Sendable, Equatable {
+    /// The bundle dir itself is not there (`lstat` ENOENT): genuine
+    /// absence, the only load failure the gate may read as packs-only.
+    /// Everything else here (a bundle that is there but broken, including
+    /// one without its model) refuses to review.
+    case bundleMissing(String)
     case badBundle(String)
     case modelUnavailable(String)
     case predictionFailed(String)

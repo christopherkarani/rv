@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVHistory
+import RVIPC
 import RVPolicy
 @testable import RVService
 
@@ -63,24 +64,36 @@ struct LocalHookDecisionLogTests {
         #expect(fixture.decisionRows().isEmpty)
     }
 
-    @Test func aLocalAndAnRvdRowForTheSameCallMatch() async throws {
-        let fixture = try LocalHookFixture()
-        let stdin = claudeBash("ls -la", cwd: fixture.workspace)
-        let local = await fixture.decider.decide(host: .claude, stdin: stdin)
-        guard case .final = local else {
-            Issue.record("a safe-lane allow must be decided locally, got \(local)")
+    /// The same call, answered locally in one home and by rvd in another,
+    /// leaves the same row (but for its time).
+    @Test func aLocalRowIsTheRowRvdWrites() async throws {
+        let local = try LocalHookFixture()
+        let outcome = await local.decider.decide(host: .claude, stdin: claudeBash("ls -la", cwd: local.workspace))
+        guard case .final = outcome else {
+            Issue.record("a safe-lane allow must be decided locally, got \(outcome)")
             return
         }
-        let localRow = try #require(fixture.decisionRows().first)
-        let time = Date(timeIntervalSince1970: 1_800_000_000)
-        let rvdRow = DecisionLogRecorder.shellRecord(
-            EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "ls -la"),
-            cwd: WorkingDirectory(validating: fixture.workspace), host: .hook(.claude),
-            home: fixture.home, at: time, timedOut: false)
-        #expect(localRow.command == rvdRow.command)
-        #expect(localRow.cwd == rvdRow.cwd)
-        #expect(localRow.host == rvdRow.host)
-        #expect(localRow.tool == rvdRow.tool)
+        let localRow = try #require(local.decisionRows().first)
+
+        let rvd = try LocalHookFixture()
+        let runtime = hookTestRuntime(
+            home: rvd.home, allowOnceDirectory: try isolatedAllowOnceDirectory(), recordsDecisions: true)
+        _ = await runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(
+                host: .claude, stdin: claudeBash("ls -la", cwd: rvd.workspace)))),
+            context: peerHookContext())
+        // rvd writes its row detached, after the reply.
+        var rvdRows: [DecisionRecord] = []
+        let started = ContinuousClock.now
+        while rvdRows.isEmpty, ContinuousClock.now - started < .seconds(10) {
+            try await Task.sleep(for: .milliseconds(20))
+            rvdRows = rvd.decisionRows()
+        }
+        let rvdRow = try #require(rvdRows.first)
+        #expect(rvdRows.count == 1)
+        var aligned = rvdRow
+        aligned.time = localRow.time
+        #expect(aligned == localRow)
     }
 }
 

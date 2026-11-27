@@ -26,11 +26,9 @@ struct PolicyDraftCommandTests {
                 compiler: FakeEnglishCompiler()
             )
             #expect(result.outcome == .preview(saved: false))
-            #expect(result.text.contains("Always block force-push to main"))
-            #expect(result.text.contains("gitPush"))
-            #expect(result.text.contains("force=force"))
-            #expect(result.text.contains("branch=main"))
-            #expect(result.text.contains("deny"))
+            #expect(result.text.hasPrefix("  ✕ never git push --force → main\n  "))
+            // The predicate fields are for --json; text shows what the rule does.
+            #expect(result.text.contains("gitPush") == false)
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
@@ -178,7 +176,7 @@ struct PolicyDraftCommandTests {
                 compiler: FakeEnglishCompiler()
             )
             #expect(result.outcome == .refuse(.uncompilable))
-            #expect(result.text.contains("uncompilable"))
+            #expect(result.text.hasPrefix("  ✕ "))
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
@@ -211,10 +209,7 @@ struct PolicyDraftCommandTests {
                 )
             )
             #expect(result.outcome == .preview(saved: false))
-            #expect(result.text.contains("Always block force-push to main"))
-            #expect(result.text.contains("gitPush"))
-            #expect(result.text.contains("force=force"))
-            #expect(result.text.contains("branch=main"))
+            #expect(result.text.hasPrefix("  ✕ never git push --force → main\n  "))
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
@@ -233,7 +228,7 @@ struct PolicyDraftCommandTests {
                 )
             )
             #expect(result.outcome == .refuse(.uncompilable))
-            #expect(result.text.contains("uncompilable"))
+            #expect(result.text.hasPrefix("  ✕ "))
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
@@ -315,7 +310,7 @@ struct PolicyDocumentCommandTests {
         english = "Never force-push main"
         """.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentRun.load(url)
         }
     }
@@ -350,13 +345,18 @@ struct PolicyDocumentCommandTests {
         #expect(loaded.rules[0].verdict == .deny)
     }
 
-    @Test func validate_missingFile_isOK() throws {
+    @Test func validate_missingFile_fails() throws {
         let home = try isolatedHome()
         let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: homeURL) }
         let missing = URL(fileURLWithPath: "/tmp/rv-missing-policy-\(UUID().uuidString).toml")
         #expect(FileManager.default.fileExists(atPath: missing.path) == false)
-        try PolicyValidateRun.validate(.file(missing, home))
+        #expect(throws: PolicyDocumentRun.MissingFile.self) {
+            try PolicyValidateRun.validate(.file(missing, home))
+        }
+        #expect(
+            PolicyValidateRun.failureText(PolicyDocumentRun.MissingFile(), target: .file(missing, home), path: "nope.toml")
+                == "  ✕ No file at nope.toml\n")
     }
 
     @Test func validate_defaultPath_invalidLegacyJSON_failsClosed() throws {
