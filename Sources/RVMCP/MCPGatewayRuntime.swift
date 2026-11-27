@@ -148,30 +148,21 @@ public enum MCPLaunchPlanner {
                 }
                 continue
             }
-            if requireSandbox {
+            switch sealRefusal(definition, configuration: configuration, requireSandbox: requireSandbox) {
+            case .refusedAlone(let reason)?:
                 // Refused alone, before its secrets are resolved or a cage
                 // is made: the other servers still serve.
-                guard let policy = definition.sandbox else {
-                    planned.append(refused(
-                        definition, .sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry")))
-                    continue
-                }
-                if policy.network {
-                    planned.append(refused(
-                        definition, .sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts")))
-                    continue
-                }
-            } else if configuration.managed?.mcp.requireSandbox == true {
-                // No cage here (`requireSandbox` is the platform's cage):
-                // the organization's rule is kept only by not starting it.
-                return .failure(.sandbox(MCPPlatformSupport.organizationSandboxUnenforced(server: name)))
+                planned.append(refused(definition, .sandbox(reason)))
+                continue
+            case .failsPlan(let reason)?:
+                return .failure(.sandbox(reason))
+            case nil: break
             }
             var environment = sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
-            let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
             let resolved: [String: String]
             switch resolve(
-                referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
+                referencedSecrets(definition), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
                 into: .stdioProcess, now: now)
             {
             case .failure(let error): return .failure(error)
@@ -235,10 +226,9 @@ public enum MCPLaunchPlanner {
             lease.revoke()
             return refuse(.variableCollision(clash.name))
         }
-        let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
         let resolved: [String: String]
         switch resolve(
-            referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
+            referencedSecrets(definition), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
             into: .stdioProcess, now: now)
         {
         case .failure(let error):
@@ -273,6 +263,44 @@ public enum MCPLaunchPlanner {
                 MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed),
                 .placeholderBound(caged, MCPPlaceholderBinding(lease: lease))))
         }
+    }
+
+    /// How a local server without placeholders is refused for its
+    /// sandbox, judged from mcp.json alone before anything is resolved.
+    package enum SealRefusal: Sendable, Equatable {
+        /// Not started; the other servers still serve.
+        case refusedAlone(String)
+        /// The whole plan fails.
+        case failsPlan(String)
+    }
+
+    /// Where the cage is enforced (`requireSandbox`), a server needs a
+    /// sandbox with the network closed (hosts listed in sandbox.hosts).
+    /// Where it is not, the organization's `requireSandbox` is kept only by
+    /// starting nothing. `rv mcp list` asks the same question.
+    package static func sealRefusal(
+        _ definition: MCPServerDefinition, configuration: MCPConfiguration, requireSandbox: Bool
+    ) -> SealRefusal? {
+        let name = definition.name
+        if requireSandbox {
+            guard let policy = definition.sandbox else {
+                return .refusedAlone("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry")
+            }
+            if policy.network {
+                return .refusedAlone("\(name) stays off the network; list the hosts it needs in sandbox.hosts")
+            }
+            return nil
+        }
+        if configuration.managed?.mcp.requireSandbox == true {
+            return .failsPlan(MCPPlatformSupport.organizationSandboxUnenforced(server: name))
+        }
+        return nil
+    }
+
+    /// The secrets a local server's launch resolves: its `secrets` values
+    /// and every `${secret:NAME}` in its `args`.
+    package static func referencedSecrets(_ definition: MCPServerDefinition) -> [String] {
+        Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] }).sorted()
     }
 
     /// A server planned not to start: no secret values, no launch.
