@@ -8,6 +8,10 @@
 # Exists because `swift test` block-buffers each test product's output:
 # a hung product prints nothing at all, and the job timeout then kills it
 # with no hint of which test was running.
+#
+# RV_WATCHDOG_SAMPLE_AT="20 45 70" also samples the test runner at those
+# elapsed seconds without killing it: the stacks show what holds the Swift
+# cooperative pool while a product is slow but not yet stalled.
 set -uo pipefail
 
 if [[ $# -lt 2 ]] || ! [[ "$1" =~ ^[1-9][0-9]*$ ]]; then
@@ -27,9 +31,9 @@ descendants() {
 }
 
 dump() {
-  local root="$1" pids pid command
+  local root="$1" at="${2:-$limit}" pids pid command
   pids="$(descendants "$root")"
-  printf '\n::group::ci-watchdog: process tree after %ss\n' "$limit"
+  printf '\n::group::ci-watchdog: process tree after %ss\n' "$at"
   # shellcheck disable=SC2086
   ps -o pid,ppid,etime,stat,command -p "$root" $pids 2>/dev/null
   printf '::endgroup::\n'
@@ -60,7 +64,15 @@ kill_tree() {
 "$@" &
 child=$!
 started=$SECONDS
+# A plain string, not an array: macOS runs bash 3.2 under `set -u`.
+sample_at="${RV_WATCHDOG_SAMPLE_AT:-}"
 while kill -0 "$child" 2>/dev/null; do
+  next="${sample_at%% *}"
+  if [[ -n "$next" ]] && (( SECONDS - started >= next )); then
+    printf '::notice::ci-watchdog: sampling %s at %ss (not a stall)\n' "$child" "$((SECONDS - started))"
+    dump "$child" "$((SECONDS - started))"
+    case "$sample_at" in *" "*) sample_at="${sample_at#* }" ;; *) sample_at='' ;; esac
+  fi
   if (( SECONDS - started >= limit )); then
     printf '::error::ci-watchdog: %s still running after %ss: %s\n' "$child" "$limit" "$*"
     dump "$child"
