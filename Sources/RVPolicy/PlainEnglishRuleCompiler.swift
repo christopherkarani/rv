@@ -79,7 +79,9 @@ public struct PlainEnglishRuleCompiler: ReasonedEnglishCompiler {
         }
         let words = Self.words(trimmed)
         guard let (verdict, rest) = Self.verdict(words) else {
-            return .unreadable(reason: "start with never, ask before, or allow, like \"never force-push to main\"")
+            return .unreadable(
+                reason: "no never, ask or allow at the start; start with never, ask before, or allow, "
+                    + "like \"never force-push to main\"")
         }
         return Self.action(rest, verdict: verdict, english: trimmed)
     }
@@ -370,7 +372,8 @@ public struct PlainEnglishRuleCompiler: ReasonedEnglishCompiler {
         let force: GitPushForceConstraint
         if keys.contains("--force-with-lease") || keys.contains("lease") {
             if keys.contains("-f") || keys.contains("--force") {
-                return .refused(.uncompilable, reason: "pick --force or --force-with-lease; a rule covers one")
+                return .refused(
+                    .uncompilable, reason: "a rule covers one of --force and --force-with-lease; drop the other")
             }
             slots.use(["--force-with-lease", "lease", "force", "with"])
             force = .exactly(.forceWithLease)
@@ -434,7 +437,7 @@ public struct PlainEnglishRuleCompiler: ReasonedEnglishCompiler {
         } else if let pointer {
             return .refused(
                 .uncompilable,
-                reason: "say which branch after \"\(DisplayedText.field(words[pointer].text))\", "
+                reason: "no branch after \"\(DisplayedText.field(words[pointer].text))\"; say which one, "
                     + "like \"never force-push to main\"")
         }
         if let refused = refusal(slots, hint: "a push rule names force and one branch, like \"never force-push to main\"") {

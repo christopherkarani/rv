@@ -70,6 +70,35 @@ enum PolicyDraftPreview {
         return String(sentence[open.upperBound..<sentence.index(before: sentence.endIndex)])
     }
 
+    static let example = "try: rv policy draft \"never force-push to main\""
+
+    /// A refusal in the same language: what is wrong after a red ✕, then
+    /// the fix as the last line. A reason is "problem; fix"; one with no
+    /// fix ends with an example sentence, so every no has a next.
+    static func refusalLines(_ refusal: EnglishCompileRefusal, reason: String, palette: Palette) -> [String] {
+        let parts = reason.components(separatedBy: "; ")
+        let problem = parts[0]
+        let fix = parts.count > 1 ? parts.dropFirst().joined(separator: "; ") : example
+        // A problem that already says no reads on its own; "can't read
+        // that" is added only to one that does not.
+        let lower = " " + problem.lowercased() + " "
+        let saysNo = ["can't", "cannot", "not", "nothing", "doesn't", "isn't", "won't"]
+            .contains { lower.contains(" \($0) ") || lower.contains(" \($0),") }
+        let headline = saysNo ? problem : "\(lead(refusal)): \(problem)"
+        return [
+            "  \(paint("✕", palette.deny, palette)) \(headline)",
+            "  \(paint("→", palette.trace, palette)) \(fix)",
+        ]
+    }
+
+    private static func lead(_ refusal: EnglishCompileRefusal) -> String {
+        switch refusal {
+        case .empty, .uncompilable: return "can't read that"
+        case .unsupported, .unsupportedPredicate, .alreadyBuiltIn: return "can't make that a rule"
+        case .hardStop: return "can't change that"
+        }
+    }
+
     private static func paint(_ text: String, _ ink: String, _ palette: Palette) -> String {
         palette.colorsEnabled && ink.isEmpty == false ? ink + text + palette.reset : text
     }

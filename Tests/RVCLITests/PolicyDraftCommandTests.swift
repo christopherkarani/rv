@@ -176,7 +176,7 @@ struct PolicyDraftCommandTests {
                 compiler: FakeEnglishCompiler()
             )
             #expect(result.outcome == .refuse(.uncompilable))
-            #expect(result.text.contains("uncompilable"))
+            #expect(result.text.hasPrefix("  ✕ "))
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
@@ -228,7 +228,7 @@ struct PolicyDraftCommandTests {
                 )
             )
             #expect(result.outcome == .refuse(.uncompilable))
-            #expect(result.text.contains("uncompilable"))
+            #expect(result.text.hasPrefix("  ✕ "))
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }

@@ -85,16 +85,77 @@ struct PolicyF1CommandTests {
         }
     }
 
-    @Test func draft_refusal_isOneLineWithTheReason() async throws {
+    @Test func draft_refusal_saysWhatIsWrongThenTheFix() async throws {
         let (home, workspace) = try scratch()
         defer { cleanup(home, workspace) }
         let result = try await PolicyDraftRun.execute(
             english: "never npm publish", save: false, robot: false, home: home, workspace: workspace,
             compiler: PlainEnglishRuleCompiler())
         #expect(result.outcome == .refuse(.unsupportedPredicate))
-        #expect(result.text == "refused (unsupportedPredicate): a rule can't cover npm yet; drafts cover git push, "
-            + "reset, clean and restore, and deleting or moving files")
-        #expect(result.text.contains("\n") == false)
+        #expect(result.text == """
+              ✕ a rule can't cover npm yet
+              → drafts cover git push, reset, clean and restore, and deleting or moving files
+            """)
+    }
+
+    /// Mac check of #669: "every no has a next". The exact refusal text for
+    /// a look-alike branch and for a sentence the grammar can't read.
+    @Test(arguments: [
+        ("never force push to m\u{0430}in", """
+              ✕ can't read that: branch name has non-ASCII characters (m\u{0430}in)
+              → type it in plain ASCII
+            """),
+        ("be careful in prod", """
+              ✕ can't read that: no never, ask or allow at the start
+              → start with never, ask before, or allow, like "never force-push to main"
+            """),
+        ("", """
+              ✕ nothing to draft
+              → say a rule, like "never force-push to main"
+            """),
+        ("never delete branches", """
+              ✕ a rule can't cover deleting branches yet
+              → try: rv policy draft "never force-push to main"
+            """),
+    ])
+    func draft_refusalText(english: String, expected: String) async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let result = try await PolicyDraftRun.execute(
+            english: english, save: false, robot: false, home: home, workspace: workspace,
+            compiler: PlainEnglishRuleCompiler())
+        #expect(result.text == expected)
+    }
+
+    /// Every refusal ends with a → line, and the ✕ is red in colour.
+    @Test(arguments: [
+        "never npm publish", "never force push to main on fridays", "never push and reset", "never push tags",
+        "never push except to feature", "never force push to", "never push to release/*", "never delete the project",
+        "allow rm -rf outside the repo", "never delete outside of node_modules", "never git clean -n",
+        "never push --force --force-with-lease to main", "never be careful", "",
+    ])
+    func draft_everyRefusal_endsWithANext(english: String) async throws {
+        let (home, workspace) = try scratch()
+        defer { cleanup(home, workspace) }
+        let palette = Palette(for: ColorCapability(colorsEnabled: true))
+        let plain = try await PolicyDraftRun.execute(
+            english: english, save: false, robot: false, home: home, workspace: workspace,
+            compiler: PlainEnglishRuleCompiler())
+        let lines = plain.text.split(separator: "\n").map(String.init)
+        #expect(lines.count == 2, "\(plain.text)")
+        #expect(lines.first?.hasPrefix("  ✕ ") == true, "\(plain.text)")
+        #expect(lines.last?.hasPrefix("  → ") == true, "\(plain.text)")
+        let coloured = try await PolicyDraftRun.execute(
+            english: english, save: false, robot: false, home: home, workspace: workspace,
+            compiler: PlainEnglishRuleCompiler(), palette: palette)
+        #expect(coloured.text.hasPrefix("  " + palette.deny + "✕" + palette.reset + " "), "\(english)")
+        // --json is unchanged: refuse and reason.
+        let robot = try await PolicyDraftRun.execute(
+            english: english, save: false, robot: true, home: home, workspace: workspace,
+            compiler: PlainEnglishRuleCompiler())
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(robot.text.utf8)) as? [String: String], "\(robot.text)")
+        #expect(Set(object.keys) == ["refuse", "reason"])
     }
 
     /// Mac recheck of #669: --json on a refusal carries the reason.
@@ -120,7 +181,7 @@ struct PolicyF1CommandTests {
             compiler: EnglishCompileChain(
                 primary: NoForceModel(), fallback: FakeEnglishCompiler(), phrases: PlainEnglishRuleCompiler()))
         #expect(result.outcome == .refuse(.uncompilable))
-        #expect(result.text.hasPrefix("refused (uncompilable): can't read this sentence for sure: it says force-push"),
+        #expect(result.text.hasPrefix("  ✕ can't read this sentence for sure: it says force-push"),
             "\(result.text)")
         #expect(FileManager.default.fileExists(
             atPath: TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home)).machineFileURL.path) == false)
@@ -134,7 +195,7 @@ struct PolicyF1CommandTests {
         let result = try await PolicyDraftRun.execute(
             english: "be careful in prod", save: false, robot: false, home: home, workspace: workspace,
             compiler: FakeEnglishCompiler())
-        #expect(result.text.hasPrefix("refused (uncompilable): start with never, ask before, or allow"))
+        #expect(result.text.hasPrefix("  ✕ can't read that: no never, ask or allow at the start\n  → start with never"))
     }
 
     @Test func draft_outsideTheRepo_isAlreadyOn() async throws {

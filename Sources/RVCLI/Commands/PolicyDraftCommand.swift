@@ -186,10 +186,16 @@ enum PolicyDraftRun {
                 return "✓ Already on: rv stops deletes and moves outside this repo "
                     + "(\(BuiltinRule.outOfRepoWrite.ruleID.rawValue)). Nothing to save."
             }
-            return "refused (alreadyBuiltIn): only the core.filesystem pack stops changes outside this repo, "
-                + "and it is off here; a rule can't name a path yet\n→ rv packs enable core.filesystem"
+            return PolicyDraftPreview.refusalLines(
+                .alreadyBuiltIn,
+                reason: "only the core.filesystem pack stops changes outside this repo, and it is off here; "
+                    + "rv packs enable core.filesystem",
+                palette: palette
+            ).joined(separator: "\n")
         case .refuse(let reason):
-            return "refused (\(reason.rawValue)): \(why ?? refusalReason(reason, english: english))"
+            return PolicyDraftPreview.refusalLines(
+                reason, reason: why ?? refusalReason(reason, english: english), palette: palette
+            ).joined(separator: "\n")
         }
     }
 
@@ -207,9 +213,10 @@ enum PolicyDraftRun {
         case .uncompilable:
             return "can't tell which command this is about; name one: git push, git reset, git clean, git restore, rm or mv"
         case .unsupported, .unsupportedPredicate:
-            return "drafts cover git push, reset, clean and restore, and deleting or moving files"
+            return "that isn't something a rule covers yet; drafts cover git push, reset, clean and restore, "
+                + "and deleting or moving files"
         case .hardStop:
-            return "rv always stops this; a rule cannot change it"
+            return "rv always stops this, and a rule cannot change it"
         case .alreadyBuiltIn:
             return "rv already stops this with a built-in rule"
         }
