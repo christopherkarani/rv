@@ -111,6 +111,10 @@ struct DecisionRedactionTests {
         // More flags and positional keys.
         ("curl --oauth2-bearer SECRETO https://x", "SECRETO", "https://x"),
         ("aws configure set aws_secret_access_key SECRETP", "SECRETP", "aws configure set"),
+        // A quoted `KEY=` / `--flag=` value with a space runs to its quote.
+        (#"psql --password="hunter SECRETV7" db"#, "SECRETV7", "\" db"),
+        (#"PGPASSWORD="pa ss SECRETV9" psql"#, "SECRETV9", "\" psql"),
+        (#"export API_TOKEN="part1 SECRETV10""#, "SECRETV10", "export API_TOKEN="),
     ]
 
     @Test(arguments: leaks.indices)

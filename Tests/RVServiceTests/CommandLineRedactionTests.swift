@@ -60,6 +60,18 @@ struct CommandLineRedactionTests {
              shown: "docker login -u bob -p [redacted] registry.example", secret: "hunter2"),
         Case(command: "gh auth login --token hunter2 --hostname h",
              shown: "gh auth login --token [redacted] --hostname h", secret: "hunter2"),
+        // A quoted value with a space after a secret `KEY=` or `--flag=`.
+        Case(command: #"psql --password="hunter SECRETV7" db"#,
+             shown: #"psql --password=[redacted] [redacted]" db"#, secret: "SECRETV7"),
+        Case(command: #"PGPASSWORD="pa ss SECRETV9" psql"#,
+             shown: #"PGPASSWORD=[redacted] [redacted] [redacted]" psql"#, secret: "SECRETV9"),
+        Case(command: #"export API_TOKEN="part1 SECRETV10""#,
+             shown: #"export API_TOKEN=[redacted] [redacted]""#, secret: "SECRETV10"),
+        Case(command: #"curl --user="bob:my hunter2" https://x.example"#,
+             shown: #"curl --user="bob:[redacted] [redacted]" https://x.example"#, secret: "hunter2"),
+        // `token` is a scheme after an auth header, wherever the header sits.
+        Case(command: #"git -c http.extraheader="Authorization: token abc123" fetch"#,
+             shown: #"git -c http.extraheader="Authorization: token [redacted]" fetch"#, secret: "abc123"),
     ]
 
     @Test(arguments: credentials)
@@ -99,6 +111,19 @@ struct CommandLineRedactionTests {
         "deploy --token --verbose",
         "docker run --name mysql -p 3306:3306 mysql:8",
         "redis-cli -h cache -p 6379 ping",
+        // Ordinary words the #675 re-review found eaten: a scheme word on
+        // its own, a prefix without a key's tail, `auth` inside `author`.
+        #"grep -rn "token" src/"#,
+        #"git commit -m "fix token refresh""#,
+        "make basic test",
+        "kubectl create token builder",
+        "npm_config_loglevel=silent",
+        "npm_config_loglevel=silent npm install",
+        "--name sk-worker-0001",
+        "docker run --name sk-worker-0001 alpine",
+        #"{"author":"bob"}"#,
+        #"curl -d '{"author":"bob"}' https://api.example.com"#,
+        "curl -H 'Author: bob' https://api.example.com",
     ])
     func ordinaryCommandsAreUnchanged(_ command: String) {
         #expect(CommandLineRedaction.redact(command) == command)
