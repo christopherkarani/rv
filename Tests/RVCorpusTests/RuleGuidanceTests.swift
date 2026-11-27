@@ -6,13 +6,16 @@ import RVPacks
 
 /// Every rule's guidance is proven by the engine it describes.
 ///
-/// - A safer command is advice rv must not block. With each `<placeholder>`
-///   filled in, it must allow under the pack evaluate with every catalog
-///   pack on except `strict_git` (which denies even `--force-with-lease` by
-///   design) and under the hook door (`evaluateWithSemantics`) with its own
-///   pack on. It never reads or prints a secret value. A rule with no safe
-///   variant carries no safer command; every `core.*` rule carries a safer
-///   command or `who_acts` instead.
+/// - A safer command is advice rv must not block, pasted exactly as shown:
+///   placeholders are UPPER_CASE words (`aws s3 ls s3://BUCKET`), never
+///   `<name>`, which the shell reads as a redirect. It must allow under the
+///   pack evaluate with every catalog pack on except `strict_git` (which
+///   denies even `--force-with-lease` by design) and under the hook door
+///   (`evaluateWithSemantics`) with its own pack on. It only inspects or
+///   dry-runs: no write verb, and it never reads or prints a secret value.
+///   A rule with no safe variant carries no safer command; every `core.*`
+///   rule carries a safer command or `who_acts` instead, pinned in
+///   `coreWhoActs`.
 /// - A `stop` example must make its own rule fire with its pack on; at
 ///   critical or high severity that is a deny. A shadowed rule (another
 ///   rule, often a core pack, always fires first on its commands) instead
@@ -164,6 +167,10 @@ struct RuleGuidanceTests {
         #expect(failures == 0)
     }
 
+    /// Redirects, pipes, separators and backgrounding: a safer command is one
+    /// plain command, so `<name>` placeholders and `>>` are both out.
+    static let shellOperators = CharacterSet(charactersIn: "<>|;&`")
+
     @Test func everySaferCommand_isAllowedByThePacksAndTheDoor() throws {
         let harness = try StressHarness.catalog()
         let documents = try PackRegistry.loadAllDocuments()
@@ -177,12 +184,15 @@ struct RuleGuidanceTests {
                 let id = guidance.ruleID.rawValue
                 #expect(safer.isEmpty == false, "\(id) has an empty safer command")
                 #expect(guidance.examples.stop.contains(safer) == false, "\(id) suggests its own stop example")
-                let filled = fillingPlaceholders(safer)
-                #expect(guidance.examples.stop.contains(filled) == false, "\(id) suggests its own stop example")
-                let packs = harness.pin(filled, enabled: catalogMinusStrict)
-                #expect(packs.decision == .allow, "\(id) suggests \(filled), packs give \(describeDecision(packs))")
-                let door = harness.door(filled, enabled: enabled)
-                #expect(door.decision == .allow, "\(id) suggests \(filled), the door gives \(describeDecision(door))")
+                // The literal text is what a person or agent pastes.
+                #expect(
+                    safer.rangeOfCharacter(from: Self.shellOperators) == nil && safer.contains("$(") == false,
+                    "\(id) suggests \(safer), which the shell would not run as one plain command"
+                )
+                let packs = harness.pin(safer, enabled: catalogMinusStrict)
+                #expect(packs.decision == .allow, "\(id) suggests \(safer), packs give \(describeDecision(packs))")
+                let door = harness.door(safer, enabled: enabled)
+                #expect(door.decision == .allow, "\(id) suggests \(safer), the door gives \(describeDecision(door))")
             }
         }
         #expect(checked > 0)
@@ -217,6 +227,78 @@ struct RuleGuidanceTests {
                 )
             }
         }
+    }
+
+    /// A safer command only lists, describes or dry-runs. These verbs change
+    /// something (a file, a container, a remote) and are never advice.
+    static let writeVerbs = [
+        #"\bexport\b"#, #"--output\b"#, #"(^|\s)(stop|down|rm|cp|mv|tee|kill|delete|remove|destroy|purge)(\s|$)"#,
+        #"\btar\s+-[A-Za-z]*c"#, #">"#,
+    ]
+
+    @Test func noSaferCommand_writes() throws {
+        for write in ["wrangler d1 export db --output b.sql", "docker compose stop", "docker compose down",
+                      "tar -cf out.tar ./build", "echo x >> log", "mv ./build /tmp/", "cp a b", "date | tee log"] {
+            #expect(writes(write), "\(write) slipped past the write check")
+        }
+        for document in try PackRegistry.loadAllDocuments() {
+            for guidance in document.guidance {
+                guard let safer = guidance.saferCommand else { continue }
+                #expect(writes(safer) == false, "\(guidance.ruleID.rawValue) suggests \(safer), which writes")
+            }
+        }
+    }
+
+    static let ownFiles = "you, in your own terminal, after checking what is in it"
+    /// The `*-root-home` and sensitive-source rules match `~` as well as
+    /// system paths, so their text must be true for both.
+    static let ownOrSystem = "you, in your own terminal, for your own files; an admin for system files"
+    static let coreWhoActs: [String: String] = [
+        "core.git:push-force-long": "you, in your own terminal, after checking no one else pushed",
+        "core.git:push-force-short": "you, in your own terminal, after checking no one else pushed",
+        "core.git:git-alias-semantic-unverified": "you, after reading the alias with git config --get-regexp alias",
+        "core.git:branch-dynamic-token": "you, with the branch name written out",
+        "core.filesystem:sed-exec-unverified": "you, after reading the rendered command",
+        "core.filesystem:rm-rf-general": ownFiles,
+        "core.filesystem:rm-r-f-separate": ownFiles,
+        "core.filesystem:rm-recursive-force-long": ownFiles,
+        "core.filesystem:unlink-general": ownFiles,
+        "core.filesystem:tar-remove-files-general": ownFiles,
+        "core.filesystem:truncate-zero-general": "you, in your own terminal",
+        "core.filesystem:shred-general": "you, in your own terminal",
+        "core.filesystem:dd-overwrite-general": "you, in your own terminal",
+        "core.filesystem:mv-dynamic-path": "you, with the paths written out",
+        "core.filesystem:redirect-truncate-dynamic-path": "you, with the path written out",
+        "core.filesystem:cp-sensitive-then-delete": ownOrSystem,
+        "core.filesystem:ln-symlink-sensitive-then-delete": ownOrSystem,
+        "core.filesystem:rsync-sensitive-then-delete": ownOrSystem,
+        "core.filesystem:rm-rf-root-home": ownOrSystem,
+        "core.filesystem:rm-r-f-separate-root-home": ownOrSystem,
+        "core.filesystem:rm-recursive-force-root-home": ownOrSystem,
+        "core.filesystem:find-delete-root-home": ownOrSystem,
+        "core.filesystem:unlink-root-home": ownOrSystem,
+        "core.filesystem:truncate-zero-root-home": ownOrSystem,
+        "core.filesystem:shred-root-home": ownOrSystem,
+        "core.filesystem:tar-remove-files-root-home": ownOrSystem,
+        "core.filesystem:dd-overwrite-root-home": ownOrSystem,
+        "core.filesystem:mv-sensitive-source-root-home": ownOrSystem,
+        "core.filesystem:redirect-truncate-root-home": ownOrSystem,
+        "core.filesystem:fork-bomb": "no one: there is no safe form",
+    ]
+
+    /// B1 prints this text on a deny line, so it is pinned word for word.
+    @Test func coreWhoActs_isPinnedPerRule() throws {
+        let catalog = try PackRegistry.loadRuleGuidance()
+        var seen: [String: String] = [:]
+        for document in try PackRegistry.loadAllDocuments() {
+            for guidance in document.guidance {
+                guard let who = guidance.whoActs else { continue }
+                seen[guidance.ruleID.rawValue] = who
+            }
+        }
+        #expect(seen == Self.coreWhoActs)
+        let rmHome = try #require(catalog[RuleID(pack: .coreFilesystem, pattern: "rm-rf-root-home")])
+        #expect(rmHome.whoActs?.contains("your own files") == true)
     }
 
     /// The plan: every stop shows a safer command, or exactly who has to act.
@@ -294,11 +376,8 @@ extension StressHarness {
     }
 }
 
-/// A safer command with each `<name>` placeholder replaced by the bare name,
-/// as a person would fill it in: `aws s3 ls s3://<bucket>` evaluates as
-/// `aws s3 ls s3://bucket`.
-func fillingPlaceholders(_ command: String) -> String {
-    command.replacingOccurrences(of: #"<([^<>\s]+)>"#, with: "$1", options: .regularExpression)
+private func writes(_ command: String) -> Bool {
+    RuleGuidanceTests.writeVerbs.contains { command.range(of: $0, options: .regularExpression) != nil }
 }
 
 private func readsSecret(_ command: String, inSecretsPack: Bool) -> Bool {
