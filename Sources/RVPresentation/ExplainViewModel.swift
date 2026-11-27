@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 public struct ExplainSemanticView: Equatable, Sendable {
@@ -189,5 +190,209 @@ package func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemantic
             )
         }
         return nil
+    }
+}
+
+// MARK: - rv why <code>
+
+/// What the CLI knows about one rule when it tells a decision's story:
+/// the pack's reason and its guidance. Plain values; the CLI reads packs.
+public struct DecisionRuleFacts: Equatable, Sendable {
+    /// The pack pattern's reason (`Git reset --hard destroys uncommitted changes`).
+    public var reason: String?
+    /// A command rv allows instead, ready to copy.
+    public var saferCommand: String?
+    /// Who has to act when there is no safer command.
+    public var whoActs: String?
+
+    public init(reason: String? = nil, saferCommand: String? = nil, whoActs: String? = nil) {
+        self.reason = reason
+        self.saferCommand = saferCommand
+        self.whoActs = whoActs
+    }
+}
+
+/// `rv why <code>`: the full story of one decision rv logged, found by the
+/// code `rv log` prints. Built from a log row, never by re-running the
+/// command: the recorded command is redacted, so evaluating it again could
+/// tell a different story.
+public struct DecisionStory: Equatable, Sendable {
+    /// What happened, in the v5c words, kept apart from the rule so a stop
+    /// can never read as a would-stop.
+    public enum Outcome: Equatable, Sendable {
+        /// It did not run.
+        case stopped
+        /// Watch mode let it run; guarding would have stopped it.
+        case wouldStop
+        /// Watch mode let it run; guarding would have asked a person.
+        case wouldAsk
+
+        public var glyph: CommandVocabulary.Glyph {
+            switch self {
+            case .stopped: .stopped
+            case .wouldStop, .wouldAsk: .watched
+            }
+        }
+
+        /// `✕ Stopped`, `◐ Would stop`.
+        public var label: String {
+            let word = glyph.eventWord ?? glyph.word
+            return glyph.rawValue + " " + word.prefix(1).uppercased() + word.dropFirst()
+        }
+    }
+
+    /// What kind of rule made the decision.
+    public enum Source: Equatable, Sendable {
+        /// A pack or typed rule.
+        case rule
+        /// rv guarding itself: its settings, its files, its daemon.
+        case selfProtection
+        /// rv could not see what the command runs, or could not finish.
+        case couldNotCheck
+    }
+
+    public var code: String
+    public var outcome: Outcome
+    public var source: Source
+    /// The recorded command (redacted), the tool and its redacted path, or the tool.
+    public var command: String
+    /// `Sat 21 Nov 14:02 · claude · in ~/code/app`.
+    public var context: String
+    /// Why, in plain words.
+    public var why: String
+    public var rule: String
+    /// A safer command rv allows, when the rule has one.
+    public var safer: String?
+    /// Who has to act.
+    public var who: String?
+    /// The stop holds in watch mode too.
+    public var holdsInEveryMode: Bool
+    /// rvd kept no command text for this row.
+    public var commandMissing: Bool
+
+    /// - Parameters:
+    ///   - entry: the `rv log` row the code names.
+    ///   - cwd: the working directory the decision log kept, home as `~`.
+    ///   - facts: the rule's reason and guidance, when its pack has them.
+    public init(entry: LogEntry, cwd: String? = nil, facts: DecisionRuleFacts = DecisionRuleFacts(), calendar: Calendar) {
+        self.code = entry.code ?? ""
+        self.outcome = entry.stopped ? .stopped : (entry.wouldAsk ? .wouldAsk : .wouldStop)
+        self.source = Self.source(rule: entry.rule)
+        self.rule = DisplayedText.field(entry.rule)
+        let target = DisplayedText.field(entry.target)
+        if let command = entry.command, command.isEmpty == false {
+            self.command = DisplayedText.field(command)
+        } else {
+            self.command = target.isEmpty ? entry.tool : "\(entry.tool) \(target)"
+        }
+        self.commandMissing = entry.tool == "Bash" && (entry.command?.isEmpty ?? true)
+        let when = LogViewModel.dayLabel(entry.time, calendar: calendar) + " "
+            + LogViewModel.timeLabel(entry.time, calendar: calendar)
+        self.context = ([when, DisplayedText.field(entry.agent)] + (cwd.map { ["in " + DisplayedText.field($0)] } ?? []))
+            .joined(separator: " · ")
+        switch source {
+        case .selfProtection:
+            self.why = Self.selfProtectionWhy(rule: entry.rule)
+            self.safer = Self.selfProtectionSafer(rule: entry.rule)
+            self.who = Self.personInTerminal
+            self.holdsInEveryMode = true
+        case .couldNotCheck:
+            self.why = Self.couldNotCheckWhy(rule: entry.rule)
+            self.safer = nil
+            self.who = Self.personInTerminal
+            self.holdsInEveryMode = entry.stopped
+        case .rule:
+            self.why = facts.reason.map(DisplayedText.field) ?? "a rule in \(DisplayedText.field(Self.pack(of: entry.rule))) matched"
+            self.safer = facts.saferCommand
+            self.who = facts.whoActs ?? (facts.saferCommand == nil ? Self.personInTerminal : nil)
+            self.holdsInEveryMode = false
+        }
+    }
+
+    /// The one command worth typing next.
+    public static let nextCommand = CommandVocabulary.Command.log.invocation
+
+    static let personInTerminal = "a person, in their own terminal"
+
+    static func source(rule: String) -> Source {
+        if rule == selfProtectionRule || rule.hasSuffix(":home-rv-config") || rule.hasPrefix("rv.self") {
+            return .selfProtection
+        }
+        if rule.hasPrefix(indeterminatePrefix) || rule.hasPrefix("observe.floor:") || rule == "rv.timeout" {
+            return .couldNotCheck
+        }
+        return .rule
+    }
+
+    static let indeterminatePrefix = "rv.indeterminate:"
+    static let selfProtectionRule = indeterminatePrefix + "selfProtection"
+
+    private static func selfProtectionWhy(rule: String) -> String {
+        rule.hasSuffix(":home-rv-config")
+            ? "rv protects itself: agents can't read or change rv's own files"
+            : "rv protects itself: an agent can't loosen rv, unlock itself or change rv's settings"
+    }
+
+    private static func selfProtectionSafer(rule: String) -> String? {
+        rule.hasSuffix(":home-rv-config")
+            ? CommandVocabulary.Command.secrets.invocation + "   names only, never values"
+            : nil
+    }
+
+    private static func couldNotCheckWhy(rule: String) -> String {
+        let raw = rule.hasPrefix(indeterminatePrefix) ? String(rule.dropFirst(indeterminatePrefix.count)) : rule
+        switch IndeterminateReason(rawValue: raw) ?? IndeterminateReason(rawValue: rule) {
+        case .observeUnanalyzable?, .unresolvedInvocation?:
+            return "rv can't see what this command runs, so it stops in every mode"
+        case .budgetExhausted?:
+            return "rv ran out of time checking this long command"
+        case .commandTooLarge?:
+            return "the command is too long for rv to check"
+        case .corePacksUnavailable?:
+            return "rv's rules did not load, so it could not check anything"
+        case .inlineProgramNeedsJudge?, .packageScriptUnresolved?:
+            return "rv can't see inside this script, so it stops in every mode"
+        case .selfProtection?:
+            return selfProtectionWhy(rule: rule)
+        case nil:
+            return rule == "rv.timeout" ? "rv ran out of time checking it" : "rv could not finish checking it"
+        }
+    }
+
+    private static func pack(of rule: String) -> String {
+        rule.split(separator: ":", maxSplits: 1).first.map(String.init) ?? rule
+    }
+}
+
+/// `rv why <code> --json`. Keys stay stable.
+public struct DecisionStoryRobotPayload: Equatable, Sendable, Encodable {
+    public static let schema = "rv.why.v1"
+    public var schema = DecisionStoryRobotPayload.schema
+    public var code: String
+    public var outcome: String
+    public var selfProtection: Bool
+    public var command: String
+    public var context: String
+    public var why: String
+    public var rule: String
+    public var safer: String?
+    public var who: String?
+    public var holdsInEveryMode: Bool
+
+    public init(_ story: DecisionStory) {
+        self.code = story.code
+        switch story.outcome {
+        case .stopped: self.outcome = "stopped"
+        case .wouldStop: self.outcome = "would_stop"
+        case .wouldAsk: self.outcome = "would_ask"
+        }
+        self.selfProtection = story.source == .selfProtection
+        self.command = story.command
+        self.context = story.context
+        self.why = story.why
+        self.rule = story.rule
+        self.safer = story.safer
+        self.who = story.who
+        self.holdsInEveryMode = story.holdsInEveryMode
     }
 }

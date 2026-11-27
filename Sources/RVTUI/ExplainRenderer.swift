@@ -182,3 +182,70 @@ private func outlineEmphasis(_ tone: DecisionTone) -> OutlineEmphasis {
         return .fact
     }
 }
+
+// MARK: - rv why <code>
+
+/// `rv why <code>`: the anatomy of a stop (North Star v2): verdict and
+/// command on one line, the only colour on screen; then why, the rule, a
+/// safer command, who acts; the next command last.
+public struct DecisionStoryRenderer: FrameRenderer {
+    static let pad = "  "
+    static let labelWidth = 8
+
+    public init() {}
+
+    public func render(_ story: DecisionStory, palette: Palette) -> [String] {
+        let ink = story.outcome == .stopped ? palette.deny : palette.mark
+        let verdict = story.outcome.label
+        let indent = String(repeating: " ", count: verdict.count + 3)
+        var lines = [
+            "",
+            paint(verdict, slot: ink, reset: palette.reset) + "   " + paint(story.command, slot: palette.fact, reset: palette.reset),
+            indent + paint(story.context, slot: palette.silver, reset: palette.reset),
+            "",
+            row("why", story.why, palette: palette),
+            row("rule", story.rule, palette: palette),
+        ]
+        switch story.outcome {
+        case .stopped:
+            if story.holdsInEveryMode {
+                lines.append(row("holds", "in every mode, watching too", palette: palette))
+            }
+        case .wouldStop:
+            lines.append(row("ran", "watch mode let it run; guarding would stop it", palette: palette))
+        case .wouldAsk:
+            lines.append(row("ran", "watch mode let it run; guarding would ask you first", palette: palette))
+        }
+        if let safer = story.safer {
+            lines.append(row("safer", paint(safer, slot: palette.heading, reset: palette.reset), palette: palette))
+        }
+        if let who = story.who {
+            lines.append(row("who", who, palette: palette))
+        }
+        if story.commandMissing {
+            lines.append(row("note", paint("rvd kept no command text for this one", slot: palette.silver, reset: palette.reset), palette: palette))
+        }
+        lines += [
+            "",
+            paint("\(CommandVocabulary.Glyph.next.rawValue) \(DecisionStory.nextCommand)", slot: palette.heading, reset: palette.reset)
+                + "   " + paint("every decision this week", slot: palette.silver, reset: palette.reset),
+        ]
+        return lines.map { $0.isEmpty ? $0 : Self.pad + $0 }
+    }
+
+    /// `rv why <code>` for a code no row has.
+    public func renderNotFound(code: String, palette: Palette) -> [String] {
+        [
+            "",
+            paint(CommandVocabulary.Glyph.stopped.rawValue, slot: palette.deny, reset: palette.reset)
+                + " No decision \(DisplayedText.field(code)) in rv's log this week.",
+            "",
+            paint("\(CommandVocabulary.Glyph.next.rawValue) \(DecisionStory.nextCommand)", slot: palette.heading, reset: palette.reset)
+                + "   " + paint("find its code", slot: palette.silver, reset: palette.reset),
+        ].map { $0.isEmpty ? $0 : Self.pad + $0 }
+    }
+
+    private func row(_ label: String, _ body: String, palette: Palette) -> String {
+        paint(padRight(label, to: Self.labelWidth), slot: palette.silver, reset: palette.reset) + body
+    }
+}
