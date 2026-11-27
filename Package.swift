@@ -109,6 +109,9 @@ let testOwnerPresence: [SwiftSetting] = Context.environment["RV_TEST_OWNER_PRESE
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
     .target(name: "RVFileStore"),
+    // `rv undo`'s copies (workstream H3): the plan from an analysis, the
+    // owner-only store, the bounded copier and the hardened git runner.
+    .target(name: "RVUndo", dependencies: ["RVDomain"]),
     .target(
         name: "RVIsolation",
         dependencies: ["RVDomain", "RVPolicy", "RVIPC", "RVHistory", "RVFileStore"],
@@ -186,6 +189,7 @@ let coreLibraryTargets: [Target] = [
 let coreProducts: [Product] = [
     .library(name: "RVDomain", targets: ["RVDomain"]),
     .library(name: "RVFileStore", targets: ["RVFileStore"]),
+    .library(name: "RVUndo", targets: ["RVUndo"]),
     .library(name: "RVIsolation", targets: ["RVIsolation"]),
     .library(name: "RVEngine", targets: ["RVEngine"]),
     .library(name: "RVPacks", targets: ["RVPacks"]),
@@ -210,6 +214,7 @@ let coreProducts: [Product] = [
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
     .testTarget(name: "RVFileStoreTests", dependencies: ["RVFileStore"]),
+    .testTarget(name: "RVUndoTests", dependencies: ["RVUndo"]),
     .testTarget(name: "RVIsolationTests", dependencies: isolationTestDependencies),
     .testTarget(
         name: "RVEngineTests",
@@ -314,7 +319,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC", "RVJudgePool",
+            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC", "RVJudgePool", "RVUndo",
         ],
         swiftSettings: testOwnerPresence
     ),
@@ -348,7 +353,7 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory", "RVTerm",
-            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore", "RVXPC",
+            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore", "RVXPC", "RVUndo",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [
