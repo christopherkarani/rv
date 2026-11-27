@@ -4,9 +4,18 @@ import RVDomain
 import RVHistory
 import RVPolicy
 import RVPresentation
+import RVTUI
+import RVTheme
 
 enum BlocksRun {
-    static func list(home: HomeDirectory, json: Bool, now: Date = Date()) throws -> String {
+    /// `palette` paints each row's glyph (red ✕, amber ◐) on a colour
+    /// terminal; the colour-off default keeps rows plain when piped.
+    static func list(
+        home: HomeDirectory,
+        json: Bool,
+        now: Date = Date(),
+        palette: Palette = colorOffPalette
+    ) throws -> String {
         let records = DenialLedger(
             configDirectory: RVPolicyPaths.configDirectory(home: home)
         ).records(asOf: now)
@@ -16,19 +25,19 @@ enum BlocksRun {
         if records.isEmpty {
             return ""
         }
-        return records.map(prettyLine).joined(separator: "\n") + "\n"
+        return records.map { prettyLine($0, palette: palette) }.joined(separator: "\n") + "\n"
     }
 
     /// Every row says what happened after the timestamp, so a real stop
     /// never reads like a watched one: `✕ Stopped` (the command did not
-    /// run), or for an observe-mode row (the agent was not blocked)
-    /// `◐ Would stop` / `◐ Would ask` (what enforcement
-    /// would have done). A host name is never one of these words. A row
+    /// run), or `◐ Would stop` for a watch-mode row (the agent was not
+    /// blocked; `--json` `would_be` says whether guard mode would have
+    /// asked or stopped). A host name is never one of these words. A row
     /// that names its agent session ends with `session=<id>`.
-    private static func prettyLine(_ record: DenialLedgerRecord) -> String {
+    private static func prettyLine(_ record: DenialLedgerRecord, palette: Palette) -> String {
         [
             iso8601(record.timestamp),
-            verdict(record),
+            paintLeadingGlyph(verdict(record), rest: "", palette: palette),
             record.host.rawValue,
             record.tool.rawValue,
             DisplayedText.field(record.ruleID.rawValue),
@@ -39,8 +48,7 @@ enum BlocksRun {
     }
 
     private static func verdict(_ record: DenialLedgerRecord) -> String {
-        guard record.observed else { return stoppedWords }
-        return record.wouldBe == .ask ? wouldAskWords : wouldStopWords
+        record.observed ? wouldStopWords : stoppedWords
     }
 
     // REQ-T7 named divergence: slashes are no longer spelled `\/`.
@@ -69,7 +77,8 @@ struct Blocks: AsyncParsableCommand {
         let home = try ctx.requireHome()
         let text = try BlocksRun.list(
             home: home,
-            json: ctx.explicitRobot
+            json: ctx.explicitRobot,
+            palette: ctx.appearance.palette
         )
         ctx.writeStdout(text)
     }

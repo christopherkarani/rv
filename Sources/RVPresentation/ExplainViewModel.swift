@@ -67,7 +67,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
     /// Under observe, the decision line names what happened instead of the
-    /// bare verdict word: `◐ Would stop` / `◐ Would ask`
+    /// bare verdict word: `◐ Would stop`
     /// (it ran) or `✕ Stopped, in every mode` (it did not).
     package var observeDecisionWords: String?
     public var explainDecisionWord: String { observeDecisionWords ?? decision.emphasizedName }

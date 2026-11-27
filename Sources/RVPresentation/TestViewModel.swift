@@ -111,8 +111,9 @@ public func testViewModel(
 ) -> TestViewModel {
     var model = baseTestViewModel(from: result, command: command, columns: columns)
     // Under observe the result line leads with what happened, never
-    // BLOCKED for a command that ran: `◐ Would stop (rule)`, `◐ Would ask
-    // (rule)` or `✕ Stopped (rule)`; the note under it says why.
+    // BLOCKED for a command that ran: `◐ Would stop (rule)` or
+    // `✕ Stopped (rule)`; the note under it says why (and whether guard
+    // mode would ask first).
     if let observed, result.decision != .allow {
         var word = observeDecisionWords(for: observed)
         if case .deny(let deny) = result.decision { word += " (\(deny.ruleID.rawValue))" }
