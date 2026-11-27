@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Synchronization
 import Testing
@@ -8,62 +13,102 @@ import RVTheme
 @testable import RVCLI
 
 /// `rv try`: the words match the v2 "First run" frame, the stop is rv's
-/// real verdict and hook text, and nothing outside its temp dir changes.
+/// real verdict and Claude Code's real guard mode, and nothing outside its
+/// temp dir changes, however the run ends.
 @Suite("rv try")
 struct TryCommandTests {
-    @Test("piped output is the v2 frame plus the agent's words, the ✓ and the next command")
-    func pipedOutputIsExact() async throws {
+    @Test("guarded, piped output is the v2 frame line for line")
+    func pipedOutputIsTheFrame() async throws {
         let sandbox = try TrySandbox()
-        let run = await sandbox.runInProcess(palette: colorOffPalette, columns: 80)
+        defer { sandbox.remove() }
+        let run = await sandbox.runInProcess(guardMode: .enforce)
         #expect(run.exitCode == 0)
         #expect(run.stderr == "")
-        #expect(run.stdout == Self.expected)
+        #expect(run.stdout == Self.stopped)
     }
 
-    @Test("nothing outside the temp dir changes: HOME, cwd and TMPDIR are as they were")
-    func touchesNothingOutsideItsTempDir() async throws {
-        let rv = try builtRV()
+    @Test("in watch mode it says the reset would run, names the guard command and exits 1")
+    func watchModeIsHonest() async throws {
         let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        let run = await sandbox.runInProcess(guardMode: .observe)
+        #expect(run.exitCode == 1)
+        #expect(run.stdout == Self.watched)
+    }
+
+    @Test("Claude Code's mode comes from config.json, the environment can only tighten it")
+    func readsClaudeGuardMode() throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        let home = try #require(HomeDirectory(validating: sandbox.home.path))
+        #expect(TryDemo.claudeGuardMode(home: home, environment: [:]) == .enforce)
+        #expect(TryDemo.claudeGuardMode(home: nil, environment: [:]) == .enforce)
+        try sandbox.writeConfig(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        #expect(TryDemo.claudeGuardMode(home: home, environment: [:]) == .observe)
+        #expect(TryDemo.claudeGuardMode(home: home, environment: ["RV_GUARD_MODE": "enforce"]) == .enforce)
+        try sandbox.writeConfig(#"{"guard":{"mode":"observe","hosts":{"claude":"block"}}}"#)
+        #expect(TryDemo.claudeGuardMode(home: home, environment: [:]) == .enforce)
+        try sandbox.writeConfig(#"{"guard":{"mode":"observe"}}"#)
+        #expect(TryDemo.claudeGuardMode(home: home, environment: [:]) == .observe)
+    }
+
+    @Test("the binary changes nothing outside its temp dir: HOME, cwd and TMPDIR are as they were")
+    func touchesNothingOutsideItsTempDir() throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
         let before = try sandbox.snapshot()
+        let run = try sandbox.runBinary()
+        #expect(run.exitCode == 0, "stderr: \(run.stderr)")
+        #expect(run.stdout == Self.stopped)
+        #expect(try sandbox.snapshot() == before)
+    }
 
-        let process = Process()
-        process.executableURL = rv
-        process.arguments = ["try"]
-        process.currentDirectoryURL = sandbox.cwd
-        process.environment = [
-            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
-            "HOME": sandbox.home.path,
-            "TMPDIR": sandbox.tmp.path,
-        ]
-        let out = Pipe()
-        let err = Pipe()
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
+    @Test("the binary reads a watch-mode config without writing to it")
+    func binaryHonoursWatchMode() throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        try sandbox.writeConfig(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        let before = try sandbox.snapshot()
+        let run = try sandbox.runBinary()
+        #expect(run.exitCode == 1, "stderr: \(run.stderr)")
+        #expect(run.stdout == Self.watched)
+        #expect(try sandbox.snapshot() == before)
+    }
 
-        #expect(process.terminationStatus == 0, "stderr: \(stderr)")
-        #expect(stdout == Self.expected)
+    @Test("a closed pipe kills rv try without leaving its temp dir behind")
+    func closedPipeLeavesNothing() throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        let before = try sandbox.snapshot()
+        _ = try sandbox.runBinary(closeStdout: true)
+        #expect(try sandbox.snapshot() == before)
+    }
+
+    @Test("SIGTERM mid-run leaves nothing behind", arguments: [0, 50, 150, 300])
+    func signalLeavesNothing(afterMilliseconds delay: Int) throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        let before = try sandbox.snapshot()
+        _ = try sandbox.runBinary(signalAfter: delay)
         #expect(try sandbox.snapshot() == before)
     }
 
     @Test("in process, the temp dir is removed and HOME is untouched")
     func inProcessCleansUp() async throws {
         let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
         let before = try sandbox.snapshot()
-        let run = await sandbox.runInProcess(palette: colorOffPalette, columns: 80)
+        let run = await sandbox.runInProcess(guardMode: .enforce)
         #expect(run.exitCode == 0)
         #expect(try sandbox.snapshot() == before)
     }
 
-    @Test("the stop is the verdict and hook text an agent gets for the same command")
-    func stopMatchesTheHookText() async throws {
-        let sandbox = try TryDemo.makeSandbox(in: try TrySandbox().tmp)
-        defer { try? FileManager.default.removeItem(at: sandbox.root) }
-        let command = ShellCommand(rawValue: "git reset --hard")
+    @Test("rv's verdict is the deny the hook would send for the same command")
+    func verdictMatchesTheHook() async throws {
+        let parent = try TrySandbox()
+        defer { parent.remove() }
+        let sandbox = try TryDemo.makeSandbox(in: parent.tmp)
+        let command = ShellCommand(rawValue: TryScreen.command)
         let result = await CommandRun.evaluateCommand(
             command.rawValue,
             cwd: sandbox.repo.path,
@@ -71,34 +116,45 @@ struct TryCommandTests {
             home: nil
         )
         #expect(denyPayload(from: result.decision)?.ruleID.pattern == "reset-hard")
-        let agentText = try #require(hostDenyText(from: result, command: command))
-        #expect(await TryDemo.evaluate(in: sandbox) == .stopped(agentText: agentText))
+        #expect(hostDenyText(from: result, command: command) != nil)
+        #expect(await TryDemo.deniedByRV(in: sandbox))
     }
 
-    @Test("every line fits 80 columns and a piped run has no escape codes")
-    func fitsEightyColumns() async throws {
-        let run = try await TrySandbox().runInProcess(palette: colorOffPalette, columns: 200)
-        #expect(run.stdout.contains("\u{1B}") == false)
-        for line in run.stdout.split(separator: "\n") {
-            #expect(line.count <= 80, "too wide: \(line)")
+    @Test("every line fits the terminal, at most 80 columns, with no escape codes when piped",
+          arguments: [200, 80, 40])
+    func fitsTheTerminal(columns: Int) async throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        for mode in [GuardMode.enforce, .observe] {
+            let run = await sandbox.runInProcess(guardMode: mode, columns: columns)
+            #expect(run.stdout.contains("\u{1B}") == false)
+            for line in run.stdout.split(separator: "\n") {
+                #expect(line.count <= min(columns, 80), "\(mode) too wide at \(columns): \(line)")
+            }
         }
     }
 
-    @Test("a narrow terminal wraps the agent's words under the command")
-    func narrowTerminalWraps() async throws {
-        let run = try await TrySandbox().runInProcess(palette: colorOffPalette, columns: 50)
-        let hung = run.stdout.split(separator: "\n").filter { $0.hasPrefix(TryScreen.hang) }
-        #expect(hung.count >= 4)
-        for line in hung { #expect(line.count <= 50, "too wide: \(line)") }
+    @Test("at 40 columns the long lines wrap and the words stay in order")
+    func fortyColumnsWrap() async throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
+        let run = await sandbox.runInProcess(guardMode: .enforce, columns: 40)
+        #expect(run.stdout.contains("  A throwaway repo with 14 unsaved\n  files. Nothing real.\n"))
+        #expect(run.stdout.contains("              would discard 14 files ·\n              2,314 lines\n"))
+        let words = { (text: String) in text.split(whereSeparator: \.isWhitespace) }
+        #expect(words(run.stdout) == words(Self.stopped))
     }
 
     @Test("colour only paints the glyph words, and the text reads the same without it")
     func colourIsInline() async throws {
+        let sandbox = try TrySandbox()
+        defer { sandbox.remove() }
         let painted = Palette(for: ColorCapability(colorsEnabled: true))
-        let run = try await TrySandbox().runInProcess(palette: painted, columns: 80)
+        let run = await sandbox.runInProcess(guardMode: .enforce, palette: painted)
         #expect(run.stdout.contains("\(painted.deny)✕ Stopped\(painted.reset)"))
-        #expect(run.stdout.contains("\(painted.allow)✓\(painted.reset) All 14 files are still here."))
-        #expect(Self.stripANSI(run.stdout) == Self.expected)
+        #expect(Self.stripANSI(run.stdout) == Self.stopped)
+        let watched = await sandbox.runInProcess(guardMode: .observe, palette: painted)
+        #expect(Self.stripANSI(watched.stdout) == Self.watched)
     }
 
     @Test("numbers group by thousands without the locale")
@@ -108,31 +164,36 @@ struct TryCommandTests {
         #expect(TryScreen.grouped(1_234_567) == "1,234,567")
     }
 
-    @Test("if rv lets the reset through, rv try says so and exits 1")
+    @Test("if rv let the reset through, rv try says so")
     func letThroughIsHonest() {
         let work = TryUnsavedWork(files: 14, lines: 2314)
-        let lines = TryScreen.verdict(.letThrough, work: work, palette: colorOffPalette, columns: 80)
-            + TryScreen.ending(.letThrough, intact: true, work: work, palette: colorOffPalette)
-        #expect(lines.contains("  rv let git reset --hard through here. It did not run."))
-        #expect(lines.contains { $0.contains("Quiet until it matters") } == false)
-        #expect(lines.last == "  → rv doctor    find out why")
+        let lines = TryScreen.lines(.letThrough, work: work, palette: colorOffPalette, columns: 80).stop
+        #expect(lines == ["  rv let git reset --hard through. It did not run here.", "", "  → rv doctor    find out why"])
     }
 
-    static let expected = """
+    /// v2 Reimagined, "First run" (`$ rv try`), without the prompt line.
+    static let stopped = """
 
       A throwaway repo with 14 unsaved files. Nothing real.
 
       agent › git reset --hard
       ✕ Stopped   git reset --hard
                   would discard 14 files · 2,314 lines
-                  the agent read: “RV · Blocked. Destroys uncommitted changes. Use
-                  'git stash' first.”
-
-      ✓ All 14 files are still here.
 
       That's rv. Quiet until it matters.
 
-      → rv doctor    check rv is guarding your agents
+    """
+
+    /// The frame's honest form when Claude Code is in watch mode.
+    static let watched = """
+
+      A throwaway repo with 14 unsaved files. Nothing real.
+
+      agent › git reset --hard
+      ◐ Would stop  git reset --hard
+                    would discard 14 files · 2,314 lines
+
+      → rv host mode claude block    stop it for real
 
     """
 
@@ -142,7 +203,7 @@ struct TryCommandTests {
 }
 
 /// Fresh HOME, cwd and TMPDIR, each with a file in it, to prove `rv try`
-/// leaves them exactly as it found them.
+/// leaves them exactly as it found them. `remove()` deletes it all.
 private struct TrySandbox {
     let root: URL
     var home: URL { root.appendingPathComponent("home") }
@@ -156,9 +217,17 @@ private struct TrySandbox {
         for dir in [home, cwd, tmp, home.appendingPathComponent(".config/rv")] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        try Data("{}\n".utf8).write(to: home.appendingPathComponent(".config/rv/config.json"))
+        try writeConfig("{}\n")
         try Data("mine\n".utf8).write(to: cwd.appendingPathComponent("notes.txt"))
         try Data("left here\n".utf8).write(to: tmp.appendingPathComponent("other.txt"))
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func writeConfig(_ text: String) throws {
+        try Data(text.utf8).write(to: home.appendingPathComponent(".config/rv/config.json"))
     }
 
     /// Every path under the sandbox with its bytes and modification time.
@@ -190,23 +259,65 @@ private struct TrySandbox {
         var exitCode: Int32
     }
 
-    func runInProcess(palette: Palette, columns: Int) async -> Run {
+    func runInProcess(
+        guardMode: GuardMode, palette: Palette = colorOffPalette, columns: Int = 80
+    ) async -> Run {
         let out = Mutex("")
         let err = Mutex("")
         let options = TryDemo.Options(
             tempRoot: tmp,
             environment: ["PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin", "HOME": home.path],
+            guardMode: guardMode,
             palette: palette,
             columns: columns,
             paced: false,
             write: { text in out.withLock { $0 += text } },
             writeError: { text in err.withLock { $0 += text } }
         )
-        let context = CLIProcess.Context(home: HomeDirectory(validating: home.path), stdinIsTTY: false, stdoutIsTTY: false)
-        let code = await CLIProcess.$context.withValue(context) {
-            await TryDemo.run(options)
-        }
+        let code = await TryDemo.run(options)
         return Run(stdout: out.withLock { $0 }, stderr: err.withLock { $0 }, exitCode: code)
+    }
+
+    /// The built `rv try`, with HOME, cwd and TMPDIR inside the sandbox.
+    /// `closeStdout` closes the pipe's read end first (SIGPIPE on the first
+    /// write); `signalAfter` sends SIGTERM that many milliseconds in.
+    func runBinary(closeStdout: Bool = false, signalAfter delay: Int? = nil) throws -> Run {
+        let process = Process()
+        process.executableURL = try builtRV()
+        process.arguments = ["try"]
+        process.currentDirectoryURL = cwd
+        process.environment = [
+            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
+            "HOME": home.path,
+            "TMPDIR": tmp.path,
+        ]
+        let out = Pipe()
+        let err = Pipe()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        if closeStdout { try out.fileHandleForReading.close() }
+        if let delay {
+            usleep(UInt32(delay) * 1000)
+            kill(process.processIdentifier, SIGTERM)
+        }
+        let errors = Mutex(Data())
+        let drained = DispatchGroup()
+        drained.enter()
+        DispatchQueue.global().async {
+            let data = err.fileHandleForReading.readDataToEndOfFile()
+            errors.withLock { $0 = data }
+            drained.leave()
+        }
+        let stdout = closeStdout ? Data() : out.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
+        process.waitUntilExit()
+        return Run(
+            stdout: String(decoding: stdout, as: UTF8.self),
+            stderr: errors.withLock { String(decoding: $0, as: UTF8.self) },
+            exitCode: process.terminationStatus
+        )
     }
 }
 

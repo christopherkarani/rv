@@ -200,12 +200,13 @@ enum HelpCatalog {
                 HelpRow(name: "rv try"),
             ]),
             HelpSection(heading: "Notes", rows: [
-                HelpRow(name: "nothing real", description: "A throwaway git repo in a temp dir, removed when it ends. The reset never runs; rvd and ~/.config/rv are never touched"),
-                HelpRow(name: "the stop", description: "rv's own evaluate with day-one policy, and the words a stopped agent reads"),
+                HelpRow(name: "nothing real", description: "A throwaway git repo in a temp dir, removed before anything prints. The reset never runs, rvd is never asked, and ~/.config/rv is only read"),
+                HelpRow(name: "the stop", description: "rv's own evaluate with day-one policy, as Claude Code's hook would ask it"),
+                HelpRow(name: "watch mode", description: "When Claude Code is in observe mode, it says the reset would stop under guard mode, and how to turn that on"),
             ]),
             HelpSection(heading: "Exit codes", rows: [
-                HelpRow(name: "0", description: "rv stopped the reset and every file is intact"),
-                HelpRow(name: "1", description: "Anything else"),
+                HelpRow(name: "0", description: "rv would stop a real agent's reset, and every file stayed intact"),
+                HelpRow(name: "1", description: "Watch mode would let it run, or the demo could not run"),
             ]),
         ]
     )

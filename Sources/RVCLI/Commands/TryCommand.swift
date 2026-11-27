@@ -11,15 +11,21 @@ import RVHooks
 import RVPolicy
 import RVService
 import RVTheme
+import Synchronization
 
 /// `rv try`: a safe, fake disaster. A throwaway git repo with unsaved work,
 /// a fake agent that tries `git reset --hard`, and rv stopping it.
 ///
-/// The stop is real: the command goes through rv's in-process evaluate (the
-/// gated peek `rv test` uses, as the agent's hook host) and the agent's
-/// words are the hook deny text. Nothing else is: it never talks to rvd,
-/// never reads or writes `~/.config/rv` (day-one policy, no home), never
-/// runs the reset, and writes only inside one temp dir that it removes.
+/// The verdict is real: the command goes through rv's in-process evaluate
+/// (the gated peek `rv test` uses, as Claude Code's hook host, day-one
+/// policy) and counts as stopped when the hook would send a deny. Whether
+/// a real agent's reset would be stopped also depends on Claude Code's
+/// guard mode, read from `~/.config/rv/config.json` the way `rv host list`
+/// reads it; under watch (observe) mode the screen says it would stop.
+///
+/// Nothing else is real: it never talks to rvd, never writes outside one
+/// temp dir, never runs the reset, and removes the temp dir before it
+/// prints, so a closed pipe or a signal cannot leave it behind.
 struct Try: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "try",
@@ -28,15 +34,20 @@ struct Try: AsyncParsableCommand {
 
     func run() async throws {
         let probe = ThemeProbeFactory.live(jsonFlag: false, robotFlag: false, plainFlag: false, noColorFlag: false)
-        let palette = Palette(for: ColorCapability(probe: probe, mode: .pretty), background: probe.background)
+        let environment = CLIProcess.environment()
+        let home = CLIProcess.home()
+        let guardMode = (try? await BlockingIO.run { TryDemo.claudeGuardMode(home: home, environment: environment) })
+            ?? .enforce
         let options = TryDemo.Options(
-            tempRoot: TryDemo.tempRoot(environment: CLIProcess.environment()),
-            environment: CLIProcess.environment(),
-            palette: palette,
+            tempRoot: TryDemo.tempRoot(environment: environment),
+            environment: environment,
+            guardMode: guardMode,
+            palette: Palette(for: ColorCapability(probe: probe, mode: .pretty), background: probe.background),
             columns: probe.columns,
-            paced: probe.stdoutIsTTY
+            paced: probe.stdoutIsTTY,
+            catchesSignals: true
         )
-        let exitCode = await TryDemo.run(options, cleanupOnSignal: true)
+        let exitCode = await TryDemo.run(options)
         if exitCode != 0 { throw ExitCode(exitCode) }
     }
 }
@@ -49,61 +60,75 @@ struct TryUnsavedWork: Equatable, Sendable {
     var lines: Int
 }
 
-/// What rv did with the fake agent's command.
-enum TryVerdict: Equatable, Sendable {
-    /// Stopped; the agent reads `agentText` (hook deny text).
-    case stopped(agentText: String)
-    /// rv let it through (it still never runs here).
+/// What a real agent's `git reset --hard` would meet.
+enum TryOutcome: Equatable, Sendable {
+    /// rv denies it and Claude Code is guarded: stopped.
+    case stopped
+    /// rv denies it, but Claude Code is in watch mode: it would run.
+    case wouldStop
+    /// rv lets it through (it still never runs here).
     case letThrough
 }
 
-/// The words and layout of `rv try` (North Star v2, "First run").
-/// Plain lines with palette inks; no width above `maxWidth`.
+/// The words and layout of `rv try`: the v2 "First run" frame, line for
+/// line, under guard mode. Plain lines with palette inks, wrapped to the
+/// terminal and never wider than `maxWidth`.
 enum TryScreen {
+    private typealias Glyph = CommandVocabulary.Glyph
+
     static let command = "git reset --hard"
     static let maxWidth = 80
-    /// `  ✕ Stopped   ` is 14 columns; detail lines hang under the command.
-    static let hang = String(repeating: " ", count: 14)
-    static let next = CommandVocabulary.Command.doctor.invocation
-    private typealias Glyph = CommandVocabulary.Glyph
     /// `✕ Stopped`: the command really did not run.
     static let stoppedLabel = "\(Glyph.stopped.rawValue) \(Glyph.stopped.word)"
+    /// `◐ Would stop`: watch mode would let it run.
+    static let wouldStopLabel = "\(Glyph.watched.rawValue) Would stop"
+    /// Puts Claude Code in guard mode.
+    static let guardClaude = "\(CommandVocabulary.Command.host.invocation) mode \(HookHost.claude.rawValue) \(HostMode.block.rawValue)"
+    static let doctor = CommandVocabulary.Command.doctor.invocation
 
-    static func intro(_ work: TryUnsavedWork) -> [String] {
-        ["", "  A throwaway repo with \(work.files) unsaved files. Nothing real.", ""]
+    static func lines(
+        _ outcome: TryOutcome, work: TryUnsavedWork, palette: Palette, columns: Int
+    ) -> (intro: [String], stop: [String]) {
+        let width = min(columns, maxWidth)
+        let intro = [""]
+            + wrap("A throwaway repo with \(work.files) unsaved \(work.files == 1 ? "file" : "files"). Nothing real.", indent: "  ", width: width)
+            + ["", "  \(paint("agent ›", palette.trace, palette)) \(command)"]
+        return (intro, verdict(outcome, work: work, palette: palette, width: width))
     }
 
-    static func agent(palette: Palette) -> [String] {
-        ["  \(paint("agent ›", palette.trace, palette)) \(command)"]
-    }
-
-    static func verdict(_ verdict: TryVerdict, work: TryUnsavedWork, palette: Palette, columns: Int) -> [String] {
-        switch verdict {
-        case .stopped(let agentText):
-            let width = min(max(columns, 40), maxWidth)
-            let told = wrap("the agent read: “\(agentText)”", width: width - hang.count)
-            return ["  \(paint(stoppedLabel, palette.deny, palette))   \(command)",
-                    hang + paint("would discard \(files(work.files)) · \(grouped(work.lines)) lines", palette.muted, palette)]
-                + told.map { hang + paint($0, palette.muted, palette) }
+    private static func verdict(_ outcome: TryOutcome, work: TryUnsavedWork, palette: Palette, width: Int) -> [String] {
+        let discard = "would discard \(files(work.files)) · \(grouped(work.lines)) lines"
+        switch outcome {
+        case .stopped:
+            return stop(stoppedLabel, ink: palette.deny, detail: discard, palette: palette, width: width)
+                + ["", "  That's rv. Quiet until it matters."]
+        case .wouldStop:
+            return stop(wouldStopLabel, ink: palette.mark, detail: discard, palette: palette, width: width)
+                + ["", next(guardClaude, "stop it for real", palette: palette, width: width)]
         case .letThrough:
-            return ["  rv let \(command) through here. It did not run."]
+            return wrap("rv let \(command) through. It did not run here.", indent: "  ", width: width)
+                + ["", next(doctor, "find out why", palette: palette, width: width)]
         }
     }
 
-    static func ending(_ verdict: TryVerdict, intact: Bool, work: TryUnsavedWork, palette: Palette) -> [String] {
-        var lines: [String] = [""]
-        if intact {
-            lines.append("  \(paint(Glyph.done.rawValue, palette.allow, palette)) All \(files(work.files)) are still here.")
-            lines.append("")
-        }
-        if case .stopped = verdict, intact {
-            lines.append("  That's rv. Quiet until it matters.")
-            lines.append("")
-            lines.append("  \(paint("\(Glyph.next.rawValue) \(next)", palette.heading, palette))    check rv is guarding your agents")
-        } else {
-            lines.append("  \(paint("\(Glyph.next.rawValue) \(next)", palette.heading, palette))    find out why")
-        }
-        return lines
+    /// `  ✕ Stopped   git reset --hard`, then the detail hung under the
+    /// command. The command starts at column 14, as in the frame, or two
+    /// spaces after a longer label.
+    private static func stop(
+        _ label: String, ink: String, detail: String, palette: Palette, width: Int
+    ) -> [String] {
+        let gap = String(repeating: " ", count: max(2, 12 - label.count))
+        let hang = String(repeating: " ", count: 2 + label.count + gap.count)
+        return ["  \(paint(label, ink, palette))\(gap)\(command)"]
+            + wrap(detail, indent: hang, width: width).map { paint($0, palette.muted, palette, keeping: hang) }
+    }
+
+    /// `  → <command>    <words>`; the words go when the line would not fit,
+    /// so the command is never broken.
+    private static func next(_ command: String, _ words: String, palette: Palette, width: Int) -> String {
+        let head = "  \(paint("\(Glyph.next.rawValue) \(command)", palette.heading, palette))"
+        let full = 2 + 2 + command.count + 4 + words.count
+        return full <= width ? "\(head)    \(words)" : head
     }
 
     static func files(_ count: Int) -> String {
@@ -121,43 +146,51 @@ enum TryScreen {
         return value < 0 ? "-" + out : out
     }
 
-    /// Greedy word wrap; a word longer than `width` gets its own line.
-    static func wrap(_ text: String, width: Int) -> [String] {
+    /// Greedy word wrap, each line prefixed by `indent`; a word longer than
+    /// the room left gets a line of its own.
+    static func wrap(_ text: String, indent: String, width: Int) -> [String] {
+        let room = max(width - indent.count, 1)
         var lines: [String] = []
         var line = ""
         for word in text.split(separator: " ", omittingEmptySubsequences: true) {
             if line.isEmpty {
                 line = String(word)
-            } else if line.count + 1 + word.count <= width {
+            } else if line.count + 1 + word.count <= room {
                 line += " " + word
             } else {
-                lines.append(line)
+                lines.append(indent + line)
                 line = String(word)
             }
         }
-        if !line.isEmpty { lines.append(line) }
+        if !line.isEmpty { lines.append(indent + line) }
         return lines
     }
 
-    private static func paint(_ text: String, _ ink: String, _ palette: Palette) -> String {
-        palette.colorsEnabled ? ink + text + palette.reset : text
+    private static func paint(_ text: String, _ ink: String, _ palette: Palette, keeping indent: String = "") -> String {
+        guard palette.colorsEnabled else { return text }
+        return indent + ink + text.dropFirst(indent.count) + palette.reset
     }
 }
 
 // MARK: - Demo (shell)
 
 /// Builds the throwaway repo, asks rv about the fake agent's command,
-/// checks the work is intact, prints the screen and removes the repo.
+/// checks the work is intact, removes the repo, then prints the screen.
 enum TryDemo {
     struct Options: Sendable {
         /// Parent of the one directory `rv try` creates (and removes).
         var tempRoot: URL
         /// The caller's environment; only `PATH` reaches git.
         var environment: [String: String]
+        /// Claude Code's effective guard mode (`claudeGuardMode`).
+        var guardMode: GuardMode
         var palette: Palette
         var columns: Int
         /// Short pauses between beats on a terminal; never when piped.
         var paced: Bool
+        /// Catch SIGINT, SIGTERM and SIGHUP while the temp dir exists, so
+        /// it is removed before rv exits. Process-wide; the command only.
+        var catchesSignals = false
         var write: @Sendable (String) -> Void = { CommandContext.writeStdout($0) }
         var writeError: @Sendable (String) -> Void = { CommandContext.writeStderr($0) }
     }
@@ -170,6 +203,15 @@ enum TryDemo {
         var home: URL { root.appendingPathComponent("home", isDirectory: true) }
     }
 
+    /// What the run found, measured before the sandbox is removed.
+    struct Rehearsal: Sendable {
+        var work: TryUnsavedWork
+        var deniedByRV: Bool
+        var intact: Bool
+    }
+
+    struct Interrupted: Error {}
+
     /// `$TMPDIR` from the caller's environment, else the system temp dir.
     static func tempRoot(environment: [String: String]) -> URL {
         if let tmp = environment["TMPDIR"], tmp.hasPrefix("/") {
@@ -178,55 +220,80 @@ enum TryDemo {
         return FileManager.default.temporaryDirectory
     }
 
-    /// Exit code: 0 when rv stopped the reset and the work is intact.
-    static func run(_ options: Options, cleanupOnSignal: Bool = false) async -> Int32 {
-        let sandbox: Sandbox
-        do {
-            sandbox = try makeSandbox(in: options.tempRoot)
-        } catch {
-            options.writeError("rv try: could not make a temp dir in \(options.tempRoot.path): \(error.localizedDescription)\n")
-            return 1
-        }
-        let guardSignals = cleanupOnSignal ? SignalCleanup(removing: sandbox.root) : nil
-        defer {
-            try? FileManager.default.removeItem(at: sandbox.root)
-            guardSignals?.cancel()
-        }
+    /// Claude Code's effective guard mode, as `rv host list` resolves it:
+    /// `RV_GUARD_MODE=enforce` > `guard.hosts.claude` > `guard.mode` >
+    /// enforce, and an organization gate pins enforce. Reads only.
+    static func claudeGuardMode(home: HomeDirectory?, environment: [String: String]) -> GuardMode {
+        if ManagedGate.pinsEnforce(home: home) { return .enforce }
+        return GuardModeResolution.resolve(GuardConfig.read(home: home), host: .claude, environment: environment)
+    }
 
-        let git: TryGit
-        let work: TryUnsavedWork
-        let written: [String: Data]
-        do {
-            git = try TryGit(sandbox: sandbox, environment: options.environment)
-            written = try TryRepo.build(at: sandbox.repo, git: git)
-            work = try TryRepo.unsavedWork(git: git)
-        } catch {
+    /// Exit code: 0 when a real agent's reset would be stopped and the
+    /// work stayed intact; 128 + the signal when interrupted; else 1.
+    static func run(_ options: Options) async -> Int32 {
+        let signals = options.catchesSignals ? SignalCapture() : nil
+        let catches = options.catchesSignals
+        let rehearsal = await rehearse(options, interrupted: { catches && SignalCapture.anyCaught })
+        signals?.release()
+        if let caught = signals?.caught { return 128 + caught }
+
+        let found: Rehearsal
+        switch rehearsal {
+        case .success(let value):
+            found = value
+        case .failure(let error):
             options.writeError("rv try: could not build the throwaway repo: \(error)\n")
             return 1
         }
+        guard found.intact else {
+            options.writeError("rv try: the throwaway repo changed while rv looked at it\n")
+            return 1
+        }
 
-        let palette = options.palette
-        options.write(PrettyWriter.join(TryScreen.intro(work) + TryScreen.agent(palette: palette)))
-        await pause(options, milliseconds: 500)
+        let outcome: TryOutcome = !found.deniedByRV ? .letThrough
+            : options.guardMode == .enforce ? .stopped : .wouldStop
+        let screen = TryScreen.lines(outcome, work: found.work, palette: options.palette, columns: options.columns)
+        options.write(PrettyWriter.join(screen.intro))
+        await pause(options, milliseconds: 600)
+        options.write(PrettyWriter.join(screen.stop))
+        return outcome == .stopped ? 0 : 1
+    }
 
-        let verdict = await evaluate(in: sandbox)
-        options.write(PrettyWriter.join(
-            TryScreen.verdict(verdict, work: work, palette: palette, columns: options.columns)
-        ))
-        await pause(options, milliseconds: 300)
-
-        let intact = (try? TryRepo.isIntact(git: git, written: written, work: work)) ?? false
-        options.write(PrettyWriter.join(TryScreen.ending(verdict, intact: intact, work: work, palette: palette)))
-
-        if case .stopped = verdict, intact { return 0 }
-        return 1
+    /// Everything that touches the disk, start to finish, with the sandbox
+    /// removed at the end by this function alone.
+    private static func rehearse(
+        _ options: Options, interrupted: @escaping @Sendable () -> Bool
+    ) async -> Result<Rehearsal, any Error> {
+        let sandbox: Sandbox
+        do {
+            sandbox = try await BlockingIO.run { try makeSandbox(in: options.tempRoot) }
+        } catch {
+            return .failure(error)
+        }
+        let result: Result<Rehearsal, any Error>
+        do {
+            let git = try TryGit(sandbox: sandbox, environment: options.environment)
+            let (written, work) = try await BlockingIO.run {
+                let written = try TryRepo.build(at: sandbox.repo, git: git, interrupted: interrupted)
+                return (written, try TryRepo.unsavedWork(git: git))
+            }
+            if interrupted() { throw Interrupted() }
+            let denied = await deniedByRV(in: sandbox)
+            if interrupted() { throw Interrupted() }
+            let intact = try await BlockingIO.run { try TryRepo.isIntact(git: git, written: written, work: work) }
+            result = .success(Rehearsal(work: work, deniedByRV: denied, intact: intact))
+        } catch {
+            result = .failure(error)
+        }
+        _ = try? await BlockingIO.run { try FileManager.default.removeItem(at: sandbox.root) }
+        return result
     }
 
     /// rv's in-process evaluate, as Claude Code's hook would ask it, with
-    /// day-one policy (no home) and an allow-once store inside the sandbox.
-    /// A peek: it records nothing and mints no code. Under observe it is the
-    /// verdict guard mode would reach, which is what `rv try` shows.
-    static func evaluate(in sandbox: Sandbox) async -> TryVerdict {
+    /// day-one policy (no home) and an allow-once store inside the sandbox:
+    /// true when the hook would send a deny. A peek: it records nothing and
+    /// mints no code. Under observe it is the verdict guard mode reaches.
+    static func deniedByRV(in sandbox: Sandbox) async -> Bool {
         let command = ShellCommand(rawValue: TryScreen.command)
         let world = LiveEvaluateWorld(
             home: nil,
@@ -237,8 +304,7 @@ enum TryDemo {
             cwd: WorkingDirectory(validating: sandbox.repo.path),
             host: .hook(.claude)
         )
-        guard let text = hostDenyText(from: verdict.shown, command: command) else { return .letThrough }
-        return .stopped(agentText: text)
+        return hostDenyText(from: verdict.shown, command: command) != nil
     }
 
     static func makeSandbox(in parent: URL) throws -> Sandbox {
@@ -271,11 +337,15 @@ enum TryRepo {
 
     /// Commits every file, then writes unsaved lines into each. Returns the
     /// bytes on disk per path, to check later that nothing changed.
-    static func build(at repo: URL, git: TryGit) throws -> [String: Data] {
+    /// Blocking: call it off the cooperative pool.
+    static func build(
+        at repo: URL, git: TryGit, interrupted: () -> Bool = { false }
+    ) throws -> [String: Data] {
         try git.run(["init", "-q"])
         for (path, _) in files {
-            try write(committed(path), to: repo.appendingPathComponent(path))
+            try write(Data(committed(path).utf8), to: repo.appendingPathComponent(path))
         }
+        if interrupted() { throw TryDemo.Interrupted() }
         try git.run(["add", "-A"])
         try git.run(["commit", "-q", "-m", "Start the app"])
         var written: [String: Data] = [:]
@@ -287,7 +357,7 @@ enum TryRepo {
         return written
     }
 
-    /// What `git reset --hard` would discard, as git counts it.
+    /// What `git reset --hard` would discard, as git counts it. Blocking.
     static func unsavedWork(git: TryGit) throws -> TryUnsavedWork {
         let rows = try git.output(["diff", "--numstat", "HEAD"])
             .split(separator: "\n")
@@ -298,7 +368,7 @@ enum TryRepo {
     }
 
     /// Every file still holds exactly what was written, and git still sees
-    /// the same unsaved work.
+    /// the same unsaved work. Blocking.
     static func isIntact(git: TryGit, written: [String: Data], work: TryUnsavedWork) throws -> Bool {
         for (path, data) in written {
             guard FileManager.default.contents(atPath: git.repo.appendingPathComponent(path).path) == data else {
@@ -315,10 +385,6 @@ enum TryRepo {
     private static func unsaved(_ path: String, count: Int) -> String {
         let mark = path.hasSuffix(".md") ? "-" : "//"
         return (1...count).map { "\(mark) unsaved work, line \($0)\n" }.joined()
-    }
-
-    private static func write(_ text: String, to url: URL) throws {
-        try write(Data(text.utf8), to: url)
     }
 
     private static func write(_ data: Data, to url: URL) throws {
@@ -360,10 +426,13 @@ struct TryGit: Sendable {
         ]
     }
 
+    /// Blocking: call it off the cooperative pool.
     func run(_ arguments: [String]) throws {
         _ = try output(arguments)
     }
 
+    /// Runs git and returns its stdout. Stdout and stderr drain at the same
+    /// time, so neither pipe can fill and stall git. Blocking.
     func output(_ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = executable
@@ -377,11 +446,20 @@ struct TryGit: Sendable {
         process.standardOutput = out
         process.standardError = err
         try process.run()
+        let errors = Mutex(Data())
+        let drained = DispatchGroup()
+        drained.enter()
+        DispatchQueue.global().async {
+            let data = err.fileHandleForReading.readDataToEndOfFile()
+            errors.withLock { $0 = data }
+            drained.leave()
+        }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: errData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = errors.withLock { String(decoding: $0, as: UTF8.self) }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             throw Failure(description: "git \(arguments.first ?? "") failed: \(message)")
         }
         return String(decoding: data, as: UTF8.self)
@@ -396,26 +474,38 @@ struct TryGit: Sendable {
     }
 }
 
-/// Removes the sandbox if `rv try` is interrupted, then exits 130. A value
-/// owned by `TryDemo.run` alone; the handlers capture only the sandbox URL.
-private struct SignalCleanup {
+/// Holds SIGINT, SIGTERM and SIGHUP while `rv try` has a temp dir, and only
+/// notes which arrived: `TryDemo.run` removes the dir itself, then exits
+/// 128 + the signal. One capture at a time per process (signals are).
+private struct SignalCapture {
     private static let signals: [Int32] = [SIGINT, SIGTERM, SIGHUP]
+    private static let received = Atomic<Int32>(0)
     private let sources: [any DispatchSourceSignal]
 
-    init(removing root: URL) {
+    init() {
+        Self.received.store(0, ordering: .sequentiallyConsistent)
         sources = Self.signals.map { number in
             _ = signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
             source.setEventHandler {
-                try? FileManager.default.removeItem(at: root)
-                exit(130)
+                _ = Self.received.compareExchange(expected: 0, desired: number, ordering: .sequentiallyConsistent)
             }
             source.resume()
             return source
         }
     }
 
-    func cancel() {
+    /// A signal arrived since the last capture began.
+    static var anyCaught: Bool { received.load(ordering: .sequentiallyConsistent) != 0 }
+
+    /// The first signal that arrived, if any.
+    var caught: Int32? {
+        let number = Self.received.load(ordering: .sequentiallyConsistent)
+        return number == 0 ? nil : number
+    }
+
+    /// Back to the default actions: nothing is left to clean up.
+    func release() {
         for source in sources { source.cancel() }
         for number in Self.signals { _ = signal(number, SIG_DFL) }
     }
