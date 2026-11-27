@@ -56,8 +56,11 @@ call, or an override-audit effect escalate (`indeterminate`, `malformed`,
 
 ### The judge
 
-A pack-allowed, non-safe-lane command with a judge bundle installed is
-scored by the judge. The evaluator asks the pool (`dev.rv.judge`,
+A pack-allowed, non-safe-lane command with a judge bundle selected is
+scored by the judge. Selection is rvd's own: any bundle dir that is
+there, broken or not, so a broken install's load failure escalates;
+only a bundle dir that is absent (`lstat` ENOENT) is packs-only
+(`engine-missing`). The evaluator asks the pool (`dev.rv.judge`,
 `docs/architecture/judge-pool.md`) itself, through the same
 `XPCJudgeClient` rvd uses, and reads the answer with rvd's own code
 (`JudgeRuntime.read`, the provenance thresholds, the truncation guard):

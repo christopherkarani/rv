@@ -5,6 +5,7 @@ import Glibc
 #endif
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVPresentation
 import RVTheme
 import RVTUI
@@ -54,10 +55,11 @@ public enum HelpDispatch {
     public static func topic(arguments: [String]) -> HelpTopic? {
         if arguments.isEmpty { return .root }
 
-        if arguments[0] == "help" {
+        let help = CommandVocabulary.Command.help.rawValue
+        if arguments[0] == help {
             let path = arguments.dropFirst().filter { isHelpFlag($0) == false }
             if path.isEmpty { return .root }
-            if path == ["help"] { return .help }
+            if path == [help] { return .help }
             return page(before: path[...]) ?? .root
         }
 

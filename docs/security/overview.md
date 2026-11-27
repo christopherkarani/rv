@@ -254,8 +254,9 @@ never stops or asks.
   other tools (including web and MCP tool calls through the host) are not
   graded by the hook.
 - On Linux, and on macOS without the judge bundle, the judge does not run.
-  A selected judge bundle that is missing or fails to load gives packs-only
-  evaluation plus a note, not a fail-closed answer **[C50]**.
+  A judge bundle dir that is not there at all gives packs-only evaluation
+  plus a note, not a fail-closed answer **[C50]**; one that is there but
+  fails to load (partial, corrupt, uncheckable) is review.
 - Rebase recovery is enabled by the existence of a `rebase-merge` or
   `rebase-apply` directory in the git directory **[C51]**, and lifts the
   working-tree-discard rule **[C52]**.
@@ -694,7 +695,8 @@ gives the hook no signal for auto-run, background agents or
 | `rvd` exceeds its own 7 s budget | Side effects attempted after 7 s are skipped and the reply becomes a timeout deny, unless an allow-once grant was already spent (its allow is sent); a slow reply that attempted no side effect is returned as computed **[C156]** | Same |
 | Pattern budget exhausted, command over 64 KiB, core packs missing | Indeterminate (not overridable) **[C39] [C40] [C41]** | Same |
 | Judge loading, queue full, or prediction failed (macOS) | With `judge.mode` `live`: ask **[C44]**. In shadow (the default): packs-only, logged | Live: recorded as observed. Shadow: packs-only, logged |
-| Judge bundle missing or unloadable; Linux | Packs-only evaluation, not fail-closed **[C50]** | Same |
+| Judge bundle dir absent; Linux | Packs-only evaluation, not fail-closed **[C50]** | Same |
+| Judge bundle present but unloadable (macOS) | With `judge.mode` `live`: review (`judge-refused`). In shadow: packs-only, logged | Live: recorded as observed. Shadow: packs-only, logged |
 | Audit append fails: deny | Deny stands; its record is lost; one stderr line per kind per minute **[C157]** | — |
 | Audit append fails: override (allow-once, allowlist, rebase recovery, contained delete) | Override not applied; command stays denied **[C158]** | — |
 | Audit append fails: owner approval | Approval refused; no grant **[C62]** | — |
@@ -885,7 +887,8 @@ commit.
    announced restart. The agent runs as the same user, so one opaque
    command that stops `rvd` and rewrites the marker still gets through
    **[C53] [C154]**.
-9. A missing or broken judge bundle degrades to packs-only **[C50]**.
+9. A missing judge bundle dir degrades to packs-only **[C50]** (a broken
+   one goes to review).
 10. Searches without a path can match inside secret files **[C56]**.
 11. On Linux the owner-check lockout is in `rvd`'s memory **[C68]**.
 

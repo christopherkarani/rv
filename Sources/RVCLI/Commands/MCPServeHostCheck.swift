@@ -40,7 +40,7 @@ extension MCPRun {
             case .blocked:
                 let throughRV = row.entry.governedServer != nil && row.entry.launches(rvExecutable)
                 if throughRV == false, row.entry.isDisabled == false { counts.blocked += 1 }
-            case .governed, .direct, .dangling, .disabled: break
+            case .governed, .direct, .dangling, .disabled, .off: break
             }
         }
         return counts

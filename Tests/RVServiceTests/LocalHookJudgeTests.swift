@@ -2,6 +2,7 @@ import Foundation
 import RVDomain
 import RVJudgePool
 import RVLaya
+import RVPolicy
 import Synchronization
 import Testing
 @testable import RVService
@@ -169,6 +170,31 @@ struct LocalHookJudgeTests {
         let local = await fixture.decider.decide(host: .claude, stdin: claudeBash(Self.judged, cwd: fixture.workspace))
         #expect(local == .escalate(.judge))
         #expect(fixture.configFileExists("judge-log.jsonl") == false)
+    }
+
+    /// The hook-local evaluator selects bundles as rvd does: a bundle dir
+    /// that is there but broken (empty here) is selected, so the call asks
+    /// the pool, whose load refusal escalates; rvd then refuses (review).
+    /// Only an absent bundle dir takes the packs-only floor locally.
+    @Test func aBrokenBundleDirEscalatesAndOnlyAnAbsentOneIsPacksOnly() async throws {
+        let refused = ScoredPoolClient(.outcome(.loadFailed(LoadFailure(kind: .badBundle, message: "tokenizer.json missing"))))
+        let fixture = try LocalHookFixture(judge: refused)
+        let stdin = claudeBash(Self.judged, cwd: fixture.workspace)
+        guard case .final(let packsOnly) = await fixture.decider.decide(host: .claude, stdin: stdin) else {
+            Issue.record("no bundle dir at all is the packs-only floor, final locally")
+            return
+        }
+        #expect(refused.count == 0, "an absent bundle is never judged")
+
+        let bundle = RVPolicyPaths.configDirectory(home: fixture.home)
+            .appendingPathComponent("models/\(JudgeRuntime.ftBundleName)", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let local = await fixture.decider.decide(host: .claude, stdin: stdin)
+        #expect(local == .escalate(.judge))
+        #expect(refused.count == 1, "the broken bundle is selected and the pool asked")
+        let rvd = try await fixture.rvdReply(host: .claude, stdin: stdin)
+        #expect(rvd != packsOnly, "rvd must not give the packs-only answer for a broken bundle")
+        #expect(rvd.stdout.contains("Ask the owner to run `rv doctor`"), "\(rvd.stdout)")
     }
 
     @Test func withoutAPoolClientAJudgedCallEscalates() async throws {

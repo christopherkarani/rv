@@ -50,9 +50,20 @@ struct MCPServeStderrWriterTests {
     }
 
     @Test func theReasonServeStopsUsesTheWriter() throws {
-        let code = try slice(
+        // Every stop reason is an `MCPServeRefusal` thrown out of `serve`;
+        // `run` hands each one to `refuse`, which writes it.
+        let run = try slice(
             "Sources/RVCLI/Commands/MCPCommand.swift",
-            from: "let line = \"rv mcp serve: \\(message)\\n\"", to: "throw ExitCode(1)")
-        expectSafeWriter(code, "serve's fail")
+            from: "try serve(home: home, environment: environment)", to: "\n    }\n")
+        #expect(run.contains("catch let refusal as MCPServeRefusal"), "run does not catch serve's refusals")
+        #expect(run.contains("try Self.refuse(refusal, ctx: ctx)"), "run does not hand refusals to refuse")
+        let code = try slice(
+            "Sources/RVCLI/Commands/MCPServeRefusal+CLI.swift",
+            from: "let line = \"rv mcp serve: \\(refusal.log)\\n\"", to: "throw ExitCode(1)")
+        expectSafeWriter(code, "serve's refuse")
+        // The reason is written before the protocol answer is served.
+        let written = try #require(code.range(of: "MCPGatewayRuntime.writeStderrLine(line)"))
+        let answered = try #require(code.range(of: "MCPRefusalResponder.serve(refusal)"))
+        #expect(written.lowerBound < answered.lowerBound, "serve answers the client before it writes the reason")
     }
 }

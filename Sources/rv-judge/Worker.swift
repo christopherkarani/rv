@@ -106,6 +106,7 @@ enum JudgeWorker {
 
     private static func loadFailure(_ error: LayaError) -> LoadFailure {
         switch error {
+        case .bundleMissing(let why): LoadFailure(kind: .modelUnavailable, message: why)
         case .badBundle(let why): LoadFailure(kind: .badBundle, message: why)
         case .modelUnavailable(let why): LoadFailure(kind: .modelUnavailable, message: why)
         case .predictionFailed(let why): LoadFailure(kind: .modelUnavailable, message: why)
