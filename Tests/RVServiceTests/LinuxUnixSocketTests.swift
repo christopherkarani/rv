@@ -89,7 +89,7 @@ struct LinuxUnixSocketTests {
         let box = LinuxReplyBox()
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(second)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
             done.signal()
         }
@@ -121,7 +121,7 @@ struct LinuxUnixSocketTests {
         let box = LinuxReplyBox()
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(client)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
             done.signal()
         }
@@ -154,7 +154,7 @@ struct LinuxUnixSocketTests {
         let done = DispatchSemaphore(value: 0)
         let held = LinuxUncheckedClient(client)
         let hello = try IPCJSON.encode(Hello())
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set(try? held.client.send(body: hello))
             done.signal()
         }

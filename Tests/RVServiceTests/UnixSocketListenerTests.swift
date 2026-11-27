@@ -453,7 +453,7 @@ struct UnixSocketListenerTests {
         let box = ReplyBox()
         let done = DispatchSemaphore(value: 0)
         let held = UncheckedClient(second)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.data = try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data())
             done.signal()
         }
@@ -508,7 +508,7 @@ struct UnixSocketListenerTests {
         let done = DispatchSemaphore(value: 0)
         let held = UncheckedClient(client)
         let hello = try IPCJSON.encode(Hello())
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set((try? held.client.send(body: hello)).map(SendOutcome.reply) ?? .hungUp)
             done.signal()
         }
@@ -539,7 +539,7 @@ struct UnixSocketListenerTests {
         let done = DispatchSemaphore(value: 0)
         let held = UncheckedClient(client)
         let hello = try IPCJSON.encode(Hello())
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             box.set((try? held.client.send(body: hello)).map(SendOutcome.reply) ?? .hungUp)
             done.signal()
         }
@@ -780,7 +780,7 @@ private func sendWithinBlocking(seconds: Double, _ client: DarwinEvaluateClient,
     let box = OutcomeBox()
     let done = DispatchSemaphore(value: 0)
     let held = UncheckedClient(client)
-    DispatchQueue.global().async {
+    Thread.detachNewThread {
         box.set((try? held.client.send(body: body)).map(SendOutcome.reply) ?? .hungUp)
         done.signal()
     }
