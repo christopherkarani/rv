@@ -154,13 +154,14 @@ enum BoxRun {
         #else
         guard let options = BoxWall.mac.microVM else { return }
         let directory = canonical(FileManager.default.currentDirectoryPath) ?? "/"
-        writeStderr(BoxPlan.setupStartLine)
+        let prepared: WorkspaceMicroVM.Prepared
         do throws(WorkspaceMicroVM.Unready) {
-            try WorkspaceMicroVM.prepare(options, project: directory)
+            prepared = try WorkspaceMicroVM.prepare(
+                options, project: directory, willBuild: { writeStderr(BoxPlan.setupStartLine) })
         } catch {
             try refuse(BoxPlan.refusal(error))
         }
-        writeStderr(BoxPlan.setupDoneLine)
+        writeStderr(BoxPlan.setupFinishedText(prepared))
         #endif
     }
 
@@ -213,14 +214,19 @@ enum BoxRun {
         let environment = CLIProcess.environment()
         let pathDirectories = (environment["PATH"] ?? "/usr/bin:/bin").split(separator: ":")
             .map(String.init).filter { $0.hasPrefix("/") && $0.contains("\0") == false }
-        let home = HomeDirectory.process()
+        // The passwd home, as the workspace host reads it: `$HOME` can be
+        // unset or point anywhere, and the home checks must not be skipped.
+        let home = passwdHome()
+        let canonicalHome = home.flatMap { canonical($0.rawValue) }
         let secrets = home.flatMap { home in
             try? SecretsConfiguration.load(configDirectory: RVPolicyPaths.configDirectory(home: home)).get()
         } ?? .empty
         return BoxSurroundings(
             workingDirectory: workingDirectory,
-            home: home.flatMap { canonical($0.rawValue) },
-            policy: WorkspaceTUICommand.loadResourceProfiles(),
+            home: canonicalHome,
+            homeAliases: canonicalHome.map(homeAliases) ?? [],
+            identity: identity,
+            policy: WorkspaceTUICommand.loadResourceProfiles(home: home),
             secrets: secrets,
             hasGitEntry: { FileManager.default.fileExists(atPath: $0 + "/.git") },
             findOnPath: { name in
@@ -265,6 +271,30 @@ enum BoxRun {
         }
     }
     #endif
+
+    /// The home directory in the passwd entry, never `$HOME`.
+    static func passwdHome() -> HomeDirectory? {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        guard home.hasPrefix("/") else { return nil }
+        return HomeDirectory(validating: home)
+    }
+
+    /// Home's other spellings: on macOS, `/Users` is a firmlink into the
+    /// Data volume, and `realpath` keeps whichever spelling it was given.
+    static func homeAliases(_ home: String) -> [String] {
+        let data = "/System/Volumes/Data" + home
+        guard let homeID = identity(home), identity(data) == homeID else { return [] }
+        return [data]
+    }
+
+    /// `stat(2)`'s device and inode: the same folder under any spelling.
+    static func identity(_ path: String) -> FileIdentity? {
+        guard path.contains("\0") == false else { return nil }
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return FileIdentity(device: UInt64(truncatingIfNeeded: info.st_dev), inode: UInt64(truncatingIfNeeded: info.st_ino))
+    }
 
     /// `realpath(3)`: the path the workspace host and profiles use.
     static func canonical(_ path: String) -> String? {

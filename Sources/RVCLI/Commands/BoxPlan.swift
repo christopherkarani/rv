@@ -120,11 +120,23 @@ struct BoxPathHit: Equatable, Sendable {
 
 /// What the resolver reads from the machine. Production fills it from
 /// the process and the file system; tests pass values.
+/// A folder's `(st_dev, st_ino)`: the same folder under any spelling (a
+/// symlink, a bind mount, the macOS Data volume's firmlinks).
+struct FileIdentity: Hashable, Sendable {
+    var device: UInt64
+    var inode: UInt64
+}
+
 struct BoxSurroundings {
     /// Canonical current directory.
     var workingDirectory: String
-    /// Canonical home directory, when known.
+    /// Canonical home directory from the passwd entry, never `$HOME`; nil
+    /// when it cannot be found, and then no box starts.
     var home: String?
+    /// Other spellings of home, such as `/System/Volumes/Data/Users/<me>`.
+    var homeAliases: [String] = []
+    /// The identity of a folder, or nil when it can't be read.
+    var identity: (String) -> FileIdentity? = { _ in nil }
     /// Owner resource profiles (runtime-resources.json); `.empty` when none.
     var policy: RuntimeResourcePolicy
     /// secrets.json, to tell placeholders from copied values.
@@ -277,32 +289,65 @@ enum BoxPlan {
     /// The current folder could not be read (it was deleted or moved).
     static let missingFolder = BoxRefusal(why: "This folder no longer exists.", fix: elsewhere)
 
+    /// No passwd home, so rv can't tell what a box would expose.
+    static let noHome = BoxRefusal(
+        why: "rv can't find your home folder, so it can't keep it out of a box.", fix: "rv doctor")
+
     /// The project a box is for: the nearest directory at or above
     /// `directory` that holds `.git`, else `directory` itself. The home
     /// folder is never a project, so the walk stops below it (a dotfiles
     /// repository in `~` does not swallow every folder under it), and
     /// neither is any folder that holds home: the box could read it all.
+    /// Folders are compared by `identity` as well as by path, so another
+    /// spelling of home or of a folder above it (a symlink, a bind mount,
+    /// `/System/Volumes/Data`) is refused too.
     static func projectRoot(
-        from directory: String, home: String?, hasGitEntry: (String) -> Bool
+        from directory: String, home: String?, homeAliases: [String] = [],
+        hasGitEntry: (String) -> Bool, identity: (String) -> FileIdentity? = { _ in nil }
     ) -> Result<String, BoxRefusal> {
         let start = normalized(directory)
-        let home = home.map(normalized)
+        guard let home = home.map(normalized) else { return .failure(noHome) }
         if start == "/" {
             return .failure(BoxRefusal(why: "The root folder can't be a box.", fix: elsewhere))
         }
-        if start == home {
+        let homeID = identity(home)
+        func isHome(_ path: String) -> Bool {
+            path == home || (homeID != nil && identity(path) == homeID)
+        }
+        if isHome(start) {
             return .failure(BoxRefusal(why: "Your home folder can't be a box.", fix: elsewhere))
         }
-        if let home, home.hasPrefix(start + "/") {
+        let spellings = [home] + homeAliases.map(normalized)
+        if holdsHome(start, spellings: spellings, homeID: homeID, identity: identity) {
             return .failure(BoxRefusal(
                 why: "\(DisplayedText.field(start)) holds your home folder, so it can't be a box.", fix: elsewhere))
         }
         var candidate = start
-        while candidate != "/", candidate != home {
+        while candidate != "/", isHome(candidate) == false {
             if hasGitEntry(candidate) { return .success(candidate) }
             candidate = parent(of: candidate)
         }
         return .success(start)
+    }
+
+    /// Whether `start` is a folder above home: by path, as an alias of one
+    /// of home's parents, or because home's own tail lies below it.
+    private static func holdsHome(
+        _ start: String, spellings: [String], homeID: FileIdentity?, identity: (String) -> FileIdentity?
+    ) -> Bool {
+        if spellings.contains(where: { $0.hasPrefix(start + "/") }) { return true }
+        guard let homeID, let startID = identity(start) else { return false }
+        for spelling in spellings {
+            var above = spelling
+            repeat {
+                above = parent(of: above)
+                if identity(above) == startID { return true }
+            } while above != "/"
+        }
+        let parts = spellings[0].split(separator: "/").map(String.init)
+        return (1...max(parts.count, 1)).contains { count in
+            identity(start + "/" + parts.suffix(count).joined(separator: "/")) == homeID
+        }
     }
 
     // MARK: Profile
@@ -478,7 +523,8 @@ enum BoxPlan {
         case .success(let value): wall = value
         }
         switch projectRoot(
-            from: surroundings.workingDirectory, home: surroundings.home, hasGitEntry: surroundings.hasGitEntry)
+            from: surroundings.workingDirectory, home: surroundings.home, homeAliases: surroundings.homeAliases,
+            hasGitEntry: surroundings.hasGitEntry, identity: surroundings.identity)
         {
         case .failure(let refusal): return .failure(refusal)
         case .success(let value): project = value
@@ -633,6 +679,16 @@ enum BoxPlan {
 
     /// `rv box setup mac`, before and after the helper's own progress.
     static let setupStartLine = "\(Glyph.rv.rawValue) rv · setting up Mac boxes · about 26 GB to download, in the foreground\n"
+    /// The last line of `rv box setup mac`: under the setup header after a
+    /// build, on its own when the image was already there.
+    static func setupFinishedText(_ prepared: WorkspaceMicroVM.Prepared) -> String {
+        switch prepared {
+        case .built: setupDoneLine
+        case .alreadyReady: setupReadyLine
+        }
+    }
+
+    static let setupReadyLine = "\(Glyph.done.rawValue) Mac boxes are ready.\n"
     static let setupDoneLine = "  \(Glyph.done.rawValue) Mac boxes are ready.\n"
 
     // MARK: Paths

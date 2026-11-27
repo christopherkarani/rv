@@ -196,6 +196,58 @@ struct BoxPlanTests {
         #expect(BoxPlan.missingFolder.text == "✕ This folder no longer exists.\n  → cd into a project folder, then run rv box again\n")
     }
 
+    @Test("no passwd home, no box")
+    func noHome() {
+        #expect(BoxPlan.projectRoot(from: Self.app, home: nil, hasGitEntry: { _ in true }) == .failure(BoxPlan.noHome))
+        #expect(BoxPlan.noHome.text == "✕ rv can't find your home folder, so it can't keep it out of a box.\n  → rv doctor\n")
+    }
+
+    /// macOS: `/Users` is a firmlink into the Data volume, so the same
+    /// folders have a second spelling that `realpath` keeps.
+    @Test("the Data volume's spelling of home, or of a folder above it, is refused")
+    func dataVolumeAliases() {
+        let data = "/System/Volumes/Data"
+        let ids: [String: UInt64] = [
+            "/": 1, "/System": 2, "/System/Volumes": 3, data: 4,
+            "/Users": 5, data + "/Users": 5, Self.home: 6, data + Self.home: 6,
+            data + Self.home + "/notes": 7, Self.app: 8, data + Self.app: 8,
+        ]
+        let identity: (String) -> FileIdentity? = { ids[$0].map { FileIdentity(device: 1, inode: $0) } }
+        func root(_ start: String, git: @escaping (String) -> Bool = { _ in false }) -> Result<String, BoxRefusal> {
+            BoxPlan.projectRoot(from: start, home: Self.home, homeAliases: [data + Self.home], hasGitEntry: git, identity: identity)
+        }
+        #expect(root(data + Self.home) == .failure(BoxRefusal(why: "Your home folder can't be a box.", fix: BoxPlan.elsewhere)))
+        for above in [data, data + "/Users", "/System/Volumes", "/System"] {
+            #expect(root(above) == .failure(BoxRefusal(
+                why: "\(above) holds your home folder, so it can't be a box.", fix: BoxPlan.elsewhere)), "\(above)")
+        }
+        // The walk up stops at home under its other spelling too.
+        #expect(root(data + Self.home + "/notes", git: { $0 == data + Self.home }) == .success(data + Self.home + "/notes"))
+        #expect(root(data + Self.app, git: { $0 == data + Self.app }) == .success(data + Self.app))
+        // Without aliases, the identity of home's tail below the start still finds it.
+        #expect(BoxPlan.projectRoot(from: data, home: Self.home, hasGitEntry: { _ in false }, identity: identity)
+            == .failure(BoxRefusal(why: "\(data) holds your home folder, so it can't be a box.", fix: BoxPlan.elsewhere)))
+    }
+
+    @Test("a symlink to home or to a folder above it is caught by inode, on this machine")
+    func symlinkAliases() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("rv-box-alias-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let home = base + "/home/me"
+        try FileManager.default.createDirectory(atPath: home + "/code", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: base + "/me-link", withDestinationPath: home)
+        try FileManager.default.createSymbolicLink(atPath: base + "/home-link", withDestinationPath: base + "/home")
+        func root(_ start: String) -> Result<String, BoxRefusal> {
+            BoxPlan.projectRoot(from: start, home: home, hasGitEntry: { _ in false }, identity: BoxRun.identity)
+        }
+        #expect(root(base + "/me-link") == .failure(BoxRefusal(why: "Your home folder can't be a box.", fix: BoxPlan.elsewhere)))
+        #expect(root(base + "/home-link/me") == .failure(BoxRefusal(why: "Your home folder can't be a box.", fix: BoxPlan.elsewhere)))
+        #expect(root(base + "/home-link") == .failure(BoxRefusal(
+            why: "\(base)/home-link holds your home folder, so it can't be a box.", fix: BoxPlan.elsewhere)))
+        #expect(root(home + "/code") == .success(home + "/code"))
+        #expect(root(base + "/me-link/code") == .success(base + "/me-link/code"))
+    }
+
     // MARK: Profile
 
     static func chosen(
@@ -444,6 +496,32 @@ struct BoxPlanTests {
         #expect(BoxPlan.headerLine(mac, home: Self.home) == "◆ rv · mac box for ~/code/app · image dev\n")
         #expect(BoxPlan.launchedLines(mac, seconds: 0, home: Self.home, workingDirectory: Self.app)
             .contains("  ✓ keys      A, B via rv · profile main\n"))
+    }
+
+    @Test("rv box setup mac leaves a ready image alone and builds a missing one")
+    func setupMac() throws {
+        let mac = try #require(BoxWall.mac.microVM)
+        var calls: [[String]] = []
+        var announced = 0
+        func setup(status: Int32, prepare: Int32 = 0) throws(WorkspaceMicroVM.Unready) -> WorkspaceMicroVM.Prepared {
+            calls = []
+            return try WorkspaceMicroVM.prepare(mac, helper: "/opt/rv/rv-macvm", willBuild: { announced += 1 }) { _, arguments, _, _ in
+                calls.append(arguments)
+                return arguments.first == "status" ? status : prepare
+            }
+        }
+        #expect(try setup(status: 0) == .alreadyReady)
+        #expect(calls == [["status", "--image", "dev"]])
+        #expect(announced == 0)
+        #expect(BoxPlan.setupFinishedText(.alreadyReady) == "✓ Mac boxes are ready.\n")
+        #expect(try setup(status: 1) == .built)
+        #expect(calls == [["status", "--image", "dev"], ["prepare", "--image", "dev"]])
+        #expect(announced == 1)
+        #expect(BoxPlan.setupFinishedText(.built) == "  ✓ Mac boxes are ready.\n")
+        #expect(throws: WorkspaceMicroVM.Unready.prepareFailed(mac, status: 2)) { try setup(status: 1, prepare: 2) }
+        #expect(throws: WorkspaceMicroVM.Unready.helperMissing(.macOS)) {
+            try WorkspaceMicroVM.prepare(mac, helper: nil, willBuild: {}) { _, _, _, _ in 0 }
+        }
     }
 
     @Test("VM start failures are one line and one fix")

@@ -164,9 +164,6 @@ func microVMHelperEnvironment(_ environment: [String], profile: MicroVMProfile) 
     ]
 }
 
-/// Contained launch in a micro-VM. Pure checks first, then the same
-/// workspace resolution and inode-alias scan the Seatbelt path runs.
-///
 extension RuntimeResourceProfile {
     /// Whether the profile grants host paths (links, read/write trees,
     /// credential files). A VM guest sees only the workspace, so a VM
@@ -180,6 +177,9 @@ extension RuntimeResourceProfile {
     }
 }
 
+/// Contained launch in a micro-VM. Pure checks first, then the same
+/// workspace resolution and inode-alias scan the Seatbelt path runs.
+///
 /// Resource profiles may carry environment, keychain and secret entries,
 /// which reach the guest as environment. Grants of host paths (links,
 /// read/write trees, credential files) are refused: the guest sees only

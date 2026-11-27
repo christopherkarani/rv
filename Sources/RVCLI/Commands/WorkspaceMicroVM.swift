@@ -103,16 +103,43 @@ enum WorkspaceMicroVM {
         }
     }
 
+    /// What `prepare` found or did.
+    enum Prepared: Equatable {
+        /// `status` said the image is ready; nothing was built.
+        case alreadyReady
+        /// The image was built or pulled now.
+        case built
+    }
+
     /// Builds or pulls the image now, in the foreground, with the helper's
-    /// progress on stderr (`rv box setup mac`).
-    static func prepare(_ options: MicroVMLaunchOptions, project: String) throws(Unready) {
-        guard let helper = MicroVMHelper.locate(workspace: project, guest: options.guest) else {
-            throw .helperMissing(options.guest)
+    /// progress on stderr (`rv box setup mac`). An image that is already
+    /// ready is left alone: the helper refuses to prepare over one.
+    static func prepare(
+        _ options: MicroVMLaunchOptions, project: String, willBuild: () -> Void = {}
+    ) throws(Unready) -> Prepared {
+        try prepare(
+            options, helper: MicroVMHelper.locate(workspace: project, guest: options.guest), willBuild: willBuild,
+            runHelper: { (helper: String, arguments: [String], output: Bool, errors: Bool) throws(Unready) -> Int32 in
+                try run(helper, arguments, output: output, errors: errors)
+            })
+    }
+
+    /// `prepare` with the helper run passed in: `(path, arguments, show
+    /// stdout, show stderr) -> exit status`.
+    static func prepare(
+        _ options: MicroVMLaunchOptions, helper: String?, willBuild: () -> Void,
+        runHelper: (String, [String], Bool, Bool) throws(Unready) -> Int32
+    ) throws(Unready) -> Prepared {
+        guard let helper else { throw .helperMissing(options.guest) }
+        if try runHelper(helper, statusArguments(image: options.image), false, options.guest == .macOS) == 0 {
+            return .alreadyReady
         }
-        let status = try run(helper, prepareArguments(image: options.image), output: true, errors: true)
+        willBuild()
+        let status = try runHelper(helper, prepareArguments(image: options.image), true, true)
         guard status == 0 else {
             throw .prepareFailed(options, status: status)
         }
+        return .built
     }
 
     /// `output` and `errors` choose which of the helper's streams reach rv's stderr.
