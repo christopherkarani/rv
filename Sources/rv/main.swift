@@ -13,7 +13,7 @@ import RVCLI
 @main
 enum RVEntry {
     static func main() async {
-        let args = VersionSpelling.normalized(Array(CommandLine.arguments.dropFirst()))
+        let args = CommandAlias.expanded(VersionSpelling.normalized(Array(CommandLine.arguments.dropFirst())))
         if args.isEmpty {
             // Piped, in CI, or from an agent, bare `rv` prints the command
             // list instead of failing with "requires an interactive

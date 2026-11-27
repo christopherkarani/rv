@@ -370,6 +370,13 @@ private func isHelpPageRequest(_ args: ArraySlice<String>) -> Bool {
 }
 
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
+    // Q1's new names (`rv unlock`, `rv watch claude`, `rv secrets add`) are
+    // judged as the spelling the CLI runs for them (`CommandVocabulary.expand`).
+    switch CommandVocabulary.expand(Array(args[verbIndex...])) {
+    case .expanded(let runs): return isWeakeningVerb(Array(args[..<verbIndex]) + runs, at: verbIndex)
+    case .missingArgument: return false
+    case .unchanged: break
+    }
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
     // `setup --observe` sheds oversight; a variable or glob may carry the flag.
@@ -419,7 +426,8 @@ private func isWeakeningSub(
         // imports a secret chooses which real value reaches a cage, or which
         // host the gateway sends it to (a Varlock `@proxy(domain=...)`).
         switch sub {
-        case "set", "remove", "oauth-reset": return true
+        // `add` is `set`'s new name; matched here too for `rv secrets --x add`.
+        case "set", CommandVocabulary.Alias.secretsAdd.words[1], "remove", "oauth-reset": return true
         case "import": return flags.contains("--dry-run") == false
         case "hook": return third.map { $0 == "uninstall" || isUnmodelledWord($0) } == true
         default: return false

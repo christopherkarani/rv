@@ -16,8 +16,9 @@ struct CommandVocabularyParityTests {
     /// them to `CommandVocabulary.Command` and deletes this set.
     static let landingWith662: Set = ["status", "version"]
 
-    /// What help and docs may name: the table, plus #662's commands.
-    static let known = commands.union(landingWith662)
+    /// What help and docs may name: the table, #662's commands, and Q1's
+    /// new names (`CommandVocabulary.Alias`).
+    static let known = commands.union(landingWith662).union(CommandAlias.leadingWords)
 
     @Test("the table and the parser name the same top-level commands")
     func tableMatchesParser() {
@@ -92,14 +93,14 @@ struct CommandVocabularyParityTests {
     @Test("the docs check catches prompts, planned names and typos, not quoted messages")
     func docCheckSeparatesCommandsFromMessages() {
         let flagged = Self.docSpellings("""
-            Run `rv stauts` or `rv why 'git reset --hard'`.
+            Run `rv stauts` or `rv protect git`.
             ```
             $ rv frobnicate
             rv is not installed at <path>
             ```
             `rv is not installed at <path>`, `rv mcp: server is back`, `rv blocks --json`
             """).filter(Self.docNamesUnknownCommand).map(\.text)
-        #expect(flagged == ["rv stauts", "rv why 'git reset --hard'", "rv frobnicate"])
+        #expect(flagged == ["rv stauts", "rv protect git", "rv frobnicate"])
     }
 
     @Test("planned names are data only: the parser refuses every one today")
