@@ -156,7 +156,13 @@ let coreLibraryTargets: [Target] = [
     // libxpc wire primitives + the operator-UI client. Peer authentication
     // needs RVIsolation; everything else stays out of the UI's graph.
     .target(name: "RVXPC", dependencies: ["RVIPC", "RVIsolation"]),
+    // The menu bar's read-only core (K1): glyph state, Glance popover model,
+    // the events long poll. No SwiftUI, so it builds and tests on Linux.
+    .target(name: "RVGlance", dependencies: ["RVDomain", "RVIPC"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
+    // rv term's pure core: views, navigation and the tally of audit events.
+    // No terminal I/O here; the full-screen view sits on top of it.
+    .target(name: "RVTerm", dependencies: ["RVHistory"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVMCP", dependencies: ["RVDomain", "RVFileStore", "RVHistory", "RVIsolation", "RVPolicy"]),
     // The Laya judge worker pool (docs/architecture/judge-pool.md): wire,
@@ -189,11 +195,13 @@ let coreProducts: [Product] = [
     .library(name: "RVLaya", targets: ["RVLaya"]),
     .library(name: "RVIPC", targets: ["RVIPC"]),
     .library(name: "RVXPC", targets: ["RVXPC"]),
+    .library(name: "RVGlance", targets: ["RVGlance"]),
     .library(name: "RVPresentation", targets: ["RVPresentation"]),
     .library(name: "RVTheme", targets: ["RVTheme"]),
     .library(name: "RVTUI", targets: ["RVTUI"]),
     .library(name: "RVWorkspaceTUI", targets: ["RVWorkspaceTUI"]),
     .library(name: "RVHistory", targets: ["RVHistory"]),
+    .library(name: "RVTerm", targets: ["RVTerm"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
     .library(name: "RVMCP", targets: ["RVMCP"]),
     .library(name: "RVJudgePool", targets: ["RVJudgePool"]),
@@ -224,6 +232,7 @@ let coreTestTargets: [Target] = [
     .testTarget(name: "RVLayaTests", dependencies: ["RVLaya"]),
     .testTarget(name: "RVJudgePoolTests", dependencies: ["RVJudgePool"]),
     .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
+    .testTarget(name: "RVGlanceTests", dependencies: ["RVGlance", "RVIPC"]),
     .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
     .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
     .testTarget(
@@ -236,6 +245,7 @@ let coreTestTargets: [Target] = [
         dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"], exclude: ["Fixtures"]),
+    .testTarget(name: "RVTermTests", dependencies: ["RVTerm"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
     .testTarget(name: "RVMCPTests", dependencies: mcpTestDependencies),
     .testTarget(
@@ -337,8 +347,8 @@ let cliTargets: [Target] = [
         name: "RVCLI",
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
-            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore",
+            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory", "RVTerm",
+            "RVAnalytics", "RVIsolation", "RVMCP", "RVFileStore", "RVXPC",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [
@@ -365,6 +375,28 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
     .executable(name: "rv-judge", targets: ["rv-judge"]),
 ]
+// The menu bar app (K1, Menu bar v5): SwiftUI and AppKit, macOS only.
+// rv-menu talks to rvd over RVXPC's authenticated client (not RVCLI, which
+// carries the write clients) and hands RVGlance a read-only wire; nothing
+// in it resolves asks or changes policy.
+#if os(macOS)
+let macOSMenuTargets: [Target] = [
+    .target(name: "RVGlanceUI", dependencies: ["RVGlance", "RVDomain"]),
+    .executableTarget(name: "rv-menu", dependencies: ["RVGlanceUI", "RVGlance", "RVXPC", "RVIPC", "RVPolicy", "RVDomain"]),
+]
+let macOSMenuProducts: [Product] = [
+    .library(name: "RVGlanceUI", targets: ["RVGlanceUI"]),
+    .executable(name: "rv-menu", targets: ["rv-menu"]),
+]
+let macOSMenuTestTargets: [Target] = [
+    .testTarget(name: "RVGlanceUITests", dependencies: ["RVGlanceUI", "RVGlance"]),
+]
+#else
+let macOSMenuTargets: [Target] = []
+let macOSMenuProducts: [Product] = []
+let macOSMenuTestTargets: [Target] = []
+#endif
+
 let cliTestTargets: [Target] = [
     .testTarget(
         name: "RVCLITests",
@@ -425,7 +457,7 @@ let package = Package(
         .macOS(.v15),
     ],
     products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts
-        + linuxCustodianProducts,
+        + linuxCustodianProducts + macOSMenuProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
         // Fork of 0.14.0 with RV's small public bracketed-paste hook (View.onPaste).
@@ -436,6 +468,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-collections.git", exact: "1.6.0"),
     ] + extraPackageDependencies,
     targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
-        + linuxCustodianTargets + coreTestTargets + serviceTestTargets + cliTestTargets + fuzzTargets,
+        + linuxCustodianTargets + coreTestTargets + serviceTestTargets + cliTestTargets + fuzzTargets
+        + macOSMenuTargets + macOSMenuTestTargets,
     swiftLanguageModes: [.v6]
 )

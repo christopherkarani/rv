@@ -66,7 +66,7 @@ enforced by `tests/run.sh`:
 | `json_reply.{h,c}` (hook-reply decode, recursion-capped) | `RVIPC/IPCEvaluate.swift` (`EvaluateReply`: `via` must be `"xpc"`) | Same wire rule: unexpected shape, `result.error`, missing `via`, or `via != "xpc"` is MISS. |
 | `json_escape.{h,c}` (request JSON building) | `RVIPC/IPCJSON.swift` + hook request encoders | Byte-level JSON escaping; covered by `json_escape_test.c`. |
 | `hook_fallback.{h,c}` (daemon-miss rendering) | `RVCLI/Service/HookDaemonFallback.swift` | Same messages (`HookDaemonFallbackTests` reads `hook_fallback.c`), same `RV_HOOK_WHEN_DOWN` modes; Swift deny reuses the host codecs. |
-| `daemon_trust.{h,c}` (daemon-identity verification) | `RVService/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed; unknown-role entries are skipped (`tests/daemon_trust_test.c` ↔ `PeerTrustManifestParseTests`). Linux has no Swift transport; C is the reference. |
+| `daemon_trust.{h,c}` (daemon-identity verification) | `RVXPC/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed; unknown-role entries are skipped (`tests/daemon_trust_test.c` ↔ `PeerTrustManifestParseTests`). Linux has no Swift transport; C is the reference. |
 
 ## Test entry points
 
