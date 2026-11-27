@@ -14,10 +14,11 @@ package let observeRobotStoppedEffective = "deny"
 /// `rv blocks`), from the locked term cut: a real stop and a would-be one
 /// never read alike. Only `rv explain`'s decision line says
 /// `stoppedInEveryModeWords`; a row or note says `stoppedWords`.
-package let stoppedInEveryModeWords = "✕ Stopped, in every mode"
-package let stoppedWords = "✕ Stopped"
-package let wouldStopWords = "◐ Would stop"
-package let wouldAskWords = "◐ Would ask"
+/// Glyphs from `CommandVocabulary.Glyph`.
+package let stoppedWords = "\(CommandVocabulary.Glyph.stopped.rawValue) Stopped"
+package let stoppedInEveryModeWords = stoppedWords + ", in every mode"
+package let wouldStopWords = "\(CommandVocabulary.Glyph.watched.rawValue) Would stop"
+package let wouldAskWords = "\(CommandVocabulary.Glyph.watched.rawValue) Would ask"
 
 /// How observe mode treated a verdict that is not an allow.
 public enum ObserveOutcome: Sendable, Equatable {
@@ -82,7 +83,7 @@ package func observeNote(
     case (_, .stopped):
         return "It always stops a disk wipe, rm -rf ~ or /, and rv's own files\(rule)."
     case (_, .stoppedInObserve):
-        return observeOnlyTail.dropLast() + "\(rule)."
+        return "Enforce lets it run: without rvd, every call asks first\(rule)."
     }
 }
 
@@ -103,3 +104,7 @@ package func observeDecisionWords(for outcome: ObserveOutcome, decisionLine: Boo
 private let stoppedTail = "Observe mode always stops a disk wipe, rm -rf ~ or /, and rv's own files."
 /// A stop observe makes and enforce does not (enforce fails closed without rvd).
 private let observeOnlyTail = "rv keeps itself running while it watches."
+
+/// `rv explain`'s reason for a stop only observe makes.
+package let observeOnlyStopSentence =
+    "rv keeps itself running while it watches, so observe mode sends this to Terminal. Run it in Terminal."

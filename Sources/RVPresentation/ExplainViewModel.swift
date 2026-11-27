@@ -129,7 +129,9 @@ public func explainViewModel(
         fact = factSentence(from: deny.reason)
         next = denyNextAction
     case .indeterminate(let reason):
-        fact = indeterminateSentence(reason)
+        // A stop only observe makes (stopping rvd) was evaluated, not left
+        // unfinished: say why it stopped.
+        fact = observed == .stoppedInObserve ? observeOnlyStopSentence : indeterminateSentence(reason)
         next = nil
     }
     // A watched verdict ran: no "run it in Terminal, or rv allow-once"

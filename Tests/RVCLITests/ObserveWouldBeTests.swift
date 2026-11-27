@@ -242,6 +242,8 @@ struct ObserveWouldBeTests {
         #expect(explain.stdout.contains("Decision: ✕ Stopped\n"), "\(explain.stdout)")
         #expect(!explain.stdout.contains("in every mode"))
         #expect(explain.stdout.contains("rv keeps itself running while it watches"), "\(explain.stdout)")
+        #expect(explain.stdout.contains("Enforce lets it run: without rvd, every call asks first."))
+        #expect(!explain.stdout.contains("could not finish evaluating"))
         let robot = try Self.json(try await Self.run(.explain, "pkill rvd", observe: true, robot: true).stdout)
         #expect(robot["mode"] as? String == "observe")
         #expect(robot["effective"] as? String == "deny")
