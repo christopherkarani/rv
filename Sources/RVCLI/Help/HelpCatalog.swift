@@ -13,6 +13,7 @@ enum HelpCatalog {
         case .root: root
         case .help: helpMeta
         case .test: test
+        case .`try`: tryDemo
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
@@ -58,6 +59,7 @@ enum HelpCatalog {
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
+                    HelpRow(name: "try", description: "Watch rv stop a fake agent in a throwaway repo"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
                 ],
                 accentNames: true
@@ -188,6 +190,25 @@ enum HelpCatalog {
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
+    )
+
+    static let tryDemo = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv try"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "nothing real", description: "A throwaway git repo in a temp dir, removed before anything prints. The reset never runs, rvd is never asked, and ~/.config/rv is only read"),
+                HelpRow(name: "the stop", description: "rv's own evaluate with day-one policy, as Claude Code's hook would ask it"),
+                HelpRow(name: "watch mode", description: "When Claude Code is in observe mode, it says the reset would stop under guard mode, and how to turn that on"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "rv would stop a real agent's reset, and every file stayed intact"),
+                HelpRow(name: "1", description: "Watch mode would let it run, or the demo could not run"),
+            ]),
+        ]
     )
 
     static let test = HelpViewModel(
@@ -989,7 +1010,7 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "draft",
-                    description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
+                    description: "A plain sentence to a typed rule preview: git push, reset, clean or restore, rm or mv. Rules only add stops; an allow rule never loosens rv or a pack."
                 ),
                 HelpRow(
                     name: "apply",
@@ -1011,7 +1032,7 @@ enum HelpCatalog {
         ],
         examples: [
             "rv policy show",
-            "rv policy draft --english 'never allow force-push to main'",
+            "rv policy draft 'never force-push to main'",
             "rv policy rollback r2",
             "rv policy check --ceiling",
         ]

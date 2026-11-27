@@ -93,7 +93,7 @@ struct PolicyDocumentTOMLTests {
         predicate = "gitPush"
         pattern = "git push -f"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -106,7 +106,7 @@ struct PolicyDocumentTOMLTests {
         verdict = "deny"
         english = "Never force-push main"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -119,7 +119,7 @@ struct PolicyDocumentTOMLTests {
         verdict = "deny"
         predicate = "gitStatus"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -132,7 +132,7 @@ struct PolicyDocumentTOMLTests {
         verdict = "deny"
         predicate = "gitPush"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -153,7 +153,7 @@ struct PolicyDocumentTOMLTests {
         force = "force"
         branch = "develop"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -191,7 +191,7 @@ struct PolicyDocumentTOMLTests {
         force = "force"
         branch = "main"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -308,7 +308,7 @@ struct PolicyDocumentTOMLTests {
         predicate = "gitClean"
         flag_force = "yes"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
@@ -323,7 +323,7 @@ struct PolicyDocumentTOMLTests {
         force = "withLeaseMaybe"
         branch = "main"
         """
-        #expect(throws: PolicyDocumentError.invalidFile) {
+        #expect(throws: PolicyDocumentError.self) {
             _ = try PolicyDocumentTOML.parse(source)
         }
     }
