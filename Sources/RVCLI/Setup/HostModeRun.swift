@@ -17,6 +17,8 @@ enum HostModeRun {
         let host: String
         let mode: String
         let wiring: String
+        /// An agent's block of this host: when it ends (ISO 8601).
+        var until: String? = nil
     }
 
     struct ListDocument: Encodable, Equatable {
@@ -38,6 +40,13 @@ enum HostModeRun {
         let mode: String
         let schema = "rv.host-mode.v1"
         let wiring: String
+        /// An agent's block: when it ends (ISO 8601) and the mode then.
+        var until: String? = nil
+        var then: String? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case host, mode, schema, then, until, wiring
+        }
     }
 
     /// A row's `mode` is the host's effective mode, not only what is stored:
@@ -51,7 +60,9 @@ enum HostModeRun {
     }
 
     /// `only`: show one host (`rv host mode claude`); nil shows every host.
-    static func list(_ env: SetupEnvironment, json: Bool, only: HookHost? = nil) -> SetupOutcome {
+    static func list(
+        _ env: SetupEnvironment, json: Bool, only: HookHost? = nil, now: Date = Date(), timeZone: TimeZone = .current
+    ) -> SetupOutcome {
         do {
             let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
             // An unreadable config shows every host under the global mode,
@@ -61,16 +72,24 @@ enum HostModeRun {
             case .entries(let entries): modes = entries
             case .unreadable: modes = [:]
             }
+            let config = GuardConfig.read(home: env.home)
             let guardMode = GuardModeResolution.resolve(
-                GuardConfig.read(home: env.home), host: nil, environment: ProcessInfo.processInfo.environment)
-            let rows = HookHost.allCases
+                config, host: nil, environment: ProcessInfo.processInfo.environment)
+            let shown = HookHost.allCases
                 .filter { only == nil || $0 == only }
                 .sorted { $0.rawValue < $1.rawValue }
+            // An agent's block that is open now shows as `block` with its end.
+            let blocks = Dictionary(uniqueKeysWithValues: shown.compactMap { host in
+                config.temporaryBlock(for: host, at: now).map { (host, $0) }
+            })
+            let rows = shown
                 .map { host in
-                    Row(
+                    let block = blocks[host]
+                    return Row(
                         host: host.rawValue,
-                        mode: effectiveMode(stored: modes[host], guardMode: guardMode).rawValue,
-                        wiring: installations.state(for: host).rawValue
+                        mode: block == nil ? effectiveMode(stored: modes[host], guardMode: guardMode).rawValue : HostMode.block.rawValue,
+                        wiring: installations.state(for: host).rawValue,
+                        until: block.map { ClockText.iso($0.until) }
                     )
                 }
             let document = ListDocument(
@@ -81,7 +100,10 @@ enum HostModeRun {
             if json {
                 return SetupOutcome(stdout: try RobotJSON.encode(document) + "\n", exitCode: 0)
             }
-            var lines = rows.map { "\($0.host)  \($0.mode)  \($0.wiring)" }
+            var lines: [String] = zip(shown, rows).map { host, row in
+                let until = blocks[host].map { "  until \(ClockText.hourMinute($0.until, timeZone: timeZone))" } ?? ""
+                return "\(row.host)  \(row.mode)  \(row.wiring)\(until)"
+            }
             if document.managedEnforce {
                 lines.append("organization gate pins enforce: observe and off do not change evaluation")
                 // A gate that arrived after a host went off does not re-wire it.
@@ -109,11 +131,21 @@ enum HostModeRun {
     /// refused while an organization gate pins enforce (unwiring the hook
     /// would bypass the org policy); `observe` is still stored, since rvd
     /// pins enforce under the gate anyway.
+    ///
+    /// `block` of a host that is not already enforcing must never lock an
+    /// agent out (Q4): at a terminal it asks `authenticate` and is then
+    /// permanent; without one it is what `HostTighten.unconfirmedBlock`
+    /// says (a block that ends on its own after an hour, or a proposal the
+    /// owner types). Ending an agent's open block early is a loosening.
     static func setMode(
         _ mode: HostMode,
         for host: HookHost,
         env: SetupEnvironment,
         json: Bool,
+        requester: HostModeRequester = .unattended,
+        now: Date = Date(),
+        timeZone: TimeZone = .current,
+        proposals: any HostModeProposalSink = UnstoredHostModeProposals(),
         authenticate: () async throws -> Void
     ) async -> SetupOutcome {
         do {
@@ -133,9 +165,46 @@ enum HostModeRun {
             // The save then refuses the file, so nothing is stored or re-wired.
             let current = stored.mode(for: host, ifUnreadable: .block)
             let wiredFrom = stored.mode(for: host, ifUnreadable: .off)
-            // Only loosening asks the owner; tightening needs no check.
+            let config = store.readGuardConfig()
+            let openBlock = config?.temporaryBlock(for: host, at: now)
             var authorization: String?
-            if mode.isLooser(than: current) {
+            if mode == .block {
+                // Unreadable reads as enforcing: the save below refuses it.
+                let storedMode = config.map {
+                    effectiveMode(stored: $0.hosts[host], guardMode: GuardModeResolution.resolveStored($0, host: nil))
+                } ?? .block
+                if storedMode != .block, requester.atTerminal {
+                    do {
+                        try await authenticate()
+                        authorization = "owner (permanent block)"
+                    } catch {
+                        throw SetupError.ownerAuthenticationRequired
+                    }
+                } else {
+                    switch HostTighten.unconfirmedBlock(
+                        of: host, storedMode: storedMode, openBlock: openBlock,
+                        callingHosts: requester.callingHosts, now: now) {
+                    case .permanent:
+                        break
+                    case .alreadyTemporary(let window):
+                        return temporaryOutcome(
+                            host: host, window: window, restores: storedMode, env: env, json: json,
+                            already: true, timeZone: timeZone)
+                    case .temporary(let window):
+                        try ConfigChangeAudit.$authorization.withValue(nil) {
+                            try store.saveTemporaryBlock(for: host, window: window)
+                        }
+                        return temporaryOutcome(
+                            host: host, window: window, restores: storedMode, env: env, json: json,
+                            already: false, timeZone: timeZone)
+                    case .proposal(let reason):
+                        let proposal = HostModeProposal(host: host, mode: mode, reason: reason)
+                        return proposalOutcome(proposal, id: proposals.submit(proposal), json: json)
+                    }
+                }
+            } else if mode.isLooser(than: openBlock == nil ? current : .block) {
+                // Only loosening asks the owner; tightening needs no check.
+                // An agent's open block counts: ending it early loosens.
                 do {
                     try await authenticate()
                     authorization = "owner (loosening check)"
@@ -150,17 +219,22 @@ enum HostModeRun {
             // hooks never run under `off`, and a retry still needs the
             // owner); leaving `off`, the tighter mode is stored before
             // re-wiring (a failed re-wire leaves the host unwired under that
-            // mode, which `rv setup` repairs).
+            // mode, which `rv setup` repairs). An agent's block is removed
+            // only after the owner's mode is stored.
             if wiredFrom == .off, mode != .off {
                 // Leaving `off` re-wires the host: refuse, as `rv setup`
                 // does, before storing anything when the fail-closed hook
                 // would reject the installed rvd and deny every tool call.
                 try SetupRun.requireTrustedDaemon(env)
             }
+            let clearsAgentBlock = authorization != nil && config?.temporaryBlocks[host] != nil
             do {
                 try await ConfigChangeAudit.$authorization.withValue(authorization) {
                     try store.save(mode, for: host) {
                         if mode == .off { try applyWiring(from: wiredFrom, to: mode, host: host, env: env) }
+                    }
+                    if clearsAgentBlock {
+                        try store.clearTemporaryBlock(for: host, direction: mode == .block ? .tightening : .loosening)
                     }
                 }
             } catch let error as SetupError {
@@ -190,9 +264,81 @@ enum HostModeRun {
             return SetupOutcome(stdout: "\(host.rawValue)  \(mode.rawValue)  \(wiring)\n", exitCode: 0)
         } catch let error as SetupError {
             return failure(error, command: .hostMode)
+        } catch OwnerConfigWriteError.unreadable {
+            return SetupOutcome(
+                stdout: "", stderr: ConfigUnreadableRefusal.message(prefix: "rv host mode failed"),
+                exitCode: ConfigUnreadableRefusal.exitCode)
+        } catch let unrecorded as ConfigChangeUnrecorded {
+            return SetupOutcome(
+                stdout: "", stderr: ConfigChangeRefusal.message(command: "host mode", unrecorded),
+                exitCode: ConfigChangeRefusal.exitCode)
         } catch {
             return SetupOutcome(stdout: "", stderr: "rv host mode failed: \(error)\n", exitCode: EX_SOFTWARE)
         }
+    }
+
+    /// An agent's block that ends on its own: the row, when it ends and
+    /// what comes back, and the command that keeps it, last.
+    private static func temporaryOutcome(
+        host: HookHost, window: GuardWindow, restores: HostMode, env: SetupEnvironment, json: Bool,
+        already: Bool, timeZone: TimeZone
+    ) -> SetupOutcome {
+        let wiring = (try? SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env))?
+            .state(for: host).rawValue ?? "unknown"
+        let keep = "\(CommandVocabulary.Command.host.invocation) mode \(host.rawValue) block"
+        if json {
+            let document = ModeDocument(
+                host: host.rawValue, mode: HostMode.block.rawValue, wiring: wiring,
+                until: ClockText.iso(window.until), then: restores.rawValue)
+            return SetupOutcome(stdout: (try? RobotJSON.encode(document)).map { $0 + "\n" } ?? "", exitCode: 0)
+        }
+        let until = ClockText.hourMinute(window.until, timeZone: timeZone)
+        let why = already
+            ? "  An agent already blocked \(host.rawValue); it ends on its own at \(until)."
+            : "  An agent's block ends on its own after an hour; then \(host.rawValue) is back to \(restores.rawValue)."
+        return SetupOutcome(
+            stdout: [
+                "\(host.rawValue)  block  \(wiring)  until \(until)",
+                why,
+                "  To keep it blocked, you type:",
+                "\(CommandVocabulary.Glyph.next.rawValue) \(keep)",
+            ].joined(separator: "\n") + "\n",
+            exitCode: 0)
+    }
+
+    struct ProposalDocument: Encodable, Equatable {
+        let host: String
+        let id: String?
+        let mode: String
+        let proposed = true
+        let reason: String
+        let schema = "rv.host-mode-proposal.v1"
+    }
+
+    /// Nothing changed: what was asked, why it waits, and the command the
+    /// owner types, last. Exits `EX_NOPERM`, so `&&` after it does not run
+    /// as if the host were blocked.
+    private static func proposalOutcome(_ proposal: HostModeProposal, id: String?, json: Bool) -> SetupOutcome {
+        let host = proposal.host.rawValue
+        if json {
+            let document = ProposalDocument(
+                host: host, id: id, mode: proposal.mode.rawValue, reason: proposal.reason.rawValue)
+            return SetupOutcome(stdout: (try? RobotJSON.encode(document)).map { $0 + "\n" } ?? "", exitCode: EX_NOPERM)
+        }
+        let why = switch proposal.reason {
+        case .ownHost: "Blocking \(host) would stop the agent that asked, so nothing changed."
+        case .unknownCaller: "rv can't tell which agent asked, and blocking \(host) could stop it, so nothing changed."
+        case .hostOff: "\(host) is off; an agent can't wire it back in as block, so nothing changed."
+        }
+        let command = "\(CommandVocabulary.Command.host.invocation) mode \(host) \(proposal.mode.rawValue)"
+        return SetupOutcome(
+            stdout: [
+                "\(CommandVocabulary.Glyph.ask.rawValue) asks  \(proposal.mode.rawValue) \(host): you decide",
+                "  \(why)",
+                "  To do it, you type:",
+                "\(CommandVocabulary.Glyph.next.rawValue) \(command)",
+            ].joined(separator: "\n") + "\n",
+            exitCode: EX_NOPERM)
     }
 
     private static func applyWiring(

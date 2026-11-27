@@ -70,6 +70,54 @@ public struct HostModeStore: Sendable {
         try MachineConfigJSON.set(.string(mode.rawValue), for: setting, in: configFile, beforeWrite: beforeWrite)
     }
 
+    /// The whole decoded guard config, or nil when the file exists but
+    /// cannot be read or `GuardConfig` rejects it (as `read` is `.unreadable`).
+    public func readGuardConfig() -> GuardConfig? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: configFile)
+        } catch CocoaError.fileReadNoSuchFile {
+            return .empty
+        } catch {
+            return nil
+        }
+        return GuardConfig(validatingJSON: data)
+    }
+
+    /// Stores an agent's block of `host` that holds only for `window`
+    /// (`guard.temporary_blocks.<host>`). `guard.hosts.<host>` is left as it
+    /// is: when the window closes, that stored mode is back with nothing to
+    /// restore. Recorded as a tightening, with the same refusals as `save`.
+    public func saveTemporaryBlock(for host: HookHost, window: GuardWindow) throws {
+        let setting = MachineConfigJSON.Setting(
+            keyPath: Self.temporaryBlockKeyPath(host), describe: Self.describeTemporaryBlock,
+            direction: { _, _ in .tightening })
+        try MachineConfigJSON.set(window.json, for: setting, in: configFile)
+    }
+
+    /// Removes `host`'s temporary block. `direction` is how the removal
+    /// reads in the audit trail: a loosening when the owner ends an open
+    /// block, a tightening when a permanent `block` replaces it.
+    public func clearTemporaryBlock(for host: HookHost, direction: ConfigChangeAudit.Direction) throws {
+        let setting = MachineConfigJSON.Setting(
+            keyPath: Self.temporaryBlockKeyPath(host), describe: Self.describeTemporaryBlock,
+            direction: { _, _ in direction })
+        try MachineConfigJSON.set(nil, for: setting, in: configFile)
+    }
+
+    private static func temporaryBlockKeyPath(_ host: HookHost) -> [String] {
+        ["guard", "temporary_blocks", host.rawValue]
+    }
+
+    private static func describeTemporaryBlock(_ value: JSONValue?) -> String {
+        guard let window = GuardWindow(json: value) else { return ConfigChangeAudit.unset }
+        return "block until \(Self.stamp(window.until))"
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
     /// Writes the machine-wide `guard.mode: observe` (`rv setup --observe`).
     /// Stored `guard.hosts` entries, and every other key, are kept; the
     /// same refusal as `save` applies.

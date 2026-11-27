@@ -557,6 +557,10 @@ enum HelpCatalog {
                     description: "Loosening a host asks for device-owner authentication"
                 ),
                 HelpRow(
+                    name: "agents",
+                    description: "An agent's block ends on its own after an hour; blocking its own host waits for you"
+                ),
+                HelpRow(
                     name: "managed",
                     description: "An organization gate keeps enforce for every host"
                 ),
