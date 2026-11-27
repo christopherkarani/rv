@@ -15,9 +15,12 @@ public final class GlanceModel {
     @ObservationIgnored private var feedTask: Task<Void, Never>?
     @ObservationIgnored private var clockTask: Task<Void, Never>?
     @ObservationIgnored private var etiquette = GlanceEtiquette()
-    @ObservationIgnored private var notices: (any GlanceNoticeSink)?
+    /// Set by `start`; internal so tests can give a model a sink alone.
+    @ObservationIgnored var notices: (any GlanceNoticeSink)?
     /// Deliveries run one after another, in the order they were planned.
     @ObservationIgnored private var delivery: Task<Void, Never>?
+    /// Bumped by `stop`; deliveries planned before it are dropped.
+    @ObservationIgnored private var deliveryGeneration = 0
     /// Between events the clock only moves idle labels along.
     static let idleTick: TimeInterval = 15
 
@@ -53,8 +56,11 @@ public final class GlanceModel {
     public func stop() {
         feedTask?.cancel()
         clockTask?.cancel()
+        delivery?.cancel()
+        deliveryGeneration &+= 1
         feedTask = nil
         clockTask = nil
+        delivery = nil
     }
 
     private func publish(_ state: GlanceState) {
@@ -65,11 +71,16 @@ public final class GlanceModel {
         rescheduleClock()
     }
 
-    private func notify(_ actions: [GlanceNoticeAction]) {
+    /// Queues `actions` behind earlier deliveries. Internal for tests.
+    func notify(_ actions: [GlanceNoticeAction]) {
         guard let notices, !actions.isEmpty else { return }
         let previous = delivery
-        delivery = Task {
+        let generation = deliveryGeneration
+        delivery = Task { [weak self] in
             await previous?.value
+            // A stopped (or restarted) model posts nothing more: every link
+            // still queued from before `stop` sees the generation move on.
+            guard let self, !Task.isCancelled, generation == self.deliveryGeneration else { return }
             await notices.deliver(actions)
         }
     }
