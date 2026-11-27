@@ -819,7 +819,11 @@ public actor ServiceRuntime {
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
             let tap = HookDecisionTap()
-            let reply = try await HookDoor.run(
+            // One id per call, minted before evaluation: the ledger row the
+            // effects write and the decision-log row share it, and a watch
+            // mode would-be is noted on it.
+            let stamp = DecisionStamp()
+            let reply = try await DecisionStamp.$current.withValue(stamp) { try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
                 world: tap.tapping(HookEvaluateWorld.live(
@@ -829,13 +833,16 @@ public actor ServiceRuntime {
                     host: params.host,
                     pending: pendingApprovals,
                     clock: clock,
-                    recordDecision: analyticsRecorder(),
-                    decisionLog: decisionLog
+                    recordDecision: analyticsRecorder()
                 ), host: params.host, clock: clock),
                 deadline: deadline
-            )
+            ) }
             // Once, after the reply is final; off the reply's path.
             tap.publish(to: events, timedOut: deadline.requiresTimeoutReply, home: configHome)
+            // The decision log reads the same capture, also detached.
+            if let decisionLog, let capture = tap.capture {
+                decisionLog.record(capture, timedOut: deadline.requiresTimeoutReply, stamp: stamp)
+            }
             return .success(reply)
         } catch let error as IPCError {
             return .failure(error)

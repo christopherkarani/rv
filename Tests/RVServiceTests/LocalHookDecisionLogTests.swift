@@ -64,24 +64,40 @@ struct LocalHookDecisionLogTests {
         #expect(fixture.decisionRows().isEmpty)
     }
 
-    @Test func aLocalAndAnRvdRowForTheSameCallMatch() async throws {
-        let fixture = try LocalHookFixture()
-        let stdin = claudeBash("ls -la", cwd: fixture.workspace)
-        let local = await fixture.decider.decide(host: .claude, stdin: stdin)
-        guard case .final = local else {
-            Issue.record("a safe-lane allow must be decided locally, got \(local)")
+    /// The same call, answered locally in one home and by rvd in another,
+    /// leaves the same row (but for its time).
+    @Test func aLocalRowIsTheRowRvdWrites() async throws {
+        let local = try LocalHookFixture()
+        let outcome = await local.decider.decide(host: .claude, stdin: claudeBash("ls -la", cwd: local.workspace))
+        guard case .final = outcome else {
+            Issue.record("a safe-lane allow must be decided locally, got \(outcome)")
             return
         }
-        let localRow = try #require(fixture.decisionRows().first)
-        let time = Date(timeIntervalSince1970: 1_800_000_000)
-        let rvdRow = DecisionLogRecorder.shellRecord(
-            EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "ls -la"),
-            cwd: WorkingDirectory(validating: fixture.workspace), host: .hook(.claude),
-            home: fixture.home, at: time, timedOut: false)
-        #expect(localRow.command == rvdRow.command)
-        #expect(localRow.cwd == rvdRow.cwd)
-        #expect(localRow.host == rvdRow.host)
-        #expect(localRow.tool == rvdRow.tool)
+        let localRow = try #require(local.decisionRows().first)
+
+        let rvd = try LocalHookFixture()
+        let runtime = hookTestRuntime(
+            home: rvd.home, allowOnceDirectory: try isolatedAllowOnceDirectory(), recordsDecisions: true)
+        _ = await runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(
+                host: .claude, stdin: claudeBash("ls -la", cwd: rvd.workspace)))),
+            context: peerHookContext())
+        // rvd writes its row detached, after the reply.
+        var rvdRows: [DecisionRecord] = []
+        let started = ContinuousClock.now
+        while rvdRows.isEmpty, ContinuousClock.now - started < .seconds(10) {
+            try await Task.sleep(for: .milliseconds(20))
+            rvdRows = rvd.decisionRows()
+        }
+        let rvdRow = try #require(rvdRows.first)
+        #expect(rvdRows.count == 1)
+        // Apart from time and the call's own id, which each side mints
+        // fresh, the rows are the same; both carry an id.
+        #expect(localRow.id != nil && rvdRow.id != nil)
+        var aligned = rvdRow
+        aligned.time = localRow.time
+        aligned.id = localRow.id
+        #expect(aligned == localRow)
     }
 
     // MARK: - The call's id and would-be
@@ -115,12 +131,8 @@ struct LocalHookDecisionLogTests {
     /// guarding would have done, and the id of its observed ledger row.
     @Test func rvdsWatchModeAllowCarriesTheWouldBeAndTheLedgerID() async throws {
         let fixture = try LocalHookFixture(guardMode: "observe")
-        let runtime = ServiceRuntime(
-            snapshots: nil, catalog: nil, home: fixture.home, allowOnce: nil,
-            allowOnceDirectory: try isolatedAllowOnceDirectory(), idleExitSeconds: IdleWatchdog.defaultSeconds,
-            log: nil, analytics: nil, clock: { Date() }, pendingApprovals: .automatic,
-            ceremonies: WorkspaceOperatorCeremonyService(), hookBudget: testHookBudget, recordsDecisions: true
-        )
+        let runtime = hookTestRuntime(
+            home: fixture.home, allowOnceDirectory: try isolatedAllowOnceDirectory(), recordsDecisions: true)
         let stdin = claudeFile("Read", path: fixture.workspace + "/.env", cwd: fixture.workspace)
         _ = await runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .claude, stdin: stdin))),
