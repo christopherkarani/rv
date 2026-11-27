@@ -49,32 +49,32 @@ struct DecisionLogRecorderTests {
     }
 
     static func written(
-        _ capture: HookDecisionTap.Capture, timedOut: Bool, stamp: DecisionStamp? = nil
+        _ capture: HookDecisionTap.Capture, timedOut: Bool, call: DecisionCall? = nil
     ) async throws -> DecisionRecord {
         let (stream, continuation) = AsyncStream.makeStream(of: DecisionRecord.self)
         let recorder = DecisionLogRecorder(home: home) { continuation.yield($0) }
-        recorder.record(capture, timedOut: timedOut, stamp: stamp)
+        recorder.record(capture, timedOut: timedOut, call: call)
         var iterator = stream.makeAsyncIterator()
         return try #require(await iterator.next())
     }
 
     @Test func theStampGivesTheIDAndAnAllowsWouldBe() async throws {
-        let stamp = DecisionStamp(id: "a7c835000001")
+        let stamp = DecisionCall(stamp: DecisionStamp(id: "a7c835000001"))
         stamp.note(DecisionWouldBe(verdict: .denied, rule: "core.git:force-push", ask: true))
         // rvd: the tapped capture, with the call's stamp.
         let allowed = try await Self.written(
             Self.capture(EvaluationResult(outcome: .plain), .shell(ShellCommand(rawValue: "git push -f"))),
-            timedOut: false, stamp: stamp)
+            timedOut: false, call: stamp)
         #expect(allowed.id == "a7c835000001")
         #expect(allowed.wouldBe == DecisionWouldBe(verdict: .denied, rule: "core.git:force-push", ask: true))
         #expect(allowed.code == "a7c-835")
         // Only an allow carries a would-be; a stop is its own verdict.
         let late = try await Self.written(
             Self.capture(EvaluationResult(outcome: .plain), .shell(ShellCommand(rawValue: "git push -f"))),
-            timedOut: true, stamp: stamp)
+            timedOut: true, call: stamp)
         #expect(late.id == "a7c835000001" && late.wouldBe == nil)
         // The hook-local evaluator: the stamp bound on its task.
-        let local = DecisionStamp.$current.withValue(stamp) {
+        let local = DecisionCall.$current.withValue(stamp) {
             DecisionLogRecorder.shellRecord(
                 EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "git push -f"),
                 cwd: nil, host: .hook(.codex), home: Self.home, at: Self.now, timedOut: false, session: "abc-123")
@@ -84,6 +84,7 @@ struct DecisionLogRecorderTests {
         let bare = Self.record(EvaluationResult(outcome: .plain))
         #expect(bare.id == nil && bare.wouldBe == nil)
         #expect(DecisionStamp().id != DecisionStamp().id)
+        #expect(DecisionStamp(id: "a7c835000001").code == "a7c-835")
     }
 
     @Test func aTappedShellCaptureIsRedactedAndKeepsItsSession() async throws {

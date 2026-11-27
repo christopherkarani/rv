@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 
 /// What guarding would have done with a command watch mode let run: the
 /// observed would-be verdict, as the denial ledger's observed row has it.
@@ -18,31 +17,21 @@ public struct DecisionWouldBe: Sendable, Equatable, Codable {
     }
 }
 
-/// One hook decision's id, minted once before evaluation, and the would-be
-/// verdict noted while it runs. Bound as a task-local around one evaluation
-/// (rvd's `HookEvaluateWorld.live`, the hook-local evaluator), so the
-/// denial-ledger row and the decision-log row for that call carry the same
-/// id, and the decision row learns what watch mode let run.
-public final class DecisionStamp: Sendable {
-    @TaskLocal public static var current: DecisionStamp?
-
+/// One hook call's id: minted once before evaluation, carried by the
+/// call's denial-ledger row and its decision-log row, so the two name the
+/// same call. A value; the per-call state that notes a watch-mode would-be
+/// while the call runs lives with the hook door (`DecisionCall` in
+/// RVService).
+public struct DecisionStamp: Sendable, Equatable, Hashable {
     /// 12 lowercase hex digits. `rv log` shows the first six as its code.
     public let id: String
-    private let noted = Mutex<DecisionWouldBe?>(nil)
 
     public init(id: String = DecisionStamp.mintID()) {
         self.id = id
     }
 
-    /// The would-be verdict noted during this evaluation, if any.
-    public var wouldBe: DecisionWouldBe? {
-        noted.withLock { $0 }
-    }
-
-    /// Notes what guarding would have done (an observed would-be row).
-    public func note(_ wouldBe: DecisionWouldBe) {
-        noted.withLock { $0 = wouldBe }
-    }
+    /// `a7c-835`: the code `rv log` prints for this call.
+    public var code: String { Self.code(forID: id) }
 
     /// A fresh random id: 48 bits, so rows in the 7-day window do not
     /// share one.

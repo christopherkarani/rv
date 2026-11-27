@@ -822,8 +822,8 @@ public actor ServiceRuntime {
             // One id per call, minted before evaluation: the ledger row the
             // effects write and the decision-log row share it, and a watch
             // mode would-be is noted on it.
-            let stamp = DecisionStamp()
-            let reply = try await DecisionStamp.$current.withValue(stamp) { try await HookDoor.run(
+            let call = DecisionCall()
+            let reply = try await DecisionCall.$current.withValue(call) { try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
                 world: tap.tapping(HookEvaluateWorld.live(
@@ -841,7 +841,7 @@ public actor ServiceRuntime {
             tap.publish(to: events, timedOut: deadline.requiresTimeoutReply, home: configHome)
             // The decision log reads the same capture, also detached.
             if let decisionLog, let capture = tap.capture {
-                decisionLog.record(capture, timedOut: deadline.requiresTimeoutReply, stamp: stamp)
+                decisionLog.record(capture, timedOut: deadline.requiresTimeoutReply, call: call)
             }
             return .success(reply)
         } catch let error as IPCError {

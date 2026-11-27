@@ -253,7 +253,7 @@ package struct LocalHookDecider: Sendable {
             // One id per call, minted before evaluation: the ledger row
             // `performBounded` writes and the decision-log row share it.
             evaluate: { command, cwd in
-              await DecisionStamp.$current.withValue(DecisionStamp()) {
+              await DecisionCall.$current.withValue(DecisionCall()) {
                 let inputs = EvaluationInputs.gather(
                     home: home, cwd: cwd, environment: environment, host: ledger)
                 probe.recordGuardMode(inputs.guardMode)
@@ -283,7 +283,7 @@ package struct LocalHookDecider: Sendable {
               }
             },
             evaluateFile: { action, cwd in
-              DecisionStamp.$current.withValue(DecisionStamp()) {
+              DecisionCall.$current.withValue(DecisionCall()) {
                 let mode = JudgeRuntime.effectiveGuardMode(
                     home: home, host: ledger, environment: environment,
                     config: GuardConfig.read(home: home))
