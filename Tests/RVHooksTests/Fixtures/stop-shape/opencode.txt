@@ -1,0 +1,15 @@
+== reset-hard, minted code
+exit 1
+stdout {"decision":"deny","reason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835","rule":"core.git/reset-hard","next":"ask Chris to run  rv allow-once a7c835"}
+
+== rm -rf home, who_acts
+exit 1
+stdout {"decision":"deny","reason":"✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)\nwhy     rm -rf on root or home paths is catastrophic\nwho     ask Chris to run it, in their own terminal, for their own files; an admin for system files","rule":"core.filesystem/rm-rf-root-home","next":"ask Chris to run it, in their own terminal, for their own files; an admin for system files"}
+
+== unresolved invocation
+exit 1
+stdout {"decision":"deny","reason":"✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)\nwhy     rv could not tell what program it runs\nwho     ask Chris to run it in their own terminal","next":"ask Chris to run it in their own terminal"}
+
+== rvd timed out
+exit 1
+stdout {"decision":"deny","reason":"✕ Stopped   (rv.timeout)\nwhy     rv timed out and committed nothing\nwho     ask Chris to run  rv doctor","next":"ask Chris to run  rv doctor"}

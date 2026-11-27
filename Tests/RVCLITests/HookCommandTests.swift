@@ -53,7 +53,7 @@ private func expectResetHardMapperDeny(_ wire: HookWire, exit: Int32) throws {
         command: ShellCommand(rawValue: "git reset --hard")
     ))
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == ownTerminalLine())
     #expect(wire.exitCode == exit)
 }
 
@@ -75,9 +75,9 @@ private func expectResetHardAskDeny(_ wire: HookWire, exit: Int32) throws {
         command: ShellCommand(rawValue: "git reset --hard")
     ))
     #expect(json["decision"] as? String == "deny")
-    #expect(json["reason"] as? String == "\(line) \(approvalPendingLine)")
+    #expect(json["reason"] as? String == askStop(line))
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == stopWho(askStop(line)))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("hostNative") == false)
     #expect(wire.exitCode == exit)
@@ -153,8 +153,9 @@ private func runHonorHook(
 
 /// Daemon-unavailable fallback reason. No transport in these probes: that
 /// never reached rvd, so it is `.connection`, not the observe-eligible
-/// `.unreachable`.
+/// `.unreachable`. Written as it appears inside the wire's JSON string.
 private let daemonDownReason = HookDaemonFallback.message(for: .connection)
+    .replacingOccurrences(of: "\n", with: "\\n")
 
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
     let expected = try grokExpected("allow-git-status")
@@ -173,17 +174,19 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     // Step 8B: cwd-bound reset-hard is policy ASK; the wire renders
     // deny-with-guidance (pending row + TTY code carry the ASK).
     #expect(json["decision"] as? String == "deny")
-    #expect(json["reason"] as? String == "\(text) \(approvalPendingLine)")
+    #expect(json["reason"] as? String == askStop(text))
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == stopWho(askStop(text)))
     #expect(wire.exitCode == expected.exit)
-    #expect(wire.stdout.contains(text))
-    #expect(wire.stdout.contains("git reset --hard") == false)
-    #expect(text == "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.")
-    #expect(text.contains("git reset --hard") == false)
+    #expect(
+        text == """
+            ✕ Stopped   git reset --hard (core.git/reset-hard)
+            why     destroys uncommitted changes
+            who     ask your user to run it in their own terminal
+            """)
     #expect(text.contains("Terminal") == false)
     #expect(text.contains("allow-once") == false)
-    #expect(text.components(separatedBy: "RV · Blocked").count == 2)
+    #expect(text.components(separatedBy: "✕ Stopped").count == 2)
 }
 
 @Test func hookRun_grokDenyThroughDaemonForwardsCode() async throws {
@@ -243,7 +246,9 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
 @Test func hookOversize_isIndeterminateDenyJSON() async throws {
     let expected = try grokExpected("deny-indeterminate-oversize")
     let wire = try await runHook(stdin: grokOversizeHookStdin())
-    #expect(wire.stdout == expected.stdout)
+    let reason = try #require(try denyJSON(wire.stdout)["reason"] as? String)
+    #expect(reason.hasPrefix("✕ Stopped   "))
+    #expect(reason.contains("(rv.indeterminate/commandTooLarge)\nwhy     \(indeterminateStopWhy(.commandTooLarge))\n"))
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains("core.git") == false)
     #expect(wire.stdout.contains("reset-hard") == false)
@@ -254,7 +259,10 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { _, _ in
         EvaluationResult(outcome: .indeterminate(.corePacksUnavailable))
     }
-    #expect(wire.stdout == expected.stdout)
+    let json = try denyJSON(wire.stdout)
+    #expect(
+        json["reason"] as? String
+            == indeterminateStopNotice(.corePacksUnavailable, command: ShellCommand(rawValue: "git reset --hard")).text)
     #expect(wire.exitCode == expected.exit)
 }
 
@@ -283,7 +291,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["decision"] as? String == "deny")
     #expect(json["reason"] as? String == malformedHookSentence(.unreadable))
     #expect(json["rule"] == nil)
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == stopWho(malformedHookSentence(.unreadable)))
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -308,7 +316,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
         probe.record(command, result: EvaluationResult(outcome: .plain))
     }
     #expect(probe.commands.isEmpty)
-    #expect(wire.stdout.contains(incompleteEvalSentence))
+    #expect(wire.stdout.contains("(rv.indeterminate/corePacksUnavailable)"))
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
@@ -395,7 +403,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["decision"] as? String == "deny")
     #expect(json["reason"] as? String == malformedHookSentence(.missingCommand))
     #expect(json["rule"] == nil)
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == stopWho(malformedHookSentence(.missingCommand)))
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -415,12 +423,12 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookDenyReasonIsOneLine_noBannerOrCSI() async throws {
+@Test func hookDenyReasonIsOneStop_noBannerOrCSI() async throws {
     let expected = try grokExpected("deny-reason-is-one-line")
     let wire = try await runHook(stdin: try grokFixture("deny-reason-is-one-line.json"))
     try expectResetHardAskDeny(wire, exit: expected.exit)
     let parsed = try grokDenyObject(wire.stdout)
-    #expect(parsed.reason.contains("\n") == false)
+    #expect(parsed.reason.split(separator: "\n").count == 3)
     #expect(parsed.reason.contains("═") == false)
     #expect(parsed.reason.contains("\u{001B}") == false)
 }
@@ -530,7 +538,6 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(text))
 }
 
 @Test func hookPiPresentCwdDeniesWithoutDaemonGrant() async throws {
@@ -583,7 +590,6 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(text))
 }
 
 @Test func hookPiNonShellRead_doesNotEvaluate() async throws {
@@ -617,7 +623,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["decision"] as? String == "deny")
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("hostNative") == false)
@@ -665,7 +671,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["decision"] as? String == "deny")
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("hostNative") == false)
@@ -712,7 +718,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     let json = try denyJSON(wire.stdout)
     // Step 8B: cwd-bound reset-hard is policy ASK; the wire renders
     // block-with-guidance (pending row + TTY code carry the ASK).
-    let askLine = "\(text) \(approvalPendingLine)"
+    let askLine = askStop(text)
     #expect(json["decision"] as? String == "block")
     #expect(json["reason"] as? String == askLine)
     #expect(json["permissionDecision"] == nil)
@@ -720,11 +726,9 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 2)
-    #expect(wire.stdout.contains(text))
     #expect(wire.stderr.isEmpty == false)
     #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
     #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == askLine)
-    #expect(wire.stderr.contains(text))
 }
 
 @Test func hookRun_codexDenyWritesStderrReason() async throws {
@@ -744,8 +748,7 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
         #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
         #expect(wire.stderr.isEmpty == false)
         #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == "\(text) \(approvalPendingLine)")
-        #expect(wire.stderr.contains(text))
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == askStop(text))
     }
 }
 
@@ -807,8 +810,8 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     // carries the deny line plus the approval-pending guidance, and the
     // agent message tells the agent to retry after human approval.
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == "\(text) \(approvalPendingLine)")
-    #expect(json["agent_message"] as? String == cursorAgentAskLine)
+    #expect(json["user_message"] as? String == askStop(text))
+    #expect(json["agent_message"] as? String == askStop(text))
     #expect(json["permissionDecision"] == nil)
     #expect(json["decision"] == nil)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
@@ -816,7 +819,6 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains(text))
 }
 
 @Test func hookCursorAllowGitStatus_isPermissionAllow() async throws {
@@ -956,8 +958,8 @@ private func assertClaudeAskDenyWire(stdout: String, exitCode: Int32) throws {
     )
     let output = try #require(json["hookSpecificOutput"] as? [String: Any])
     #expect(output["permissionDecision"] as? String == "deny")
-    #expect((json["systemMessage"] as? String)?.contains(approvalPendingLine) == true)
-    #expect((output["permissionDecisionReason"] as? String)?.contains(approvalPendingLine) == true)
+    #expect((json["systemMessage"] as? String)?.contains("\nwho     ask ") == true)
+    #expect((output["permissionDecisionReason"] as? String)?.contains("\nwho     ask ") == true)
     #expect(output["ruleId"] as? String == "core.git:reset-hard")
     #expect(exitCode == 0)
     #expect(stdout.contains("hostNative") == false)

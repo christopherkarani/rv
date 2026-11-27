@@ -71,7 +71,7 @@ struct PendingHostAskServiceTests {
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
         )
         #expect(json["decision"] as? String == "deny")
-        #expect(reply.stdout.contains(approvalPendingLine))
+        #expect(reply.stdout.contains("\\nwho     ask "))
         #expect(reply.exitCode == 1)
         let listed = try await env.store.list(now: now)
         #expect(listed.count == 1)
@@ -103,7 +103,7 @@ struct PendingHostAskServiceTests {
         )
         #expect(json["decision"] as? String == "deny")
         #expect(json["decision"] as? String != "ask")
-        #expect(denyReply.stdout.contains(approvalPendingLine))
+        #expect(denyReply.stdout.contains("\\nwho     ask "))
         // The pending store (under home) is intact; the row survives by dedupe.
         #expect(try await env.store.list(now: now).count == 1)
     }
@@ -181,7 +181,7 @@ struct PendingHostAskServiceTests {
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
         )
         #expect(json["decision"] as? String == "deny")
-        #expect(reply.stdout.contains(approvalPendingLine))
+        #expect(reply.stdout.contains("\\nwho     ask "))
         let listed = try await env.store.list(now: now)
         #expect(listed.count == 1)
         #expect(listed.first?.state == .awaitingHuman)
@@ -198,8 +198,14 @@ struct PendingHostAskServiceTests {
         )
         // Step 8B: ASK renders as deny-with-guidance on the wire.
         #expect(json["decision"] as? String == "deny")
-        #expect(reply.stdout.contains(recorded ? approvalPendingLine : approvalUnrecordedLine))
-        #expect(reply.stdout.contains(recorded ? approvalUnrecordedLine : approvalPendingLine) == false)
+        #expect(reply.stdout.contains("\\nwho     ask "))
+        #if os(macOS)
+        if allowOnceUnlockCode(in: reply.stdout) == nil {
+            #expect(reply.stdout.contains(approveInRVLine(owner: .current)) == recorded)
+        }
+        #else
+        #expect(reply.stdout.contains(approveInRVLine(owner: .current)) == false)
+        #endif
         #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
         #expect(reply.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(reply.exitCode == 1)

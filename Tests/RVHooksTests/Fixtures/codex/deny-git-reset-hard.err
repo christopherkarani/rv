@@ -1,1 +1,3 @@
-RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.
+✕ Stopped   git reset --hard (core.git/reset-hard)
+why     destroys uncommitted changes
+who     ask your user to run it in their own terminal

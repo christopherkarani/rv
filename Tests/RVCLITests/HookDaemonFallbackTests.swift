@@ -11,6 +11,13 @@ import RVService
 struct HookDaemonFallbackTests {
     private static let unreachable = HookDaemonFallback.message(for: .unreachable)
 
+    /// `text` as it appears inside a JSON string on the wire.
+    private static func inJSON(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
+
     private static func json(_ wire: HookWire) throws -> [String: Any] {
         try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     }
@@ -26,25 +33,40 @@ struct HookDaemonFallbackTests {
     }
 
     @Test func messagesAreDistinctActionableAndMatchTheCClient() throws {
-        let messages = HookDaemonFailure.allCases.map(HookDaemonFallback.message(for:))
+        let messages = HookDaemonFailure.allCases.map { HookDaemonFallback.message(for: $0) }
         #expect(Set(messages).count == messages.count)
-        #expect(Self.unreachable.contains("rv doctor"))
-        #expect(HookDaemonFallback.message(for: .untrusted).contains("rv setup"))
+        #expect(Self.unreachable.hasSuffix("  rv doctor"))
+        #expect(HookDaemonFallback.message(for: .untrusted).hasSuffix("  rv service restart"))
         let cSource = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("Sources/rv-c/hook_fallback.c"),
             encoding: .utf8
         )
-        for message in messages {
-            #expect(cSource.contains("\"\(message)\""), "C/Swift message drift: \(message)")
+        #expect(cSource.contains("kDoctor[] = \"\(CommandVocabulary.Command.doctor.invocation)\""))
+        #expect(cSource.contains("kRestart[] = \"rv service restart\""))
+        // The C client formats the same shape the Swift notice prints.
+        #expect(cSource.contains(#""\xE2\x9C\x95 Stopped   (%s)\nwhy     %s\nwho     ask %s to run  %s""#))
+        for failure in HookDaemonFailure.allCases {
+            let rule = HookDaemonFallback.rule(for: failure)
+            let why = HookDaemonFallback.why(for: failure)
+            let fix = HookDaemonFallback.fix(for: failure) == "rv service restart" ? "kRestart" : "kDoctor"
+            #expect(cSource.contains("\"\(rule)\", \"\(why)\", \(fix)}"), "C/Swift stop drift: \(rule)")
+            #expect(why.split(separator: " ").count <= stopWhyWordLimit, "\(why)")
+            let message = HookDaemonFallback.message(for: failure, owner: .unknown)
+            #expect(message == "✕ Stopped   (\(rule))\nwhy     \(why)\nwho     ask your user to run  \(HookDaemonFallback.fix(for: failure))")
+            #expect(message.contains("allow-once") == false)
+            #expect(message.contains("unlock") == false)
         }
+        #expect(
+            HookDaemonFallback.message(for: .timeout, owner: OwnerName(gecos: "Chris Karani,,,"))
+                .hasSuffix("\nwho     ask Chris to run  rv doctor"))
     }
 
     @Test func askModeUsesNativeAskOnClaudeAndCursor() throws {
         let claude = HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask)
         #expect(claude.exitCode == 0)
-        #expect(claude.stdout == "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(Self.unreachable)\"},\"systemMessage\":\"\(Self.unreachable)\"}\n")
+        #expect(claude.stdout == "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(Self.inJSON(Self.unreachable))\"},\"systemMessage\":\"\(Self.inJSON(Self.unreachable))\"}\n")
         let claudeJSON = try Self.json(claude)
         let output = try #require(claudeJSON["hookSpecificOutput"] as? [String: Any])
         #expect(output["permissionDecision"] as? String == "ask")
@@ -71,7 +93,7 @@ struct HookDaemonFallbackTests {
                 #expect(ask == codecDeny)
             } else if host == .claude || host == .cursor {
                 #expect(ask.stdout.contains("\"ask\""))
-                #expect(ask.stdout.contains(message))
+                #expect(ask.stdout.contains(Self.inJSON(message)))
                 #expect(ask.exitCode == 0)
             } else {
                 // No ask primitive: the host's own deny wire, exit code included.
@@ -177,7 +199,7 @@ struct HookDaemonFallbackTests {
                 host: host, stdin: "{}", whenDown: .ask, ownerObserves: observes,
                 rvdStateAllowsObserve: { false })
             #expect(stopped == HookDaemonFallback.wire(host: host, failure: .stopped, mode: .ask))
-            #expect(stopped.stdout.contains(HookDaemonFallback.message(for: .stopped)))
+            #expect(stopped.stdout.contains(Self.inJSON(HookDaemonFallback.message(for: .stopped))))
             #expect(stopped.stderr.contains("allowed without being checked") == false)
 
             let restarting = await client.hookEvaluate(

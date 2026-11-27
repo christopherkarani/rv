@@ -247,7 +247,7 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
 
 @Test func cursorWrapper_preservesSplitUserAndAgentMessages() async throws {
     let user = "RV · Blocked. Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks the reviewed command once, including its sudo, env, and path spellings."
-    let agent = cursorAgentStopLine
+    let agent = "RV blocked this command."
     let result = try await runCursorWrapper(
         event: [
             "hook_event_name": "beforeShellExecution",

@@ -1,0 +1,28 @@
+== reset-hard, minted code
+exit 2
+stdout {"decision":"block","reason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835"}
+stderr ✕ Stopped   git reset --hard origin/main (core.git/reset-hard)
+why     destroys uncommitted changes
+safer   git status
+who     ask Chris to run  rv allow-once a7c835
+
+== rm -rf home, who_acts
+exit 2
+stdout {"decision":"block","reason":"✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)\nwhy     rm -rf on root or home paths is catastrophic\nwho     ask Chris to run it, in their own terminal, for their own files; an admin for system files"}
+stderr ✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)
+why     rm -rf on root or home paths is catastrophic
+who     ask Chris to run it, in their own terminal, for their own files; an admin for system files
+
+== unresolved invocation
+exit 2
+stdout {"decision":"block","reason":"✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)\nwhy     rv could not tell what program it runs\nwho     ask Chris to run it in their own terminal"}
+stderr ✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)
+why     rv could not tell what program it runs
+who     ask Chris to run it in their own terminal
+
+== rvd timed out
+exit 2
+stdout {"decision":"block","reason":"✕ Stopped   (rv.timeout)\nwhy     rv timed out and committed nothing\nwho     ask Chris to run  rv doctor"}
+stderr ✕ Stopped   (rv.timeout)
+why     rv timed out and committed nothing
+who     ask Chris to run  rv doctor

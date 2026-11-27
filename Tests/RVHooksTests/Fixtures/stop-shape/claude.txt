@@ -1,0 +1,15 @@
+== reset-hard, minted code
+exit 0
+stdout {"systemMessage":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835","ruleId":"core.git:reset-hard","packId":"core.git","severity":"critical"}}
+
+== rm -rf home, who_acts
+exit 0
+stdout {"systemMessage":"✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)\nwhy     rm -rf on root or home paths is catastrophic\nwho     ask Chris to run it, in their own terminal, for their own files; an admin for system files","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)\nwhy     rm -rf on root or home paths is catastrophic\nwho     ask Chris to run it, in their own terminal, for their own files; an admin for system files","ruleId":"core.filesystem:rm-rf-root-home","packId":"core.filesystem","severity":"critical"}}
+
+== unresolved invocation
+exit 0
+stdout {"systemMessage":"✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)\nwhy     rv could not tell what program it runs\nwho     ask Chris to run it in their own terminal","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)\nwhy     rv could not tell what program it runs\nwho     ask Chris to run it in their own terminal"}}
+
+== rvd timed out
+exit 0
+stdout {"systemMessage":"✕ Stopped   (rv.timeout)\nwhy     rv timed out and committed nothing\nwho     ask Chris to run  rv doctor","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   (rv.timeout)\nwhy     rv timed out and committed nothing\nwho     ask Chris to run  rv doctor"}}

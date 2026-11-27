@@ -292,11 +292,19 @@ private func droppingCommandWords(_ text: String, command: ShellCommand) -> Stri
     {
         shared += 1
     }
-    guard shared > 0, shared < words.count else { return text }
+    // `rm -rf on root or home paths …` keeps its subject: a bare
+    // `on root …` would not read as a reason.
+    guard shared > 0, shared < words.count, prepositions.contains(words[shared].lowercased()) == false else {
+        return text
+    }
     let rest = words[shared...].joined(separator: " ")
     // `rm -rf is destructive` reads `it is destructive`, not `is destructive`.
     return predicateHeads.contains(words[shared].lowercased()) ? "it \(rest)" : rest
 }
+
+private let prepositions: Set<String> = [
+    "on", "in", "into", "of", "to", "at", "for", "with", "from", "against", "inside", "outside", "under", "over",
+]
 
 private let predicateHeads: Set<String> = ["is", "are", "was", "can", "could", "will", "may", "might", "has", "does"]
 
@@ -390,7 +398,9 @@ private func stopNotice(
         rule: deny.ruleID.slashDisplay,
         why: stopWhy(deny.reason, command: command),
         safer: advice?.saferCommand.map(singleLine).flatMap(printableSafer),
-        who: stopWho(kind: kind, unlock: unlock, whoActs: advice?.whoActs, owner: voice.owner)
+        who: stopWho(
+            kind: kind, unlock: unlock, ownerStep: ownerRepairStep(in: deny.reason), whoActs: advice?.whoActs,
+            owner: voice.owner)
     )
 }
 
@@ -400,9 +410,31 @@ private func printableSafer(_ safer: String) -> String? {
     safer.isEmpty || namesAWayPast(safer) ? nil : safer
 }
 
+/// The rv repair commands a deny reason may hand the owner (a judge that
+/// could not load says "Ask the owner to run `rv doctor`"). Only these:
+/// never an unlock, never anything else a reason could name.
+private let ownerRepairSteps = [
+    CommandVocabulary.Command.doctor.invocation,
+    "\(CommandVocabulary.Command.service.invocation) restart",
+    CommandVocabulary.Command.setup.invocation,
+]
+
+/// The repair command a reason names in backticks, if it is one of
+/// `ownerRepairSteps`; the stop's why is too short to carry it.
+func ownerRepairStep(in reason: String) -> String? {
+    ownerRepairSteps.first { reason.contains("`\($0)`") }
+}
+
 /// Exactly one person and one step: the minted code, an earlier code, the
-/// RV app, the pack's `who_acts`, or the owner's own terminal.
-private func stopWho(kind: StopKind, unlock: AllowOnceUnlockMint?, whoActs: String?, owner: OwnerName) -> String {
+/// RV app, a repair command the reason names, the pack's `who_acts`, or
+/// the owner's own terminal.
+private func stopWho(
+    kind: StopKind,
+    unlock: AllowOnceUnlockMint?,
+    ownerStep: String?,
+    whoActs: String?,
+    owner: OwnerName
+) -> String {
     switch unlock {
     case .code(let code):
         return unlockLine(for: code, owner: owner)
@@ -416,6 +448,9 @@ private func stopWho(kind: StopKind, unlock: AllowOnceUnlockMint?, whoActs: Stri
         return approveInRVLine(owner: owner)
     }
     #endif
+    if let ownerStep {
+        return ownerRunsLine(ownerStep, owner: owner)
+    }
     if let whoActs, whoActs.trimmingCharacters(in: .whitespaces).isEmpty == false {
         return whoActsLine(whoActs, owner: owner)
     }

@@ -203,7 +203,7 @@ struct AllowOnceGrantHonorTests {
         #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .connection, mode: .deny))
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
-        #expect(json["agent_message"] as? String == cursorAgentStopLine)
+        #expect(json["agent_message"] as? String == json["user_message"] as? String)
         #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
     }
