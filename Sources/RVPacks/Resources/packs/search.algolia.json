@@ -73,7 +73,7 @@
       "severity": "medium",
       "description": "algolia rules delete removes index rules.",
       "explanation": "Deleting Algolia rules removes search customizations like query rewrites, promotions, and filters. Search behavior may change unexpectedly for users relying on these rules for relevant results.\n\nSafer alternatives:\n- algolia rules browse: Export rules before deletion\n- Disable rules temporarily instead of deleting\n- Test rule changes on a replica index first",
-      "safer_command": "algolia rules browse",
+      "safer_command": "algolia rules browse <index>",
       "examples": {
         "stop": [
           "algolia rules delete my-app"
@@ -90,7 +90,7 @@
       "severity": "medium",
       "description": "algolia synonyms delete removes synonym entries.",
       "explanation": "Deleting Algolia synonyms removes word associations that improve search matching. Users searching with alternative terms may no longer find expected results. Synonym configurations can take time to rebuild.\n\nSafer alternatives:\n- algolia synonyms browse: Export synonyms before deletion\n- Test synonym changes on a replica index\n- Document synonym configurations for recovery",
-      "safer_command": "algolia synonyms browse",
+      "safer_command": "algolia synonyms browse <index>",
       "examples": {
         "stop": [
           "algolia synonyms delete my-app"
@@ -107,7 +107,6 @@
       "severity": "high",
       "description": "algolia apikeys delete removes API keys and can break integrations.",
       "explanation": "Deleting an Algolia API key immediately revokes access for all applications using it. Search and indexing operations will fail with authentication errors. The key cannot be recovered after deletion.\n\nSafer alternatives:\n- algolia apikeys list: Review keys and their usage\n- Create new API keys before deleting old ones\n- Rotate keys by updating applications first",
-      "safer_command": "algolia apikeys list",
       "examples": {
         "stop": [
           "algolia apikeys delete my-app"

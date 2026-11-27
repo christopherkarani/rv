@@ -193,7 +193,7 @@
       "severity": "critical",
       "description": "aws opensearch delete-domain permanently deletes an OpenSearch domain.",
       "explanation": "Deleting an OpenSearch domain removes the entire cluster including all indices, data, and configuration. This is irreversible and affects all applications using the domain. Automated snapshots may also be deleted.\n\nSafer alternatives:\n- aws opensearch describe-domain: Review domain configuration\n- Create a manual snapshot before deletion\n- Export data to S3 for long-term retention",
-      "safer_command": "aws opensearch describe-domain",
+      "safer_command": "aws opensearch describe-domain --domain-name <domain>",
       "examples": {
         "stop": [
           "aws opensearch delete-domain"

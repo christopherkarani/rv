@@ -41,7 +41,7 @@
       "severity": "high",
       "description": "newrelic entity delete removes a New Relic entity, impacting observability.",
       "explanation": "Deleting a New Relic entity removes all associated telemetry data, relationships, and alert configurations. Historical metrics for this entity will no longer be accessible.\n\nSafer alternatives:\n- newrelic entity search: Find and verify the entity first\n- Tag the entity as deprecated instead of deleting\n- Export entity configuration before deletion",
-      "safer_command": "newrelic entity search",
+      "safer_command": "newrelic entity search --name <name>",
       "examples": {
         "stop": [
           "newrelic entity delete my-app"
@@ -90,7 +90,6 @@
       "severity": "high",
       "description": "newrelic synthetics delete removes a synthetics monitor.",
       "explanation": "Deleting a synthetics monitor stops all uptime and availability checking for the monitored endpoint. You will no longer receive alerts when the endpoint becomes unavailable or slow.\n\nSafer alternatives:\n- Disable the monitor temporarily instead of deleting\n- Export monitor configuration as code (Terraform/Pulumi)\n- newrelic synthetics search: Verify you're deleting the correct monitor",
-      "safer_command": "newrelic synthetics search",
       "examples": {
         "stop": [
           "newrelic synthetics delete my-app"

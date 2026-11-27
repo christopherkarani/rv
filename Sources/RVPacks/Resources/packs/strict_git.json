@@ -202,7 +202,8 @@
       "description": "git add -A/--all stages all changes including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead.",
       "examples": {
         "stop": [
-          "git add -A --all"
+          "git add -A",
+          "git add --all"
         ],
         "allow": [
           "git --help"

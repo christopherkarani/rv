@@ -70,8 +70,7 @@
           "sudo systemctl stop docker"
         ],
         "allow": [
-          "systemctl status sshd",
-          "systemctl status disable mask ssh sshd network networking firewalld ufw docker containerd"
+          "systemctl status ssh"
         ]
       }
     },
@@ -131,7 +130,8 @@
       "explanation": "This immediately initiates a system power state change. Poweroff and halt shut down the machine, reboot restarts it, and suspend/hibernate save state to RAM or disk. Any unsaved work, running processes, or active connections will be interrupted.\n\nCheck who is logged in: who\n\nSchedule a graceful shutdown instead: shutdown +5 \"Rebooting for maintenance\"",
       "examples": {
         "stop": [
-          "systemctl poweroff reboot halt suspend hibernate"
+          "systemctl reboot",
+          "systemctl poweroff"
         ],
         "allow": [
           "systemctl --help"

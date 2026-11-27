@@ -850,7 +850,7 @@
       "safer_command": "diskutil list",
       "examples": {
         "stop": [
-          "diskutil eraseDisk eraseVolume reformat zeroDisk randomDisk secureErase"
+          "diskutil eraseDisk APFS Blank disk4"
         ],
         "allow": [
           "diskutil list",
@@ -867,7 +867,7 @@
       "safer_command": "diskutil list",
       "examples": {
         "stop": [
-          "diskutil partitionDisk splitPartition mergePartitions resetFusion"
+          "diskutil partitionDisk disk4 GPT APFS Data 100%"
         ],
         "allow": [
           "diskutil list",

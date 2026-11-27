@@ -111,7 +111,8 @@
       "explanation": "terraform apply -auto-approve skips confirmation:\n\n- No opportunity to review changes before applying\n- Intended for CI/CD, not interactive use\n- Changes may destroy or recreate resources\n\nFor safety: remove -auto-approve and review the plan",
       "examples": {
         "stop": [
-          "terraform tofu apply -auto-approve"
+          "terraform apply -auto-approve",
+          "tofu apply -auto-approve"
         ],
         "allow": [
           "terraform --help"

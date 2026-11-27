@@ -164,11 +164,12 @@
       "explanation": "Deleting a workload terminates all its pods:\n\n- Deployment: All replicas terminated, service goes down\n- StatefulSet: Ordered shutdown, PVCs may be orphaned\n- DaemonSet: Removed from all nodes\n- ReplicaSet: Pods terminated (usually managed by Deployment)\n\nPreview first: kubectl delete <type> <name> --dry-run=client kubectl get pods -l app=<name> # Check affected pods\n\nConsider scaling down first: kubectl scale deployment <name> --replicas=0",
       "examples": {
         "stop": [
-          "kubectl delete deployment statefulset daemonset replicaset"
+          "kubectl delete deployment web",
+          "kubectl delete statefulset db"
         ],
         "allow": [
-          "kubectl get deployment statefulset daemonset replicaset",
-          "kubectl describe deployment statefulset daemonset replicaset"
+          "kubectl get deployment web",
+          "kubectl describe deployment web"
         ]
       }
     },

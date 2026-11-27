@@ -54,7 +54,7 @@
       "severity": "critical",
       "description": "borg delete removes archives or entire repositories.",
       "explanation": "Deleting borg archives or repositories permanently removes backup data. Without the archive, you cannot restore files to that point in time. If you delete the entire repository, all backup history is lost and cannot be recovered.\n\nSafer alternatives:\n- borg list: Review archives before deletion\n- borg info: Check archive details and size\n- borg export-tar: Export archive contents before deletion\n- Use --dry-run to preview what would be deleted",
-      "safer_command": "borg list",
+      "safer_command": "borg list <repo>",
       "examples": {
         "stop": [
           "borg delete my-app"
@@ -71,7 +71,7 @@
       "severity": "high",
       "description": "borg prune removes archives based on retention rules.",
       "explanation": "Pruning removes archives that don't match retention rules. Misconfigured retention policies can delete more archives than intended. Once pruned, those backup points cannot be restored. Space is not reclaimed until borg compact is run.\n\nSafer alternatives:\n- borg prune --dry-run: Preview which archives would be removed\n- borg list: Review current archives before pruning\n- Double-check retention flags (--keep-daily, --keep-weekly, etc.)",
-      "safer_command": "borg list",
+      "safer_command": "borg list <repo>",
       "examples": {
         "stop": [
           "borg prune my-app"
@@ -88,7 +88,7 @@
       "severity": "medium",
       "description": "borg compact reclaims space after deletions.",
       "explanation": "Compacting permanently removes data segments that are no longer referenced after delete or prune operations. Before compacting, deleted data could theoretically be recovered. After compacting, the data is permanently gone and disk space is reclaimed.\n\nSafer alternatives:\n- borg list: Verify intended archives still exist\n- borg check: Verify repository integrity before compacting\n- Ensure all pruning was intentional before compacting",
-      "safer_command": "borg list",
+      "safer_command": "borg list <repo>",
       "examples": {
         "stop": [
           "borg compact"
@@ -105,7 +105,7 @@
       "severity": "high",
       "description": "borg recreate can drop data from archives.",
       "explanation": "Recreate modifies existing archives by recompressing or excluding files. Using --exclude or --exclude-from can permanently remove files from the archive. The original archive state cannot be recovered after recreation completes.\n\nSafer alternatives:\n- borg recreate --dry-run: Preview changes without applying\n- borg create: Create a new archive instead of modifying existing\n- borg export-tar: Export archive before recreation for backup",
-      "safer_command": "borg export-tar",
+      "safer_command": "borg list <repo>",
       "examples": {
         "stop": [
           "borg recreate"

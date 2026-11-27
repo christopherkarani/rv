@@ -73,7 +73,7 @@
       "explanation": "Rebooting or shutting down systems via Ansible affects all targeted hosts at once. This can cause service outages across your infrastructure:\n\n- All services on affected hosts become unavailable\n- No graceful draining of connections or traffic\n- Database transactions may be interrupted\n- Load balancer health checks will fail\n\nSafer alternatives:\n- Use the reboot module which handles wait_for_connection\n- Add serial: 1 to playbook for rolling reboots\n- Use --limit to test on single host first\n- Coordinate with maintenance windows",
       "examples": {
         "stop": [
-          "ansible -m shell command reboot shutdown poweroff"
+          "ansible all -m shell -a reboot"
         ],
         "allow": [
           "ansible --help"

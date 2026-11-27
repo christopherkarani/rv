@@ -50,7 +50,7 @@
       "severity": "critical",
       "description": "Deleting Prometheus rule/config files can break alerting and monitoring coverage.",
       "explanation": "Deleting Prometheus configuration or rule files stops alerting for the defined conditions. After Prometheus reloads, those alerts will no longer fire, potentially leaving critical conditions unmonitored.\n\nSafer alternatives:\n- promtool check rules: Validate rule files before changes\n- Back up files before deletion\n- Use version control (git) for rule files",
-      "safer_command": "promtool check rules",
+      "safer_command": "promtool check rules <file>",
       "examples": {
         "stop": [
           "rm /etc/prometheus/rules.d/alerts.yml"
@@ -98,7 +98,7 @@
       "severity": "high",
       "description": "grafana-cli plugins uninstall removes a Grafana plugin, potentially breaking dashboards.",
       "explanation": "Uninstalling a Grafana plugin breaks all dashboards using that plugin's panels or datasources. Users will see error messages where those panels were.\n\nSafer alternatives:\n- grafana-cli plugins list: Review installed plugins first\n- Check which dashboards use the plugin before removal\n- Update the plugin instead of uninstalling",
-      "safer_command": "grafana-cli plugins list",
+      "safer_command": "grafana-cli plugins ls",
       "examples": {
         "stop": [
           "grafana-cli plugins uninstall my-app"

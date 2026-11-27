@@ -152,7 +152,7 @@
       "severity": "high",
       "description": "kamal app remove takes the app offline by removing its containers and images.",
       "explanation": "`kamal app remove` removes the app containers and images from the servers. The app goes offline and the images must be rebuilt or re-pulled before it can serve again. This is a frequent footgun when asked to \"clean up old containers\".\n\nSafer alternatives:\n- kamal app stale_containers: list leftover containers without removing the live app\n- kamal prune: remove genuinely old images/containers (still erodes rollback)\n- kamal app maintenance: serve a 503 reversibly instead of removing",
-      "safer_command": "kamal app stale_containers",
+      "safer_command": "kamal app details",
       "examples": {
         "stop": [
           "kamal app remove my-app"
@@ -169,7 +169,7 @@
       "severity": "high",
       "description": "kamal app stop stops the app container, causing an outage until restarted.",
       "explanation": "`kamal app stop` stops the app container on the servers, causing an outage until `kamal app start`. There is no built-in confirmation prompt.\n\nSafer alternatives:\n- kamal app maintenance: serve a 503 maintenance page (reversible with kamal app live)\n- kamal app details: confirm the target before stopping anything",
-      "safer_command": "kamal app maintenance",
+      "safer_command": "kamal app details",
       "examples": {
         "stop": [
           "kamal app stop my-app"
@@ -234,7 +234,7 @@
       "severity": "high",
       "description": "kamal accessory reboot stops, removes, and recreates the accessory container (downtime).",
       "explanation": "`kamal accessory reboot [NAME]` stops, removes, and starts a new accessory container, causing downtime for that accessory (e.g. the database). Data survives only if a volume is mapped; an unmapped data directory is at risk. `NAME=all` reboots every accessory.\n\nSafer alternatives:\n- kamal accessory restart: restart the existing container without remove/recreate\n- kamal accessory details: confirm the target accessory before cycling it",
-      "safer_command": "kamal accessory details",
+      "safer_command": "kamal accessory details <accessory>",
       "examples": {
         "stop": [
           "kamal accessory reboot"

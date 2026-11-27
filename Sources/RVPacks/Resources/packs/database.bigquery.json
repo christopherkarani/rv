@@ -91,7 +91,7 @@
       "severity": "high",
       "description": "bq load --replace overwrites all existing data in the destination table.",
       "explanation": "`--replace` truncates the destination table before loading. If the source file is wrong, short, or malformed, the previous contents are already gone and only time travel can recover them.\n\nSafer alternative:\n- bq load --noreplace: append instead of overwriting\n- load into a staging table first, then swap",
-      "safer_command": "bq load --noreplace",
+      "safer_command": "bq show <dataset>.<table>",
       "examples": {
         "stop": [
           "bq load --replace t f"
@@ -108,7 +108,7 @@
       "severity": "high",
       "description": "bq query --replace overwrites the destination table with the query result.",
       "explanation": "`--replace` discards the destination table's current contents before writing the result. A query that returns fewer rows than expected silently destroys the difference.\n\nSafer alternative:\n- bq query --append_table: add rows instead of replacing them\n- bq query --dry_run: check what the query would process first",
-      "safer_command": "bq query --append_table",
+      "safer_command": "bq show <dataset>.<table>",
       "examples": {
         "stop": [
           "bq query --replace 'select 1'"

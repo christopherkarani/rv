@@ -84,7 +84,7 @@
       "severity": "high",
       "description": "rabbitmqadmin purge queue deletes ALL messages in the queue.",
       "explanation": "Purging a queue deletes all messages immediately. Messages that were waiting to be consumed are permanently lost. This cannot be undone.\n\nSafer alternatives:\n- rabbitmqadmin show queue: Check message count first\n- Consume and process messages instead of purging\n- Set message TTL for automatic expiration",
-      "safer_command": "rabbitmqadmin show queue",
+      "safer_command": "rabbitmqadmin list queues",
       "examples": {
         "stop": [
           "rabbitmqadmin purge queue"

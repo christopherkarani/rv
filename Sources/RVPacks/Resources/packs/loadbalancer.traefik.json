@@ -52,7 +52,7 @@
       "explanation": "Stopping or killing the Traefik container immediately halts all HTTP/HTTPS traffic routing. Every service behind this load balancer becomes unreachable until Traefik is restarted.\n\nCheck container status first: docker inspect traefik\n\nView logs for issues: docker logs traefik",
       "examples": {
         "stop": [
-          "docker stop kill traefik"
+          "docker stop traefik"
         ],
         "allow": [
           "docker inspect kill traefik",
@@ -100,11 +100,11 @@
       "explanation": "Deleting Traefik pods or deployments removes the load balancer from the cluster. If managed by a Deployment, pods will be recreated but with downtime. Deleting the Deployment itself stops all traffic routing until it is redeployed.\n\nCheck pod status: kubectl get pods -l app=traefik\n\nRestart pods without deleting: kubectl rollout restart deployment traefik",
       "examples": {
         "stop": [
-          "kubectl delete pod deployment daemonset traefik"
+          "kubectl delete pod traefik -n kube-system"
         ],
         "allow": [
-          "kubectl get pod deployment daemonset traefik",
-          "kubectl describe pod deployment daemonset traefik"
+          "kubectl get pod traefik -n kube-system",
+          "kubectl describe pod traefik -n kube-system"
         ]
       }
     },

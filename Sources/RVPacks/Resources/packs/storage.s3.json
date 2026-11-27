@@ -75,7 +75,7 @@
       "severity": "critical",
       "description": "aws s3 rb removes an S3 bucket and is destructive.",
       "explanation": "Removing an S3 bucket deletes the bucket and optionally all objects within it (with --force). Bucket names are globally unique and may be claimed by others after deletion. Versioned objects require additional cleanup.\n\nSafer alternatives:\n- aws s3 ls: Review bucket contents first\n- Empty the bucket before removal\n- Enable bucket versioning for recovery options",
-      "safer_command": "aws s3 ls",
+      "safer_command": "aws s3 ls s3://<bucket>",
       "examples": {
         "stop": [
           "aws s3 rb"
@@ -92,7 +92,7 @@
       "severity": "high",
       "description": "aws s3 rm deletes S3 objects and is destructive.",
       "explanation": "The rm command deletes objects from S3. With --recursive, it deletes all objects under a prefix. For versioned buckets, this creates delete markers; for unversioned buckets, data is permanently lost.\n\nSafer alternatives:\n- aws s3 ls: Review objects before deletion\n- Use --dryrun to preview what will be deleted\n- Enable versioning for recovery options",
-      "safer_command": "aws s3 ls",
+      "safer_command": "aws s3 ls s3://<bucket>",
       "examples": {
         "stop": [
           "aws s3 rm"
@@ -109,7 +109,7 @@
       "severity": "high",
       "description": "aws s3 sync --delete removes destination objects not in source.",
       "explanation": "The --delete flag removes files from the destination that don't exist in the source. This can accidentally delete important data if source and destination are swapped or if source is empty.\n\nSafer alternatives:\n- aws s3 sync --dryrun: Preview changes first\n- Omit --delete for additive-only sync\n- Back up destination before syncing",
-      "safer_command": "aws s3 sync --dryrun",
+      "safer_command": "aws s3 sync <source> s3://<bucket> --delete --dryrun",
       "examples": {
         "stop": [
           "aws s3 sync --delete"
@@ -126,7 +126,7 @@
       "severity": "critical",
       "description": "aws s3api delete-bucket permanently deletes a bucket.",
       "explanation": "The delete-bucket API removes an S3 bucket. The bucket must be empty (including all versions and delete markers). Once deleted, the bucket name becomes available globally and may be claimed by others.\n\nSafer alternatives:\n- aws s3api list-objects-v2: Verify bucket is empty\n- aws s3api list-object-versions: Check for versions\n- Use lifecycle policies for managed cleanup",
-      "safer_command": "aws s3api list-objects-v2",
+      "safer_command": "aws s3api list-objects-v2 --bucket <bucket>",
       "examples": {
         "stop": [
           "aws s3api delete-bucket"
@@ -143,7 +143,7 @@
       "severity": "medium",
       "description": "aws s3api delete-object permanently deletes an object.",
       "explanation": "Deleting an object removes it from S3. For versioned buckets, this creates a delete marker. Specifying a version-id permanently deletes that specific version. Unversioned objects are immediately and permanently deleted.\n\nSafer alternatives:\n- aws s3api head-object: Verify object exists\n- Use bucket versioning for recovery\n- Copy to backup location before deletion",
-      "safer_command": "aws s3api head-object",
+      "safer_command": "aws s3api head-object --bucket <bucket> --key <key>",
       "examples": {
         "stop": [
           "aws s3api delete-object"

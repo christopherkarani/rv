@@ -109,7 +109,6 @@
       "severity": "critical",
       "description": "flipt flag delete permanently removes a feature flag. This cannot be undone.",
       "explanation": "Deleting a Flipt feature flag immediately removes it from evaluation. All applications checking this flag will receive default values or errors. Rules, variants, and distributions associated with the flag are also removed.\n\nSafer alternatives:\n- flipt flag get: Review flag configuration first\n- Disable the flag instead of deleting\n- Export flag configuration before deletion",
-      "safer_command": "flipt flag get",
       "examples": {
         "stop": [
           "flipt flag delete my-app"
@@ -126,7 +125,6 @@
       "severity": "high",
       "description": "flipt segment delete removes a segment and its constraints.",
       "explanation": "Deleting a segment removes user grouping rules. Any flags using this segment for targeting will lose that targeting logic, potentially changing which users receive which variants.\n\nSafer alternatives:\n- flipt segment get: Review segment configuration\n- Check which flags reference this segment\n- Update flags to use different segments first",
-      "safer_command": "flipt segment get",
       "examples": {
         "stop": [
           "flipt segment delete my-app"
@@ -143,7 +141,6 @@
       "severity": "critical",
       "description": "flipt namespace delete removes a namespace and all its flags, segments, and rules.",
       "explanation": "Deleting a namespace removes ALL flags, segments, rules, and constraints within it. This is a complete wipe of that feature flag environment. All applications using this namespace will lose flag evaluations.\n\nSafer alternatives:\n- flipt namespace get: Review namespace contents\n- Export all flags and segments before deletion\n- Migrate resources to another namespace first",
-      "safer_command": "flipt namespace get",
       "examples": {
         "stop": [
           "flipt namespace delete my-app"
@@ -160,7 +157,6 @@
       "severity": "high",
       "description": "flipt rule delete removes a targeting rule from a flag.",
       "explanation": "Deleting a rule changes how the flag evaluates for targeted users. Users previously matching this rule will fall through to other rules or receive the default variant.\n\nSafer alternatives:\n- flipt rule get: Review rule configuration\n- Disable the rule instead of deleting\n- Verify other rules handle affected users",
-      "safer_command": "flipt rule get",
       "examples": {
         "stop": [
           "flipt rule delete my-app"

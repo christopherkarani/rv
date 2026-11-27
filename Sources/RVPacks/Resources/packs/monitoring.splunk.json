@@ -66,14 +66,12 @@
       "severity": "high",
       "description": "splunk delete user/role removes access configurations. Verify before deleting.",
       "explanation": "Deleting a user removes their access and any saved searches or dashboards owned by them. Deleting a role affects all users assigned to it, potentially breaking access controls.\n\nSafer alternatives:\n- splunk list user/role: Review before deletion\n- Disable the user instead of deleting\n- Reassign role capabilities before deletion",
-      "safer_command": "splunk list user/role",
       "examples": {
         "stop": [
-          "splunk delete user role"
+          "splunk delete user alice"
         ],
         "allow": [
-          "splunk list user/role",
-          "splunk list user role"
+          "splunk list user"
         ]
       }
     },

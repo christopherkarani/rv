@@ -57,7 +57,8 @@
       "safer_command": "gh secret list",
       "examples": {
         "stop": [
-          "gh secret delete remove my-app"
+          "gh secret delete MY_SECRET",
+          "gh secret remove MY_SECRET"
         ],
         "allow": [
           "gh secret list",
@@ -74,7 +75,8 @@
       "safer_command": "gh variable list",
       "examples": {
         "stop": [
-          "gh variable delete remove my-app"
+          "gh variable delete MY_VAR",
+          "gh variable remove MY_VAR"
         ],
         "allow": [
           "gh variable list",
@@ -105,7 +107,7 @@
       "severity": "low",
       "description": "gh run cancel cancels a running workflow. This is reversible, but may disrupt deployments.",
       "explanation": "Canceling a workflow run stops it mid-execution. Any in-progress deployments, tests, or builds will be interrupted. The run can be re-triggered, but partial work may leave systems in an inconsistent state.\n\nSafer alternatives:\n- gh run view: Check run status and progress first\n- gh run list: Review running workflows\n- Wait for natural completion if possible",
-      "safer_command": "gh run view",
+      "safer_command": "gh run view <run-id>",
       "examples": {
         "stop": [
           "gh run cancel my-app"

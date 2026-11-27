@@ -51,7 +51,7 @@
       "severity": "critical",
       "description": "aws sqs delete-queue permanently deletes an SQS queue.",
       "explanation": "Deleting an SQS queue removes the queue and all messages in it. Messages in flight are lost, and any applications sending to this queue will receive errors. You must wait 60 seconds before recreating a queue with the same name.\n\nSafer alternatives:\n- aws sqs get-queue-attributes: Review queue metrics first\n- aws sqs purge-queue: Remove messages but keep the queue\n- Use message retention period for automatic cleanup",
-      "safer_command": "aws sqs get-queue-attributes",
+      "safer_command": "aws sqs get-queue-attributes --queue-url <queue-url> --attribute-names All",
       "examples": {
         "stop": [
           "aws sqs delete-queue"
@@ -68,7 +68,7 @@
       "severity": "high",
       "description": "aws sqs purge-queue deletes ALL messages in the queue.",
       "explanation": "Purging an SQS queue deletes all messages immediately. This includes messages in flight and delayed messages. The operation cannot be undone. You can only purge a queue once every 60 seconds.\n\nSafer alternatives:\n- aws sqs get-queue-attributes: Check message count first\n- Process messages normally instead of purging\n- Use dead-letter queues for failed messages",
-      "safer_command": "aws sqs get-queue-attributes",
+      "safer_command": "aws sqs get-queue-attributes --queue-url <queue-url> --attribute-names All",
       "examples": {
         "stop": [
           "aws sqs purge-queue"
@@ -117,7 +117,7 @@
       "severity": "critical",
       "description": "aws sns delete-topic removes an SNS topic and its subscriptions.",
       "explanation": "Deleting an SNS topic removes all subscriptions and stops all message delivery. Publishers will receive errors. Lambda functions, SQS queues, and other subscribers will no longer receive notifications.\n\nSafer alternatives:\n- aws sns list-subscriptions-by-topic: Review subscribers first\n- Unsubscribe endpoints individually if needed\n- Use topic policies to restrict publishing instead",
-      "safer_command": "aws sns list-subscriptions-by-topic",
+      "safer_command": "aws sns list-subscriptions-by-topic --topic-arn <topic-arn>",
       "examples": {
         "stop": [
           "aws sns delete-topic"
@@ -134,7 +134,7 @@
       "severity": "high",
       "description": "aws sns unsubscribe removes a subscription and stops message delivery.",
       "explanation": "Unsubscribing stops message delivery to that endpoint. If this is a critical integration (Lambda, SQS, HTTP endpoint), that system will stop receiving notifications immediately.\n\nSafer alternatives:\n- aws sns get-subscription-attributes: Review subscription first\n- Use subscription filter policies to reduce traffic\n- Disable the endpoint instead of unsubscribing",
-      "safer_command": "aws sns get-subscription-attributes",
+      "safer_command": "aws sns get-subscription-attributes --subscription-arn <subscription-arn>",
       "examples": {
         "stop": [
           "aws sns unsubscribe"
@@ -151,7 +151,7 @@
       "severity": "high",
       "description": "aws sns remove-permission revokes permissions on a topic.",
       "explanation": "Removing permissions can break cross-account access or service integrations. AWS services and other accounts may lose the ability to publish or subscribe to the topic.\n\nSafer alternatives:\n- aws sns get-topic-attributes: Review current policy first\n- Add new permissions before removing old ones\n- Use IAM policies for fine-grained access control",
-      "safer_command": "aws sns get-topic-attributes",
+      "safer_command": "aws sns get-topic-attributes --topic-arn <topic-arn>",
       "examples": {
         "stop": [
           "aws sns remove-permission"
@@ -168,7 +168,7 @@
       "severity": "high",
       "description": "aws sns delete-platform-application removes a platform application.",
       "explanation": "Deleting a platform application removes all endpoints and stops push notifications to mobile devices. All registered device tokens are removed, and users will stop receiving push notifications.\n\nSafer alternatives:\n- aws sns list-endpoints-by-platform-application: Review endpoints\n- Disable individual endpoints instead of deleting the app\n- Back up endpoint ARNs before deletion",
-      "safer_command": "aws sns list-endpoints-by-platform-application",
+      "safer_command": "aws sns list-endpoints-by-platform-application --platform-application-arn <application-arn>",
       "examples": {
         "stop": [
           "aws sns delete-platform-application"

@@ -77,7 +77,7 @@
       "severity": "critical",
       "description": "kafka-topics --delete removes Kafka topics and data.",
       "explanation": "Deleting a Kafka topic permanently removes all messages and partitions. Consumers will receive errors, and any unprocessed data is lost. Producer applications may fail until they handle the missing topic.\n\nSafer alternatives:\n- kafka-topics --describe: Review topic details first\n- Set retention.ms to expire data naturally\n- Back up critical data before deletion",
-      "safer_command": "kafka-topics --describe",
+      "safer_command": "kafka-topics --describe --topic <topic> --bootstrap-server <host>:<port>",
       "examples": {
         "stop": [
           "kafka-topics --delete"
@@ -94,7 +94,7 @@
       "severity": "high",
       "description": "kafka-consumer-groups --delete removes consumer groups and offsets.",
       "explanation": "Deleting a consumer group removes all committed offsets. When consumers reconnect, they will start from the earliest or latest offset based on their configuration, potentially reprocessing or skipping messages.\n\nSafer alternatives:\n- kafka-consumer-groups --describe: Check group status first\n- Reset offsets instead of deleting the group\n- Ensure all consumers are stopped before deletion",
-      "safer_command": "kafka-consumer-groups --describe",
+      "safer_command": "kafka-consumer-groups --describe --group <group> --bootstrap-server <host>:<port>",
       "examples": {
         "stop": [
           "kafka-consumer-groups --delete"
@@ -126,7 +126,7 @@
       "severity": "high",
       "description": "kafka-configs --alter --delete-config removes broker/topic configs.",
       "explanation": "Deleting configuration overrides reverts topics or brokers to default settings. This can unexpectedly change retention, replication, or compression behavior.\n\nSafer alternatives:\n- kafka-configs --describe: Review current configuration first\n- Set explicit values instead of deleting to revert to defaults\n- Test configuration changes in a non-production environment",
-      "safer_command": "kafka-configs --describe",
+      "safer_command": "kafka-configs --describe --entity-type topics --entity-name <topic> --bootstrap-server <host>:<port>",
       "examples": {
         "stop": [
           "kafka-configs --alter --delete-config"
@@ -143,7 +143,7 @@
       "severity": "high",
       "description": "kafka-acls --remove deletes ACLs and can break access controls.",
       "explanation": "Removing ACLs can immediately break access for producers and consumers. Applications may fail with authorization errors, causing message loss or processing delays.\n\nSafer alternatives:\n- kafka-acls --list: Review existing ACLs first\n- Test ACL changes in a non-production environment\n- Add new ACLs before removing old ones during transitions",
-      "safer_command": "kafka-acls --list",
+      "safer_command": "kafka-acls --list --bootstrap-server <host>:<port>",
       "examples": {
         "stop": [
           "kafka-acls --remove"
@@ -175,7 +175,7 @@
       "severity": "critical",
       "description": "rpk topic delete removes topics (Kafka-compatible).",
       "explanation": "Deleting a topic via rpk (Redpanda) permanently removes all data and partitions, similar to kafka-topics --delete. This affects both Redpanda and Kafka-compatible systems.\n\nSafer alternatives:\n- rpk topic describe: Review topic details first\n- rpk topic list: Verify the topic name\n- Use retention settings for data lifecycle management",
-      "safer_command": "rpk topic describe",
+      "safer_command": "rpk topic describe <topic>",
       "examples": {
         "stop": [
           "rpk topic delete my-app"
