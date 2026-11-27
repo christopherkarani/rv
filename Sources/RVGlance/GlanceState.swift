@@ -52,12 +52,16 @@ public struct GlanceStop: Sendable, Equatable {
     /// Rule id (`core.git:reset-hard`), when rvd sent one.
     public var rule: String?
     public var at: Date
+    /// The tool the action was for, so the plain-English line can tell a
+    /// command from a file path.
+    public var tool: LiveTool
 
-    public init(host: HookHost, action: String, rule: String?, at: Date) {
+    public init(host: HookHost, action: String, rule: String?, at: Date, tool: LiveTool = .bash) {
         self.host = host
         self.action = action
         self.rule = rule
         self.at = at
+        self.tool = tool
     }
 }
 
@@ -188,7 +192,8 @@ public struct GlanceState: Sendable, Equatable {
         guard decision.verdict != .allowed else { return }
         today.stopped += 1
         if lastStop.map({ at >= $0.at }) ?? true {
-            lastStop = GlanceStop(host: decision.host, action: action, rule: decision.rule, at: at)
+            lastStop = GlanceStop(
+                host: decision.host, action: action, rule: decision.rule, at: at, tool: decision.tool)
         }
     }
 }

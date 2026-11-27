@@ -32,25 +32,31 @@ struct GlanceAgentRows: View {
     }
 }
 
-/// The last command rv stopped, with the rule that stopped it.
+/// The last command rv stopped, what it would have done in plain words,
+/// and the rule that stopped it.
 struct GlanceStopRow: View {
     let stop: GlanceStop
+    /// The explainer's line; the template line until it arrives.
+    let plain: String?
     let now: Date
     let calendar: Calendar
 
     var body: some View {
         let who = GlanceAgent.displayName(stop.host)
         let rule = stop.rule.map { " · \($0)" } ?? ""
+        let line = plain ?? PlainTemplate.line(for: PlainRequest(stop)).text
         GlanceRow(
             avatar: Text(CommandVocabulary.Glyph.stopped.rawValue)
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(GlanceTheme.stop),
             avatarFill: GlanceTheme.stop.opacity(0.18),
             title: stop.action,
             titleIsCode: true,
-            detail: "\(who)\(rule) · \(GlanceClock.time(stop.at, calendar: calendar))",
+            detail: line,
+            detailIsCode: false,
+            caption: "\(who)\(rule) · \(GlanceClock.time(stop.at, calendar: calendar))",
             trailing: GlanceClock.ago(from: stop.at, to: now),
             trailingColor: .secondary)
-        .accessibilityLabel(Text("\(CommandVocabulary.Glyph.stopped.word) \(stop.action), \(who)\(rule)"))
+        .accessibilityLabel(Text("\(CommandVocabulary.Glyph.stopped.word) \(stop.action). \(line). \(who)\(rule)"))
     }
 }
 
@@ -60,6 +66,9 @@ struct GlanceRow<Avatar: View>: View {
     let title: String
     var titleIsCode = false
     let detail: String
+    var detailIsCode = true
+    /// A third, quieter line.
+    var caption: String?
     let trailing: String
     let trailingColor: Color
 
@@ -74,10 +83,17 @@ struct GlanceRow<Avatar: View>: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(detail)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(detailIsCode ? .system(size: 11.5, design: .monospaced) : .system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if let caption {
+                    Text(caption)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             Spacer(minLength: 4)
             Text(trailing)
