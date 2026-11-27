@@ -5,6 +5,9 @@ import RVHooks
 import RVIPC
 import RVPolicy
 import RVService
+#if canImport(XPC)
+import RVXPC
+#endif
 
 public struct RoutedEvaluation: Sendable, Equatable {
     public let result: EvaluationResult

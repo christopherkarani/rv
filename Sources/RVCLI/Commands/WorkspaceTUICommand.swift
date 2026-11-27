@@ -130,7 +130,9 @@ enum WorkspaceTUICommand {
         model.setDurableViewChangedHook { [weak savePump] view in savePump?.saveSync(view) }
         savePump.start()
         do {
-            try await WorkspaceTUILaunch.run(model, background: background)
+            try await WorkspaceTUILaunch.run(
+                model, background: background,
+                sessionsStarted: openedLayout.session.recordShellStart())
         } catch {
             model.detachSession()
             if let saveError = savePump.stop() {

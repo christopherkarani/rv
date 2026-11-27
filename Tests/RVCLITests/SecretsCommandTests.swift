@@ -7,6 +7,7 @@ import Foundation
 import RVHistory
 import RVIsolation
 import RVPolicy
+import RVTheme
 import Synchronization
 import Testing
 @testable import RVCLI
@@ -93,7 +94,11 @@ struct SecretsCommandTests {
                                  placeholderPrefix: "sk-"),
             agents: ["codex"], description: "model calls", environment: environment
         ).get()
-        #expect(text.hasPrefix("Stored OPENAI_API_KEY in \(SecretKeychain.storeName) (rv.secrets). Delivery: gateway → api.openai.com via $OPENAI_BASE_URL."))
+        #expect(text.hasPrefix(
+            "✓ Stored OPENAI_API_KEY in \(SecretKeychain.storeName) (rv.secrets).\n"
+                + "  Delivery: gateway → api.openai.com via $OPENAI_BASE_URL; commands get a stand-in, never the value.\n"))
+        // An agents filter keeps it out of `rv run`: a profile is the way in.
+        #expect(text.hasSuffix("→ add \"OPENAI_API_KEY\" to a profile's \"secrets\" in runtime-resources.json\n"))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/OPENAI_API_KEY"] } == Data("sk-real-value-123".utf8))
 
         var info = stat()
@@ -188,7 +193,8 @@ struct SecretsCommandTests {
             definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
             agents: [], description: nil, environment: environment).get()
         #expect(open.hasSuffix(
-            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"))
+            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"
+                + "→ rv run --secret ACME_KEY -- <command>\n"))
         let rotated = try SecretsRun.set(
             name: "ACME_KEY", value: Data("acme-5678".utf8), definition: nil, agents: [], description: nil,
             environment: environment).get()
@@ -553,12 +559,30 @@ struct SecretsCommandTests {
         #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_KEY") != nil)
 
         let text = try setAcme(fixture.environment()).get()
-        #expect(text.hasPrefix("Stored ACME_KEY in \(SecretKeychain.storeName) (rv.secrets)."))
+        #expect(text.hasPrefix("✓ Stored ACME_KEY in \(SecretKeychain.storeName) (rv.secrets)."))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-12345678".utf8))
         #expect(try Data(contentsOf: fixture.secretsFile) == defined)
         // Only the first run changed a definition; the re-run records what a bare set records.
         let recorded = AuditLedger(configDirectory: fixture.directory).events(AuditFilter(kinds: ["config.changed"]))
         #expect(recorded.map(\.subject) == ["secrets"])
+    }
+
+    /// S1: the success line ends with how to use the secret, ready to copy.
+    @Test func setEndsWithTheRVRunLine() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let text = try SecretsRun.set(
+            name: "OPENAI_API_KEY", value: Data("sk-real-value-123".utf8),
+            definition: .gateway(upstream: "https://api.openai.com/v1/", baseURLEnv: "OPENAI_BASE_URL",
+                                 placeholderPrefix: "sk-"),
+            agents: [], description: nil, environment: fixture.environment()
+        ).get()
+        #expect(text.hasSuffix("→ rv run --secret OPENAI_API_KEY -- <command>\n"))
+        #expect(text.contains("runtime-resources.json") == false)
+        #expect(text.contains("sk-real-value-123") == false)
+        // Lines the command adds after set (profile wiring) go above it.
+        let wired = SecretsRun.insertingBeforeNextStep("Wired OPENAI_API_KEY into profile main.\n", into: text)
+        #expect(wired.hasSuffix("Wired OPENAI_API_KEY into profile main.\n→ rv run --secret OPENAI_API_KEY -- <command>\n"))
     }
 
     @Test func setRerunAfterAFailedStoreStoresTheValueUnderTheSameEnvironmentDefinition() throws {
@@ -573,7 +597,9 @@ struct SecretsCommandTests {
         let defined = try Data(contentsOf: fixture.secretsFile)
 
         let text = try setToken(fixture.environment()).get()
-        #expect(text.hasPrefix("Stored GH_TOKEN in \(SecretKeychain.storeName) (rv.secrets). Delivery: environment"))
+        #expect(text.hasPrefix(
+            "✓ Stored GH_TOKEN in \(SecretKeychain.storeName) (rv.secrets).\n"
+                + "  Delivery: environment (real value in the cage), weaker than a stand-in.\n"))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == Data("ghp-12345678".utf8))
         #expect(try Data(contentsOf: fixture.secretsFile) == defined)
     }
@@ -1025,13 +1051,34 @@ struct SecretsCommandTests {
         try Data("clean now\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
         let leaked = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(leaked.failed)
-        #expect(leaked.text.contains("leak.txt:1:GH_TOKEN"))
-        #expect(leaked.text.contains("rv.secretsScan"))
+        // One glyph line per finding, then the fix, never the off switch:
+        // whoever commits may be an agent.
+        #expect(leaked.text == "✕ leak.txt:1  GH_TOKEN\n→ use it: rv run --secret GH_TOKEN -- <command>\n")
+        #expect(leaked.text.contains("rv.secretsScan") == false)
+        #expect(leaked.text.contains("rv-secrets:allow") == false)
         #expect(leaked.text.contains(value) == false)
 
         let removed = try SecretGitHook.uninstall(workTree: work).get()
         #expect(removed.contains("removed rv's block"))
         #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
+
+    @Test func hookPaintsOnlyTheGlyphsAndOnlyWithAColorPalette() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-color")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
+        try git(work, ["add", "leak.txt"])
+        let color = Palette(for: ColorCapability(colorsEnabled: true))
+        let painted = try SecretsRun.hookRun(workTree: work, environment: fixture.environment(), palette: color).get()
+        #expect(painted.failed)
+        // Red ✕ and blue →, as in the policy refusals; the rest of each line stays plain.
+        #expect(painted.text == "\u{1B}[1;31m✕\u{1B}[0m leak.txt:1  aws-access-key-id\n\u{1B}[1;34m→\u{1B}[0m move it: rv secrets set AWS_ACCESS_KEY_ID\n")
+        let plain = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(plain.text == "✕ leak.txt:1  aws-access-key-id\n→ move it: rv secrets set AWS_ACCESS_KEY_ID\n")
     }
 
     @Test func hookFindsPatternsPastTheFirstMebibyteAndReportsOversizedFiles() throws {
@@ -1051,7 +1098,8 @@ struct SecretsCommandTests {
         try git(work, ["add", "big.txt", "huge.bin"])
         let result = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
         #expect(result.failed)
-        #expect(result.text.contains("big.txt:120001:aws-access-key-id"))
+        #expect(result.text.contains("✕ big.txt:120001  aws-access-key-id\n"))
+        #expect(result.text.hasSuffix("→ move it: rv secrets set AWS_ACCESS_KEY_ID\n"))
         #expect(result.text.contains("not scanned (over 8 MiB): huge.bin"))
         #expect(result.text.contains(token) == false)
 

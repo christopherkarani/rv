@@ -8,6 +8,7 @@ import Foundation
 import RVDomain
 import RVIsolation
 import RVPolicy
+import RVTheme
 
 /// Seams for `rv secrets`: where config lives and how values are read and stored.
 struct SecretsEnvironment: Sendable {
@@ -444,18 +445,17 @@ enum SecretsRun {
             }
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
-        var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
+        var text = "✓ Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)).\n"
+        text += "  \(deliveryLine(secret.delivery))\n"
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
-        if users.isEmpty {
-            text += "Add \"\(DisplayedText.field(name))\" to a profile's \"secrets\" in runtime-resources.json to use it.\n"
-        } else {
-            text += "Used by profiles: \(users.joined(separator: ", ")).\n"
+        if users.isEmpty == false {
+            text += "  Used by profiles: \(users.joined(separator: ", ")).\n"
         }
         if updated != current, case .gateway(let binding) = secret.delivery, binding.allow.isEmpty {
             text += "note: \(DisplayedText.field(name)) may be used with any method and path on "
                 + "\(binding.upstream.host ?? binding.upstream.absoluteString); narrow it with --allow, e.g. --allow read-only.\n"
         }
-        return .success(text)
+        return .success(text + nextStep(secret, inProfile: users.isEmpty == false))
     }
 
     /// The definition `set` adds for a new name from its flags.
@@ -827,7 +827,9 @@ enum SecretsRun {
         return .success(text)
     }
 
-    static func hookRun(workTree: URL, environment: SecretsEnvironment) -> Result<(text: String, failed: Bool), CommandFailure> {
+    static func hookRun(
+        workTree: URL, environment: SecretsEnvironment, palette: Palette = colorOffPalette
+    ) -> Result<(text: String, failed: Bool), CommandFailure> {
         let configuration: SecretsConfiguration
         switch self.configuration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -845,20 +847,52 @@ enum SecretsRun {
         case .success(let found): report = found
         }
         let findings = report.findings
-        var lines = findings.map { "\(DisplayedText.field($0.path)):\($0.line):\($0.secret)" }
+        // `✕ path:line  rule` per finding (never the value), the fix last,
+        // never the off switch: whoever commits may be an agent.
+        let stopped = paint(CommandVocabulary.Glyph.stopped.rawValue, palette.deny, palette)
+        var lines = findings.map { "\(stopped) \(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
         let gaps = report.tooLarge.isEmpty == false || skipped.isEmpty == false
         if findings.isEmpty {
             lines.append(gaps ? "No secrets in the staged files that were scanned." : "No secrets in staged files.")
-        } else {
-            lines.append(
-                "commit blocked. A false positive: add an `rv-secrets:allow` comment on the line, or "
-                    + "path:rule:line to \(SecretLeakIgnore.fileName). Skip the scan: git config \(SecretGitHook.killSwitch) false")
         }
         lines += report.tooLarge.map(notScanned)
         lines += skipped
         if gaps { lines.append(hookGapSummary(files: report.tooLarge.count, secrets: skipped.count)) }
+        let next = paint(CommandVocabulary.Glyph.next.rawValue, palette.trace, palette)
+        lines += hookNextSteps(findings, defined: Set(configuration.secrets.map(\.name))).map { "\(next) \($0)" }
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
     }
+
+    /// Colour only the glyph, as the policy refusals do; off palettes pass the text through.
+    static func paint(_ text: String, _ ink: String, _ palette: Palette) -> String {
+        palette.colorsEnabled && ink.isEmpty == false ? ink + text + palette.reset : text
+    }
+
+    /// The hook's last lines, before their `→`, one per distinct name, in finding order. A
+    /// defined secret's value is already in rv: use it through rv run. A
+    /// token pattern names the variable its issuer's SDKs read, when there
+    /// is one, and is moved into rv.
+    static func hookNextSteps(_ findings: [SecretLeakFinding], defined: Set<String>) -> [String] {
+        var seen: Set<String> = []
+        return findings.compactMap { finding in
+            let line = defined.contains(finding.secret)
+                ? "use it: rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
+                : "move it: rv secrets set \(patternSecretNames[finding.secret] ?? "NAME")"
+            return seen.insert(line).inserted ? line : nil
+        }
+    }
+
+    /// Pattern rule ids (`SecretPatternRules`) and the name a key of that
+    /// kind usually goes by.
+    static let patternSecretNames: [String: String] = [
+        "aws-access-key-id": "AWS_ACCESS_KEY_ID",
+        "github-token": "GITHUB_TOKEN",
+        "slack-token": "SLACK_TOKEN",
+        "stripe-secret-key": "STRIPE_SECRET_KEY",
+        "anthropic-api-key": "ANTHROPIC_API_KEY",
+        "openai-api-key": "OPENAI_API_KEY",
+        "google-api-key": "GOOGLE_API_KEY",
+    ]
 
     /// The hook lets a commit through past files it could not read and
     /// secrets it could not resolve; this line says so in one place.
@@ -889,6 +923,47 @@ enum SecretsRun {
         (try? RobotJSON.encode(value, options: .pretty)) ?? "{}\n"
     }
 
+    /// One plain line on where the value goes, for the `set` success text.
+    static func deliveryLine(_ delivery: SecretDelivery) -> String {
+        // The delivery summary (`gateway → api.openai.com via
+        // $OPENAI_BASE_URL`) names the variable a command reads.
+        switch delivery {
+        case .gateway, .awsSigV4:
+            "Delivery: \(delivery.summary); commands get a stand-in, never the value."
+        case .environment:
+            "Delivery: \(delivery.summary), weaker than a stand-in."
+        }
+    }
+
+    /// The last line of `set`: how to use the secret, ready to copy. `rv
+    /// run` stages gateway and AWS secrets with no agents filter; any other
+    /// is used through a runtime profile.
+    static func nextStep(_ secret: SecretDefinition, inProfile: Bool) -> String {
+        let name = DisplayedText.field(secret.name)
+        if runsWithRVRun(secret) { return "→ rv run --secret \(name) -- <command>\n" }
+        return inProfile ? "" : profileStep(name)
+    }
+
+    static func profileStep(_ displayedName: String) -> String {
+        "→ add \"\(displayedName)\" to a profile's \"secrets\" in runtime-resources.json\n"
+    }
+
+    /// What `rv run --secret` accepts: a stand-in delivery and no agents filter.
+    static func runsWithRVRun(_ secret: SecretDefinition) -> Bool {
+        if case .environment = secret.delivery { return false }
+        return (secret.agents ?? []).isEmpty
+    }
+
+    /// `text` with `lines` put before its last line, the next step, which
+    /// stays last.
+    static func insertingBeforeNextStep(_ lines: String, into text: String) -> String {
+        guard lines.isEmpty == false, let range = text.range(of: "\n→ ", options: .backwards) else {
+            return text + lines
+        }
+        let split = text.index(after: range.lowerBound)
+        return String(text[..<split]) + lines + String(text[split...])
+    }
+
     /// The secret value: hidden prompt on a terminal, otherwise all of stdin
     /// minus trailing newlines.
     static func readValue(name: String, stdinIsTTY: Bool) -> Data? {
@@ -901,7 +976,11 @@ enum SecretsRun {
             for index in buffer.indices { buffer[index] = 0 }
             return Data(bytes)
             #else
-            return nil
+            // No readpassphrase off macOS: the same hidden prompt on /dev/tty.
+            switch HiddenLinePrompt.readFromTerminal(prompt: "Value for \(name): ", maximumBytes: SecretValue.maximumBytes) {
+            case .line(let data): return data
+            case .cancelled, .unavailable: return nil
+            }
             #endif
         }
         var data = FileHandle.standardInput.readDataToEndOfFile()
@@ -991,6 +1070,8 @@ struct SecretsSet: AsyncParsableCommand {
             Setting a new value reaches running sessions that use the gateway on their next
             request. Environment-delivered values only change for new sessions.
               rv secrets set GITHUB_TOKEN --expires 2027-01-31
+            Then run a command with it; the command gets a stand-in, never the value:
+              rv run --secret OPENAI_API_KEY -- codex
             """
     )
 
@@ -1103,19 +1184,21 @@ struct SecretsSet: AsyncParsableCommand {
         case .success(var text):
             // Only a new secret's definition is written; a re-run applies no defaults.
             if isNew, let inferredNote { text = inferredNote + text }
+            var wiring = ""
             if let profile {
                 switch InitRun.attachSecret(
                     name, profileID: profile, configDirectory: environment.configDirectory)
                 {
                 case .failure(let failure):
-                    text += "warning: stored but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n"
+                    wiring += "warning: stored but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n"
                 case .success(true):
-                    text += "Wired \(DisplayedText.field(name)) into profile \(DisplayedText.field(profile)).\n"
+                    text = text.replacingOccurrences(of: SecretsRun.profileStep(DisplayedText.field(name)), with: "")
+                    wiring += "Wired \(DisplayedText.field(name)) into profile \(DisplayedText.field(profile)).\n"
                 case .success(false):
                     break
                 }
             }
-            ctx.writeStdout(text)
+            ctx.writeStdout(SecretsRun.insertingBeforeNextStep(wiring, into: text))
         }
     }
 }
@@ -1268,15 +1351,33 @@ struct SecretsHookRun: AsyncParsableCommand {
         commandName: "run", abstract: "Scan staged files. The installed hook runs this.")
 
     func run() throws {
-        let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: true, noColor: true)
-        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        // The same text either way; the glyphs are coloured only on a terminal
+        // (git hands the hook the committer's stderr as stdout), never when
+        // piped, in CI, under NO_COLOR or TERM=dumb. `plain` would forbid colour.
+        let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: false, noColor: false)
+        let palette: Palette
+        switch ctx.appearance {
+        case .pretty(let value): palette = value
+        case .robot: palette = colorOffPalette
+        }
+        // The store is the real user's, from the passwd entry: a commit run
+        // with HOME pointed elsewhere must not swap in an empty store.
+        let environment = SecretsEnvironment.live(home: try Self.passwdHome() ?? ctx.requireHome())
         let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        switch SecretsRun.hookRun(workTree: workTree, environment: environment) {
+        switch SecretsRun.hookRun(workTree: workTree, environment: environment, palette: palette) {
         case .failure(let failure): try ctx.fail("rv secrets hook run: \(failure.message)\n")
         case .success(let result):
             if result.failed { try ctx.emit(stdout: result.text, exitCode: 1) }
             else { ctx.writeStdout(result.text) }
         }
+    }
+
+    /// The home directory in the real user's passwd entry, never HOME.
+    static func passwdHome() -> HomeDirectory? {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        guard home.hasPrefix("/") else { return nil }
+        return HomeDirectory(validating: home)
     }
 }
 
