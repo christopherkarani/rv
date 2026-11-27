@@ -18,6 +18,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case `try`
     case term
     case wait
+    case undo
     case explain
     case check
     case prompt
@@ -167,6 +168,7 @@ extension HelpTopic {
         case .`try`: [Try.self]
         case .term: [Term.self]
         case .wait: [Wait.self]
+        case .undo: [Undo.self]
         case .explain: [Explain.self]
         case .check: [CheckCommand.self]
         case .prompt: [PromptCommand.self]

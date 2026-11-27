@@ -16,6 +16,7 @@ enum HelpCatalog {
         case .`try`: tryDemo
         case .term: term
         case .wait: wait
+        case .undo: undo
         case .explain: explain
         case .check: check
         case .prompt: prompt
@@ -80,6 +81,7 @@ enum HelpCatalog {
                 HelpRow(name: "news", description: "What's new in this rv, measured on your week"),
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
                 HelpRow(name: "wait", description: "Wait for the person's answer to a stop, then carry on"),
+                HelpRow(name: "undo", description: "Restore what a reset or delete removed, from rv's copy"),
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
@@ -247,6 +249,29 @@ enum HelpCatalog {
                 HelpRow(name: "0", description: "Unlocked: retry the exact command"),
                 HelpRow(name: "1", description: "Still waiting, expired, already used, or rv restarted"),
                 HelpRow(name: "2", description: "No stop has this code"),
+            ]),
+        ]
+    )
+
+    static let undo = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv undo"),
+                HelpRow(name: "rv undo <id>"),
+                HelpRow(name: "rv undo --list"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "when rv keeps a copy", description: "Before a reset, discard, clean or delete goes through in watch mode, or after you unlock it"),
+                HelpRow(name: "what it keeps", description: "Git refs for unsaved work (refs/rv/undo/...); file copies for deletes, owner-only in ~/.config/rv/undo. Kept 7 days"),
+                HelpRow(name: "what it skips", description: "Secrets files, anything outside the repository, copies over 256 MB or too slow to make; the copy says why"),
+                HelpRow(name: "restoring", description: "Needs you at a terminal. Never overwrites: git work comes back on a new branch, files only where nothing is now"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Restored, or listed"),
+                HelpRow(name: "1", description: "Not restored (no copy kept, declined, no terminal, or it would overwrite)"),
+                HelpRow(name: "2", description: "No copy here from the last 7 days"),
             ]),
         ]
     )

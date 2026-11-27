@@ -11,6 +11,7 @@ _rv() {
     'try:Watch rv stop a fake agent in a throwaway repo'
     'term:Watch what rv is doing, full screen'
     'wait:Wait for the answer to a stop'
+    'undo:Restore what a reset or delete removed'
     'explain:Explain a decision'
     'check:Check a plan before an agent runs it'
     'prompt:One glyph for your shell prompt'
