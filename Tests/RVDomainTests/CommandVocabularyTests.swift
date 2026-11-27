@@ -43,7 +43,7 @@ struct CommandVocabularyTests {
         let words = CommandVocabulary.plannedNames.map { $0.spelling.split(separator: " ").map(String.init) }
         #expect(words.allSatisfy { $0.first == CommandVocabulary.program })
         let newWords = Set(words.map { $0[1] }).subtracting(commands)
-        #expect(newWords == ["guard", "keys", "log", "protect", "rules", "unlock", "watch", "why"])
+        #expect(newWords == ["guard", "keys", "protect", "rules", "unlock", "watch", "why"])
         let spellings = CommandVocabulary.plannedNames.map(\.spelling)
         #expect(Set(spellings).count == spellings.count)
     }
