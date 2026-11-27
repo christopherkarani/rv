@@ -119,6 +119,7 @@ extension SetupRun {
                 + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
                 + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
                 + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
+                + [DecisionLog(configDirectory: configDir).directory]
         }
         let configExisted = configArtifacts.contains { files.fileExists($0.path) }
         for artifact in configArtifacts {

@@ -17,7 +17,7 @@ public struct SecretGitHookError: Error, Sendable, Equatable {
 public enum SecretGitHook {
     public static let beginMarker = "# >>> rv secrets >>>"
     public static let endMarker = "# <<< rv secrets <<<"
-    /// `git config rv.secretsScan false` skips the scan with a notice.
+    /// `git config --local rv.secretsScan false` skips the scan with a notice.
     public static let killSwitch = "rv.secretsScan"
     /// The previous installer replaced the whole hook and moved the old one aside.
     static let legacyMarker = "# rv-secrets-hook"
@@ -35,22 +35,26 @@ public enum SecretGitHook {
         "rv secrets: rv not found, so staged files were not scanned; reinstall rv, "
         + "or remove this check with `rv secrets hook uninstall` or by deleting the lines between the rv secrets markers in this hook"
 
-    /// rv is found on PATH when the hook runs, then at `rvPath` (where
-    /// install ran from). `rvPath` nil writes the PATH lookup only, for a
-    /// hooks directory other people check out. `|| true` keeps a missing
-    /// rv from tripping `sh -e` (husky) before the notice.
+    /// rv is run from `rvPath` (where install ran from) when that is still
+    /// there, else found on PATH: a `PATH=/tmp/x:$PATH git commit` cannot
+    /// swap in another `rv`. `rvPath` nil writes the PATH lookup only, for a
+    /// hooks directory other people check out. The off switch is read from
+    /// the repository's own config only (`--local`), so a `HOME=`,
+    /// `XDG_CONFIG_HOME=` or `git -c` cannot supply it. `|| true` keeps a
+    /// missing rv from tripping `sh -e` (husky) before the notice.
     static func block(rvPath: String?) -> String {
-        let fallback = rvPath.map {
-            "\n  if [ -z \"$rv_secrets_bin\" ] && [ -x \(shellQuote($0)) ]; then rv_secrets_bin=\(shellQuote($0)); fi"
+        let pinned = rvPath.map {
+            "\n  if [ -x \(shellQuote($0)) ]; then rv_secrets_bin=\(shellQuote($0)); fi"
         } ?? ""
         return """
             \(beginMarker)
             # Managed by rv; `rv secrets hook uninstall` removes only this block.
-            # Scans staged content and prints path:line:rule, never a value.
-            if [ "$(git config --bool \(killSwitch))" = "false" ]; then
-              echo "rv secrets: staged-content scan skipped (git config \(killSwitch) is false)" >&2
+            # Scans staged content and prints path:line  rule, never a value.
+            if [ "$(git config --local --bool \(killSwitch))" = "false" ]; then
+              echo "rv secrets: staged-content scan skipped (git config --local \(killSwitch) is false)" >&2
             else
-              rv_secrets_bin="$(command -v rv 2>/dev/null || true)"\(fallback)
+              rv_secrets_bin=''\(pinned)
+              if [ -z "$rv_secrets_bin" ]; then rv_secrets_bin="$(command -v rv 2>/dev/null || true)"; fi
               if [ -n "$rv_secrets_bin" ]; then
                 "$rv_secrets_bin" secrets hook run || exit $?
               else

@@ -55,6 +55,15 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
     }
 
+    /// The requests awaiting a human `now`, read without the lock and
+    /// without writing: the sweep is applied in memory only. For a viewer
+    /// (`rv term`) that must never change rvd's ledger. A torn or
+    /// unreadable file reads as no requests.
+    nonisolated public func awaitingSnapshot(now: Date) -> [PendingApproval] {
+        let records = store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
+        return PendingApprovalLedger.awaitingHuman(records, now: now)
+    }
+
     /// Every row after the timeout sweep, terminal rows included: one
     /// consistent snapshot read under the store lock. Review displays
     /// derive from it so what is shown and what is bound agree.
