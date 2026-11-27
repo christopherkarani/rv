@@ -803,8 +803,8 @@ check gate "observe: rv host list shows claude observe" $?
 g1="$(hook 'git reset --hard' | decision)"; g2="$(hook 'cat .env' | decision)"; g3="$(hook 'pkill rvd' | decision)"
 [[ "$g1" == "allow" && "$g2" == "allow" ]]; check gate "observe: would-be denies run" $? "reset=$g1 env=$g2"
 [[ "$g3" == "deny" ]]; check gate "observe: rv's self-protection (pkill rvd) still blocks" $? "$g3"
-as_owner rv blocks | grep -q 'Watched, would ask'
-check gate "observe: rv blocks marks what enforce would have done (Watched, would ask)" $?
+as_owner rv blocks | grep -q '◐ Would ask'
+check gate "observe: rv blocks marks what enforce would have done (◐ Would ask)" $?
 pkill -TERM -u "$OWNER" -x rvd; for _ in $(seq 30); do pgrep -u "$OWNER" -x rvd >/dev/null || break; sleep 0.2; done
 out="$(hook 'git reset --hard' 2>&1)"
 [[ "$out" == *"allowed without being checked"* ]]

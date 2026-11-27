@@ -65,7 +65,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
     /// Under observe, the decision line names what happened instead of the
-    /// bare verdict word: `◐ Watched, would stop` / `◐ Watched, would ask`
+    /// bare verdict word: `◐ Would stop` / `◐ Would ask`
     /// (it ran) or `✕ Stopped, in every mode` (it did not).
     package var observeDecisionWords: String?
     public var explainDecisionWord: String { observeDecisionWords ?? decision.emphasizedName }
@@ -156,10 +156,10 @@ public func explainViewModel(
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis),
         observeNote: observed.flatMap { observeNote(for: result.decision, outcome: $0, leadingWords: false) },
-        observeStopped: observed == .stopped && result.decision != .allow
+        observeStopped: (observed?.isStop ?? false) && result.decision != .allow
     )
     if result.decision != .allow {
-        model.observeDecisionWords = observed.map(observeDecisionWords(for:))
+        model.observeDecisionWords = observed.map { observeDecisionWords(for: $0, decisionLine: true) }
     }
     return model
 }

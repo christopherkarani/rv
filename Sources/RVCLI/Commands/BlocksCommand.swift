@@ -22,7 +22,7 @@ enum BlocksRun {
     /// Every row says what happened after the timestamp, so a real stop
     /// never reads like a watched one: `✕ Stopped` (the command did not
     /// run), or for an observe-mode row (the agent was not blocked)
-    /// `◐ Watched, would stop` / `◐ Watched, would ask` (what enforcement
+    /// `◐ Would stop` / `◐ Would ask` (what enforcement
     /// would have done). A host name is never one of these words. A row
     /// that names its agent session ends with `session=<id>`.
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
@@ -39,8 +39,8 @@ enum BlocksRun {
     }
 
     private static func verdict(_ record: DenialLedgerRecord) -> String {
-        guard record.observed else { return "✕ Stopped" }
-        return record.wouldBe == .ask ? watchedWouldAskWords : watchedWouldStopWords
+        guard record.observed else { return stoppedWords }
+        return record.wouldBe == .ask ? wouldAskWords : wouldStopWords
     }
 
     // REQ-T7 named divergence: slashes are no longer spelled `\/`.

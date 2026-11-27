@@ -210,6 +210,8 @@ public enum CommandRun {
         let authorization: ObserveOutcome?
         if verdict.stoppedInEveryMode {
             authorization = .stopped
+        } else if verdict.stoppedInObserve {
+            authorization = .stoppedInObserve
         } else if verdict.observeOverrode, let wouldBe = verdict.wouldBe {
             authorization = .watched(wouldBe.authorization)
         } else {

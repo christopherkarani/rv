@@ -11,10 +11,13 @@ package let observeRobotEffective = "allow"
 package let observeRobotStoppedEffective = "deny"
 
 /// Verdict words shared by every observe surface (`rv test`, `rv explain`,
-/// `rv blocks`): a real stop and a watched one never read alike.
+/// `rv blocks`), from the locked term cut: a real stop and a would-be one
+/// never read alike. Only `rv explain`'s decision line says
+/// `stoppedInEveryModeWords`; a row or note says `stoppedWords`.
 package let stoppedInEveryModeWords = "✕ Stopped, in every mode"
-package let watchedWouldStopWords = "◐ Watched, would stop"
-package let watchedWouldAskWords = "◐ Watched, would ask"
+package let stoppedWords = "✕ Stopped"
+package let wouldStopWords = "◐ Would stop"
+package let wouldAskWords = "◐ Would ask"
 
 /// How observe mode treated a verdict that is not an allow.
 public enum ObserveOutcome: Sendable, Equatable {
@@ -25,22 +28,33 @@ public enum ObserveOutcome: Sendable, Equatable {
     /// The observe floor kept it (catastrophic, or rv's own protection):
     /// it did not run, in observe as in enforce.
     case stopped
+    /// The observe floor stopped what enforce lets run (stopping rvd,
+    /// writing rv's install): without rvd an observe hook would let every
+    /// later call through, while enforce fails closed. Never "in every
+    /// mode".
+    case stoppedInObserve
+
+    /// It did not run.
+    package var isStop: Bool { self == .stopped || self == .stoppedInObserve }
 }
 
 /// The observe-mode line for a verdict, or nil when it is an allow (an
 /// allow under observe is byte-identical to enforce). `.watched(.ask)`
 /// reads "would ask", any other watched verdict "would stop"; an
 /// indeterminate is never asked about. `leadingWords` false drops the
-/// verdict words, for a frame whose decision line already says them
-/// (`rv explain`).
-package func observeNote(for verdict: Decision, outcome: ObserveOutcome, leadingWords: Bool = true) -> String? {
+/// verdict words, for a frame whose decision or result line already says
+/// them (`rv explain`, `rv test`); `rule` false drops the rule id too, for
+/// a result line that already names it.
+package func observeNote(
+    for verdict: Decision, outcome: ObserveOutcome, leadingWords: Bool = true, rule includesRule: Bool = true
+) -> String? {
     let words = observeDecisionWords(for: outcome)
     let rule: String
     switch verdict {
     case .allow:
         return nil
     case .deny(let deny):
-        rule = " (\(deny.ruleID.rawValue))"
+        rule = includesRule ? " (\(deny.ruleID.rawValue))" : ""
     case .indeterminate:
         rule = ""
     }
@@ -50,8 +64,12 @@ package func observeNote(for verdict: Decision, outcome: ObserveOutcome, leading
         tail = ": rv could not finish evaluating it. It logs it and lets it run."
     case (_, .watched):
         tail = "\(rule). It logs it and lets it run."
+    case (.indeterminate, .stopped):
+        tail = ". Enforce stops it too."
     case (_, .stopped):
         tail = "\(rule). \(stoppedTail)"
+    case (_, .stoppedInObserve):
+        tail = "\(rule). \(observeOnlyTail)"
     }
     guard leadingWords == false else { return words + tail }
     switch (verdict, outcome) {
@@ -59,19 +77,29 @@ package func observeNote(for verdict: Decision, outcome: ObserveOutcome, leading
         return "rv could not finish evaluating it. It logs it and lets it run."
     case (_, .watched):
         return "Enforce would \(outcome == .watched(.ask) ? "ask first" : "stop it")\(rule). It logs it and lets it run."
+    case (.indeterminate, .stopped):
+        return "Enforce stops it too."
     case (_, .stopped):
-        return "It still stops catastrophic commands and anything that touches rv itself\(rule)."
+        return "It always stops a disk wipe, rm -rf ~ or /, and rv's own files\(rule)."
+    case (_, .stoppedInObserve):
+        return observeOnlyTail.dropLast() + "\(rule)."
     }
 }
 
-/// The verdict words for the decision line under observe.
-package func observeDecisionWords(for outcome: ObserveOutcome) -> String {
+/// The verdict words under observe. `decisionLine`: `rv explain`'s
+/// decision line, the one place a stop says "in every mode".
+package func observeDecisionWords(for outcome: ObserveOutcome, decisionLine: Bool = false) -> String {
     switch outcome {
     case .watched(let authorization):
-        authorization == .ask ? watchedWouldAskWords : watchedWouldStopWords
+        authorization == .ask ? wouldAskWords : wouldStopWords
     case .stopped:
-        stoppedInEveryModeWords
+        decisionLine ? stoppedInEveryModeWords : stoppedWords
+    case .stoppedInObserve:
+        stoppedWords
     }
 }
 
-private let stoppedTail = "Observe mode still stops catastrophic commands and anything that touches rv itself."
+/// Exactly what observe always stops (`ObserveCatastrophe`, `ObserveFloor`).
+private let stoppedTail = "Observe mode always stops a disk wipe, rm -rf ~ or /, and rv's own files."
+/// A stop observe makes and enforce does not (enforce fails closed without rvd).
+private let observeOnlyTail = "rv keeps itself running while it watches."

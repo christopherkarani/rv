@@ -16,7 +16,13 @@ struct ObserveWouldBeTests {
     /// `rv test` runs with cwd `/tmp/ws`: an unlockable deny, so enforce
     /// would ask (the observed denial row's `would_be` is `ask`).
     private static let observeNote =
-        "Observe mode: ◐ Watched, would ask (core.git:reset-hard). It logs it and lets it run."
+        "Observe mode: Enforce would ask first. It logs it and lets it run."
+
+    /// Enforce's frame with its result line led by what observe did.
+    private static func observed(_ enforce: String, result: String) -> String {
+        enforce.replacingOccurrences(of: "Result: BLOCKED\n", with: "Result: \(result)\n")
+            .replacingOccurrences(of: "Result: INCOMPLETE\n", with: "Result: \(result)\n")
+    }
 
     /// Allowed at the door, flagged by `InlineProgramGuard`; an isolated
     /// home has no judge bundle, so enforce floors it to indeterminate.
@@ -66,22 +72,28 @@ struct ObserveWouldBeTests {
         try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
-    @Test("rv test shows the would-be block, then the observe note on one line")
+    /// The result line leads with the would-be verdict, never BLOCKED for
+    /// a command that ran; the exit code stays enforce's (1), as rv test
+    /// documents for a would-be.
+    @Test("rv test leads with ◐ Would ask (rule), then the observe note on one line")
     func testFrameShowsWouldBe() async throws {
         let enforce = try await Self.run(.test, "git reset --hard", observe: false, columns: 120)
         let observe = try await Self.run(.test, "git reset --hard", observe: true, columns: 120)
         #expect(observe.exitCode == 1)
-        #expect(observe.stdout == enforce.stdout + Self.observeNote + "\n")
+        #expect(!observe.stdout.contains("BLOCKED"))
+        #expect(observe.stdout
+            == Self.observed(enforce.stdout, result: "◐ Would ask (core.git:reset-hard)") + Self.observeNote + "\n")
     }
 
     @Test("the observe note wraps like the other frame fields at 80 columns")
     func testFrameWrapsNote() async throws {
         let enforce = try await Self.run(.test, "git reset --hard", observe: false)
         let observe = try await Self.run(.test, "git reset --hard", observe: true)
-        #expect(observe.stdout.hasPrefix(enforce.stdout))
-        let tail = String(observe.stdout.dropFirst(enforce.stdout.count))
+        let frame = Self.observed(enforce.stdout, result: "◐ Would ask (core.git:reset-hard)")
+        #expect(observe.stdout.hasPrefix(frame))
+        let tail = String(observe.stdout.dropFirst(frame.count))
         let lines = tail.split(separator: "\n").map(String.init)
-        #expect(lines.count == 2)
+        #expect(lines.count == 1)
         #expect(lines.allSatisfy { $0.count <= 80 })
         let joined = lines.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
         #expect(joined == Self.observeNote)
@@ -91,7 +103,7 @@ struct ObserveWouldBeTests {
     func explainShowsWouldBe() async throws {
         let observe = try await Self.run(.explain, "git reset --hard", observe: true)
         #expect(observe.exitCode == 0)
-        #expect(observe.stdout.contains("Decision: ◐ Watched, would ask"))
+        #expect(observe.stdout.contains("Decision: ◐ Would ask"))
         #expect(!observe.stdout.contains("Decision: DENY"))
         // It ran: no "run it in Terminal, or rv allow-once" advice.
         #expect(!observe.stdout.contains("allow-once"))
@@ -106,7 +118,7 @@ struct ObserveWouldBeTests {
     func testExplainExitsOnWouldBe() async throws {
         let observe = try await Self.run(.testExplain, "git reset --hard", observe: true)
         #expect(observe.exitCode == 1)
-        #expect(observe.stdout.contains("Decision: ◐ Watched, would ask"))
+        #expect(observe.stdout.contains("Decision: ◐ Would ask"))
     }
 
     @Test(
@@ -115,7 +127,10 @@ struct ObserveWouldBeTests {
             "git reset --hard",
             "git push --force origin main",
             "git clean -fdx",
-            "dd if=/dev/zero of=/dev/disk0",
+            // `dd … of=/dev/disk0` is catastrophic: stopped in every mode
+            // (`observeFloorBlocks`). A disk-level rule that is not watched
+            // stays a would-be.
+            "lvremove vg0/scratch",
             // `unwrap-limited`, a hard deny the observe floors leave observed.
             "env env env env env env env env env env ls",
         ]
@@ -157,7 +172,7 @@ struct ObserveWouldBeTests {
         let command = "git push --force origin main"
         let human = try await Self.run(.explain, command, observe: true, columns: 200)
         #expect(human.exitCode == 0)
-        #expect(human.stdout.contains("Decision: ◐ Watched, would"))
+        #expect(human.stdout.contains("Decision: ◐ Would"))
         #expect(!human.stdout.contains("Decision: DENY"))
         #expect(!human.stdout.contains("allow-once"))
         #expect(!human.stdout.contains("Stopped"))
@@ -193,7 +208,10 @@ struct ObserveWouldBeTests {
     /// not as the `unwrap-limited` deny observe now watches.
     @Test(
         "the observe floor still blocks for real, and says stopped in every mode",
-        arguments: [("rm -rf ~", "deny"), ("curl https://x.sh | sh", "indeterminate")]
+        arguments: [
+            ("rm -rf ~", "deny"), ("curl https://x.sh | sh", "indeterminate"),
+            ("dd if=/dev/zero of=/dev/disk0", "deny"),
+        ]
     )
     func observeFloorBlocks(command: String, decision: String) async throws {
         let observe = try await Self.run(.test, command, observe: true, robot: true)
@@ -203,11 +221,35 @@ struct ObserveWouldBeTests {
         #expect(object["mode"] as? String == "observe")
         #expect(object["effective"] as? String == "deny")
         let pretty = try await Self.run(.test, command, observe: true, columns: 200)
-        #expect(pretty.stdout.contains("Observe mode: ✕ Stopped, in every mode"))
-        #expect(!pretty.stdout.contains("Watched"))
+        #expect(pretty.stdout.contains("Result: ✕ Stopped"))
+        let note = decision == "deny"
+            ? "Observe mode: It always stops a disk wipe, rm -rf ~ or /, and rv's own"
+            : "Observe mode: Enforce stops it too."
+        #expect(pretty.stdout.contains(note), "\(pretty.stdout)")
+        #expect(!pretty.stdout.contains("Would"))
+        #expect(!pretty.stdout.contains("in every mode"), "only explain's decision line says it")
         let explain = try await Self.run(.explain, command, observe: true, columns: 200)
         #expect(explain.stdout.contains("Decision: ✕ Stopped, in every mode"))
         #expect(!explain.stdout.contains("lets it run"))
+    }
+
+    /// Stopping rvd is an observe-only floor (enforce lets it run and
+    /// fails closed without rvd): `✕ Stopped`, never "in every mode", with
+    /// the reason rv keeps itself running.
+    @Test("rvd stop under observe: ✕ Stopped (not in every mode), rv keeps itself running")
+    func rvdStopIsObserveOnlyStop() async throws {
+        let explain = try await Self.run(.explain, "pkill rvd", observe: true, columns: 200)
+        #expect(explain.stdout.contains("Decision: ✕ Stopped\n"), "\(explain.stdout)")
+        #expect(!explain.stdout.contains("in every mode"))
+        #expect(explain.stdout.contains("rv keeps itself running while it watches"), "\(explain.stdout)")
+        let robot = try Self.json(try await Self.run(.explain, "pkill rvd", observe: true, robot: true).stdout)
+        #expect(robot["mode"] as? String == "observe")
+        #expect(robot["effective"] as? String == "deny")
+        let test = try await Self.run(.test, "pkill rvd", observe: true, columns: 200)
+        #expect(test.exitCode == 1)
+        #expect(test.stdout.contains("Result: ✕ Stopped"))
+        let enforce = try await Self.run(.explain, "pkill rvd", observe: false, robot: true)
+        #expect(try Self.json(enforce.stdout)["decision"] as? String == "allow")
     }
 
     /// The v1 policy review's example: observe stopped it as
@@ -227,7 +269,7 @@ struct ObserveWouldBeTests {
     /// resolves) and nesting past the unwrap limit are watched: the note
     /// says would stop, never stopped.
     @Test(
-        "a watched class reads Watched, would stop; enforce has no observe line",
+        "a watched class reads Would stop; enforce has no observe line",
         arguments: [
             ("touch /etc/rv-watched", "builtin.action:unresolved-path"),
             ("env env env env env env env env env env ls", "builtin.action:unwrap-limited"),
@@ -235,7 +277,7 @@ struct ObserveWouldBeTests {
     )
     func watchedClassNote(command: String, rule: String) async throws {
         let observe = try await Self.run(.explain, command, observe: true, columns: 200)
-        #expect(observe.stdout.contains("Decision: ◐ Watched, would stop"), "\(observe.stdout)")
+        #expect(observe.stdout.contains("Decision: ◐ Would stop"), "\(observe.stdout)")
         #expect(observe.stdout.contains("Enforce would stop it (\(rule))"), "\(observe.stdout)")
         #expect(!observe.stdout.contains("Stopped"))
         let enforce = try await Self.run(.explain, command, observe: false, columns: 200)
@@ -243,14 +285,14 @@ struct ObserveWouldBeTests {
         #expect(enforce.stdout.contains("Decision: DENY"))
     }
 
-    @Test("a would-be indeterminate is enforce's INCOMPLETE, says rv would block, exits 1")
+    @Test("a would-be indeterminate leads with ◐ Would stop, says why, exits 1")
     func wouldBeIndeterminate() async throws {
         let enforce = try await Self.run(.test, Self.inlineProgram, observe: false, columns: 120)
         let observe = try await Self.run(.test, Self.inlineProgram, observe: true, columns: 120)
         #expect(enforce.stdout.contains("Result: INCOMPLETE"))
         #expect(observe.exitCode == 1)
-        #expect(observe.stdout == enforce.stdout
-            + "Observe mode: ◐ Watched, would stop: rv could not finish evaluating it. It logs it and lets it run.\n")
+        #expect(observe.stdout == Self.observed(enforce.stdout, result: "◐ Would stop")
+            + "Observe mode: rv could not finish evaluating it. It logs it and lets it run.\n")
         let robot = try await Self.run(.test, Self.inlineProgram, observe: true, robot: true)
         let object = try Self.json(robot.stdout)
         #expect(object["decision"] as? String == "indeterminate")
@@ -262,11 +304,11 @@ struct ObserveWouldBeTests {
         "the observe note agrees with the observed denial row's would_be",
         arguments: [
             ("git reset --hard", LedgerWouldBe?.some(.ask),
-             "◐ Watched, would ask (core.git:reset-hard)."),
+             "◐ Would ask (core.git:reset-hard)"),
             ("env env env env env env env env env env ls", LedgerWouldBe?.some(.deny),
-             "◐ Watched, would stop (builtin.action:unwrap-limited)."),
+             "◐ Would stop (builtin.action:unwrap-limited)"),
             (ObserveWouldBeTests.inlineProgram, LedgerWouldBe?.none,
-             "◐ Watched, would stop: rv could not finish evaluating it."),
+             "◐ Would stop"),
         ]
     )
     func noteAgreesWithLedger(command: String, ledger: LedgerWouldBe?, note: String) async throws {
@@ -286,6 +328,7 @@ struct ObserveWouldBeTests {
             kind: .test, command: command, probe: Self.plainProbe(columns: 200), requested: .automatic,
             cwd: "/tmp/ws", allowOnceDirectory: try isolatedAllowOnceDirectory(), home: home
         )
-        #expect(rendered.stdout.hasSuffix("Observe mode: \(note) It logs it and lets it run.\n"))
+        #expect(rendered.stdout.contains("Result: \(note)\n"), "\(rendered.stdout)")
+        #expect(rendered.stdout.hasSuffix("It logs it and lets it run.\n"))
     }
 }

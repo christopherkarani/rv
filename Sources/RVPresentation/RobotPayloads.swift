@@ -16,9 +16,13 @@ public struct TestRobotPayload: Equatable, Sendable, Encodable {
     public var packID: String?
     public var ruleID: String?
     public var reason: String?
-    /// `observe` only when observe let the would-be `decision` run.
+    /// `observe` when observe mode was read for a `decision` that is not
+    /// an allow (absent under enforce, and for an allow).
     package var mode: String? = nil
-    /// What the hook did instead (`allow`); set with `mode`.
+    /// What the hook actually did, set with `mode`: `allow` (observe let
+    /// the would-be `decision` run) or `deny` (observe stopped it too).
+    /// Consumers read this field, never `mode` alone, to know whether the
+    /// command ran.
     package var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -41,9 +45,13 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     public var reason: String?
     public var explanation: String?
     public var nextAction: String?
-    /// `observe` only when observe let the would-be `decision` run.
+    /// `observe` when observe mode was read for a `decision` that is not
+    /// an allow (absent under enforce, and for an allow).
     package var mode: String? = nil
-    /// What the hook did instead (`allow`); set with `mode`.
+    /// What the hook actually did, set with `mode`: `allow` (observe let
+    /// the would-be `decision` run) or `deny` (observe stopped it too).
+    /// Consumers read this field, never `mode` alone, to know whether the
+    /// command ran.
     package var effective: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -212,7 +220,7 @@ public func testRobotPayload(from result: EvaluationResult, observed: ObserveOut
     var payload = baseTestRobotPayload(from: result)
     if let observed, result.decision != .allow {
         payload.mode = observeRobotMode
-        payload.effective = observed == .stopped ? observeRobotStoppedEffective : observeRobotEffective
+        payload.effective = observed.isStop ? observeRobotStoppedEffective : observeRobotEffective
     }
     return payload
 }

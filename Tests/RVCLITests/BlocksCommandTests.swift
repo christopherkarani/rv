@@ -92,7 +92,7 @@ struct BlocksCommandTests {
         )
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("Z  ◐ Watched, would stop  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[0].hasSuffix("Z  ◐ Would stop  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
         #expect(lines[1].contains("Watched") == false)
         #expect(lines[1].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
     }
@@ -124,7 +124,7 @@ struct BlocksCommandTests {
     }
 
     /// Observed would-ask rows (enforcement would have asked a human) say
-    /// `◐ Watched, would ask`; would-deny rows `◐ Watched, would stop`;
+    /// `◐ Would ask`; would-deny rows `◐ Would stop`;
     /// real stops `✕ Stopped`, so the two never look alike. JSON
     /// carries `would_be` on observed rows only.
     @Test func observedWouldAskRowsAreDistinct() throws {
@@ -149,8 +149,8 @@ struct BlocksCommandTests {
         ledger.append(record(0, .claude, observed: true, wouldBe: .ask), now: now)
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 3)
-        #expect(lines[0].hasSuffix("Z  ◐ Watched, would ask  claude  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[1].hasSuffix("Z  ◐ Watched, would stop  codex  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[0].hasSuffix("Z  ◐ Would ask  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[1].hasSuffix("Z  ◐ Would stop  codex  Bash  core.git:reset-hard  core.git  "))
         #expect(lines[2].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  "))
         let json = try BlocksRun.list(home: home, json: true, now: now)
         let rows = try #require(

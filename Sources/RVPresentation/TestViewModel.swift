@@ -110,7 +110,16 @@ public func testViewModel(
     observed: ObserveOutcome? = nil
 ) -> TestViewModel {
     var model = baseTestViewModel(from: result, command: command, columns: columns)
-    model.observeNote = observed.flatMap { observeNote(for: result.decision, outcome: $0) }
+    // Under observe the result line leads with what happened, never
+    // BLOCKED for a command that ran: `◐ Would stop (rule)`, `◐ Would ask
+    // (rule)` or `✕ Stopped (rule)`; the note under it says why.
+    if let observed, result.decision != .allow {
+        var word = observeDecisionWords(for: observed)
+        if case .deny(let deny) = result.decision { word += " (\(deny.ruleID.rawValue))" }
+        model.resultWord = word
+        if case .watched = observed { model.resultTone = .incomplete }
+        model.observeNote = observeNote(for: result.decision, outcome: observed, leadingWords: false, rule: false)
+    }
     return model
 }
 
