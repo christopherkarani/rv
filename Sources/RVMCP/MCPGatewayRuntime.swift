@@ -135,6 +135,12 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
+            // Before anything is resolved: a secret named in `args` would
+            // land in the process's arguments, where `ps` shows it.
+            if let secret = argumentSecret(definition) {
+                planned.append(refused(definition, .secretInArguments(secret)))
+                continue
+            }
             if definition.placeholders.isEmpty == false {
                 switch placeholderServer(
                     definition, configuration: configuration, secrets: secrets, resolver: resolver,
@@ -168,10 +174,12 @@ public enum MCPLaunchPlanner {
             case .failure(let error): return .failure(error)
             case .success(let values): resolved = values
             }
+            // Secrets reach the server only through its environment;
+            // `argumentSecret` refused any `${secret:}` in its args above.
             for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
-            let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
             let launch = MCPUpstreamLaunch(
-                server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+                server: name, executable: envPath, arguments: [definition.command] + definition.args,
+                environment: environment)
             switch sandbox(definition, launch, .standard) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
@@ -237,9 +245,9 @@ public enum MCPLaunchPlanner {
         case .success(let values): resolved = values
         }
         for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
-        let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
         let launch = MCPUpstreamLaunch(
-            server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+            server: name, executable: envPath, arguments: [definition.command] + definition.args,
+            environment: environment)
         // By value, under any name: an alias secret, an `env` literal, an argument.
         if lease.holdsRealValue(environment: launch.environment, arguments: launch.arguments) {
             lease.revoke()
@@ -297,10 +305,30 @@ public enum MCPLaunchPlanner {
         return nil
     }
 
-    /// The secrets a local server's launch resolves: its `secrets` values
-    /// and every `${secret:NAME}` in its `args`.
+    /// The secrets a local server's launch resolves: its `secrets` values,
+    /// delivered as environment variables. A `${secret:}` in `args` is
+    /// never resolved (`argumentSecret` refuses the server first).
     package static func referencedSecrets(_ definition: MCPServerDefinition) -> [String] {
-        Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] }).sorted()
+        Set(definition.secrets.values).sorted()
+    }
+
+    /// The first secret a local server's `args` name, or nil. Such a server
+    /// is not started: its arguments are readable by every user on the
+    /// machine (`ps`, `/proc/<pid>/cmdline`), so a secret goes by
+    /// environment variable or not at all. An arg that is not a valid
+    /// template counts too: rv does not guess what it would expand to.
+    package static func argumentSecret(_ definition: MCPServerDefinition) -> String? {
+        guard definition.remote == nil else { return nil }
+        for arg in definition.args where arg.contains("${secret:") {
+            return MCPSecretReference.names(in: arg)?.first ?? "?"
+        }
+        return nil
+    }
+
+    /// Why a server with a secret in its arguments is off, and the fix.
+    package static func argumentSecretMessage(_ secret: String) -> String {
+        "secret \(MCPDisplayedText.field(secret)) is in its arguments, where ps shows it to every user; "
+            + "bind it to an environment variable in the server's \"secrets\" instead"
     }
 
     /// A server planned not to start: no secret values, no launch.

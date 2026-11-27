@@ -88,6 +88,7 @@ public enum MCPImport {
                 plan.skipped.append((entry.name, "an environment value carries a second secret"))
                 continue
             }
+            let secretsBefore = plan.secrets.count
             var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
             // Imported servers ask for every tool until the person allows
             // one. Defaults are inert, so this must be an ask glob.
@@ -110,6 +111,15 @@ public enum MCPImport {
                 }
             }
             definition.args = templatedArgs(args, entry: entry, plan: &plan, secretName: secretName)
+            // rv never passes a secret in a process's arguments (`ps` shows
+            // them to every user), so a server that takes its credential
+            // only as an argument is not imported, and none of its values
+            // are stored.
+            if definition.args.contains(where: { $0.contains("${secret:") }) {
+                plan.secrets.removeSubrange(secretsBefore...)
+                plan.skipped.append((entry.name, Self.argumentCredentialSkip(entry.host)))
+                continue
+            }
             plan.servers.append(definition)
             takenServers.insert(entry.name)
         }
@@ -117,6 +127,11 @@ public enum MCPImport {
     }
 
     struct Skip: Error { var reason: String }
+
+    /// Why a server whose credential is an argument is skipped, and the fix.
+    static func argumentCredentialSkip(_ host: MCPHost) -> String {
+        "a credential is in its arguments, where ps shows it; pass it as an environment variable in \(host.rawValue)'s config, then import again"
+    }
 
     /// Credential header values become `${secret:NAME}` (an auth scheme such
     /// as `Bearer ` stays literal); headers that point at host variables or

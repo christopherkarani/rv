@@ -50,11 +50,15 @@ public enum MCPServerRefusal: Sendable, Equatable {
     /// The host cages servers, and this one's entry has no `sandbox` or
     /// asks for open network without listing hosts.
     case sandbox(String)
+    /// `${secret:NAME}` is in its `args`. rv never puts a secret value in
+    /// a process's arguments: `ps` shows them to every user.
+    case secretInArguments(String)
 
     public var message: String {
         switch self {
         case .placeholder(let refusal): refusal.message
         case .sandbox(let reason): MCPLaunchError.sandbox(reason).message
+        case .secretInArguments(let secret): MCPLaunchPlanner.argumentSecretMessage(secret)
         }
     }
 }
