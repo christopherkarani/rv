@@ -480,11 +480,15 @@ struct GatedEffectTests {
         #expect(first.result.decision == .allow)
         let second = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         let denied = try #require(Self.denialRow(second.result))
-        #expect(second.effects == [denied])
         guard case .denialRow(let denial) = denied else {
             Issue.record("expected a denial row")
             return
         }
+        // Spent, the grant leaves an unlockable deny: Claude shows it as an
+        // ask, so its row is listed as one (`rv blocks`: `⏺ Asks`).
+        var asked = denial
+        asked.asked = true
+        #expect(second.effects == [.denialRow(asked)])
         // The redeemed allow asks for no denial row, only an override audit
         // carrying the deny's rows for when it cannot be written.
         #expect(first.effects == [.overrideAudit(GatedEffect.OverrideRow(
