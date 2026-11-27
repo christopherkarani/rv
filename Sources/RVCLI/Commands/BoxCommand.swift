@@ -4,6 +4,7 @@ import RVDomain
 import RVIsolation
 import RVPolicy
 import RVPresentation
+import RVTheme
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -108,7 +109,8 @@ struct BoxListCommand: ParsableCommand {
         if ctx.explicitRobot {
             ctx.writeStdout(try RobotJSON.encode(BoxListRender.document(boxes), options: .compactISO8601) + "\n")
         } else {
-            ctx.writeStdout(BoxListRender.text(boxes, home: shownHome, platformNote: platformNote))
+            ctx.writeStdout(BoxInk.paint(
+                BoxListRender.text(boxes, home: shownHome, platformNote: platformNote), palette: ctx.appearance.palette))
         }
     }
 }
@@ -276,8 +278,12 @@ enum BoxRun {
         throw ExitCode(refusal.exitCode)
     }
 
+    /// Glyphs are coloured only when stderr is a terminal (`BoxInk`).
+    private static let stderrPalette = BoxInk.palette(
+        isTerminal: isatty(STDERR_FILENO) == 1, environment: CLIProcess.environment())
+
     private static func writeStderr(_ text: String) {
-        FileHandle.standardError.write(Data(text.utf8))
+        FileHandle.standardError.write(Data(BoxInk.paint(text, palette: stderrPalette).utf8))
     }
 }
 

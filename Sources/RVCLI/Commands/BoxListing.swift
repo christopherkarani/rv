@@ -2,6 +2,8 @@ import Foundation
 import RVDomain
 import RVIsolation
 
+private typealias Glyph = CommandVocabulary.Glyph
+
 /// One box `rv box list` shows: a project whose workspace never closed.
 struct BoxListing: Equatable, Sendable {
     /// Where the box stands now, from the workspace host's own records.
@@ -50,8 +52,8 @@ enum BoxListRender {
         _ boxes: [BoxListing], home: String?, platformNote: String? = nil, timeZone: TimeZone = .current
     ) -> String {
         guard boxes.isEmpty == false else {
-            if let platformNote { return "◆ rv · no boxes · \(platformNote)\n" }
-            return "◆ rv · no boxes\n  → rv box claude\n"
+            if let platformNote { return "\(Glyph.rv.rawValue) rv · no boxes · \(platformNote)\n" }
+            return "\(Glyph.rv.rawValue) rv · no boxes\n  \(Glyph.next.rawValue) rv box claude\n"
         }
         let sorted = boxes.sorted { $0.lastActive > $1.lastActive }
         let formatter = DateFormatter()
@@ -60,7 +62,7 @@ enum BoxListRender {
         formatter.dateFormat = "MMM d"
         let places = sorted.map { DisplayedText.field(BoxPlan.displayPath($0.project, home: home)) }
         let width = min(places.map(\.count).max() ?? 0, 40)
-        var lines = ["◆ rv · \(boxes.count) \(boxes.count == 1 ? "box" : "boxes")"]
+        var lines = ["\(Glyph.rv.rawValue) rv · \(boxes.count) \(boxes.count == 1 ? "box" : "boxes")"]
         for (box, place) in zip(sorted, places) {
             let padded = place.count < width ? place + String(repeating: " ", count: width - place.count) : place
             var facts = [word(box.state)]
@@ -74,10 +76,10 @@ enum BoxListRender {
 
     static func mark(_ state: BoxListing.State) -> String {
         switch state {
-        case .open: "✓"
+        case .open: Glyph.done.rawValue
         case .starting: "·"
-        case .unfinished, .recovering: "◐"
-        case .blocked: "✕"
+        case .unfinished, .recovering: Glyph.watched.rawValue
+        case .blocked: Glyph.stopped.rawValue
         }
     }
 

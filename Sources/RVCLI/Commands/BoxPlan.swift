@@ -2,6 +2,8 @@ import Foundation
 import RVDomain
 import RVIsolation
 
+private typealias Glyph = CommandVocabulary.Glyph
+
 /// How strong a box's walls are. `rv box` takes the cage; `--linux` and
 /// `--mac` take the VMs the workspace host already launches
 /// (`rv workspace run --microvm` / `--macvm`). Every wall keeps the
@@ -54,11 +56,13 @@ enum BoxTarget: Equatable, Sendable {
 
 /// Why a box did not start, as one line and the one thing to do next.
 struct BoxRefusal: Error, Equatable, Sendable {
-    enum Mark: String, Sendable {
+    enum Mark: Sendable {
         /// It cannot start as asked.
-        case stopped = "✕"
+        case stopped
         /// It can start once a one-time step is done.
-        case setup = "◐"
+        case setup
+
+        var glyph: CommandVocabulary.Glyph { self == .stopped ? .stopped : .watched }
     }
 
     var mark: Mark = .stopped
@@ -70,8 +74,8 @@ struct BoxRefusal: Error, Equatable, Sendable {
     var exitCode: Int32 = 1
 
     var text: String {
-        var lines = ["\(mark.rawValue) \(why)"]
-        if let fix { lines.append("  → \(fix)") }
+        var lines = ["\(mark.glyph.rawValue) \(why)"]
+        if let fix { lines.append("  \(Glyph.next.rawValue) \(fix)") }
         return lines.joined(separator: "\n") + "\n"
     }
 }
@@ -164,8 +168,14 @@ enum BoxPlan {
             }
             return .success(.command(command, arguments: Array(rest.dropFirst())))
         }
-        if first == "list" { return .success(.list(rest)) }
+        if first == "list" {
+            if let refusal = listRefusal(rest) { return .failure(refusal) }
+            return .success(.list(rest))
+        }
         if first == "setup" {
+            if rest.first == "mac", rest.dropFirst().contains(where: isWallOrProfileFlag) {
+                return .failure(wallFlagsRefusal("rv box setup mac"))
+            }
             guard rest == ["mac"] else {
                 return .failure(BoxRefusal(why: "Only Mac boxes need a setup.", fix: "rv box setup mac", exitCode: 64))
             }
@@ -191,14 +201,34 @@ enum BoxPlan {
     }
 
     /// Flags that would be silently ignored are refused instead.
+    /// The words `rv box list` takes after `list`: its format flags and
+    /// `--help`. A wall or profile flag in either place gets the same refusal.
+    static let listWords: Set = ["--json", "--robot", "--plain", "--no-color", "--help", "-h"]
+
+    static func listRefusal(_ rest: [String]) -> BoxRefusal? {
+        if rest.contains(where: isWallOrProfileFlag) { return wallFlagsRefusal("rv box list") }
+        guard let stray = rest.first(where: { listWords.contains($0) == false }) else { return nil }
+        let why = stray.hasPrefix("-")
+            ? "rv box list has no \(DisplayedText.field(stray)) option."
+            : "rv box list takes no \(DisplayedText.field(stray))."
+        return BoxRefusal(why: why, fix: "rv box list", exitCode: 64)
+    }
+
+    private static func isWallOrProfileFlag(_ word: String) -> Bool {
+        word == "--linux" || word == "--mac" || word == "--profile" || word.hasPrefix("--profile=")
+    }
+
+    private static func wallFlagsRefusal(_ command: String) -> BoxRefusal {
+        BoxRefusal(why: "\(command) takes no --linux, --mac or --profile.", fix: command, exitCode: 64)
+    }
+
     static func checkFlags(
         linux: Bool, mac: Bool, profile: String?, target: BoxTarget
     ) -> BoxRefusal? {
         switch target {
         case .list, .setupMac:
             guard linux || mac || profile != nil else { return nil }
-            let command = target == .setupMac ? "rv box setup mac" : "rv box list"
-            return BoxRefusal(why: "\(command) takes no --linux, --mac or --profile.", fix: command, exitCode: 64)
+            return wallFlagsRefusal(target == .setupMac ? "rv box setup mac" : "rv box list")
         case .shell:
             if linux || mac {
                 let wall: BoxWall = linux ? .linux : .mac
@@ -552,11 +582,11 @@ enum BoxPlan {
         let place = DisplayedText.field(displayPath(launch.project, home: home))
         switch launch.wall {
         case .cage:
-            return "◆ rv · box for \(place)\n"
+            return "\(Glyph.rv.rawValue) rv · box for \(place)\n"
         case .linux:
-            return "◆ rv · linux box for \(place) · \(BoxWall.linuxImage.replacingOccurrences(of: ":", with: " "))\n"
+            return "\(Glyph.rv.rawValue) rv · linux box for \(place) · \(BoxWall.linuxImage.replacingOccurrences(of: ":", with: " "))\n"
         case .mac:
-            return "◆ rv · mac box for \(place) · image \(BoxWall.macImage)\n"
+            return "\(Glyph.rv.rawValue) rv · mac box for \(place) · image \(BoxWall.macImage)\n"
         }
     }
 
@@ -568,27 +598,27 @@ enum BoxPlan {
         let network = launch.wall == .cage
             ? "public HTTPS through rv · LAN closed"
             : "public HTTPS through rv · no network card"
-        var lines = ["  ✓ sealed    writes stay in the box until you bring them home"]
+        var lines = ["  \(Glyph.done.rawValue) sealed    writes stay in the box until you bring them home"]
         var next: String?
         switch launch.keys {
         case .placeholders(let names):
             let shown = names.map { DisplayedText.field($0) }.joined(separator: ", ")
-            lines.append("  ✓ keys      \(shown) via rv · \(names.count == 1 ? "the value never enters" : "the values never enter")")
+            lines.append("  \(Glyph.done.rawValue) keys      \(shown) via rv · \(names.count == 1 ? "the value never enters" : "the values never enter")")
         case .profile(let id, let secrets):
             lines.append(secrets.isEmpty
-                ? "  ✓ keys      from profile \(DisplayedText.field(id))"
-                : "  ✓ keys      \(secrets.map { DisplayedText.field($0) }.joined(separator: ", ")) via rv · profile \(DisplayedText.field(id))")
+                ? "  \(Glyph.done.rawValue) keys      from profile \(DisplayedText.field(id))"
+                : "  \(Glyph.done.rawValue) keys      \(secrets.map { DisplayedText.field($0) }.joined(separator: ", ")) via rv · profile \(DisplayedText.field(id))")
         case .none(let command):
-            lines.append("  ◐ keys      none staged")
+            lines.append("  \(Glyph.watched.rawValue) keys      none staged")
             next = command
         }
-        lines.append("  ✓ network   \(network)")
+        lines.append("  \(Glyph.done.rawValue) network   \(network)")
         var ready = "  ready in \(String(format: "%.1f", max(0, seconds))) s"
         if normalized(workingDirectory) != launch.project {
             ready += " · starts in \(DisplayedText.field(displayPath(launch.project, home: home)))"
         }
         lines.append(ready)
-        if let next { lines.append("  → \(next)") }
+        if let next { lines.append("  \(Glyph.next.rawValue) \(next)") }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -598,12 +628,12 @@ enum BoxPlan {
         if normalized(workingDirectory) != project {
             command += " --workspace " + shellPath(project, home: home)
         }
-        return "  → bring the writes home: \(command)\n"
+        return "  \(Glyph.next.rawValue) bring the writes home: \(command)\n"
     }
 
     /// `rv box setup mac`, before and after the helper's own progress.
-    static let setupStartLine = "◆ rv · setting up Mac boxes · about 26 GB to download, in the foreground\n"
-    static let setupDoneLine = "  ✓ Mac boxes are ready.\n"
+    static let setupStartLine = "\(Glyph.rv.rawValue) rv · setting up Mac boxes · about 26 GB to download, in the foreground\n"
+    static let setupDoneLine = "  \(Glyph.done.rawValue) Mac boxes are ready.\n"
 
     // MARK: Paths
 

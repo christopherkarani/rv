@@ -117,6 +117,36 @@ struct BoxPlanTests {
         #expect(BoxPlan.checkFlags(linux: false, mac: false, profile: nil, target: .list(["--json"])) == nil)
     }
 
+    @Test("a wall or profile flag after list or setup mac gets the same refusal as before it")
+    func flagsAfterListOrSetup() throws {
+        let listText = "✕ rv box list takes no --linux, --mac or --profile.\n  → rv box list\n"
+        for words in [["list", "--linux"], ["list", "--mac", "--json"], ["list", "--json", "--profile", "main"], ["list", "--profile=main"]] {
+            let parsed = try #require(try RV.parseAsRoot(["box"] + words) as? BoxCommand)
+            #expect(parsed.words == words)
+            guard case .failure(let refusal) = BoxPlan.target(parsed.words) else {
+                Issue.record("\(words) was not refused"); continue
+            }
+            #expect(refusal.text == listText)
+            #expect(refusal.exitCode == 64)
+        }
+        guard case .failure(let setup) = BoxPlan.target(["setup", "mac", "--linux"]) else {
+            Issue.record("setup mac --linux was not refused"); return
+        }
+        #expect(setup.text == "✕ rv box setup mac takes no --linux, --mac or --profile.\n  → rv box setup mac\n")
+        guard case .failure(let stray) = BoxPlan.target(["list", "--frob"]),
+              case .failure(let word) = BoxPlan.target(["list", "all"]) else {
+            Issue.record("stray list words were not refused"); return
+        }
+        #expect(stray.text == "✕ rv box list has no --frob option.\n  → rv box list\n")
+        #expect(word.text == "✕ rv box list takes no all.\n  → rv box list\n")
+        #expect(BoxPlan.target(["list", "--json"]) == .success(.list(["--json"])))
+        #expect(BoxPlan.target(["list", "--help"]) == .success(.list(["--help"])))
+        // Every word the list check lets through, BoxListCommand parses.
+        for word in BoxPlan.listWords where word != "--help" && word != "-h" {
+            #expect(throws: Never.self) { _ = try BoxListCommand.parse([word]) }
+        }
+    }
+
     @Test("--linux and --mac pick the VMs; nothing picks the cage")
     func walls() {
         let target = BoxTarget.agent("claude", arguments: [])
@@ -562,5 +592,44 @@ struct BoxCommandTests {
         #expect(page.contains("rv-macvm") == false)
         let root = HelpCatalog.page(.root).sections.flatMap(\.rows).map(\.name)
         #expect(root.contains("box"))
+    }
+}
+
+/// Only the glyphs take colour, and only on a terminal.
+@Suite("rv box colours its glyphs")
+struct BoxInkTests {
+    static let color = Palette(for: ColorCapability(colorsEnabled: true))
+
+    @Test("refusals: red ✕, blue →; the words stay plain")
+    func refusal() {
+        let refusal = BoxRefusal(why: "No codex on your PATH.", fix: "rv box -- /full/path/to/codex")
+        #expect(BoxInk.paint(refusal.text, palette: Self.color)
+            == "\u{1B}[1;31m✕\u{1B}[0m No codex on your PATH.\n  \u{1B}[1;34m→\u{1B}[0m rv box -- /full/path/to/codex\n")
+        let setup = BoxRefusal(mark: .setup, why: "Mac boxes need a one-time setup.", fix: "rv box setup mac")
+        #expect(BoxInk.paint(setup.text, palette: Self.color)
+            == "\u{1B}[1;33m◐\u{1B}[0m Mac boxes need a one-time setup.\n  \u{1B}[1;34m→\u{1B}[0m rv box setup mac\n")
+    }
+
+    @Test("rv's ◆ and the ✓ lines")
+    func headerAndList() {
+        #expect(BoxInk.paint(BoxListRender.text([], home: nil), palette: Self.color)
+            == "\u{1B}[1;36m◆\u{1B}[0m rv · no boxes\n  \u{1B}[1;34m→\u{1B}[0m rv box claude\n")
+        #expect(BoxInk.paint("  ✓ sealed    writes stay in the box\n", palette: Self.color)
+            == "  \u{1B}[1;32m✓\u{1B}[0m sealed    writes stay in the box\n")
+        // A glyph that is not a line's lead, or not followed by a space, stays plain.
+        #expect(BoxInk.paint("  ready in 0.4 s · → x\n→x\n", palette: Self.color) == "  ready in 0.4 s · → x\n→x\n")
+    }
+
+    @Test("plain when piped, with NO_COLOR, with TERM=dumb, or in CI")
+    func plain() {
+        let text = BoxRefusal(why: "Your home folder can't be a box.", fix: "rv box --help").text
+        #expect(BoxInk.paint(text, palette: colorOffPalette) == text)
+        #expect(BoxInk.palette(isTerminal: true, environment: ["TERM": "xterm-256color"]).colorsEnabled)
+        #expect(BoxInk.palette(isTerminal: false, environment: ["TERM": "xterm-256color"]).colorsEnabled == false)
+        #expect(BoxInk.palette(isTerminal: true, environment: ["TERM": "xterm-256color", "NO_COLOR": "1"]).colorsEnabled == false)
+        #expect(BoxInk.palette(isTerminal: true, environment: ["TERM": "dumb"]).colorsEnabled == false)
+        #expect(BoxInk.palette(isTerminal: true, environment: ["TERM": "xterm-256color", "CI": "1"]).colorsEnabled == false)
+        let piped = BoxInk.palette(isTerminal: false, environment: [:])
+        #expect(BoxInk.paint(text, palette: piped) == text)
     }
 }
