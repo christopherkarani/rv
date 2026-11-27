@@ -6,6 +6,7 @@ import RVHooks
 import RVIPC
 import RVPolicy
 import RVService
+import RVXPC
 @testable import RVCLI
 
 struct LocalControlBoundaryTests {

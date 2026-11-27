@@ -24,7 +24,7 @@ struct GlanceAgentRows: View {
                     avatar: Text(agent.monogram).font(.system(size: 11, weight: .bold)).foregroundStyle(.black),
                     avatarFill: GlanceTheme.avatar(agent.host),
                     title: agent.name,
-                    detail: unguarded ? "not guarded · last: \(agent.lastAction)" : agent.lastAction,
+                    detail: unguarded ? "running · not guarded" : agent.lastAction,
                     trailing: agent.idleLabel(at: now) ?? GlanceClock.ago(from: agent.lastAt, to: now),
                     trailingColor: unguarded ? GlanceTheme.stop : .secondary)
             }
@@ -118,7 +118,7 @@ struct GlanceFooter: View {
             Spacer()
             if let onQuit {
                 Button(action: onQuit) {
-                    Text("Quit")
+                    Text("Quit rv")
                         .font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)

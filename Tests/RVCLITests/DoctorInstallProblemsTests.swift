@@ -7,6 +7,7 @@ import RVIPC
 import RVPolicy
 import RVPresentation
 import RVService
+import RVXPC
 import RVTheme
 import Synchronization
 import Testing

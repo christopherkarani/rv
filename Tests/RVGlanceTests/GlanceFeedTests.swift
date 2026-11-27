@@ -20,7 +20,7 @@ struct GlanceFeedTests {
         }
         let reader = GlanceReader(wire: wire)
         _ = await reader.events(EventsParams(after: 0, waitMs: 10))
-        _ = await reader.pendingIDs()
+        _ = await reader.pendingAsks()
         let names = wire.methods.map(Self.name)
         #expect(names == ["events", "pendingList"])
     }
@@ -67,7 +67,7 @@ struct GlanceFeedTests {
             EventsParams(stream: nil, after: 0, waitMs: GlanceFeed.pollWaitMs),
             EventsParams(stream: stream, after: 7, waitMs: GlanceFeed.pollWaitMs),
         ])
-        #expect(feed.state.pending == [ApprovalID(rawValue: "ask-1")])
+        #expect(feed.state.pending == [ApprovalID(rawValue: "ask-1"): Self.item("ask-1").host])
         #expect(feed.state.today.stopped == 2)
         #expect(feed.state.glyph(at: GlanceSamples.now) == .needsYou)
     }

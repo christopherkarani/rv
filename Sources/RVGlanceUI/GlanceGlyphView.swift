@@ -3,7 +3,7 @@ import AppKit
 import RVGlance
 import SwiftUI
 
-/// The rv diamond in one of its seven states, drawn on a 16-point grid
+/// The rv diamond in one of its states, drawn on a 16-point grid
 /// (Menu bar v5, "The glyph"). Monochrome in `foreground`; the stop's ✕ is
 /// cut out of the diamond so it reads on any background.
 public struct GlanceGlyphView: View {
@@ -67,6 +67,8 @@ enum GlanceGlyphPaths {
             slash.move(to: CGPoint(x: 2.5, y: 13.5))
             slash.addLine(to: CGPoint(x: 13.5, y: 2.5))
             context.stroke(slash, with: shading, style: StrokeStyle(lineWidth: line, lineCap: .round))
+        case .connecting:
+            context.stroke(diamond, with: .color(color.opacity(0.55)), style: outline)
         }
     }
 
