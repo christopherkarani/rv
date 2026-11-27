@@ -140,7 +140,7 @@ enum DoctorRun {
         var service = snapshot.health.service
         service.fix = serviceFix(snapshot.health, paths: paths)
         service.trust = environment.install?.daemonTrust
-        return DoctorViewModel(
+        var model = DoctorViewModel(
             service: service,
             packs: packsView(
                 snapshot.packs,
@@ -174,6 +174,19 @@ enum DoctorRun {
                         $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
             } ?? []) + judgeProblems(environment: environment, diagnostics: diagnostics, paths: paths)
         )
+        model.modeWord = modeWord(GuardModeResolution.resolve(
+            GuardConfig.read(home: environment.home), host: nil,
+            environment: ProcessInfo.processInfo.environment
+        ))
+        return model
+    }
+
+    /// Q1's mode words: `guarding` blocks, `watching` logs what rv would stop.
+    static func modeWord(_ mode: GuardMode) -> String {
+        switch mode {
+        case .enforce: CommandVocabulary.PlannedWord.guarding
+        case .observe: CommandVocabulary.PlannedWord.watching
+        }
     }
 
     /// The judge rows: why the pool agent is not running, a manifest that

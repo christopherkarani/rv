@@ -169,7 +169,7 @@ private func renderGrouped(
         row(id: .coreFilesystem, category: "core", enabled: false),
     ])
     let lines = renderGrouped(model, collapsed: true)
-    #expect(lines == ["core: 2 off"])
+    #expect(lines == ["  core: 2 off"])
 }
 
 @Test func packsRenderer_collapsed_listsEnabledAndOffRemainder() {
@@ -182,7 +182,7 @@ private func renderGrouped(
     #expect(lines.contains("  core:"))
     #expect(lines.contains { $0.contains("✓") && $0.contains("core.git") && $0.contains("Core Git") })
     #expect(lines.contains("    ○ 1 off"))
-    #expect(lines.contains("database: 1 off"))
+    #expect(lines.contains("  database: 1 off"))
 }
 
 @Test func packsRenderer_collapsedVerbose_unwrapsAndTruncatesPatterns() {

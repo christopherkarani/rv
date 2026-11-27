@@ -195,7 +195,7 @@ struct WorkspaceReviewQueueTests {
 
     @Test func refusalWordingCoversEveryCeremonyError() {
         #expect(WorkspaceReviewQueue.refusal(AllowOnceError.ttyRequired)
-            == "requires an interactive TTY (stdin and stdout)")
+            == "requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal")
         #expect(WorkspaceReviewQueue.refusal(AllowOnceError.robotRefused) == "--json/--robot refused")
         #expect(WorkspaceReviewQueue.refusal(EgressReviewError.storeUnavailable) == "store unavailable")
         #expect(WorkspaceReviewQueue.refusal(AllowOnceError.redemptionChanged)

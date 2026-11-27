@@ -343,6 +343,33 @@ extension WorkspaceHosts {
         projectExists: (String) -> Bool,
         inspect: (String) -> WorkspaceAttachment
     ) -> [WorkspaceLeftover] {
+        unclosedWorkspaces(lifecycleLog: lifecycleLog, projectExists: projectExists, inspect: inspect)
+            .filter { leftover in
+                switch leftover.attachment {
+                case .orphaned, .recovering, .blocked, .staleEndpoint: true
+                case .absent, .live, .starting, .unsupported: false
+                }
+            }
+    }
+
+    /// Read-only scan for `rv box list`: every project whose newest
+    /// workspace never closed, live ones included, with how it is attached
+    /// now. A project with no host and nothing to recover (`absent`) is
+    /// left out, as `leftovers` leaves it out.
+    public static func unclosedWorkspaces() -> [WorkspaceLeftover] {
+        guard let directory = WorkspaceHostLocation.configurationDirectory() else { return [] }
+        return unclosedWorkspaces(
+            lifecycleLog: WorkspaceHostLocation.lifecycleLog(in: directory),
+            projectExists: { FileManager.default.fileExists(atPath: $0) },
+            inspect: { WorkspaceDiscovery.inspect(project: $0, configurationDirectory: directory) }
+        )
+    }
+
+    static func unclosedWorkspaces(
+        lifecycleLog: URL,
+        projectExists: (String) -> Bool,
+        inspect: (String) -> WorkspaceAttachment
+    ) -> [WorkspaceLeftover] {
         var closed: Set<UUID> = []
         var latest: [UUID: WorkspaceLifecycleRecord] = [:]
         for record in WorkspaceLifecycleLog.records(at: lifecycleLog) {
@@ -361,7 +388,7 @@ extension WorkspaceHosts {
             .compactMap { record in
                 let attachment = inspect(record.originalPath)
                 switch attachment {
-                case .orphaned, .recovering, .blocked, .staleEndpoint:
+                case .orphaned, .recovering, .blocked, .staleEndpoint, .live, .starting:
                     return WorkspaceLeftover(
                         project: record.originalPath,
                         workspace: record.workspace,
@@ -369,7 +396,7 @@ extension WorkspaceHosts {
                         recordedAt: record.recordedAt,
                         attachment: attachment
                     )
-                case .absent, .live, .starting, .unsupported:
+                case .absent, .unsupported:
                     return nil
                 }
             }

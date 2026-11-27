@@ -22,7 +22,7 @@ struct WorkspacePaneViewport: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if plan.focusedFallback {
                         Text("Terminal too small — showing focused pane")
-                            .foregroundStyle(ink.attention)
+                            .foregroundStyle(ink.watch)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     PaneCanvasLayout(viewport: plan.viewport, placements: plan.placements) {
@@ -39,6 +39,9 @@ struct WorkspacePaneViewport: View {
                                     focused: placement.id == plan.focusedPaneID,
                                     recentOutputOnly: snapshot.recentOutputOnly.contains(placement.id),
                                     scrolling: scrollPane == placement.id,
+                                    ask: placement.id == plan.focusedPaneID
+                                        ? WorkspaceReviewText.ask(snapshot.review, cells: placement.outer.width - 4)
+                                        : nil,
                                     hasNewOutput: hasNewOutput(
                                         paneID: placement.id, scrollPane: scrollPane
                                     )
@@ -51,9 +54,11 @@ struct WorkspacePaneViewport: View {
                 }
             } else if plan.state == .tooSmall {
                 Text("terminal too small for this layout")
+                    .foregroundStyle(ink.watch)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                Text("New shell · Ctrl-B a launcher · Ctrl-B w runtimes")
+                Text("New shell · ^B a launcher · ^B w runtimes")
+                    .foregroundStyle(ink.mute)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
         }
@@ -109,6 +114,8 @@ struct WorkspacePanePanel: View {
     let focused: Bool
     let recentOutputOnly: Bool
     let scrolling: Bool
+    /// The inline ask, shown in this pane's bottom border.
+    let ask: String?
     let hasNewOutput: Bool
     @Environment(\.workspaceInk) private var ink
 
@@ -120,24 +127,34 @@ struct WorkspacePanePanel: View {
         let width = placement.outer.width
         let contentWidth = placement.content.width
         let contentHeight = placement.content.height
-        let border: Color = focused ? ink.ok : ink.muted
+        // Focus is white, the rest ghost; amber only when this pane is
+        // where an ask is shown.
+        let border: Color = ask != nil ? ink.watch : (focused ? ink.fg : ink.ghost)
         let status = scrolling
-            ? (hasNewOutput ? "SCROLL • new" : "SCROLL")
-            : WorkspacePaneChrome.status(pane, terminal: terminal,
-                                         recentOutputOnly: recentOutputOnly)
-        let indicator = WorkspaceStatusLabel.paneIndicator(focused: focused)
-        let statusWidth = WorkspaceStatusLabel.paneStatusWidth(outerWidth: width)
-        let titleWidth = WorkspaceStatusLabel.paneTitleWidth(outerWidth: width, focused: focused)
+            ? WorkspaceStatusLabel.scroll(hasNewOutput: hasNewOutput)
+            : WorkspaceStatusLabel.pane(pane, terminal: terminal, recentOutputOnly: recentOutputOnly)
+        let title = WorkspacePaneChrome.title(pane, terminal: terminal)
+        let agent = WorkspaceStatusLabel.isAgent(title)
+        let top = WorkspacePaneTopRow.make(width: width, focused: focused, title: title,
+                                          agent: agent, status: status.text)
+        let bottom = WorkspacePaneBottomRow.make(width: width, ask: ask)
+        let titleColor: Color = agent ? ink.agent : (focused ? ink.fg : ink.ghost)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text(indicator).foregroundStyle(border)
-                Text(" \(WorkspacePaneChrome.title(pane, terminal: terminal))")
+                Text(top.lead).foregroundStyle(border)
+                    .frame(width: WorkspacePaneTopRow.leadCells, height: 1, alignment: .leading)
+                Text(top.title).foregroundStyle(titleColor)
+                    .bold(focused)
                     .lineLimit(1).truncationMode(.tail)
-                    .frame(width: titleWidth, height: 1, alignment: .leading)
-                Text(status).foregroundStyle(status == "running" ? ink.ok : ink.attention)
+                    .frame(width: top.titleCells, height: 1, alignment: .leading)
+                Text(top.rule).foregroundStyle(border)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, maxHeight: 1, alignment: .leading)
+                Text(top.status)
+                    .foregroundStyle(status.tone == .quiet ? ink.mute : ink.color(status.tone))
                     .lineLimit(1).truncationMode(.tail)
-                    .frame(width: statusWidth, height: 1, alignment: .trailing)
-                Text("╮").foregroundStyle(border)
+                    .frame(width: top.statusCells, height: 1, alignment: .trailing)
+                Text(top.corner).foregroundStyle(border)
             }
             .frame(width: width, height: 1, alignment: .leading)
             if contentHeight > 0 {
@@ -154,9 +171,17 @@ struct WorkspacePanePanel: View {
                 }
                 .frame(width: width, height: contentHeight, alignment: .leading)
             }
-            Text("╰" + String(repeating: "─", count: max(0, width - 2)) + "╯")
-                .foregroundStyle(border)
-                .frame(width: width, height: 1, alignment: .leading)
+            HStack(spacing: 0) {
+                Text(bottom.lead).foregroundStyle(border)
+                if bottom.ask.isEmpty == false {
+                    Text(bottom.ask).foregroundStyle(ink.watch).lineLimit(1)
+                        .frame(width: bottom.askCells, height: 1, alignment: .leading)
+                }
+                Text(bottom.rule).foregroundStyle(border).lineLimit(1)
+                    .frame(maxWidth: .infinity, maxHeight: 1, alignment: .leading)
+                Text("╯").foregroundStyle(border)
+            }
+            .frame(width: width, height: 1, alignment: .leading)
         }
         .frame(width: width, height: placement.outer.height, alignment: .topLeading)
     }

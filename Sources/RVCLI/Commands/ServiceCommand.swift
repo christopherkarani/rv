@@ -28,6 +28,11 @@ struct Status: AsyncParsableCommand {
             explicitRobot: ctx.explicitRobot
         )
         ctx.writeStdout(text + "\n")
+        // Scripts and `&&` chains read the exit code: only a running rvd
+        // answers hooks, so down, skew and missing are failures.
+        if report.state != "running" {
+            throw ExitCode(1)
+        }
     }
 }
 

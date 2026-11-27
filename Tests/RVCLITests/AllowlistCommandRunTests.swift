@@ -68,7 +68,7 @@ struct AllowlistCommandRunTests {
                 try await command.run()
             }
         }
-        #expect(out.stderr == "rv allowlist add: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv allowlist add: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func add_slashRuleSucceedsOnTTY() async throws {
@@ -158,7 +158,7 @@ struct AllowlistCommandRunTests {
                 try await tty.run()
             }
         }
-        #expect(out.stderr == "rv allowlist add-command: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv allowlist add-command: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func addCommand_lockAndParseErrors() async throws {
@@ -204,7 +204,7 @@ struct AllowlistCommandRunTests {
                 try await tty.run()
             }
         }
-        #expect(out.stderr == "rv allowlist remove: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv allowlist remove: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var ok = try AllowlistRemove.parse(["core.git:reset-hard"])
             try await ok.run()

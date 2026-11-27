@@ -222,7 +222,9 @@ private func stops(argv: [String], _ context: StopContext) -> Bool {
     guard let head = argv.first else { return false }
     let args = argv.dropFirst().map(unescapeBackslashPairs)
     switch commandName(head) {
-    case "rvd": return true
+    // `rvd --version` prints and exits, in every shipped rvd; any other
+    // launch may start a second daemon (an older rvd ignored `--help`).
+    case "rvd": return Array(args) != ["--version"]
     case "launchctl": return launchctlStops(args, context)
     case "systemctl": return systemctlStops(args, context)
     case "pkill": return pkillSelectsRVD(args)

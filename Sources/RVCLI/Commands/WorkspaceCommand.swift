@@ -748,13 +748,14 @@ enum WorkspaceCommandRun {
         columns: Int?,
         resourceProfileID: String? = nil,
         microVM: MicroVMLaunchOptions? = nil,
-        timeoutSeconds: UInt64? = nil
+        timeoutSeconds: UInt64? = nil,
+        onLaunched: () -> Void = {}
     ) throws {
         try runInteractiveSelection(
             project: project,
             selection: .legacy(executable: executable, hook: hook),
             arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID,
-            microVM: microVM, timeoutSeconds: timeoutSeconds
+            microVM: microVM, timeoutSeconds: timeoutSeconds, onLaunched: onLaunched
         )
     }
 
@@ -766,7 +767,8 @@ enum WorkspaceCommandRun {
         columns: Int?,
         resourceProfileID: String? = nil,
         microVM: MicroVMLaunchOptions? = nil,
-        timeoutSeconds: UInt64? = nil
+        timeoutSeconds: UInt64? = nil,
+        onLaunched: () -> Void = {}
     ) throws {
         // Identity launch requires a scoped operator permit, which the
         // ceremony cannot issue yet. Fail before spawning or contacting a
@@ -801,20 +803,24 @@ enum WorkspaceCommandRun {
                 launch: { client in
                     switch selection {
                     case .legacy(let executable, let hook):
-                        client.launchRuntime(
+                        // `onLaunched` runs before the session copies any
+                        // runtime output, so its line lands above the agent's.
+                        let launched = client.launchRuntime(
                             executable: executable, arguments: arguments, hookHost: hook,
                             terminalRows: rows, terminalColumns: columns,
                             resourceProfileID: resourceProfileID,
                             microVM: microVM,
                             timeoutSeconds: timeoutSeconds
                         )
+                        if case .success = launched { onLaunched() }
+                        return launched
                     case .named(let definitionID):
-                        client.launchAgentRuntime(
+                        return client.launchAgentRuntime(
                             definitionID: definitionID, arguments: arguments,
                             terminalRows: rows, terminalColumns: columns
                         )
                     case .custom(let executable, let digest):
-                        client.launchCustomRuntime(
+                        return client.launchCustomRuntime(
                             executable: executable, arguments: arguments, expectedContentDigestSHA256: digest,
                             terminalRows: rows, terminalColumns: columns
                         )

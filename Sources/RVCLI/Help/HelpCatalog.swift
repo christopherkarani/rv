@@ -14,6 +14,7 @@ enum HelpCatalog {
         case .help: helpMeta
         case .test: test
         case .`try`: tryDemo
+        case .term: term
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
@@ -40,6 +41,7 @@ enum HelpCatalog {
         case .run: run
         case .opencode: opencode
         case .workspace: workspace
+        case .box: box
         case .`operator`: operatorHelp
         case .egress: egress
         case .login: login
@@ -54,19 +56,21 @@ enum HelpCatalog {
                 heading: "Get started",
                 rows: [
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
+                    HelpRow(name: "box", description: "Run an agent in a box for this repo (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
                     HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
-                    HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
-                    HelpRow(name: "test", description: "Try a command before it runs"),
+                    HelpRow(name: "init", description: "Optional: a sandbox profile for rv run (hooks need only setup)"),
+                    HelpRow(name: "test", description: "Try a command before it runs: the verdict"),
                     HelpRow(name: "try", description: "Watch rv stop a fake agent in a throwaway repo"),
+                    HelpRow(name: "term", description: "Watch what rv is doing, full screen"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
                 ],
                 accentNames: true
             ),
             HelpSection(heading: "Everyday", rows: [
-                HelpRow(name: "explain", description: "Why something was allowed or blocked"),
+                HelpRow(name: "explain", description: "Why a command ran or was stopped: each step"),
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
@@ -194,6 +198,30 @@ enum HelpCatalog {
         examples: ["rv workspace start", "rv workspace status"]
     )
 
+    static let term = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv term", description: "Glance: whether anything needs you, the last 30 minutes, the latest command"),
+                HelpRow(name: "rv term --view stream", description: "Open on Stream (or needs-you)"),
+                HelpRow(name: "rv term --once", description: "Print one frame and exit"),
+            ]),
+            HelpSection(heading: "Keys", rows: [
+                HelpRow(name: "1 2 3", description: "Glance, Stream, Needs you"),
+                HelpRow(name: "space", description: "Swap Glance and Stream"),
+                HelpRow(name: "↑↓ ⏎", description: "Stream: move, and why a command ran or stopped"),
+                HelpRow(name: "f", description: "Stream: would-stops and stops only"),
+                HelpRow(name: "?", description: "Every key"),
+                HelpRow(name: "esc / q", description: "Back / quit"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "read-only", description: "Reads the audit log, the decision log and the pending requests; never writes them and never answers a request"),
+                HelpRow(name: "commands checked", description: "Needs an rvd that keeps the decision log; an older one shows only would-stops and stops"),
+            ]),
+        ]
+    )
+
     static let tryDemo = HelpViewModel(
         title: "",
         blurb: "",
@@ -225,11 +253,15 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Exit codes", rows: [
                 HelpRow(name: "0", description: "Allow"),
                 HelpRow(name: "1", description: "Deny (or incomplete evaluation)"),
+            ]),
+            HelpSection(heading: "Test or explain", rows: [
+                HelpRow(name: "test", description: "The verdict and the rule, in one screen"),
+                HelpRow(name: "explain", description: "Every step rv took to reach it (same as rv test --explain)"),
             ]),
             HelpSection(heading: "Observe mode", rows: [
                 HelpRow(name: "guard.mode observe", description: "Shows the verdict enforce would reach, exit code included, and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
@@ -252,7 +284,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Observe mode", rows: [
                 HelpRow(name: "guard.mode observe", description: "Explains the verdict enforce would reach and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
@@ -297,7 +329,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "JSON document (same as --robot)"),
                 HelpRow(name: "--robot", description: "JSON document; piped or CI output without a flag is key=value lines"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
@@ -361,18 +393,21 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv setup [--force] [--observe] [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv setup --dry-run [--force] [--observe]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
                 HelpRow(name: "--observe", description: "Log what rv would block instead of blocking"),
+                HelpRow(name: "--dry-run", description: "Print which hooks and service files setup would write; write nothing"),
                 HelpRow(name: "--json", description: "One rv.setup.v1 JSON document (same as --robot)"),
                 HelpRow(name: "--robot", description: "One rv.setup.v1 JSON document"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
             "rv setup",
+            "rv setup --dry-run",
             "rv setup --force",
             "rv setup --observe",
             "rv setup --robot",
@@ -399,6 +434,8 @@ enum HelpCatalog {
                 HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "not setup", description: "init does not wire hooks or start rvd; new here? run rv setup first"),
+                HelpRow(name: "what for", description: "A resource profile says which agents and secrets a sandboxed launch (rv run, rv workspace) may use"),
                 HelpRow(name: "writes", description: "Appends one profile to ~/.config/rv/runtime-resources.json; other profiles untouched"),
                 HelpRow(name: "detects", description: "Agent binaries on PATH plus installed credential files (claude, codex, opencode, muse)"),
                 HelpRow(name: "explicit", description: "Launches still name the profile with --resource-profile; nothing is auto-selected"),
@@ -441,7 +478,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
                 HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
         ],
         examples: [
@@ -487,7 +524,7 @@ enum HelpCatalog {
                 HelpRow(name: "--json", description: "JSON array on stdout"),
                 HelpRow(name: "--robot", description: "JSON array on stdout"),
                 HelpRow(name: "--plain", description: "Disable color"),
-                HelpRow(name: "--no-color", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Human output without color, even when piped"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -507,7 +544,8 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv host list [--json]"),
+                HelpRow(name: "rv host [list] [--json]"),
+                HelpRow(name: "rv host mode [<host>] [--json]"),
                 HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
             ]),
             HelpSection(heading: "Modes", rows: [
@@ -599,6 +637,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
+                HelpRow(name: "rv run --secret <name> -- <command>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
@@ -614,6 +653,7 @@ enum HelpCatalog {
                 HelpRow(name: "--refresh", description: "Gateway only: re-read the value this often in running sessions, e.g. 15m"),
             ]),
             HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "use", description: "Run a command with a secret through rv: rv run --secret NAME -- <command>. It gets a stand-in, never the value"),
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
                 HelpRow(
                     name: "gateway",
@@ -703,7 +743,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "allow",
-                    description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
+                    description: "You only: silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config --local rv.secretsScan false. rv stops agents' git config and shell edits of these"
                 ),
                 HelpRow(
                     name: "audit",
@@ -716,6 +756,7 @@ enum HelpCatalog {
             "rv secrets set GITHUB_TOKEN --provider github",
             "rv secrets check",
             "rv secrets scan .",
+            "rv run --secret OPENAI_API_KEY -- codex",
         ]
     )
 
@@ -949,8 +990,20 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
+                    name: "code",
+                    description: "The six-character code in the agent's stop message (\"rv allow-once a1b2c3\")"
+                ),
+                HelpRow(
                     name: "redeem",
-                    description: "Paste the six-character code from a hook deny on a TTY"
+                    description: "Lets exactly that command run once; the agent then retries it"
+                ),
+                HelpRow(
+                    name: "expiry",
+                    description: "A code works once and expires; rv allow-once list shows what is still open"
+                ),
+                HelpRow(
+                    name: "terminal",
+                    description: "Type it in your own Terminal: rv refuses it from an agent or a script"
                 ),
                 HelpRow(
                     name: "mint",
@@ -969,7 +1022,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv packs [list] [--enabled] [--verbose] [--json]"),
+                HelpRow(name: "rv packs [list] [--all] [--enabled] [--category <c>] [--search <text>] [--verbose] [--json]"),
                 HelpRow(name: "rv packs enable <pack>"),
                 HelpRow(name: "rv packs disable <pack>"),
                 HelpRow(name: "rv packs info <pack>"),

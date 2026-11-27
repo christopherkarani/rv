@@ -16,6 +16,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case help
     case test
     case `try`
+    case term
     case explain
     case service
     case serviceStatus
@@ -42,6 +43,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case run
     case opencode
     case workspace
+    case box
     case `operator`
     case egress
     case login
@@ -62,7 +64,8 @@ public enum HelpDispatch {
             let path = arguments.dropFirst().filter { isHelpFlag($0) == false }
             if path.isEmpty { return .root }
             if path == [help] { return .help }
-            return page(before: path[...]) ?? .root
+            // A passthrough command (`rv help box list`) keeps its own page.
+            return (0...path.count).reversed().lazy.compactMap { page(before: path.prefix($0)) }.first ?? .root
         }
 
         guard let index = arguments.firstIndex(where: isHelpFlag) else { return nil }
@@ -158,6 +161,7 @@ extension HelpTopic {
         case .help: []
         case .test: [Test.self]
         case .`try`: [Try.self]
+        case .term: [Term.self]
         case .explain: [Explain.self]
         case .service: [Service.self]
         case .serviceStatus: [Status.self]
@@ -184,6 +188,7 @@ extension HelpTopic {
         case .run: [Run.self]
         case .opencode: [OpenCode.self]
         case .workspace: [Workspace.self]
+        case .box: [BoxCommand.self]
         case .`operator`: [Operator.self]
         case .egress: [Egress.self]
         case .login: [Login.self]

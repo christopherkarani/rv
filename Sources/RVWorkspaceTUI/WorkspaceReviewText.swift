@@ -96,11 +96,26 @@ enum WorkspaceReviewText {
         return keys.joined(separator: " · ")
     }
 
-    /// Header badge for the shell chrome; nil when nothing awaits a human.
-    static func badge(_ review: WorkspaceReviewState) -> String? {
-        let count = review.pendingCount
-        guard count > 0 else { return nil }
-        return "\(count) pending · Ctrl-B R"
+    /// The ask shown in the pane's bottom border, within `cells`; nil when
+    /// nothing awaits a human. It names the oldest pending host and how to
+    /// answer. Answering stays in the review pane, where the size rule
+    /// applies: a bare `a` typed in a pane belongs to its shell, so the
+    /// ask never takes a key of its own. A host never loses its
+    /// registrable tail; when that cannot fit, the host is left out.
+    static func ask(_ review: WorkspaceReviewState, cells: Int) -> String? {
+        let pending = review.items.filter { $0.kind == .pendingEgress }
+        guard let oldest = pending.min(by: { $0.at < $1.at }) else { return nil }
+        let lead = "◐ wants out "
+        let more = pending.count > 1 ? " · +\(pending.count - 1) more" : ""
+        let keys = " · ^B R answer"
+        let host = clean(oldest.summary)
+        let tail = registrableTailLength(host)
+        let budget = cells - lead.count - more.count - keys.count
+        if budget >= tail {
+            return lead + shortened(host, to: budget, keepingTail: tail) + more + keys
+        }
+        let bare = "◐ wants out · ^B R"
+        return bare.count <= cells ? bare : nil
     }
 
     static func header(_ review: WorkspaceReviewState) -> String {

@@ -65,6 +65,31 @@ struct WorkspaceLeftoversTests {
         ])
     }
 
+    @Test func unclosedWorkspacesKeepLiveAndStartingHostsButNotAbsentOnes() throws {
+        let closed = UUID(), orphan = UUID(), starting = UUID(), absent = UUID()
+        let url = try log([
+            record(.created, closed, "/p/closed", at: 1),
+            record(.closed, closed, "/p/closed", at: 2),
+            record(.created, orphan, "/p/orphan", at: 3),
+            record(.created, starting, "/p/starting", at: 4),
+            record(.created, absent, "/p/absent", at: 5),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let found = WorkspaceHosts.unclosedWorkspaces(
+            lifecycleLog: url,
+            projectExists: { _ in true },
+            inspect: { project in
+                switch project {
+                case "/p/starting": .starting(starting)
+                case "/p/absent": .absent
+                default: .orphaned(orphan)
+                }
+            }
+        )
+        #expect(found.map(\.project) == ["/p/orphan", "/p/starting"])
+        #expect(found.map(\.attachment) == [.orphaned(orphan), .starting(starting)])
+    }
+
     @Test func newestUnclosedWorkspacePerProjectWinsAndBlockedIsReported() throws {
         let older = UUID(), newer = UUID()
         let block = WorkspaceRecoveryBlock(workspace: newer, reason: .corrupt)
