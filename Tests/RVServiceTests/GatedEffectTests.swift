@@ -23,7 +23,7 @@ struct GatedEffectTests {
     private static func inputs(_ mode: GuardMode, bundle: URL? = nil) -> EvaluationInputs {
         EvaluationInputs(
             guardMode: mode,
-            judge: JudgeSelection(engine: .ft, bundle: bundle),
+            judge: JudgeSelection(engine: .ft, bundle: bundle, shadow: false),
             store: .gather(home: nil, cwd: nil)
         )
     }
@@ -168,7 +168,7 @@ struct GatedEffectTests {
                 now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash,
                 inputs: EvaluationInputs(
                     guardMode: .enforce,
-                    judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+                    judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle, shadow: false),
                     store: .gather(home: home, cwd: cwd)
                 )
             )
@@ -216,7 +216,7 @@ struct GatedEffectTests {
         )
         let inputs = EvaluationInputs(
             guardMode: .enforce,
-            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle, shadow: false),
             store: .gather(home: home, cwd: cwd)
         )
         let stale = HookDeadline(receivedAt: .now - .seconds(30))
@@ -254,7 +254,7 @@ struct GatedEffectTests {
         let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("test")))
         let inputs = EvaluationInputs(
             guardMode: .enforce,
-            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle, shadow: false),
             store: .gather(home: home, cwd: cwd)
         )
         let stale = HookDeadline(receivedAt: .now - .seconds(30))

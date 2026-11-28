@@ -28,7 +28,7 @@ struct WiringShellDoorTests {
             EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
             cwd: cwd, home: home, now: Date(),
             inputs: EvaluationInputs(
-                guardMode: mode, judge: JudgeSelection(engine: .ft, bundle: nil), store: .gather(home: home, cwd: cwd)
+                guardMode: mode, judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false), store: .gather(home: home, cwd: cwd)
             )
         )
     }

@@ -299,6 +299,12 @@ private func resultLine(_ model: TestViewModel, palette: Palette) -> String {
     case .incomplete:
         slot = palette.muted
     }
-    return paint("Result: ", slot: palette.muted, reset: palette.reset)
-        + paint(model.resultWord, slot: slot, reset: palette.reset)
+    let head = paint("Result: ", slot: palette.muted, reset: palette.reset)
+    // Observe words (`◐ Would stop (rule)`, `✕ Stopped (rule)`): the
+    // glyph takes its own ink and the words read bold, as the artifact
+    // draws an event head.
+    if leadsWithGlyph(model.resultWord) {
+        return head + paintLeadingGlyph(model.resultWord, rest: palette.fact, palette: palette)
+    }
+    return head + paint(model.resultWord, slot: slot, reset: palette.reset)
 }
