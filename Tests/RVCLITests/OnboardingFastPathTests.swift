@@ -8,6 +8,7 @@ import RVDomain
 import RVIsolation
 import RVMCP
 import RVPolicy
+import Synchronization
 import Testing
 @testable import RVCLI
 
@@ -185,15 +186,60 @@ struct OnboardingFastPathTests {
         #expect(configuration.toolMode == .search)
         let report = MCPRun.report(
             fixture.environment(), project: nil, configuration: configuration, rvExecutable: rv.path)
-        if MCPSandbox.enforced {
-            // Onboarded local servers carry no sandbox yet: check fails until
-            // one is added and the file is re-trusted.
-            #expect(report.passes == false)
-            #expect(report.problems.contains { $0.message.contains("github has no sandbox") })
-        } else {
-            // No cage on this host: check names the bare server as uncaged.
-            #expect(report.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
+        // E3: onboarded local servers are sealed, so serve will start them.
+        #expect(configuration.server(named: "github")?.sandbox == MCPSandboxPolicy(network: false, hosts: ["registry.npmjs.org"]))
+        #expect(report.problems.contains { $0.message.contains("has no sandbox") } == false)
+        if MCPSandbox.enforced == false {
+            #expect(report.problems.contains { $0.message == MCPPlatformSupport.sandboxUnenforced(server: "github") })
         }
+    }
+
+    /// E3: without a terminal, onboard fails at once with one line and the
+    /// command to run yourself; it reads no host config and writes nothing.
+    @Test func onboardWithoutATerminalFailsFastAndWritesNothing() async throws {
+        let fixture = MCPCommandTests.Fixture()
+        try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"github": {"command": "npx"}}}"#)
+        let asked = Mutex(false)
+        var environment = fixture.environment(presence: UserPresence { _, _ in
+            asked.withLock { $0 = true }
+            return .confirmed(method: "test")
+        })
+        environment.hasTerminal = { false }
+        let result = await MCPRun.onboard(
+            host: .cursor, names: [], project: nil, dryRun: false, rvPath: "/bin/rv", environment: environment)
+        guard case .failure(let failure) = result else {
+            Issue.record("onboard ran without a terminal")
+            return
+        }
+        #expect(failure.message == "✕ needs you at your own terminal, and this process has no terminal; nothing was imported\n→ rv mcp onboard --host cursor")
+        #expect(asked.withLock { $0 } == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(fixture.text(".cursor/mcp.json").contains("rv mcp serve") == false)
+        // A dry run needs no one present, so it still works.
+        let dry = await MCPRun.onboard(
+            host: .cursor, names: [], project: nil, dryRun: true, rvPath: "/bin/rv", environment: environment)
+        #expect((try? dry.get())?.contains("dry run") == true)
+    }
+
+    /// E3: trust without a terminal fails before reading mcp.json or using a key.
+    @Test func trustWithoutATerminalFailsFastAndSignsNothing() async throws {
+        let fixture = MCPCommandTests.Fixture()
+        try fixture.write(".config/rv/mcp.json", #"{"version":1,"servers":[{"name":"wax","command":"wax-mcp"}]}"#)
+        let keyUsed = Mutex(false)
+        let signing = MCPApprovalSigning(
+            status: { keyUsed.withLock { $0 = true }; return .enrolled },
+            mac: { _, _, _ in keyUsed.withLock { $0 = true }; return nil },
+            verify: { _, _, _ in keyUsed.withLock { $0 = true }; return .noKey })
+        var environment = fixture.environment(approvalSigning: signing)
+        environment.hasTerminal = { false }
+        let result = await MCPRun.trust(environment: environment, show: { _ in Issue.record("trust showed a review") })
+        guard case .failure(let failure) = result else {
+            Issue.record("trust ran without a terminal")
+            return
+        }
+        #expect(failure.message == "✕ needs you at your own terminal, and this process has no terminal; nothing was signed\n→ rv mcp trust")
+        #expect(keyUsed.withLock { $0 } == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent(MCPIntegrity.fileName).path) == false)
     }
 
     @Test func onboardDryRunWritesNothing() async throws {

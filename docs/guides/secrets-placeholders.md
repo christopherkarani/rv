@@ -223,8 +223,8 @@ log](audit-log.md)).
 ## 3. Give an MCP server placeholders (macOS only)
 
 A local MCP server in `~/.config/rv/mcp.json` normally gets the **real**
-value of each secret in its `secrets` map, and of each `${secret:NAME}`
-in its arguments. To hand it a placeholder instead, list the secret under
+value of each secret in its `secrets` map, as an environment variable
+(a `${secret:NAME}` in its arguments turns it off). To hand it a placeholder instead, list the secret under
 `placeholders`:
 
 ```json
