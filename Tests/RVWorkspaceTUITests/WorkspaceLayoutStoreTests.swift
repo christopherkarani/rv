@@ -60,6 +60,18 @@ private func layoutFixture() throws -> (URL, URL) {
     #expect(try start() == 1)
 }
 
+@Test func aShellStartWhoseRenameLandedCountsEvenWhenTheDirectorySyncFails() throws {
+    let (root, project) = try layoutFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let config = root.appendingPathComponent("config")
+    let uncertain = try WorkspaceLayoutStore.openForTesting(
+        canonicalOriginalProject: project.path, configurationDirectory: config,
+        failDirectorySyncAfterRename: true).session
+    #expect(uncertain.recordShellStart() == 1)
+    let counter = uncertain.directoryURL.appendingPathComponent("shell-starts")
+    #expect(try String(contentsOf: counter, encoding: .utf8) == "1\n")
+}
+
 @Test func openTightensSiblingCreatedSubtreePermissions() throws {
     // The workspace host creates the shared config root with default
     // permissions before the TUI opens its layout; open must tighten the

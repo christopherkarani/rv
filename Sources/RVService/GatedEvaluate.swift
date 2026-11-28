@@ -1241,7 +1241,7 @@ public struct GatedEvaluate: Sendable {
         } else {
             denial = GatedEffect.DenialRow(
                 at: now, host: host, tool: tool, ruleID: deny.ruleID, category: .pack(deny.ruleID.pack), path: "",
-                session: attributedSession())
+                session: attributedSession(), id: DecisionCall.current?.id)
         }
         let name: String
         switch override {
@@ -1268,11 +1268,14 @@ public struct GatedEvaluate: Sendable {
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny
     ) -> GatedEffect? {
+        let call = DecisionCall.current
         if case .indeterminate(let reason) = result.outcome {
             let ruleID = indeterminateRuleID(reason)
+            if observed { call?.note(DecisionWouldBe(verdict: .refused, rule: ruleID.rawValue)) }
             return .denialRow(GatedEffect.DenialRow(
                 at: now, host: host, tool: tool, ruleID: ruleID, category: .pack(ruleID.pack), path: path ?? "",
-                observed: observed, wouldBe: wouldBe, indeterminate: reason, session: attributedSession()
+                observed: observed, wouldBe: wouldBe, indeterminate: reason, session: attributedSession(),
+                id: call?.id
             ))
         }
         guard case .deny(let deny, let matched) = result.outcome else { return nil }
@@ -1294,9 +1297,14 @@ public struct GatedEvaluate: Sendable {
         } else {
             category = .pack(deny.ruleID.pack)
         }
+        // Watch mode let it run: the decision-log row for this call says
+        // what guarding would have done (`DecisionLogRecorder`).
+        if observed {
+            call?.note(DecisionWouldBe(verdict: .denied, rule: deny.ruleID.rawValue, ask: wouldBe == .ask))
+        }
         return .denialRow(GatedEffect.DenialRow(
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
-            observed: observed, wouldBe: wouldBe, session: attributedSession()
+            observed: observed, wouldBe: wouldBe, session: attributedSession(), id: call?.id
         ))
     }
 
@@ -1537,7 +1545,8 @@ public struct GatedEvaluate: Sendable {
             observed: row.observed,
             wouldBe: row.wouldBe,
             asked: row.asked,
-            session: row.session
+            session: row.session,
+            id: row.id
         )
         let ledger = DenialLedger(configDirectory: configDir)
         if let wait, wait.expired { return false }

@@ -95,6 +95,9 @@ enum GatedEffect: Sendable, Equatable {
         /// The hook request's host session id, when it is an opaque token
         /// (`DenialLedgerRecord.attributableSession`); nil otherwise.
         var session: String?
+        /// The hook call's id (`DecisionCall.current`), so the ledger row
+        /// and the decision-log row name the same call. Nil off the hook path.
+        var id: String?
         /// Enforced rows: the host showed this deny as an ask
         /// (`HookAuthorization.project`), so the person may have let it run.
         var asked = false
@@ -113,7 +116,7 @@ enum GatedEffect: Sendable, Equatable {
                 guard let rule = RuleID(rawValue: IndeterminateReason.observeUnanalyzable.rawValue) else { return nil }
                 return DenialRow(
                     at: at, host: host, tool: tool, ruleID: rule, category: .pack(rule.pack), path: path,
-                    observed: observed, wouldBe: wouldBe, indeterminate: nil, session: session
+                    observed: observed, wouldBe: wouldBe, indeterminate: nil, session: session, id: id
                 )
             default:
                 return nil

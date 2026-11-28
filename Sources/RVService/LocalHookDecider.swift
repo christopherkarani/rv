@@ -250,7 +250,10 @@ package struct LocalHookDecider: Sendable {
         let home = self.home
         let ledger = LedgerHost.hook(host)
         let world = HookEvaluateWorld(
+            // One id per call, minted before evaluation: the ledger row
+            // `performBounded` writes and the decision-log row share it.
             evaluate: { command, cwd in
+              await DecisionCall.$current.withValue(DecisionCall()) {
                 let inputs = EvaluationInputs.gather(
                     home: home, cwd: cwd, environment: environment, host: ledger)
                 probe.recordGuardMode(inputs.guardMode)
@@ -277,8 +280,10 @@ package struct LocalHookDecider: Sendable {
                     decided.result, command: command, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
                     session: DecisionLogRecorder.currentSession))
                 return decided.result
+              }
             },
             evaluateFile: { action, cwd in
+              DecisionCall.$current.withValue(DecisionCall()) {
                 let mode = JudgeRuntime.effectiveGuardMode(
                     home: home, host: ledger, environment: environment,
                     config: GuardConfig.read(home: home))
@@ -290,6 +295,7 @@ package struct LocalHookDecider: Sendable {
                     decided.result, action: action, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
                     session: DecisionLogRecorder.currentSession))
                 return decided.result
+              }
             },
             mintOnDeny: { _, _ in
                 probe.escalate(.ask)
