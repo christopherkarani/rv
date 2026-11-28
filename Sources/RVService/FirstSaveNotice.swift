@@ -32,7 +32,7 @@ package enum FirstSaveNotice {
     }
 
     /// The `osascript` run for `text`.
-    static func notification(_ text: String) -> Process {
+    package static func notification(_ text: String) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = [
@@ -49,7 +49,7 @@ package enum FirstSaveNotice {
 
     /// Starts `process` without waiting, holding it until it exits so
     /// nothing is torn down while it runs.
-    static func run(_ process: Process) {
+    package static func run(_ process: Process) {
         let held = Held(process)
         let key = ObjectIdentifier(process)
         running.withLock { $0[key] = held }
@@ -64,7 +64,7 @@ package enum FirstSaveNotice {
     }
 
     /// How many notification runs are still held.
-    static var runningCount: Int { running.withLock { $0.count } }
+    package static var runningCount: Int { running.withLock { $0.count } }
 
     #if os(macOS)
     static let postsSystemNotifications = true
