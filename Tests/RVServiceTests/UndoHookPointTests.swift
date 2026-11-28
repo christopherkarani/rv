@@ -71,7 +71,7 @@ struct UndoHookPointTests {
             cwd: cwd, home: nil, grants: EphemeralAllowOnceTable(), now: Date(), allowlist: { .empty },
             host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
-                guardMode: mode, judge: JudgeSelection(engine: .ft, bundle: nil), store: .gather(home: nil, cwd: nil))
+                guardMode: mode, judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false), store: .gather(home: nil, cwd: nil))
         ).effects
     }
 
