@@ -107,6 +107,8 @@ public struct GlanceState: Sendable, Equatable {
     public var posture: GlancePosture = .guarding
     /// Each ask waiting for a human, and the agent that asked.
     public var pending: [ApprovalID: HookHost] = [:]
+    /// Loosen proposals waiting for the owner (`rv proposals`, F2).
+    public var proposals: Set<ProposalID> = []
     public var agents: [HookHost: GlanceAgent] = [:]
     public var today: GlanceToday
     public var lastStop: GlanceStop?
@@ -139,7 +141,7 @@ public struct GlanceState: Sendable, Equatable {
         case .down: return .notRunning
         case .live, .liveWithoutEvents: break
         }
-        if !pending.isEmpty { return .needsYou }
+        if !pending.isEmpty || !proposals.isEmpty { return .needsYou }
         if let lastStop, now >= lastStop.at, now.timeIntervalSince(lastStop.at) < Self.stopFlash {
             return .justStopped
         }
@@ -173,6 +175,7 @@ public struct GlanceState: Sendable, Equatable {
         link = .down(reason)
         downSince = since
         pending = [:]
+        proposals = []
     }
 
     /// Starts today's counts over once local midnight has passed.
@@ -209,6 +212,12 @@ public struct GlanceState: Sendable, Equatable {
             if counts { today.asked += 1 }
         case .resolution(let resolution):
             pending[resolution.id] = nil
+        case .proposal(let proposal):
+            if proposal.status == .pending {
+                proposals.insert(proposal.id)
+            } else {
+                proposals.remove(proposal.id)
+            }
         case .unknown:
             break
         }

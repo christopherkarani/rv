@@ -453,11 +453,12 @@ private func isWeakeningSub(
     if isUnmodelledWord(sub) { return true }
     switch verb {
     case "packs":
-        return sub == "disable" || sub == "off"
+        return (sub == "disable" || sub == "off") && onlyProposes(tail) == false
     case "protect":
         // `rv protect <tool> off` loosens; `off` may sit anywhere, and a
         // variable or glob may carry it. Adding protection only tightens.
-        return sub == "off" || tail.contains { $0 == "off" || isUnmodelledWord($0) }
+        // The literal `--propose` form only files a proposal (F2).
+        return (sub == "off" || tail.contains { $0 == "off" || isUnmodelledWord($0) }) && onlyProposes(tail) == false
     case "safety":
         return sub != SafetyLevel.strict.rawValue && onlyProposes(tail) == false
     case "allowlist":

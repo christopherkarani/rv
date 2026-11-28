@@ -157,8 +157,11 @@ struct Packs: AsyncParsableCommand {
         @Argument(help: "Pack, category, or preset IDs.")
         var ids: [String]
 
+        @Flag(name: .customLong("propose"), help: "Send it to the owner as a proposal instead of asking now.")
+        var propose = false
+
         func run() async throws {
-            try await mutate(ids: ids, enabling: false)
+            try await mutate(ids: ids, enabling: false, propose: propose)
         }
     }
 
@@ -322,7 +325,7 @@ enum PacksListFilter {
     }
 }
 
-private func mutate(ids: [String], enabling: Bool) async throws {
+private func mutate(ids: [String], enabling: Bool, propose: Bool = false) async throws {
     // Check every name and the config before asking the owner anything:
     // a typo fails in a second, not after Touch ID.
     try preflightPackMutation(ids: ids)
@@ -333,7 +336,9 @@ private func mutate(ids: [String], enabling: Bool) async throws {
         try applyPackMutation(ids: ids, enabling: true)
         return
     }
-    guard let authorization = try await packsOffAuthorization("disable packs \(ids.joined(separator: ", "))") else {
+    guard let authorization = try await packsOffAuthorization(
+        "disable packs \(ids.joined(separator: ", "))", packs: ids, command: "packs disable", propose: propose)
+    else {
         return
     }
     try await ConfigChangeAudit.$authorization.withValue(authorization) {
@@ -344,9 +349,22 @@ private func mutate(ids: [String], enabling: Bool) async throws {
 /// The one owner gate for turning packs off, from `rv packs disable/off`
 /// and `rv protect <tool> off`. Returns how the owner was checked, or nil
 /// when the change was filed for the owner instead and nothing may be
-/// changed now (F2's proposal route plugs in here). A refusal exits 77.
-func packsOffAuthorization(_ summary: String) async throws -> String? {
-    try await OwnerConfirmation.require(summary)
+/// changed now (F2's proposal route). A refusal exits 77.
+///
+/// Only the owner at a real terminal is asked directly. Anything else
+/// (an agent, a script, `--propose`) files one proposal per name with
+/// rvd, which applies it only after its own owner check; nothing changes
+/// here and no prompt is raised.
+func packsOffAuthorization(
+    _ summary: String, packs: [String], command: String, propose: Bool = false
+) async throws -> String? {
+    if propose == false, LoosenRoute.isOwnerTerminal() {
+        return try await OwnerConfirmation.require(summary)
+    }
+    for pack in packs {
+        _ = try await LoosenRoute.propose(.packOff(pack: pack), command: command)
+    }
+    return nil
 }
 
 /// Fails, with the fix, on what `applyPackMutation` would refuse anyway:

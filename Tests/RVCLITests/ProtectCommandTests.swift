@@ -35,7 +35,7 @@ struct ProtectCommandTests {
         try await withCLIProcess(home: home) { try await Protect.parse(["redis"]).run() }
         let before = try Data(contentsOf: PacksConfigStore.configURL(home: home))
         let capture = CLIOutputCapture()
-        try await withCLIProcess(home: home, output: capture) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: capture) {
             let off = try Protect.parse(["redis", "off"])
             await #expect(throws: ExitCode(EX_NOPERM)) { try await off.run() }
         }
@@ -48,7 +48,9 @@ struct ProtectCommandTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) { try await Protect.parse(["redis"]).run() }
         let capture = CLIOutputCapture()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, output: capture) {
+        try await withCLIProcess(
+            home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: capture
+        ) {
             try await Protect.parse(["redis", "off"]).run()
         }
         #expect(capture.stdout == "  ✓ Redis is no longer protected.\n  → Turn it back on: rv protect redis\n")

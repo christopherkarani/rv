@@ -36,7 +36,9 @@ package struct LoosenApplier: Sendable {
                     return parseAllowlistRuleID(rule) == nil ? "\(rule) is not a rule id (pack:rule)" : nil
                 case .packOff(let pack):
                     guard let index = try? PackRegistry.loadIndex() else { return "rv cannot read its pack index" }
-                    return index.packIDs.contains(where: { $0.rawValue == pack }) ? nil : "\(pack) is not a pack id"
+                    // The names `rv packs disable` takes: a pack id, a category or a preset.
+                    return PacksFacade.knownSelections(index: index).contains(pack)
+                        ? nil : "\(pack) is not a pack, category or preset"
                 case .allowCommand, .safetyNormal:
                     return nil
                 }

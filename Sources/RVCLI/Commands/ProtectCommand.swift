@@ -20,6 +20,9 @@ struct Protect: AsyncParsableCommand {
     @Argument(help: "A tool name, such as redis or terraform, then off to remove protection.")
     var words: [String] = []
 
+    @Flag(name: .customLong("propose"), help: "With off: send it to the owner as a proposal instead of asking now.")
+    var propose = false
+
     func run() async throws {
         let request: ProtectRequest
         do {
@@ -35,7 +38,7 @@ struct Protect: AsyncParsableCommand {
         }
         let target = try resolve(request.tool, tools: tools, off: request.off)
         if request.off {
-            try await ProtectFlow.turnOff(target)
+            try await ProtectFlow.turnOff(target, propose: propose)
         } else {
             try ProtectFlow.turnOn(target)
         }
@@ -149,7 +152,7 @@ enum ProtectFlow {
     }
 
     /// Loosening: the owner check first, every time.
-    static func turnOff(_ target: ProtectTarget) async throws {
+    static func turnOff(_ target: ProtectTarget, propose: Bool = false) async throws {
         let home = try CommandContext.requireHome(command: "protect")
         try preflightPackMutation(ids: [target.packID.rawValue])
         if ManagedGate.requiredPacks(home: home).contains(target.packID) {
@@ -159,7 +162,10 @@ enum ProtectFlow {
             CommandContext.writeStdout(ProtectText.alreadyOff(target))
             return
         }
-        guard let authorization = try await packsOffAuthorization("turn off \(target.name) protection (\(target.packID.rawValue))") else {
+        guard let authorization = try await packsOffAuthorization(
+            "turn off \(target.name) protection (\(target.packID.rawValue))",
+            packs: [target.packID.rawValue], command: "protect", propose: propose)
+        else {
             return
         }
         try ConfigChangeAudit.$authorization.withValue(authorization) {

@@ -206,6 +206,64 @@ struct ProposalsCommandTests {
             """)
     }
 
+    // MARK: pack off (G6's packsOffAuthorization gate)
+
+    static func redisIsOn(_ fixture: Fixture) throws -> Bool {
+        try PacksFacade.effectiveIDs(home: fixture.home).contains(PackID(rawValue: "database.redis"))
+    }
+
+    @Test func anAgentsPackOffIsAProposal_andTheOwnerApprovesIt() async throws {
+        let fixture = try Self.fixture(approve: true)
+        _ = try await Self.run(fixture, terminal: false) { try await Protect.parse(["redis"]).run() }
+        #expect(try Self.redisIsOn(fixture))
+        let filed = try await Self.run(fixture, terminal: false) {
+            var command = try Packs.Disable.parse(["database.redis"])
+            try await command.run()
+        }
+        #expect(filed.exit == 0)
+        #expect(filed.stdout.contains("as proposal p-1. Turning a pack off is looser."))
+        #expect(fixture.prompt.shown.isEmpty, "an agent's pack off never raises the owner's prompt")
+        #expect(try Self.redisIsOn(fixture), "nothing changes until the owner approves")
+
+        let approved = try await Self.run(fixture, terminal: true) {
+            var command = try ProposalsApprove.parse(["p-1"])
+            try await command.run()
+        }
+        #expect(approved.exit == 0)
+        #expect(approved.stdout.hasSuffix("✓ Approved p-1: pack database.redis is turned off\n"))
+        #expect(fixture.prompt.shown.first?.hasPrefix("approve rv proposal p-1: pack database.redis is turned off") == true)
+        #expect(try Self.redisIsOn(fixture) == false)
+    }
+
+    @Test func protectOffProposeIsAProposalEvenOnATerminal() async throws {
+        let fixture = try Self.fixture()
+        _ = try await Self.run(fixture, terminal: true) { try await Protect.parse(["redis"]).run() }
+        let filed = try await Self.run(fixture, terminal: true) {
+            try await Protect.parse(["redis", "off", "--propose"]).run()
+        }
+        #expect(filed.exit == 0)
+        #expect(filed.stdout.contains("as proposal p-1. Turning a pack off is looser."))
+        #expect(fixture.prompt.shown.isEmpty)
+        #expect(try Self.redisIsOn(fixture))
+    }
+
+    @Test func packsOffNamesEachPackAsItsOwnProposal() async throws {
+        let fixture = try Self.fixture()
+        _ = try await Self.run(fixture, terminal: false) {
+            var command = try Packs.Enable.parse(["database.redis", "containers.docker"])
+            try await command.run()
+        }
+        let filed = try await Self.run(fixture, terminal: false) {
+            var command = try Packs.Disable.parse(["database.redis", "containers.docker"])
+            try await command.run()
+        }
+        #expect(filed.exit == 0)
+        #expect(filed.stdout.contains("proposal p-1."))
+        #expect(filed.stdout.contains("proposal p-2."))
+        let on = Set(try PacksFacade.effectiveIDs(home: fixture.home).map(\.rawValue))
+        #expect(on.isSuperset(of: ["database.redis", "containers.docker"]))
+    }
+
     // MARK: the owner decides
 
     @Test func theOwnerApprovesWithRvdsPromptAndRvdApplies() async throws {

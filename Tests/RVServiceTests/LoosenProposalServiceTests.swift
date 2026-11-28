@@ -335,7 +335,7 @@ struct LoosenProposalServiceTests {
             change: .packOff(pack: "core.nope"), from: nil, cwd: nil, clientSemver: ProtocolVersion.serviceSemver)))
         guard case .proposeLoosen(let reply) = result else { Issue.record("\(result)"); return }
         #expect(reply.outcome == .invalid)
-        #expect(reply.problem == "core.nope is not a pack id")
+        #expect(reply.problem == "core.nope is not a pack, category or preset")
     }
 
     // MARK: events

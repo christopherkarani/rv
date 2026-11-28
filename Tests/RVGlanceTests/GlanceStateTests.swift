@@ -113,6 +113,23 @@ struct GlanceStateTests {
         #expect(state.glyph(at: now) == .guarding)
     }
 
+    /// F2: a loosen proposal needs the owner until it is decided.
+    @Test func aProposalNeedsYouUntilItIsDecided() {
+        var state = GlanceState(now: now, calendar: calendar)
+        let id = ProposalID(rawValue: "p-1")!
+        state.apply(reply([
+            LiveEvent(sequence: 1, atMs: ms(now), payload: .proposal(
+                LiveProposal(id: id, status: .pending, kind: "packOff", from: "claude"))),
+        ]), now: now, calendar: calendar)
+        #expect(state.glyph(at: now) == .needsYou)
+        state.apply(reply([
+            LiveEvent(sequence: 2, atMs: ms(now), payload: .proposal(
+                LiveProposal(id: id, status: .approved, kind: "packOff", from: "claude"))),
+        ]), now: now, calendar: calendar)
+        #expect(state.proposals.isEmpty)
+        #expect(state.glyph(at: now) == .guarding)
+    }
+
     @Test func unknownEventsAndMissedCountsAreKept() {
         var state = GlanceState(now: now, calendar: calendar)
         state.apply(EventsReply(stream: stream, cursor: 9, missed: 3, events: [

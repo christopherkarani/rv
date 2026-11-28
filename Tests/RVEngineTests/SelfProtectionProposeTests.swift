@@ -16,6 +16,10 @@ struct SelfProtectionProposeTests {
         "rv proposals p-21",
         "rv proposals list --all",
         "rv proposals reject p-21 --reason no",
+        "rv packs disable core.git --propose",
+        "rv packs off core.git database --propose",
+        "rv protect redis off --propose",
+        "rv protect off redis --propose",
     ])
     func agentsMayPropose(_ command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false)
@@ -33,7 +37,14 @@ struct SelfProtectionProposeTests {
         "rv safety normal -- --propose",
         "rv proposals approve p-21",
         "rv proposals approve --json p-21",
-        "rv packs disable core.git --propose",
+        "rv packs disable core.git",
+        "rv packs --propose disable core.git",
+        "rv packs disable core.git -- --propose",
+        "rv packs disable $PACK --propose",
+        "rv protect redis off",
+        "rv protect redis off -- --propose",
+        "rv protect redis $OFF --propose",
+        "rv protect --propose redis off",
     ])
     func everyOtherLoosenStaysTheOwners(_ command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)))

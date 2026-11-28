@@ -1124,7 +1124,7 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv packs [list] [--all] [--enabled] [--category <c>] [--search <text>] [--verbose] [--json]"),
                 HelpRow(name: "rv packs enable <pack>"),
-                HelpRow(name: "rv packs disable <pack>"),
+                HelpRow(name: "rv packs disable <pack> [--propose]", description: "Asks the owner; off a terminal or with --propose, files a proposal"),
                 HelpRow(name: "rv packs info <pack>"),
                 HelpRow(name: "rv packs test <pack>"),
             ]),
@@ -1143,6 +1143,7 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv protect <tool>", description: "Turn on the pack for a tool; asks nobody"),
                 HelpRow(name: "rv protect <tool> off", description: "Turn it off; asks for Touch ID or your password"),
+                HelpRow(name: "rv protect <tool> off --propose", description: "Send it to the owner as a proposal; rv proposals"),
             ]),
         ],
         examples: [

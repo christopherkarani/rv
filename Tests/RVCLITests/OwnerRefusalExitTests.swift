@@ -35,7 +35,7 @@ struct OwnerRefusalExitTests {
     @Test func packsDisableRefusesWithNoPerm_enableNeedsNoOwner() async throws {
         let home = try isolatedHome()
         let out = CLIOutputCapture()
-        try await withCLIProcess(home: home, output: out) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: out) {
             var enable = try Packs.Enable.parse(["core.git"])
             try await enable.run()
             var disable = try Packs.Disable.parse(["core.git"])
