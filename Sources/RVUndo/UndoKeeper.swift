@@ -26,7 +26,9 @@ public enum UndoKeeper {
         git: URL? = UndoGit.locate(), clones: Bool = true, maxBytes: UInt64 = UndoLimits.maxBytes,
         maxEntries: Int = UndoLimits.maxEntries, secrets: SecretPathCatalog = .dayOne
     ) -> UndoManifest {
-        let deadline = ContinuousClock.now + request.budget
+        // The request's own deadline when it has one: time spent before
+        // this keep started counts.
+        let deadline = request.deadline ?? ContinuousClock.now + request.budget
         let id = UndoStore.makeID(now: now)
         var manifest = UndoManifest(
             schema: UndoManifest.schema, id: id, createdAt: now, host: request.host, command: request.command,
@@ -36,6 +38,10 @@ public enum UndoKeeper {
             return manifest
         }
         manifest.repoRoot = root
+        guard ContinuousClock.now < deadline else {
+            manifest.notes = [UndoSkip.outOfTime.note]
+            return manifest
+        }
         let copy: UndoFD
         do throws(UndoSkip) {
             copy = try store.makeCopy(id: id)
@@ -47,28 +53,53 @@ public enum UndoKeeper {
             maxBytes: maxBytes, maxEntries: maxEntries, deadline: deadline,
             isSecret: { relative in secrets.firstMatch(of: root + "/" + relative) != nil }, clones: clones)
         var notes: [String] = []
+        var nothingUnsaved = false
         switch request.target {
         case .gitWorkingTree:
-            keepGit(into: &manifest, copy: copy, store: store, root: root, git: git, budget: budget, notes: &notes)
+            nothingUnsaved = keepGit(
+                into: &manifest, copy: copy, store: store, root: root, git: git, budget: budget, notes: &notes)
         case .gitUntracked:
             keepUntracked(into: &manifest, copy: copy, store: store, root: root, git: git, budget: budget, notes: &notes)
         case .paths(let paths):
             keepPaths(paths, into: &manifest, copy: copy, store: store, root: root, budget: budget, notes: &notes)
         }
         manifest.notes = capped(notes)
-        do {
-            try store.writeManifest(manifest, in: copy)
-        } catch {
-            store.remove(id: id)
-            dropRef(manifest, git: git)
+        if nothingUnsaved {
+            // A reset of a clean tree throws nothing away: nothing is
+            // recorded, so such resets can never crowd real copies out.
+            store.remove(id: id, deadline: deadline)
+            manifest.notes = [nothingUnsavedNote]
+        } else {
+            do {
+                try store.writeManifest(manifest, in: copy)
+            } catch {
+                store.remove(id: id, deadline: deadline)
+                store.queueRefDrops(manifest.git.map { [UndoStore.RefDrop(repoRoot: root, ref: $0.ref)] } ?? [])
+            }
         }
         // Pruning on the hook path is a short slice: what does not fit is
-        // left for the next keep or for `rv undo`.
+        // left for the next keep or for `rv undo`. Refs of pruned copies
+        // are queued, so none is ever forgotten.
         let pruneDeadline = min(deadline, ContinuousClock.now + pruneSlice)
-        for old in store.prune(now: now, deadline: pruneDeadline).prefix(2) {
-            dropRef(old, git: git, deadline: min(deadline, ContinuousClock.now + .milliseconds(200)))
-        }
+        prune(store, now: now, git: git, deadline: pruneDeadline)
         return manifest
+    }
+
+    static let nothingUnsavedNote = "Nothing unsaved here, so there was nothing to keep."
+
+    /// Prunes the store and drops the git refs of what went (queued first,
+    /// so a ref not dropped before `deadline` is dropped by a later prune).
+    /// `rv undo` calls it with no deadline.
+    public static func prune(
+        _ store: UndoStore, now: Date = Date(), git: URL? = UndoGit.locate(), deadline: ContinuousClock.Instant? = nil
+    ) {
+        let removed = store.prune(now: now, deadline: deadline)
+        store.queueRefDrops(removed.compactMap { manifest in
+            manifest.git.map { UndoStore.RefDrop(repoRoot: manifest.repoRoot, ref: $0.ref) }
+        })
+        store.drainRefDrops(deadline: deadline) { drop in
+            dropRef(drop, git: git, deadline: deadline.map { min($0, .now + .milliseconds(500)) } ?? .now + .seconds(5))
+        }
     }
 
     /// The first `maxNotes` notes, then how many more there were.
@@ -81,50 +112,48 @@ public enum UndoKeeper {
 
     static func refName(_ id: String) -> String { "refs/rv/undo/\(id)" }
 
+    /// Returns true when nothing was unsaved (nothing to record).
     private static func keepGit(
         into manifest: inout UndoManifest, copy: borrowing UndoFD, store: UndoStore, root: String, git: URL?,
         budget: UndoBudget, notes: inout [String]
-    ) {
-        guard let git else { notes.append(UndoSkip.gitUnavailable.note); return }
+    ) -> Bool {
+        guard let git else { notes.append(UndoSkip.gitUnavailable.note); return false }
         let runner = UndoGit(executable: git, repository: root, deadline: budget.deadline)
+        if let problem = UndoRepository.problem(root: root, runner: runner) {
+            notes.append(UndoSkip.unsafeRepository(problem).note)
+            return false
+        }
         do throws(UndoSkip) {
             let kept = try UndoGitCopy.keep(
                 runner: runner, root: root, copy: copy, copyPath: store.root.appendingPathComponent(manifest.id).path,
                 budget: budget, notes: &notes)
+            // Nothing unsaved, and nothing left out: nothing to record.
+            guard let stash = kept.stash else { return notes.isEmpty }
             let ref = refName(manifest.id)
-            _ = try runner.text(["update-ref", "-m", "rv undo", ref, kept.stash ?? kept.head])
+            _ = try runner.text(["update-ref", ref, stash])
             manifest.kind = .git
-            manifest.git = UndoManifest.Git(ref: ref, head: kept.head, stash: kept.stash)
-            if let stash = kept.stash, let counted = try? numstat(runner, from: kept.head, to: stash) {
-                manifest.tally = counted
-            }
+            manifest.git = UndoManifest.Git(ref: ref, head: kept.head, stash: stash)
+            manifest.tally = kept.tally
         } catch {
             notes.append(error.note)
         }
+        return false
     }
 
-    /// Files and changed lines between two commits.
-    static func numstat(_ runner: UndoGit, from: String, to: String) throws(UndoSkip) -> UndoTally {
-        let text = try runner.text(["diff", "--numstat", "--no-textconv", "--no-ext-diff", "--no-renames", from, to])
-        var tally = UndoTally()
-        for line in text.split(whereSeparator: \.isNewline) {
-            let fields = line.split(separator: "\t", maxSplits: 2)
-            guard fields.count == 3 else { continue }
-            tally.files += 1
-            tally.lines = tally.lines.map { $0 + (Int(fields[0]) ?? 0) + (Int(fields[1]) ?? 0) }
+    /// Deletes a queued ref. True when it is gone or can never be dropped
+    /// (not rv's ref, not a repository rv runs git in); false only when
+    /// time ran out, so it stays queued.
+    static func dropRef(_ drop: UndoStore.RefDrop, git: URL?, deadline: ContinuousClock.Instant) -> Bool {
+        guard let git, drop.isWellFormed, let root = UndoRepository.root(from: drop.repoRoot),
+            root == realPath(drop.repoRoot), UndoRepository.foldersProblem(root: root) == nil
+        else { return true }
+        let runner = UndoGit(executable: git, repository: root, deadline: deadline)
+        do throws(UndoSkip) {
+            _ = try runner.run(["update-ref", "-d", drop.ref])
+            return true
+        } catch {
+            return error != .outOfTime
         }
-        tally.entries = tally.files
-        return tally
-    }
-
-    /// Deletes a copy's git ref (after pruning it).
-    public static func dropRef(
-        _ manifest: UndoManifest, git: URL? = UndoGit.locate(), deadline: ContinuousClock.Instant? = nil
-    ) {
-        guard let ref = manifest.git?.ref, ref == refName(manifest.id), let git, manifest.repoRoot.isEmpty == false
-        else { return }
-        let runner = UndoGit(executable: git, repository: manifest.repoRoot, deadline: deadline ?? .now + .seconds(1))
-        _ = try? runner.run(["update-ref", "-d", ref])
     }
 
     // MARK: File copies
@@ -135,6 +164,10 @@ public enum UndoKeeper {
     ) {
         guard let git else { notes.append(UndoSkip.gitUnavailable.note); return }
         let runner = UndoGit(executable: git, repository: root, deadline: budget.deadline)
+        if let problem = UndoRepository.problem(root: root, runner: runner) {
+            notes.append(UndoSkip.unsafeRepository(problem).note)
+            return
+        }
         let listed: Data
         do throws(UndoSkip) {
             let output = try runner.run(["ls-files", "--others", "--exclude-standard", "-z"])
@@ -157,6 +190,10 @@ public enum UndoKeeper {
         for raw in listed.split(separator: 0) {
             let components = String(decoding: raw, as: UTF8.self).split(separator: "/").map(String.init)
             guard components.isEmpty == false, components.allSatisfy({ $0 != "." && $0 != ".." }) else { continue }
+            guard components.count <= budget.maxDepth else {
+                notes.append(UndoSkip.tooDeep(levels: budget.maxDepth).note)
+                continue
+            }
             plan.append(components)
         }
         guard plan.isEmpty == false else {
@@ -221,7 +258,7 @@ public enum UndoKeeper {
                 let shown = relative.joined(separator: "/")
                 let name = relative[relative.count - 1]
                 if budget.isSecret(shown) {
-                    secrets.append(shown)
+                    secrets.append(UndoSkip.secret(shown).note)
                     continue
                 }
                 let parent: Int32
@@ -240,11 +277,13 @@ public enum UndoKeeper {
                 var left = budget
                 left.maxEntries = budget.maxEntries - min(budget.maxEntries, measured.entries)
                 left.maxBytes = budget.maxBytes - min(budget.maxBytes, measured.bytes)
+                // The folders above count: one open descriptor per level.
+                left.maxDepth = budget.maxDepth - min(budget.maxDepth, relative.count)
                 measured.add(try UndoTree.scan(name, in: parentFD, shown: shown, budget: left, secrets: &secrets))
                 try budget.check(measured)
                 present.append(relative)
             }
-            notes += secrets.map { UndoSkip.secret($0).note }
+            notes += secrets
             guard measured.entries > 0 else { return }
             if let free = UndoTree.freeBytes(at: store.root.path), free < measured.bytes + UndoLimits.freeSpaceFloor {
                 throw UndoSkip.lowDisk(free: free)
@@ -267,6 +306,7 @@ public enum UndoKeeper {
                 var left = budget
                 left.maxEntries = budget.maxEntries - min(budget.maxEntries, tally.entries)
                 left.maxBytes = budget.maxBytes - min(budget.maxBytes, tally.bytes)
+                left.maxDepth = budget.maxDepth - min(budget.maxDepth, relative.count)
                 tally.add(try UndoTree.copy(name, from: parentFD, to: target, shown: shown, budget: left, secrets: &again))
                 try budget.check(tally)
                 kept.append(shown)
@@ -276,8 +316,9 @@ public enum UndoKeeper {
             manifest.tally = tally
         } catch let skip {
             // Half a copy is no copy: drop the data, keep the note.
+            // Bounded: what is left is swept by the next prune.
             if let copyFD = try? UndoTree.openDirectory(store.root.appendingPathComponent(manifest.id).path) {
-                UndoRemove.tree(UndoStore.dataName, in: copyFD.raw, deadline: nil)
+                UndoRemove.tree(UndoStore.dataName, in: copyFD.raw, deadline: budget.deadline)
             }
             manifest.kind = .skipped
             manifest.paths = []
@@ -306,6 +347,7 @@ public enum UndoKeeper {
         guard components.isEmpty == false, components.allSatisfy({ $0 != "." && $0 != ".." }) else {
             return .failure(.outsideRepository(path.path))
         }
+        guard components.count <= UndoLimits.maxDepth else { return .failure(.tooDeep(levels: UndoLimits.maxDepth)) }
         return .success(components)
     }
 
@@ -315,14 +357,9 @@ public enum UndoKeeper {
         return String(cString: resolved)
     }
 
-    /// The nearest directory at or above `cwd` holding `.git`, resolved.
+    /// The repository `cwd` is in, when rv may keep copies there
+    /// (`UndoRepository.root`).
     public static func repositoryRoot(from cwd: String) -> String? {
-        guard var path = realPath(cwd) else { return nil }
-        while true {
-            var info = stat()
-            if lstat(path == "/" ? "/.git" : path + "/.git", &info) == 0 { return path }
-            if path == "/" { return nil }
-            path = (path as NSString).deletingLastPathComponent
-        }
+        UndoRepository.root(from: cwd)
     }
 }

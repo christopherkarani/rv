@@ -323,6 +323,96 @@ struct UndoFileTests {
         #expect(kept.notes == [UndoSkip.tooManyFiles(count: 300).note])
     }
 
+    @Test("a file with other hard links is not copied under this name")
+    func hardLinkInTree() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makePlainRepo()
+        try scratch.write("key", "SECRET\n", mode: 0o600)
+        try scratch.write("repo/out/ok.txt", "ok\n")
+        link(scratch.path("key"), scratch.path("repo/out/innocent.txt"))
+        let kept = UndoKeeper.keep(
+            request(.paths([UndoPath(path: scratch.path("repo/out"))]), cwd: scratch.path("repo")),
+            in: scratch.store, clones: false)
+        #expect(kept.kind == .files)
+        #expect(kept.tally.files == 1)
+        #expect(kept.notes == [UndoSkip.hardLinked("out/innocent.txt").note])
+        #expect(FileManager.default.fileExists(atPath: scratch.path("store/\(kept.id)/data/out/innocent.txt")) == false)
+    }
+
+    @Test("a path deeper than the limit is refused before anything is opened")
+    func deepPath() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makePlainRepo()
+        let deep = (0...UndoLimits.maxDepth).map { _ in "d" }.joined(separator: "/")
+        try scratch.write("repo/\(deep)/f.txt", "x\n")
+        #expect(UndoKeeper.place(UndoPath(path: scratch.path("repo/\(deep)/f.txt")), in: scratch.path("repo"))
+            == .failure(.tooDeep(levels: UndoLimits.maxDepth)))
+        // A target near the limit leaves only what is left of it for the walk.
+        let near = (0..<(UndoLimits.maxDepth - 2)).map { _ in "d" }.joined(separator: "/")
+        let kept = UndoKeeper.keep(
+            request(.paths([UndoPath(path: scratch.path("repo/\(near)"))]), cwd: scratch.path("repo")),
+            in: scratch.store, clones: false)
+        #expect(kept.notes == [UndoSkip.tooDeep(levels: UndoLimits.maxDepth).note])
+    }
+
+    @Test("the request's own deadline counts: one already past keeps nothing and runs nothing")
+    func requestDeadline() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makePlainRepo()
+        try scratch.write("repo/x.txt", "x\n")
+        var late = request(.paths([UndoPath(path: scratch.path("repo/x.txt"))]), cwd: scratch.path("repo"))
+        late.deadline = .now - .milliseconds(1)
+        let kept = UndoKeeper.keep(late, in: scratch.store, clones: false)
+        #expect(kept.notes == [UndoSkip.outOfTime.note])
+        #expect(FileManager.default.fileExists(atPath: scratch.path("store")) == false)
+        // Two requests for the same copy are equal whenever they were made.
+        var early = late
+        early.deadline = .now + .seconds(5)
+        #expect(early == late)
+    }
+
+    @Test("no git run starts past its deadline, and a long index listing stops at it")
+    func gitDeadlines() throws {
+        let runner = UndoGit(executable: URL(fileURLWithPath: "/usr/bin/git"), repository: "/", deadline: .now - .seconds(1))
+        #expect(throws: UndoSkip.outOfTime) { _ = try runner.run(["--version"]) }
+        let entry = "100644 \(String(repeating: "a", count: 40)) 0\tp\0"
+            + "  ctime: 1:2\n  mtime: 1:0\n  dev: 1\tino: 2\n  uid: 0\tgid: 0\n  size: 1\tflags: 0\n"
+        #expect(UndoIndexListing.parse(Data(entry.utf8), deadline: .now - .seconds(1)) == nil)
+        #expect(UndoIndexListing.parse(Data(entry.utf8), deadline: .now + .seconds(5))?.count == 1)
+    }
+
+    @Test("rvd's git reaches no transport, helper or parent repository; a restore is the person's own git")
+    func environments() {
+        let base = ["HOME": "/h", "PATH": "/opt/bin:/usr/bin", "GIT_DIR": "/elsewhere", "LANG": "C"]
+        let keeper = UndoGit.environment(mode: .keeper, root: "/r/app", base: base)
+        #expect(keeper["GIT_NO_LAZY_FETCH"] == "1")
+        #expect(keeper["GIT_ALLOW_PROTOCOL"] == "none")
+        #expect(keeper["GIT_CONFIG_GLOBAL"] == "/dev/null")
+        #expect(keeper["GIT_DIR"] == "/r/app/.git")
+        #expect(keeper["GIT_WORK_TREE"] == "/r/app")
+        #expect(keeper["GIT_CEILING_DIRECTORIES"] == "/r")
+        #expect(keeper["PATH"] == "/usr/bin:/bin")
+        for flag in ["core.hooksPath=/dev/null", "credential.helper=", "core.sshCommand=/bin/false", "protocol.allow=never"] {
+            #expect(UndoGit.hardening.contains(flag))
+        }
+        let person = UndoGit.environment(mode: .person, root: "/r/app", base: base)
+        #expect(person["PATH"] == "/opt/bin:/usr/bin")
+        #expect(person["GIT_CONFIG_GLOBAL"] == nil)
+        #expect(person["GIT_DIR"] == "/r/app/.git")
+        #expect(UndoGit.personHardening.contains("core.hooksPath=/dev/null"))
+    }
+
+    @Test("partial clones, promisor remotes and unknown extensions are refused by name")
+    func configProblems() {
+        #expect(UndoRepository.configProblem(["core.bare", "extensions.objectformat"]) == nil)
+        #expect(UndoRepository.configProblem(["extensions.partialclone"]) == "it is a partial clone")
+        #expect(UndoRepository.configProblem(["remote.my.fork.promisor"]) == "it is a partial clone")
+        #expect(UndoRepository.configProblem(["extensions.worktreeconfig"]) == "it uses extensions.worktreeconfig")
+    }
+
     @Test("nested paths in one set are copied once, inside their folder")
     func outermost() {
         #expect(UndoKeeper.outermost([["a", "b"], ["b"], ["a"], ["a", "b", "c"], ["ab"]]) == [["a"], ["ab"], ["b"]])
@@ -455,7 +545,7 @@ struct UndoStoreTests {
             reason: .watched, repoRoot: "/r", kind: kind, git: nil, paths: [], tally: tally, notes: [])
     }
 
-    @Test("the store keeps at most 50 copies and 2 GB, oldest out first, skipped notes before real copies")
+    @Test("the store keeps at most 50 copies and 2 GB, oldest out first, skipped notes capped first")
     func quota() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let copies = (0..<55).map { Self.manifest("c\($0)", .files, daysAgo: Double($0) / 100, now: now) }
@@ -473,6 +563,10 @@ struct UndoStoreTests {
         #expect(going.contains("real") == false)
         #expect(going.count == 50)
         #expect(UndoStore.evictions([Self.manifest("x", .git, daysAgo: 8, now: now)], now: now).map(\.id) == ["x"])
+        // Age order across kinds: the oldest goes, whatever it is.
+        let mixed = [Self.manifest("oldfile", .files, daysAgo: 2, now: now)]
+            + (0..<50).map { Self.manifest("g\($0)", .git, daysAgo: Double($0) / 100, now: now) }
+        #expect(UndoStore.evictions(mixed, now: now).map(\.id) == ["oldfile"])
     }
 
     @Test("a prune past its deadline removes nothing")
@@ -516,8 +610,11 @@ struct UndoGitTests {
         let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
         #expect(kept.kind == .git)
         #expect(kept.notes.isEmpty)
+        // Counted from what rv handed git (no diff runs): both files, their bytes.
         #expect(kept.tally.files == 2)
-        #expect(kept.tally.lines == 3)
+        #expect(kept.tally.lines == nil)
+        #expect(kept.tally.bytes == UInt64("one\ntwo\nthree\n".utf8.count + "new file\n".utf8.count))
+        #expect(kept.storedBytes == kept.tally.bytes)
         let ref = try #require(kept.git?.ref)
         #expect(try scratch.git(["rev-parse", "--verify", "-q", ref]).isEmpty == false)
 
@@ -607,15 +704,16 @@ struct UndoGitTests {
         #expect(target == "run.sh")
     }
 
-    @Test("a clean tree keeps HEAD only")
+    @Test("a reset of a clean tree records nothing, so it can never crowd real copies out")
     func cleanTree() throws {
         let scratch = try Scratch()
         defer { scratch.remove() }
         try scratch.makeRepo()
         let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
-        #expect(kept.kind == .git)
-        #expect(kept.git?.stash == nil)
-        #expect(kept.tally.files == 0)
+        #expect(kept.kind == .skipped)
+        #expect(kept.notes == [UndoKeeper.nothingUnsavedNote])
+        #expect(scratch.store.list().isEmpty)
+        #expect(try scratch.git(["for-each-ref", "refs/rv"]).isEmpty)
     }
 
     @Test("a changed tracked secrets file is not read; the rest is kept, with a note")
@@ -695,8 +793,173 @@ struct UndoGitTests {
             request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store,
             now: Date().addingTimeInterval(-8 * 86_400))
         let ref = try #require(old.git?.ref)
-        // The next keep prunes the old copy and its ref.
-        _ = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+        // `rv undo`'s prune drops the old copy and its ref.
+        UndoKeeper.prune(scratch.store)
         #expect(try scratch.git(["for-each-ref", ref]).isEmpty)
+        #expect(scratch.store.list().isEmpty)
+    }
+
+    @Test("refs of pruned copies are queued until they are dropped, never leaked")
+    func refQueue() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        try scratch.write("repo/a.txt", "changed\n")
+        let old = (0..<3).map { offset in
+            UndoKeeper.keep(
+                request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store,
+                now: Date().addingTimeInterval(-8 * 86_400 - Double(offset)))
+        }
+        #expect(old.allSatisfy { $0.kind == .git })
+        let removed = scratch.store.prune(now: Date())
+        #expect(removed.count == 3)
+        scratch.store.queueRefDrops(removed.compactMap { m in m.git.map { .init(repoRoot: m.repoRoot, ref: $0.ref) } })
+        // Out of time: nothing is dropped, nothing is forgotten.
+        scratch.store.drainRefDrops(deadline: .now - .seconds(1)) { _ in true }
+        #expect(scratch.store.refDrops().count == 3)
+        #expect(try scratch.git(["for-each-ref", "refs/rv"]).split(separator: "\n").count == 3)
+        UndoKeeper.prune(scratch.store)
+        #expect(scratch.store.refDrops().isEmpty)
+        #expect(try scratch.git(["for-each-ref", "refs/rv"]).isEmpty)
+    }
+
+    /// Sets up the reviewer's partial-clone repository: a lazy fetch would
+    /// run `touch <marker>` through the `ext::` transport.
+    static func makePartialClone(_ scratch: Scratch, marker: String) throws {
+        try scratch.git(["config", "core.repositoryformatversion", "1"])
+        try scratch.git(["config", "extensions.partialClone", "origin"])
+        try scratch.git(["config", "remote.origin.promisor", "true"])
+        try scratch.git(["config", "remote.origin.url", "ext::sh -c touch% \(marker)"])
+        try scratch.git(["config", "protocol.ext.allow", "always"])
+    }
+
+    @Test("a partial clone is refused, and its lazy fetch never runs")
+    func partialCloneRefused() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        let marker = scratch.path("PWNED")
+        try Self.makePartialClone(scratch, marker: marker)
+        try scratch.write("repo/a.txt", "changed\n")
+        let head = try scratch.git(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        try FileManager.default.removeItem(
+            atPath: scratch.path("repo/.git/objects/\(head.prefix(2))/\(head.dropFirst(2))"))
+        let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+        #expect(kept.kind == .skipped)
+        #expect(kept.notes == [UndoSkip.unsafeRepository("it is a partial clone").note])
+        let untracked = UndoKeeper.keep(request(.gitUntracked, cwd: scratch.path("repo")), in: scratch.store)
+        #expect(untracked.kind == .skipped)
+        #expect(FileManager.default.fileExists(atPath: marker) == false)
+    }
+
+    @Test("even past the config check, git's environment blocks the lazy fetch")
+    func lazyFetchBlockedByEnvironment() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        let marker = scratch.path("PWNED")
+        try Self.makePartialClone(scratch, marker: marker)
+        let head = try scratch.git(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        try FileManager.default.removeItem(
+            atPath: scratch.path("repo/.git/objects/\(head.prefix(2))/\(head.dropFirst(2))"))
+        let runner = UndoGit(
+            executable: URL(fileURLWithPath: "/usr/bin/git"), repository: scratch.path("repo"), deadline: .now + .seconds(10))
+        _ = try? runner.run(["rev-parse", "--verify", "-q", "HEAD^{commit}"])
+        _ = try? runner.run(["cat-file", "-p", head])
+        _ = try? runner.run(["diff", "--numstat", head, "HEAD"])
+        #expect(FileManager.default.fileExists(atPath: marker) == false)
+    }
+
+    @Test("a .git that is a link or a gitdir file is never used, and rv never walks up to a parent repository")
+    func gitRedirectsRefused() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        try scratch.write("repo/sub/.git", "gitdir: \(scratch.path("repo/.git"))\n")
+        try scratch.write("repo/sub/x.txt", "x\n")
+        try FileManager.default.createDirectory(atPath: scratch.path("linked"), withIntermediateDirectories: true)
+        symlink(scratch.path("repo/.git"), scratch.path("linked/.git"))
+        for cwd in [scratch.path("repo/sub"), scratch.path("linked")] {
+            #expect(UndoKeeper.repositoryRoot(from: cwd) == nil)
+            let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: cwd), in: scratch.store)
+            #expect(kept.notes == [UndoSkip.notInRepository.note])
+        }
+        #expect(FileManager.default.fileExists(atPath: scratch.path("store")) == false)
+        #expect(try scratch.git(["for-each-ref", "refs/rv"]).isEmpty)
+    }
+
+    @Test("object or ref folders that lead out of the repository, and alternates, are refused")
+    func linkedGitFoldersRefused() throws {
+        let cases: [(String, (Scratch) throws -> Void)] = [
+            ("it borrows objects (alternates)", { try $0.write("repo/.git/objects/info/alternates", "/elsewhere\n") }),
+            (".git/refs/rv is not a plain folder", { scratch in
+                try FileManager.default.createDirectory(atPath: scratch.path("out"), withIntermediateDirectories: true)
+                symlink(scratch.path("out"), scratch.path("repo/.git/refs/rv"))
+            }),
+            (".git/objects/zz is a link", { scratch in
+                try FileManager.default.createDirectory(atPath: scratch.path("out"), withIntermediateDirectories: true)
+                symlink(scratch.path("out"), scratch.path("repo/.git/objects/zz"))
+            }),
+        ]
+        for (reason, setUp) in cases {
+            let scratch = try Scratch()
+            defer { scratch.remove() }
+            try scratch.makeRepo()
+            try setUp(scratch)
+            try scratch.write("repo/a.txt", "changed\n")
+            let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+            #expect(kept.notes == [UndoSkip.unsafeRepository(reason).note])
+            let outside = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path("out"))) ?? []
+            #expect(outside.isEmpty)
+        }
+    }
+
+    @Test("a tracked file deeper than the limit is left out with a note; the rest is kept")
+    func deepTrackedFile() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        let deep = (0...UndoLimits.maxDepth).map { _ in "d" }.joined(separator: "/") + "/f.txt"
+        try scratch.write("repo/" + deep, "x\n")
+        try scratch.git(["add", deep])
+        try scratch.git(["commit", "-q", "-m", "deep"])
+        try scratch.write("repo/" + deep, "changed\n")
+        try scratch.write("repo/a.txt", "changed\n")
+        let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+        #expect(kept.kind == .git)
+        #expect(kept.notes == [UndoSkip.tooDeep(levels: UndoLimits.maxDepth).note])
+        #expect(kept.tally.files == 1)
+    }
+
+    @Test("an untracked file deeper than the limit is left out with a note")
+    func deepUntrackedFile() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        let deep = (0...UndoLimits.maxDepth).map { _ in "d" }.joined(separator: "/") + "/f.txt"
+        try scratch.write("repo/" + deep, "x\n")
+        try scratch.write("repo/top.txt", "x\n")
+        let kept = UndoKeeper.keep(request(.gitUntracked, cwd: scratch.path("repo")), in: scratch.store, clones: false)
+        #expect(kept.paths == ["top.txt"])
+        #expect(kept.notes == [UndoSkip.tooDeep(levels: UndoLimits.maxDepth).note])
+    }
+
+    @Test("a changed tracked file with other hard links is not handed to git")
+    func hardLinkedTrackedFile() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        try scratch.write("repo/b.txt", "b\n")
+        try scratch.git(["add", "b.txt"])
+        try scratch.git(["commit", "-q", "-m", "b"])
+        try scratch.write("secret.txt", "TOKEN\n")
+        try FileManager.default.removeItem(atPath: scratch.path("repo/b.txt"))
+        link(scratch.path("secret.txt"), scratch.path("repo/b.txt"))
+        try scratch.write("repo/a.txt", "changed\n")
+        let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+        #expect(kept.kind == .git)
+        #expect(kept.notes == [UndoSkip.hardLinked("b.txt").note])
+        let stash = try #require(kept.git?.stash)
+        #expect(try scratch.git(["cat-file", "blob", stash + ":b.txt"]) == "b\n")
     }
 }

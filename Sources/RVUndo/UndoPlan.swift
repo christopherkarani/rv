@@ -44,10 +44,14 @@ public struct UndoRequest: Sendable, Equatable {
     public var reason: UndoReason
     /// The longest the copy may take; past it, rv skips with a note.
     public var budget: Duration
+    /// When the copy must be done, fixed when the request is made (so
+    /// time spent before the keep starts counts). Nil: `budget` from when
+    /// the keep starts.
+    public var deadline: ContinuousClock.Instant?
 
     public init(
         target: UndoTarget, cwd: String, command: String, host: String, reason: UndoReason,
-        budget: Duration = UndoLimits.defaultBudget
+        budget: Duration = UndoLimits.defaultBudget, deadline: ContinuousClock.Instant? = nil
     ) {
         self.target = target
         self.cwd = cwd
@@ -55,6 +59,14 @@ public struct UndoRequest: Sendable, Equatable {
         self.host = host
         self.reason = reason
         self.budget = budget
+        self.deadline = deadline
+    }
+
+    /// What is asked, not when: two requests for the same copy are equal
+    /// whenever they were made.
+    public static func == (lhs: UndoRequest, rhs: UndoRequest) -> Bool {
+        lhs.target == rhs.target && lhs.cwd == rhs.cwd && lhs.command == rhs.command && lhs.host == rhs.host
+            && lhs.reason == rhs.reason && lhs.budget == rhs.budget
     }
 }
 

@@ -29,11 +29,12 @@ enum UndoIndexListing {
     /// The entries, or nil when the text is not in the shape git prints.
     /// Each entry is `<mode> <object> <stage>\t<path>\0` and then five
     /// `  key: value` lines (ctime, mtime, dev/ino, uid/gid, size/flags).
-    static func parse(_ data: Data) -> [UndoIndexEntry]? {
+    static func parse(_ data: Data, deadline: ContinuousClock.Instant? = nil) -> [UndoIndexEntry]? {
         let bytes = [UInt8](data)
         var entries: [UndoIndexEntry] = []
         var index = 0
         while index < bytes.count {
+            if entries.count & 0x3FF == 0, let deadline, ContinuousClock.now >= deadline { return nil }
             guard let end = bytes[index...].firstIndex(of: 0) else { return nil }
             let header = String(decoding: bytes[index..<end], as: UTF8.self)
             index = end + 1
@@ -136,7 +137,10 @@ enum UndoGitCopy {
 
     struct Kept: Equatable {
         var head: String
+        /// Nil when nothing was unsaved: the tree and the index match HEAD.
         var stash: String?
+        /// Files kept (changed or deleted) and the bytes handed to git.
+        var tally = UndoTally()
     }
 
     static func keep(
@@ -150,7 +154,8 @@ enum UndoGitCopy {
         if indexPath.hasPrefix("/") == false { indexPath = root + "/" + indexPath }
 
         guard mkdirat(copy.raw, stageName, 0o700) == 0 else { throw .io(stageName, errno: errno) }
-        defer { UndoRemove.tree(stageName, in: copy.raw, deadline: nil) }
+        // Bounded too: what is left is swept by the next prune.
+        defer { UndoRemove.tree(stageName, in: copy.raw, deadline: budget.deadline) }
         let stageFD = openat(copy.raw, stageName, UndoTree.directoryFlags)
         guard stageFD >= 0 else { throw .io(stageName, errno: errno) }
         let stage = UndoFD(stageFD)
@@ -164,8 +169,9 @@ enum UndoGitCopy {
         let indexWritten = written ?? (0, 0)
 
         let listing = try runner.run(["ls-files", "-s", "--debug", "-z"], indexFile: tempIndex, maxOutput: 64 * 1024 * 1024)
-        guard listing.status == 0, let entries = UndoIndexListing.parse(listing.stdout) else {
-            throw .gitFailed("ls-files")
+        guard listing.status == 0 else { throw .gitFailed("ls-files") }
+        guard let entries = UndoIndexListing.parse(listing.stdout, deadline: budget.deadline) else {
+            throw ContinuousClock.now >= budget.deadline ? .outOfTime : .gitFailed("ls-files")
         }
         guard entries.allSatisfy({ $0.stage == 0 }) else { throw .unmergedFiles }
         let indexTree = try runner.text(["write-tree"], indexFile: tempIndex)
@@ -181,6 +187,12 @@ enum UndoGitCopy {
             if number & 0x3F == 0, ContinuousClock.now >= budget.deadline { throw .outOfTime }
             let components = entry.path.split(separator: "/").map(String.init)
             guard let name = components.last, components.allSatisfy({ $0 != "." && $0 != ".." }) else { continue }
+            // One open folder per level: deeper than the limit is never
+            // walked (descriptors are finite).
+            guard components.count <= budget.maxDepth else {
+                notes.append(UndoSkip.tooDeep(levels: budget.maxDepth).note)
+                continue
+            }
             let state: UndoWorktreeFile
             let parent: Int32
             do throws(UndoSkip) {
@@ -203,6 +215,13 @@ enum UndoGitCopy {
             case .missing, .other:
                 records.append("0 \(zeros)\t\(entry.path)")
             case .file(let size, _, _, let executable):
+                // A second name for another file (a secret, say) would put
+                // that file's bytes in the repository's objects.
+                var info = stat()
+                guard fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_nlink == 1 else {
+                    notes.append(UndoSkip.hardLinked(entry.path).note)
+                    continue
+                }
                 let file = "f\(staged.count)"
                 try stageFile(name, in: parent, as: file, into: stage, shown: entry.path, budget: budget, tally: &tally)
                 tally.bytes += size
@@ -216,9 +235,17 @@ enum UndoGitCopy {
             try budget.check(tally)
         }
 
+        tally.files = records.count + staged.count
+        tally.entries = tally.files
+        tally.lines = nil
         guard records.isEmpty == false || staged.isEmpty == false else {
             guard indexTree != headTree else { return Kept(head: head, stash: nil) }
-            return Kept(head: head, stash: try commitPair(runner, head: head, index: indexTree, work: indexTree))
+            return Kept(
+                head: head, stash: try commitPair(runner, head: head, index: indexTree, work: indexTree), tally: tally)
+        }
+        // The objects land in the repository's disk: the same floor applies.
+        if let free = UndoTree.freeBytes(at: root + "/.git"), free < tally.bytes + UndoLimits.freeSpaceFloor {
+            throw .lowDisk(free: free)
         }
         if staged.isEmpty == false {
             let paths = staged.map { stagePath + "/" + $0.file }.joined(separator: "\n") + "\n"
@@ -233,7 +260,7 @@ enum UndoGitCopy {
         _ = try runner.text(["update-index", "-z", "--index-info"], input: Data(info.utf8), indexFile: tempIndex)
         let workTree = try runner.text(["write-tree"], indexFile: tempIndex)
         guard workTree != headTree || indexTree != headTree else { return Kept(head: head, stash: nil) }
-        return Kept(head: head, stash: try commitPair(runner, head: head, index: indexTree, work: workTree))
+        return Kept(head: head, stash: try commitPair(runner, head: head, index: indexTree, work: workTree), tally: tally)
     }
 
     /// The index commit and the work commit on top, as `git stash` makes
@@ -293,7 +320,9 @@ enum UndoGitCopy {
         if budget.clones, UndoClone.cloneFile(name, from: parent, to: stage.raw, as: file) {
             var info = stat()
             // A clone of a link swapped in is the link: refuse it.
-            guard fstatat(stage.raw, file, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG else {
+            guard fstatat(stage.raw, file, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG,
+                info.st_nlink == 1
+            else {
                 throw .io(shown, errno: EINVAL)
             }
             return
@@ -302,7 +331,9 @@ enum UndoGitCopy {
         guard input >= 0 else { throw .io(shown, errno: errno) }
         let from = UndoFD(input)
         var info = stat()
-        guard fstat(from.raw, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw .io(shown, errno: EINVAL) }
+        guard fstat(from.raw, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+            throw .io(shown, errno: EINVAL)
+        }
         let output = openat(stage.raw, file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
         guard output >= 0 else { throw .io(shown, errno: errno) }
         let to = UndoFD(output)

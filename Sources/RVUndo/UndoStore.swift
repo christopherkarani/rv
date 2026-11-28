@@ -137,19 +137,24 @@ public struct UndoStore: Sendable {
     }
 
     /// Removes one copy's directory (links inside are removed, never
-    /// followed).
-    func remove(id: String) {
+    /// followed), stopping at `deadline` (a later prune finishes it).
+    func remove(id: String, deadline: ContinuousClock.Instant? = nil) {
         guard Self.isID(id), let rootFD = try? UndoTree.openDirectory(root.path) else { return }
-        UndoRemove.tree(id, in: rootFD.raw, deadline: nil)
+        let copyFD = openat(rootFD.raw, id, UndoTree.directoryFlags)
+        if copyFD >= 0 {
+            _ = unlinkat(copyFD, Self.manifestName, 0)
+            close(copyFD)
+        }
+        UndoRemove.tree(id, in: rootFD.raw, deadline: deadline)
     }
 
     /// Skipped requests keep only their note; at most this many are kept.
     static let maxSkipped = 10
 
     /// Which copies go, oldest first: expired ones, skipped notes past
-    /// `maxSkipped`, then the oldest copies while the store holds more than
-    /// `maxCopies` or `maxBytes`. Skipped notes go before real copies, so a
-    /// flood of skipped requests can never push a real copy out. Pure.
+    /// `maxSkipped`, then the oldest copies, of any kind, while the store
+    /// holds more than `maxCopies` or `maxBytes` (git copies count the
+    /// bytes they put in their repository). Pure.
     static func evictions(
         _ manifests: [UndoManifest], now: Date, retention: TimeInterval = UndoLimits.retention,
         maxCopies: Int = UndoLimits.storeMaxCopies, maxBytes: UInt64 = UndoLimits.storeMaxBytes
@@ -163,24 +168,22 @@ public struct UndoStore: Sendable {
             .dropFirst(maxSkipped) {
             going.insert(manifest.id)
         }
-        func staying() -> [UndoManifest] { newestFirst.filter { going.contains($0.id) == false } }
-        func over(_ left: [UndoManifest]) -> Bool {
-            left.count > maxCopies || left.reduce(UInt64(0)) { $0 + $1.storedBytes } > maxBytes
-        }
-        for kind in [UndoManifest.Kind.skipped, .files, .git] {
-            while over(staying()), let oldest = staying().last(where: { $0.kind == kind }) {
-                going.insert(oldest.id)
-            }
+        var staying = newestFirst.filter { going.contains($0.id) == false }
+        var bytes = staying.reduce(UInt64(0)) { $0 + $1.storedBytes }
+        while staying.count > maxCopies || bytes > maxBytes, let oldest = staying.popLast() {
+            going.insert(oldest.id)
+            bytes -= oldest.storedBytes
         }
         return newestFirst.reversed().filter { going.contains($0.id) }
     }
 
-    /// Removes what `evictions` names, oldest first, and copies a crash
-    /// left without a manifest once they are an hour old. Each copy loses
-    /// its manifest first, so a removal cut short by `deadline` leaves a
-    /// leftover a later prune finishes, never a half copy `rv undo` lists.
-    /// Returns the copies whose manifests went, so the caller can drop
-    /// their git refs.
+    /// Removes what `evictions` names, oldest first, and leftovers: copies
+    /// a crash left without a manifest once they are an hour old, and the
+    /// half-removed `data` or `stage` folders a copy cut short left behind.
+    /// Each copy loses its manifest first, so a removal cut short by
+    /// `deadline` leaves a leftover a later prune finishes, never a half
+    /// copy `rv undo` lists. Returns the copies whose manifests went, so
+    /// the caller can queue their git refs.
     @discardableResult
     public func prune(
         now: Date, deadline: ContinuousClock.Instant? = nil, retention: TimeInterval = UndoLimits.retention,
@@ -199,24 +202,102 @@ public struct UndoStore: Sendable {
             removed.append(manifest)
             UndoRemove.tree(manifest.id, in: rootFD.raw, deadline: deadline)
         }
-        let listed = Set(kept.map(\.id)).subtracting(removed.map(\.id))
+        let removedIDs = Set(removed.map(\.id))
+        for manifest in kept where removedIDs.contains(manifest.id) == false {
+            if let deadline, ContinuousClock.now >= deadline { return removed }
+            let copyFD = openat(rootFD.raw, manifest.id, UndoTree.directoryFlags)
+            guard copyFD >= 0 else { continue }
+            let copy = UndoFD(copyFD)
+            UndoRemove.tree(UndoGitCopy.stageName, in: copy.raw, deadline: deadline)
+            if manifest.kind != .files { UndoRemove.tree(Self.dataName, in: copy.raw, deadline: deadline) }
+        }
+        let listed = Set(kept.map(\.id)).subtracting(removedIDs)
         let budget = UndoBudget(maxEntries: .max, deadline: deadline ?? .now + .seconds(86_400))
         let names = (try? UndoTree.names(in: rootFD, shown: root.path, budget: budget)) ?? []
         for id in names where Self.isID(id) && listed.contains(id) == false {
             if let deadline, ContinuousClock.now >= deadline { break }
             var info = stat()
             guard fstatat(rootFD.raw, id, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
-            let leftover = removed.contains { $0.id == id }
+            let leftover = removedIDs.contains(id)
             guard leftover || now.timeIntervalSince1970 - Double(UndoStat.mtime(info).seconds) > 3600 else { continue }
             UndoRemove.tree(id, in: rootFD.raw, deadline: deadline)
         }
         return removed
     }
+
+    // MARK: Refs to drop
+
+    /// A git ref of a pruned copy, still to be deleted.
+    public struct RefDrop: Sendable, Equatable, Codable, Hashable {
+        public var repoRoot: String
+        public var ref: String
+
+        /// rv's own ref shape, in an absolute repository path.
+        var isWellFormed: Bool {
+            repoRoot.hasPrefix("/") && ref.hasPrefix("refs/rv/undo/")
+                && UndoStore.isID(String(ref.dropFirst("refs/rv/undo/".count)))
+        }
+    }
+
+    static let refDropsName = "refs-to-drop.json"
+    static let maxRefDrops = 1_000
+
+    func refDrops() -> [RefDrop] {
+        guard let data = try? Self.readOwnerOnly(root.appendingPathComponent(Self.refDropsName).path),
+            let drops = try? JSONDecoder().decode([RefDrop].self, from: data)
+        else { return [] }
+        return drops.filter(\.isWellFormed)
+    }
+
+    private func writeRefDrops(_ drops: [RefDrop]) {
+        guard let rootFD = try? UndoTree.openDirectory(root.path) else { return }
+        guard drops.isEmpty == false else {
+            _ = unlinkat(rootFD.raw, Self.refDropsName, 0)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(Array(drops.prefix(Self.maxRefDrops))) else { return }
+        let temp = Self.refDropsName + ".\(UUID().uuidString).tmp"
+        let fd = openat(rootFD.raw, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        guard fd >= 0 else { return }
+        let file = UndoFD(fd)
+        let raw = file.raw
+        let written = data.withUnsafeBytes { write(raw, $0.baseAddress, $0.count) }
+        guard written == data.count else {
+            _ = unlinkat(rootFD.raw, temp, 0)
+            return
+        }
+        if renameat(rootFD.raw, temp, rootFD.raw, Self.refDropsName) != 0 { _ = unlinkat(rootFD.raw, temp, 0) }
+    }
+
+    /// Adds refs to the queue (kept in the store, owner-only).
+    func queueRefDrops(_ drops: [RefDrop]) {
+        guard drops.isEmpty == false else { return }
+        var queue = refDrops()
+        for drop in drops where drop.isWellFormed && queue.contains(drop) == false { queue.append(drop) }
+        writeRefDrops(queue)
+    }
+
+    /// Hands each queued ref to `drop`, oldest first, until `deadline`;
+    /// keeps the ones `drop` could not finish.
+    func drainRefDrops(deadline: ContinuousClock.Instant?, drop: (RefDrop) -> Bool) {
+        let queue = refDrops()
+        guard queue.isEmpty == false else { return }
+        var left: [RefDrop] = []
+        for (index, entry) in queue.enumerated() {
+            if let deadline, ContinuousClock.now >= deadline {
+                left += queue[index...]
+                break
+            }
+            if drop(entry) == false { left.append(entry) }
+        }
+        writeRefDrops(left)
+    }
 }
 
 extension UndoManifest {
-    /// Bytes this copy holds in the store (git copies live in the repo).
-    var storedBytes: UInt64 { kind == .files ? tally.bytes : 0 }
+    /// Bytes this copy holds: in the store, or for a git copy, the objects
+    /// it put in its repository.
+    var storedBytes: UInt64 { kind == .skipped ? 0 : tally.bytes }
 }
 
 /// Text from a manifest, which any process running as the person can

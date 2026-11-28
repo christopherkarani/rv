@@ -35,7 +35,7 @@ enum UndoHookPoint {
         guard budget >= smallestUseful else { return nil }
         return UndoRequest(
             target: target, cwd: cwd.rawValue, command: LiveEventRedaction.command(command.rawValue, home: nil),
-            host: hookHost.rawValue, reason: reason, budget: budget)
+            host: hookHost.rawValue, reason: reason, budget: budget, deadline: now + budget)
     }
 
     /// Keeps the copy in the owner's store. Never fails the decision.

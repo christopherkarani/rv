@@ -19,6 +19,8 @@ public enum UndoSkip: Error, Sendable, Equatable {
     case notInRepository
     case missing(String)
     case unmergedFiles
+    case unsafeRepository(String)
+    case hardLinked(String)
     case gitUnavailable
     case gitFailed(String)
     case io(String, errno: Int32)
@@ -48,6 +50,10 @@ public enum UndoSkip: Error, Sendable, Equatable {
             "Nothing to copy at \(path)."
         case .unmergedFiles:
             "A merge is half done here (unmerged files), so rv kept no copy."
+        case .unsafeRepository(let why):
+            "rv will not run git in this repository (\(why)), so it kept no copy."
+        case .hardLinked(let path):
+            "Not copied: \(path) has other hard links (it may be another file, such as a secret)."
         case .gitUnavailable:
             "git was not found, so rv kept no copy."
         case .gitFailed(let what):
@@ -135,8 +141,8 @@ enum UndoTree {
     }
 
     /// Counts what copying `name` in `parent` would take, within `budget`.
-    /// Entries the budget names as secrets are left out and listed in
-    /// `secrets`.
+    /// Entries the budget names as secrets, and files with other hard
+    /// links, are left out, with their notes in `secrets`.
     static func scan(
         _ name: String, in parent: borrowing UndoFD, shown: String, budget: UndoBudget, secrets: inout [String]
     ) throws(UndoSkip) -> UndoTally {
@@ -149,9 +155,9 @@ enum UndoTree {
         _ name: String, in parent: Int32, shown: String, depth: Int, budget: UndoBudget,
         into tally: inout UndoTally, secrets: inout [String]
     ) throws(UndoSkip) {
-        guard depth <= budget.maxDepth else { throw .tooDeep(levels: budget.maxDepth) }
+        guard depth <= budget.maxDepth else { throw .tooDeep(levels: UndoLimits.maxDepth) }
         if budget.isSecret(shown) {
-            secrets.append(shown)
+            secrets.append(UndoSkip.secret(shown).note)
             return
         }
         var info = stat()
@@ -159,6 +165,13 @@ enum UndoTree {
         tally.entries += 1
         switch info.st_mode & S_IFMT {
         case S_IFREG:
+            // A second name for a file elsewhere (a secret, say) is not
+            // copied under this one.
+            if info.st_nlink > 1 {
+                tally.entries -= 1
+                secrets.append(UndoSkip.hardLinked(shown).note)
+                return
+            }
             tally.files += 1
             tally.bytes += UInt64(max(0, info.st_size))
         case S_IFDIR:
@@ -194,9 +207,9 @@ enum UndoTree {
         _ name: String, from source: Int32, to destination: Int32, shown: String, depth: Int, budget: UndoBudget,
         into tally: inout UndoTally, secrets: inout [String]
     ) throws(UndoSkip) {
-        guard depth <= budget.maxDepth else { throw .tooDeep(levels: budget.maxDepth) }
+        guard depth <= budget.maxDepth else { throw .tooDeep(levels: UndoLimits.maxDepth) }
         if budget.isSecret(shown) {
-            secrets.append(shown)
+            secrets.append(UndoSkip.secret(shown).note)
             return
         }
         var info = stat()
@@ -208,7 +221,20 @@ enum UndoTree {
             let target = try linkTarget(name, in: source, shown: shown)
             guard symlinkat(target, destination, name) == 0 else { throw .io(shown, errno: errno) }
         case S_IFREG:
+            if info.st_nlink > 1 {
+                secrets.append(UndoSkip.hardLinked(shown).note)
+                return
+            }
             if budget.clones, UndoClone.cloneFile(name, from: source, to: destination) {
+                // What was cloned must be a regular file: a link or folder
+                // swapped in between the stat and the clone is undone.
+                var made = stat()
+                guard fstatat(destination, name, &made, AT_SYMLINK_NOFOLLOW) == 0, made.st_mode & S_IFMT == S_IFREG,
+                    made.st_nlink == 1
+                else {
+                    UndoRemove.tree(name, in: destination, deadline: nil)
+                    throw .io(shown, errno: EINVAL)
+                }
                 tally.files += 1
                 tally.bytes += UInt64(max(0, info.st_size))
                 tally.lines = nil

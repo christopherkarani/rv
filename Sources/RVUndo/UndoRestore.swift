@@ -82,6 +82,7 @@ public enum UndoRestore {
     static func isPlainRelativePath(_ path: String) -> Bool {
         guard path.isEmpty == false, path.hasPrefix("/") == false else { return false }
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count <= UndoLimits.maxDepth else { return false }
         return components.allSatisfy { component in
             component.isEmpty == false && component != "." && component != ".."
                 && foldedGitName(component) != ".git"
@@ -105,7 +106,9 @@ public enum UndoRestore {
     private static func restoreGit(
         _ kept: UndoManifest.Git, root: String, git: URL, now: Date, timeZone: TimeZone
     ) throws(UndoRestoreRefusal) -> String {
-        let runner = UndoGit(executable: git, repository: root, deadline: .now + .seconds(60))
+        // The person's own git (their global config, so LFS and smudge
+        // filters work), hooks still off, pinned to this repository.
+        let runner = UndoGit(executable: git, repository: root, deadline: .now + .seconds(60), mode: .person)
         func text(_ arguments: [String]) throws(UndoRestoreRefusal) -> String {
             do {
                 return try runner.text(arguments)

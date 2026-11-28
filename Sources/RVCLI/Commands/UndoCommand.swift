@@ -27,7 +27,7 @@ struct Undo: AsyncParsableCommand {
         guard let home = CLIProcess.home() else { try CommandContext.failHomeMissing(command: "undo") }
         let store = UndoStore.inConfigDirectory(RVPolicyPaths.configDirectory(home: home))
         let now = Date()
-        for old in store.prune(now: now) { UndoKeeper.dropRef(old) }
+        UndoKeeper.prune(store, now: now)
         let cwd = FileManager.default.currentDirectoryPath
         let repository = UndoKeeper.repositoryRoot(from: cwd)
         let copies = store.list().filter { repository != nil && $0.repoRoot == repository }
