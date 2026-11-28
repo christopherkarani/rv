@@ -17,7 +17,8 @@ enum XPCOperatorUIBridge {
         xpc_get_type(message) == XPC_TYPE_DICTIONARY
             && (xpc_dictionary_get_value(message, UIBridgeWire.requestKey) != nil
                 || xpc_dictionary_get_value(message, UIBridgeWire.actionRequestKey) != nil
-                || xpc_dictionary_get_value(message, UIBridgeWire.hookRequestKey) != nil)
+                || xpc_dictionary_get_value(message, UIBridgeWire.hookRequestKey) != nil
+                || xpc_dictionary_get_value(message, UIBridgeWire.unlockRequestKey) != nil)
     }
 
     static func handle(
@@ -28,7 +29,8 @@ enum XPCOperatorUIBridge {
         sessions: LiveOperatorUISessionRegistry,
         ceremonies: WorkspaceOperatorCeremonyService,
         actionCeremonies: ActionApprovalCeremonyService,
-        hookCeremonies: HookReviewCeremonyService
+        hookCeremonies: HookReviewCeremonyService,
+        unlockCeremonies: UnlockReviewCeremonyService? = nil
     ) async {
         guard let response = await reply(
             message: message.object,
@@ -38,7 +40,8 @@ enum XPCOperatorUIBridge {
             sessions: sessions,
             ceremonies: ceremonies,
             actionCeremonies: actionCeremonies,
-            hookCeremonies: hookCeremonies
+            hookCeremonies: hookCeremonies,
+            unlockCeremonies: unlockCeremonies
         ),
             let peer = xpc_dictionary_get_remote_connection(message.object)
         else {
@@ -55,7 +58,8 @@ enum XPCOperatorUIBridge {
         sessions: LiveOperatorUISessionRegistry,
         ceremonies: WorkspaceOperatorCeremonyService,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
-        hookCeremonies: HookReviewCeremonyService? = nil
+        hookCeremonies: HookReviewCeremonyService? = nil,
+        unlockCeremonies: UnlockReviewCeremonyService? = nil
     ) async -> xpc_object_t? {
         // Reply-always: the only nil is a missing remote (nothing to send
         // to). Every gate failure answers opaque denial so the requestor's
@@ -86,6 +90,17 @@ enum XPCOperatorUIBridge {
                 discoveryOnly: discoveryOnly,
                 sessions: sessions,
                 hookCeremonies: hookCeremonies)
+        }
+        // Unlock review (K2) rides its own key; the gate and dispatch are
+        // platform-neutral (`UnlockReviewBridge`).
+        if xpc_dictionary_get_value(message, UIBridgeWire.unlockRequestKey) != nil {
+            guard let unlockCeremonies,
+                let data = body(message, key: UIBridgeWire.unlockRequestKey),
+                let request = try? IPCJSON.decode(UIUnlockBridgeRequest.self, from: data)
+            else { return deny(response) }
+            return answer(response, result: await UnlockReviewBridge.reply(
+                request, context: context, handshakeOK: handshakeOK, discoveryOnly: discoveryOnly,
+                sessions: sessions, ceremony: unlockCeremonies))
         }
         guard handshakeOK, !discoveryOnly,
             let peer = context.peer, peer.componentRole == .operatorUI,

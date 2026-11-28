@@ -198,6 +198,61 @@ public final class XPCOperatorUIClient: Sendable {
         return status
     }
 
+    // MARK: - Unlock reviews (K2)
+
+    /// Unlock-review calls ride the same persistent connection and
+    /// registered UI session as the other reviews, on the unlock request
+    /// key. A dropped connection kills bound unlock challenges server-side.
+    public func unlockList() async throws -> UIUnlockListDTO {
+        let response = try await unlockRoundTrip(.unlockList)
+        guard case .uiUnlockList(let list) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return list
+    }
+
+    public func unlockBind(codeHash: String) async throws -> UIUnlockChallengeBundleDTO {
+        let response = try await unlockRoundTrip(.unlockBind(codeHash: codeHash))
+        guard case .uiUnlockChallengeBundle(let bundle) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return bundle
+    }
+
+    public func unlockComplete(_ completion: UIUnlockCompletion) async throws -> UIUnlockStatusDTO {
+        let response = try await unlockRoundTrip(.unlockComplete(completion))
+        guard case .uiUnlockStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func unlockRelease(codeHash: String) async throws -> UIUnlockStatusDTO {
+        let response = try await unlockRoundTrip(.unlockRelease(codeHash: codeHash))
+        guard case .uiUnlockStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    private func unlockRoundTrip(_ request: UIUnlockBridgeRequest) async throws -> IPCResponse {
+        if Task.isCancelled {
+            throw XPCOperatorUIClientError.cancelled
+        }
+        let actions = try await liveActions()
+        let body = try IPCJSON.encode(request)
+        do {
+            let frame = try await exchangeRaw(body: body, key: UIBridgeWire.unlockRequestKey, on: actions).body
+            return try IPCJSON.decode(IPCResponse.self, from: frame)
+        } catch let error as XPCOperatorUIClientError {
+            forgetActions()
+            throw error
+        } catch {
+            forgetActions()
+            throw XPCOperatorUIClientError.protocolMismatch
+        }
+    }
+
     private func register() async throws -> UIRegisteredDTO {
         let response = try await roundTrip(.register)
         guard case .uiRegistered(let receipt) = response.result else {

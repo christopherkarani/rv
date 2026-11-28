@@ -54,6 +54,9 @@ public enum IPCResult: Sendable, Equatable {
     case uiHookReviewList(UIHookReviewListDTO)
     case uiHookChallengeBundle(UIHookChallengeBundleDTO)
     case uiHookStatus(UIHookStatusDTO)
+    case uiUnlockList(UIUnlockListDTO)
+    case uiUnlockChallengeBundle(UIUnlockChallengeBundleDTO)
+    case uiUnlockStatus(UIUnlockStatusDTO)
     case hostActionApprovalCreated(HostActionApprovalCreatedDTO)
     case hostActionApprovalStatus(HostActionApprovalStatusReplyDTO)
     case hostActionApprovalDecision(HostActionApprovalDecisionDTO)
@@ -216,6 +219,9 @@ extension IPCResult: Codable {
         case uiHookReviewList
         case uiHookChallengeBundle
         case uiHookStatus
+        case uiUnlockList
+        case uiUnlockChallengeBundle
+        case uiUnlockStatus
         case hostActionApprovalCreated
         case hostActionApprovalStatus
         case hostActionApprovalDecision
@@ -283,6 +289,12 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .uiHookChallengeBundle)
         case .uiHookStatus(let reply):
             try container.encode(reply, forKey: .uiHookStatus)
+        case .uiUnlockList(let reply):
+            try container.encode(reply, forKey: .uiUnlockList)
+        case .uiUnlockChallengeBundle(let reply):
+            try container.encode(reply, forKey: .uiUnlockChallengeBundle)
+        case .uiUnlockStatus(let reply):
+            try container.encode(reply, forKey: .uiUnlockStatus)
         case .hostActionApprovalCreated(let reply):
             try container.encode(reply, forKey: .hostActionApprovalCreated)
         case .hostActionApprovalStatus(let reply):
@@ -369,6 +381,13 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             UIHookStatusDTO.self, forKey: .uiHookStatus) {
             self = .uiHookStatus(reply)
+        } else if let reply = try container.decodeIfPresent(UIUnlockListDTO.self, forKey: .uiUnlockList) {
+            self = .uiUnlockList(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIUnlockChallengeBundleDTO.self, forKey: .uiUnlockChallengeBundle) {
+            self = .uiUnlockChallengeBundle(reply)
+        } else if let reply = try container.decodeIfPresent(UIUnlockStatusDTO.self, forKey: .uiUnlockStatus) {
+            self = .uiUnlockStatus(reply)
         } else if let reply = try container.decodeIfPresent(
             HostActionApprovalCreatedDTO.self, forKey: .hostActionApprovalCreated) {
             self = .hostActionApprovalCreated(reply)
