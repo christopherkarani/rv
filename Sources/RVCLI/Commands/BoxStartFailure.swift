@@ -5,8 +5,9 @@ import RVDomain
 /// line why and one fix (v4 Contained, "When it can't start, one line says
 /// why"). The workspace host speaks `rv workspace`'s words; this reads
 /// them by their opening clause and says the same thing plainly. A message
-/// no entry knows still gets one line (its first clause) and one fix (the
-/// first `rv …` command it names, else `rv doctor`).
+/// no entry knows gets a generic line and `rv doctor`: the host's own text
+/// (which can carry paths and internal names) is shown only with
+/// `rv box --verbose`, on a line of its own (`detail`).
 ///
 /// Pure and cross-platform: the macOS shell (`BoxRun.runLaunch`) catches
 /// the host's refusal and hands its text here.
@@ -18,16 +19,35 @@ enum BoxStartFailure {
     }
 
     static let doctor = "rv doctor"
-    private static let leftovers = "see what it left: rv workspace leftovers"
+    private static let leftovers = "clear what it left: rv box tidy"
     private static let status = "rv workspace status"
+
+    /// The trust-pin refusal (v4 Contained). `rv repair` does not exist
+    /// yet, so the fix is `rv doctor`, which names the root-owned step.
+    static let trustPin = BoxRefusal(
+        why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
+        fix: "see the fix (it needs an administrator): rv doctor")
+
+    /// Messages a stale trust pin can also cause: a host this rv refuses
+    /// to talk to looks unreachable from here. With a trust reason in
+    /// hand (the installed helper fails its peer-trust check), they read
+    /// as the trust pin, not as an unreachable helper.
+    static let trustSensitivePrefixes = [
+        "workspace host is not reachable",
+        "unauthorized workspace client",
+        "the workspace host was refused",
+    ]
+
+    static func mayBeTrust(_ message: String) -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trustSensitivePrefixes.contains { trimmed.hasPrefix($0) }
+    }
 
     /// Longest prefixes first, so a specific message wins over a general
     /// one that starts the same way.
     static let entries: [Entry] = [
         // Ensure (`WorkspaceCommandRun.ensureFailureText`).
-        Entry(prefix: "the workspace host was refused", refusal: BoxRefusal(
-            why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
-            fix: "see the fix (it needs an administrator): rv doctor")),
+        Entry(prefix: "the workspace host was refused", refusal: trustPin),
         Entry(prefix: "the workspace host this start launched is still mounting or recovering", refusal: BoxRefusal(
             mark: .setup, why: "The box is still starting in the background.",
             fix: "run rv box again once it is ready: rv workspace status")),
@@ -86,9 +106,7 @@ enum BoxStartFailure {
         Entry(prefix: "incompatible workspace protocol", refusal: BoxRefusal(
             why: "The running box helper is from another rv version.",
             fix: "close it, then run rv box again: rv workspace close")),
-        Entry(prefix: "unauthorized workspace client", refusal: BoxRefusal(
-            why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
-            fix: "see the fix (it needs an administrator): rv doctor")),
+        Entry(prefix: "unauthorized workspace client", refusal: trustPin),
         Entry(prefix: "workspace is closing", refusal: BoxRefusal(
             mark: .setup, why: "This box is closing.", fix: "run rv box again in a moment: rv workspace status")),
         Entry(prefix: "workspace is closed", refusal: BoxRefusal(
@@ -132,34 +150,25 @@ enum BoxStartFailure {
         Entry(prefix: "contained runtime is macOS-only today", refusal: BoxPlan.linuxHostRefusal),
     ].sorted { $0.prefix.count > $1.prefix.count }
 
-    /// The refusal for a host message.
-    static func refusal(_ message: String) -> BoxRefusal {
+    /// The refusal for a host message. `hostTrustReason`: why the
+    /// installed box helper fails its peer-trust check, when it does
+    /// (`WorkspaceCommandRun.currentHostTrustReason`).
+    static func refusal(_ message: String, hostTrustReason: String? = nil) -> BoxRefusal {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hostTrustReason != nil, mayBeTrust(trimmed) { return trustPin }
         if let entry = entries.first(where: { trimmed.hasPrefix($0.prefix) }) { return entry.refusal }
-        return fallback(trimmed)
+        return fallback
     }
 
-    /// An unknown message: its first clause, and the first `rv …` command
-    /// it names, else `rv doctor`. Always one line each.
-    static func fallback(_ message: String) -> BoxRefusal {
-        let firstLine = message.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
-        var reason = firstLine.components(separatedBy: "; ").first ?? firstLine
-        reason = reason.components(separatedBy: " — ").first ?? reason
-        if reason.isEmpty { reason = "the box could not start" }
-        return BoxRefusal(why: sentence(DisplayedText.field(reason)), fix: firstCommand(in: message) ?? doctor)
-    }
+    /// A message no entry knows: never its text, which can carry paths,
+    /// ids and commands meant for `rv workspace`.
+    static let fallback = BoxRefusal(why: "The box could not start.", fix: doctor)
 
-    /// The first `'rv …'` command quoted in `message`.
-    static func firstCommand(in message: String) -> String? {
-        let parts = message.components(separatedBy: "'")
-        guard parts.count >= 3 else { return nil }
-        return stride(from: 1, to: parts.count - 1, by: 2).map { parts[$0] }
-            .first { $0.hasPrefix("rv ") && $0.contains("\n") == false }
-    }
-
-    private static func sentence(_ text: String) -> String {
-        guard let first = text.first else { return text }
-        let capitalized = first.uppercased() + text.dropFirst()
-        return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+    /// `rv box --verbose`: the host's own words, on one line, with control
+    /// characters made visible.
+    static func detail(_ message: String) -> String {
+        let oneLine = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline).joined(separator: " ")
+        return "  host said: \(DisplayedText.field(oneLine))\n"
     }
 }

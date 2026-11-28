@@ -97,15 +97,48 @@ struct BoxStartFailureTests {
             """)
     }
 
-    /// A message no entry knows: its first clause and the first rv
-    /// command it names, still one line each.
-    @Test func anUnknownMessageStillGetsOneLineAndOneFix() {
-        let named = BoxStartFailure.refusal("the moon is in the way; run 'rv box list' and then\nsomething else")
-        #expect(named.text == "✕ The moon is in the way.\n  → rv box list\n")
-        let bare = BoxStartFailure.refusal("weird — nothing else")
-        #expect(bare.text == "✕ Weird.\n  → rv doctor\n")
-        Self.expectOneLineOneFix(BoxStartFailure.refusal(""))
-        Self.expectOneLineOneFix(BoxStartFailure.refusal("line one\nline two; 'rv x\ny'"))
+    /// A message no entry knows: a generic line and rv doctor, never the
+    /// host's own text or the commands (with paths) it quotes.
+    @Test func anUnknownMessageNeverEchoesTheHost() {
+        let generic = "✕ The box could not start.\n  → rv doctor\n"
+        for message in ["the moon is in the way; run 'rv workspace abandon --workspace /Users/chris/secret'",
+                        "weird — nothing else", "", "line one\nline two; 'rv x\ny'"] {
+            let refusal = BoxStartFailure.refusal(message)
+            #expect(refusal.text == generic)
+            Self.expectOneLineOneFix(refusal)
+        }
+    }
+
+    /// `--verbose`: the host's words, on one line of their own.
+    @Test func verboseDetailIsOneSanitizedLine() {
+        #expect(BoxStartFailure.detail("a\nb; 'rv x'\n") == "  host said: a b; 'rv x'\n")
+        #expect(BoxStartFailure.detail("bell\u{07}").contains("\u{07}") == false)
+    }
+
+    /// With a trust reason in hand, an unreachable or refused helper is the
+    /// trust pin; without one it stays what the host said.
+    @Test func aTrustReasonTurnsUnreachableIntoTheTrustPin() {
+        let reason = "the peer-trust manifest at /Library/rv/peer-trust.json grants no workspaceHost role"
+        for message in [WorkspaceCommandRun.hostNotReachableText, "unauthorized workspace client",
+                        Self.hostMessages[0]] {
+            #expect(BoxStartFailure.mayBeTrust(message))
+            #expect(BoxStartFailure.refusal(message, hostTrustReason: reason) == BoxStartFailure.trustPin)
+        }
+        #expect(BoxStartFailure.refusal(WorkspaceCommandRun.hostNotReachableText, hostTrustReason: nil).why
+            == "The box helper started but rv can't reach it.")
+        // Other failures do not become the trust pin.
+        #expect(BoxStartFailure.refusal("workspace host timed out", hostTrustReason: reason).why
+            == "The box helper did not answer in time.")
+    }
+
+    /// Every recovery-blocked reason has a plain line and no internal name.
+    @Test(arguments: ["publicationConflict", "missingVolume", "ambiguousOwnership", "ambiguousSavedTree",
+                      "unprovenProcess", "unrelatedMount", "tornLog", "corrupt"])
+    func everyRecoveryBlockedReasonReadsPlainly(_ reason: String) {
+        let refusal = BoxStartFailure.refusal("recovery blocked: \(reason): abandon will refuse; run 'rv doctor'")
+        #expect(refusal != BoxStartFailure.fallback)
+        #expect(refusal.why.contains(reason) == false)
+        Self.expectOneLineOneFix(refusal)
     }
 
     /// `BoxPlan.hostRefusal` is the same catalog, so L1's callers changed

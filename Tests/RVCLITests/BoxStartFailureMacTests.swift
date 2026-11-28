@@ -28,11 +28,41 @@ struct BoxStartFailureMacTests {
         BoxStartFailure.entries.contains { message.hasPrefix($0.prefix) }
     }
 
+    /// Every reason `hostTrustReason` can give, and none.
+    static let trustReasons: [String?] = [
+        nil,
+        WorkspaceCommandRun.hostTrustReason(source: .siblingPin, hostPath: "/usr/local/bin/rv-workspace-host"),
+        WorkspaceCommandRun.hostTrustReason(source: .invalid, hostPath: "/usr/local/bin/rv-workspace-host"),
+        "the installed workspace host is not pinned to this build",
+    ]
+
+    static let recoveryReasons: [WorkspaceRecoveryBlock.Reason] = [
+        .publicationConflict, .missingVolume, .ambiguousOwnership, .ambiguousSavedTree,
+        .unprovenProcess, .unrelatedMount, .tornLog, .corrupt,
+    ]
+
     @Test func everyEnsureFailureHasAnEntry() {
-        for failure in Self.hostFailures {
-            let message = WorkspaceCommandRun.ensureFailureText(failure, hostTrustReason: nil)
-            #expect(Self.known(message), "no entry for \(failure): \(message)")
-            BoxStartFailureTests.expectOneLineOneFix(BoxStartFailure.refusal(message))
+        let failures = Self.hostFailures
+            + Self.recoveryReasons.map { .recoveryBlocked(WorkspaceRecoveryBlock(workspace: nil, reason: $0)) }
+        for failure in failures {
+            for reason in Self.trustReasons {
+                let message = WorkspaceCommandRun.ensureFailureText(failure, hostTrustReason: reason)
+                #expect(Self.known(message), "no entry for \(failure): \(message)")
+                let refusal = BoxStartFailure.refusal(message, hostTrustReason: reason)
+                BoxStartFailureTests.expectOneLineOneFix(refusal)
+                if failure == .control(.unauthorizedClient) { #expect(refusal == BoxStartFailure.trustPin) }
+            }
+        }
+        for reason in Self.recoveryReasons {
+            #expect(Self.known(WorkspaceCommandRun.blockedRecoveryText(reason)))
+        }
+    }
+
+    /// Unreachable with a failing trust check reads as the trust pin.
+    @Test func unreachableWithATrustReasonIsTheTrustPin() {
+        for reason in Self.trustReasons.compactMap({ $0 }) {
+            #expect(BoxStartFailure.refusal(WorkspaceCommandRun.hostNotReachableText, hostTrustReason: reason)
+                == BoxStartFailure.trustPin)
         }
     }
 
