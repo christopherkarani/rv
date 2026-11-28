@@ -234,11 +234,10 @@ func antigravityDecode_fileToolsAreFileDoor(_ tool: String, kind: FileToolKind) 
     )
     try assertAntigravityHonorPath(
         wire,
-        reason:
-            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)"
+        reason: hostDenyLine(command: command, deny: deny, kind: .ask(recorded: true))
     )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
 }
 
@@ -307,7 +306,7 @@ private final class AntigravityEvaluateProbe: Sendable {
     #expect(json["decision"] as? String == "deny")
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
 }
 
 @Test func antigravityDecode_readsCwdSessionAndProposedAction() throws {

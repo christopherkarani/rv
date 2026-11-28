@@ -78,29 +78,49 @@ struct ServiceClientLiveEventsTests {
     /// the way the Linux socket blocks in `recv`, many more than the pool
     /// has threads. A request on the same client still answers at once,
     /// over the main channel, and no poll ever went there.
-    @Test func parkedPollsDoNotDelayOtherRequests() async throws {
+    ///
+    /// Nothing here races the clock against the pool. Each poll needs a
+    /// pool thread for a moment before it reaches its own thread, and when
+    /// other suites hold the pool (CI starts ~1900 tests at once) that
+    /// moment can be seconds long, for these tasks and for every other.
+    /// So parking is awaited as an event, and the request is timed beside
+    /// a control request on an idle client at the same moment, under the
+    /// same load. Both failures this test guards against hang instead: a
+    /// poll that blocked a pool thread lets at most core-count polls park,
+    /// and a request queued behind a parked poll waits for a release that
+    /// only comes after it. The time limit turns a hang into a failure.
+    @Test(.timeLimit(.minutes(2)))
+    func parkedPollsDoNotDelayOtherRequests() async throws {
         let gate = PollGate()
         let main = MainChannel(events: EventsChannel(gate: gate))
         let service = client(main)
+        let idle = client(MainChannel(events: EventsChannel(gate: PollGate())))
         let count = max(16, ProcessInfo.processInfo.activeProcessorCount * 4)
-        // Whatever happens, release the polls so a failure cannot hang.
+        // Cleanup only, past the time limit: a failed run leaves no thread
+        // parked.
         Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 30)
+            Thread.sleep(forTimeInterval: 150)
             gate.release(count)
         }
         let polls = (0..<count).map { _ in
             Task { await service.liveEvents(EventsParams(waitMs: EventsParams.maxWaitMs)) }
         }
-        let clock = ContinuousClock()
-        let deadline = clock.now + .seconds(20)
-        while gate.parked < count, clock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        await gate.parked(atLeast: count)
         #expect(gate.parked == count)
 
-        let started = clock.now
-        let other = await service.proposalStatus(operationID: UUID())
-        #expect(clock.now - started < .seconds(2))
+        async let control = timed { await idle.proposalStatus(operationID: UUID()) }
+        async let request = timed { await service.proposalStatus(operationID: UUID()) }
+        let (controlRun, run) = await (control, request)
+        let other = run.result
+        // Answered while every poll was still parked: none had returned.
+        #expect(gate.returned == 0)
+        // And not delayed by them: at most 2 s past the idle client's
+        // request, well under the 5 s a poll waits, so a request held for
+        // any part of a poll's wait fails here.
+        let pollWait = Duration.milliseconds(EventsParams.maxWaitMs)
+        #expect(run.took < controlRun.took + .seconds(2),
+                "beside parked polls: \(run.took); idle client: \(controlRun.took)")
+        #expect(run.took - controlRun.took < pollWait / 2)
         guard case .failure(.service(let reason)) = other else {
             Issue.record("the main channel must answer, got \(other)")
             return
@@ -127,17 +147,60 @@ struct ServiceClientLiveEventsTests {
     }
 }
 
-/// Releases parked polls; counts how many are parked.
+/// Wall time of one async call.
+private func timed<T: Sendable>(_ body: () async -> T) async -> (result: T, took: Duration) {
+    let clock = ContinuousClock()
+    let started = clock.now
+    let result = await body()
+    return (result, clock.now - started)
+}
+
+/// Releases parked polls; counts how many are parked and wakes a waiter
+/// once enough are.
 private final class PollGate: @unchecked Sendable {
     // DispatchSemaphore and Mutex are thread-safe; nothing else is stored.
     private let semaphore = DispatchSemaphore(value: 0)
-    private let count = Mutex(0)
+    private struct State {
+        var parked = 0
+        var returned = 0
+        var waiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
+    }
+    private let state = Mutex(State())
 
-    var parked: Int { count.withLock { $0 } }
+    var parked: Int { state.withLock { $0.parked } }
+    /// Polls that were released and returned.
+    var returned: Int { state.withLock { $0.returned } }
 
     func park() {
-        count.withLock { $0 += 1 }
+        let ready = state.withLock { state -> CheckedContinuation<Void, Never>? in
+            state.parked += 1
+            guard let waiter = state.waiter, state.parked >= waiter.count else { return nil }
+            state.waiter = nil
+            return waiter.continuation
+        }
+        ready?.resume()
         semaphore.wait()
+        state.withLock { $0.returned += 1 }
+    }
+
+    /// Suspends until `count` polls are parked, or the task is cancelled.
+    func parked(atLeast count: Int) async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let now = state.withLock { state -> Bool in
+                    if state.parked >= count || Task.isCancelled { return true }
+                    state.waiter = (count, continuation)
+                    return false
+                }
+                if now { continuation.resume() }
+            }
+        } onCancel: {
+            let waiting = state.withLock { state -> CheckedContinuation<Void, Never>? in
+                defer { state.waiter = nil }
+                return state.waiter?.continuation
+            }
+            waiting?.resume()
+        }
     }
 
     func release(_ polls: Int) {
@@ -198,4 +261,75 @@ private final class MainChannel: ServiceTransport, Sendable {
     func invalidate() {}
 
     func longPollChannel() -> any ServiceTransport { events }
+}
+
+/// `ServiceClient` as a `LiveEventsPolling` source: each rvd answer maps
+/// to what `LiveEventFeed` acts on.
+struct ServiceClientLiveFeedTests {
+    private let ack = HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok)
+    private let stream = UUID()
+
+    private func client(_ transport: (any ServiceTransport)?) -> ServiceClient {
+        ServiceClient(
+            transport: transport,
+            allowOnceDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("rv-events-feed-\(UUID().uuidString)", isDirectory: true),
+            home: nil)
+    }
+
+    @Test func answersMapToFeedResults() async {
+        let reply = EventsReply(stream: stream, cursor: 1, events: [])
+        #expect(await client(ScriptedTransport(ack: ack, responseResult: .events(reply)))
+            .pollLiveEvents(EventsParams()) == .reply(reply))
+        #expect(await client(ScriptedTransport(ack: ack, responseResult: .error(.decodeFailed), responseID: UUID()))
+            .pollLiveEvents(EventsParams()) == .unsupported)
+        #expect(await client(ScriptedTransport(ack: ack, responseResult: .error(.unknownMethod)))
+            .pollLiveEvents(EventsParams()) == .unsupported)
+        #expect(await client(ScriptedTransport(ack: ack, responseResult: .error(.authorizationDenied)))
+            .pollLiveEvents(EventsParams()) == .refused)
+        #expect(await client(ScriptedTransport(ack: ack, responseResult: .error(.protocolSkew(.majorVersion))))
+            .pollLiveEvents(EventsParams()) == .skewed)
+        #expect(await client(nil).pollLiveEvents(EventsParams()) == .failed("noTransport"))
+        let crossed = ScriptedTransport(ack: ack, responseResult: .events(reply), responseID: UUID())
+        #expect(await client(crossed).pollLiveEvents(EventsParams()) == .failed("identityMismatch"))
+    }
+
+    /// Hello skew: rvd refuses the hello it asked for. The feed reads
+    /// that as skewed (asked again later), not as down.
+    @Test func aRefusedHelloIsSkewed() async {
+        let skewed = HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "9.0.0", status: .skew(.majorVersion))
+        let transport = ScriptedTransport(
+            ack: skewed, responseResults: [.error(.protocolSkew(.handshakeRequired))])
+        #expect(await client(transport).pollLiveEvents(EventsParams()) == .skewed)
+        #expect(transport.helloCount == 1)
+    }
+
+    /// A cancelled poll sends nothing and never invalidates the events
+    /// channel, which a newer feed on the same client may be using.
+    @Test func aCancelledPollLeavesTheChannelAlone() async {
+        let transport = ScriptedTransport(
+            ack: ack, helloError: .decodeFailed, responseResults: [.error(.protocolSkew(.handshakeRequired))])
+        let client = client(transport)
+        let poll = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await client.pollLiveEvents(EventsParams())
+        }
+        #expect(await poll.value == .failed("cancelled"))
+        #expect(transport.sendCount == 0)
+        #expect(transport.helloCount == 0)
+        #expect(transport.invalidationCount == 0)
+    }
+
+    /// The whole chain: the feed over a client over its events channel.
+    @Test func theFeedReadsEventsThroughTheClient() async {
+        let event = LiveEvent(sequence: 1, atMs: 0, payload: .decision(LiveDecision(
+            verdict: .denied, host: .claude, tool: .bash, command: "git reset --hard", rule: "core.git:reset-hard")))
+        let transport = ScriptedTransport(
+            ack: ack,
+            responseResults: [.error(.protocolSkew(.handshakeRequired)),
+                              .events(EventsReply(stream: stream, cursor: 1, events: [event]))])
+        var iterator = client(transport).liveFeed().makeAsyncIterator()
+        #expect(await iterator.next() == .link(.live))
+        #expect(await iterator.next() == .event(event))
+    }
 }

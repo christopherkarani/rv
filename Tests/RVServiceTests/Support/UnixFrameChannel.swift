@@ -182,18 +182,26 @@ final class FakeXPCClient {
         fd = sock
     }
 
-    func hello() throws -> [String: Any] {
+    func hello() async throws -> [String: Any] {
         let body = Data(#"{"protocol":"rv.ipc.v1","clientSemver":"1.0.0"}"#.utf8)
-        try UnixFrameIO.writeFrame(fd: fd, body: body)
-        let reply = try UnixFrameIO.readFrame(fd: fd)
+        let reply = try await exchange(body)
         return try JSONSerialization.jsonObject(with: reply) as? [String: Any] ?? [:]
     }
 
-    func sendJSON(_ object: [String: Any]) throws -> [String: Any] {
+    func sendJSON(_ object: [String: Any]) async throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: object)
-        try UnixFrameIO.writeFrame(fd: fd, body: body)
-        let reply = try UnixFrameIO.readFrame(fd: fd)
+        let reply = try await exchange(body)
         return try JSONSerialization.jsonObject(with: reply) as? [String: Any] ?? [:]
+    }
+
+    /// One frame out, one back, blocking off the cooperative pool: the
+    /// server answers from a `Task`, which needs a pool thread to run.
+    private func exchange(_ body: Data) async throws -> Data {
+        let fd = self.fd
+        return try await offPool {
+            try UnixFrameIO.writeFrame(fd: fd, body: body)
+            return try UnixFrameIO.readFrame(fd: fd)
+        }
     }
 
     func close() {

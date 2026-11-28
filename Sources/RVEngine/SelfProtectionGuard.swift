@@ -76,6 +76,50 @@ private let xargsStdinWord = "$xargs-stdin"
 
 private let xargsProgramNames: Set<String> = ["xargs", "gxargs"]
 
+/// The stdin stand-in, for other guards that follow xargs.
+let xargsStandIn = xargsStdinWord
+
+/// `launched` plus the commands each `xargs` among them runs (nested
+/// xargs too, up to `maxXargsDepth`): its program as written and with
+/// every replace string swapped for the stdin stand-in, the stand-in
+/// appended unless replace mode alone is in effect, re-fed through the
+/// shared launcher resolver. When xargs's options do not parse exactly,
+/// every word from one that names git (or is dynamic) on is taken as the
+/// program (fail closed).
+func followingXargs(_ launched: [LaunchedCommand]) -> [LaunchedCommand] {
+    var out = launched
+    var depths = Array(repeating: 0, count: launched.count)
+    var index = 0
+    while index < out.count {
+        let (command, depth) = (out[index], depths[index])
+        index += 1
+        guard depth < maxXargsDepth, let head = command.guardArgv.first,
+              xargsProgramNames.contains(commandName(head)) else { continue }
+        for argv in xargsPrograms(Array(command.guardArgv.dropFirst())) {
+            let fed = launchedCommandHeads(argv: argv, depth: depth + 1)
+            out += fed
+            depths += Array(repeating: depth + 1, count: fed.count)
+        }
+    }
+    return out
+}
+
+private func xargsPrograms(_ words: [String]) -> [[String]] {
+    guard let parsed = parseXargsOptions(words) else {
+        return words.indices.filter { index in
+            let word = unescapeBackslashPairs(words[index])
+            return commandName(word) == "git" || word.hasPrefix("$")
+        }.map { Array(words[$0...]) + [xargsStdinWord] }
+    }
+    guard let start = parsed.programStart else { return [] }
+    let program = Array(words[start...])
+    let stdin = parsed.appendsStdin ? [xargsStdinWord] : []
+    var variants = [program + stdin]
+    let substituted = substitutingReplaceStrings(parsed.replaceStrings, in: program)
+    if substituted != program { variants.append(substituted + stdin) }
+    return variants
+}
+
 /// xargs feeding xargs feeding…: past this, fail closed.
 private let maxXargsDepth = 4
 
@@ -328,7 +372,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace",
+    "workspace", "protect", "pause",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -370,6 +414,13 @@ private func isHelpPageRequest(_ args: ArraySlice<String>) -> Bool {
 }
 
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
+    // Q1's new names (`rv unlock`, `rv watch claude`, `rv secrets add`) are
+    // judged as the spelling the CLI runs for them (`CommandVocabulary.expand`).
+    switch CommandVocabulary.expand(Array(args[verbIndex...])) {
+    case .expanded(let runs): return isWeakeningVerb(Array(args[..<verbIndex]) + runs, at: verbIndex)
+    case .missingArgument: return false
+    case .unchanged: break
+    }
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
     // `setup --observe` sheds oversight; a variable or glob may carry the flag.
@@ -398,7 +449,11 @@ private func isWeakeningSub(
     if isUnmodelledWord(sub) { return true }
     switch verb {
     case "packs":
-        return sub == "disable"
+        return sub == "disable" || sub == "off"
+    case "protect":
+        // `rv protect <tool> off` loosens; `off` may sit anywhere, and a
+        // variable or glob may carry it. Adding protection only tightens.
+        return sub == "off" || tail.contains { $0 == "off" || isUnmodelledWord($0) }
     case "safety":
         return sub != SafetyLevel.strict.rawValue
     case "allowlist":
@@ -419,7 +474,8 @@ private func isWeakeningSub(
         // imports a secret chooses which real value reaches a cage, or which
         // host the gateway sends it to (a Varlock `@proxy(domain=...)`).
         switch sub {
-        case "set", "remove", "oauth-reset": return true
+        // `add` is `set`'s new name; matched here too for `rv secrets --x add`.
+        case "set", CommandVocabulary.Alias.secretsAdd.words[1], "remove", "oauth-reset": return true
         case "import": return flags.contains("--dry-run") == false
         case "hook": return third.map { $0 == "uninstall" || isUnmodelledWord($0) } == true
         default: return false
@@ -430,6 +486,10 @@ private func isWeakeningSub(
         // File transfer crosses the cage wall: `upload` reads host paths
         // into the workspace, `download` writes workspace files to the host.
         return sub == "upload" || sub == "download"
+    case "pause":
+        // `rv pause <duration>` watches every host; bare `rv pause` (the
+        // countdown) and `rv pause --end` (back now) carry no positional.
+        return true
     case "host":
         // `mode <host> block` is the one tightening form; a missing, extra,
         // unknown or unmodelled word fails closed. `--json`/`--robot` take

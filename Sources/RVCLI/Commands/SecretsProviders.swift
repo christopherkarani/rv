@@ -90,9 +90,9 @@ extension SecretsRun {
         if let binaries = row.binaries { lines.append("  binaries: \(binaries.joined(separator: ", "))") }
         lines += row.notes.map { "  note: \($0)" }
         if let first = row.credentials.first {
-            lines.append("  use: rv secrets set \(first.variable) --provider \(row.id)")
+            lines.append("  use: \(CommandVocabulary.Alias.secretsAdd.invocation) \(first.variable) --provider \(row.id)")
         } else {
-            lines.append("  use: rv secrets set NAME --provider \(row.id) --base-url-env VAR")
+            lines.append("  use: \(CommandVocabulary.Alias.secretsAdd.invocation) NAME --provider \(row.id) --base-url-env VAR")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -133,7 +133,7 @@ extension SecretsRun {
 struct SecretsProviders: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "providers",
-        abstract: "List the provider profiles `rv secrets set --provider` expands, or show one.")
+        abstract: "List the provider profiles `rv secrets add --provider` expands, or show one.")
 
     @Argument(help: "Profile id, e.g. github. Default: list all.") var id: String?
     @OptionGroup var format: FormatFlags

@@ -139,17 +139,20 @@ struct LocalHookDeciderTests {
     enum ModeFlip: String, CaseIterable, Sendable {
         case fileGlobal, shellGlobal, shellHost
 
-        var stdin: String {
+        /// A secret read is enforced in every mode, so the file door's
+        /// observable deny is a host MCP config write while rv's gateway is
+        /// in use (`MCPHostConfigDoor`).
+        func stdin(home: HomeDirectory) -> String {
             switch self {
-            case .fileGlobal: claudeFile("Read", path: "/Users/x/.ssh/id_rsa", cwd: "/tmp")
+            case .fileGlobal: claudeFile("Write", path: home.rawValue + "/.cursor/mcp.json", cwd: "/tmp")
             case .shellGlobal, .shellHost: claudeBash("touch /etc/x", cwd: "/tmp")
             }
         }
 
         var observe: Data {
             switch self {
-            case .fileGlobal, .shellGlobal: Data(#"{"guard":{"mode":"observe"}}"#.utf8)
-            case .shellHost: Data(#"{"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
+            case .fileGlobal, .shellGlobal: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"observe"}}"#.utf8)
+            case .shellHost: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
             }
         }
     }
@@ -163,17 +166,18 @@ struct LocalHookDeciderTests {
     /// the flip never landing.
     @Test(arguments: ModeFlip.allCases)
     func guardModeFlipsNeverFinalizeAnObservedDeny(_ flip: ModeFlip) async throws {
-        let stdin = flip.stdin
-        let enforced = await (try LocalHookFixture(guardMode: "enforce")).decider
-            .decide(host: .claude, stdin: stdin)
+        let fixture = try LocalHookFixture(guardMode: "enforce")
+        let configDirectory = RVPolicyPaths.configDirectory(home: fixture.home)
+        try Data("{}".utf8).write(to: configDirectory.appendingPathComponent(MCPHostConfigPaths.gatewayConfigFileName))
+        let stdin = flip.stdin(home: fixture.home)
+        let enforced = await fixture.decider.decide(host: .claude, stdin: stdin)
         guard case .final(let deny) = enforced, deny.stdout.isEmpty == false else {
             Issue.record("expected a final enforce deny, got \(enforced)")
             return
         }
 
-        let fixture = try LocalHookFixture(guardMode: "enforce")
-        let config = RVPolicyPaths.configDirectory(home: fixture.home).appendingPathComponent("config.json")
-        let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
+        let config = configDirectory.appendingPathComponent("config.json")
+        let enforce = Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce"}}"#.utf8)
         let observe = flip.observe
         let stop = UnfairLock(false)
         let flipper = Thread {
@@ -270,10 +274,13 @@ struct LocalHookFixture {
     let judge: (any JudgeClient)?
 
     /// `localDeadline` defaults to `testLocalDeadline`; tests of the real
-    /// deadline pass `LocalHookDecider.localDeadline`.
+    /// deadline pass `LocalHookDecider.localDeadline`. `judgeMode` defaults
+    /// to `live` (these tests characterize the judge deciding); nil writes
+    /// none (over the live judge `isolatedHomeDirectory` seeds), so the
+    /// judge runs in its default shadow.
     init(
         judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true, judge: (any JudgeClient)? = nil,
-        localDeadline: Duration = testLocalDeadline
+        judgeMode: String? = "live", localDeadline: Duration = testLocalDeadline
     ) throws {
         let root = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: root.path))
@@ -288,10 +295,13 @@ struct LocalHookFixture {
         }
         let config = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
-        if let guardMode {
-            try Data(#"{"guard":{"mode":"\#(guardMode)"}}"#.utf8)
-                .write(to: config.appendingPathComponent("config.json"))
-        }
+        let sections = [
+            judgeMode.map { #""judge":{"mode":"\#($0)"}"# },
+            guardMode.map { #""guard":{"mode":"\#($0)"}"# },
+        ].compactMap(\.self)
+        // Always written: `isolatedHomeDirectory` seeds a live judge.
+        try Data("{\(sections.joined(separator: ","))}".utf8)
+            .write(to: config.appendingPathComponent("config.json"))
         if judgeBundle {
             let bundle = config.appendingPathComponent("models/\(JudgeRuntime.ftBundleName)", isDirectory: true)
             try FileManager.default.createDirectory(

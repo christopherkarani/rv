@@ -138,8 +138,8 @@ struct PendingHostAskHookTests {
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
         )
         #expect(json["decision"] as? String == "deny")
-        #expect(wire.stdout.contains(approvalUnrecordedLine))
-        #expect(wire.stdout.contains(approvalPendingLine) == false)
+        #expect(wire.stdout.contains(ownTerminalLine()))
+        #expect(wire.stdout.contains(approveInRVLine()) == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.exitCode == 1)
         #expect(await probe.records.isEmpty)
@@ -160,12 +160,8 @@ struct PendingHostAskHookTests {
                     }
                 )
             )
-            #expect(wire.stdout.contains(approvalUnrecordedLine), "\(host)")
-            #expect(wire.stdout.contains(approvalPendingLine) == false, "\(host)")
-            if host == .cursor {
-                #expect(wire.stdout.contains(cursorAgentAskUnrecordedLine), "\(host)")
-                #expect(wire.stdout.contains(cursorAgentAskLine) == false, "\(host)")
-            }
+            #expect(wire.stdout.contains(ownTerminalLine()), "\(host)")
+            #expect(wire.stdout.contains(approveInRVLine()) == false, "\(host)")
         }
     }
 
@@ -184,8 +180,12 @@ struct PendingHostAskHookTests {
                     }
                 )
             )
-            #expect(wire.stdout.contains(approvalPendingLine), "\(host)")
-            #expect(wire.stdout.contains(approvalUnrecordedLine) == false, "\(host)")
+            #if os(macOS)
+            #expect(wire.stdout.contains(approveInRVLine()), "\(host)")
+            #expect(wire.stdout.contains(ownTerminalLine()) == false, "\(host)")
+            #else
+            #expect(wire.stdout.contains(ownTerminalLine()), "\(host)")
+            #endif
         }
     }
 
@@ -209,7 +209,7 @@ struct PendingHostAskHookTests {
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false, "\(host)")
         #expect(wire.stdout.contains("\"permission\":\"ask\"") == false, "\(host)")
         #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false, "\(host)")
-        #expect(wire.stdout.contains(approvalPendingLine), "\(host)")
+        #expect(wire.stdout.contains("\\nwho     ask "), "\(host)")
         #expect(wire.stdout.isEmpty == false, "\(host)")
         let records = await probe.records
         #expect(records.count == 1, "\(host)")
@@ -316,6 +316,6 @@ private func askDenyJSON(_ wire: HookWire) throws -> [String: Any] {
     #expect(json["decision"] as? String == "deny")
     #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     return json
 }

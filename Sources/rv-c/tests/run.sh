@@ -218,7 +218,7 @@ expect_exec() {
   local log="$OUT/$name.argv"
   local st
   set +e
-  RV_C_ARGV_LOG="$log" "$PROBE/rv" "$@"
+  RV_C_ARGV_LOG="$log" "$PROBE/rv" "$@" </dev/null
   st=$?
   set -e
   if [[ "$st" -ne 17 ]]; then
@@ -264,7 +264,6 @@ err = open(err_path, encoding="utf-8").read()
 if not text.endswith("\n") or text.count("\n") != 1:
     raise SystemExit("%s: deny must be one JSON line, got %r" % (host, text))
 obj = json.loads(text)
-stop = "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
 leftover = {"grok": 0, "antigravity": 0, "pi": 1, "opencode": 1, "openclaw": 1, "hermes": 1}
 if host in leftover:
     expect_status = leftover[host]
@@ -288,25 +287,35 @@ elif host in ("claude", "muse"):
 elif host == "cursor":
     expect_status = 0
     assert set(obj) == {"permission", "user_message", "agent_message"}, (host, obj)
-    assert obj["permission"] == "deny" and obj["agent_message"] == stop, (host, obj)
+    # The agent reads the same stop as the person (B1).
     reason = obj["user_message"]
+    assert obj["permission"] == "deny" and obj["agent_message"] == reason, (host, obj)
 else:
     raise SystemExit("rv-c tests: no expected deny wire for HookHost %s" % host)
 if status != expect_status:
     raise SystemExit("%s: deny exit %d, want %d" % (host, status, expect_status))
 if not reason or want not in reason:
     raise SystemExit("%s: reason %r missing %r" % (host, reason, want))
+# One shape for every stop (B1): verdict with the rule id, why, who acts;
+# the owner runs the fix, never the agent.
+lines = reason.split("\n")
+if not lines[0].startswith("\u2715 Stopped   (rv.hook/") or not lines[0].endswith(")"):
+    raise SystemExit("%s: stop must name its rule id, got %r" % (host, lines[0]))
+if len(lines) != 3 or not lines[1].startswith("why     ") or not lines[2].startswith("who     ask "):
+    raise SystemExit("%s: stop shape mismatch %r" % (host, reason))
+if "allow-once" in reason or "unlock" in reason or "\x1b" in reason:
+    raise SystemExit("%s: stop must not offer an unlock or colour %r" % (host, reason))
 PY
 }
 
 # Substrings of the hook_fallback.c messages (classified, not a generic sentence).
-REASON_INPUT="RV could not read this hook request"
-REASON_OVERSIZE="RV could not read this hook request"
-REASON_UNREACHABLE='RV daemon is not reachable'
-REASON_CONNECTION='RV daemon connection failed'
-REASON_REJECTED='RV daemon identity check failed'
-REASON_TIMEOUT='RV daemon did not answer in time'
-REASON_STOPPED='rvd was stopped or crashed after it last ran'
+REASON_INPUT="rv could not read this hook request"
+REASON_OVERSIZE="rv could not read this hook request"
+REASON_UNREACHABLE="rv's daemon is not running"
+REASON_CONNECTION='rv lost its daemon before a verdict'
+REASON_REJECTED="rv's daemon failed its identity check"
+REASON_TIMEOUT="rv's daemon did not answer in time"
+REASON_STOPPED='rvd stopped or crashed after it last ran'
 
 # Every host denies malformed input directly; an executable CLI sibling must
 # never receive authority-bearing fallback input.

@@ -8,6 +8,7 @@ import Testing
         .deletingLastPathComponent()
         .deletingLastPathComponent()
     let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
+        + CommandAlias.leadingWords
     let files = [
         root.appendingPathComponent("Resources/Completions/rv.bash"),
         root.appendingPathComponent("Resources/Completions/rv.zsh"),

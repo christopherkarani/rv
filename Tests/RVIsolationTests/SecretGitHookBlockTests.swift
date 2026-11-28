@@ -89,6 +89,26 @@ import Testing
         #expect(viaRecorded.status == 4)
     }
 
+    @Test func recordedRVWinsOverPathAndOnlyTheRepositorySwitchSkips() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let onPath = try fixture.fakeRV(status: 3)
+        let recorded = try fixture.fakeRV(status: 4, named: "rv-recorded")
+        _ = try SecretGitHook.install(workTree: fixture.work, rvPath: recorded.path).get()
+        let path = onPath.deletingLastPathComponent().path + ":" + Self.systemPath
+        // `PATH=/tmp/x:$PATH git commit` cannot swap in another rv.
+        #expect(try fixture.run(fixture.defaultHook, path: path).status == 4)
+
+        // A user-level switch (`HOME=`, `XDG_CONFIG_HOME=`) is not the repository's.
+        try Data("[rv]\n\tsecretsScan = false\n".utf8).write(to: fixture.root.appendingPathComponent(".gitconfig"))
+        #expect(try fixture.run(fixture.defaultHook, path: path).status == 4)
+
+        try fixture.git(["config", "rv.secretsScan", "false"])
+        let skipped = try fixture.run(fixture.defaultHook, path: path)
+        #expect(skipped.status == 0)
+        #expect(skipped.stderr.contains("skipped"))
+    }
+
     @Test func trackedHooksDirectoryGetsNoPersonalPath() throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }

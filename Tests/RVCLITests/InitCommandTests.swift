@@ -282,7 +282,7 @@ struct InitCommandTests {
             varlockLines: [], dryRun: false, wrote: true)
         #expect(text.contains("profile main for /proj"))
         #expect(text.contains("staged at launch"))
-        #expect(text.contains("`rv secrets set B_KEY`"))
+        #expect(text.contains("`rv secrets add B_KEY`"))
         #expect(text.contains("wrote runtime-resources.json"))
         #if os(macOS)
         #expect(text.contains("next: rv opencode --workspace /proj --resource-profile main"))

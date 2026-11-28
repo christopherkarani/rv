@@ -11,8 +11,8 @@ import RVTUI
 struct Packs: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "packs",
-        abstract: "List and enable or disable packs.",
-        subcommands: [List.self, Enable.self, Disable.self, Info.self],
+        abstract: "List, test, and turn packs on or off (everyday: rv protect <tool>).",
+        subcommands: [List.self, Enable.self, Disable.self, Info.self, TestPack.self],
         defaultSubcommand: List.self
     )
 
@@ -55,6 +55,13 @@ struct Packs: AsyncParsableCommand {
             if (try? PacksConfigStore.load(home: home)) == nil {
                 ctx.writeStderr(
                     "warning: \(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+            } else if let problems = try? PacksFacade.configProblems(home: home), problems.isEmpty == false {
+                // The doors skip these lines; say so instead of listing a
+                // pack the owner thinks is on as off without a word.
+                let file = DisplayedText.field(PacksConfigStore.configURL(home: home).path)
+                let lines = ["warning: [packs] has lines rv does not read; rv skips them:"]
+                    + problems.flatMap { $0.lines(file: file) }
+                ctx.writeStderr(lines.joined(separator: "\n") + "\n")
             }
             let filtered = PacksListFilter.apply(
                 full,
@@ -128,7 +135,8 @@ struct Packs: AsyncParsableCommand {
     struct Enable: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "enable",
-            abstract: "Enable pack, category, or preset IDs."
+            abstract: "Enable pack, category, or preset IDs.",
+            aliases: ["on"]
         )
 
         @Argument(help: "Pack, category, or preset IDs.")
@@ -142,7 +150,8 @@ struct Packs: AsyncParsableCommand {
     struct Disable: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "disable",
-            abstract: "Disable pack, category, or preset IDs."
+            abstract: "Disable pack, category, or preset IDs (asks the owner).",
+            aliases: ["off"]
         )
 
         @Argument(help: "Pack, category, or preset IDs.")
@@ -195,6 +204,91 @@ struct Packs: AsyncParsableCommand {
     }
 }
 
+extension Packs {
+    /// `rv packs test <pack>`: runs every example of the pack's rules and
+    /// shows which pass. Reads the bundle only; changes nothing.
+    struct TestPack: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "test",
+            abstract: "Run a pack's examples and show which rules pass."
+        )
+
+        @OptionGroup
+        var format: FormatFlags
+
+        @Argument(help: "Pack ID.")
+        var id: String
+
+        func run() async throws {
+            let ctx = CommandContext.current(command: "packs", format: format)
+            let probe: PackProbe
+            do {
+                probe = try PackProbe.bundled()
+            } catch {
+                try ctx.fail("rv: the bundled packs cannot be read. Run rv doctor.\n")
+            }
+            guard let packID = PackID(validating: id), let runs = probe.runExamples(of: packID) else {
+                let ids = probe.packIDs.map(\.rawValue)
+                var text = "rv: no pack is named \(DisplayedText.field(id))."
+                if let near = PacksConfigStore.nearestSelection(to: id, in: ids) { text += " Did you mean \(near)?" }
+                try ctx.fail(text + " rv packs --all lists every pack.\n")
+            }
+            let enabled = ctx.home.map { EvaluationWorld.walkedPackIDs(home: $0).ids } ?? dayOnePackIDs
+            let model = PackTestReport.model(packID: packID, runs: runs, enabled: enabled.contains(packID))
+            let exitCode: Int32 = model.passed ? 0 : 1
+            if ctx.explicitRobot {
+                try ctx.emit(stdout: PackTestReport.json(packID: packID, runs: runs) + "\n", exitCode: exitCode)
+                return
+            }
+            let palette: Palette
+            switch ctx.appearance {
+            case .robot: palette = colorOffPalette
+            case .pretty(let value): palette = value
+            }
+            try ctx.emit(stdout: PrettyWriter.join(PackTestRenderer().render(model, palette: palette)), exitCode: exitCode)
+        }
+    }
+}
+
+/// `rv packs test` results to the view model and `--json`.
+enum PackTestReport {
+    static func model(packID: PackID, runs: [RuleExampleRun], enabled: Bool) -> PackTestViewModel {
+        PackTestViewModel(
+            packID: packID,
+            rules: runs.map { run in
+                PackTestViewModel.Rule(
+                    name: run.ruleID.pattern,
+                    stops: run.stops,
+                    allows: run.allows,
+                    failures: run.failures.map { "\($0.label.rawValue): \(DisplayedText.field($0.command)) \($0.got)" }
+                )
+            },
+            turnOn: enabled ? nil : ProtectTurnOn.command(packID)
+        )
+    }
+
+    /// `{"schema":"rv.packs.test.v1","pack_id":…,"passed":…,"rules":[…]}`
+    static func json(packID: PackID, runs: [RuleExampleRun]) throws -> String {
+        let rules: [[String: Any]] = runs.map { run in
+            [
+                "rule_id": run.ruleID.rawValue,
+                "stops": run.stops,
+                "allows": run.allows,
+                "passed": run.passed,
+                "failures": run.failures.map { ["label": $0.label.rawValue, "command": $0.command, "got": $0.got] },
+            ]
+        }
+        let object: [String: Any] = [
+            "schema": "rv.packs.test.v1",
+            "pack_id": packID.rawValue,
+            "passed": runs.allSatisfy(\.passed),
+            "rules": rules,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 enum PacksListFilter {
     static func apply(
         _ snapshot: PacksListSnapshot,
@@ -229,10 +323,70 @@ enum PacksListFilter {
 }
 
 private func mutate(ids: [String], enabling: Bool) async throws {
-    let authorization = try await OwnerConfirmation.require(
-        "\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
+    // Check every name and the config before asking the owner anything:
+    // a typo fails in a second, not after Touch ID.
+    try preflightPackMutation(ids: ids)
+    // G6: adding protection asks nobody (an agent may add it); only turning
+    // packs off needs the owner. The enable path refuses any change that
+    // would leave a pack off (`PacksFacade.enableTightening`).
+    guard enabling == false else {
+        try applyPackMutation(ids: ids, enabling: true)
+        return
+    }
+    guard let authorization = try await packsOffAuthorization("disable packs \(ids.joined(separator: ", "))") else {
+        return
+    }
     try await ConfigChangeAudit.$authorization.withValue(authorization) {
-        try applyPackMutation(ids: ids, enabling: enabling)
+        try applyPackMutation(ids: ids, enabling: false)
+    }
+}
+
+/// The one owner gate for turning packs off, from `rv packs disable/off`
+/// and `rv protect <tool> off`. Returns how the owner was checked, or nil
+/// when the change was filed for the owner instead and nothing may be
+/// changed now (F2's proposal route plugs in here). A refusal exits 77.
+func packsOffAuthorization(_ summary: String) async throws -> String? {
+    try await OwnerConfirmation.require(summary)
+}
+
+/// Fails, with the fix, on what `applyPackMutation` would refuse anyway:
+/// a name that is no pack, category or preset, or a `[packs]` section rv
+/// does not read as written. Asks nobody and writes nothing.
+func preflightPackMutation(ids: [String]) throws {
+    guard !ids.isEmpty else {
+        throw ValidationError("missing pack id")
+    }
+    let home = try CommandContext.requireHome(command: "packs")
+    do {
+        try PacksFacade.preflight(home: home, ids: ids)
+    } catch let error as PacksCommandError {
+        try failPackMutation(error, home: home)
+    }
+}
+
+/// One stderr block per refusal, then exit 1.
+func failPackMutation(_ error: PacksCommandError, home: HomeDirectory) throws -> Never {
+    switch error {
+    case .unknownSelection(let name, let suggestion):
+        var text = "rv: no pack, category or preset is named \(DisplayedText.field(name))."
+        if let suggestion { text += " Did you mean \(suggestion)?" }
+        try CommandContext.fail(text + " rv packs --all lists every pack.\n")
+    case .configInvalid(let problems):
+        let file = DisplayedText.field(PacksConfigStore.configURL(home: home).path)
+        let lines = ["rv: [packs] has lines rv does not read, so nothing was changed:"]
+            + problems.flatMap { $0.lines(file: file) }
+        try CommandContext.fail(lines.joined(separator: "\n") + "\n")
+    case .unknownID(let token):
+        try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
+    case .criticalPatternUncompilable(let rule):
+        try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
+    case .configUnreadable:
+        try CommandContext.fail(
+            "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    case .wouldLoosen:
+        try CommandContext.fail("rv: that change would turn a pack off, which needs the owner; nothing changed.\n")
+    case .packNotFound, .configUnwritable:
+        throw ExitCode(1)
     }
 }
 
@@ -245,15 +399,10 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     let result: PacksMutationResult
     do {
         result = enabling
-            ? try PacksFacade.enable(home: home, ids: ids)
+            ? try PacksFacade.enableTightening(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
-    } catch PacksCommandError.unknownID(let token) {
-        try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
-    } catch PacksCommandError.criticalPatternUncompilable(let rule) {
-        try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
-    } catch PacksCommandError.configUnreadable {
-        try CommandContext.fail(
-            "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    } catch let error as PacksCommandError where error != .configUnwritable {
+        try failPackMutation(error, home: home)
     } catch let unrecorded as ConfigChangeUnrecorded {
         try ConfigChangeRefusal.fail(command: "packs", unrecorded)
     } catch {

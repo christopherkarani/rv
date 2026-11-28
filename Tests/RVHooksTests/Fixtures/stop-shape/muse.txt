@@ -1,0 +1,31 @@
+== reset-hard, minted code
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835  (you can wait: rv wait a7c835)"}}
+
+== rm -rf home, who_acts
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   rm -rf ~ (core.filesystem/rm-rf-root-home)\nwhy     rm -rf on root or home paths is catastrophic\nwho     ask Chris to run it, in their own terminal, for their own files; an admin for system files"}}
+
+== unresolved invocation
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   $TOOL --apply (rv.indeterminate/unresolvedInvocation)\nwhy     rv could not tell what program it runs\nwho     ask Chris to run it in their own terminal"}}
+
+== rvd timed out
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   (rv.timeout)\nwhy     rv timed out and committed nothing\nwho     ask Chris to run  rv doctor"}}
+
+== secret-bearing command 1
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   git clone https://bob:[redacted]@github.com/acme/app.git (core.git/reset-hard)\nwhy     git reset --hard destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run it in their own terminal"}}
+
+== secret-bearing command 2
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   GITHUB_TOKEN=[redacted] git reset --hard (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run it in their own terminal"}}
+
+== secret-bearing command 3
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   curl -H 'Authorization: [redacted] [redacted]' https://api.github.com/user (core.git/reset-hard)\nwhy     git reset --hard destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run it in their own terminal"}}
+
+== secret-bearing command 4
+exit 0
+stdout {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   rm -rf ~ # [redacted] (core.git/reset-hard)\nwhy     git reset --hard destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run it in their own terminal"}}

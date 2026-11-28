@@ -161,7 +161,7 @@ extension WorkspaceTUIReducer {
                 effects = [.resolveRunCommand(target: target, input: input)]
             }
         case .invalidPrefix:
-            next.feedback = "Unknown Ctrl-B command"
+            next.feedback = "Unknown ^B command"
             next.feedbackTicks = 60
             presentationChanged = true
         default:
@@ -521,7 +521,7 @@ extension WorkspaceTUIReducer {
             }
         case .runtime(let id, _):
             guard let pane = next.activePaneID else {
-                next.feedback = "Open a tab first (Ctrl-B c)"
+                next.feedback = "Open a tab first (^B c)"
                 next.feedbackTicks = 60
                 presentationChanged = true
                 return

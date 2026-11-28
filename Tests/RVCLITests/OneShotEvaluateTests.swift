@@ -85,7 +85,7 @@ struct OneShotEvaluateClientTests {
     }
 
     @Test func hookEvaluateReplyStderr_isForwardedOnWire() async throws {
-        let reason = "RV · Blocked. Destroys uncommitted changes."
+        let reason = "✕ Stopped   git reset --hard (core.git/reset-hard)"
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .hookEvaluate(
@@ -243,11 +243,8 @@ struct OneShotEvaluateClientTests {
         let code = try #require(AllowOnceUnlockCode(validating: "abc123"))
         let why = try hookFixture("codex", "deny-git-reset-hard.err")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let whyRest = why.hasPrefix("RV · Blocked. ")
-            ? String(why.dropFirst("RV · Blocked. ".count))
-            : why
         let daemon = CodexHostCodec().encodeDeny(
-            reason: "RV · Blocked. \(unlockLine(for: code)) \(whyRest)",
+            reason: why.replacingOccurrences(of: ownTerminalLine(), with: unlockLine(for: code)),
             rule: nil,
             next: .minted(code)
         )

@@ -33,7 +33,7 @@ public struct PolicyContainmentWitness: Sendable, Equatable {
     /// The witness as something to check, not run: the read-only
     /// `rv explain` of `command`.
     public var checkCommand: String {
-        "rv explain " + PolicyContainment.shellWord(command)
+        CommandVocabulary.Alias.why.invocation + " " + PolicyContainment.shellWord(command)
     }
 }
 

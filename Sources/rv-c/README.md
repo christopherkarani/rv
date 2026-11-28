@@ -49,6 +49,13 @@ can write, and a same-user agent can make rvd unreachable on purpose.
 The Swift hook path (`RVCLI/Service/HookDaemonFallback.swift`, used for
 hosts not piped here) mirrors the classes, messages and modes.
 
+Parity gap, by design: the C fallback reads only the stored
+`guard.mode` / `guard.hosts.<host>` from config.json and ignores
+`guard.temporary_blocks.<host>` (an agent's one-hour block, F3). With rvd
+down, a host an agent blocked over a stored `observe` still steps aside
+here, while the Swift path enforces it. This errs toward the owner's stored
+mode, never toward a lockout.
+
 Not an SPM target by design (plain `clang -std=c11`). Constraints, all
 enforced by `tests/run.sh`:
 
@@ -66,7 +73,7 @@ enforced by `tests/run.sh`:
 | `json_reply.{h,c}` (hook-reply decode, recursion-capped) | `RVIPC/IPCEvaluate.swift` (`EvaluateReply`: `via` must be `"xpc"`) | Same wire rule: unexpected shape, `result.error`, missing `via`, or `via != "xpc"` is MISS. |
 | `json_escape.{h,c}` (request JSON building) | `RVIPC/IPCJSON.swift` + hook request encoders | Byte-level JSON escaping; covered by `json_escape_test.c`. |
 | `hook_fallback.{h,c}` (daemon-miss rendering) | `RVCLI/Service/HookDaemonFallback.swift` | Same messages (`HookDaemonFallbackTests` reads `hook_fallback.c`), same `RV_HOOK_WHEN_DOWN` modes; Swift deny reuses the host codecs. |
-| `daemon_trust.{h,c}` (daemon-identity verification) | `RVService/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed; unknown-role entries are skipped (`tests/daemon_trust_test.c` ↔ `PeerTrustManifestParseTests`). Linux has no Swift transport; C is the reference. |
+| `daemon_trust.{h,c}` (daemon-identity verification) | `RVXPC/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed; unknown-role entries are skipped (`tests/daemon_trust_test.c` ↔ `PeerTrustManifestParseTests`). Linux has no Swift transport; C is the reference. |
 
 ## Test entry points
 

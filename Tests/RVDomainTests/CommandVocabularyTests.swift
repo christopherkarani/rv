@@ -32,10 +32,11 @@ struct CommandVocabularyTests {
         #expect([Verdict.allowed, Verdict.blocked] == ["allowed", "blocked"])
     }
 
-    @Test func protectIsDecidedByChris() {
-        let protect = CommandVocabulary.plannedNames.filter { $0.spelling.hasPrefix("rv protect ") }
-        #expect(protect.map(\.today) == ["rv packs enable <pack>", "rv packs disable <pack>"])
-        #expect(protect.allSatisfy { $0.status == .decided })
+    /// Chris chose `rv protect <tool>` (2026-11-22); G6 shipped it, so it
+    /// is a command and no longer a planned name.
+    @Test func protectShipped() {
+        #expect(CommandVocabulary.Command.protect.invocation == "rv protect")
+        #expect(CommandVocabulary.plannedNames.contains { $0.spelling.hasPrefix("rv protect") } == false)
     }
 
     @Test func plannedTopLevelWordsAreNotCommandsYet() {
@@ -43,7 +44,7 @@ struct CommandVocabularyTests {
         let words = CommandVocabulary.plannedNames.map { $0.spelling.split(separator: " ").map(String.init) }
         #expect(words.allSatisfy { $0.first == CommandVocabulary.program })
         let newWords = Set(words.map { $0[1] }).subtracting(commands)
-        #expect(newWords == ["guard", "keys", "log", "protect", "rules", "unlock", "watch", "why"])
+        #expect(newWords == ["keys", "rules"])
         let spellings = CommandVocabulary.plannedNames.map(\.spelling)
         #expect(Set(spellings).count == spellings.count)
     }
@@ -54,5 +55,37 @@ struct CommandVocabularyTests {
             let word = today.split(separator: " ").dropFirst().first.map(String.init)
             #expect(word.flatMap(CommandVocabulary.Command.init(rawValue:)) != nil, "\(today)")
         }
+    }
+
+    @Test func aliasesNameTheirOldSpellings() {
+        let pairs = CommandVocabulary.Alias.allCases.map { "\($0.spelling) = \($0.target)" }
+        #expect(pairs == [
+            "rv why = rv explain",
+            "rv unlock = rv allow-once",
+            "rv guard <host> = rv host mode <host> block",
+            "rv watch <host> = rv host mode <host> observe",
+            "rv secrets add = rv secrets set",
+        ])
+    }
+
+    @Test func aliasesRunCommandsRvHas() {
+        for alias in CommandVocabulary.Alias.allCases {
+            #expect(alias.runs.first.flatMap(CommandVocabulary.Command.init(rawValue:)) != nil, "\(alias)")
+            let first = alias.words[0]
+            // A new top-level word is not a command; `secrets add` is under one.
+            #expect((CommandVocabulary.Command(rawValue: first) != nil) == (alias.words.count > 1), "\(alias)")
+        }
+    }
+
+    @Test func expandFillsTheHostSlot() {
+        #expect(CommandVocabulary.expand(["guard", "claude"]) == .expanded(["host", "mode", "claude", "block"]))
+        #expect(CommandVocabulary.expand(["watch", "--json", "cursor"]) == .expanded(["host", "mode", "--json", "cursor", "observe"]))
+        #expect(CommandVocabulary.expand(["guard"]) == .missingArgument(.guard))
+        #expect(CommandVocabulary.expand(["guard", "-h"]) == .expanded(["host", "mode", "-h"]))
+        #expect(CommandVocabulary.expand(["why"]) == .expanded(["explain"]))
+        #expect(CommandVocabulary.expand(["secrets", "add", "K"]) == .expanded(["secrets", "set", "K"]))
+        #expect(CommandVocabulary.expand(["secrets", "list"]) == .unchanged)
+        #expect(CommandVocabulary.expand(["explain", "why"]) == .unchanged)
+        #expect(CommandVocabulary.expand([]) == .unchanged)
     }
 }

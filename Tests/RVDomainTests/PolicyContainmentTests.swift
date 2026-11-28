@@ -155,7 +155,7 @@ struct PolicyContainmentTests {
             Issue.record("expected exceeds")
             return
         }
-        #expect(witness.checkCommand == "rv explain 'git push --force origin main'")
+        #expect(witness.checkCommand == "rv why 'git push --force origin main'")
     }
 
     // MARK: Properties, one per rule kind

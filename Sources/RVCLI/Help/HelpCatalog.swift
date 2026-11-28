@@ -1,3 +1,5 @@
+import Foundation
+import RVDomain
 import RVPolicy
 import RVPresentation
 
@@ -14,7 +16,12 @@ enum HelpCatalog {
         case .help: helpMeta
         case .test: test
         case .`try`: tryDemo
+        case .term: term
+        case .wait: wait
         case .explain: explain
+        case .check: check
+        case .prompt: prompt
+        case .news: news
         case .service: service
         case .serviceStatus: serviceStatus
         case .serviceRestart: serviceRestart
@@ -25,12 +32,15 @@ enum HelpCatalog {
         case .doctor: doctor
         case .allowOnce: allowOnce
         case .packs: packs
+        case .protect: protect
         case .scan: scan
         case .policy: policy
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .log: log
         case .host: host
+        case .pause: pause
         case .audit: audit
         case .secrets: secrets
         case .mcp: mcp
@@ -46,62 +56,55 @@ enum HelpCatalog {
         }
     }
 
+    /// `rv --help`: five groups, under 30 lines (North Star A2). It names
+    /// every command a person types; the Advanced rows list several each,
+    /// so the page fits one screen. `hook` and `operator` are for programs
+    /// (`UnknownCommand.internalCommands`) and have their own pages.
     static let root = HelpViewModel(
-        title: "rv",
-        blurb: "Block destructive shell commands.",
+        title: "\(CommandVocabulary.Glyph.rv.rawValue) \(CommandVocabulary.program)",
+        blurb: "Stops destructive commands before your agents run them.",
         sections: [
             HelpSection(
                 heading: "Get started",
                 rows: [
-                    HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
-                    HelpRow(name: "box", description: "Run an agent in a box for this repo (contained runtime, macOS only)"),
-                    HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
-                    HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
-                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
-                    HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
-                    HelpRow(name: "init", description: "Optional: a sandbox profile for rv run (hooks need only setup)"),
-                    HelpRow(name: "test", description: "Try a command before it runs: the verdict"),
+                    HelpRow(name: "setup", description: "Wire your agents' hooks and start rvd"),
                     HelpRow(name: "try", description: "Watch rv stop a fake agent in a throwaway repo"),
-                    HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
+                    HelpRow(name: "test, check", description: "Would rv stop it? Nothing runs"),
+                    HelpRow(name: "doctor", description: "Check rvd, packs and agents"),
                 ],
                 accentNames: true
             ),
             HelpSection(heading: "Everyday", rows: [
-                HelpRow(name: "explain", description: "Why a command ran or was stopped: each step"),
-                HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
-                HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
-                HelpRow(name: "safety", description: "Show or set normal or strict"),
-                HelpRow(name: "blocks", description: "List recent denials"),
-                HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
-                HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
-                HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
-                HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
-                HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
-                HelpRow(name: "egress", description: "Review blocked network egress"),
-                HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
+                HelpRow(name: "why", description: "Why rv stopped a command, or let it run"),
+                HelpRow(name: "log, blocks", description: "What rv stopped or would stop, newest first"),
+                HelpRow(name: "unlock, wait", description: "Run a stopped command once; wait for that answer"),
+                HelpRow(name: "guard, watch, host, pause", description: "Guard or watch an agent; pause rv an hour"),
+                HelpRow(name: "secrets", description: "Keys your agents use but never see"),
+            ]),
+            HelpSection(heading: "Rules", rows: [
+                HelpRow(name: "protect, packs", description: "Protect a tool; list, test or switch rule packs"),
+                HelpRow(name: "policy, allowlist, safety", description: "Your own rules, lasting exceptions, strictness"),
+            ]),
+            HelpSection(heading: "Team", rows: [
+                HelpRow(name: "managed, report, audit", description: "Org policy, this machine's posture, the audit trail"),
             ]),
             HelpSection(heading: "Advanced", rows: [
-                HelpRow(name: "packs", description: "List and enable or disable packs"),
-                HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
-                HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
-                HelpRow(name: "uninstall", description: "Remove rv's hooks, rvd and binaries; --purge also its data"),
-                HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
-                HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
-                HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
+                HelpRow(name: "term, prompt, news", description: "rv full screen, in your prompt, what's new"),
+                HelpRow(name: "mcp, login, egress, scan", description: "MCP, app logins, network, past sessions"),
+                HelpRow(name: "run, box, workspace, opencode", description: "Placeholders or a sandbox (macOS only)"),
+                HelpRow(name: "service, init, uninstall", description: "rvd, a sandbox profile, removing rv"),
             ]),
         ],
-        examples: [
-            "rv",
-            "rv setup",
-            "rv test 'git reset --hard'",
-            "rv explain 'rm -rf ~'",
-        ],
+        nextHeading: "",
         next: [
-            HelpNextItem(command: "rv setup", description: "Wire hosts and start rvd"),
-            HelpNextItem(command: "rv help setup", description: "Flags and what setup writes"),
+            HelpNextItem(command: "rv setup", description: "wire your agents and start rvd"),
         ]
     )
+
+    /// The command names a root row lists (`allowlist, safety` names two).
+    static func commands(in row: HelpRow) -> [String] {
+        row.name.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
 
     static let helpMeta = HelpViewModel(
         title: "",
@@ -194,6 +197,51 @@ enum HelpCatalog {
         examples: ["rv workspace start", "rv workspace status"]
     )
 
+    static let term = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv term", description: "Glance: whether anything needs you, the last 30 minutes, the latest command"),
+                HelpRow(name: "rv term --view stream", description: "Open on Stream (or needs-you)"),
+                HelpRow(name: "rv term --once", description: "Print one frame and exit"),
+            ]),
+            HelpSection(heading: "Keys", rows: [
+                HelpRow(name: "1 2 3", description: "Glance, Stream, Needs you"),
+                HelpRow(name: "space", description: "Swap Glance and Stream"),
+                HelpRow(name: "↑↓ ⏎", description: "Stream: move, and why a command ran or stopped"),
+                HelpRow(name: "f", description: "Stream: would-stops and stops only"),
+                HelpRow(name: "?", description: "Every key"),
+                HelpRow(name: "esc / q", description: "Back / quit"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "read-only", description: "Reads the audit log, the decision log and the pending requests; never writes them and never answers a request"),
+                HelpRow(name: "commands checked", description: "Needs an rvd that keeps the decision log; an older one shows only would-stops and stops"),
+            ]),
+        ]
+    )
+
+    static let wait = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv wait <code>"),
+                HelpRow(name: "rv wait <code> --timeout <seconds>"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "who decides", description: "Only the person, with rv unlock in a terminal or the review window. rv wait reads the answer; it can never give one"),
+                HelpRow(name: "the code", description: "The six characters in rv's stop message (a7c835 or a7c-835)"),
+                HelpRow(name: "--timeout", description: "Seconds to wait, 1 to 3600 (default 100, under an agent's 2 minute shell limit)"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Unlocked: retry the exact command"),
+                HelpRow(name: "1", description: "Still waiting, expired, already used, or rv restarted"),
+                HelpRow(name: "2", description: "No stop has this code"),
+            ]),
+        ]
+    )
+
     static let tryDemo = HelpViewModel(
         title: "",
         blurb: "",
@@ -250,7 +298,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv explain [--json] [--robot] [--plain] [--no-color] <command>"),
+                HelpRow(name: "rv why [--json] [--robot] [--plain] [--no-color] <command>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
@@ -261,10 +309,11 @@ enum HelpCatalog {
             HelpSection(heading: "Observe mode", rows: [
                 HelpRow(name: "guard.mode observe", description: "Explains the verdict enforce would reach and notes whether rv would ask (a deny you can approve) or block (a pinned deny, or an evaluation it could not finish), and that it logs the command and lets it run. JSON adds \"mode\":\"observe\" and \"effective\":\"allow\""),
             ]),
+            glossary,
         ],
         examples: [
-            "rv explain 'git reset --hard'",
-            "rv explain 'git status'",
+            "rv why 'git reset --hard'",
+            "rv why 'git status'",
         ]
     )
 
@@ -517,6 +566,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv host [list] [--json]"),
+                HelpRow(name: "rv guard <host> [--json]"),
+                HelpRow(name: "rv watch <host> [--json]"),
                 HelpRow(name: "rv host mode [<host>] [--json]"),
                 HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
             ]),
@@ -529,6 +580,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "owner",
                     description: "Loosening a host asks for device-owner authentication"
+                ),
+                HelpRow(
+                    name: "agents",
+                    description: "An agent's block ends on its own after an hour; blocking its own host waits for you"
                 ),
                 HelpRow(
                     name: "managed",
@@ -546,8 +601,30 @@ enum HelpCatalog {
         ],
         examples: [
             "rv host list",
-            "rv host mode claude observe",
-            "rv host mode cursor block",
+            "rv watch claude",
+            "rv guard cursor",
+        ]
+    )
+
+    static let pause = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv pause [--json]"),
+                HelpRow(name: "rv pause <10m|30m|1h>"),
+                HelpRow(name: "rv pause --end"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "owner", description: "Pausing asks for Touch ID or your password at your terminal; agents can't pause rv"),
+                HelpRow(name: "watch", description: "Every host is watched, not blocked; rv's own files stay protected"),
+                HelpRow(name: "back", description: "rv comes back on its own, at most an hour later; --end comes back now"),
+            ]),
+        ],
+        examples: [
+            "rv pause 10m",
+            "rv pause",
+            "rv pause --end",
         ]
     )
 
@@ -599,16 +676,17 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
-                HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
-                HelpRow(name: "rv secrets set <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
+                HelpRow(name: "rv secrets add <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
+                HelpRow(name: "rv secrets add <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
                 HelpRow(name: "rv secrets providers [<id>] [--json]"),
-                HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
+                HelpRow(name: "rv secrets add <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
+                HelpRow(name: "rv run --secret <name> -- <command>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
@@ -624,6 +702,7 @@ enum HelpCatalog {
                 HelpRow(name: "--refresh", description: "Gateway only: re-read the value this often in running sessions, e.g. 15m"),
             ]),
             HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "use", description: "Run a command with a secret through rv: rv run --secret NAME -- <command>. It gets a stand-in, never the value"),
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
                 HelpRow(
                     name: "gateway",
@@ -713,7 +792,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "allow",
-                    description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
+                    description: "You only: silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config --local rv.secretsScan false. rv stops agents' git config and shell edits of these"
                 ),
                 HelpRow(
                     name: "audit",
@@ -722,10 +801,11 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv secrets set OPENAI_API_KEY --resource-profile main",
-            "rv secrets set GITHUB_TOKEN --provider github",
+            "rv secrets add OPENAI_API_KEY --resource-profile main",
+            "rv secrets add GITHUB_TOKEN --provider github",
             "rv secrets check",
             "rv secrets scan .",
+            "rv run --secret OPENAI_API_KEY -- codex",
         ]
     )
 
@@ -952,10 +1032,10 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv allow-once <code>"),
-                HelpRow(name: "rv allow-once mint -- <command>"),
-                HelpRow(name: "rv allow-once list"),
-                HelpRow(name: "rv allow-once clear"),
+                HelpRow(name: "rv unlock <code>"),
+                HelpRow(name: "rv unlock mint -- <command>"),
+                HelpRow(name: "rv unlock list"),
+                HelpRow(name: "rv unlock clear"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -968,7 +1048,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "expiry",
-                    description: "A code works once and expires; rv allow-once list shows what is still open"
+                    description: "A code works once and expires; rv unlock list shows what is still open"
                 ),
                 HelpRow(
                     name: "terminal",
@@ -981,8 +1061,8 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv allow-once a1b2c3",
-            "rv allow-once mint -- git reset --hard",
+            "rv unlock a1b2c3",
+            "rv unlock mint -- git reset --hard",
         ]
     )
 
@@ -995,11 +1075,28 @@ enum HelpCatalog {
                 HelpRow(name: "rv packs enable <pack>"),
                 HelpRow(name: "rv packs disable <pack>"),
                 HelpRow(name: "rv packs info <pack>"),
+                HelpRow(name: "rv packs test <pack>"),
             ]),
         ],
         examples: [
             "rv packs",
             "rv packs enable core.git",
+            "rv packs test database.redis",
+        ]
+    )
+
+    static let protect = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv protect <tool>", description: "Turn on the pack for a tool; asks nobody"),
+                HelpRow(name: "rv protect <tool> off", description: "Turn it off; asks for Touch ID or your password"),
+            ]),
+        ],
+        examples: [
+            "rv protect redis",
+            "rv protect terraform",
         ]
     )
 

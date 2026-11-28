@@ -89,6 +89,17 @@ private let claudeFreshBytes = """
         ],
         "matcher": "MultiEdit"
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "RV_BINARY=/usr/local/bin/rv \(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
+          }
+        ]
+      }
     ]
   }
 }
@@ -109,6 +120,18 @@ private let codexFreshBytes = """
           }
         ],
         "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "\(adapterLauncher)/usr/bin/python3 -I -S /tmp/home/.codex/hooks/rv-guard.py",
+            "statusMessage": "RV",
+            "timeout": 18,
+            "type": "command"
+          }
+        ]
       }
     ]
   }

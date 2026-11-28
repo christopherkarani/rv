@@ -33,7 +33,8 @@ func hookTestRuntime(
     pendingApprovals: PendingApprovalsBinding = .automatic,
     ownerPresence: OwnerPresence = OwnerPresence(),
     hookBudget: Duration = testHookBudget,
-    judge: any JudgePort = LiveJudgePort()
+    judge: any JudgePort = LiveJudgePort(),
+    recordsDecisions: Bool = false
 ) -> ServiceRuntime {
     ServiceRuntime(
         snapshots: snapshots,
@@ -50,6 +51,7 @@ func hookTestRuntime(
         ceremonies: WorkspaceOperatorCeremonyService(),
         ownerPresence: ownerPresence,
         hookBudget: hookBudget,
-        judge: judge
+        judge: judge,
+        recordsDecisions: recordsDecisions
     )
 }

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 const RV_BINARY = "__RV_BINARY__";
 const RV_HOOK_TIMEOUT_MS = 15000;
 const RV_TOAST_TIMEOUT_MS = 1500;
-const RV_TOAST_TITLE = "RV · Blocked";
+const RV_TOAST_TITLE = "\u2715 Stopped";
+const RV_STOP_PREFIX = "\u2715 Stopped   ";
 const RV_CMD_PREVIEW = 96;
 const RV_MISSING_COMMAND =
   "rv received a shell hook with no command text and blocked the command. Run it in Terminal.";
@@ -291,6 +292,12 @@ function mapRvHookResult(value) {
 }
 
 function formatToastMessage(mapped, command) {
+  const stop = stopLines(mapped.reason);
+  if (stop) {
+    // rv's stop as rv wrote it: why / safer / who, one per line, each
+    // said once; the verdict line is the toast's title.
+    return stop.slice(1).join("\n").slice(0, 280);
+  }
   const card = cardFromBlock(mapped, command);
   const lines = [];
   const push = (label, value) => {
@@ -306,6 +313,28 @@ function formatToastMessage(mapped, command) {
   return lines.join("\n").slice(0, 280);
 }
 
+// rv's stop text, one line per entry, when `reason` is one stop
+// ("\u2715 Stopped   <command> (<rule>)", then why / safer / who). Line
+// breaks are kept; controls are dropped from each line.
+function stopLines(reason) {
+  if (typeof reason !== "string") {
+    return undefined;
+  }
+  const lines = reason
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trimEnd())
+    .filter((line) => line.length > 0);
+  if (lines.length < 2 || !lines[0].startsWith(RV_STOP_PREFIX)) {
+    return undefined;
+  }
+  return lines;
+}
+
+function toastTitle(mapped) {
+  const stop = stopLines(mapped.reason);
+  return stop ? stop[0].slice(0, 120) : RV_TOAST_TITLE;
+}
+
 function cardFromBlock(mapped, command) {
   const preview = previewCommand(command);
   if (typeof mapped.rule === "string" || typeof mapped.next === "string") {
@@ -317,7 +346,7 @@ function cardFromBlock(mapped, command) {
       summary = summary.split(`. ${mapped.next}`).join("");
     }
     return {
-      summary: sanitizeVisibleText(summary) || "Blocked.",
+      summary: sanitizeVisibleText(summary) || "Stopped.",
       rule: typeof mapped.rule === "string" ? mapped.rule : undefined,
       nextStep: typeof mapped.next === "string" ? mapped.next : undefined,
       preview,
@@ -346,7 +375,7 @@ function cardFromReason(reason, preview) {
     };
   }
   return {
-    summary: cleaned || "Blocked.",
+    summary: cleaned || "Stopped.",
     preview,
   };
 }
@@ -367,7 +396,7 @@ function previewCommand(command) {
 
 async function showBlockToast(ctx, mapped, command) {
   const payload = {
-    title: RV_TOAST_TITLE,
+    title: toastTitle(mapped),
     message: formatToastMessage(mapped, command),
     variant: "error",
     duration: 8000,

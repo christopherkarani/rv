@@ -48,7 +48,7 @@ package let setupCeremonyDownloadTitle = "Downloading"
 package let setupCeremonyDownloadComplete = "✓ Download complete"
 package let setupCeremonyAllHostsWired = "✓ All hosts wired"
 package let setupCeremonyHooksWired = "Hooks wired"
-package let setupCeremonyInstallCloser = "Install complete, run rv explain \"rm -rf\" to test"
+package let setupCeremonyInstallCloser = "Install complete, run rv why \"rm -rf\" to test"
 package let setupCeremonyHostlessTitle = "No hosts yet"
 package let setupCeremonyHostlessNext = "Next  rv setup"
 

@@ -68,3 +68,72 @@ private func packsPosixMode(_ url: URL) throws -> Int {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     return ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777
 }
+
+// G3: strict [packs]. The doors still read what they can; `problems`
+// names every line they skip.
+
+@Test func packsConfig_problems_unknownKeyUnquotedAndUnknownPack() {
+    let text = """
+    [theme]
+    enable = "not packs"
+
+    [packs]
+    enable = ["database.redis"]
+    enabled = [
+      "database.redis",
+      containers.docker,
+      "nope.pack",
+    ]
+    disable = []
+    """
+    let problems = PacksConfigStore.problems(in: text, known: ["database.redis", "containers.docker", "core.git"])
+    #expect(problems.map(\.line) == [5, 8, 9, 11])
+    #expect(problems[0].problem == "unknown key enable in [packs]")
+    #expect(problems[0].fix == "did you mean enabled?")
+    #expect(problems[1].problem == "containers.docker is not a quoted string")
+    #expect(problems[2].problem == "no pack, category or preset is named nope.pack")
+    #expect(problems[3].fix == "did you mean disabled?")
+    // The doors read only the quoted, known-key entries, as before.
+    #expect(PacksConfigStore.parse(text) == PacksConfig(enabled: ["database.redis", "nope.pack"], disabled: []))
+}
+
+@Test func packsConfig_problems_cleanRenderHasNone() {
+    let config = PacksConfig(enabled: ["database.redis", "kubernetes"], disabled: ["core.git"])
+    let text = PacksConfigStore.render(config)
+    #expect(PacksConfigStore.problems(in: text, known: ["database.redis", "kubernetes", "core.git"]).isEmpty)
+    #expect(PacksConfigStore.parse(text) == config)
+}
+
+@Test func packsConfig_problems_notAListAndUnclosed() {
+    let problems = PacksConfigStore.problems(in: "[packs]\nenabled = \"core.git\"\ndisabled = [\n  \"core.git\",\n", known: ["core.git"])
+    #expect(problems.map(\.problem) == ["enabled is not a list", "disabled has no closing ]"])
+}
+
+@Test func packsConfig_parse_repeatedKeyReplaces() {
+    let text = "[packs]\nenabled = [\"a\"]\nenabled = [\"b\"]\n"
+    #expect(PacksConfigStore.parse(text).enabled == ["b"])
+}
+
+// G6b: the two [packs] shapes the G3 scanner reads differently from the
+// pre-G3 parser, pinned so they cannot drift back unnoticed.
+
+@Test func packsConfig_parse_itemsOnAMultiLineListsOpeningLineAreRead() {
+    let text = "[packs]\nenabled = [\"a\",\n  \"b\",\n]\n"
+    #expect(PacksConfigStore.parse(text).enabled == ["a", "b"])
+    #expect(PacksConfigStore.problems(in: text, known: ["a", "b"]).isEmpty)
+}
+
+@Test func packsConfig_parse_repeatedMultiLineKeyReplaces() {
+    let text = "[packs]\nenabled = [\n  \"a\",\n]\nenabled = [\n  \"b\",\n]\n"
+    #expect(PacksConfigStore.parse(text).enabled == ["b"])
+}
+
+@Test func packsConfig_problems_junkAfterClosingBracket() {
+    let text = "[packs]\nenabled = [\"a\"] x\ndisabled = [\n  \"b\",\n] y\n"
+    let problems = PacksConfigStore.problems(in: text, known: ["a", "b"])
+    #expect(problems.map(\.line) == [2, 5])
+    #expect(problems.map(\.problem) == ["x after ] is not read", "y after ] is not read"])
+    #expect(problems.map(\.key) == ["enabled", "disabled"])
+    // The list itself is still read.
+    #expect(PacksConfigStore.parse(text) == PacksConfig(enabled: ["a"], disabled: ["b"]))
+}

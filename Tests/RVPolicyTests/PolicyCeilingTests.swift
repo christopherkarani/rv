@@ -215,7 +215,7 @@ struct PolicyCeilingTests {
                 Issue.record("expected a ceiling refusal")
             } catch let error as PolicyCeilingError {
                 #expect(error.refusal.hasPrefix("git push --force exceeds the policy ceiling"), "\(error.refusal)")
-                #expect(error.refusal.hasSuffix("(check: rv explain 'git push --force')"), "\(error.refusal)")
+                #expect(error.refusal.hasSuffix("(check: rv why 'git push --force')"), "\(error.refusal)")
             }
             #expect(FileManager.default.fileExists(atPath: workspace.machineStore.machineFileURL.path) == false)
             // A preview is never refused: it writes nothing.

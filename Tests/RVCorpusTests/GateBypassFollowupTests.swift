@@ -66,7 +66,9 @@ struct GateBypassFollowupTests {
                 Issue.record("\(command): \(describeDecision(result))")
                 continue
             }
-            #expect(deny.ruleID.rawValue == unverifiedAlias, "\(command)")
+            // Config that can move rv's commit hook or pull in another
+            // config file is the pinned commit-check stop instead.
+            #expect([unverifiedAlias, SecretsScanGuard.ruleID.rawValue].contains(deny.ruleID.rawValue), "\(command)")
         }
     }
 

@@ -14,6 +14,10 @@ func isolatedHomeDirectory() throws -> URL {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-service-home-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    // The judge decides in these homes (`judge.mode` unset is shadow).
+    let config = root.appendingPathComponent(".config/rv", isDirectory: true)
+    try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+    try Data(#"{"judge":{"mode":"live"}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
     return root
 }
 
