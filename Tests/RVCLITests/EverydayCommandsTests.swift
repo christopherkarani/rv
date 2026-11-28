@@ -233,16 +233,14 @@ struct PromptCommandTests {
 
     @Test("a hello that never answers gives up at the budget")
     func budget() async {
+        // The hello hangs until the test releases it, so an answer while it
+        // is still held proves the budget won, with no wall-clock bound a
+        // loaded run could miss. The release binary's timing is in H5.md.
         let stuck = HelloOnlyTransport(reply: .hang)
-        let clock = ContinuousClock()
-        let start = clock.now
         let liveness = await PromptRun.hello(over: stuck, budgetMs: 30)
-        let elapsed = clock.now - start
         #expect(liveness == .unknown)
-        // The hang lasts 60 s: returning at all proves the budget won. The
-        // bound is loose because a loaded test run can starve the pool;
-        // the release binary's timing is measured separately (H5.md).
-        #expect(elapsed < .seconds(30), "\(elapsed)")
+        #expect(stuck.hangEnded == false)
+        stuck.release()
         #expect(stuck.sends == 0)
     }
 
@@ -384,9 +382,16 @@ final class HelloOnlyTransport: ServiceTransport {
         case hang
     }
 
+    struct HangState {
+        var waiting: CheckedContinuation<Void, Never>?
+        var released = false
+        var ended = false
+    }
+
     let reply: Reply
     private let helloCalls = Mutex(0)
     private let sendCalls = Mutex(0)
+    private let hang = Mutex(HangState())
 
     init(reply: Reply) {
         self.reply = reply
@@ -409,9 +414,30 @@ final class HelloOnlyTransport: ServiceTransport {
         case .fail(let error):
             throw error
         case .hang:
-            try await Task.sleep(for: .seconds(60))
+            await withCheckedContinuation { (waiting: CheckedContinuation<Void, Never>) in
+                let resumeNow = hang.withLock { state -> Bool in
+                    if state.released { return true }
+                    state.waiting = waiting
+                    return false
+                }
+                if resumeNow { waiting.resume() }
+            }
+            hang.withLock { $0.ended = true }
             throw ServiceTransportError.timeout
         }
+    }
+
+    /// True once a `.hang` hello has returned.
+    var hangEnded: Bool { hang.withLock { $0.ended } }
+
+    /// Lets a `.hang` hello return, now or as soon as it starts.
+    func release() {
+        let waiting = hang.withLock { state -> CheckedContinuation<Void, Never>? in
+            state.released = true
+            defer { state.waiting = nil }
+            return state.waiting
+        }
+        waiting?.resume()
     }
 
     func send(_ body: Data) async throws -> Data {
