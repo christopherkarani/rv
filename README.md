@@ -145,13 +145,13 @@ root in a container usually can't pass
 
 When rv can't decide (the daemon `rvd` is down or slow, or the `rv` binary
 is gone), every hook fails closed: the agent's tool call is blocked, never
-quietly allowed. The block message says which of these it was:
+quietly allowed. The block message names which of these it was:
 
-| Message starts with | What it means | What to do |
+| Message shows | What it means | What to do |
 | --- | --- | --- |
-| `RV daemon is not reachable` | `rvd` isn't running | `rv doctor`; `rv setup` repairs the service |
-| `RV daemon did not answer in time`, `rv did not answer within 15s` | `rvd` is busy or hung | Retry; then `rv service status`, `rv service restart` |
-| `RV daemon identity check failed`, `RV daemon sent an unexpected reply` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
+| `(rv.hook/unreachable)` | `rvd` isn't running | `rv doctor`; `rv setup` repairs the service |
+| `(rv.hook/timeout)`, `(rv.hook/connection)`, `rv did not answer within 15s` | `rvd` is busy or hung | Retry; then `rv service status`, `rv service restart` |
+| `(rv.hook/untrusted)`, `(rv.hook/protocol)` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
 | `rv is not installed at <path>` | the hook points at a binary that's gone | Reinstall rv, then `rv setup` |
 | `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
 | `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |

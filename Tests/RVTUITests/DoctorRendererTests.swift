@@ -47,10 +47,19 @@ private let doctorRendererFixture = DoctorViewModel(
         "",
         "  Config",
         "    readable · grade hook · safety normal · block ledger on",
+        "    judge  shadow · logs only",
         "",
         "  Next",
         "  →  rv setup    Wire Pi, OpenCode, and Claude",
     ])
+}
+
+@Test func doctorRenderer_judgeLiveLine() {
+    var fixture = doctorRendererFixture
+    fixture.judgeLive = true
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    #expect(lines.contains("    judge  live"))
+    #expect(!lines.contains { $0.contains("shadow") })
 }
 
 @Test func doctorRenderer_usesHumanServiceStateText() {

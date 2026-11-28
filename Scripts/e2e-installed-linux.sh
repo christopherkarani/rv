@@ -726,8 +726,8 @@ d=json.loads(t)["hookSpecificOutput"]; r=d.get("permissionDecisionReason","")
 print(d["permissionDecision"] + ("+code" if "allow-once" in r else ""))'; }
 
 # rvd down first (it was stopped above)
-out="$(hook 'git status')"; [[ "$(printf '%s' "$out" | decision)" == "ask" && "$out" == *"RV daemon is not reachable"* ]]
-check gate "rvd down: Claude gets its native ask with 'RV daemon is not reachable' (RV_HOOK_WHEN_DOWN default)" $? "$out"
+out="$(hook 'git status')"; [[ "$(printf '%s' "$out" | decision)" == "ask" && "$out" == *"(rv.hook/unreachable)"* ]]
+check gate "rvd down: Claude gets its native ask with the rv.hook/unreachable stop (RV_HOOK_WHEN_DOWN default)" $? "$out"
 out="$(hookjson Bash command 'git status' | as_owner env RV_HOOK_WHEN_DOWN=deny rv hook --host claude)"; [[ "$(printf '%s' "$out" | decision)" == "deny" ]]
 check gate "rvd down, RV_HOOK_WHEN_DOWN=deny: deny" $? "$out"
 out="$(hookjson Bash command 'git status' | as_owner env RV_HOOK_WHEN_DOWN=allow rv hook --host claude)"; [[ "$(printf '%s' "$out" | decision)" == "ask" ]]
@@ -803,8 +803,8 @@ check gate "observe: rv host list shows claude observe" $?
 g1="$(hook 'git reset --hard' | decision)"; g2="$(hook 'cat .env' | decision)"; g3="$(hook 'pkill rvd' | decision)"
 [[ "$g1" == "allow" && "$g2" == "allow" ]]; check gate "observe: would-be denies run" $? "reset=$g1 env=$g2"
 [[ "$g3" == "deny" ]]; check gate "observe: rv's self-protection (pkill rvd) still blocks" $? "$g3"
-as_owner rv blocks | grep -q 'observed ask'
-check gate "observe: rv blocks marks what enforce would have done (observed ask/deny)" $?
+as_owner rv blocks | grep -q '◐ Would stop'
+check gate "observe: rv blocks marks what guard mode would have done (◐ Would stop)" $?
 pkill -TERM -u "$OWNER" -x rvd; for _ in $(seq 30); do pgrep -u "$OWNER" -x rvd >/dev/null || break; sleep 0.2; done
 out="$(hook 'git reset --hard' 2>&1)"
 [[ "$out" == *"allowed without being checked"* ]]
