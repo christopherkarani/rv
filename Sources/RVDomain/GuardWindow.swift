@@ -3,19 +3,22 @@ import Foundation
 /// A stretch of wall-clock time a guard change holds for, stored in
 /// `config.json` as whole Unix seconds: `{"from": 1764250000, "until": 1764253600}`.
 ///
-/// An agent's block of a host that expires on its own
-/// (`guard.temporary_blocks.<host>`) is one. It never overwrites the mode it
-/// covers, so when the window closes nothing has to be restored: the stored
-/// mode was there all along. The window is open only from `from` up to `until` and only when it
+/// Two changes use one: an agent's block of a host that expires on its own
+/// (`guard.temporary_blocks.<host>`), and the owner's `rv pause`
+/// (`guard.pause`). Neither ever overwrites the mode it covers, so when the
+/// window closes nothing has to be restored: the stored mode was there all
+/// along. The window is open only from `from` up to `until` and only when it
 /// is no longer than its kind allows: a clock set back before `from`, or a
 /// record stretched past the limit, reads as closed, so a block can never
-/// stick.
+/// stick and a pause can never last longer than the owner asked.
 public struct GuardWindow: Sendable, Equatable {
     public var from: Date
     public var until: Date
 
     /// The longest an agent's block of a host lasts (Q4, 2026-11-27).
     public static let temporaryBlockLimit: TimeInterval = 60 * 60
+    /// The longest `rv pause` lasts.
+    public static let pauseLimit: TimeInterval = 60 * 60
 
     public init(from: Date, until: Date) {
         self.from = from

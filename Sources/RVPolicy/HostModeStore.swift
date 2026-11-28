@@ -105,13 +105,36 @@ public struct HostModeStore: Sendable {
         try MachineConfigJSON.set(nil, for: setting, in: configFile)
     }
 
+    /// Stores the owner's pause (`guard.pause`): every host observes while
+    /// `window` is open. Recorded as a loosening; the caller binds the
+    /// owner check to `ConfigChangeAudit.authorization` first.
+    public func savePause(_ window: GuardWindow) throws {
+        let setting = MachineConfigJSON.Setting(
+            keyPath: Self.pauseKeyPath, describe: Self.describePause, direction: { _, _ in .loosening })
+        try MachineConfigJSON.set(window.json, for: setting, in: configFile)
+    }
+
+    /// Ends the pause now (`rv pause --end`): a tightening, needing no owner.
+    public func clearPause() throws {
+        let setting = MachineConfigJSON.Setting(
+            keyPath: Self.pauseKeyPath, describe: Self.describePause, direction: { _, _ in .tightening })
+        try MachineConfigJSON.set(nil, for: setting, in: configFile)
+    }
+
     private static func temporaryBlockKeyPath(_ host: HookHost) -> [String] {
         ["guard", "temporary_blocks", host.rawValue]
     }
 
+    private static let pauseKeyPath = ["guard", "pause"]
+
     private static func describeTemporaryBlock(_ value: JSONValue?) -> String {
         guard let window = GuardWindow(json: value) else { return ConfigChangeAudit.unset }
         return "block until \(Self.stamp(window.until))"
+    }
+
+    private static func describePause(_ value: JSONValue?) -> String {
+        guard let window = GuardWindow(json: value) else { return ConfigChangeAudit.unset }
+        return "paused until \(Self.stamp(window.until))"
     }
 
     private static func stamp(_ date: Date) -> String {

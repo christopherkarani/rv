@@ -2,9 +2,9 @@ import Foundation
 import Testing
 import RVDomain
 
-/// F3: an agent's block that ends on its own is a `GuardWindow` the
-/// resolution reads against the clock, so it never needs a write, or rvd,
-/// to end.
+/// F3 (an agent's block that ends on its own) and H4 (`rv pause`): both are
+/// a `GuardWindow` the resolution reads against the clock, so neither ever
+/// needs a write, or rvd, to end.
 @Suite("Guard windows")
 struct GuardWindowTests {
     private static let start = Date(timeIntervalSince1970: 1_764_250_000)
@@ -66,9 +66,43 @@ struct GuardWindowTests {
         #""block""#,
     ])
     func malformedWindow_isNoWindow(_ window: String) throws {
-        let json = #"{"guard":{"hosts":{"claude":"observe"},"temporary_blocks":{"claude":\#(window)}}}"#
+        let json = #"{"guard":{"hosts":{"claude":"observe"},"temporary_blocks":{"claude":\#(window)},"pause":\#(window)}}"#
         let config = try Self.config(json)
         #expect(config.temporaryBlocks.isEmpty)
+        #expect(config.pause == nil)
+    }
+
+    @Test func pause_observesEveryHostWhileOpen_thenTheStoredModesAreBack() throws {
+        let from = Int(Self.start.timeIntervalSince1970)
+        let json = #"{"guard":{"hosts":{"claude":"block"},"pause":{"from":\#(from),"until":\#(from + 600)}}}"#
+        let config = try Self.config(json)
+        for host in HookHost.allCases {
+            #expect(GuardModeResolution.resolve(config, host: host, environment: [:], now: Self.start) == .observe)
+        }
+        #expect(GuardModeResolution.resolve(config, host: nil, environment: [:], now: Self.start) == .observe)
+        let back = Self.start.addingTimeInterval(600)
+        #expect(GuardModeResolution.resolve(config, host: .claude, environment: [:], now: back) == .enforce)
+        #expect(GuardModeResolution.resolve(config, host: .cursor, environment: [:], now: back) == .enforce)
+        // The stored posture never reads as paused.
+        #expect(config.machineMode == .enforce)
+    }
+
+    @Test func pause_neverOutranksTheEnvironmentsEnforce() throws {
+        let from = Int(Self.start.timeIntervalSince1970)
+        let config = try Self.config(#"{"guard":{"pause":{"from":\#(from),"until":\#(from + 600)}}}"#)
+        #expect(GuardModeResolution.resolve(
+            config, host: .claude, environment: ["RV_GUARD_MODE": "enforce"], now: Self.start) == .enforce)
+    }
+
+    /// A pause can never last longer than the hour the owner may ask for,
+    /// whatever the file says or the clock does.
+    @Test func pause_overlongOrBeforeItStarts_isClosed() throws {
+        let from = Int(Self.start.timeIntervalSince1970)
+        let long = try Self.config(#"{"guard":{"pause":{"from":\#(from),"until":\#(from + 3601)}}}"#)
+        #expect(long.activePause(at: Self.start.addingTimeInterval(1)) == nil)
+        #expect(GuardModeResolution.resolve(long, host: .claude, environment: [:], now: Self.start.addingTimeInterval(1)) == .enforce)
+        let normal = try Self.config(#"{"guard":{"pause":{"from":\#(from),"until":\#(from + 600)}}}"#)
+        #expect(normal.activePause(at: Self.start.addingTimeInterval(-60)) == nil)
     }
 
     @Test func window_roundTripsOnWholeSeconds() {

@@ -55,6 +55,9 @@ public struct GuardConfig: Sendable, Equatable {
     /// `guard.temporary_blocks.<host>`: an agent's block that expires on its
     /// own. It covers `hosts[host]` while open and never replaces it.
     public var temporaryBlocks: [HookHost: GuardWindow]
+    /// `guard.pause`: the owner's `rv pause`. While open every host is
+    /// observed.
+    public var pause: GuardWindow?
 
     public static let empty = GuardConfig()
 
@@ -62,12 +65,14 @@ public struct GuardConfig: Sendable, Equatable {
         mode: GuardMode? = nil,
         hosts: [HookHost: HostMode] = [:],
         judgeEngine: JudgeEngine? = nil,
-        temporaryBlocks: [HookHost: GuardWindow] = [:]
+        temporaryBlocks: [HookHost: GuardWindow] = [:],
+        pause: GuardWindow? = nil
     ) {
         self.mode = mode
         self.hosts = hosts
         self.judgeEngine = judgeEngine
         self.temporaryBlocks = temporaryBlocks
+        self.pause = pause
     }
 
     /// The agent's block of `host` in force at `now`, if any.
@@ -76,6 +81,12 @@ public struct GuardConfig: Sendable, Equatable {
               window.isOpen(at: now, limit: GuardWindow.temporaryBlockLimit)
         else { return nil }
         return window
+    }
+
+    /// The owner's pause in force at `now`, if any.
+    public func activePause(at now: Date) -> GuardWindow? {
+        guard let pause, pause.isOpen(at: now, limit: GuardWindow.pauseLimit) else { return nil }
+        return pause
     }
 
     /// Decodes `config.json` bytes: the one bytes-to-config entry, shared
@@ -112,12 +123,13 @@ public struct GuardConfig: Sendable, Equatable {
             mode: Self.chosenRaw(root, object: "guard", key: "mode").flatMap { GuardMode(rawValue: $0.lowercased()) },
             hosts: Self.hostModes(root),
             judgeEngine: Self.chosenRaw(root, object: "judge", key: "engine").flatMap { JudgeEngine(rawValue: $0.lowercased()) },
-            temporaryBlocks: Self.temporaryBlocks(root)
+            temporaryBlocks: Self.temporaryBlocks(root),
+            pause: GuardWindow(json: root["guard"]?["pause"])
         )
     }
 
     /// The machine-wide mode the owner stored: no host entry, no
-    /// environment.
+    /// environment, and no pause (a pause is not a posture `rv setup` keeps).
     public var machineMode: GuardMode {
         GuardModeResolution.resolveStored(self, host: nil)
     }
@@ -158,16 +170,16 @@ public struct GuardConfig: Sendable, Equatable {
     }
 }
 
-/// The guard-mode ladder: `RV_GUARD_MODE=enforce` >
+/// The guard-mode ladder: `RV_GUARD_MODE=enforce` > an open `guard.pause` >
 /// an open `guard.temporary_blocks.<host>` > `guard.hosts.<host>` >
 /// `guard.mode` > enforce. Callers apply the organization pin
 /// (`ManagedGate.guardMode`) afterwards.
 public enum GuardModeResolution {
     /// The environment can only tighten: only `enforce` (any case) is
     /// honoured, because rvd's launch environment is same-user editable.
-    /// An agent's temporary block enforces its host only while its window
-    /// is open at `now` (read on every evaluation, so it needs no rvd
-    /// running to end).
+    /// The owner's pause observes every host; an agent's temporary block
+    /// enforces its host; both only while their window is open at `now`
+    /// (read on every evaluation, so neither needs rvd running to end).
     public static func resolve(
         _ config: GuardConfig, host: HookHost?, environment: [String: String], now: Date = Date()
     ) -> GuardMode {
@@ -175,6 +187,7 @@ public enum GuardModeResolution {
            GuardMode(rawValue: raw.lowercased()) == .enforce {
             return .enforce
         }
+        if config.activePause(at: now) != nil { return .observe }
         if let host, config.temporaryBlock(for: host, at: now) != nil { return .enforce }
         return resolveStored(config, host: host)
     }

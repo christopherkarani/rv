@@ -51,6 +51,11 @@ enum ClockText {
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
+    /// "9 min left", rounding up so the last minute reads "1 min left".
+    static func minutesLeft(_ seconds: Int) -> String {
+        "\(max(1, (seconds + 59) / 60)) min left"
+    }
+
     static func iso(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
     }

@@ -96,12 +96,29 @@ struct HostModeStoreWindowTests {
         #expect(store.read() == .entries([.cursor: .observe]))
     }
 
+    @Test func pause_roundTripsAndClears() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try store.save(.block, for: .claude)
+        let window = GuardWindow(startingAt: Self.now, lasting: 600)
+        try store.savePause(window)
+        let config = try #require(store.readGuardConfig())
+        #expect(config.pause == window)
+        #expect(config.hosts == [.claude: .block])
+        try store.clearPause()
+        #expect(try #require(store.readGuardConfig()).pause == nil)
+        #expect(store.read() == .entries([.claude: .block]))
+    }
+
     @Test func unreadableConfig_refusesWindowsAndReadsAsNil() throws {
         let (store, root) = try store()
         defer { try? FileManager.default.removeItem(at: root) }
         let text = Data(#"{"guard":{"mode":"observe"},"guard":{"mode":"enforce"}}"#.utf8)
         try text.write(to: store.configFile)
         #expect(store.readGuardConfig() == nil)
+        #expect(throws: OwnerConfigWriteError.unreadable) {
+            try store.savePause(GuardWindow(startingAt: Self.now, lasting: 600))
+        }
         #expect(throws: OwnerConfigWriteError.unreadable) {
             try store.saveTemporaryBlock(for: .claude, window: GuardWindow(startingAt: Self.now, lasting: 3600))
         }

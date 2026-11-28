@@ -39,6 +39,8 @@ public enum CommandVocabulary {
         case safety
         case blocks
         case host
+        /// `rv pause 10m` (H4).
+        case pause
         case audit
         case secrets
         case login

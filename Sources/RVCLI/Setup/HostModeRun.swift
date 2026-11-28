@@ -25,12 +25,15 @@ enum HostModeRun {
         let guardMode: String
         let hosts: [Row]
         let managedEnforce: Bool
+        /// The owner's `rv pause`: when rv is back (ISO 8601).
+        var pausedUntil: String? = nil
         let schema = "rv.hosts.v1"
 
         enum CodingKeys: String, CodingKey {
             case guardMode = "guard"
             case hosts
             case managedEnforce = "managed_enforce"
+            case pausedUntil = "paused_until"
             case schema
         }
     }
@@ -73,8 +76,12 @@ enum HostModeRun {
             case .unreadable: modes = [:]
             }
             let config = GuardConfig.read(home: env.home)
+            // The stored posture: a pause is shown on its own line, not as
+            // every host turning observe.
+            var unpaused = config
+            unpaused.pause = nil
             let guardMode = GuardModeResolution.resolve(
-                config, host: nil, environment: ProcessInfo.processInfo.environment)
+                unpaused, host: nil, environment: ProcessInfo.processInfo.environment)
             let shown = HookHost.allCases
                 .filter { only == nil || $0 == only }
                 .sorted { $0.rawValue < $1.rawValue }
@@ -92,15 +99,21 @@ enum HostModeRun {
                         until: block.map { ClockText.iso($0.until) }
                     )
                 }
+            let pause = config.activePause(at: now)
             let document = ListDocument(
                 guardMode: guardMode.rawValue,
                 hosts: rows,
-                managedEnforce: env.managedEnforce(env.home)
+                managedEnforce: env.managedEnforce(env.home),
+                pausedUntil: pause.map { ClockText.iso($0.until) }
             )
             if json {
                 return SetupOutcome(stdout: try RobotJSON.encode(document) + "\n", exitCode: 0)
             }
-            var lines: [String] = zip(shown, rows).map { host, row in
+            var lines: [String] = []
+            if let pause {
+                lines.append(PauseRun.pausedLine(pause, now: now, timeZone: timeZone))
+            }
+            lines += zip(shown, rows).map { host, row in
                 let until = blocks[host].map { "  until \(ClockText.hourMinute($0.until, timeZone: timeZone))" } ?? ""
                 return "\(row.host)  \(row.mode)  \(row.wiring)\(until)"
             }
