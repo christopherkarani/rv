@@ -36,7 +36,7 @@ struct GateAuditTests {
             allowlist: { allowlist }, host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
                 guardMode: guardMode,
-                judge: JudgeSelection(engine: .ft, bundle: nil),
+                judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                 store: .gather(home: nil, cwd: nil)
             )
         )
@@ -123,7 +123,7 @@ struct GateAuditTests {
             allowlist: { allowlist }, host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
                 guardMode: .enforce,
-                judge: JudgeSelection(engine: .ft, bundle: nil),
+                judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                 store: .gather(home: nil, cwd: nil)
             )
         )
@@ -273,7 +273,7 @@ struct GateAuditTests {
                 allowlist: { .empty }, host: .hook(.claude), tool: .bash,
                 inputs: EvaluationInputs(
                     guardMode: mode,
-                    judge: JudgeSelection(engine: .ft, bundle: nil),
+                    judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                     store: .gather(home: home, cwd: cwd)
                 )
             )
@@ -367,7 +367,7 @@ struct GateAuditTests {
                 allowlist: { .empty }, host: .hook(.claude), tool: .bash,
                 inputs: EvaluationInputs(
                     guardMode: mode,
-                    judge: JudgeSelection(engine: .ft, bundle: nil),
+                    judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false),
                     store: .gather(home: nil, cwd: nil)
                 )
             )

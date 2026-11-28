@@ -213,10 +213,20 @@ public enum CommandRun {
         offPacks: [ExplainOffPack] = []
     ) throws -> CLIResult {
         let result = verdict.shown
-        let observed = verdict.observeOverrode
-        // Enforce's authorization of the would-be verdict, as the observed
-        // denial row records it; nil unless observe changed the outcome.
-        let authorization = observed ? verdict.wouldBe?.authorization : nil
+        // Watched: enforce's authorization of the would-be verdict, as the
+        // observed denial row records it, when observe changed the outcome.
+        // Stopped: observe was read but its floor kept the verdict. nil
+        // under enforce, or for an allow.
+        let authorization: ObserveOutcome?
+        if verdict.stoppedInEveryMode {
+            authorization = .stopped
+        } else if verdict.stoppedInObserve {
+            authorization = .stoppedInObserve
+        } else if verdict.observeOverrode, let wouldBe = verdict.wouldBe {
+            authorization = .watched(wouldBe.authorization)
+        } else {
+            authorization = nil
+        }
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
@@ -249,7 +259,7 @@ public enum CommandRun {
     private static func robotResult(
         kind: CLIKind,
         result: EvaluationResult,
-        observed: HookAuthorization?,
+        observed: ObserveOutcome?,
         command: ShellCommand,
         exitCode: Int32,
         alsoMatches: [ExplainAlsoMatch],
@@ -271,7 +281,7 @@ public enum CommandRun {
             let payload = explainRobotPayload(from: model)
             text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:
-            text = try RobotDocument.test(testRobotPayload(from: result, observed: observed != nil)).render()
+            text = try RobotDocument.test(testRobotPayload(from: result, observed: observed)).render()
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }

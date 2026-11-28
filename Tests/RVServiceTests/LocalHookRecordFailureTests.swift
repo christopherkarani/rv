@@ -132,6 +132,8 @@ struct LocalHookRecordFailureTests {
     func aFIFOAtARecordPathNeverHangs(_ name: String) throws {
         let fixture = try LocalHookFixture()
         let fifo = Self.config(fixture).appendingPathComponent(name)
+        // The fixture writes config.json (its judge mode): replace it.
+        try? FileManager.default.removeItem(at: fifo)
         #expect(mkfifo(fifo.path, 0o600) == 0)
         let effects = Self.effects(fixture)
         let home = fixture.home

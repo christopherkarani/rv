@@ -17,7 +17,7 @@ struct FakeXPCUnixSocketTests {
         let client = try retryConnect(path: path)
         defer { client.close() }
 
-        let reply = try client.sendJSON(
+        let reply = try await client.sendJSON(
             evaluateJSON("git reset --hard", clientSemver: ProtocolVersion.serviceSemver)
         )
         let result = try #require(reply["result"] as? [String: Any])
@@ -36,11 +36,11 @@ struct FakeXPCUnixSocketTests {
         let client = try retryConnect(path: path)
         defer { client.close() }
 
-        let ack = try client.hello()
+        let ack = try await client.hello()
         #expect(ack["ok"] as? Bool == true)
         #expect(ack["protocol"] as? String == "rv.ipc.v1")
 
-        let reply = try client.sendJSON(evaluateJSON("git reset --hard"))
+        let reply = try await client.sendJSON(evaluateJSON("git reset --hard"))
         let result = try #require(reply["result"] as? [String: Any])
         let error = try #require(result["error"] as? [String: Any])
         #expect(error["authorizationDenied"] as? Bool == true)
@@ -55,8 +55,8 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        #expect(try client.hello()["ok"] as? Bool == true)
-        let reply = try client.sendJSON(evaluateJSON("git status"))
+        #expect(try await client.hello()["ok"] as? Bool == true)
+        let reply = try await client.sendJSON(evaluateJSON("git status"))
         let error = nested(reply, ["result", "error"])
         #expect(error?["authorizationDenied"] as? Bool == true)
         #expect(nested(reply, ["result", "evaluate"]) == nil)
@@ -70,7 +70,7 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        #expect(try client.hello()["ok"] as? Bool == true)
+        #expect(try await client.hello()["ok"] as? Bool == true)
 
         let requests: [[String: Any]] = [
             methodJSON("explain", ["request": requestObject("git status")]),
@@ -80,7 +80,7 @@ struct FakeXPCUnixSocketTests {
         ]
         let keys = ["explain", "classify", "listPacks", "doctorSnapshot"]
         for (request, key) in zip(requests, keys) {
-            let reply = try client.sendJSON(request)
+            let reply = try await client.sendJSON(request)
             let result = try #require(reply["result"] as? [String: Any])
             #expect(result[key] != nil, "missing result key \(key)")
         }
@@ -90,7 +90,7 @@ struct FakeXPCUnixSocketTests {
             evaluateJSON("git status"),
             methodJSON("setPackEnabled", ["id": "core.git", "enabled": true]),
         ] {
-            let reply = try client.sendJSON(request)
+            let reply = try await client.sendJSON(request)
             let result = try #require(reply["result"] as? [String: Any])
             let error = try #require(result["error"] as? [String: Any])
             #expect(error["authorizationDenied"] as? Bool == true)
@@ -105,8 +105,8 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        _ = try client.hello()
-        let reply = try client.sendJSON(methodJSON("listPacks", [:] as [String: Any]))
+        _ = try await client.hello()
+        let reply = try await client.sendJSON(methodJSON("listPacks", [:] as [String: Any]))
         let list = try #require(nested(reply, ["result", "listPacks"]))
         #expect(list["enabledCount"] as? Int == dayOnePackIDs.count)
         let packs = try #require(list["packs"] as? [[String: Any]])
@@ -124,8 +124,8 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        _ = try client.hello()
-        let reply = try client.sendJSON(
+        _ = try await client.hello()
+        let reply = try await client.sendJSON(
             methodJSON("setPackEnabled", ["id": "core.unknown", "enabled": false])
         )
         let error = try #require(nested(reply, ["result", "error"]))
@@ -141,15 +141,15 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        _ = try client.hello()
+        _ = try await client.hello()
 
-        let first = try client.sendJSON(
+        let first = try await client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
         #expect(nested(first, ["result", "error"])?["decodeFailed"] as? Bool == true)
         #expect(nested(first, ["result", "allowOnceConsume"]) == nil)
 
-        let second = try client.sendJSON(
+        let second = try await client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
         #expect(nested(second, ["result", "error"])?["decodeFailed"] as? Bool == true)
@@ -164,8 +164,8 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        _ = try client.hello()
-        let reply = try client.sendJSON(methodJSON("doctorSnapshot", [:] as [String: Any]))
+        _ = try await client.hello()
+        let reply = try await client.sendJSON(methodJSON("doctorSnapshot", [:] as [String: Any]))
         let snap = try #require(nested(reply, ["result", "doctorSnapshot"]))
         #expect(snap["keepAlive"] as? Bool == true)
         #expect(snap["idleExitSeconds"] as? Int == IdleWatchdog.defaultSeconds)
@@ -191,7 +191,7 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        let ack = try client.hello()
+        let ack = try await client.hello()
         #expect(ack["ok"] as? Bool == false)
 
         let body = Data(
@@ -215,7 +215,7 @@ struct FakeXPCUnixSocketTests {
         defer { server.stop() }
         let client = try retryConnect(path: path)
         defer { client.close() }
-        let ack = try client.hello()
+        let ack = try await client.hello()
         #expect(ack["ok"] as? Bool == false)
         #expect(ack["skewReason"] as? String == "core packs unavailable")
     }

@@ -282,10 +282,20 @@ struct SelfProtectionGuardTests {
         "bash -c 'rv workspace upload ~/.config/gh'",
         "rv-cli workspace download . ~/copy",
         "ls | xargs rv workspace upload",
+        // `rv pause <duration>` watches every host (H4); agents never pause.
+        "rv pause 10m",
+        "rv pause 1h",
+        "rv pause --json 10m",
+        "rv pause $D",
+        "bash -c 'rv pause 10m'",
+        "rv-cli pause 30m",
     ]
 
     static let harmless: [String] = [
         "rv test 'ls'",
+        "rv pause",
+        "rv pause --end",
+        "rv pause --json",
         "rv workspace status",
         "rv workspace leftovers",
         "rv workspace --workspace /p status",

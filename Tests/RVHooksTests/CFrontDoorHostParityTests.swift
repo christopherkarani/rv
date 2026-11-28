@@ -38,7 +38,7 @@ import RVDomain
         // initial exit 0 and empty stderr; tie that to Swift's contract.
         #expect(!branch.contains("exit_code"), "Muse deny must exit 0")
         #expect(!branch.contains("out->err"), "Muse deny carries no stderr")
-        let renderer = try cFunctionBody(in: "hook_fallback.c", named: "int rv_hook_fallback_render(")
+        let renderer = try cFunctionBody(in: "hook_fallback.c", named: "int rv_hook_fallback_render_for(")
         #expect(renderer.contains("out->exit_code = 0;"))
         #expect(HookHost.muse.denyExitCode == 0)
     }

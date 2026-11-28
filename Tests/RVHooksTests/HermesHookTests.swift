@@ -75,7 +75,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.hasSuffix("\n"))
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
-    #expect(wire.stdout.contains(reason))
+    #expect(wire.stdout.contains(jsonQuoted(reason)))
 }
 
 @Test func hermesEncodeDeny_sameReasonAsPi() {

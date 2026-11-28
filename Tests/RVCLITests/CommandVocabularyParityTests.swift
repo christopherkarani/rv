@@ -60,6 +60,10 @@ struct CommandVocabularyParityTests {
         planned.spelling.split(separator: " ").dropFirst().first.map(String.init)
     }).subtracting(known)
 
+    /// Words of rv's own messages that sit one edit from a command:
+    /// "rv paused this call" (the MCP gateway) is not a typo of `rv pause`.
+    static let messageWords: Set = ["paused"]
+
     /// Docs quote rv's own messages in code too (`rv is not installed at
     /// <path>`), so a code span is held to the table only when it is a
     /// command: a `$ rv …` prompt line, or a word that is a planned name
@@ -68,6 +72,7 @@ struct CommandVocabularyParityTests {
     static func docNamesUnknownCommand(_ spelling: DocSpelling) -> Bool {
         guard let word = commandWord(in: spelling.text), known.contains(word) == false else { return false }
         if spelling.isPrompt || plannedWords.contains(word) { return true }
+        if messageWords.contains(word) { return false }
         return known.contains { editDistance(word, $0) <= 1 }
     }
 

@@ -25,7 +25,7 @@ private func verdict<T: Decodable>(
 
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private let fakeBundle = JudgeSelection(
-    engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+    engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true), shadow: false
 )
 // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
 private let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
@@ -483,7 +483,7 @@ struct JudgePortThresholdTests {
         #expect(safe.decision == .allow)
         let missing = door.evaluateAgent(
             request(judged), cwd: nil, home: home, now: now,
-            inputs: inputs(.enforce, home: home, judge: JudgeSelection(engine: .ft, bundle: nil))
+            inputs: inputs(.enforce, home: home, judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false))
         )
         #expect(missing.decision == .allow)
         let notes = try judgeLog(home).compactMap { $0["note"] as? String }
@@ -555,7 +555,7 @@ struct JudgePortPacksOnlyFloorTests {
 
         let missing = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .failed)).evaluateAgent(
             request(Self.inline), cwd: nil, home: home, now: now,
-            inputs: inputs(.enforce, home: home, judge: JudgeSelection(engine: .ft, bundle: nil))
+            inputs: inputs(.enforce, home: home, judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false))
         )
         #expect(missing.decision == .indeterminate(.inlineProgramNeedsJudge))
         let missingRow = try #require(try judgeLog(home).last)
@@ -582,7 +582,7 @@ struct JudgePortPacksOnlyFloorTests {
         "observe: the runtime flags the packs-only floor and leaves the would-be unfloored",
         arguments: [
             (JudgeRuntime.JudgeRun.unavailable("x"), fakeBundle),
-            (JudgeRuntime.JudgeRun.failed, JudgeSelection(engine: .ft, bundle: nil)),
+            (JudgeRuntime.JudgeRun.failed, JudgeSelection(engine: .ft, bundle: nil, shadow: false)),
         ]
     )
     func observeDefersFloor(run: JudgeRuntime.JudgeRun, selection: JudgeSelection) throws {

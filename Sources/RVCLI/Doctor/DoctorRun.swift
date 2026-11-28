@@ -165,6 +165,9 @@ enum DoctorRun {
             blocksEnabled: DenialLedgerPreferences.isEnabled(
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             ),
+            judgeLive: GuardConfig.read(
+                configDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
+            ).judgeDecides,
             leftovers: environment.leftovers,
             problems: (environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)

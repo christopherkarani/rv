@@ -136,6 +136,17 @@ struct GlanceStateTests {
         #expect(GlancePosture(configJSON: Data(#"{"guard":{"hosts":{"codex":"observe","claude":"observe"}}}"#.utf8))
             == .watching([.claude, .codex]))
         #expect(GlancePosture(configJSON: Data(#"{"guard":{"mode":"observe"}}"#.utf8)) == .watching([]))
+        // An open `rv pause` outranks the stored modes; an ended one does not.
+        let from = Date(timeIntervalSince1970: 1_764_252_720)
+        let paused = GuardConfig(hosts: [.claude: .block], pause: GuardWindow(from: from, until: from.addingTimeInterval(600)))
+        #expect(GlancePosture(config: paused, now: from.addingTimeInterval(1)) == .paused(until: from.addingTimeInterval(600)))
+        #expect(GlancePosture(config: paused, now: from.addingTimeInterval(600)) == .guarding)
+        var state = GlanceState(today: GlanceToday(day: from))
+        state.link = .live
+        state.posture = .paused(until: from.addingTimeInterval(600))
+        #expect(state.glyph(at: from.addingTimeInterval(1)) == .paused)
+        #expect(state.pauseEnd == from.addingTimeInterval(600))
+        #expect(state.glyph(at: from.addingTimeInterval(600)) == .guarding)
     }
 
     // MARK: - Helpers
