@@ -95,6 +95,16 @@ public struct HostModeStore: Sendable {
         try MachineConfigJSON.set(window.json, for: setting, in: configFile)
     }
 
+    /// Ends `host`'s open temporary block at `now` (the owner loosening it
+    /// early). The record stays, ended, so the cooldown counts from `now`.
+    /// Recorded as a loosening.
+    public func endTemporaryBlock(for host: HookHost, window: GuardWindow, at now: Date) throws {
+        let setting = MachineConfigJSON.Setting(
+            keyPath: Self.temporaryBlockKeyPath(host), describe: Self.describeTemporaryBlock,
+            direction: { _, _ in .loosening })
+        try MachineConfigJSON.set(window.ended(at: now).json, for: setting, in: configFile)
+    }
+
     /// Removes `host`'s temporary block. `direction` is how the removal
     /// reads in the audit trail: a loosening when the owner ends an open
     /// block, a tightening when a permanent `block` replaces it.

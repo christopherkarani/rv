@@ -11,36 +11,36 @@ struct HostTightenTests {
 
     @Test func agentBlockOfAnotherHost_endsOnItsOwnAfterAnHour() {
         let outcome = HostTighten.unconfirmedBlock(
-            of: .cursor, storedMode: .observe, openBlock: nil, callingHosts: [.claude], now: Self.now)
+            of: .cursor, storedMode: .observe, lastBlock: nil, callingHosts: [.claude], now: Self.now)
         #expect(outcome == .temporary(GuardWindow(from: Self.now, until: Self.now.addingTimeInterval(3600))))
     }
 
     @Test func agentBlockOfItsOwnHost_isAProposal() {
         let outcome = HostTighten.unconfirmedBlock(
-            of: .claude, storedMode: .observe, openBlock: nil, callingHosts: [.claude], now: Self.now)
+            of: .claude, storedMode: .observe, lastBlock: nil, callingHosts: [.claude], now: Self.now)
         #expect(outcome == .proposal(.ownHost))
         // An inherited marker makes it more careful, never less.
         let nested = HostTighten.unconfirmedBlock(
-            of: .codex, storedMode: .observe, openBlock: nil, callingHosts: [.claude, .codex], now: Self.now)
+            of: .codex, storedMode: .observe, lastBlock: nil, callingHosts: [.claude, .codex], now: Self.now)
         #expect(nested == .proposal(.ownHost))
     }
 
     @Test func blockWithNoAgentMarker_isAProposal() {
         let outcome = HostTighten.unconfirmedBlock(
-            of: .cursor, storedMode: .observe, openBlock: nil, callingHosts: [], now: Self.now)
+            of: .cursor, storedMode: .observe, lastBlock: nil, callingHosts: [], now: Self.now)
         #expect(outcome == .proposal(.unknownCaller))
     }
 
     @Test func blockOfAnOffHost_isAProposal() {
         let outcome = HostTighten.unconfirmedBlock(
-            of: .cursor, storedMode: .off, openBlock: nil, callingHosts: [.claude], now: Self.now)
+            of: .cursor, storedMode: .off, lastBlock: nil, callingHosts: [.claude], now: Self.now)
         #expect(outcome == .proposal(.hostOff))
     }
 
     @Test func blockOfAHostAlreadyEnforcing_isStoredAsAsked() {
         for callers: Set<HookHost> in [[], [.claude]] {
             let outcome = HostTighten.unconfirmedBlock(
-                of: .claude, storedMode: .block, openBlock: nil, callingHosts: callers, now: Self.now)
+                of: .claude, storedMode: .block, lastBlock: nil, callingHosts: callers, now: Self.now)
             #expect(outcome == .permanent)
         }
     }
@@ -49,8 +49,48 @@ struct HostTightenTests {
     @Test func openAgentBlock_isNotExtended() {
         let open = GuardWindow(from: Self.now.addingTimeInterval(-1800), until: Self.now.addingTimeInterval(1800))
         let outcome = HostTighten.unconfirmedBlock(
-            of: .cursor, storedMode: .observe, openBlock: open, callingHosts: [.claude], now: Self.now)
+            of: .cursor, storedMode: .observe, lastBlock: open, callingHosts: [.claude], now: Self.now)
         #expect(outcome == .alreadyTemporary(open))
+    }
+
+    /// An agent re-asking as each hour ends must not keep a host blocked
+    /// for good: within the cooldown of the last block's end it is a proposal.
+    @Test(arguments: [
+        (endedAgo: 0.0, outcome: "cooldown"),
+        (endedAgo: 60.0, outcome: "cooldown"),
+        (endedAgo: 6 * 3600.0 - 1, outcome: "cooldown"),
+        (endedAgo: 6 * 3600.0, outcome: "temporary"),
+    ])
+    func reAskAfterABlockEnds_waitsOutTheCooldown(endedAgo: Double, outcome: String) {
+        let end = Self.now.addingTimeInterval(-endedAgo)
+        let last = GuardWindow(from: end.addingTimeInterval(-3600), until: end)
+        let result = HostTighten.unconfirmedBlock(
+            of: .cursor, storedMode: .observe, lastBlock: last, callingHosts: [.claude], now: Self.now)
+        switch outcome {
+        case "cooldown": #expect(result == .proposal(.cooldown))
+        default: #expect(result == .temporary(GuardWindow(startingAt: Self.now, lasting: 3600)))
+        }
+    }
+
+    /// A record that never reads as open (overlong, or a clock set back
+    /// before it) still holds the cooldown.
+    @Test func unopenableRecord_isACooldown() {
+        let overlong = GuardWindow(from: Self.now.addingTimeInterval(-60), until: Self.now.addingTimeInterval(86_400))
+        let ahead = GuardWindow(from: Self.now.addingTimeInterval(60), until: Self.now.addingTimeInterval(3660))
+        for last in [overlong, ahead] {
+            #expect(HostTighten.unconfirmedBlock(
+                of: .cursor, storedMode: .observe, lastBlock: last, callingHosts: [.claude], now: Self.now)
+                == .proposal(.cooldown))
+        }
+    }
+
+    @Test func endedAt_keepsAValidRecordEndingNow() {
+        let open = GuardWindow(from: Self.now.addingTimeInterval(-600), until: Self.now.addingTimeInterval(3000))
+        let ended = open.ended(at: Self.now.addingTimeInterval(0.4))
+        #expect(ended == GuardWindow(from: open.from, until: Self.now))
+        #expect(GuardWindow(json: ended.json) == ended)
+        let fresh = GuardWindow(from: Self.now, until: Self.now.addingTimeInterval(3600)).ended(at: Self.now)
+        #expect(fresh.from < fresh.until)
     }
 
     @Test func markers_nameTheHostsInTheEnvironment() {
