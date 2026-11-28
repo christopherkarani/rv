@@ -25,8 +25,25 @@ struct GlanceNotifierTests {
         #expect(quiet.title == "claude needs you")
     }
 
-    @Test func noticesCarryNoActions() {
+    @Test func ordinaryNoticesCarryNoActions() {
         #expect(UserNotificationSink.content(for: notice(.timeSensitive)).categoryIdentifier.isEmpty)
+    }
+
+    @Test func anUnlockBannerCarriesTheAllowOnceCategoryAndItsCodeOnly() {
+        let hash = String(repeating: "ab", count: 32)
+        var unlock = notice(.timeSensitive)
+        unlock.unlockCodeHash = hash
+        let content = UserNotificationSink.content(for: unlock)
+        #expect(content.categoryIdentifier == UnlockNoticeAction.category)
+        #expect(content.userInfo[UnlockNoticeAction.codeHashKey] as? String == hash)
+        let category = UserNotificationSink.unlockCategory
+        #expect(category.actions.map(\.identifier) == [UnlockNoticeAction.allowOnce])
+        // The action brings the app forward for the sheet and Touch ID, and
+        // only on an unlocked Mac.
+        #expect(category.actions.first?.options.contains(.foreground) == true)
+        #expect(category.actions.first?.options.contains(.authenticationRequired) == true)
+        #expect(UnlockNoticeAction.openBanner == UNNotificationDefaultActionIdentifier)
+        #expect(UnlockNoticeAction.dismissBanner == UNNotificationDismissActionIdentifier)
     }
 
     @Test func aBareExecutableNeverTouchesTheCenter() async {

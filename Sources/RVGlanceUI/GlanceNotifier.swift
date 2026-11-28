@@ -4,9 +4,10 @@ import RVGlance
 import Synchronization
 import UserNotifications
 
-/// Hands the etiquette's notices to UserNotifications. Read-only like the
-/// rest of the menu bar: notices carry no actions, so a banner can't answer
-/// an ask; clicking one only brings the menu bar forward.
+/// Hands the etiquette's notices to UserNotifications. A banner can't
+/// answer anything: most carry no actions, and the one about a single
+/// unlockable stop (K2) carries "Allow once…", which only opens the
+/// approval sheet and starts Touch ID (`UnlockNoticeAction.route`).
 public struct UserNotificationSink: GlanceNoticeSink {
     private static let authorized = Mutex<Bool?>(nil)
 
@@ -37,9 +38,21 @@ public struct UserNotificationSink: GlanceNoticeSink {
     /// Asks once per launch; the system remembers the answer.
     private static func authorize(_ center: UNUserNotificationCenter) async -> Bool {
         if let known = authorized.withLock({ $0 }) { return known }
+        center.setNotificationCategories([unlockCategory])
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
         authorized.withLock { $0 = granted }
         return granted
+    }
+
+    /// "Allow once…" brings the app forward (the sheet and the Touch ID
+    /// prompt need it) and only on an unlocked Mac.
+    static var unlockCategory: UNNotificationCategory {
+        UNNotificationCategory(
+            identifier: UnlockNoticeAction.category,
+            actions: [UNNotificationAction(
+                identifier: UnlockNoticeAction.allowOnce, title: UnlockNoticeAction.allowOnceTitle,
+                options: [.foreground, .authenticationRequired])],
+            intentIdentifiers: [], options: [])
     }
 
     static func content(for notice: GlanceNotice) -> UNMutableNotificationContent {
@@ -47,6 +60,10 @@ public struct UserNotificationSink: GlanceNoticeSink {
         content.title = notice.title
         content.body = notice.body
         content.threadIdentifier = notice.thread
+        if let codeHash = notice.unlockCodeHash {
+            content.categoryIdentifier = UnlockNoticeAction.category
+            content.userInfo = [UnlockNoticeAction.codeHashKey: codeHash]
+        }
         switch notice.level {
         case .passive:
             content.interruptionLevel = .passive

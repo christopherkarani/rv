@@ -111,7 +111,22 @@ public final class GlanceModel {
         delivery = nil
     }
 
-    private func publish(_ state: GlanceState) {
+    /// K2: the stops waiting for an unlock, from the unlock review. They
+    /// ride along every published state until rvd goes down.
+    public func setUnlocks(_ asks: [String: GlanceUnlockAsk]) {
+        unlocks = asks
+        publish(state)
+    }
+
+    @ObservationIgnored private var unlocks: [String: GlanceUnlockAsk] = [:]
+
+    private func publish(_ fed: GlanceState) {
+        var state = fed
+        if case .down = state.link {
+            state.unlocks = [:]
+        } else {
+            state.unlocks = unlocks
+        }
         let old = self.state
         self.state = state
         now = Date()

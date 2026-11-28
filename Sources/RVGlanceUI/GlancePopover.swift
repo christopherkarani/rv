@@ -5,8 +5,9 @@ import RVGlance
 import SwiftUI
 
 /// The Glance popover (Menu bar v5 "Glance", v5b glass): is rv on, what
-/// are my agents doing, did anything get stopped. Read-only: there is no
-/// control here that answers an ask or loosens a rule.
+/// are my agents doing, did anything get stopped. Read-only, with one
+/// exception (K2): a stop that can be unlocked opens its approval sheet,
+/// and only the sheet's Touch ID answers it. Nothing here loosens a rule.
 public struct GlancePopover: View {
     let state: GlanceState
     let now: Date
@@ -14,23 +15,46 @@ public struct GlancePopover: View {
     /// The last stop's plain-English line; nil shows the template line.
     let plain: String?
     let onQuit: (() -> Void)?
+    /// K2: the unlock review, when this app can answer stops.
+    let unlocks: UnlockReviewModel?
 
     public init(
         state: GlanceState, now: Date, calendar: Calendar = .current, plain: String? = nil,
-        onQuit: (() -> Void)? = nil
+        unlocks: UnlockReviewModel? = nil, onQuit: (() -> Void)? = nil
     ) {
         self.state = state
         self.now = now
         self.calendar = calendar
         self.plain = plain
+        self.unlocks = unlocks
         self.onQuit = onQuit
+    }
+
+    /// True while the sheet (or its outcome) takes the popover over.
+    private var sheetOpen: Bool {
+        guard let unlocks else { return false }
+        if case .idle = unlocks.review.phase { return false }
+        return true
     }
 
     private var glyph: GlanceGlyph { state.glyph(at: now) }
 
     public var body: some View {
+        if let unlocks, sheetOpen {
+            UnlockSheetView(model: unlocks)
+        } else {
+            glance
+        }
+    }
+
+    private var glance: some View {
         VStack(alignment: .leading, spacing: 0) {
             GlanceHeader(glyph: glyph, headline: GlanceHeadline(state, now: now, calendar: calendar))
+            if let unlocks, !unlocks.review.waiting.isEmpty {
+                GlanceSectionTitle("Needs you")
+                UnlockAskRows(model: unlocks)
+                GlanceSeparator()
+            }
             if glyph == .connecting {
                 // Nothing is confirmed yet: no numbers, no agents, no stop.
                 Text("Waiting for rvd's first reply.")

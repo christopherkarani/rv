@@ -378,11 +378,16 @@ let cliProducts: [Product] = [
 // The menu bar app (K1, Menu bar v5): SwiftUI and AppKit, macOS only.
 // rv-menu talks to rvd over RVXPC's authenticated client (not RVCLI, which
 // carries the write clients) and hands RVGlance a read-only wire; nothing
-// in it resolves asks or changes policy.
+// in it changes policy. It answers one thing (K2): a stop's allow-once code,
+// over the operator-UI channel, after Touch ID.
 #if os(macOS)
 let macOSMenuTargets: [Target] = [
     .target(name: "RVGlanceUI", dependencies: ["RVGlance", "RVDomain"]),
-    .executableTarget(name: "rv-menu", dependencies: ["RVGlanceUI", "RVGlance", "RVXPC", "RVIPC", "RVPolicy", "RVDomain"]),
+    // K2: RVOperatorUI for its fresh-LAContext authenticator; the unlock
+    // review itself is RVGlance's (Linux-tested) and RVXPC's UI client.
+    .executableTarget(
+        name: "rv-menu",
+        dependencies: ["RVGlanceUI", "RVGlance", "RVXPC", "RVIPC", "RVPolicy", "RVDomain", "RVOperatorUI"]),
 ]
 let macOSMenuProducts: [Product] = [
     .library(name: "RVGlanceUI", targets: ["RVGlanceUI"]),
