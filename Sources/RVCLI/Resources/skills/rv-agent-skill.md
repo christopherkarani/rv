@@ -76,7 +76,6 @@ sandbox), quote them for the human instead.
 - `rv why <command>` shows why rv allows or blocks a command (`rv explain` is the same command).
 - `rv egress pending` lists egress proposals waiting for review.
 - `rv egress denials` lists recent egress refusals.
-- `rv secrets describe --json` lists the keys you can use, never a value.
 - `rv run --secret NAME -- <command>` runs a command with a key's stand-in.
 
 ## Commands only the human runs
@@ -108,5 +107,4 @@ Do not try to get around rv. In particular, never:
 
 If you think a rule is wrong, say so to the human and let them decide.
 
-This file is installed and owned by rv. The human's rv setup keeps it current;
-rv refuses edits to it from agents.
+This file is installed and owned by rv, and rv refuses edits to it from agents.
