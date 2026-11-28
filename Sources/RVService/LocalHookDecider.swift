@@ -37,6 +37,9 @@ package enum LocalHookEscalation: String, Sendable, CaseIterable {
     /// Enforce mode: the deny's hash-chained audit row could not be
     /// written by the write deadline, so rvd answers (and records) it.
     case auditUnwritten = "audit-unwritten"
+    /// A session-start event (B4): rvd words the house rules with the mode
+    /// its own launch environment enforces, which this process cannot see.
+    case houseRules = "house-rules"
 }
 
 /// The hook-local verdict: the exact host reply rvd would send, or a reason
@@ -120,6 +123,8 @@ package struct LocalHookDecider: Sendable {
             // rvd answers a call that is not this host's tool with the same
             // allow, before any evaluation.
             return .final(Self.reply(codec.encodeAllow()))
+        case .sessionStart:
+            return .escalate(.houseRules)
         case .request:
             break
         }

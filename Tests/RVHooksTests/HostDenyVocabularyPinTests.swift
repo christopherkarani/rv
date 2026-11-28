@@ -9,7 +9,7 @@ struct HostDenyVocabularyPinTests {
     @Test func unlockLinesUseTheTableSpelling() throws {
         let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
         let unlock = CommandVocabulary.Command.allowOnce.invocation
-        #expect(unlockLine(for: code) == "ask your user to run  \(unlock) a1b2c3")
+        #expect(unlockLine(for: code) == "ask your user to run  \(unlock) a1b2c3  (you can wait: rv wait a1b2c3)")
         #expect(earlierPendingUnlockLine() == "ask your user to run the earlier code with  \(unlock)")
         #expect(
             ownerRunsLine(CommandVocabulary.Command.doctor.invocation)

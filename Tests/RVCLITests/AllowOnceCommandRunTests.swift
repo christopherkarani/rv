@@ -11,7 +11,7 @@ struct AllowOnceCommandRunTests {
     @Test func redeem_missingCodePrintsUsage() async throws {
         try await withCLIProcess(environment: [:]) {
             var command = try AllowOnceRedeem.parse([])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -299,7 +299,7 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
             var command = try AllowOnceMint.parse([])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }

@@ -11,6 +11,7 @@ _rv() {
     'try:Watch rv stop a fake agent in a throwaway repo'
     'term:Watch what rv is doing, full screen'
     'wait:Wait for the answer to a stop'
+    'why:Why rv stopped a command, or let it run'
     'pause:Pause rv for a while (owner only)'
     'explain:Explain a decision'
     'check:Check a plan before an agent runs it'
@@ -20,6 +21,7 @@ _rv() {
     'protect:Protect a tool'
     'policy:Typed rules'
     'scan:Session forensics'
+    'unlock:Run a stopped command once, with its code'
     'allow-once:Mint and redeem single-use unlock codes'
     'allowlist:Manage permanent user-layer exceptions'
     'service:Service status'
@@ -32,6 +34,8 @@ _rv() {
     'proposals:Approve or decline loosen proposals'
     'blocks:List recent denials'
     'log:What rv stopped or would stop'
+    'guard:Guard an agent (host mode block)'
+    'watch:Watch an agent (host mode observe)'
     'host:Per-host mode: block, observe, or off'
     'audit:Unified audit trail'
     'secrets:Secrets agents use through placeholders'
@@ -49,7 +53,7 @@ _rv() {
       case $words[1] in
         box)
           local -a bx
-          bx=('list:List boxes' 'setup:Set up Mac boxes once')
+          bx=('list:List boxes' 'setup:Set up Mac boxes once' 'tidy:Move old box images to the trash')
           _describe -t commands 'box' bx
           ;;
         workspace)

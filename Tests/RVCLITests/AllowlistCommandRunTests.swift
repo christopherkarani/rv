@@ -19,7 +19,7 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "   "])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -29,7 +29,7 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["not-a-rule", "--reason", "reviewed"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -41,7 +41,7 @@ struct AllowlistCommandRunTests {
             var command = try AllowlistAdd.parse([
                 "core.git:reset-hard", "--reason", "reviewed", "--project",
             ])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -53,7 +53,7 @@ struct AllowlistCommandRunTests {
             var command = try AllowlistAdd.parse([
                 "core.git:reset-hard", "--reason", "reviewed", "--system",
             ])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -149,7 +149,7 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var missing = try AllowlistAddCommand.parse(["echo hi", "--reason", ""])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await missing.run()
             }
             var ok = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
@@ -192,7 +192,7 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
             var command = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe", "--project"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await command.run()
             }
         }
@@ -462,13 +462,13 @@ struct AllowlistCommandRunTests {
             ])
             try await add.run()
             var remove = try AllowlistRemove.parse(["core.git:reset-hard", "--project"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await remove.run()
             }
             var system = try AllowlistAddCommand.parse([
                 "echo hi", "--reason", "safe", "--system",
             ])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(ExitStatus.usage.rawValue)) {
                 try await system.run()
             }
         }

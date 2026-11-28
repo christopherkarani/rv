@@ -11,6 +11,8 @@ enum CodexHooksMerge {
     static let hooksFileName = "hooks.json"
     static let hooksRootKey = "hooks"
     static let preToolUseKey = "PreToolUse"
+    /// B4: the adapter also hears SessionStart and replies with rv's house rules.
+    static let sessionStartKey = "SessionStart"
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
     static let hookType = "command"
@@ -24,7 +26,8 @@ enum CodexHooksMerge {
         isFingerprintedCommand: { isFingerprinted(command: $0) },
         buildEntry: { context, _ in
             hookEntry(interpreter: context.interpreter, adapterPath: context.adapterPath)
-        }
+        },
+        sessionStartListKey: sessionStartKey
     )
 
     /// Paths are shell-quoted when needed (a HOME with a space): the host

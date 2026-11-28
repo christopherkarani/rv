@@ -53,7 +53,7 @@ struct AllowlistLayerFlags: ParsableArguments {
 
     func refuseUnsupported() throws {
         if project || system {
-            try CommandContext.fail("rv allowlist: --project/--system not in v1\n", exitCode: 2)
+            try CommandContext.fail("rv allowlist: --project/--system not in v1\n", exitCode: ExitStatus.usage.rawValue)
         }
     }
 }
@@ -84,10 +84,10 @@ struct AllowlistAdd: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
-            try ctx.fail("rv allowlist add: reason required\n", exitCode: 2)
+            try ctx.fail("rv allowlist add: reason required\n", exitCode: ExitStatus.usage.rawValue)
         }
         guard let ruleID = parseAllowlistRuleID(rule) else {
-            try ctx.fail("rv allowlist add: invalid rule id\n", exitCode: 2)
+            try ctx.fail("rv allowlist add: invalid rule id\n", exitCode: ExitStatus.usage.rawValue)
         }
         // An exception is looser: from an agent or a script it becomes a
         // proposal the owner approves later; nothing changes here.
@@ -141,7 +141,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
-            try ctx.fail("rv allowlist add-command: reason required\n", exitCode: 2)
+            try ctx.fail("rv allowlist add-command: reason required\n", exitCode: ExitStatus.usage.rawValue)
         }
         let route = try await LoosenRoute.ownerOrProposal(
             .allowCommand(command: command, reason: trimmed),
