@@ -12,6 +12,7 @@ _rv() {
     'term:Watch what rv is doing, full screen'
     'wait:Wait for the answer to a stop'
     'why:Why rv stopped a command, or let it run'
+    'undo:Restore what a reset or delete removed'
     'pause:Pause rv for a while (owner only)'
     'explain:Explain a decision'
     'check:Check a plan before an agent runs it'

@@ -647,6 +647,12 @@ public struct GatedEvaluate: Sendable {
             // timeout deny.
             var recordsDenial = false
             if verb.recordsDenial, case .deny = unfloored.decision { recordsDenial = true }
+            // Watch mode lets a would-be stop run: keep a copy first.
+            if recordsDenial, let keep = UndoHookPoint.request(
+                for: unfloored, command: request.command, cwd: cwd, host: host, reason: .watched
+            ) {
+                effects.append(.keepCopy(keep))
+            }
             if verb.recordsDenial, case .indeterminate = unfloored.decision, let row = Self.denialRow(
                 for: unfloored, path: nil, host: host, tool: tool, now: now, observed: true,
                 wouldBe: Self.ledgerWouldBe(HookAuthorization.project(result: unfloored, cwd: cwd))
@@ -689,6 +695,12 @@ public struct GatedEvaluate: Sendable {
         }
         let finished = decision.result
         let override = decision.override
+        // An unlock lets a stop through: keep a copy first.
+        if verb == .apply, override == .allowOnce, let keep = UndoHookPoint.request(
+            for: candidate, command: request.command, cwd: cwd, host: host, reason: .unlocked
+        ) {
+            effects.append(.keepCopy(keep))
+        }
         // On the task, after the offload (`HookDeadline.current` is
         // task-local). Checked on every apply, allow included: past the
         // deadline the check trips it and `HookDoor` swaps in the timeout
@@ -1373,6 +1385,8 @@ public struct GatedEvaluate: Sendable {
                 // offers allow-once): an indeterminate refusal is neither,
                 // except the observe floor's own stop (`ledgerRow`).
                 if let ledgerRow = row.ledgerRow { recordDenial(ledgerRow, home: home) }
+            case .keepCopy(let request):
+                UndoHookPoint.keep(request, home: home)
             case .overrideAudit(let row):
                 let wait = lockWait()
                 guard auditOverride(row, home: home, wait: wait) == false else { continue }
@@ -1457,6 +1471,10 @@ public struct GatedEvaluate: Sendable {
                 if recordDenial(row, home: home, wait: wait) == false { record.drops.append(.denialLedger) }
             case .overrideAudit:
                 record.drops.append(.audit)
+            case .keepCopy:
+                // rvd is down: the local hook keeps its budget for the
+                // reply and keeps no copy.
+                break
             }
         }
         return record

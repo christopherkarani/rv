@@ -8,6 +8,7 @@ complete -c rv -n "__fish_use_subcommand" -a "try" -d "Watch rv stop a fake agen
 complete -c rv -n "__fish_use_subcommand" -a "term" -d "Watch what rv is doing, full screen"
 complete -c rv -n "__fish_use_subcommand" -a "wait" -d "Wait for the answer to a stop"
 complete -c rv -n "__fish_use_subcommand" -a "why" -d "Why rv stopped a command, or let it run"
+complete -c rv -n "__fish_use_subcommand" -a "undo" -d "Restore what a reset or delete removed"
 complete -c rv -n "__fish_use_subcommand" -a "pause" -d "Pause rv for a while (owner only)"
 complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
 complete -c rv -n "__fish_use_subcommand" -a "check" -d "Check a plan before an agent runs it"
