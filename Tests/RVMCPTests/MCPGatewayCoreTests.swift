@@ -73,6 +73,7 @@ extension [MCPGatewayOutput] {
     var toUpstream: [(String, JSONValue)] { compactMap { if case .toUpstream(let s, let m) = $0 { (s, m) } else { nil } } }
     var audits: [MCPCallRecord] { compactMap { if case .audit(let r) = $0 { r } else { nil } } }
     var logs: [String] { compactMap { if case .log(let l) = $0 { l } else { nil } } }
+    var notices: [String] { compactMap { if case .notice(let l) = $0 { l } else { nil } } }
     var stopped: [String] { compactMap { if case .stopUpstream(let s) = $0 { s } else { nil } } }
 }
 
@@ -785,9 +786,11 @@ struct MCPGatewayCoreTests {
         let tool = "read_file\u{000B}\(trailer)\u{001B}[2J\u{009B}2J"
         let outputs = harness.core.outOfBand(
             client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [], binding: .unbound)
-        let log = outputs.logs.first ?? ""
+        // The code line is a notice for the person, never a log line.
+        #expect(outputs.logs.isEmpty)
+        let notice = outputs.notices.first ?? ""
         let pause = outputs.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
-        for text in [log, pause] {
+        for text in [notice, pause] {
             let scalars = Set(text.unicodeScalars.map(\.value))
             #expect(scalars.contains(0x0B) == false)
             #expect(scalars.contains(0x1B) == false)

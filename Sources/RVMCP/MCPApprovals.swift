@@ -7,6 +7,7 @@ import Foundation
 import RVDomain
 import RVFileStore
 import RVIsolation
+import Synchronization
 
 /// The tool definition an approval was asked for. A grant is consumed only
 /// while the tool is still listed with this definition and pin status, so
@@ -84,14 +85,62 @@ public struct MCPApprovalRequest: Sendable, Equatable {
     }
 }
 
-/// A recorded pending request. `code` is nil when no signing key exists.
+/// A recorded pending request.
 public struct MCPApprovalTicket: Sendable, Equatable {
     public var id: String
+    /// The plaintext confirmation code, when this process can show it: it
+    /// minted the code just now, or it printed it for this same call
+    /// before. Nil when no signing key exists, or when another process
+    /// printed the code for a request that is still waiting (`reused`).
     public var code: String?
+    /// The call was already waiting with a code. That code still
+    /// approves it: a retry never changes the code the person is reading.
+    public var reused: Bool
 
-    public init(id: String, code: String? = nil) {
+    public init(id: String, code: String? = nil, reused: Bool = false) {
         self.id = id
         self.code = code
+        self.reused = reused
+    }
+}
+
+/// Confirmation codes this gateway printed, held in this process's memory
+/// only (never on disk), so a retry of the same call shows the same code
+/// again. Keyed by the request's id and every field its code MAC binds, so
+/// a different call, or a new request for the same call, never finds one.
+public final class MCPShownCodes: Sendable {
+    public static let capacity = MCPApprovalStore.maximumRequests
+
+    private struct State {
+        var codes: [[String]: String] = [:]
+        var order: [[String]] = []
+    }
+
+    private let state = Mutex(State())
+
+    public init() {}
+
+    func remember(_ code: String, for key: [String]) {
+        state.withLock { state in
+            if state.codes.updateValue(code, forKey: key) == nil { state.order.append(key) }
+            while state.order.count > Self.capacity {
+                state.codes[state.order.removeFirst()] = nil
+            }
+        }
+    }
+
+    func code(for key: [String]) -> String? {
+        state.withLock { $0.codes[key] }
+    }
+
+    /// Fills in the code a retry should show again, and remembers a fresh one.
+    func show(_ ticket: MCPApprovalTicket, key: [String]) -> MCPApprovalTicket {
+        if let code = ticket.code {
+            remember(code, for: key)
+            return ticket
+        }
+        guard ticket.reused, let code = code(for: key) else { return ticket }
+        return MCPApprovalTicket(id: ticket.id, code: code, reused: true)
     }
 }
 
@@ -121,10 +170,18 @@ public struct MCPApprovalGate: Sendable {
         self.request = request
     }
 
-    public static func store(_ store: MCPApprovalStore) -> MCPApprovalGate {
+    /// `shown` holds the codes this gateway printed; one per serve process.
+    public static func store(_ store: MCPApprovalStore, shown: MCPShownCodes = MCPShownCodes()) -> MCPApprovalGate {
         MCPApprovalGate(
             consumeGrant: { store.consumeGrant(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3, binding: $4) },
-            request: { store.request(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3, binding: $4) })
+            request: { server, tool, hash, keys, binding in
+                store.request(server: server, tool: tool, argumentsHash: hash, argumentKeys: keys, binding: binding)
+                    .map { ticket in
+                        shown.show(ticket, key: MCPApprovalStore.boundFields(
+                            id: ticket.id, server: server, tool: tool, argumentsHash: hash, argumentKeys: keys,
+                            binding: binding))
+                    }
+            })
     }
 }
 
@@ -154,7 +211,13 @@ public struct MCPApprovalStore: Sendable {
         withLockedRequests { requests in requests.filter { $0.state == .pending } } ?? []
     }
 
-    /// Reusing a pending request mints a fresh code: only the newest printed code works.
+    /// One pending request, and one code, per call. A retry of the same
+    /// call (same server, tool, arguments, argument names, and definition)
+    /// gets the same request back with its code untouched, so the code the
+    /// person is reading keeps working; the plaintext is not stored, so the
+    /// ticket carries no code then (`reused`). A different call never
+    /// matches. A request that never got a code (no key when it asked) gets
+    /// one now: nobody can be reading an older one.
     public func request(
         server: String, tool: String, argumentsHash: String, argumentKeys: [String], binding: MCPToolBinding = .unbound
     ) -> MCPApprovalTicket? {
@@ -182,11 +245,17 @@ public struct MCPApprovalStore: Sendable {
                 mac == nil ? nil : codeCandidate
             }
             if let index = requests.firstIndex(where: {
-                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.binding == binding
-                    && $0.state == .pending
+                $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash
+                    && $0.argumentKeys == argumentKeys && $0.binding == binding && $0.state == .pending
             }) {
-                requests[index].argumentKeys = argumentKeys
-                requests[index].argumentKeysMAC = keysMAC(requests[index].id)
+                // Nothing is rewritten: the row, and the MACs the person's
+                // code is checked against, stay exactly as they were.
+                if requests[index].codeMAC != nil {
+                    return MCPApprovalTicket(id: requests[index].id, code: nil, reused: true)
+                }
+                if requests[index].argumentKeysMAC == nil {
+                    requests[index].argumentKeysMAC = keysMAC(requests[index].id)
+                }
                 let mac = codeMAC(requests[index].id)
                 requests[index].codeMAC = mac
                 return MCPApprovalTicket(id: requests[index].id, code: liveCode(for: mac))
