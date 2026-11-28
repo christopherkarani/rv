@@ -78,8 +78,7 @@ enum HelpCatalog {
             HelpSection(heading: "Everyday", rows: [
                 HelpRow(name: "why", description: "Why rv stopped a command, or let it run"),
                 HelpRow(name: "log, blocks", description: "What rv stopped or would stop, newest first"),
-                HelpRow(name: "unlock, wait", description: "Run a stopped command once; wait for that answer"),
-                HelpRow(name: "undo", description: "Put back what a reset or delete removed"),
+                HelpRow(name: "unlock, wait, undo", description: "Run once; wait for it; put back what it removed"),
                 HelpRow(name: "guard, watch, host, pause", description: "Guard or watch an agent; pause rv an hour"),
                 HelpRow(name: "secrets", description: "Keys your agents use but never see"),
             ]),
