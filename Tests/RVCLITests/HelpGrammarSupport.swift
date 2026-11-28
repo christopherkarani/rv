@@ -1,3 +1,4 @@
+import RVDomain
 import ArgumentParser
 import Foundation
 @testable import RVCLI
@@ -64,9 +65,21 @@ enum UsageRow {
         case optional([[Node]])
     }
 
+    /// `row` with a new name (`rv why`, `rv guard <host>`) spelled the way
+    /// the parser knows it (`rv explain`, `rv host mode <host> block`),
+    /// as `CommandAlias` rewrites it before the parser runs.
+    static func spelledAsParsed(_ row: String) -> String {
+        for alias in CommandVocabulary.Alias.allCases {
+            let typed = alias.spelling
+            guard row == typed || row.hasPrefix(typed + " ") else { continue }
+            return alias.target + row.dropFirst(typed.count)
+        }
+        return row
+    }
+
     /// The argv (without `rv`) for `row` in `mode`.
     static func argv(_ row: String, mode: Mode) -> [String] {
-        var tokens = tokenize(String(row.dropFirst(3)))[...]
+        var tokens = tokenize(String(spelledAsParsed(row).dropFirst(3)))[...]
         var alternatives = alternatives(&tokens)
         // `rv mcp pending | approve <id> | deny <id>`: later alternatives
         // share the first one's leading words.

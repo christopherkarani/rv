@@ -42,7 +42,7 @@ the judge weights) were taken from the source and have not been run.
 | `rv run` | as shipped | kernel 5.9 or later, and `rv-isolation-exec` beside `rv` (the installer puts it there) |
 | Caged MCP servers (`sandbox`) | Seatbelt, as shipped | **kernel 6.7 or later with Landlock** (ABI 4) and seccomp filters; tested on x86-64 only |
 | MCP trust and approvals | RVApprovals.app, installed by the installer | systemd, PAM, and `sudo rv mcp custodian install` (see below) |
-| Owner checks (`rv host mode … off`, `rv uninstall`, `rv allow-once`) | Touch ID or your password | your login password; the account needs a local password |
+| Owner checks (`rv host mode … off`, `rv uninstall`, `rv unlock`) | Touch ID or your password | your login password; the account needs a local password |
 
 To check a Linux machine before you start:
 
@@ -160,7 +160,7 @@ your files:
 
 | What | macOS (from source, not run) | Linux |
 | --- | --- | --- |
-| Secret **values** (`rv secrets set`) | the Keychain, service `rv.secrets` | the Secret Service keyring through `secret-tool`; the hook guard refuses an agent's own `secret-tool` and Secret Service D-Bus calls |
+| Secret **values** (`rv secrets add`) | the Keychain, service `rv.secrets` | the Secret Service keyring through `secret-tool`; the hook guard refuses an agent's own `secret-tool` and Secret Service D-Bus calls |
 | The MCP **approvals key** (signs `mcp.json`, tool pins and approvals) | the data-protection keychain behind RVApprovals.app; using it asks for Touch ID or your password | a system service you install once with `sudo rv mcp custodian install`; signing asks for your login password at your terminal |
 
 `rv setup` does not install the Linux custodian. Without it the MCP
@@ -192,7 +192,7 @@ Releases before v0.2.2 do not ship `rv-mcp-custodian`.
 
 Commands that weaken rv ask for proof that you, not the agent, are at the
 keyboard: `rv host mode <host> observe|off`, `rv uninstall`,
-`rv allow-once`, `rv packs enable|disable`, `rv safety`, `rv allowlist`,
+`rv unlock`, `rv packs enable|disable`, `rv safety`, `rv allowlist`,
 and others. On macOS that is Touch ID or your password; on Linux it is
 your login password, checked by `rvd` with the system's `unix_chkpwd`.
 Five wrong passwords in ten minutes lock checks for ten minutes. Every
@@ -293,14 +293,14 @@ It is the safe way to learn what rv will refuse in your team's workflow.
 4. Ask why any one of them would block:
 
    ```bash
-   rv explain 'terraform destroy'
+   rv why 'terraform destroy'
    ```
 
 5. Enforce, one host at a time. A stored `block` outranks the global
    observe mode, and tightening needs no owner check:
 
    ```bash
-   rv host mode claude block
+   rv guard claude
    ```
 
    Or, to enforce everywhere at once, edit `~/.config/rv/config.json`
@@ -356,7 +356,7 @@ gate arrived stays unwired until you run `rv setup`.
 Per host, at any time:
 
 ```bash
-rv host mode cursor observe
+rv watch cursor
 ```
 
 ```bash
@@ -403,7 +403,7 @@ rv uninstall --purge           # also delete all of rv's data and the values it 
 
 `--purge` deletes the secret values rv stored (only a definition whose
 source is the `rv.secrets` item named after the secret itself, the one
-`rv secrets set` writes; never a value kept by 1Password, Vault or another
+`rv secrets add` writes; never a value kept by 1Password, Vault or another
 provider, nor any other Keychain item) and, on macOS, the MCP OAuth
 tokens under `rv.mcp.oauth`, then all of `~/.config/rv`
 including the audit log, its key and the judge weights, rvd's log

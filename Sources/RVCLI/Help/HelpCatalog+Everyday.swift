@@ -13,7 +13,7 @@ extension HelpCatalog {
                 HelpRow(name: "--json", description: "rv.check.v1: each step's outcome, rule and reason"),
             ]),
             HelpSection(heading: "Notes", rows: [
-                HelpRow(name: "read-only", description: "Each step is checked like rv explain: nothing is approved, spent or written, and rvd is not asked"),
+                HelpRow(name: "read-only", description: "Each step is checked like rv why: nothing is approved, spent or written, and rvd is not asked"),
                 HelpRow(name: "approves nothing", description: "A step that needs a person still needs one when the agent runs it"),
                 HelpRow(name: "exit", description: "0 when nothing needs a person (watch-mode would-stops still run), 1 otherwise, 64 for bad input"),
                 HelpRow(name: "one at a time", description: "Each step is checked on its own, from this folder: a cd in step 1 does not move step 2"),

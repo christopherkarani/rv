@@ -102,7 +102,7 @@ enum SecretsRun {
         guard expires.timeIntervalSince(now) < expiryWarningWindow else { return nil }
         let days = SecretExpiry.daysLeft(expires, now: now)
         let when = days == 0 ? "within a day" : days == 1 ? "in 1 day" : "in \(days) days"
-        return "\(name) expires \(when) (\(date)); rotate it with rv secrets set \(name) --expires DATE"
+        return "\(name) expires \(when) (\(date)); rotate it with \(CommandVocabulary.Alias.secretsAdd.invocation) \(name) --expires DATE"
     }
 
     /// `--allow` values: preset names or `METHODS PATH` rules.
@@ -247,7 +247,7 @@ enum SecretsRun {
     static func listText(_ report: ListReport) -> String {
         guard report.secrets.isEmpty == false || report.warnings.isEmpty == false else {
             return "No secrets configured. Add one with:\n"
-                + "  rv secrets set NAME --gateway https://api.example.com --base-url-env EXAMPLE_BASE_URL\n"
+                + "  \(CommandVocabulary.Alias.secretsAdd.invocation) NAME --gateway https://api.example.com --base-url-env EXAMPLE_BASE_URL\n"
         }
         let width = report.secrets.map(\.name.count).max() ?? 0
         var lines = report.secrets.map { row -> String in
@@ -371,7 +371,7 @@ enum SecretsRun {
         if let existing = current.secret(named: name) {
             guard existing.source == source else {
                 return .failure(CommandFailure(
-                    "\(DisplayedText.field(name)) reads from \(existing.source.locator); rv secrets set only stores values it reads "
+                    "\(DisplayedText.field(name)) reads from \(existing.source.locator); \(CommandVocabulary.Alias.secretsAdd.invocation) only stores values it reads "
                         + "from \(SecretKeychain.service)"))
             }
             // A re-run of the command that defined this secret (say, after its
@@ -381,7 +381,7 @@ enum SecretsRun {
             } ?? false
             guard rerun || (definition == nil && agents.isEmpty && description == nil) else {
                 return .failure(CommandFailure(
-                    "\(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
+                    "\(DisplayedText.field(name)) is already defined; `\(CommandVocabulary.Alias.secretsAdd.invocation) \(DisplayedText.field(name))` "
                         + "with no flags other than --expires, --refresh or --resource-profile replaces its value; "
                         + "edit secrets.json to change anything else"))
             }
@@ -429,7 +429,7 @@ enum SecretsRun {
                 return .failure(CommandFailure(
                     "\(storeFailure.message); its definition was saved to secrets.json, but the value you gave was not stored: "
                         + "once \(SecretKeychain.storeName) is available, run this command again or "
-                        + "`rv secrets set \(DisplayedText.field(name))` to store it"))
+                        + "`\(CommandVocabulary.Alias.secretsAdd.invocation) \(DisplayedText.field(name))` to store it"))
             }
         } else {
             // An existing secret takes its new value first: a store that
@@ -877,7 +877,7 @@ enum SecretsRun {
         return findings.compactMap { finding in
             let line = defined.contains(finding.secret)
                 ? "use it: rv run --secret \(DisplayedText.field(finding.secret)) -- <command>"
-                : "move it: rv secrets set \(patternSecretNames[finding.secret] ?? "NAME")"
+                : "move it: \(CommandVocabulary.Alias.secretsAdd.invocation) \(patternSecretNames[finding.secret] ?? "NAME")"
             return seen.insert(line).inserted ? line : nil
         }
     }
@@ -1060,16 +1060,16 @@ struct SecretsSet: AsyncParsableCommand {
             The value is read from a hidden prompt, or from stdin when piped. Well-known names
             (OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN) default
             to their gateway; anything else needs a delivery:
-              rv secrets set OPENAI_API_KEY --resource-profile main
-              rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
+              rv secrets add OPENAI_API_KEY --resource-profile main
+              rv secrets add ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
             --provider expands a profile from `rv secrets providers` into upstream and allow
             rules; --allow and --surface may only narrow it:
-              rv secrets set GITHUB_TOKEN --provider github
-              rv secrets set GITHUB_TOKEN --provider github --allow "GET /repos/**"
-              printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
+              rv secrets add GITHUB_TOKEN --provider github
+              rv secrets add GITHUB_TOKEN --provider github --allow "GET /repos/**"
+              printf %s "$TOKEN" | rv secrets add GH_TOKEN --environment
             Setting a new value reaches running sessions that use the gateway on their next
             request. Environment-delivered values only change for new sessions.
-              rv secrets set GITHUB_TOKEN --expires 2027-01-31
+              rv secrets add GITHUB_TOKEN --expires 2027-01-31
             Then run a command with it; the command gets a stand-in, never the value:
               rv run --secret OPENAI_API_KEY -- codex
             """
@@ -1156,7 +1156,7 @@ struct SecretsSet: AsyncParsableCommand {
         }
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
-                "rv secrets set: \(DisplayedText.field(name)) is already defined; `rv secrets set \(DisplayedText.field(name))` "
+                "rv secrets set: \(DisplayedText.field(name)) is already defined; `\(CommandVocabulary.Alias.secretsAdd.invocation) \(DisplayedText.field(name))` "
                     + "with no flags other than --expires, --refresh or --resource-profile replaces its value; "
                     + "edit secrets.json to change its surfaces or allow rules\n")
         }

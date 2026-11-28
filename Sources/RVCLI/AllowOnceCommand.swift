@@ -273,7 +273,7 @@ enum AllowOnceCLI {
     static func mintedMessage(code: String) -> String {
         """
         allow-once code: \(code)
-        rv allow-once \(code)
+        \(CommandVocabulary.Alias.unlock.invocation) \(code)
         This code lives only in rvd's memory: it is lost if rvd restarts, and expires in 24 hours.
 
         """
@@ -403,13 +403,13 @@ struct AllowOnceRedeem: AsyncParsableCommand {
         guard let code, code.isEmpty == false else {
             try CommandContext.fail(
                 """
-                usage: rv allow-once mint -- <command>
-                       rv allow-once <code>
-                       rv allow-once list
-                       rv allow-once clear
+                usage: rv unlock mint -- <command>
+                       rv unlock <code>
+                       rv unlock list
+                       rv unlock clear
 
                 """,
-                exitCode: 2
+                exitCode: ExitStatus.usage.rawValue
             )
         }
         let ctx = CommandContext.current(command: "allow-once", format: format)
@@ -462,7 +462,7 @@ struct AllowOnceMint: AsyncParsableCommand {
     func run() async throws {
         let raw = commandParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard raw.isEmpty == false else {
-            try CommandContext.fail("rv allow-once mint: missing command\n", exitCode: 2)
+            try CommandContext.fail("rv allow-once mint: missing command\n", exitCode: ExitStatus.usage.rawValue)
         }
         let ctx = CommandContext.current(command: "allow-once", format: format)
         do {
@@ -479,7 +479,7 @@ struct AllowOnceMint: AsyncParsableCommand {
             )
             ctx.writeStdout(AllowOnceCLI.mintedMessage(code: code.rawValue))
         } catch AllowOnceError.emptyCommand {
-            try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
+            try ctx.fail("rv allow-once mint: missing command\n", exitCode: ExitStatus.usage.rawValue)
         } catch AllowOnceAttestError.serviceUnavailable {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceUnavailableMessage)\n", exitCode: 2)
         } catch AllowOnceAttestError.serviceDenied {

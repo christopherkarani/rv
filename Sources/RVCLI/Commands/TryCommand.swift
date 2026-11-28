@@ -83,7 +83,7 @@ enum TryScreen {
     /// `◐ Would stop`: watch mode would let it run.
     static let wouldStopLabel = "\(Glyph.watched.rawValue) Would stop"
     /// Puts Claude Code in guard mode.
-    static let guardClaude = "\(CommandVocabulary.Command.host.invocation) mode \(HookHost.claude.rawValue) \(HostMode.block.rawValue)"
+    static let guardClaude = "\(CommandVocabulary.Alias.guard.invocation) \(HookHost.claude.rawValue)"
     static let doctor = CommandVocabulary.Command.doctor.invocation
 
     static func lines(

@@ -126,9 +126,111 @@ public enum CommandVocabulary {
         }
     }
 
-    /// A name rv will accept later as an alias of a command it has today.
-    /// Data only: nothing parses these yet (A3 adds them, A4 flips them to
-    /// primary, and the old spelling stays a permanent alias).
+    /// A new name from Q1 (Chris, 2026-11-27) for something rv already
+    /// does. rv reads it as the spelling it `runs` before anything else
+    /// sees the arguments, so both spellings print the same bytes and exit
+    /// with the same code. The old spelling stays a permanent alias.
+    public enum Alias: String, CaseIterable, Sendable {
+        case why
+        case unlock
+        case `guard`
+        case watch
+        case secretsAdd = "secrets add"
+
+        /// The words a person types after `rv`: `["secrets", "add"]`.
+        public var words: [String] {
+            rawValue.split(separator: " ").map(String.init)
+        }
+
+        /// The spelling it runs. `hostSlot` marks where the first
+        /// positional the person typed goes: `rv guard claude` runs
+        /// `rv host mode claude block`.
+        public var runs: [String] {
+            switch self {
+            case .why: [Command.explain.rawValue]
+            case .unlock: [Command.allowOnce.rawValue]
+            case .guard: [Command.host.rawValue, "mode", Self.hostSlot, Self.blockMode]
+            case .watch: [Command.host.rawValue, "mode", Self.hostSlot, Self.observeMode]
+            case .secretsAdd: [Command.secrets.rawValue, "set"]
+            }
+        }
+
+        /// `rv guard <host>`, as help and docs show it.
+        public var spelling: String {
+            ([CommandVocabulary.program] + words + (runs.contains(Self.hostSlot) ? [Self.hostSlot] : []))
+                .joined(separator: " ")
+        }
+
+        /// What a person types, before any arguments: `rv why`,
+        /// `rv secrets add`. Messages that name a command to type use it.
+        public var invocation: String {
+            ([CommandVocabulary.program] + words).joined(separator: " ")
+        }
+
+        /// `rv host mode <host> block`.
+        public var target: String {
+            ([CommandVocabulary.program] + runs).joined(separator: " ")
+        }
+
+        public static let hostSlot = "<host>"
+        /// `HostMode` lives in RVPolicy, which RVDomain does not import;
+        /// `HostModeAliasTests` pins these to its raw values.
+        static let blockMode = "block"
+        static let observeMode = "observe"
+
+        /// The alias `arguments` starts with, if any (the longest match).
+        public static func leading(_ arguments: [String]) -> Alias? {
+            allCases
+                .filter { arguments.starts(with: $0.words) }
+                .max { $0.words.count < $1.words.count }
+        }
+    }
+
+    /// What `CommandVocabulary.expand` made of the arguments.
+    public enum Expansion: Equatable, Sendable {
+        /// No alias: run the arguments as they are.
+        case unchanged
+        /// An alias, rewritten to the spelling it runs.
+        case expanded([String])
+        /// An alias that needs a positional (`rv guard` names a host) and
+        /// was given none.
+        case missingArgument(Alias)
+    }
+
+    /// `arguments` (the words after `rv`) with a leading alias rewritten to
+    /// the spelling it runs. The rest of the arguments keep their order;
+    /// the first positional fills `hostSlot`, and a help flag stands in for
+    /// a missing one, so `rv guard --help` shows `rv host mode`'s page.
+    public static func expand(_ arguments: [String]) -> Expansion {
+        guard let alias = Alias.leading(arguments) else { return .unchanged }
+        let rest = Array(arguments.dropFirst(alias.words.count))
+        guard let slot = alias.runs.firstIndex(of: Alias.hostSlot) else {
+            return .expanded(alias.runs + rest)
+        }
+        let prefix = Array(alias.runs[..<slot])
+        let suffix = Array(alias.runs[(slot + 1)...])
+        guard let host = firstPositional(rest) else {
+            let asksForHelp = rest.contains { $0 == "--help" || $0 == "-h" }
+            return asksForHelp ? .expanded(prefix + rest) : .missingArgument(alias)
+        }
+        var filled = rest
+        filled.insert(contentsOf: suffix, at: host + 1)
+        return .expanded(prefix + filled)
+    }
+
+    /// The index of the first word that is not a flag; after `--`, the word
+    /// that follows it.
+    private static func firstPositional(_ words: [String]) -> Int? {
+        for (index, word) in words.enumerated() {
+            if word == "--" { return index + 1 < words.count ? index + 1 : nil }
+            if word.hasPrefix("-") == false { return index }
+        }
+        return nil
+    }
+
+    /// A name rv will accept later, for a command it has today or one still
+    /// to build. Data only: nothing parses these yet. Names rv accepts now
+    /// are in `Alias`.
     public struct PlannedName: Equatable, Sendable {
         public enum Status: Equatable, Sendable {
             /// Chris chose it.
@@ -154,11 +256,6 @@ public enum CommandVocabulary {
     public static let plannedNames: [PlannedName] = [
         // `rv protect <tool>` (Chris, 2026-11-22) shipped in G6: it is
         // `Command.protect` now, not a planned name.
-        PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
-        PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
-        PlannedName(spelling: "rv guard <host>", today: "rv host mode <host> block", status: .recommended),
-        PlannedName(spelling: "rv watch <host>", today: "rv host mode <host> observe", status: .recommended),
-        PlannedName(spelling: "rv secrets add", today: "rv secrets set", status: .recommended),
         PlannedName(spelling: "rv keys forget <name>", today: "rv secrets remove <name>", status: .recommended),
         PlannedName(spelling: "rv rules forget <n>", today: nil, status: .recommended),
         PlannedName(spelling: "rv mcp forget <server>", today: nil, status: .recommended),

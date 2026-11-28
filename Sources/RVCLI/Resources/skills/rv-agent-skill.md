@@ -73,10 +73,9 @@ that key's API. The real value never reaches you or the transcript.
 These only read. If rv does not run where you are (for example inside a
 sandbox), quote them for the human instead.
 
-- `rv explain <command>` shows why rv allows or blocks a command.
+- `rv why <command>` shows why rv allows or blocks a command (`rv explain` is the same command).
 - `rv egress pending` lists egress proposals waiting for review.
 - `rv egress denials` lists recent egress refusals.
-- `rv secrets describe --json` lists the keys you can use, never a value.
 - `rv run --secret NAME -- <command>` runs a command with a key's stand-in.
 
 ## Commands only the human runs
@@ -84,9 +83,9 @@ sandbox), quote them for the human instead.
 Quote these for the human to run in their own Terminal. Never run them
 yourself; rv blocks agents from running them.
 
-- `rv allow-once <code>` redeems the code from a hook deny, once.
+- `rv unlock <code>` redeems the code from a hook deny, once (`rv allow-once <code>` is the same command).
 - `rv egress approve <id>` approves the egress proposal named in `next_step`.
-- `rv secrets set NAME` keeps a new key in rv.
+- `rv secrets add NAME` keeps a new key in rv.
 
 ## Never
 
@@ -108,5 +107,4 @@ Do not try to get around rv. In particular, never:
 
 If you think a rule is wrong, say so to the human and let them decide.
 
-This file is installed and owned by rv. The human's rv setup keeps it current;
-rv refuses edits to it from agents.
+This file is installed and owned by rv, and rv refuses edits to it from agents.
