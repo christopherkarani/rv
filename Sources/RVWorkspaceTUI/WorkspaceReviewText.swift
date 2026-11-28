@@ -96,11 +96,54 @@ enum WorkspaceReviewText {
         return keys.joined(separator: " · ")
     }
 
-    /// Header badge for the shell chrome; nil when nothing awaits a human.
-    static func badge(_ review: WorkspaceReviewState) -> String? {
-        let count = review.pendingCount
-        guard count > 0 else { return nil }
-        return "\(count) pending · Ctrl-B R"
+    /// The ask shown in the pane's bottom border, within `cells`; nil when
+    /// nothing awaits a human. It names the oldest pending host and how to
+    /// answer. Answering stays in the review pane, where the size rule
+    /// applies: a bare `a` typed in a pane belongs to its shell, so the
+    /// ask never takes a key of its own. A host never loses its
+    /// registrable tail; when that cannot fit, the host is left out.
+    static func ask(_ review: WorkspaceReviewState, cells: Int) -> String? {
+        let pending = review.items.filter { $0.kind == .pendingEgress }
+        guard let oldest = pending.min(by: { $0.at < $1.at }) else { return nil }
+        let lead = "◐ wants out "
+        let more = pending.count > 1 ? " · +\(pending.count - 1) more" : ""
+        let keys = " · ^B R answer"
+        let host = clean(oldest.summary)
+        let budget = cells - WorkspaceCells.width(lead + more + keys)
+        if let shown = fitted(host, cells: budget, keepingTail: registrableTailLength(host)) {
+            return lead + shown + more + keys
+        }
+        let bare = "◐ wants out · ^B R"
+        return WorkspaceCells.width(bare) <= cells ? bare : nil
+    }
+
+    /// `host` within `cells` terminal cells: whole when it fits, else cut
+    /// in the middle with `…`, keeping at least its last `minimumTail`
+    /// characters. Nil when even `…` and the tail do not fit, so the
+    /// caller's keys are never the part that is cut.
+    private static func fitted(_ host: String, cells: Int, keepingTail minimumTail: Int) -> String? {
+        if WorkspaceCells.width(host) <= cells { return host }
+        let characters = Array(host)
+        let required = WorkspaceCells.width(String(characters.suffix(minimumTail)))
+        guard cells >= required + 1 else { return nil }
+        let tailCells = max(required, (cells - 1) / 2)
+        var tail: [Character] = []
+        var used = 0
+        for character in characters.reversed() {
+            let width = WorkspaceCells.width(of: character)
+            if tail.count >= minimumTail, used + width > tailCells { break }
+            tail.insert(character, at: 0)
+            used += width
+        }
+        var head = ""
+        var headCells = 0
+        for character in characters.dropLast(tail.count) {
+            let width = WorkspaceCells.width(of: character)
+            guard headCells + width <= cells - 1 - used else { break }
+            head.append(character)
+            headCells += width
+        }
+        return head + "…" + String(tail)
     }
 
     static func header(_ review: WorkspaceReviewState) -> String {

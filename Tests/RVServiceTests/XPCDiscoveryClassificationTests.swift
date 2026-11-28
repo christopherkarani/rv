@@ -1,7 +1,7 @@
 #if canImport(XPC)
 import Foundation
 import Testing
-@testable import RVService
+@testable import RVXPC
 @preconcurrency import XPC
 
 /// Only a discovery Hello that launchd refuses before this client ever heard

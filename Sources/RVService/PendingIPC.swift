@@ -9,7 +9,7 @@ public enum PendingApprovalsBinding: Sendable {
 }
 
 /// List items and set fingerprint for `ApprovalRuntime` watch generation.
-enum PendingListProjection {
+package enum PendingListProjection {
     static let missingFolder = "."
     static let coordinatorUnavailable = IPCError.pendingCoordinatorUnavailable
 
@@ -44,7 +44,7 @@ enum PendingListProjection {
     }
 
     /// One row as `pendingList` shows it; live ask events reuse it.
-    static func item(from record: PendingApproval) -> PendingListItem {
+    package static func item(from record: PendingApproval) -> PendingListItem {
         PendingListItem(
             id: record.id,
             host: record.identity.agent,
