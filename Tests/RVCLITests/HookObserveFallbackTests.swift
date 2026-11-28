@@ -51,6 +51,23 @@ struct HookObserveFallbackTests {
 
     /// Parsers disagree on which duplicate key wins, so a config that
     /// repeats one never steps aside, whichever copy says observe.
+    /// With rvd down there is no ObserveFloor, so the owner's pause must not
+    /// step the fallback aside; an agent's temporary block still enforces.
+    @Test func pauseNeverStepsAside_temporaryBlocksStillEnforce() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Int(Date().timeIntervalSince1970)
+        let pause = #""pause":{"from":\#(now - 60),"until":\#(now + 540)}"#
+        try write(#"{"guard":{"hosts":{"claude":"block"},\#(pause)}}"#)
+        #expect(applies(.claude) == false, "paused, but the stored block holds")
+        #expect(applies(.cursor) == false, "paused, but the stored enforce holds")
+        try write(#"{"guard":{"mode":"observe",\#(pause)}}"#)
+        #expect(applies(.cursor), "the stored observe still steps aside")
+        let block = #""temporary_blocks":{"claude":{"from":\#(now - 60),"until":\#(now + 3000)}}"#
+        try write(#"{"guard":{"mode":"observe",\#(block),\#(pause)}}"#)
+        #expect(applies(.claude) == false, "an agent's open block enforces")
+        #expect(applies(.cursor))
+    }
+
     @Test func duplicateKeysAreEnforce() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         try write(#"{"guard":{"mode":"observe","mode":"enforce"}}"#)

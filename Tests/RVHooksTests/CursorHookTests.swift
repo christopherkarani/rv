@@ -27,8 +27,9 @@ private func cursorExpected(_ stem: String) throws -> (stdout: String, exit: Int
 private func isCursorHonorPath(
     _ wire: HookWire,
     reason: String,
-    agentMessage: String = cursorAgentStopLine
+    agentMessage: String? = nil
 ) -> Bool {
+    let agentMessage = agentMessage ?? reason.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmedReason.isEmpty == false else { return false }
     guard wire.exitCode == 0 else { return false }
@@ -50,8 +51,9 @@ private func isCursorHonorPath(
 private func assertCursorHonorPath(
     _ wire: HookWire,
     reason: String,
-    agentMessage: String = cursorAgentStopLine
+    agentMessage: String? = nil
 ) throws {
+    let agentMessage = agentMessage ?? reason
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == reason)
@@ -310,12 +312,10 @@ func cursorDecode_grepCwdWideBenignIsForeign(input: String) {
     )
     try assertCursorHonorPath(
         wire,
-        reason:
-            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)",
-        agentMessage: cursorAgentAskLine
+        reason: hostDenyLine(command: command, deny: deny, kind: .ask(recorded: true))
     )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
@@ -375,8 +375,8 @@ func cursorDecode_grepCwdWideBenignIsForeign(input: String) {
     #expect(json["permission"] as? String == "deny")
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
-    #expect(json["agent_message"] as? String == cursorAgentAskLine)
-    #expect((json["user_message"] as? String)?.contains(approvalPendingLine) == true)
+    #expect(json["agent_message"] as? String == json["user_message"] as? String)
+    #expect((json["user_message"] as? String)?.contains("\nwho     ask ") == true)
 }
 
 @Test func cursorDecode_readsCwdSessionAndProposedAction() throws {

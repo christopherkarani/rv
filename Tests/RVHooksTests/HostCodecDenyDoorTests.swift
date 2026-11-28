@@ -82,9 +82,9 @@ import RVDomain
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let leftover = codec.encodeDeny(
-        reason: hostDenyLine(command: command, reason: deny.reason),
+        reason: hostDenyLine(command: command, deny: deny),
         rule: deny.ruleID,
-        next: .none
+        next: .ttyHint
     )
     #expect(evaluated == leftover)
 
@@ -96,7 +96,7 @@ import RVDomain
         intent: .firstCall(verdict: .deny, unlockCode: .code(code))
     )
     let mintedLeftover = codec.encodeDeny(
-        reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: code),
+        reason: hostDenyLine(command: command, deny: deny, unlock: .code(code)),
         rule: deny.ruleID,
         next: .minted(code)
     )
@@ -107,10 +107,11 @@ import RVDomain
     let codec = LeftoverVoiceCodec()
     let result = secretsEnvFileDeny()
     let file = hookFileWire(from: result, using: codec)
+    let ruleID = RuleID(pack: .coreSecrets, pattern: "env")
     let leftover = codec.encodeDeny(
-        reason: hostFileDenyLine(reason: "Access to a sensitive path is not allowed."),
-        rule: RuleID(pack: .coreSecrets, pattern: "env"),
-        next: .none
+        reason: hostFileDenyLine(deny: Deny(ruleID: ruleID, reason: "Access to a sensitive path is not allowed.")),
+        rule: ruleID,
+        next: .ttyHint
     )
     #expect(file == leftover)
 }
@@ -124,9 +125,11 @@ import RVDomain
         using: codec,
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
-    let incomplete = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    let incomplete = codec.encodeDeny(
+        reason: indeterminateStopNotice(nil, command: command).text, rule: nil, next: .ttyHint)
     #expect(allow == incomplete)
     #expect(allow != codec.encodeAllow())
+    #expect(allow.stdout.contains("rv.indeterminate/incomplete"))
 
     let oversize = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
@@ -134,7 +137,10 @@ import RVDomain
         using: codec,
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
-    #expect(oversize == incomplete)
+    #expect(
+        oversize
+            == codec.encodeDeny(
+                reason: indeterminateStopNotice(.commandTooLarge, command: command).text, rule: nil, next: .ttyHint))
 
     let live = hookWire(
         from: EvaluationResult(outcome: .plain),
@@ -164,9 +170,9 @@ import RVDomain
     #expect(
         hookFileWire(from: unmatched, using: codec)
             == codec.encodeDeny(
-                reason: hostFileDenyLine(reason: deny.reason),
+                reason: hostFileDenyLine(deny: deny),
                 rule: deny.ruleID,
-                next: .none
+                next: .ttyHint
             )
     )
     #expect(
@@ -174,7 +180,8 @@ import RVDomain
             from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
             using: codec
         )
-            == codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+            == codec.encodeDeny(
+                reason: indeterminateStopNotice(.commandTooLarge, command: nil).text, rule: nil, next: .ttyHint)
     )
     #expect(
         hookFileWire(from: EvaluationResult(outcome: .plain), using: codec)
@@ -200,8 +207,9 @@ import RVDomain
     #expect(deny.matched == match)
     #expect(deny.rule == match.ruleID)
     #expect(deny.next == .none)
-    #expect(deny.agentText == cursorAgentStopLine)
+    #expect(deny.agentText == deny.reason)
     #expect(deny.reason == resetHardHostDeny)
+    #expect(deny.nextText == ownTerminalLine())
 
     let ask = askDenyPresentation(
         from: denied,
@@ -210,8 +218,12 @@ import RVDomain
         askRecorded: true
     )
     #expect(ask.matched == match)
-    #expect(ask.agentText == cursorAgentAskLine)
-    #expect(ask.reason == "\(resetHardHostDeny) \(approvalPendingLine)")
+    #expect(ask.agentText == ask.reason)
+    #if os(macOS)
+    #expect(ask.reason == resetHardHostDeny.replacingOccurrences(of: ownTerminalLine(), with: approveInRVLine()))
+    #else
+    #expect(ask.reason == resetHardHostDeny)
+    #endif
 
     let askUnrecorded = askDenyPresentation(
         from: denied,
@@ -219,15 +231,15 @@ import RVDomain
         unlockCode: nil,
         askRecorded: false
     )
-    #expect(askUnrecorded.agentText == cursorAgentAskUnrecordedLine)
-    #expect(askUnrecorded.reason == "\(resetHardHostDeny) \(approvalUnrecordedLine)")
+    #expect(askUnrecorded.agentText == askUnrecorded.reason)
+    #expect(askUnrecorded.reason == resetHardHostDeny)
 
     let evaluatedAllow = denyPresentation(
         from: EvaluationResult(outcome: .plain),
         command: command,
         unlockCode: nil
     )
-    #expect(evaluatedAllow.reason == incompleteEvalSentence)
+    #expect(evaluatedAllow.reason == indeterminateStopNotice(nil, command: command).text)
     #expect(evaluatedAllow.matched == nil)
     #expect(fileDenyPresentation(from: EvaluationResult(outcome: .plain)) == nil)
     #expect(fileDenyPresentation(from: denied)?.matched == match)
@@ -254,10 +266,6 @@ private struct LeftoverVoiceCodec: HostCodec {
     }
 
     func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
-        encodeLeftoverDecisionDeny(
-            reason: presentation.reason,
-            rule: presentation.rule,
-            next: presentation.next
-        )
+        encodeLeftoverDecisionDeny(presentation)
     }
 }

@@ -179,11 +179,10 @@ func museEncodeDeny_blankReasonFallsBackToGuidance(_ blank: String) throws {
     )
     try assertMuseHonorPath(
         wire,
-        reason:
-            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)"
+        reason: hostDenyLine(command: command, deny: deny, kind: .ask(recorded: true))
     )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }

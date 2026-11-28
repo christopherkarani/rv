@@ -115,18 +115,20 @@ public struct HookSessionIDs: Equatable, Sendable {
 
 /// Deny presentation: the composed deny content before per-adapter wire
 /// rendering. `HookMapper` (the deny-dispatch module) composes it once at
-/// this seam; adapters only render. `reason` is the user-facing deny text,
-/// already composed (`hostDenyLine`, `hostFileDenyLine`, or a plain
-/// sentence). `matched` carries the deny's rule match across the seam as
-/// data so the Claude adapter can render its rich shape; adapters without
-/// a rich shape ignore it. `agentText` is the agent-facing text (Cursor
-/// `agent_message`): the stop line on a plain deny, the ask-retry line on
-/// an ask-denial; adapters with no agent copy ignore it.
+/// this seam; adapters only render. `reason` is the stop text, already
+/// composed (`StopNotice.text`: one shape for every stop). `matched`
+/// carries the deny's rule match across the seam as data so the Claude
+/// adapter can render its rich shape; adapters without a rich shape ignore
+/// it. `nextText` is the stop's `who` line, for hosts whose JSON carries a
+/// separate `next`. `agentText` is the agent-facing text (Cursor
+/// `agent_message`): the same stop text unless a caller says otherwise, so
+/// the agent reads what the person reads.
 public struct HookDenyPresentation: Equatable, Sendable {
     public var reason: String
     public var rule: RuleID?
     public var next: HookVoiceNext
     public var matched: RuleMatch?
+    public var nextText: String?
     public var agentText: String
 
     public init(
@@ -134,13 +136,15 @@ public struct HookDenyPresentation: Equatable, Sendable {
         rule: RuleID? = nil,
         next: HookVoiceNext = .none,
         matched: RuleMatch? = nil,
-        agentText: String = cursorAgentStopLine
+        nextText: String? = nil,
+        agentText: String? = nil
     ) {
         self.reason = reason
         self.rule = rule
         self.next = next
         self.matched = matched
-        self.agentText = agentText
+        self.nextText = nextText ?? hookVoiceNextSentence(next)
+        self.agentText = agentText ?? reason
     }
 }
 
@@ -243,19 +247,24 @@ extension HostCodec {
 
     /// Grok / Pi / OpenCode / OpenClaw / Hermes / Antigravity honor JSON (`decision` key).
     /// Codex / Cursor / Claude must not call this — they own a native honor path.
+    public func encodeLeftoverDecisionDeny(_ presentation: HookDenyPresentation) -> HookWire {
+        HookWire(
+            stdout: hookDenyJSON(
+                reason: presentation.reason,
+                rule: presentation.rule.map(\.slashDisplay),
+                next: presentation.nextText
+            ),
+            exitCode: host.denyExitCode
+        )
+    }
+
+    /// `encodeLeftoverDecisionDeny(_:)` from parts.
     public func encodeLeftoverDecisionDeny(
         reason: String,
         rule: RuleID? = nil,
         next: HookVoiceNext = .none
     ) -> HookWire {
-        HookWire(
-            stdout: hookDenyJSON(
-                reason: reason,
-                rule: rule.map(\.slashDisplay),
-                next: hookVoiceNextSentence(next)
-            ),
-            exitCode: host.denyExitCode
-        )
+        encodeLeftoverDecisionDeny(HookDenyPresentation(reason: reason, rule: rule, next: next))
     }
 
     /// Plain presentation from parts: no matched rule, agent stop line.

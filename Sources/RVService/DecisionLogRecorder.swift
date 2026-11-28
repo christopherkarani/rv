@@ -33,45 +33,50 @@ package struct DecisionLogRecorder: Sendable {
     }
 
     /// The decision `HookDecisionTap` captured for one hookEvaluate, with
-    /// the reply's final timeout state. Called once, after the reply is
-    /// built; the write runs detached.
-    func record(_ capture: HookDecisionTap.Capture, timedOut: Bool) {
+    /// the reply's final timeout state and the call's `DecisionCall` (its
+    /// id, shared with the ledger row, and any watch-mode would-be).
+    /// Called once, after the reply is built; the write runs detached.
+    func record(_ capture: HookDecisionTap.Capture, timedOut: Bool, call: DecisionCall?) {
         let host = LedgerHost.hook(capture.host)
         let row: DecisionRecord
         switch capture.subject {
         case .shell(let command):
             row = Self.shellRecord(
                 capture.result, command: command, cwd: capture.cwd, host: host, home: home,
-                at: capture.startedAt, timedOut: timedOut, session: capture.session)
+                at: capture.startedAt, timedOut: timedOut, session: capture.session, call: call)
         case .file(let action):
             row = Self.fileRecord(
                 capture.result, action: action, cwd: capture.cwd, host: host, home: home,
-                at: capture.startedAt, timedOut: timedOut, session: capture.session)
+                at: capture.startedAt, timedOut: timedOut, session: capture.session, call: call)
         }
         send(row)
     }
 
     /// The row for a shell decision, redacted. rvd (through the tap) and
     /// the hook-local evaluator both build rows here, so a command reads
-    /// the same whichever decided it.
+    /// the same whichever decided it. `call` gives the row the call's id
+    /// (the one its denial-ledger row carries) and, for an allow, what
+    /// watch mode let run; it defaults to the call bound on this task.
     static func shellRecord(
         _ result: EvaluationResult, command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost,
-        home: HomeDirectory?, at time: Date, timedOut: Bool, session: String?
+        home: HomeDirectory?, at time: Date, timedOut: Bool, session: String?,
+        call: DecisionCall? = DecisionCall.current
     ) -> DecisionRecord {
         record(
             result, tool: .bash, command: DecisionRedaction.command(command.rawValue, home: home), path: nil,
-            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: session)
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: session, call: call)
     }
 
     /// The row for a file-tool decision; see `shellRecord`.
     static func fileRecord(
         _ result: EvaluationResult, action: FileToolAction, cwd: WorkingDirectory?, host: LedgerHost,
-        home: HomeDirectory?, at time: Date, timedOut: Bool, session: String?
+        home: HomeDirectory?, at time: Date, timedOut: Bool, session: String?,
+        call: DecisionCall? = DecisionCall.current
     ) -> DecisionRecord {
         record(
             result, tool: .file(action.kind), command: nil,
             path: DecisionRedaction.path(action.path.rawValue, home: home),
-            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: session)
+            cwd: cwd, host: host, home: home, at: time, timedOut: timedOut, session: session, call: call)
     }
 
     /// The hook session bound on this task, when it can be attributed
@@ -94,7 +99,8 @@ package struct DecisionLogRecorder: Sendable {
         home: HomeDirectory?,
         at time: Date,
         timedOut: Bool,
-        session: String?
+        session: String?,
+        call: DecisionCall? = nil
     ) -> DecisionRecord {
         let verdict: DecisionVerdict
         let rule: String?
@@ -117,7 +123,8 @@ package struct DecisionLogRecorder: Sendable {
         let shownCwd = cwd.map { DecisionRedaction.path($0.rawValue, home: home) }
         return DecisionRecord(
             time: time, verdict: verdict, host: host, tool: tool, command: command, path: path,
-            cwd: shownCwd?.isEmpty == false ? shownCwd : nil, rule: rule, session: session
+            cwd: shownCwd?.isEmpty == false ? shownCwd : nil, rule: rule, session: session,
+            id: call?.id, wouldBe: verdict == .allowed ? call?.wouldBe : nil
         )
     }
 

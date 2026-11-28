@@ -33,7 +33,7 @@ struct HostListCommand: AsyncParsableCommand {
 struct HostModeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mode",
-        abstract: "Set one host to block, observe, or off. Loosening asks for device-owner authentication."
+        abstract: "Set one host to block, observe, or off. Loosening asks for device-owner authentication; an agent's block ends on its own after an hour."
     )
 
     @Argument(help: "Host: grok, pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity, or muse.")
@@ -67,12 +67,16 @@ struct HostModeCommand: AsyncParsableCommand {
             try CeremonyCLI.emit(HostModeRun.list(env, json: format.json || format.robot, only: host.flatMap(HookHost.init(rawValue:))))
         }
         // Loosening sheds oversight for that host: like `rv uninstall`, a
-        // same-user agent must not do it unattended.
+        // same-user agent must not do it unattended. A block that would stop
+        // agents is permanent only with the owner's check at a terminal;
+        // otherwise it ends on its own or waits for the owner (Q4).
         let outcome = await HostModeRun.setMode(
             hostMode, for: hookHost, env: env, json: format.json || format.robot,
+            requester: .live(),
             authenticate: {
-                // Only loosening calls this; with rvd down the human confirms
-                // locally at a TTY (DaemonDownOwnerConfirmation).
+                // Loosening, or a permanent block at a terminal; with rvd
+                // down the human confirms locally at a TTY
+                // (DaemonDownOwnerConfirmation).
                 try await CLIOwnerAuth.requireAuthenticatedOrLocalWhenDaemonDown(
                     reason: "Authenticate to set rv to \(hostMode.rawValue) for \(hookHost.rawValue).",
                     action: .hostMode(hostMode, host: hookHost))

@@ -17,6 +17,16 @@ public struct HookEvaluateWorld: Sendable {
     /// its payload digest is stored in the row.
     public var mintOnDenyWithCommand:
         (@Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?)?
+    /// Who a stop asks to act and what each rule's pack offers (B1).
+    /// `.plain` says "your user" and offers no safer command; rvd and the
+    /// hook-local pass give the owner's first name and the pack advice.
+    public var voice: StopVoice
+    /// Whether a pack's safer command is one rv allows here, in the mode
+    /// that stopped the original (B1). A stop shows its `safer` line only
+    /// when this says yes, so the advice is never a command rv would stop
+    /// too. Nil (tests, worlds with no advice) shows the voice's advice as
+    /// it is.
+    public var saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
     /// B4: the facts rv tells an agent at session start, for the session's
     /// cwd. Nil (the port, or its answer) sends no house rules: the event
     /// passes like a foreign one. Read-only; it never changes policy.
@@ -30,6 +40,8 @@ public struct HookEvaluateWorld: Sendable {
         mintOnDenyWithCommand: (
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
         )? = nil,
+        voice: StopVoice = .plain,
+        saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)? = nil,
         houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)? = nil
     ) {
         self.evaluate = evaluate
@@ -37,6 +49,8 @@ public struct HookEvaluateWorld: Sendable {
         self.mintOnDeny = mintOnDeny
         self.recordHostAsk = recordHostAsk
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
+        self.voice = voice
+        self.saferAllowed = saferAllowed
         self.houseRules = houseRules
     }
 }

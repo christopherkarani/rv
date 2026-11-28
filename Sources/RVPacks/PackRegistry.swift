@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import Synchronization
 
 public enum PackRegistry {
     public static func loadIndex() throws -> PackIndex {
@@ -31,9 +32,18 @@ public enum PackRegistry {
         try loadAllDocuments().map(\.snapshot)
     }
 
+    /// The bundled catalog, decoded once per process. The bundle is
+    /// read-only while the process runs (an upgrade replaces the binary and
+    /// rvd exits), yet every `EvaluateSession` used to re-read and re-decode
+    /// every pack file. A failed load is not kept, so the next call retries.
     public static func loadAllDocuments() throws -> [PackDocument] {
-        try loadAllDocuments(from: PackResourceBundle.require(PackResourceBundle.located))
+        if let cached = bundledDocuments.withLock({ $0 }) { return cached }
+        let documents = try loadAllDocuments(from: PackResourceBundle.require(PackResourceBundle.located))
+        bundledDocuments.withLock { $0 = documents }
+        return documents
     }
+
+    private static let bundledDocuments = Mutex<[PackDocument]?>(nil)
 
     public static func loadAllDocuments(from bundle: Bundle) throws -> [PackDocument] {
         let index = try loadIndex(from: bundle)

@@ -55,6 +55,16 @@ struct GuardConfigTests {
         #expect(try Self.config(testCase.json).judgeEngine == testCase.engine)
     }
 
+    @Test("judge.mode: only an explicit live decides; unset or unknown is shadow")
+    func judgeMode() throws {
+        #expect(try Self.config(#"{"judge": {"mode": "live"}}"#).judgeDecides)
+        #expect(try Self.config(#"{"judge.mode": "LIVE"}"#).judgeDecides)
+        #expect(try Self.config(#"{"judge": {"mode": "shadow"}}"#).judgeDecides == false)
+        #expect(try Self.config(#"{"judge": {"mode": "bogus"}}"#).judgeDecides == false)
+        #expect(try Self.config("{}").judgeDecides == false)
+        #expect(try Self.config(#"{"judge": {"mode": "Shadow"}}"#).judgeMode == .shadow)
+    }
+
     @Test("guard.hosts: nested only, known hosts and modes, lowercased")
     func hosts() throws {
         let mixed = try Self.config(
