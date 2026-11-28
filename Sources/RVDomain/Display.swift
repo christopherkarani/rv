@@ -6,9 +6,19 @@ public let incompleteEvalSentence =
 public let observeUnanalyzableSentence =
     "rv could not see what this command runs, so observe mode sends it to Terminal. Run it in Terminal."
 
+/// Hook voice for `IndeterminateReason.budgetExhausted`: the matcher ran out
+/// of its time budget, usually on a very long or deeply nested command. Says
+/// so, so a benign long command does not read as a crash.
+public let budgetExhaustedSentence =
+    "rv ran out of time checking this long or complex command, so it could not tell whether it is safe. Split it into smaller commands, or run it in Terminal."
+
 /// The sentence a person reads for an indeterminate verdict.
 public func indeterminateSentence(_ reason: IndeterminateReason) -> String {
-    reason == .observeUnanalyzable ? observeUnanalyzableSentence : incompleteEvalSentence
+    switch reason {
+    case .observeUnanalyzable: observeUnanalyzableSentence
+    case .budgetExhausted: budgetExhaustedSentence
+    default: incompleteEvalSentence
+    }
 }
 
 /// Text a person or a client reads. Control characters stay inside the field,

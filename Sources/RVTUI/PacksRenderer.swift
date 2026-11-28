@@ -71,7 +71,7 @@ public struct PacksRenderer: FrameRenderer {
                 let enabled = group.packs.filter(\.isEnabled)
                 let disabledCount = group.packs.count - enabled.count
                 if enabled.isEmpty {
-                    lines.append(paint("\(group.category): \(disabledCount) off", slot: palette.muted, reset: palette.reset))
+                    lines.append(paint("  \(group.category): \(disabledCount) off", slot: palette.muted, reset: palette.reset))
                     continue
                 }
                 lines.append(paint("  \(group.category):", slot: palette.silver, reset: palette.reset))

@@ -65,7 +65,6 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
 
 @Test func hostDenyText_indeterminateIsPlanSentence() {
     let reasons: [IndeterminateReason] = [
-        .budgetExhausted,
         .commandTooLarge,
         .corePacksUnavailable,
     ]
@@ -80,6 +79,16 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
         #expect(text?.contains(":") == false)
         #expect(text?.contains("\n") == false)
     }
+}
+
+/// A matcher timeout says the command was too long or complex to check,
+/// not the generic "could not finish" sentence, and stays one line.
+@Test func hostDenyText_budgetExhaustedSaysWhy() {
+    let text = hostDenyText(from: EvaluationResult(outcome: .indeterminate(.budgetExhausted)), command: resetHard)
+    #expect(text == budgetExhaustedSentence)
+    #expect(text?.contains("core.git") == false)
+    #expect(text?.contains(":") == false)
+    #expect(text?.contains("\n") == false)
 }
 
 /// The observe floor's indeterminate says why: rv could not see what the

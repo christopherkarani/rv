@@ -25,7 +25,7 @@ struct EgressCommandRunTests {
             var command = try EgressApprove.parse([id])
             await #expect(throws: ExitCode(2)) { try await command.run() }
         }
-        #expect(out.stderr == "rv egress approve: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv egress approve: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func approve_robotRefused() async throws {
@@ -60,7 +60,7 @@ struct EgressCommandRunTests {
             var command = try EgressDeny.parse([id, "--reason", "tracker"])
             await #expect(throws: ExitCode(2)) { try await command.run() }
         }
-        #expect(out.stderr == "rv egress deny: requires an interactive TTY (stdin and stdout)\n")
+        #expect(out.stderr == "rv egress deny: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
     }
 
     @Test func deny_robotRefused() async throws {

@@ -29,6 +29,10 @@ enum RVD {
         RVDLogFile.captureDiscardedStderr()
         do {
             let configuration = try RVDLaunch.parse(arguments: ProcessInfo.processInfo.arguments)
+            if configuration.printHelp {
+                try? FileHandle.standardOutput.write(contentsOf: Data(RVDLaunch.usage.utf8))
+                return
+            }
             if configuration.printVersion {
                 do {
                     try FileHandle.standardOutput.write(contentsOf: Data((RVDLaunch.versionLine + "\n").utf8))
@@ -43,6 +47,12 @@ enum RVD {
                 Data("rvd: production transport is XPC; --socket is not supported\n".utf8)
             )
             Foundation.exit(2)
+        } catch RVDLaunchError.unknownArgument(let argument) {
+            // Usage error: exit at once (no supervisor backoff; launchd
+            // and systemd never pass an argument rvd does not take).
+            try? FileHandle.standardError.write(contentsOf: Data(
+                RVDLaunch.unknownArgumentMessage(argument).utf8))
+            Foundation.exit(64)
         } catch RVDLaunchError.homeRequired {
             try? FileHandle.standardError.write(contentsOf: Data(homeRequired.utf8))
             exitOnConfigurationError()
