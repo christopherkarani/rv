@@ -47,6 +47,10 @@ extension HouseRules {
                 configDirectory: RVPolicyPaths.configDirectory(home: home))
         else { return [] }
         return configuration.secrets
+            // No agent tag, on purpose: the hello names the keys the
+            // agent can use through `rv run --secret`, and `rv run`
+            // carries none (`SecretRunPlan`), so a key scoped to agents
+            // would be refused there even for this host's agent.
             .filter { $0.stages(forAgent: nil) && ($0.expires.map { $0 > now } ?? true) }
             .map(\.name)
     }
