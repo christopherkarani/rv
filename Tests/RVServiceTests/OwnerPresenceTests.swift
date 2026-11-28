@@ -87,7 +87,7 @@ struct OwnerPresenceTests {
         let id = UUID()
         return .captured(
             peer: AuthenticatedPeer(
-                evidence: PlatformPeerEvidence(processID: 9, effectiveUserID: 501, auditToken: Data([9]),
+                evidence: PlatformPeerEvidence(processID: 9, effectiveUserID: UInt32(geteuid()), auditToken: Data([9]),
                     codeIdentity: code, componentRole: nil),
                 connectionID: id),
             connectionID: id)
@@ -95,7 +95,7 @@ struct OwnerPresenceTests {
 
     static func socketContext() -> AuthenticatedRequestContext {
         let id = UUID()
-        return .captured(peer: .socketPeer(processID: 4242, effectiveUserID: 501, connectionID: id), connectionID: id)
+        return .captured(peer: .socketPeer(processID: 4242, effectiveUserID: UInt32(geteuid()), connectionID: id), connectionID: id)
     }
 
     static func cliContext() -> AuthenticatedRequestContext {
@@ -104,7 +104,7 @@ struct OwnerPresenceTests {
         let id = UUID()
         return .captured(
             peer: AuthenticatedPeer(
-                evidence: PlatformPeerEvidence(processID: 7, effectiveUserID: 501, auditToken: Data([7]),
+                evidence: PlatformPeerEvidence(processID: 7, effectiveUserID: UInt32(geteuid()), auditToken: Data([7]),
                     codeIdentity: code, componentRole: .cli),
                 connectionID: id),
             connectionID: id)
