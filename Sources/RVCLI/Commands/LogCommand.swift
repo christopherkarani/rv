@@ -33,7 +33,7 @@ enum LogRun {
             commandsRecorded: decisions != nil,
             skippedDays: decisions?.skippedDays ?? [],
             firstSave: FirstSaveStore(configDirectory: configDirectory).load()
-                .map { LogFirstSave(code: $0.code, receipt: $0.receipt?.text) }
+                .map { LogFirstSave(id: $0.id, receipt: $0.receipt?.text) }
         )
         if json {
             return try RobotJSON.encode(LogRobotPayload(model), options: .compactISO8601) + "\n"

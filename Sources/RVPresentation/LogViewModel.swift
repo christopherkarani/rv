@@ -132,16 +132,18 @@ public struct LogRow: Equatable, Sendable {
 }
 
 /// The first save (C5): the first real stop by a pack rule, which `rv
-/// log` stars by its code, with what the stop kept when that was counted.
+/// log` stars by its call's full id (never the six-digit code, which can
+/// repeat), with what the stop kept when that was counted.
 public struct LogFirstSave: Equatable, Sendable {
     public static let star = "★"
-    public var code: String
+    /// The call's full id.
+    public var id: String
     /// `kept 14 files · 2,314 lines`; nil when nothing was counted (rv
     /// never guesses a receipt).
     public var receipt: String?
 
-    public init(code: String, receipt: String? = nil) {
-        self.code = code
+    public init(id: String, receipt: String? = nil) {
+        self.id = id
         self.receipt = receipt
     }
 
@@ -204,7 +206,7 @@ public struct LogViewModel: Equatable, Sendable {
         let allToday = listed.allSatisfy { calendar.isDate($0.time, inSameDayAs: now) }
         self.rows = shown.map { entry in
             var row = Self.row(entry, now: now, calendar: calendar)
-            if let firstSave, entry.stopped, entry.code == firstSave.code { row.firstSave = firstSave.text }
+            if let firstSave, entry.stopped, entry.id == firstSave.id { row.firstSave = firstSave.text }
             return row
         }
         self.matching = listed.count

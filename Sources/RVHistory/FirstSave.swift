@@ -42,6 +42,8 @@ public struct FirstSaveReceipt: Sendable, Equatable, Codable {
 /// redacted command the decision log kept, never argv.
 public struct FirstSaveRecord: Sendable, Equatable, Codable {
     public var time: Date
+    /// The call's full id (12 hex digits): the one row `rv log` stars.
+    public var id: String
     /// The row's code (`a7c-835`), as `rv log` prints it.
     public var code: String
     public var rule: String
@@ -50,9 +52,12 @@ public struct FirstSaveRecord: Sendable, Equatable, Codable {
     public var what: String?
     public var receipt: FirstSaveReceipt?
 
-    public init(time: Date, code: String, rule: String, host: String, what: String? = nil, receipt: FirstSaveReceipt? = nil) {
+    public init(
+        time: Date, id: String, rule: String, host: String, what: String? = nil, receipt: FirstSaveReceipt? = nil
+    ) {
         self.time = time
-        self.code = code
+        self.id = id
+        self.code = DecisionStamp.code(forID: id)
         self.rule = rule
         self.host = host
         self.what = what
@@ -63,7 +68,7 @@ public struct FirstSaveRecord: Sendable, Equatable, Codable {
     /// by a pack rule. A judge note, a self-protection refusal, a command
     /// rv could not check and a watch-mode would-stop are not saves.
     public static func qualifies(_ record: DecisionRecord) -> Bool {
-        guard record.verdict == .denied, record.code != nil, let rule = record.rule,
+        guard record.verdict == .denied, record.id != nil, let rule = record.rule,
               let id = RuleID(rawValue: rule)
         else { return false }
         let pack = id.pack.rawValue
@@ -74,13 +79,13 @@ public struct FirstSaveRecord: Sendable, Equatable, Codable {
     /// The record for a qualifying decision row; nil for a row that does
     /// not qualify (`qualifies`).
     public init?(_ record: DecisionRecord) {
-        guard Self.qualifies(record), let code = record.code else { return nil }
+        guard Self.qualifies(record), let id = record.id else { return nil }
         // Rows arrive redacted; redacting again costs nothing and keeps a
         // secret out of this file even if one did not.
         let command = record.command.map { DecisionRedaction.command($0, home: nil) }
         let path = record.path.map { DecisionRedaction.path($0, home: nil) }
         let what = command ?? path.map { "\(record.tool.rawValue) \($0)" }
-        self.init(time: record.time, code: code, rule: record.rule ?? "", host: record.host.rawValue, what: what)
+        self.init(time: record.time, id: id, rule: record.rule ?? "", host: record.host.rawValue, what: what)
     }
 
     /// `First save. rv stopped claude's git reset --hard and kept 14 files.`
@@ -112,17 +117,42 @@ public struct FirstSaveStore: Sendable {
     }
 
     /// Writes `record` when no first save exists. True when this call made
-    /// it, so exactly one caller notifies. The file is created exclusively
-    /// (`O_EXCL`), owner-only.
+    /// it, so exactly one caller notifies. The whole record goes to a
+    /// private temp file first (owner-only, `O_EXCL | O_NOFOLLOW`), then
+    /// `link(2)` puts it in place, which fails when a first save exists:
+    /// a short write never leaves a partial file that blocks every later
+    /// claim. The temp file is always removed.
     public func claim(_ record: FirstSaveRecord) -> Bool {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(record) else { return false }
-        let fd = open(fileURL.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        let temp = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".first-save.\(getpid()).\(UInt32.random(in: .min ... .max)).tmp").path
+        let fd = open(temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return false }
-        defer { close(fd) }
-        let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        return written == data.count
+        defer { unlink(temp) }
+        let whole = Self.writeAll(data, to: fd) && fsync(fd) == 0
+        guard close(fd) == 0, whole else { return false }
+        return link(temp, fileURL.path) == 0
+    }
+
+    /// Writes every byte, retrying short writes and `EINTR`.
+    static func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return buffer.isEmpty }
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(fd, base + offset, buffer.count - offset)
+                if written > 0 {
+                    offset += written
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
     }
 }

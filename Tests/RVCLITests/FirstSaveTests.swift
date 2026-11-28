@@ -72,9 +72,54 @@ struct FirstSaveTests {
         #expect(posted.withLock { $0 } == ["First save. rv stopped claude's git reset --hard origin/main."])
         let store = FirstSaveStore(configDirectory: config)
         let saved = try #require(store.load())
-        #expect(saved.code == "a7c-835" && saved.rule == "core.git:reset-hard")
+        #expect(saved.id == "a7c835000001" && saved.code == "a7c-835" && saved.rule == "core.git:reset-hard")
+        // Only the record is left: the temp file it was written to is gone.
+        let left = try FileManager.default.contentsOfDirectory(atPath: config.path)
+        #expect(left.contains { $0.hasPrefix(".first-save.") } == false)
         let mode = try FileManager.default.attributesOfItem(atPath: store.fileURL.path)[.posixPermissions] as? Int
         #expect(mode == 0o600)
+    }
+
+    @Test func aStrayTempFileNeverBlocksTheClaim() throws {
+        let (_, config) = try Self.config()
+        let stray = config.appendingPathComponent(".first-save.1.2.tmp")
+        try Data("{\"partial".utf8).write(to: stray)
+        let store = FirstSaveStore(configDirectory: config)
+        let save = try #require(FirstSaveRecord(Self.stop()))
+        #expect(store.claim(save))
+        #expect(store.load() == save)
+        #expect(store.claim(save) == false)
+    }
+
+    @Test func theNotificationPassesTheTextAsAnArgumentAndIsHeldUntilItExits() async throws {
+        let process = FirstSaveNotice.notification("rv stopped \"x\" & then")
+        #expect(process.arguments?.last == "rv stopped \"x\" & then")
+        #expect(process.arguments?.dropLast().contains { $0.contains("stopped") } == false)
+
+        let done = Process()
+        done.executableURL = URL(fileURLWithPath: "/bin/sh")
+        done.arguments = ["-c", "exit 0"]
+        FirstSaveNotice.run(done)
+        for _ in 0..<200 where FirstSaveNotice.runningCount > 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(FirstSaveNotice.runningCount == 0)
+    }
+
+    @Test func theStarFollowsTheFullIdNotTheCode() throws {
+        let (home, config) = try Self.config()
+        let log = DecisionLog(configDirectory: config)
+        let first = Self.stop(id: "a7c835000001", minutesAgo: 28)
+        log.append(first, now: Self.now)
+        log.append(Self.stop("git reset --hard HEAD~3", id: "a7c835ffffff", minutesAgo: 5), now: Self.now)
+        #expect(FirstSaveStore(configDirectory: config).claim(try #require(FirstSaveRecord(first))))
+
+        let text = try LogRun.output(home: home, query: LogQuery(), json: false, palette: colorOffPalette,
+                                     columns: nil, now: Self.now, calendar: Self.utc)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let starred = try #require(lines.firstIndex { $0.contains("★") })
+        #expect(lines[starred - 1].contains("git reset --hard origin/main"))
+        #expect(text.components(separatedBy: "★").count == 2)
     }
 
     @Test func aNonSaveNeitherClaimsNorNotifies() throws {
@@ -104,7 +149,7 @@ struct FirstSaveTests {
         let receipt = FirstSaveReceipt(files: 14, lines: 2_314)
         #expect(receipt.text == "kept 14 files · 2,314 lines")
         #expect(FirstSaveReceipt(files: 1).text == "kept 1 file")
-        var save = FirstSaveRecord(time: Self.now, code: "a7c-835", rule: "core.git:reset-hard", host: "claude",
+        var save = FirstSaveRecord(time: Self.now, id: "a7c835000001", rule: "core.git:reset-hard", host: "claude",
                                    what: "git reset --hard origin/main", receipt: receipt)
         #expect(save.notificationText
             == "First save. rv stopped claude's git reset --hard origin/main and kept 14 files, 2,314 lines.")
@@ -153,9 +198,10 @@ struct FirstSaveTests {
     @Test func theStarIsPaintedAndTheWordsArePlain() {
         let model = LogViewModel(
             entries: [LogEntry(time: Self.now, agent: "claude", stopped: true, rule: "core.git:reset-hard",
-                               tool: "Bash", target: "", command: "git reset --hard", code: "a7c-835")],
+                               tool: "Bash", target: "", command: "git reset --hard", code: "a7c-835",
+                               id: "a7c835000001")],
             query: LogQuery(), now: Self.now, calendar: Self.utc,
-            firstSave: LogFirstSave(code: "a7c-835"))
+            firstSave: LogFirstSave(id: "a7c835000001"))
         #expect(model.rows.first?.firstSave == "★ first save")
         let plain = LogRenderer().render(LogFrame(model: model), palette: colorOffPalette)
         #expect(plain.contains { $0.hasSuffix("★ first save") })

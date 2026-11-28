@@ -1,5 +1,6 @@
 import Foundation
 import RVHistory
+import Synchronization
 
 /// rvd's side of the first save (C5): when a decision row is the first
 /// real stop, claim `first-save.json` and say so once. Runs on the
@@ -23,9 +24,15 @@ package enum FirstSaveNotice {
 
     /// macOS: a Notification Center banner through `osascript`, the text
     /// passed as an argument (never spliced into the script). Elsewhere a
-    /// no-op: `rv log`'s ★ row is the record on every platform.
+    /// no-op: `rv log`'s ★ row is the record on every platform. The code
+    /// compiles everywhere; only macOS runs it.
     package static func postSystemNotification(_ text: String) {
-#if os(macOS)
+        guard postsSystemNotifications else { return }
+        run(notification(text))
+    }
+
+    /// The `osascript` run for `text`.
+    static func notification(_ text: String) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = [
@@ -37,7 +44,39 @@ package enum FirstSaveNotice {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-#endif
+        return process
     }
+
+    /// Starts `process` without waiting, holding it until it exits so
+    /// nothing is torn down while it runs.
+    static func run(_ process: Process) {
+        let held = Held(process)
+        let key = ObjectIdentifier(process)
+        running.withLock { $0[key] = held }
+        process.terminationHandler = { finished in
+            _ = running.withLock { $0.removeValue(forKey: ObjectIdentifier(finished)) }
+        }
+        do {
+            try process.run()
+        } catch {
+            _ = running.withLock { $0.removeValue(forKey: key) }
+        }
+    }
+
+    /// How many notification runs are still held.
+    static var runningCount: Int { running.withLock { $0.count } }
+
+    #if os(macOS)
+    static let postsSystemNotifications = true
+    #else
+    static let postsSystemNotifications = false
+    #endif
+
+    /// A started process, held from its start to its exit.
+    private final class Held: @unchecked Sendable {
+        let process: Process
+        init(_ process: Process) { self.process = process }
+    }
+
+    private static let running = Mutex<[ObjectIdentifier: Held]>([:])
 }
