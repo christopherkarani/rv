@@ -52,6 +52,8 @@ enum BoxTarget: Equatable, Sendable {
     case list([String])
     /// `rv box setup mac`: build the Mac image now.
     case setupMac
+    /// `rv box tidy [--yes]`: leftovers to the 7-day trash.
+    case tidy(yes: Bool)
 }
 
 /// Why a box did not start, as one line and the one thing to do next.
@@ -184,6 +186,16 @@ enum BoxPlan {
             if let refusal = listRefusal(rest) { return .failure(refusal) }
             return .success(.list(rest))
         }
+        if first == "tidy" {
+            if rest.contains(where: isWallOrProfileFlag) { return .failure(wallFlagsRefusal("rv box tidy")) }
+            if let stray = rest.first(where: { BoxTidyRun.words.contains($0) == false }) {
+                let why = stray.hasPrefix("-")
+                    ? "rv box tidy has no \(DisplayedText.field(stray)) option."
+                    : "rv box tidy takes no \(DisplayedText.field(stray))."
+                return .failure(BoxRefusal(why: why, fix: "rv box tidy", exitCode: 64))
+            }
+            return .success(.tidy(yes: rest.contains("--yes") || rest.contains("-y")))
+        }
         if first == "setup" {
             if rest.first == "mac", rest.dropFirst().contains(where: isWallOrProfileFlag) {
                 return .failure(wallFlagsRefusal("rv box setup mac"))
@@ -238,9 +250,13 @@ enum BoxPlan {
         linux: Bool, mac: Bool, profile: String?, target: BoxTarget
     ) -> BoxRefusal? {
         switch target {
-        case .list, .setupMac:
+        case .list, .setupMac, .tidy:
             guard linux || mac || profile != nil else { return nil }
-            return wallFlagsRefusal(target == .setupMac ? "rv box setup mac" : "rv box list")
+            switch target {
+            case .setupMac: return wallFlagsRefusal("rv box setup mac")
+            case .tidy: return wallFlagsRefusal("rv box tidy")
+            default: return wallFlagsRefusal("rv box list")
+            }
         case .shell:
             if linux || mac {
                 let wall: BoxWall = linux ? .linux : .mac
@@ -278,6 +294,8 @@ enum BoxPlan {
             words += ["list"] + rest.map(InitRun.shellWord)
         case .setupMac:
             words += ["setup", "mac"]
+        case .tidy(let yes):
+            words += yes ? ["tidy", "--yes"] : ["tidy"]
         }
         return words.joined(separator: " ")
     }
@@ -465,7 +483,7 @@ enum BoxPlan {
         switch target {
         case .shell:
             return .success(.shell(project: project))
-        case .list, .setupMac:
+        case .list, .setupMac, .tidy:
             return .failure(BoxRefusal(why: "Nothing to launch.", fix: "rv box --help", exitCode: 64))
         case .agent(let agent, let rest):
             (name, arguments, hook) = (agent, rest, HookHost(rawValue: agent))
@@ -549,7 +567,7 @@ enum BoxPlan {
     /// Contained launches are macOS-only; Linux refuses rather than run
     /// behind a weaker wall (`ContainedRuntimeRefusal`).
     static let linuxHostRefusal = BoxRefusal(
-        why: "Boxes run on macOS only today; on Linux rv refuses rather than use a weaker wall.",
+        why: "Boxes run on macOS only today, so rv refuses here rather than use a weaker wall.",
         fix: "guard agents here through their hooks instead: rv setup")
 
     /// `rv box` alone opens the workspace shell, which needs a terminal.
@@ -589,36 +607,9 @@ enum BoxPlan {
     }
 
     /// A refusal from the workspace host (`rv workspace run`'s words),
-    /// as one line and one fix. The peer-trust refusal gets the v4
-    /// "can't start" frame; any other message keeps its first clause as
-    /// the reason and the first `rv …` command it names as the fix.
+    /// as one line and one fix (`BoxStartFailure`).
     static func hostRefusal(_ message: String) -> BoxRefusal {
-        if message.hasPrefix("the workspace host was refused") {
-            return BoxRefusal(
-                why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
-                fix: "see the fix (it needs an administrator): rv doctor")
-        }
-        if message.hasPrefix("the workspace host this start launched is still mounting or recovering") {
-            return BoxRefusal(
-                mark: .setup,
-                why: "The box is still starting in the background.",
-                fix: "run rv box again once it is ready: rv workspace status")
-        }
-        let reason = message.components(separatedBy: "; ").first ?? message
-        return BoxRefusal(why: sentence(reason), fix: firstCommand(in: message) ?? "rv doctor")
-    }
-
-    /// The first `'rv …'` command quoted in `message`.
-    static func firstCommand(in message: String) -> String? {
-        let parts = message.components(separatedBy: "'")
-        guard parts.count >= 3 else { return nil }
-        return stride(from: 1, to: parts.count - 1, by: 2).map { parts[$0] }.first { $0.hasPrefix("rv ") }
-    }
-
-    private static func sentence(_ text: String) -> String {
-        guard let first = text.first else { return text }
-        let capitalized = first.uppercased() + text.dropFirst()
-        return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+        BoxStartFailure.refusal(message)
     }
 
     // MARK: Words

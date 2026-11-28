@@ -49,7 +49,7 @@ _rv() {
       case $words[1] in
         box)
           local -a bx
-          bx=('list:List boxes' 'setup:Set up Mac boxes once')
+          bx=('list:List boxes' 'setup:Set up Mac boxes once' 'tidy:Move old box images to the trash')
           _describe -t commands 'box' bx
           ;;
         workspace)

@@ -6,6 +6,14 @@ public struct ClaudeHostCodec: HostCodec {
 
     public init() {}
 
+    /// B4: house rules ride this event's `additionalContext`.
+    static let sessionStartEvent = "SessionStart"
+
+    /// Session-start context (`additionalContext`), exit 0.
+    public func encodeHouseRules(_ text: String) -> HookWire {
+        HookWire(stdout: sessionStartContextJSON(text), exitCode: 0)
+    }
+
     /// Guarded spellings; near-variants read as these (`HookWireName`).
     static let guardedTools =
         ["Bash"] + HookWireName.fileTools + ["Grep", "Glob", "NotebookEdit", "MultiEdit"]
@@ -15,6 +23,9 @@ public struct ClaudeHostCodec: HostCodec {
               let envelope = try? JSONDecoder().decode(ClaudeEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
+        }
+        if HookWireName.isEvent(envelope.hookEventName, named: Self.sessionStartEvent) {
+            return .sessionStart(cwd: envelope.cwd.flatMap { WorkingDirectory(validating: $0) })
         }
         guard HookWireName.isPreToolEvent(envelope.hookEventName, preToolEvent: "PreToolUse") else {
             return .foreign

@@ -211,7 +211,15 @@ extension HookEvaluateWorld {
                 )
             },
             voice: voice,
-            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) }
+            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) },
+            // B4: the session-start house rules, read with rvd's own
+            // launch environment so the mode named is the one enforced.
+            houseRules: { cwd in
+                HouseRules.gather(
+                    home: world.home, cwd: cwd, host: host,
+                    environment: ProcessInfo.processInfo.environment)
+            },
+            countStop: { key in StopStreakCounter.shared.record(key, now: clock()) }
         ))
     }
 
@@ -239,7 +247,13 @@ extension HookEvaluateWorld {
             },
             mintOnDenyWithCommand: mintWithCommand,
             voice: world.voice,
-            saferAllowed: world.saferAllowed
+            saferAllowed: world.saferAllowed,
+            houseRules: world.houseRules,
+            // A stop the agent never sees (the reply missed its deadline)
+            // is not counted toward its streak.
+            countStop: world.countStop.map { count in
+                { @Sendable key in HookDeadline.permitsSideEffects() ? count(key) : 0 }
+            }
         )
     }
 }

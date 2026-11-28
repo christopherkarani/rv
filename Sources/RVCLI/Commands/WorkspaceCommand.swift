@@ -889,12 +889,16 @@ enum WorkspaceCommandRun {
     /// `WorkspaceHosts.ensure` failure text, with the live trust reason for
     /// a refused host.
     static func ensureFailureText(_ error: WorkspaceHostFailure) -> String {
-        let reason = error == .control(.unauthorizedClient)
-            ? WorkspaceHostExecutable.currentSibling().flatMap { host in
-                hostTrustReason(source: ProtectedPeerTrustConfiguration.hookTrustSource(), hostPath: host.path)
-            }
-            : nil
+        let reason = error == .control(.unauthorizedClient) ? currentHostTrustReason() : nil
         return ensureFailureText(error, hostTrustReason: reason)
+    }
+
+    /// Why the installed workspace host beside this rv fails its
+    /// peer-trust check; nil when it passes or there is none.
+    static func currentHostTrustReason() -> String? {
+        WorkspaceHostExecutable.currentSibling().flatMap { host in
+            hostTrustReason(source: ProtectedPeerTrustConfiguration.hookTrustSource(), hostPath: host.path)
+        }
     }
 
     /// `ensure` stops the host it spawned on a refusal, silence after

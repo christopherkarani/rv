@@ -435,7 +435,7 @@ if lines[0] != "\u2715 Stopped   git reset --hard (core.git/reset-hard)":
     raise SystemExit("verdict line=%r" % (lines[0],))
 if "why     destroys uncommitted changes" not in lines:
     raise SystemExit("reason missing pack why: %r" % (reason,))
-minted_who = re.compile("^who     ask .{1,32} to run  rv allow-once [0-9a-f]{6}$")
+minted_who = re.compile("^who     ask .{1,32} to run  rv allow-once ([0-9a-f]{6})  \\(you can wait: rv wait \\1\\)$")
 earlier_who = re.compile("^who     ask .{1,32} to run the earlier code with  rv allow-once$")
 if not (minted_who.match(lines[-1]) or earlier_who.match(lines[-1])):
     raise SystemExit("who line=%r" % (lines[-1],))
