@@ -185,7 +185,7 @@ public struct StatusViewModel: Equatable, Sendable {
     }
 
     /// Where the day's rows are listed.
-    public static let logCommand = CommandVocabulary.Command.blocks.invocation
+    public static let logCommand = CommandVocabulary.Command.log.invocation
 
     /// Whole minutes, hours or days, never seconds: `now`, `2m`, `3h`, `2d`.
     public static func age(from time: Date, to now: Date) -> String {

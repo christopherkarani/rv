@@ -4,6 +4,7 @@ import RVHistory
 import RVIsolation
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTheme
 import RVTUI
 
@@ -92,11 +93,18 @@ enum StatusRun {
             paths: paths, pathEntries: pathEntries, fileManager: fileManager
         ) else { return [:] }
         let config = GuardConfig.read(home: home)
+        let pinned = ManagedGate.pinsEnforce(home: home)
         var agents: [HookHost: GuardMode] = [:]
         for host in HookHost.setupSlotOrder where snapshot.installation(for: host).state == .wired {
-            agents[host] = GuardModeResolution.resolve(config, host: host, environment: [:])
+            agents[host] = mode(config, host: host, pinnedByOrganization: pinned)
         }
         return agents
+    }
+
+    /// The mode rvd applies to `host`: an organization gate pins enforce,
+    /// as `rv host list` shows it; otherwise the config's own mode.
+    static func mode(_ config: GuardConfig, host: HookHost, pinnedByOrganization: Bool) -> GuardMode {
+        pinnedByOrganization ? .enforce : GuardModeResolution.resolve(config, host: host, environment: [:])
     }
 
     /// A ledger row as status shows it: the rule, or the tool and its

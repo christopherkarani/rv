@@ -560,7 +560,7 @@ public struct ServiceClient: Sendable {
     ///
     /// Compiling the packs in this process takes seconds, so it happens only
     /// when rvd has no usable answer. A reachable rvd's own pack check speaks
-    /// for the fallback (ready unless it reports an error): the same pack
+    /// for the fallback (ready only when it reports ok; a missing check is not ready): the same pack
     /// files, and a version-skewed rvd never reaches this arm. `checkingLocalPacks: false` skips the compile on
     /// every arm (bare `rv`, which never shows the fallback) and reports
     /// the fallback as not ready.
@@ -572,7 +572,7 @@ public struct ServiceClient: Sendable {
                 let snapshot = try await send(DoctorSnapshotCall(), using: transport, hookConsult: true)
                 return .xpc(
                     snapshot: snapshot,
-                    localCorePacksReady: snapshot.checks.first { $0.id == .packs }?.status != .error
+                    localCorePacksReady: snapshot.checks.first { $0.id == .packs }?.status == .ok
                 )
             } catch {
                 snapshotFailure = error

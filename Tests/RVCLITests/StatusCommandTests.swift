@@ -55,7 +55,7 @@ struct StatusCommandTests {
               last      2m  claude   core.git:push-force   ◐ would stop
               secrets   2 locked  ·  console ● connected
 
-              → rv blocks   see what rv saw today
+              → rv log   see what rv saw today
 
             """)
     }
@@ -76,7 +76,7 @@ struct StatusCommandTests {
               last      2h  claude   core.git:reset-hard   ✕ stopped
               secrets   0 locked  ·  console not connected
 
-              → rv blocks   see what rv saw today
+              → rv log   see what rv saw today
 
             """)
     }
@@ -132,7 +132,7 @@ struct StatusCommandTests {
         ))
         let lines = text.split(separator: "\n").filter { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }
         #expect(lines.count == 5)
-        #expect(lines.last?.contains("→ rv blocks") == true)
+        #expect(lines.last?.contains("→ rv log") == true)
     }
 
     // MARK: - Counting
@@ -244,6 +244,36 @@ struct StatusCommandTests {
             category: .pack(.coreJudge), path: "", observed: true
         ))
         #expect(judge.isJudgeNote)
+    }
+
+    @Test func anOrganizationPinShowsGuardingWhateverTheConfigSays() {
+        let watching = GuardConfig(mode: .observe)
+        #expect(StatusRun.mode(watching, host: .claude, pinnedByOrganization: true) == .enforce)
+        #expect(StatusRun.mode(watching, host: .claude, pinnedByOrganization: false) == .observe)
+    }
+
+    @Test(arguments: [
+        ([DoctorCheck(id: .packs, status: .ok, message: "ready")], true),
+        ([DoctorCheck(id: .packs, status: .error, message: "broken")], false),
+        ([], false),
+    ])
+    func rvdsPackCheckIsReadyOnlyWhenItSaysOk(checks: [DoctorCheck], ready: Bool) async throws {
+        let home = try isolatedHome()
+        let client = ServiceClient(
+            transport: ScriptedTransport(
+                ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: ProtocolVersion.serviceSemver, status: .ok),
+                responseResult: .doctorSnapshot(DoctorSnapshotReply(
+                    state: .running, idleExitSeconds: 300, packsEnabled: dayOnePackIDs, checks: checks))
+            ),
+            lazySession: { EvaluateSession() },
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: home
+        )
+        guard case .xpc(_, let localReady) = await client.diagnostics(checkingLocalPacks: false) else {
+            Issue.record("expected rvd's snapshot")
+            return
+        }
+        #expect(localReady == ready)
     }
 
     static func healthyRvd() -> ScriptedTransport {
