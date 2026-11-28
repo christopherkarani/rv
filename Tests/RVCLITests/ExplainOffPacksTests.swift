@@ -13,7 +13,7 @@ struct ExplainOffPacksTests {
         let result = try await explain("redis-cli FLUSHALL")
         #expect(result.stdout.contains("Decision: ALLOW"))
         #expect(result.stdout.contains("Packs that are off"))
-        #expect(result.stdout.contains("Would stop if database.redis were on (database.redis:flushall)"))
+        #expect(result.stdout.contains("A rule in database.redis matches (database.redis:flushall)"))
         #expect(result.stdout.contains("$ rv protect redis"))
         #expect(result.exitCode == 0)
     }
@@ -79,7 +79,7 @@ struct ExplainOffPacksTests {
             OffPackHit(packID: PackID(rawValue: "containers.docker"), ruleID: RuleID(rawValue: "containers.docker:system-prune")!),
         ])
         #expect(rows.map(\.turnOn) == ["rv protect docker"])
-        #expect(rows.first?.display == "Would stop if containers.docker were on (containers.docker:system-prune)")
+        #expect(rows.first?.display == "A rule in containers.docker matches (containers.docker:system-prune)")
     }
 }
 

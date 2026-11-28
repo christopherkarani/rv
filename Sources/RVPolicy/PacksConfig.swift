@@ -203,6 +203,15 @@ public enum PacksConfigStore {
             }
         }
 
+        /// Anything after a list's closing `]` is not read.
+        func trailing(_ rest: Substring, key: String, line: Int) {
+            let junk = rest.trimmingCharacters(in: .whitespaces)
+            guard junk.isEmpty == false else { return }
+            result.problems.append(PolicyDocumentProblem(
+                line: line, key: key, problem: "\(DisplayedText.field(junk)) after ] is not read",
+                fix: "remove it, or move it inside the list as a quoted string"))
+        }
+
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
             lineNumber += 1
             let line = stripComment(String(rawLine)).trimmingCharacters(in: .whitespaces)
@@ -222,6 +231,7 @@ public enum PacksConfigStore {
                 let close = line.firstIndex(of: "]")
                 if key != unreadKey {
                     items(close.map { line[..<$0] } ?? Substring(line), key: key, line: lineNumber)
+                    if let close { trailing(line[line.index(after: close)...], key: key, line: lineNumber) }
                 }
                 if close != nil { openKey = nil }
                 continue
@@ -258,7 +268,10 @@ public enum PacksConfigStore {
             // against the pack list either.
             let target = known ? key : ""
             if let close = body.lastIndex(of: "]") {
-                if known { items(body[..<close], key: target, line: lineNumber) }
+                if known {
+                    items(body[..<close], key: target, line: lineNumber)
+                    trailing(body[body.index(after: close)...], key: target, line: lineNumber)
+                }
             } else {
                 if known { items(body, key: target, line: lineNumber) }
                 openKey = known ? key : unreadKey
