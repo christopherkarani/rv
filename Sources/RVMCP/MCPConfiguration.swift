@@ -855,8 +855,10 @@ public enum MCPGlob {
     }
 }
 
-/// `${secret:NAME}` inside an mcp.json arg: replaced at launch with the rv
-/// secret's value, so credentials passed as flags never live in a config file.
+/// `${secret:NAME}` in an mcp.json value. In a remote server's headers it is
+/// replaced with the rv secret's value. In a local server's args it is
+/// refused (`MCPLaunchPlanner.argumentSecret`): `ps` shows arguments to
+/// every user, so a local server gets secrets only as environment variables.
 public enum MCPSecretReference {
     static let opener = "${secret:"
 
