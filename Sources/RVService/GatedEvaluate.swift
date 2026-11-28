@@ -46,8 +46,8 @@ package struct GatedVerdict: Sendable, Equatable {
 
     /// What the door returns (under observe, the observed allow).
     package let result: EvaluationResult
-    /// Nil when the enforce branch decided: enforce mode, or a result the
-    /// observe floor took.
+    /// Nil when the enforce branch decided (enforce mode, or a result the
+    /// observe floor took), and on a peek that did not ask for it.
     package let wouldBe: WouldBe?
 
     package init(result: EvaluationResult, wouldBe: WouldBe? = nil) {
@@ -186,29 +186,30 @@ public struct GatedEvaluate: Sendable {
            MCPHostConfigDoor.protects(action.path.rawValue, guard: guarded, home: home, cwd: cwd) {
             result = MCPHostConfigDoor.deny(path: action.path.rawValue)
         }
-        switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
-        case .observed(let observed, let wouldBe, _):
-            // `would_be` stays deny: the hook's file wire never asks
-            // (`hookFileWire`).
+        let posture = Self.posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home)
+        let enforced = posture.result
+        if posture.observing {
+            // The file door has no Policy gate: its would-be is the result,
+            // and `would_be` stays deny (the hook's file wire never asks,
+            // `hookFileWire`).
             if let row = Self.denialRow(
-                for: wouldBe, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
+                for: enforced, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
                 observed: true
             ) {
                 effects.append(row)
             }
-            return (observed, effects)
-        case .enforced(let enforced):
-            // Checked on every enforced result, exactly as before effects
-            // became values: past the deadline the check trips it, so
-            // `HookDoor` swaps in the timeout deny even for an allow.
-            guard HookDeadline.permitsSideEffects() else { return (enforced, effects) }
-            if let row = Self.denialRow(
-                for: enforced, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now
-            ) {
-                effects.append(row)
-            }
-            return (enforced, effects)
+            return (enforced.observedAllow, effects)
         }
+        // Checked on every enforced result, exactly as before effects
+        // became values: past the deadline the check trips it, so
+        // `HookDoor` swaps in the timeout deny even for an allow.
+        guard HookDeadline.permitsSideEffects() else { return (enforced, effects) }
+        if let row = Self.denialRow(
+            for: enforced, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now
+        ) {
+            effects.append(row)
+        }
+        return (enforced, effects)
     }
 
     /// Trampoline onto `peek(command:)` or `apply(command:)`.
@@ -286,7 +287,7 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost = .tty,
         tool: LedgerTool = .bash
     ) async -> GatedVerdict {
-        await gatedVerdict(
+        await gated(
             .peek,
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
@@ -296,7 +297,7 @@ public struct GatedEvaluate: Sendable {
             allowlist: allowlist,
             host: host,
             tool: tool,
-            previewsWouldBe: true,
+            showsWouldBe: true,
             inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
         )
     }
@@ -358,7 +359,7 @@ public struct GatedEvaluate: Sendable {
             host: host,
             tool: tool,
             inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
-        )
+        ).result
     }
 
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
@@ -384,11 +385,12 @@ public struct GatedEvaluate: Sendable {
             host: host,
             tool: tool,
             inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
-        )
+        ).result
     }
 
     /// Wire-path `apply` plus, under observe, the verdict enforce would
-    /// return (ServiceRuntime evaluate, for SDK callers).
+    /// return (ServiceRuntime evaluate, for SDK callers). An apply always
+    /// has the would-be: its observed denial row is taken from it.
     func applyVerdict(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
@@ -399,7 +401,7 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost = .tty,
         tool: LedgerTool = .bash
     ) async -> GatedVerdict {
-        await gatedVerdict(
+        await gated(
             .apply,
             request,
             cwd: cwd,
@@ -409,7 +411,6 @@ public struct GatedEvaluate: Sendable {
             allowlist: allowlist,
             host: host,
             tool: tool,
-            previewsWouldBe: true,
             inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
         )
     }
@@ -426,9 +427,10 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    /// Gated evaluate. `inputs` is gathered exactly once per evaluation,
-    /// off the cooperative pool together with the evaluation, script check
-    /// and judge (the shell doors pass a live gather; tests pass a value).
+    /// Gated evaluate: `decide`, then its writes. `inputs` is gathered
+    /// exactly once per evaluation, off the cooperative pool together with
+    /// the evaluation, script check and judge (the shell doors pass a live
+    /// gather; tests pass a value). `showsWouldBe` as for `decide`.
     func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
@@ -439,32 +441,12 @@ public struct GatedEvaluate: Sendable {
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
         tool: LedgerTool,
-        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
-    ) async -> EvaluationResult {
-        await gatedVerdict(
-            intent, request, cwd: cwd, home: home, grants: grants, now: now,
-            allowlist: allowlist, host: host, tool: tool, previewsWouldBe: false, inputs: inputs()
-        ).result
-    }
-
-    /// `gated` plus, under observe and when `previewsWouldBe`, the would-be
-    /// verdict.
-    func gatedVerdict(
-        _ intent: EvaluationIntent,
-        _ request: EvaluationRequest,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory?,
-        grants: EphemeralAllowOnceTable,
-        now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: LedgerHost,
-        tool: LedgerTool,
-        previewsWouldBe: Bool,
+        showsWouldBe: Bool = false,
         inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> GatedVerdict {
-        let decided = await decideVerdict(
+        let decided = await decide(
             intent, request, cwd: cwd, home: home, grants: grants, now: now,
-            allowlist: allowlist, host: host, tool: tool, previewsWouldBe: previewsWouldBe, inputs: inputs()
+            allowlist: allowlist, host: host, tool: tool, showsWouldBe: showsWouldBe, inputs: inputs()
         )
         // Exemption audit and judge log are file appends: keep them off the
         // cooperative pool, as they were when they ran inside the offload.
@@ -493,9 +475,19 @@ public struct GatedEvaluate: Sendable {
         return result
     }
 
-    /// Shell-door decision: the verdict plus the writes it asks for, in
-    /// order. Grant spend / preview stays inline here (SEC-003). `inputs`
-    /// is gathered once, inside the offload.
+    /// Shell-door decision: the verdict, the writes it asks for in order,
+    /// and under observe the would-be verdict. Grant spend / preview stays
+    /// inline here (SEC-003). `inputs` is gathered once, inside the
+    /// offload.
+    ///
+    /// Observe and enforce run the same enforce path up to the Policy gate
+    /// (`shellPosture`). Observe then runs that gate as a peek (an
+    /// allowlist entry or live grant would have let the command through;
+    /// nothing is spent) and takes one observe step over what it returns
+    /// (`observe`). `showsWouldBe` asks a peek for the would-be (`rv test` /
+    /// `rv explain`); a plain peek skips the work only the would-be needs
+    /// (the packs-only floor's parse, the preview). Apply always has it:
+    /// its observed denial row is taken from it.
     func decide(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
@@ -506,30 +498,7 @@ public struct GatedEvaluate: Sendable {
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
         tool: LedgerTool,
-        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
-    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
-        let decided = await decideVerdict(
-            intent, request, cwd: cwd, home: home, grants: grants, now: now,
-            allowlist: allowlist, host: host, tool: tool, previewsWouldBe: false, inputs: inputs()
-        )
-        return (decided.result, decided.effects)
-    }
-
-    /// `decide` plus, under observe, the would-be verdict through a
-    /// Policy-gate preview and its enforce authorization. Nil when the
-    /// enforce branch decided, or when `previewsWouldBe` is false (the
-    /// preview then runs only for an apply's observed denial row).
-    func decideVerdict(
-        _ intent: EvaluationIntent,
-        _ request: EvaluationRequest,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory?,
-        grants: EphemeralAllowOnceTable,
-        now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: LedgerHost,
-        tool: LedgerTool,
-        previewsWouldBe: Bool,
+        showsWouldBe: Bool = false,
         inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> (
         result: EvaluationResult,
@@ -569,14 +538,10 @@ public struct GatedEvaluate: Sendable {
                 )
             }
             let screened = HookTiming.measure(.screen) {
-                posture(
-                    result,
-                    door: .shell(request, inputs: gathered, isPeek: isPeek),
-                    guardMode: gathered.guardMode,
-                    cwd: cwd,
-                    home: home,
-                    now: now,
-                    effects: &effects
+                shellPosture(
+                    result, request: request, inputs: gathered, isPeek: isPeek,
+                    wantsWouldBe: verb.recordsDenial || showsWouldBe,
+                    cwd: cwd, home: home, now: now, effects: &effects
                 )
             }
             return (screened, gathered.store.safety, effects)
@@ -584,44 +549,20 @@ public struct GatedEvaluate: Sendable {
         var effects = offloaded
         let candidate: EvaluationResult
         switch screened {
-        case .observed(let observed, let unfloored, let floorsWouldBe):
-            // The would-be verdict through a Policy-gate preview (an
-            // allowlist entry or live grant would have let it through;
-            // nothing is spent): on apply, what enforcement would have
-            // denied; for a verdict caller, what enforce would show. Other
-            // peeks skip it. Not deadline-gated: the reply is an allow
-            // either way, and checking would trip the deadline into a
-            // timeout deny.
-            var recordsDenial = false
-            if verb.recordsDenial, case .deny = unfloored.decision { recordsDenial = true }
-            if verb.recordsDenial, case .indeterminate = unfloored.decision, let row = Self.denialRow(
-                for: unfloored, path: nil, host: host, tool: tool, now: now, observed: true,
-                wouldBe: Self.ledgerWouldBe(HookAuthorization.project(result: unfloored, cwd: cwd))
-            ) {
-                // An unfinished evaluation enforcement would refuse. It never
-                // reaches the Policy gate as a ledger row, not even a preview.
-                effects.append(row)
-            }
-            guard recordsDenial || previewsWouldBe else { return (observed, effects, nil) }
-            // The packs-only floor only turns an allow indeterminate, so it
-            // never changes whether a denial row is recorded: it runs here,
-            // where the would-be is consumed, not on every observed allow.
-            let wouldBe = floorsWouldBe
-                ? JudgeRuntime.packsOnlyFloor(unfloored, command: request.command)
-                : unfloored
-            let previewed = await Self.policyFinish(
-                .peek, candidate: wouldBe, request: request, cwd: cwd, grants: grants,
+        case .observe(let observed, nil):
+            // A plain peek reads nothing past the observed allow: enforce's
+            // verdict was never asked for (`Judged.result`).
+            return (observed, effects, nil)
+        case .observe(let observed, let enforced?):
+            let wouldBe = await Self.policyFinish(
+                .peek, candidate: enforced, request: request, cwd: cwd, grants: grants,
                 now: now, allowlist: allowlist, safety: safety
+            ).result
+            return Self.observe(
+                wouldBe, allow: observed, recordsDenial: verb.recordsDenial,
+                cwd: cwd, host: host, tool: tool, now: now, effects: effects
             )
-            let authorization = HookAuthorization.project(result: previewed.result, cwd: cwd)
-            if recordsDenial, let row = Self.denialRow(
-                for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true,
-                wouldBe: Self.ledgerWouldBe(authorization)
-            ) {
-                effects.append(row)
-            }
-            return (observed, effects, GatedVerdict.WouldBe(result: previewed.result, authorization: authorization))
-        case .enforced(let enforced):
+        case .enforce(let enforced):
             candidate = enforced
         }
         let decision = await HookTiming.measure(.gate) {
@@ -651,6 +592,33 @@ public struct GatedEvaluate: Sendable {
             effects.append(row)
         }
         return (finished, effects, nil)
+    }
+
+    /// The one observe step: the door returns `allow`, and `wouldBe`, the
+    /// enforce path's verdict through a Policy-gate peek, is the would-be,
+    /// with the authorization enforce would give it. Apply records it as an
+    /// observed denial row (none when enforce would allow). Not
+    /// deadline-gated: the reply is an allow either way, and checking would
+    /// trip the deadline into a timeout deny.
+    private static func observe(
+        _ wouldBe: EvaluationResult,
+        allow: EvaluationResult,
+        recordsDenial: Bool,
+        cwd: WorkingDirectory?,
+        host: LedgerHost,
+        tool: LedgerTool,
+        now: Date,
+        effects: [GatedEffect]
+    ) -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
+        var effects = effects
+        let authorization = HookAuthorization.project(result: wouldBe, cwd: cwd)
+        if recordsDenial, let row = denialRow(
+            for: wouldBe, path: nil, host: host, tool: tool, now: now, observed: true,
+            wouldBe: ledgerWouldBe(authorization)
+        ) {
+            effects.append(row)
+        }
+        return (allow, effects, GatedVerdict.WouldBe(result: wouldBe, authorization: authorization))
     }
 
     /// The Policy gate over a candidate verdict. Fast path: allow and
@@ -696,100 +664,77 @@ public struct GatedEvaluate: Sendable {
         }
     }
 
-    /// Which door is asking. Shell doors run the script check and judge.
-    private enum Door {
-        case file(FileToolAction)
-        case shell(EvaluationRequest, inputs: EvaluationInputs, isPeek: Bool)
-
-        var observeFloor: ObserveFloor.Door {
-            switch self {
-            case .file(let action): .file(action)
-            case .shell(let request, let inputs, _): .shell(request.command, store: inputs.store)
-            }
+    /// The mode one evaluated result runs under: observe, unless the observe
+    /// floor holds, on every door (`ObserveFloor.rule`). Then the result
+    /// takes the enforce path as the floor hands it back. Stopping rvd,
+    /// writing its install, or touching rv's protection only in program
+    /// text the command feeds a shell is floored at "run it in Terminal"
+    /// there (an allow becomes indeterminate; a deny stays the deny).
+    /// Otherwise a shell command running a program rv cannot see is sent to
+    /// Terminal (`observe.floor:unanalyzable`) whatever its verdict, since
+    /// observe would have let it run.
+    private static func posture(
+        _ evaluated: EvaluationResult,
+        door: ObserveFloor.Door,
+        guardMode: GuardMode,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> (observing: Bool, result: EvaluationResult) {
+        guard guardMode == .observe else { return (false, evaluated) }
+        switch ObserveFloor.rule(evaluated, door: door, context: ObserveFloor.Context(home: home, cwd: cwd)) {
+        case .observed: return (true, evaluated)
+        case .enforce(let floored): return (false, floored)
         }
     }
 
-    /// `observed` is final: the door returns it as-is; `wouldBe` is what
-    /// enforcement would have acted on (observed denial row), before the
-    /// packs-only floor when `floorsWouldBe`. `enforced` is what the door
-    /// acts on (Policy gate, denial row).
-    private enum Posture {
-        case observed(EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool)
-        case enforced(EvaluationResult)
+    /// A shell result after the enforce path, up to the Policy gate.
+    /// `enforced` is enforce's verdict (`Judged.result`), read inside the
+    /// offload so the packs-only floor's parse runs there. Under observe,
+    /// `allow` is what the door returns instead; `enforced` is nil when
+    /// the caller asked for no would-be (a plain peek), so that peek never
+    /// parses the inline program.
+    private enum ShellPosture: Sendable {
+        case enforce(EvaluationResult)
+        case observe(allow: EvaluationResult, enforced: EvaluationResult?)
     }
 
-    /// The one observe/enforce branch, shared by every door.
-    ///
-    /// Observe is whole-guard: everything is evaluated, the would-be verdict
-    /// is logged (shell doors, as a `.judgeLog` effect), and the door allows. Grants are never spent
-    /// on that path; apply and the file door record a would-be deny as an
-    /// observed denial row. Enforce runs the script
-    /// check, then the judge, over a pack-allow; anything else is returned
-    /// untouched (a pack deny is a floor neither may lower).
-    ///
-    /// Observe never relaxes rv's own protection (`ObserveFloor.rule`):
-    /// such a result takes the enforce branch, on every door, with the
-    /// result the floor hands back. Stopping rvd, writing its install, or
-    /// touching rv's protection only in program text the command feeds a
-    /// shell is floored at "run it in Terminal" there (an allow becomes
-    /// indeterminate; a deny stays the deny). Otherwise a shell command
-    /// running a program rv cannot see is sent to Terminal
-    /// (`observe.floor:unanalyzable`) whatever its verdict, since observe
-    /// would have let it run.
-    private func posture(
+    /// The enforce path over one evaluated shell result, on observe and
+    /// enforce alike: the script check, then the judge over a pack-allow (a
+    /// pack deny is a floor neither may lower). Observe is whole-guard:
+    /// everything is evaluated, and only the judge-log row differs (it
+    /// describes the would-be; `Judged.observedLog`). The door allows; what
+    /// it does with enforce's verdict is `decide`'s observe step.
+    /// `wantsWouldBe` asks observe for enforce's verdict too; enforce always
+    /// reads it.
+    private func shellPosture(
         _ evaluated: EvaluationResult,
-        door: Door,
-        guardMode: GuardMode,
+        request: EvaluationRequest,
+        inputs: EvaluationInputs,
+        isPeek: Bool,
+        wantsWouldBe: Bool,
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
         now: Date,
         effects: inout [GatedEffect]
-    ) -> Posture {
-        var result = evaluated
-        var mode = guardMode
-        if guardMode == .observe,
-           case .enforce(let floored) = ObserveFloor.rule(
-               evaluated, door: door.observeFloor, context: ObserveFloor.Context(home: home, cwd: cwd)
-           )
-        {
-            result = floored
-            mode = .enforce
+    ) -> ShellPosture {
+        let posture = Self.posture(
+            evaluated, door: .shell(request.command, store: inputs.store),
+            guardMode: inputs.guardMode, cwd: cwd, home: home
+        )
+        let screened = scriptScreen(
+            posture.result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
+        )
+        let judged = JudgeRuntime.apply(
+            to: screened.result, command: request.command,
+            inputs: inputs, judge: judge, provenance: request.provenance, now: now,
+            cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
+            observing: posture.observing, lateLog: Self.lateJudgeLog(home: home)
+        )
+        if let log = posture.observing ? judged.observedLog : judged.log {
+            effects.append(.judgeLog(log))
         }
-        switch (mode, door) {
-        case (.observe, .file):
-            return .observed(result.observedAllow, wouldBe: result, floorsWouldBe: false)
-        case (.enforce, .file):
-            return .enforced(result)
-        case (.observe, .shell(let request, let inputs, let isPeek)):
-            let screened = scriptScreen(
-                result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
-            )
-            let observed = JudgeRuntime.observe(
-                wouldBe: screened.result, command: request.command,
-                inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
-                lateLog: Self.lateJudgeLog(home: home)
-            )
-            effects.append(.judgeLog(observed.log))
-            return .observed(observed.result, wouldBe: observed.wouldBe, floorsWouldBe: observed.floorsWouldBe)
-        case (.enforce, .shell(let request, let inputs, let isPeek)):
-            let screened = scriptScreen(
-                result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
-            )
-            if screened.scriptDenied {
-                return .enforced(screened.result)
-            }
-            let judged = JudgeRuntime.apply(
-                to: screened.result, command: request.command,
-                inputs: inputs, judge: judge, provenance: request.provenance, now: now,
-                cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek,
-                lateLog: Self.lateJudgeLog(home: home)
-            )
-            if let log = judged.log {
-                effects.append(.judgeLog(log))
-            }
-            return .enforced(judged.result)
-        }
+        guard posture.observing else { return .enforce(judged.result) }
+        return .observe(allow: posture.result.observedAllow, enforced: wantsWouldBe ? judged.result : nil)
     }
 
     /// Where a prediction that answered after its caller gave up is logged:
@@ -802,11 +747,10 @@ public struct GatedEvaluate: Sendable {
 
     /// Package-script check over a pack-allow. A script deny is projected
     /// over the pack result; an unresolved graph is indeterminate before
-    /// any judge runs. `scriptDenied` means the screen's result is final.
+    /// any judge runs.
     private struct ScriptScreen {
         let result: EvaluationResult
         let allowSafeLane: Bool
-        let scriptDenied: Bool
     }
 
     private func scriptScreen(
@@ -819,12 +763,12 @@ public struct GatedEvaluate: Sendable {
         effects: inout [GatedEffect]
     ) -> ScriptScreen {
         guard case .allow = result.decision else {
-            return ScriptScreen(result: result, allowSafeLane: true, scriptDenied: false)
+            return ScriptScreen(result: result, allowSafeLane: true)
         }
         switch scriptVerdict(for: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects) {
         case .deny(let hit):
             return ScriptScreen(
-                result: Self.projectScriptHit(hit, over: result), allowSafeLane: true, scriptDenied: true
+                result: Self.projectScriptHit(hit, over: result), allowSafeLane: true
             )
         case .unresolved:
             // Nobody has read what this runner executes. The judge only
@@ -837,17 +781,17 @@ public struct GatedEvaluate: Sendable {
                     matchingView: result.matchingView,
                     analysis: result.analysis
                 ),
-                allowSafeLane: false, scriptDenied: true
+                allowSafeLane: false
             )
         case .needsJudge:
             // A package bin, a remote runner, or a run after earlier work
             // with no script to run: no body the judge cannot see, so the
             // judge decides from the whole command, never the safe lane.
-            return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
+            return ScriptScreen(result: result, allowSafeLane: false)
         case .clear(let allBodiesSafe):
             // A body that is not itself safe-lane (`jest`, `node x.js`)
             // keeps the command in front of the judge.
-            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe, scriptDenied: false)
+            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe)
         }
     }
 
@@ -981,17 +925,13 @@ public struct GatedEvaluate: Sendable {
         let result = evaluateWithSemantics(
             request, cwd: cwd, home: home, store: inputs.store, now: now, effects: &effects
         )
-        switch posture(
-            result,
-            door: .shell(request, inputs: inputs, isPeek: false),
-            guardMode: inputs.guardMode,
-            cwd: cwd,
-            home: home,
-            now: now,
-            effects: &effects
-        ) {
-        case .observed(let final, _, _), .enforced(let final):
-            return (final, effects)
+        let screened = shellPosture(
+            result, request: request, inputs: inputs, isPeek: false, wantsWouldBe: false,
+            cwd: cwd, home: home, now: now, effects: &effects
+        )
+        switch screened {
+        case .enforce(let enforced): return (enforced, effects)
+        case .observe(let allow, _): return (allow, effects)
         }
     }
 

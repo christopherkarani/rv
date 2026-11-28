@@ -235,7 +235,7 @@ package struct LocalHookDecider: Sendable {
                 let inputs = EvaluationInputs.gather(
                     home: home, cwd: cwd, environment: environment, host: ledger)
                 probe.recordGuardMode(inputs.guardMode)
-                let decided = await gated.decideVerdict(
+                let decided = await gated.decide(
                     .apply,
                     GatedEvaluate.makeRequest(command: command, home: home),
                     cwd: cwd,
@@ -250,7 +250,6 @@ package struct LocalHookDecider: Sendable {
                     },
                     host: ledger,
                     tool: .bash,
-                    previewsWouldBe: false,
                     inputs: inputs
                 )
                 probe.record(.shell(decided.result, cwd: cwd), effects: decided.effects)

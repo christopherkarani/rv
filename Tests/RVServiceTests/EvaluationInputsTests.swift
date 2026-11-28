@@ -83,7 +83,7 @@ struct EvaluationInputsGuardModeTests {
                 grants: EphemeralAllowOnceTable(), now: now,
                 allowlist: { AllowlistSnapshot(entries: []) },
                 host: .tty, tool: .bash, inputs: gathered
-            )
+            ).result
             guard case .deny = result.decision else {
                 Issue.record("env \(env) must enforce, got \(result.decision)")
                 continue
@@ -107,7 +107,7 @@ struct EvaluationInputsReadOnceTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
-        )
+        ).result
         #expect(result.outcome == .plain)
         let rows = try judgeLog(home)
         #expect(rows.count == 1)
@@ -254,7 +254,7 @@ struct EvaluationInputsReadOnceTests {
                 cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: now,
                 allowlist: { AllowlistSnapshot(entries: []) },
                 host: .tty, tool: .bash, inputs: gathered
-            )
+            ).result
         }
         // Balanced (normal) lets contained generated-output deletes through.
         #expect(try await decide(disk: .strict, injected: .normal).decision == .allow)
@@ -406,7 +406,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
-        )
+        ).result
         guard case .deny(let deny) = enforced.decision else {
             Issue.record("warming judge must fail closed on apply, got \(enforced.decision)")
             return
@@ -421,7 +421,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
-        )
+        ).result
         #expect(observed.outcome == .plain)
         let observeRow = try #require(try judgeLog(home).last)
         #expect(observeRow["guard"] as? String == "observe")
@@ -440,7 +440,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
-        )
+        ).result
         guard case .deny(let deny) = enforced.decision else {
             Issue.record("refused judge must fail closed on apply, got \(enforced.decision)")
             return
@@ -460,7 +460,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
-        )
+        ).result
         guard case .deny(let deny) = enforced.decision else {
             Issue.record("busy judge must fail closed on apply, got \(enforced.decision)")
             return
@@ -502,7 +502,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
-        )
+        ).result
         #expect(result.outcome == .plain)
         #expect(ledgerRows(home).map(\.observed) == [true])
         #expect(ledgerRows(home).first?.ruleID == RuleID(pack: .coreJudge, pattern: "laya-block"))
@@ -525,7 +525,7 @@ struct JudgePortThresholdTests {
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
             host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
-        )
+        ).result
         guard case .deny(let deny) = result.decision else {
             Issue.record("judge review must deny, got \(result.decision)")
             return
@@ -576,36 +576,39 @@ struct JudgePortPacksOnlyFloorTests {
         #expect(row["note"] as? String == "judge-unavailable: x; context: partial")
     }
 
-    /// `apply` and plain `peek` throw the would-be away, so the runtime only
-    /// flags the floor; the caller that shows the would-be applies it.
+    /// The judge step is the same on both postures: an unscored pack-allow
+    /// is floored only where its verdict is read, and both log rows keep the
+    /// unfloored reading.
     @Test(
-        "observe: the runtime flags the packs-only floor and leaves the would-be unfloored",
+        "the judge step floors an unscored inline program in its verdict, not its log rows",
         arguments: [
             (JudgeRuntime.JudgeRun.unavailable("x"), fakeBundle),
             (JudgeRuntime.JudgeRun.failed, JudgeSelection(engine: .ft, bundle: nil)),
         ]
     )
-    func observeDefersFloor(run: JudgeRuntime.JudgeRun, selection: JudgeSelection) throws {
+    func judgeStepFloorsOnlyTheVerdict(run: JudgeRuntime.JudgeRun, selection: JudgeSelection) throws {
         let home = try guardHome(mode: nil)
         defer { remove(home) }
-        let observed = JudgeRuntime.observe(
-            wouldBe: EvaluationResult(outcome: .plain), command: Self.inline,
+        let judged = JudgeRuntime.apply(
+            to: EvaluationResult(outcome: .plain), command: Self.inline,
             inputs: inputs(.observe, home: home, judge: selection), judge: FixedJudge(run: run),
-            provenance: .unknown, now: now, cwd: nil, allowSafeLane: true, isPeek: false
+            provenance: .unknown, now: now, cwd: nil, allowSafeLane: true, isPeek: false, observing: false
         )
-        #expect(observed.wouldBe.decision == .allow)
-        #expect(observed.floorsWouldBe)
+        #expect(judged.result.decision == .indeterminate(.inlineProgramNeedsJudge))
+        #expect(judged.scored.decision == .allow)
+        #expect(judged.log?.subject == .live(.allow))
+        #expect(judged.observedLog.subject == .wouldBe(.allow, rule: nil))
     }
 
     @Test("observe, judge unavailable: the shown would-be is enforce's indeterminate")
     func observeUnavailableFloorsShownWouldBe() async throws {
         let home = try guardHome(mode: nil)
         defer { remove(home) }
-        let verdict = await GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .unavailable("x"))).gatedVerdict(
+        let verdict = await GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .unavailable("x"))).gated(
             .peek, request(Self.inline), cwd: nil, home: home,
             grants: EphemeralAllowOnceTable(), now: now,
             allowlist: { AllowlistSnapshot(entries: []) },
-            host: .tty, tool: .bash, previewsWouldBe: true, inputs: inputs(.observe, home: home)
+            host: .tty, tool: .bash, showsWouldBe: true, inputs: inputs(.observe, home: home)
         )
         #expect(verdict.result.decision == .allow)
         #expect(verdict.wouldBe?.result.decision == .indeterminate(.inlineProgramNeedsJudge))

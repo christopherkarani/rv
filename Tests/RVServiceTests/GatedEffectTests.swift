@@ -40,7 +40,7 @@ struct GatedEffectTests {
         bundle: URL? = nil,
         cwd: WorkingDirectory? = nil,
         grants: EphemeralAllowOnceTable = EphemeralAllowOnceTable()
-    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+    ) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
         await door.decide(
             intent, request(command), cwd: cwd, home: nil, grants: grants, now: now,
             allowlist: { .empty }, host: .hook(.claude), tool: .bash,
@@ -162,7 +162,7 @@ struct GatedEffectTests {
             EvaluateSession(),
             judge: EffectFixedJudge(run: .verdict(try effectVerdict(choice: "review", risk: 0.5)))
         )
-        func decide(_ intent: EvaluationIntent) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+        func decide(_ intent: EvaluationIntent) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
             await door.decide(
                 intent, Self.request(Self.judged), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
                 now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash,
@@ -228,7 +228,7 @@ struct GatedEffectTests {
             let result = await door.gated(
                 .apply, Self.request(Self.judged), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
                 now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
-            )
+            ).result
             return (decided, result)
         }
         guard case .deny = result.decision else {
@@ -262,7 +262,7 @@ struct GatedEffectTests {
             await door.gated(
                 .apply, Self.request(ShellCommand(rawValue: "ls")), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
                 now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
-            )
+            ).result
         }
         guard case .allow = result.decision else {
             Issue.record("plain ls must allow, got \(result.decision)")
@@ -348,7 +348,7 @@ struct GatedEffectTests {
     }
 
     /// The one case where observe `ask` depends on `boundReview == .mandatoryHuman`
-    /// surviving scriptScreen -> JudgeRuntime.observe -> the Policy-gate preview:
+    /// surviving scriptScreen -> JudgeRuntime.apply -> the Policy-gate peek:
     /// a plain push is a builtin-pack deny that only a carried mandatory-human bind
     /// keeps unpinned (HookAuthorization.isPinned).
     @Test("observe would-be ask survives a mandatory-human bind in a real git repo")

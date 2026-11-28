@@ -77,11 +77,11 @@ struct JudgeDenyBypassTests {
 
     static func apply(
         _ result: EvaluationResult, _ command: String, _ home: HomePath, _ judge: any JudgePort
-    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
+    ) -> JudgeRuntime.Judged {
         JudgeRuntime.apply(
             to: result, command: ShellCommand(rawValue: command),
             inputs: .gather(home: home, cwd: nil, environment: [:]), judge: judge,
-            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
+            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false, observing: false
         )
     }
 }

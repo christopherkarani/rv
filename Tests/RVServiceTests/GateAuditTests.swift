@@ -29,7 +29,7 @@ struct GateAuditTests {
         allowlist: AllowlistSnapshot = .empty,
         command: ShellCommand = Self.resetHard,
         guardMode: GuardMode = .enforce
-    ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+    ) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
         await GatedEvaluate().decide(
             intent, EvaluationRequest(command: command, enabledPacks: dayOnePackIDs),
             cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
@@ -126,7 +126,7 @@ struct GateAuditTests {
                 judge: JudgeSelection(engine: .ft, bundle: nil),
                 store: .gather(home: nil, cwd: nil)
             )
-        )
+        ).result
         guard case .deny(let kept) = result.decision else {
             Issue.record("an unrecorded override must stay a deny, got \(result.decision)")
             return
@@ -267,7 +267,7 @@ struct GateAuditTests {
         defer { try? FileManager.default.removeItem(at: pkg) }
         let cwd = WorkingDirectory(rawValue: pkg.path)
         let request = EvaluationRequest(command: ShellCommand(rawValue: #"cd "$D" && npm test"#), enabledPacks: dayOnePackIDs)
-        func decideScript(_ mode: GuardMode) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+        func decideScript(_ mode: GuardMode) async -> (result: EvaluationResult, effects: [GatedEffect], wouldBe: GatedVerdict.WouldBe?) {
             await GatedEvaluate().decide(
                 .apply, request, cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
                 allowlist: { .empty }, host: .hook(.claude), tool: .bash,
@@ -295,6 +295,27 @@ struct GateAuditTests {
         #expect(event.detail["verdict"] == "indeterminate")
         #expect(event.detail["would_be"] == "deny")
         #expect(AuditChain.verify(Data((lines.joined(separator: "\n") + "\n").utf8)).isIntact)
+    }
+
+    /// With no judge to score it, enforce refuses an inline program the packs
+    /// let through (the packs-only floor). Observe records that refusal as
+    /// it records every other one enforce would make: chained as observed.
+    @Test func observeChainsAnUnscoredInlineProgramAsEnforceWouldRefuseIt() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let inline = ShellCommand(rawValue: #"python3 -c 'print(shred)'"#)
+        let enforced = await decide(.apply, home: home, command: inline)
+        #expect(enforced.result.decision == .indeterminate(.inlineProgramNeedsJudge))
+        let observed = await decide(.apply, home: home, command: inline, guardMode: .observe)
+        #expect(observed.result.decision == .allow)
+        GatedEvaluate.perform(observed.effects, home: home)
+        let events = try chained(home)
+        #expect(events.count == 1)
+        let event = try #require(events.first)
+        #expect(event.kind == .commandObserved)
+        #expect(event.subject == "rv.indeterminate:inlineProgramNeedsJudge")
+        #expect(event.detail["verdict"] == "indeterminate")
+        #expect(event.detail["would_be"] == "deny")
     }
 
     /// The file door: observe floors a write of rv's install (a systemd user
@@ -370,7 +391,7 @@ struct GateAuditTests {
                     judge: JudgeSelection(engine: .ft, bundle: nil),
                     store: .gather(home: nil, cwd: nil)
                 )
-            )
+            ).result
             #expect(gated.decision == expected, "\(label)")
             if case .indeterminate = expected {
                 #expect(HookAuthorization.project(result: gated, cwd: wd("/tmp/ws")) == .denyPinned, "\(label)")

@@ -1026,7 +1026,7 @@ struct ObserveFloorBypassTests {
             cwd: nil, home: home,
             grants: EphemeralAllowOnceTable(), now: Self.now,
             allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
-        )
+        ).result
     }
 }
 

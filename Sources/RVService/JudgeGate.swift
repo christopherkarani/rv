@@ -273,14 +273,15 @@ public enum JudgeRuntime {
         }
     }
 
-    /// Enforce path: judge may raise a pack-allow. Deny untouched.
+    /// The judge step over one screened shell result, the same on enforce
+    /// and observe: the judge may raise a pack-allow; a deny is untouched.
     ///
     /// `allowSafeLane` is false when a package script the command runs is
     /// not itself safe-lane: the command then reaches the judge (or the
     /// packs-only floor). An unresolved script graph never gets here: the
-    /// door floors it to indeterminate first. `isPeek` only tags the log row.
-    /// The log row is returned, not written; nil when the judge is not
-    /// consulted (a pack deny).
+    /// door floors it to indeterminate first. `isPeek` only tags the log
+    /// rows and `observing` only the late-result row; neither changes the
+    /// verdict. The log rows are returned, not written (`Judged`).
     static func apply(
         to result: EvaluationResult,
         command: ShellCommand,
@@ -291,18 +292,23 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool,
+        observing: Bool,
         lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
-    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
-        guard case .allow = result.decision else { return (result, nil) }
-        let context = judgeContext(cwd: cwd)
-        let partial = contextIsPartial(context)
+    ) -> Judged {
         let selection = inputs.judge
+        func judged(
+            _ scored: EvaluationResult, _ lane: Judged.Lane, context: JudgeContext?, unscored: Bool = false
+        ) -> Judged {
+            Judged(
+                scored: scored, unscored: unscored, lane: lane, command: command,
+                allowSafeLane: allowSafeLane, cwd: cwd, context: context, guardMode: inputs.guardMode,
+                engine: selection.engine, now: now, isPeek: isPeek
+            )
+        }
+        guard case .allow = result.decision else { return judged(result, .skipped, context: nil) }
+        let context = judgeContext(cwd: cwd)
         if allowSafeLane, SafeCommandLane.isSafe(command.rawValue) {
-            return (result, logRow(
-                guardMode: inputs.guardMode, subject: .live(result),
-                verdict: nil, action: nil, engine: selection.engine,
-                note: noteFor("safe-lane", contextPartial: partial), now: now, isPeek: isPeek
-            ))
+            return judged(result, .safeLane, context: context)
         }
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
@@ -313,86 +319,98 @@ public enum JudgeRuntime {
         // failing on a model that is there, refuses (review): an agent can
         // provoke those (`loadFailureRun`).
         guard let bundle = selection.bundle else {
-            return (packsOnlyFloor(result, command: command), logRow(
-                guardMode: inputs.guardMode, subject: .live(result),
-                verdict: nil, action: nil, engine: selection.engine,
-                note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
-            ))
+            return judged(result, .engineMissing, context: context, unscored: true)
         }
+        let partial = contextIsPartial(context)
         let run = judge.judge(JudgeCall(
             command: command.rawValue, context: context,
             engine: selection.engine, bundle: bundle,
             onLateResult: lateLog.map { log in
                 lateResultLogger(
-                    over: result, observing: false, provenance: provenance, guardMode: inputs.guardMode,
+                    over: result, observing: observing, provenance: provenance, guardMode: inputs.guardMode,
                     engine: selection.engine, contextPartial: partial, isPeek: isPeek, log: log)
             }
         ))
         let reading = read(run, over: result, provenance: provenance)
-        let row = logRow(
-            guardMode: inputs.guardMode, subject: .live(reading.outcome),
-            verdict: reading.verdict, action: reading.action, engine: selection.engine,
-            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
-        )
-        // Only enforce floors an unscored allow; the log keeps the pack
-        // result, as for engine-missing above.
-        if case .unavailable = run {
-            return (packsOnlyFloor(reading.outcome, command: command), row)
-        }
-        return (reading.outcome, row)
+        var unscored = false
+        if case .unavailable = run { unscored = true }
+        return judged(reading.outcome, .judged(reading), context: context, unscored: unscored)
     }
 
-    /// Observe path: the would-be verdict as a log row, always allow.
-    /// `wouldBe` is what enforcement would have returned before the Policy
-    /// gate (the door records an observed denial row from it).
-    static func observe(
-        wouldBe result: EvaluationResult,
-        command: ShellCommand,
-        inputs: EvaluationInputs,
-        judge: any JudgePort,
-        provenance: ActionProvenance,
-        now: Date,
-        cwd: WorkingDirectory?,
-        allowSafeLane: Bool,
-        isPeek: Bool,
-        lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
-    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool, log: GatedEffect.JudgeLogRow) {
-        let context = judgeContext(cwd: cwd)
-        let partial = contextIsPartial(context)
-        let selection = inputs.judge
-        let safe = allowSafeLane && SafeCommandLane.isSafe(command.rawValue)
-        var reading = JudgeReading(
-            outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
-        )
-        // `floorsWouldBe` marks where `apply` would take the packs-only
-        // floor (no bundle, or a judge that is unavailable). The callers
-        // that consume the would-be (`peekVerdict` for `rv test` /
-        // `rv explain`, `applyVerdict` for the SDK evaluate RPC) apply it;
-        // a plain `apply` or peek discards the would-be, so it skips the
-        // parse. The log row keeps the unfloored reading, as `apply`'s does.
-        var floorsWouldBe = false
-        if !safe, case .allow = result.decision {
-            if let bundle = selection.bundle {
-                let run = judge.judge(JudgeCall(
-                    command: command.rawValue, context: context,
-                    engine: selection.engine, bundle: bundle,
-                    onLateResult: lateLog.map { log in
-                        lateResultLogger(
-                            over: result, observing: true, provenance: provenance, guardMode: inputs.guardMode,
-                            engine: selection.engine, contextPartial: partial, isPeek: isPeek, log: log)
-                    }
-                ))
-                reading = read(run, over: result, provenance: provenance)
-                if case .unavailable = run { floorsWouldBe = true }
-            } else {
-                floorsWouldBe = true
+    /// What the judge step left over one screened shell result: enforce's
+    /// verdict before the Policy gate, and the judge-log row each posture
+    /// writes for it. Enforce writes `log`; observe writes `observedLog`
+    /// and takes `result` as its would-be.
+    struct Judged: Sendable {
+        enum Lane: Sendable {
+            /// Not a pack-allow: the judge is never consulted.
+            case skipped
+            /// A safe-lane command: allowed without the judge.
+            case safeLane
+            /// The selected engine has no bundle: packs-only.
+            case engineMissing
+            case judged(JudgeReading)
+        }
+
+        /// The judge's reading over the result, before the packs-only floor:
+        /// what both log rows describe.
+        let scored: EvaluationResult
+        /// No judge scored this pack-allow (no bundle, or a judge that is
+        /// unavailable): enforce floors it.
+        let unscored: Bool
+        let lane: Lane
+        let command: ShellCommand
+        let allowSafeLane: Bool
+        let cwd: WorkingDirectory?
+        /// Nil when skipped: the judge context is probed only for a row.
+        let context: JudgeContext?
+        let guardMode: GuardMode
+        let engine: JudgeEngine
+        let now: Date
+        let isPeek: Bool
+
+        /// Enforce's verdict before the Policy gate. An unscored pack-allow
+        /// takes the packs-only floor here, so only a caller that reads the
+        /// verdict parses its inline program.
+        var result: EvaluationResult {
+            unscored ? JudgeRuntime.packsOnlyFloor(scored, command: command) : scored
+        }
+
+        /// The enforce row; nil when the judge step did not run (not a
+        /// pack-allow). It keeps the unfloored reading.
+        var log: GatedEffect.JudgeLogRow? {
+            switch lane {
+            case .skipped: return nil
+            case .safeLane: return row(.live(scored), reading: nil, note: "safe-lane")
+            case .engineMissing: return row(.live(scored), reading: nil, note: "engine-missing")
+            case .judged(let reading): return row(.live(scored), reading: reading, note: reading.note)
             }
         }
-        return (result.observedAllow, reading.outcome, floorsWouldBe, logRow(
-            guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
-            verdict: reading.verdict, action: reading.action, engine: selection.engine,
-            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
-        ))
+
+        /// The observe row: one for every evaluation, the would-be before
+        /// the packs-only floor. A missing engine carries no note, and a
+        /// result the judge never saw notes only the safe lane.
+        var observedLog: GatedEffect.JudgeLogRow {
+            switch lane {
+            case .skipped:
+                let safe = allowSafeLane && SafeCommandLane.isSafe(command.rawValue)
+                return row(.wouldBe(scored), reading: nil, note: safe ? "safe-lane" : nil)
+            case .safeLane: return row(.wouldBe(scored), reading: nil, note: "safe-lane")
+            case .engineMissing: return row(.wouldBe(scored), reading: nil, note: nil)
+            case .judged(let reading): return row(.wouldBe(scored), reading: reading, note: reading.note)
+            }
+        }
+
+        private func row(
+            _ subject: LogSubject, reading: JudgeReading?, note: String?
+        ) -> GatedEffect.JudgeLogRow {
+            let partial = JudgeRuntime.contextIsPartial(context ?? JudgeRuntime.judgeContext(cwd: cwd))
+            return JudgeRuntime.logRow(
+                guardMode: guardMode, subject: subject,
+                verdict: reading?.verdict, action: reading?.action, engine: engine,
+                note: JudgeRuntime.noteFor(note, contextPartial: partial), now: now, isPeek: isPeek
+            )
+        }
     }
 
     /// What one judge run means for a pack-allow: the threshold-resolved
@@ -404,8 +422,8 @@ public enum JudgeRuntime {
         let note: String?
     }
 
-    /// Verdict → provenance thresholds → truncation guard → raise. Shared by
-    /// `apply` and `observe`; neither re-derives it.
+    /// Verdict → provenance thresholds → truncation guard → raise. `apply`
+    /// and the late-result logger both read a run through it.
     static func read(
         _ run: JudgeRun,
         over result: EvaluationResult,

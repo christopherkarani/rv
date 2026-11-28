@@ -526,7 +526,7 @@ struct JudgeGatePacksOnlyFloorTests {
         JudgeRuntime.apply(
             to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command),
             inputs: .gather(home: home, cwd: nil, environment: [:]), judge: LiveJudgePort(),
-            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
+            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false, observing: false
         ).result
     }
 
