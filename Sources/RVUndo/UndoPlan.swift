@@ -11,7 +11,7 @@ public enum UndoReason: String, Sendable, Equatable, Codable {
 /// What a destructive command would throw away, as far as a copy goes.
 public enum UndoTarget: Sendable, Equatable {
     /// Unsaved changes to tracked files and where HEAD is (`reset --hard`,
-    /// `checkout -- .`, `restore`, `switch -f`): kept as git refs.
+    /// `checkout -- .`, `restore`, `switch -f`): kept as git commits in the store.
     case gitWorkingTree
     /// Untracked files (`git clean -f`): kept as file copies.
     case gitUntracked

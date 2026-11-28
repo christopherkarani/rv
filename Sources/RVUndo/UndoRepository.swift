@@ -8,14 +8,16 @@ import Foundation
 /// Which repositories rvd may run git in. A repository is the agent's to
 /// shape, so its `.git` can be set up to send git elsewhere: a `gitdir:`
 /// file or a link (git would follow it, or walk up to a parent repo), an
-/// object or ref folder that is a link out of the repository (git would
-/// write there), alternates (git would read objects from anywhere), or a
-/// partial clone (git would fetch, running the remote's transport). rvd
-/// refuses all of them before git runs.
+/// object folder or a file git reads (`HEAD`, `config`, `index`,
+/// `packed-refs`) that is a link out of the repository, alternates (git
+/// would read objects from anywhere), or a partial clone (git would
+/// fetch, running the remote's transport). rvd refuses all of them
+/// before git runs.
 ///
-/// These are point-in-time checks; the guards that hold even if the
-/// repository changes right after them are in `UndoGit` (no transport,
-/// no lazy fetch, no hooks, git pinned to `<root>/.git`).
+/// These are point-in-time checks, defence in depth; the guards that hold
+/// even if the repository changes right after them are in `UndoGit` (no
+/// transport, no lazy fetch, no hooks, git pinned to `<root>/.git`, and
+/// nothing written in the repository: objects go to rv's store, no refs).
 public enum UndoRepository {
     /// Extensions a repository may have and still be kept: the object
     /// format (SHA-256 repositories).
@@ -41,7 +43,7 @@ public enum UndoRepository {
     /// is. Runs `git config` and `rev-parse` (hardened) after the folder
     /// checks.
     static func problem(root: String, runner: UndoGit) -> String? {
-        if let reason = foldersProblem(root: root) { return reason }
+        if let reason = foldersProblem(root: root, deadline: runner.deadline) { return reason }
         let gitDir = root + "/.git"
         let config: UndoGit.Output
         do {
@@ -59,22 +61,33 @@ public enum UndoRepository {
         return nil
     }
 
+    /// Files in `.git` that git reads: each, when there, a plain file.
+    static let plainFiles = ["HEAD", "config", "index", "packed-refs"]
+
     /// The folder checks alone (no git run): `.git`, its object and ref
-    /// folders are plain folders, and nothing borrows objects.
-    static func foldersProblem(root: String) -> String? {
+    /// folders are plain folders, the files git reads are plain files,
+    /// and nothing borrows objects. Bounded by `deadline`.
+    static func foldersProblem(root: String, deadline: ContinuousClock.Instant) -> String? {
+        guard ContinuousClock.now < deadline else { return "there was no time left to check it" }
         let gitDir = root + "/.git"
         guard kind(gitDir) == .directory else { return ".git is not a plain folder" }
         for folder in ["objects", "refs"] where kind(gitDir + "/" + folder) != .directory {
             return ".git/\(folder) is not a plain folder"
         }
-        for folder in ["objects/info", "refs/rv", "refs/rv/undo"] {
-            switch kind(gitDir + "/" + folder) {
-            case .missing, .directory: continue
-            default: return ".git/\(folder) is not a plain folder"
+        switch kind(gitDir + "/objects/info") {
+        case .missing, .directory: break
+        default: return ".git/objects/info is not a plain folder"
+        }
+        for file in plainFiles {
+            switch kind(gitDir + "/" + file) {
+            case .missing, .file: continue
+            default: return ".git/\(file) is not a plain file"
             }
         }
         if kind(gitDir + "/objects/info/alternates") != .missing { return "it borrows objects (alternates)" }
-        if let linked = linkedObjectFolder(gitDir + "/objects") { return ".git/objects/\(linked) is a link" }
+        if let linked = linkedObjectFolder(gitDir + "/objects", deadline: deadline) {
+            return ".git/objects/\(linked) is a link"
+        }
         return nil
     }
 
@@ -94,19 +107,24 @@ public enum UndoRepository {
     enum Kind: Equatable {
         case missing
         case directory
+        case file
         case other
     }
 
     static func kind(_ path: String) -> Kind {
         var info = stat()
         guard lstat(path, &info) == 0 else { return errno == ENOENT ? .missing : .other }
-        return info.st_mode & S_IFMT == S_IFDIR ? .directory : .other
+        switch info.st_mode & S_IFMT {
+        case S_IFDIR: return .directory
+        case S_IFREG: return .file
+        default: return .other
+        }
     }
 
     /// The first `objects/xx` fan-out entry that is not a plain folder.
-    private static func linkedObjectFolder(_ objects: String) -> String? {
+    private static func linkedObjectFolder(_ objects: String, deadline: ContinuousClock.Instant) -> String? {
         guard let fd = try? UndoTree.openDirectory(objects) else { return "." }
-        let budget = UndoBudget(maxEntries: 100_000, deadline: .now + .seconds(1))
+        let budget = UndoBudget(maxEntries: 100_000, deadline: deadline)
         guard let names = try? UndoTree.names(in: fd, shown: objects, budget: budget) else { return "." }
         for name in names where name.utf8.count == 2 || name == "pack" || name == "info" {
             var info = stat()

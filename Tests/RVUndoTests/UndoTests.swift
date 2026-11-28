@@ -49,8 +49,9 @@ struct Scratch {
     func remove() { try? FileManager.default.removeItem(atPath: root) }
 
     /// `git` in `relative`, with a test identity; returns stdout.
+    /// `reading` adds a copy's objects (in the store) as an alternate.
     @discardableResult
-    func git(_ arguments: [String], in relative: String = "repo") throws -> String {
+    func git(_ arguments: [String], in relative: String = "repo", reading copy: UndoManifest? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
@@ -59,6 +60,7 @@ struct Scratch {
         env["GIT_AUTHOR_NAME"] = "t"; env["GIT_AUTHOR_EMAIL"] = "t@t"
         env["GIT_COMMITTER_NAME"] = "t"; env["GIT_COMMITTER_EMAIL"] = "t@t"
         env["GIT_CONFIG_GLOBAL"] = "/dev/null"; env["GIT_CONFIG_NOSYSTEM"] = "1"
+        if let copy { env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = store.objectsDirectory(of: copy.id).path }
         process.environment = env
         let out = Pipe()
         process.standardOutput = out
@@ -67,6 +69,21 @@ struct Scratch {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Every object file and ref name in the repository's `.git`, so a
+    /// test can see that a keep added none.
+    func gitObjectsAndRefs() throws -> Set<String> {
+        let git = path("repo/.git")
+        var names = Set<String>()
+        for folder in ["objects", "refs"] {
+            let enumerator = FileManager.default.enumerator(atPath: git + "/" + folder)
+            while let name = enumerator?.nextObject() as? String { names.insert(folder + "/" + name) }
+        }
+        if let packed = FileManager.default.contents(atPath: git + "/packed-refs") {
+            names.insert("packed-refs:" + String(decoding: packed, as: UTF8.self))
+        }
+        return names
     }
 
     /// A repo with one commit holding `a.txt`.
@@ -437,16 +454,16 @@ struct UndoFileTests {
         for head in ["HEAD~1", "--exec=x", "abc", String(repeating: "A", count: 40)] {
             var edited = kept
             edited.kind = .git
-            edited.git = .init(ref: UndoKeeper.refName(kept.id), head: head, stash: nil)
+            edited.git = .init(head: head, stash: nil)
             #expect(throws: UndoRestoreRefusal.notOurs) {
                 _ = try UndoRestore.restore(edited, from: scratch.store, into: scratch.path("repo"))
             }
         }
-        var otherRef = kept
-        otherRef.kind = .git
-        otherRef.git = .init(ref: "refs/heads/main", head: String(repeating: "a", count: 40), stash: nil)
+        var badStash = kept
+        badStash.kind = .git
+        badStash.git = .init(head: String(repeating: "a", count: 40), stash: "refs/heads/main")
         #expect(throws: UndoRestoreRefusal.notOurs) {
-            _ = try UndoRestore.restore(otherRef, from: scratch.store, into: scratch.path("repo"))
+            _ = try UndoRestore.restore(badStash, from: scratch.store, into: scratch.path("repo"))
         }
         // A .git planted inside a kept folder is not put back.
         try scratch.write("store/\(kept.id)/data/x.txt", "")
@@ -616,8 +633,10 @@ struct UndoGitTests {
         // Bytes rv handed git (the staged file was already in the repository).
         #expect(kept.tally.bytes == UInt64("one\ntwo\nthree\n".utf8.count))
         #expect(kept.storedBytes == kept.tally.bytes)
-        let ref = try #require(kept.git?.ref)
-        #expect(try scratch.git(["rev-parse", "--verify", "-q", ref]).isEmpty == false)
+        // Kept in the store, not the repository.
+        let stash = try #require(kept.git?.stash)
+        #expect(try scratch.git(["cat-file", "-t", stash]).isEmpty)
+        #expect(try scratch.git(["cat-file", "-t", stash], reading: kept) == "commit\n")
 
         try scratch.git(["reset", "-q", "--hard"])
         #expect(scratch.read("repo/a.txt") == "one\n")
@@ -661,7 +680,7 @@ struct UndoGitTests {
         #expect(FileManager.default.fileExists(atPath: marker) == false)
         #expect(kept.kind == .git)
         let stash = try #require(kept.git?.stash)
-        #expect(try scratch.git(["cat-file", "blob", stash + ":a.txt"]) == "changed\n")
+        #expect(try scratch.git(["cat-file", "blob", stash + ":a.txt"], reading: kept) == "changed\n")
     }
 
     @Test("the person's index is never written, and no lock is left in the repository")
@@ -731,8 +750,8 @@ struct UndoGitTests {
         #expect(kept.kind == .git)
         #expect(kept.notes == ["Not copied: .env is a secrets file."])
         let stash = try #require(kept.git?.stash)
-        #expect(try scratch.git(["cat-file", "blob", stash + ":.env"]) == "A=1\n")
-        #expect(try scratch.git(["cat-file", "blob", stash + ":a.txt"]) == "changed\n")
+        #expect(try scratch.git(["cat-file", "blob", stash + ":.env"], reading: kept) == "A=1\n")
+        #expect(try scratch.git(["cat-file", "blob", stash + ":a.txt"], reading: kept) == "changed\n")
     }
 
     @Test("untracked secrets are left out of a clean copy, and too many untracked files are refused up front")
@@ -784,44 +803,48 @@ struct UndoGitTests {
         #expect(scratch.read("repo/scratch/notes.md") == "draft\n")
     }
 
-    @Test("pruning drops the git ref with the copy")
-    func pruneDropsRef() throws {
+    @Test("a keep adds no ref and no object to the repository; pruning is removing its folder")
+    func keepsNothingInRepository() throws {
         let scratch = try Scratch()
         defer { scratch.remove() }
         try scratch.makeRepo()
         try scratch.write("repo/a.txt", "changed\n")
+        try scratch.write("repo/new.txt", "added\n")
+        try scratch.git(["add", "new.txt"])
+        let before = try scratch.gitObjectsAndRefs()
         let old = UndoKeeper.keep(
             request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store,
             now: Date().addingTimeInterval(-8 * 86_400))
-        let ref = try #require(old.git?.ref)
-        // `rv undo`'s prune drops the old copy and its ref.
+        #expect(old.kind == .git)
+        #expect(try scratch.gitObjectsAndRefs() == before)
+        #expect(try scratch.git(["for-each-ref"]).contains("refs/rv") == false)
+        let objects = try FileManager.default.subpathsOfDirectory(atPath: scratch.store.objectsDirectory(of: old.id).path)
+        #expect(objects.contains { $0.count == 41 })
+        // `rv undo`'s prune drops the old copy: its folder, nothing else.
         UndoKeeper.prune(scratch.store)
-        #expect(try scratch.git(["for-each-ref", ref]).isEmpty)
         #expect(scratch.store.list().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: scratch.path("store/\(old.id)")) == false)
+        #expect(try scratch.gitObjectsAndRefs() == before)
     }
 
-    @Test("refs of pruned copies are queued until they are dropped, never leaked")
-    func refQueue() throws {
+    @Test("a restore takes the kept objects from the store, and the result stays whole once the copy is pruned")
+    func restoreFromStoreObjects() throws {
         let scratch = try Scratch()
         defer { scratch.remove() }
         try scratch.makeRepo()
-        try scratch.write("repo/a.txt", "changed\n")
-        let old = (0..<3).map { offset in
-            UndoKeeper.keep(
-                request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store,
-                now: Date().addingTimeInterval(-8 * 86_400 - Double(offset)))
-        }
-        #expect(old.allSatisfy { $0.kind == .git })
-        let removed = scratch.store.prune(now: Date())
-        #expect(removed.count == 3)
-        scratch.store.queueRefDrops(removed.compactMap { m in m.git.map { .init(repoRoot: m.repoRoot, ref: $0.ref) } })
-        // Out of time: nothing is dropped, nothing is forgotten.
-        scratch.store.drainRefDrops(deadline: .now - .seconds(1)) { _ in true }
-        #expect(scratch.store.refDrops().count == 3)
-        #expect(try scratch.git(["for-each-ref", "refs/rv"]).split(separator: "\n").count == 3)
-        UndoKeeper.prune(scratch.store)
-        #expect(scratch.store.refDrops().isEmpty)
-        #expect(try scratch.git(["for-each-ref", "refs/rv"]).isEmpty)
+        try scratch.write("repo/a.txt", "kept only in the store\n")
+        let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+        let stash = try #require(kept.git?.stash)
+        try scratch.git(["reset", "-q", "--hard"])
+        #expect(try scratch.git(["cat-file", "-t", stash]).isEmpty)
+        _ = try UndoRestore.restore(kept, from: scratch.store, into: scratch.path("repo"))
+        #expect(scratch.read("repo/a.txt") == "kept only in the store\n")
+        // The objects came into the repository: gone from the store, still whole.
+        try FileManager.default.removeItem(atPath: scratch.path("store"))
+        #expect(try scratch.git(["cat-file", "-t", stash]) == "commit\n")
+        #expect(try scratch.git(["cat-file", "blob", stash + ":a.txt"]) == "kept only in the store\n")
+        try scratch.git(["add", "a.txt"])
+        #expect(try scratch.git(["write-tree"]).isEmpty == false)
     }
 
     /// Sets up the reviewer's partial-clone repository: a lazy fetch would
@@ -893,9 +916,9 @@ struct UndoGitTests {
     func linkedGitFoldersRefused() throws {
         let cases: [(String, (Scratch) throws -> Void)] = [
             ("it borrows objects (alternates)", { try $0.write("repo/.git/objects/info/alternates", "/elsewhere\n") }),
-            (".git/refs/rv is not a plain folder", { scratch in
+            (".git/packed-refs is not a plain file", { scratch in
                 try FileManager.default.createDirectory(atPath: scratch.path("out"), withIntermediateDirectories: true)
-                symlink(scratch.path("out"), scratch.path("repo/.git/refs/rv"))
+                symlink(scratch.path("out/target"), scratch.path("repo/.git/packed-refs"))
             }),
             (".git/objects/zz is a link", { scratch in
                 try FileManager.default.createDirectory(atPath: scratch.path("out"), withIntermediateDirectories: true)
@@ -913,6 +936,32 @@ struct UndoGitTests {
             let outside = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path("out"))) ?? []
             #expect(outside.isEmpty)
         }
+    }
+
+    @Test("a packed-refs, HEAD, config or index that is not a plain file is refused, and its target is never written")
+    func gitFilesMustBePlain() throws {
+        for file in UndoRepository.plainFiles {
+            let scratch = try Scratch()
+            defer { scratch.remove() }
+            try scratch.makeRepo()
+            try scratch.git(["pack-refs", "--all"])
+            let original = scratch.read("repo/.git/" + file)
+            try FileManager.default.moveItem(atPath: scratch.path("repo/.git/" + file), toPath: scratch.path("target"))
+            symlink(scratch.path("target"), scratch.path("repo/.git/" + file))
+            try scratch.write("repo/a.txt", "changed\n")
+            let kept = UndoKeeper.keep(request(.gitWorkingTree, cwd: scratch.path("repo")), in: scratch.store)
+            #expect(kept.notes == [UndoSkip.unsafeRepository(".git/\(file) is not a plain file").note])
+            #expect(scratch.read("target") == original)
+        }
+    }
+
+    @Test("the folder checks end at the request's deadline: out of time is refused, never waved through")
+    func folderChecksUseDeadline() throws {
+        let scratch = try Scratch()
+        defer { scratch.remove() }
+        try scratch.makeRepo()
+        #expect(UndoRepository.foldersProblem(root: scratch.path("repo"), deadline: .now + .seconds(10)) == nil)
+        #expect(UndoRepository.foldersProblem(root: scratch.path("repo"), deadline: .now - .seconds(1)) != nil)
     }
 
     @Test("a tracked file deeper than the limit is left out with a note; the rest is kept")
@@ -961,6 +1010,6 @@ struct UndoGitTests {
         #expect(kept.kind == .git)
         #expect(kept.notes == [UndoSkip.hardLinked("b.txt").note])
         let stash = try #require(kept.git?.stash)
-        #expect(try scratch.git(["cat-file", "blob", stash + ":b.txt"]) == "b\n")
+        #expect(try scratch.git(["cat-file", "blob", stash + ":b.txt"], reading: kept) == "b\n")
     }
 }

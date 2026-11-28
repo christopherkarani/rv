@@ -140,6 +140,13 @@ enum UndoTree {
         return UndoFD(fd)
     }
 
+    /// Opens the directory `name` in `parent`, never through a link.
+    static func openChild(_ name: String, in parent: borrowing UndoFD, shown: String) throws(UndoSkip) -> UndoFD {
+        let fd = openat(parent.raw, name, directoryFlags)
+        guard fd >= 0 else { throw .io(shown, errno: errno) }
+        return UndoFD(fd)
+    }
+
     /// Counts what copying `name` in `parent` would take, within `budget`.
     /// Entries the budget names as secrets, and files with other hard
     /// links, are left out, with their notes in `secrets`.

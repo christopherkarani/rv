@@ -23,6 +23,10 @@ import Foundation
 /// - global and system config are not read;
 /// - git is pinned to `<root>/.git` (`GIT_DIR`, `GIT_WORK_TREE`,
 ///   `GIT_CEILING_DIRECTORIES`): it never walks up to a parent repository;
+/// - git writes nothing in the repository: new objects go to the copy's
+///   own folder in rv's store (`GIT_OBJECT_DIRECTORY`), the repository's
+///   objects are only read (`GIT_ALTERNATE_OBJECT_DIRECTORIES`), the
+///   index git works on is a copy, and no ref is made;
 /// - rvd never runs a git command that reads working-tree files (that is
 ///   where filters run): `UndoGitCopy` reads the files itself and hands
 ///   git their bytes with `hash-object --no-filters`;
@@ -45,17 +49,25 @@ public struct UndoGit: Sendable {
     let repository: String
     var deadline: ContinuousClock.Instant
     var mode: Mode = .keeper
+    /// Where new objects go (a folder in rv's store), with the
+    /// repository's own objects read as an alternate. Nil: the
+    /// repository's objects (only for runs that write none).
+    var objectDirectory: String?
     /// Most output read from one run. Past it the run fails.
     static let maxOutput = 4 * 1024 * 1024
     /// A run still going this close to the deadline is killed, so reaping
     /// it ends by the deadline.
     static let killMargin: Duration = .milliseconds(150)
 
-    init(executable: URL, repository: String, deadline: ContinuousClock.Instant, mode: Mode = .keeper) {
+    init(
+        executable: URL, repository: String, deadline: ContinuousClock.Instant, mode: Mode = .keeper,
+        objectDirectory: String? = nil
+    ) {
         self.executable = executable
         self.repository = repository
         self.deadline = deadline
         self.mode = mode
+        self.objectDirectory = objectDirectory
     }
 
     /// The git a person would get, never the macOS `/usr/bin/git` shim:
@@ -89,6 +101,7 @@ public struct UndoGit: Sendable {
         "-c", "commit.gpgSign=false",
         "-c", "gc.auto=0",
         "-c", "maintenance.auto=false",
+        "-c", "core.sharedRepository=false",
     ]
 
     /// Flags on a person's restore: hooks and fsmonitor off, the rest is
@@ -188,6 +201,10 @@ public struct UndoGit: Sendable {
         process.currentDirectoryURL = URL(fileURLWithPath: repository, isDirectory: true)
         var environment = Self.environment(mode: mode, root: repository)
         if let indexFile { environment["GIT_INDEX_FILE"] = indexFile }
+        if let objectDirectory {
+            environment["GIT_OBJECT_DIRECTORY"] = objectDirectory
+            environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = Self.quotedAlternate(repository + "/.git/objects")
+        }
         process.environment = environment
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -216,6 +233,22 @@ public struct UndoGit: Sendable {
         return Output(status: process.terminationStatus, stdout: data)
     }
 
+    /// One entry of `GIT_ALTERNATE_OBJECT_DIRECTORIES`, C-quoted the way
+    /// git reads it, so a `:` (the list separator) or any other byte in
+    /// the path is taken literally.
+    static func quotedAlternate(_ path: String) -> String {
+        var quoted = "\""
+        for byte in path.utf8 {
+            switch byte {
+            case UInt8(ascii: "\\"): quoted += "\\\\"
+            case UInt8(ascii: "\""): quoted += "\\\""
+            case 0..<0x20, 0x7F...0xFF: quoted += "\\" + String(byte, radix: 8).leftPadded(to: 3)
+            default: quoted.unicodeScalars.append(Unicode.Scalar(byte))
+            }
+        }
+        return quoted + "\""
+    }
+
     /// `run`, requiring exit 0, trimmed text out.
     func text(_ arguments: [String], input: Data? = nil, indexFile: String? = nil) throws(UndoSkip) -> String {
         let output = try run(arguments, input: input, indexFile: indexFile)
@@ -227,5 +260,11 @@ public struct UndoGit: Sendable {
     public static func isObjectID(_ text: String) -> Bool {
         (text.utf8.count == 40 || text.utf8.count == 64)
             && text.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    }
+}
+
+extension String {
+    fileprivate func leftPadded(to width: Int) -> String {
+        String(repeating: "0", count: max(0, width - count)) + self
     }
 }

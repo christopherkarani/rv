@@ -74,32 +74,21 @@ public enum UndoKeeper {
                 try store.writeManifest(manifest, in: copy)
             } catch {
                 store.remove(id: id, deadline: deadline)
-                store.queueRefDrops(manifest.git.map { [UndoStore.RefDrop(repoRoot: root, ref: $0.ref)] } ?? [])
             }
         }
         // Pruning on the hook path is a short slice: what does not fit is
-        // left for the next keep or for `rv undo`. Refs of pruned copies
-        // are queued, so none is ever forgotten.
+        // left for the next keep or for `rv undo`. A copy, git or files,
+        // is only its folder in the store, so pruning touches no repository.
         let pruneDeadline = min(deadline, ContinuousClock.now + pruneSlice)
-        prune(store, now: now, git: git, deadline: pruneDeadline)
+        prune(store, now: now, deadline: pruneDeadline)
         return manifest
     }
 
     static let nothingUnsavedNote = "Nothing unsaved here, so there was nothing to keep."
 
-    /// Prunes the store and drops the git refs of what went (queued first,
-    /// so a ref not dropped before `deadline` is dropped by a later prune).
-    /// `rv undo` calls it with no deadline.
-    public static func prune(
-        _ store: UndoStore, now: Date = Date(), git: URL? = UndoGit.locate(), deadline: ContinuousClock.Instant? = nil
-    ) {
-        let removed = store.prune(now: now, deadline: deadline)
-        store.queueRefDrops(removed.compactMap { manifest in
-            manifest.git.map { UndoStore.RefDrop(repoRoot: manifest.repoRoot, ref: $0.ref) }
-        })
-        store.drainRefDrops(deadline: deadline) { drop in
-            dropRef(drop, git: git, deadline: deadline.map { min($0, .now + .milliseconds(500)) } ?? .now + .seconds(5))
-        }
+    /// Prunes the store. `rv undo` calls it with no deadline.
+    public static func prune(_ store: UndoStore, now: Date = Date(), deadline: ContinuousClock.Instant? = nil) {
+        store.prune(now: now, deadline: deadline)
     }
 
     /// The first `maxNotes` notes, then how many more there were.
@@ -108,9 +97,7 @@ public enum UndoKeeper {
         return Array(notes.prefix(maxNotes)) + ["And \(notes.count - maxNotes) more like these."]
     }
 
-    // MARK: Git refs
-
-    static func refName(_ id: String) -> String { "refs/rv/undo/\(id)" }
+    // MARK: Git copies
 
     /// Returns true when nothing was unsaved (nothing to record).
     private static func keepGit(
@@ -118,7 +105,16 @@ public enum UndoKeeper {
         budget: UndoBudget, notes: inout [String]
     ) -> Bool {
         guard let git else { notes.append(UndoSkip.gitUnavailable.note); return false }
-        let runner = UndoGit(executable: git, repository: root, deadline: budget.deadline)
+        // Every object git writes lands in this copy's own folder; the
+        // repository's are only read. No ref is made: the manifest holds
+        // the ids, and pruning the copy is removing its folder.
+        guard mkdirat(copy.raw, UndoStore.objectsName, 0o700) == 0 else {
+            notes.append(UndoSkip.io(UndoStore.objectsName, errno: errno).note)
+            return false
+        }
+        let runner = UndoGit(
+            executable: git, repository: root, deadline: budget.deadline,
+            objectDirectory: store.objectsDirectory(of: manifest.id).path)
         if let problem = UndoRepository.problem(root: root, runner: runner) {
             notes.append(UndoSkip.unsafeRepository(problem).note)
             return false
@@ -129,31 +125,13 @@ public enum UndoKeeper {
                 budget: budget, notes: &notes)
             // Nothing unsaved, and nothing left out: nothing to record.
             guard let stash = kept.stash else { return notes.isEmpty }
-            let ref = refName(manifest.id)
-            _ = try runner.text(["update-ref", ref, stash])
             manifest.kind = .git
-            manifest.git = UndoManifest.Git(ref: ref, head: kept.head, stash: stash)
+            manifest.git = UndoManifest.Git(head: kept.head, stash: stash)
             manifest.tally = kept.tally
         } catch {
             notes.append(error.note)
         }
         return false
-    }
-
-    /// Deletes a queued ref. True when it is gone or can never be dropped
-    /// (not rv's ref, not a repository rv runs git in); false only when
-    /// time ran out, so it stays queued.
-    static func dropRef(_ drop: UndoStore.RefDrop, git: URL?, deadline: ContinuousClock.Instant) -> Bool {
-        guard let git, drop.isWellFormed, let root = UndoRepository.root(from: drop.repoRoot),
-            root == realPath(drop.repoRoot), UndoRepository.foldersProblem(root: root) == nil
-        else { return true }
-        let runner = UndoGit(executable: git, repository: root, deadline: deadline)
-        do throws(UndoSkip) {
-            _ = try runner.run(["update-ref", "-d", drop.ref])
-            return true
-        } catch {
-            return error != .outOfTime
-        }
     }
 
     // MARK: File copies

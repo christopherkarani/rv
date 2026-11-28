@@ -94,7 +94,8 @@ struct UndoScreen {
         return formatter.string(from: date)
     }
 
-    /// `14 files · 2,314 lines`, or the size when lines are unknown.
+    /// `14 files · 2,314 lines` (file copies), or `14 files · 86 KB` when
+    /// lines are unknown (git copies, clones).
     static func amount(_ tally: UndoTally) -> String {
         let files = tally.files == 1 ? "1 file" : "\(TryScreen.grouped(tally.files)) files"
         if let lines = tally.lines, lines > 0 { return "\(files) · \(TryScreen.grouped(lines)) lines" }

@@ -254,7 +254,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "when rv keeps a copy", description: "Before a reset, discard, clean or delete goes through in watch mode, or after you unlock it"),
-                HelpRow(name: "what it keeps", description: "Git refs for unsaved work (refs/rv/undo/...); file copies for deletes, owner-only in ~/.config/rv/undo. Kept 7 days"),
+                HelpRow(name: "what it keeps", description: "Unsaved git work as commits, deleted files as copies; owner-only in ~/.config/rv/undo, nothing added to your repo. Kept 7 days"),
                 HelpRow(name: "what it skips", description: "Secrets files (also inside folders), anything outside the repository, copies over 256 MB or too slow to make; the copy says why"),
                 HelpRow(name: "restoring", description: "Needs you at a terminal, and a y. Never overwrites: git work comes back on a new branch, files only where nothing is now"),
             ]),

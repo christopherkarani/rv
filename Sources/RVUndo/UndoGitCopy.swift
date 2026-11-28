@@ -129,6 +129,8 @@ enum UndoWorktreeFile: Equatable {
 /// 4. `update-index --index-info`, `write-tree` and `commit-tree` build
 ///    the index commit and the work commit (`stash apply --index` reads
 ///    the pair).
+/// Every object these write goes to the copy's own `objects/` in rv's
+/// store (`UndoGit.objectDirectory`); the repository is only read.
 /// Secrets (rv's matcher) are never read: they keep their committed
 /// version, with a note.
 enum UndoGitCopy {
@@ -162,7 +164,7 @@ enum UndoGitCopy {
         let stagePath = copyPath + "/" + stageName
         let tempIndex = stagePath + "/index"
 
-        let written = try copyIndex(from: indexPath, to: stage)
+        let written = try copyIndex(from: indexPath, to: stage, deadline: budget.deadline)
         if written == nil {
             _ = try runner.text(["read-tree", head], indexFile: tempIndex)
         }
@@ -251,8 +253,9 @@ enum UndoGitCopy {
             return Kept(
                 head: head, stash: try commitPair(runner, head: head, index: indexTree, work: indexTree), tally: tally)
         }
-        // The objects land in the repository's disk: the same floor applies.
-        if let free = UndoTree.freeBytes(at: root + "/.git"), free < tally.bytes + UndoLimits.freeSpaceFloor {
+        // The objects land in the copy's folder in the store: the same
+        // floor as file copies applies.
+        if let free = UndoTree.freeBytes(at: copyPath), free < tally.bytes + UndoLimits.freeSpaceFloor {
             throw .lowDisk(free: free)
         }
         if staged.isEmpty == false {
@@ -309,7 +312,9 @@ enum UndoGitCopy {
 
     /// Copies the repository's index into `stage/index`; returns when the
     /// index was written, or nil when the repository has no index file.
-    private static func copyIndex(from path: String, to stage: borrowing UndoFD) throws(UndoSkip)
+    private static func copyIndex(
+        from path: String, to stage: borrowing UndoFD, deadline: ContinuousClock.Instant
+    ) throws(UndoSkip)
         -> (seconds: Int, nanoseconds: Int)? {
         let input = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         if input < 0, errno == ENOENT { return nil }
@@ -322,7 +327,7 @@ enum UndoGitCopy {
         let output = openat(stage.raw, "index", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
         guard output >= 0 else { throw .io("index", errno: errno) }
         let to = UndoFD(output)
-        try UndoTree.pump(from: from.raw, to: to.raw, shown: "index", limit: UInt64(maxIndexBytes), deadline: nil)
+        try UndoTree.pump(from: from.raw, to: to.raw, shown: "index", limit: UInt64(maxIndexBytes), deadline: deadline)
         return UndoStat.mtime(info)
     }
 
