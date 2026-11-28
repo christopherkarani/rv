@@ -35,6 +35,12 @@ enum OpenCodeRun {
         return .failure(.executableUnavailable)
     }
 
+    /// Boxed by default takes `rv opencode` through `rv box opencode`. An
+    /// explicit `--executable` or `--workspace` keeps the launch as typed.
+    static func startsBoxed(executable: String?, workspace: String?, home: HomePath?) -> Bool {
+        executable == nil && workspace == nil && BoxDefaultSetting.isOn(home: home)
+    }
+
     private static func usableExecutable(_ path: String) -> String? {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
@@ -63,7 +69,7 @@ struct OpenCode: AsyncParsableCommand {
     @Argument(parsing: .captureForPassthrough, help: "Arguments passed unchanged to OpenCode.")
     var agentArguments: [String] = []
 
-    func run() throws {
+    func run() async throws {
         guard Task.isCancelled == false else { throw ExitCode(130) }
         #if !os(macOS)
         // Refuse before the macOS cage notice or the executable lookup: on
@@ -71,6 +77,15 @@ struct OpenCode: AsyncParsableCommand {
         throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let arguments = agentArguments.first == "--" ? Array(agentArguments.dropFirst()) : agentArguments
+        if OpenCodeRun.startsBoxed(executable: executable, workspace: workspace, home: CLIProcess.home()) {
+            // Boxed by default: rv box's front door, so the project, the
+            // profile, the one-line notice and the review on the way home
+            // are rv box's. The host enforces the same walls either way.
+            try await BoxRun.run(
+                linux: false, mac: false, profile: resourceProfile,
+                captured: ["opencode", "--"] + arguments, presentation: .byDefault)
+            return
+        }
         FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
         let project = workspace ?? CLIProcess.workspacePath()
         let command: OpenCodePreparedCommand
@@ -88,19 +103,29 @@ struct OpenCode: AsyncParsableCommand {
         if resourceProfile == nil {
             FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
         }
-        try WorkspaceCommandRun.runInteractive(
-            project: WorkspaceCommandRun.requireProject(
-                workspace,
-                currentDirectory: FileManager.default.currentDirectoryPath,
-                environment: CLIProcess.environment()
-            ),
-            executable: command.executable,
-            arguments: command.arguments,
-            hook: .opencode,
-            rows: nil,
-            columns: nil,
-            resourceProfileID: resourceProfile
+        let root = try WorkspaceCommandRun.requireProject(
+            workspace,
+            currentDirectory: FileManager.default.currentDirectoryPath,
+            environment: CLIProcess.environment()
         )
+        do {
+            try WorkspaceCommandRun.runInteractive(
+                project: root,
+                executable: command.executable,
+                arguments: command.arguments,
+                hook: .opencode,
+                rows: nil,
+                columns: nil,
+                resourceProfileID: resourceProfile
+            )
+        } catch let exit as ExitCode {
+            // Boxed by default with flags typed: the walls are the same,
+            // and the review still comes on the way home.
+            if BoxDefaultSetting.isOn(home: CLIProcess.home()), CLIProcess.stdinIsTTY(), CLIProcess.stdoutIsTTY() {
+                do { try BoxDoneRun.run(agent: "opencode", project: root) } catch {}
+            }
+            throw exit
+        }
         #endif
     }
 }

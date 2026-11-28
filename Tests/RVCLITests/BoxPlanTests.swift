@@ -475,9 +475,12 @@ struct BoxPlanTests {
 
             """)
         #expect(BoxPlan.exitLine(project: Self.app, workingDirectory: Self.app, home: Self.home)
-            == "  → bring the writes home: rv workspace close\n")
+            == "  → bring it home: rv box done\n")
+        // rv box done finds the box from anywhere inside the project.
         #expect(BoxPlan.exitLine(project: Self.app, workingDirectory: Self.app + "/src", home: Self.home)
-            == "  → bring the writes home: rv workspace close --workspace ~/code/app\n")
+            == "  → bring it home: rv box done\n")
+        #expect(BoxPlan.exitLine(project: Self.app, workingDirectory: Self.home, home: Self.home)
+            == "  → bring it home: cd ~/code/app && rv box done\n")
     }
 
     @Test("no keys: the state, then the step last; a subfolder start names the root")
