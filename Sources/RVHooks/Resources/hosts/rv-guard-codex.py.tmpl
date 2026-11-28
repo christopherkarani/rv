@@ -16,6 +16,9 @@ import unicodedata
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
+# The session-start hello is a courtesy: a slow rv must not hold up a
+# session, so it gets far less time than a tool call.
+RV_SESSION_START_TIMEOUT_S = 2
 
 # Every block says what broke and what to run; never a bare "rv failed".
 _NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
@@ -112,7 +115,7 @@ def _house_rules(host, raw):
             input=raw,
             capture_output=True,
             text=True,
-            timeout=RV_HOOK_TIMEOUT_S,
+            timeout=RV_SESSION_START_TIMEOUT_S,
         )
         if completed.returncode != 0:
             return None

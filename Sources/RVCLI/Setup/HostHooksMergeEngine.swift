@@ -50,7 +50,9 @@ struct HostWiringDescriptor: Sendable {
     /// (`SessionStart`) that gets one matcher-less group with the same
     /// adapter, so the host hands rv its session-start event and the agent
     /// hears the house rules. Stripped with the pre-tool list on every
-    /// merge and uninstall. Inspection still reads the pre-tool list only.
+    /// merge and uninstall; a value there that is not a list is left
+    /// alone. Inspection reads it too (`locateSessionStartHooks`): a wired
+    /// file without it is outdated.
     var sessionStartListKey: String? = nil
 }
 
@@ -141,6 +143,19 @@ enum HostHooksMergeEngine {
             }
             return located
         }
+    }
+
+    /// The fingerprinted hooks in the session-start list (B4); empty when
+    /// the descriptor has none or the file has no such list.
+    static func locateSessionStartHooks(
+        in root: [String: JSONValue],
+        descriptor: HostWiringDescriptor
+    ) -> [LocatedHook] {
+        guard case .nested(let hooksRootKey, _) = descriptor.layout,
+              let key = descriptor.sessionStartListKey,
+              let list = root[hooksRootKey]?[key]?.asArray
+        else { return [] }
+        return locate(in: list, listKey: key, descriptor: descriptor)
     }
 
     private static func locate(
@@ -288,7 +303,11 @@ enum HostHooksMergeEngine {
                 ]))
             }
             hooksRoot[listKey] = .array(list)
-            if let sessionKey = descriptor.sessionStartListKey {
+            // A session-start value that is not a list belongs to someone
+            // else (or is broken): leave it as it is rather than replace it.
+            if let sessionKey = descriptor.sessionStartListKey,
+               hooksRoot[sessionKey] == nil || hooksRoot[sessionKey]?.asArray != nil
+            {
                 var sessionList = hooksRoot[sessionKey]?.asArray ?? []
                 sessionList.append(.object([
                     "hooks": .array([hookValue(descriptor.buildEntry(context, nil))]),

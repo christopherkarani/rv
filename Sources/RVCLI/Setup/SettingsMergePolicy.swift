@@ -330,10 +330,17 @@ enum SettingsMergePolicy {
                 return .occupied
             }
             let present = Set(located.compactMap { $0.matcher })
-            if Set(descriptor.matchers).isSubset(of: present) {
-                return .wired(bakedPath: bakedPath)
+            guard Set(descriptor.matchers).isSubset(of: present) else { return .outdated }
+            // B4: a host with a session-start list is wired only when that
+            // list holds the current adapter too, so doctor sees it missing
+            // and setup puts it back.
+            if descriptor.wiring.sessionStartListKey != nil,
+               HostHooksMergeEngine.locateSessionStartHooks(in: root, descriptor: descriptor.wiring)
+                .contains(where: { matchesCurrentHook($0.hook, descriptor: descriptor) }) == false
+            {
+                return .outdated
             }
-            return .outdated
+            return .wired(bakedPath: bakedPath)
         }
         if hasNonCurrentGuard {
             return .occupied
