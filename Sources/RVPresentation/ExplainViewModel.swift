@@ -60,6 +60,8 @@ public struct ExplainViewModel: Equatable, Sendable {
     package var observeNote: String?
     /// Typed rules that also match but did not decide, shown before Next.
     package var alsoMatches: [ExplainAlsoMatch] = []
+    /// Packs that are off but would stop the command (G2), shown before Next.
+    package var offPacks: [ExplainOffPack] = []
 
     public var heading: String { explainHeading }
     public var decisionWord: String { decision.displayName }
