@@ -12,15 +12,13 @@ struct Doctor: AsyncParsableCommand {
 
     func run() async throws {
         let ctx = CommandContext.current(command: "doctor", format: format)
-        guard let environment = DoctorEnvironment.live() else {
+        guard let outcome = await DoctorRun.collect(
+            environment: { DoctorEnvironment.live() },
+            client: ServiceClient.probing(home: ctx.home),
+            appearance: ctx.appearance
+        ) else {
             try ctx.failHomeMissing()
         }
-        let diagnostics = await ServiceClient.probing(home: ctx.home).diagnostics()
-        let outcome = DoctorRun.run(
-            environment: environment,
-            diagnostics: diagnostics,
-            appearance: ctx.appearance
-        )
         try ctx.emit(
             stdout: outcome.stdout,
             stderr: outcome.stderr,

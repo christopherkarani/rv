@@ -4,6 +4,8 @@ import RVIPC
 import RVPolicy
 import RVPresentation
 import RVTheme
+import RVService
+import Synchronization
 import Testing
 @testable import RVCLI
 
@@ -1093,6 +1095,52 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 @Test func doctor_modeWordUsesTheVocabulary() {
     #expect(DoctorRun.modeWord(.enforce) == CommandVocabulary.PlannedWord.guarding)
     #expect(DoctorRun.modeWord(.observe) == CommandVocabulary.PlannedWord.watching)
+}
+
+/// C4: with a healthy rvd, `rv doctor` answers in under a second. The fake
+/// rvd answers at once, so the time is all doctor's own work; the in-process
+/// pack compile (the seconds-long part) must not run at all.
+@Test func doctor_healthyServiceFinishesUnderASecondWithoutCompilingPacks() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-doctor-timing-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let homeDirectory = try #require(HomeDirectory(validating: home.path))
+    let sessions = Mutex(0)
+    let client = ServiceClient(
+        transport: ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: ProtocolVersion.serviceSemver, status: .ok),
+            responseResult: .doctorSnapshot(runningDoctorSnapshot())
+        ),
+        lazySession: {
+            sessions.withLock { $0 += 1 }
+            return EvaluateSession()
+        },
+        allowOnceDirectory: try isolatedAllowOnceDirectory(),
+        home: homeDirectory
+    )
+    let environment = DoctorEnvironment(
+        home: homeDirectory, pathEntries: [], fileManager: .default, launchAgentLoaded: true
+    )
+
+    // Best of three: a parallel test run can park this task behind other
+    // suites' blocking work, which is the harness's time, not doctor's.
+    let clock = ContinuousClock()
+    var outcome: DoctorOutcome?
+    var best = Duration.seconds(3_600)
+    for _ in 0..<3 where best >= .seconds(1) {
+        let elapsed = await clock.measure {
+            outcome = await DoctorRun.collect(
+                environment: { environment }, client: client, appearance: .pretty(colorOffPalette)
+            )
+        }
+        best = min(best, elapsed)
+    }
+
+    let stdout = try #require(outcome).stdout
+    #expect(best < .seconds(1), "rv doctor took \(best) with a healthy rvd")
+    #expect(sessions.withLock { $0 } == 0)
+    #expect(stdout.contains("running"))
 }
 
 /// G6b: a pack id a bundle update dropped (or any line rv skips) is named

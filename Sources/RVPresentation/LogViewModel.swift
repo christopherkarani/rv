@@ -25,11 +25,13 @@ public struct LogEntry: Equatable, Sendable {
     /// The call's code (`a7c-835`); nil when its row carries no id.
     public var code: String?
     public var session: String?
+    /// The call's full id (12 hex digits) the code is cut from, or nil.
+    public var id: String?
 
     public init(
         time: Date, agent: String, stopped: Bool, wouldAsk: Bool = false, rule: String,
         isJudge: Bool = false, tool: String, target: String, command: String? = nil, code: String?,
-        session: String? = nil
+        session: String? = nil, id: String? = nil
     ) {
         self.time = time
         self.agent = agent
@@ -42,6 +44,7 @@ public struct LogEntry: Equatable, Sendable {
         self.command = command
         self.code = code
         self.session = session
+        self.id = id
     }
 
     /// A judge note in shadow: the judge's own would-stop, which watch
@@ -123,6 +126,31 @@ public struct LogRow: Equatable, Sendable {
     public var target: String
     public var code: String?
     public var session: String?
+    /// `★ first save · kept 14 files` on the one row that was rv's first
+    /// save; nil on every other row.
+    public var firstSave: String? = nil
+}
+
+/// The first save (C5): the first real stop by a pack rule, which `rv
+/// log` stars by its call's full id (never the six-digit code, which can
+/// repeat), with what the stop kept when that was counted.
+public struct LogFirstSave: Equatable, Sendable {
+    public static let star = "★"
+    /// The call's full id.
+    public var id: String
+    /// `kept 14 files · 2,314 lines`; nil when nothing was counted (rv
+    /// never guesses a receipt).
+    public var receipt: String?
+
+    public init(id: String, receipt: String? = nil) {
+        self.id = id
+        self.receipt = receipt
+    }
+
+    /// `★ first save · kept 14 files · 2,314 lines`, or `★ first save`.
+    public var text: String {
+        ([Self.star + " first save"] + (receipt.map { [$0] } ?? [])).joined(separator: " · ")
+    }
 }
 
 /// `rv log`: the newest decisions in fixed columns, one summary line.
@@ -166,7 +194,7 @@ public struct LogViewModel: Equatable, Sendable {
     public init(
         entries: [LogEntry], query: LogQuery, now: Date, calendar: Calendar,
         windowDays: Int = 7, coveredFrom: Date? = nil, ledgerOff: Bool = false,
-        commandsRecorded: Bool = true, skippedDays: [String] = []
+        commandsRecorded: Bool = true, skippedDays: [String] = [], firstSave: LogFirstSave? = nil
     ) {
         let windowStart = now.addingTimeInterval(-Double(windowDays) * 86_400)
         let newestFirst = entries
@@ -176,7 +204,11 @@ public struct LogViewModel: Equatable, Sendable {
         let listed = folds ? newestFirst.filter { $0.isShadowJudgeNote == false } : newestFirst
         let shown = query.all ? listed : Array(listed.prefix(LogQuery.defaultLimit))
         let allToday = listed.allSatisfy { calendar.isDate($0.time, inSameDayAs: now) }
-        self.rows = shown.map { Self.row($0, now: now, calendar: calendar) }
+        self.rows = shown.map { entry in
+            var row = Self.row(entry, now: now, calendar: calendar)
+            if let firstSave, entry.stopped, entry.id == firstSave.id { row.firstSave = firstSave.text }
+            return row
+        }
         self.matching = listed.count
         self.stopped = listed.filter(\.stopped).count
         self.wouldStop = listed.count - stopped
