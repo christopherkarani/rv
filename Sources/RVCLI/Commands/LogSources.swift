@@ -42,7 +42,8 @@ enum LogSources {
             target: record.path,
             command: nil,
             code: record.code,
-            session: record.session
+            session: record.session,
+            id: record.id
         )
     }
 
@@ -75,7 +76,8 @@ enum LogSources {
             target: decision.path.map { DecisionRedaction.path($0, home: home) } ?? "",
             command: decision.command.map { DecisionRedaction.command($0, home: home) },
             code: decision.code,
-            session: decision.session
+            session: decision.session,
+            id: decision.id
         )
     }
 }

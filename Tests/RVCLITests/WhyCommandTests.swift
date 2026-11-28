@@ -34,7 +34,7 @@ struct WhyCommandTests {
         #expect(WhyRun.code(parts) == code)
     }
 
-    @Test(arguments: [["git", "status"], ["a7c-83"], ["a7c-8355"], ["xyz-123"], ["a7c-835", "x"], ["a7c_835"]])
+    @Test(arguments: [["git", "status"], ["a7c-83"], ["a7c-8355"], ["xyz-123"], ["a7c-835", "x"], ["a7c_835"], ["a7c-８３５"], ["٣٣٣-٣٣٣"]])
     func anythingElseIsACommandToExplain(parts: [String]) {
         #expect(WhyRun.code(parts) == nil)
     }
@@ -140,6 +140,64 @@ struct WhyCommandTests {
             now: Self.now, calendar: Self.utc, facts: Self.noFacts)
         #expect(outcome.exitCode == 1)
         #expect(outcome.stdout == "\n  ✕ No decision fff-fff in rv's log this week.\n\n  → rv log   find its code\n")
+    }
+
+    @Test func theStoryComesFromOneRowWhenIdsShareACode() throws {
+        let (home, config) = try Self.home()
+        let log = DecisionLog(configDirectory: config)
+        log.append(DecisionRecord(
+            time: Self.now.addingTimeInterval(-3_600), verdict: .denied, host: .hook(.codex), tool: .bash,
+            command: "git clean -fdx", cwd: "~/code/old", rule: "core.git:clean-force",
+            id: "a7c835000001"), now: Self.now)
+        log.append(DecisionRecord(
+            time: Self.now.addingTimeInterval(-60), verdict: .denied, host: .hook(.claude), tool: .bash,
+            command: "git reset --hard origin/main", cwd: "~/code/app", rule: "core.git:reset-hard",
+            id: "a7c835ffffff"), now: Self.now)
+
+        let outcome = try WhyRun.output(
+            code: "a7c-835", home: home, json: false, palette: colorOffPalette,
+            now: Self.now, calendar: Self.utc, facts: Self.noFacts)
+
+        #expect(outcome.stdout.contains("✕ Stopped   git reset --hard origin/main"))
+        #expect(outcome.stdout.contains("· claude · in ~/code/app"))
+        #expect(outcome.stdout.contains("~/code/old") == false)
+        #expect(outcome.stdout.contains("also    1 other call shares this code; this is the newest"))
+        #expect(outcome.stdout.contains("→ rv log --all   find the others with this code"))
+        let json = try WhyRun.output(
+            code: "a7c-835", home: home, json: true, palette: colorOffPalette,
+            now: Self.now, calendar: Self.utc, facts: Self.noFacts).stdout
+        #expect(json.contains("\"othersSharingCode\":1"))
+    }
+
+    @Test func aWouldAskRowReadsAsks() throws {
+        let (home, config) = try Self.home()
+        let row = DenialLedgerRecord(
+            timestamp: Self.now.addingTimeInterval(-120), host: .hook(.cursor), tool: .file(.read),
+            ruleID: RuleID(rawValue: "core.secrets:env")!, category: .secret(.environment),
+            path: "~/code/app/.env", observed: true, wouldBe: .ask, id: "e0e000000005")
+        DenialLedger(configDirectory: config).append(row, now: Self.now)
+
+        let outcome = try WhyRun.output(
+            code: try #require(row.code), home: home, json: false, palette: colorOffPalette,
+            now: Self.now, calendar: Self.utc, facts: Self.noFacts)
+
+        #expect(outcome.stdout.contains("⏺ Asks   Read ~/code/app/.env"))
+        #expect(outcome.stdout.contains("ran     watch mode let it run; guarding would ask you first"))
+        #expect(outcome.stdout.contains("◐") == false && outcome.stdout.contains("✕") == false)
+    }
+
+    @Test func aCommandRvCouldNotSeeInsideIsWordedByWhatHappened() {
+        func story(stopped: Bool) -> DecisionStory {
+            DecisionStory(entry: LogEntry(
+                time: Self.now, agent: "claude", stopped: stopped, rule: "rv.indeterminate:inlineProgramNeedsJudge",
+                tool: "Bash", target: "", command: "python3 -c 'import os'", code: "abc-def"), calendar: Self.utc)
+        }
+        let watched = story(stopped: false)
+        #expect(watched.why == "rv can't see inside this script; watch mode let it run")
+        #expect(watched.holdsInEveryMode == false)
+        let stopped = story(stopped: true)
+        #expect(stopped.why == "rv can't see inside this script, so it stopped it")
+        #expect(stopped.holdsInEveryMode)
     }
 
     @Test func liveFactsReadTheShippedPack() {

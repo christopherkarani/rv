@@ -51,7 +51,7 @@ enum WhyRun {
         let digits = raw.count == 7 && raw.dropFirst(3).first == "-"
             ? String(raw.prefix(3) + raw.suffix(3))
             : raw
-        guard digits.count == 6, digits.allSatisfy(\.isHexDigit) else { return nil }
+        guard digits.count == 6, digits.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
         return String(digits.prefix(3)) + "-" + String(digits.suffix(3))
     }
 
@@ -85,10 +85,17 @@ enum WhyRun {
         let records = DenialLedger(configDirectory: configDirectory).records(asOf: now)
         let decisions = LogRun.decisionLog(configDirectory: configDirectory, now: now)
         let entries = LogSources.entries(ledger: records, decisions: decisions, home: home)
-        guard let entry = entries.filter({ $0.code == code }).max(by: { $0.time < $1.time }) else { return nil }
-        let cwd = decisions?.records.first { $0.code == code }?.cwd
+        let matching = entries.filter { $0.code == code }
+        guard let entry = matching.max(by: { $0.time < $1.time }) else { return nil }
+        // Everything comes from that one row: its cwd is the decision row
+        // with the same id, never another call that shares the code.
+        let cwd = entry.id.flatMap { id in decisions?.records.first { $0.id == id } }?.cwd
             .map { DecisionRedaction.path($0, home: home) }
-        return DecisionStory(entry: entry, cwd: cwd, facts: facts(entry.rule), calendar: calendar)
+        // Six hex digits can repeat: other calls whose ids share the code.
+        let others = Set(matching.compactMap(\.id)).subtracting([entry.id].compactMap { $0 }).count
+        var story = DecisionStory(entry: entry, cwd: cwd, facts: facts(entry.rule), calendar: calendar)
+        story.othersSharingCode = others
+        return story
     }
 
     private struct NotFound: Encodable {

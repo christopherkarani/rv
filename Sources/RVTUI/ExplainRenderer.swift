@@ -213,7 +213,7 @@ public struct DecisionStoryRenderer: FrameRenderer {
     public init() {}
 
     public func render(_ story: DecisionStory, palette: Palette) -> [String] {
-        let ink = story.outcome == .stopped ? palette.deny : palette.mark
+        let ink = story.outcome.glyph.ink(palette)
         let verdict = story.outcome.label
         let indent = String(repeating: " ", count: verdict.count + 3)
         var lines = [
@@ -243,10 +243,17 @@ public struct DecisionStoryRenderer: FrameRenderer {
         if story.commandMissing {
             lines.append(row("note", paint("rvd kept no command text for this one", slot: palette.silver, reset: palette.reset), palette: palette))
         }
+        if story.othersSharingCode > 0 {
+            let others = story.othersSharingCode == 1 ? "1 other call shares" : "\(story.othersSharingCode) other calls share"
+            lines.append(row("also", paint("\(others) this code; this is the newest", slot: palette.silver, reset: palette.reset), palette: palette))
+        }
+        let next = story.othersSharingCode > 0
+            ? (DecisionStory.nextCommand + " --all", "find the others with this code")
+            : (DecisionStory.nextCommand, "every decision this week")
         lines += [
             "",
-            paint("\(CommandVocabulary.Glyph.next.rawValue) \(DecisionStory.nextCommand)", slot: palette.heading, reset: palette.reset)
-                + "   " + paint("every decision this week", slot: palette.silver, reset: palette.reset),
+            paint("\(CommandVocabulary.Glyph.next.rawValue) \(next.0)", slot: palette.heading, reset: palette.reset)
+                + "   " + paint(next.1, slot: palette.silver, reset: palette.reset),
         ]
         return lines.map { $0.isEmpty ? $0 : Self.pad + $0 }
     }
