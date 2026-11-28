@@ -210,6 +210,9 @@ enum BoxRun {
             throw exit
         } catch let error as ValidationError {
             try refuse(BoxPlan.hostRefusal(error.message))
+        } catch {
+            // Anything else the start throws is still one line and one fix.
+            try refuse(BoxStartFailure.fallback(String(describing: error)))
         }
         writeStderr(exitLine)
     }

@@ -567,7 +567,7 @@ enum BoxPlan {
     /// Contained launches are macOS-only; Linux refuses rather than run
     /// behind a weaker wall (`ContainedRuntimeRefusal`).
     static let linuxHostRefusal = BoxRefusal(
-        why: "Boxes run on macOS only today; on Linux rv refuses rather than use a weaker wall.",
+        why: "Boxes run on macOS only today, so rv refuses here rather than use a weaker wall.",
         fix: "guard agents here through their hooks instead: rv setup")
 
     /// `rv box` alone opens the workspace shell, which needs a terminal.
@@ -607,36 +607,9 @@ enum BoxPlan {
     }
 
     /// A refusal from the workspace host (`rv workspace run`'s words),
-    /// as one line and one fix. The peer-trust refusal gets the v4
-    /// "can't start" frame; any other message keeps its first clause as
-    /// the reason and the first `rv …` command it names as the fix.
+    /// as one line and one fix (`BoxStartFailure`).
     static func hostRefusal(_ message: String) -> BoxRefusal {
-        if message.hasPrefix("the workspace host was refused") {
-            return BoxRefusal(
-                why: "Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.",
-                fix: "see the fix (it needs an administrator): rv doctor")
-        }
-        if message.hasPrefix("the workspace host this start launched is still mounting or recovering") {
-            return BoxRefusal(
-                mark: .setup,
-                why: "The box is still starting in the background.",
-                fix: "run rv box again once it is ready: rv workspace status")
-        }
-        let reason = message.components(separatedBy: "; ").first ?? message
-        return BoxRefusal(why: sentence(reason), fix: firstCommand(in: message) ?? "rv doctor")
-    }
-
-    /// The first `'rv …'` command quoted in `message`.
-    static func firstCommand(in message: String) -> String? {
-        let parts = message.components(separatedBy: "'")
-        guard parts.count >= 3 else { return nil }
-        return stride(from: 1, to: parts.count - 1, by: 2).map { parts[$0] }.first { $0.hasPrefix("rv ") }
-    }
-
-    private static func sentence(_ text: String) -> String {
-        guard let first = text.first else { return text }
-        let capitalized = first.uppercased() + text.dropFirst()
-        return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+        BoxStartFailure.refusal(message)
     }
 
     // MARK: Words
