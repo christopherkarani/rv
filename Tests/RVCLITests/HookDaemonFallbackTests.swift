@@ -10,7 +10,14 @@ import RVXPC
 /// Swift twin of `Sources/rv-c/tests/hook_fallback_test.c`: a daemon miss
 /// is classified and rendered per `RV_HOOK_WHEN_DOWN`, never one generic deny.
 struct HookDaemonFallbackTests {
-    private static let unreachable = HookDaemonFallback.message(for: .unreachable)
+    private static let unreachable = HookDaemonFallback.message(for: .unreachable, owner: .unknown)
+
+    /// `text` as it appears inside a JSON string on the wire.
+    private static func inJSON(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
 
     private static func json(_ wire: HookWire) throws -> [String: Any] {
         try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
@@ -27,52 +34,67 @@ struct HookDaemonFallbackTests {
     }
 
     @Test func messagesAreDistinctActionableAndMatchTheCClient() throws {
-        let messages = HookDaemonFailure.allCases.map(HookDaemonFallback.message(for:))
+        let messages = HookDaemonFailure.allCases.map { HookDaemonFallback.message(for: $0, owner: .unknown) }
         #expect(Set(messages).count == messages.count)
-        #expect(Self.unreachable.contains("rv doctor"))
-        #expect(HookDaemonFallback.message(for: .untrusted).contains("rv setup"))
+        #expect(Self.unreachable.hasSuffix("  rv doctor"))
+        #expect(HookDaemonFallback.message(for: .untrusted, owner: .unknown).hasSuffix("  rv service restart"))
         let cSource = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("Sources/rv-c/hook_fallback.c"),
             encoding: .utf8
         )
-        for message in messages {
-            #expect(cSource.contains("\"\(message)\""), "C/Swift message drift: \(message)")
+        #expect(cSource.contains("kDoctor[] = \"\(CommandVocabulary.Command.doctor.invocation)\""))
+        #expect(cSource.contains("kRestart[] = \"rv service restart\""))
+        // The C client formats the same shape the Swift notice prints.
+        #expect(cSource.contains(#""\xE2\x9C\x95 Stopped   (%s)\nwhy     %s\nwho     ask %s to run  %s""#))
+        for failure in HookDaemonFailure.allCases {
+            let rule = HookDaemonFallback.rule(for: failure)
+            let why = HookDaemonFallback.why(for: failure)
+            let fix = HookDaemonFallback.fix(for: failure) == "rv service restart" ? "kRestart" : "kDoctor"
+            #expect(cSource.contains("\"\(rule)\", \"\(why)\", \(fix)}"), "C/Swift stop drift: \(rule)")
+            #expect(why.split(separator: " ").count <= stopWhyWordLimit, "\(why)")
+            let message = HookDaemonFallback.message(for: failure, owner: .unknown)
+            #expect(message == "✕ Stopped   (\(rule))\nwhy     \(why)\nwho     ask your user to run  \(HookDaemonFallback.fix(for: failure))")
+            #expect(message.contains("allow-once") == false)
+            #expect(message.contains("unlock") == false)
         }
+        #expect(
+            HookDaemonFallback.message(for: .timeout, owner: OwnerName(gecos: "Chris Karani,,,"))
+                .hasSuffix("\nwho     ask Chris to run  rv doctor"))
     }
 
     @Test func askModeUsesNativeAskOnClaudeAndCursor() throws {
-        let claude = HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask)
+        let claude = HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask, owner: .unknown)
         #expect(claude.exitCode == 0)
-        #expect(claude.stdout == "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(Self.unreachable)\"},\"systemMessage\":\"\(Self.unreachable)\"}\n")
+        #expect(claude.stdout == "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(Self.inJSON(Self.unreachable))\"},\"systemMessage\":\"\(Self.inJSON(Self.unreachable))\"}\n")
         let claudeJSON = try Self.json(claude)
         let output = try #require(claudeJSON["hookSpecificOutput"] as? [String: Any])
         #expect(output["permissionDecision"] as? String == "ask")
 
-        let cursor = HookDaemonFallback.wire(host: .cursor, failure: .timeout, mode: .ask)
+        let cursor = HookDaemonFallback.wire(host: .cursor, failure: .timeout, mode: .ask, owner: .unknown)
         let cursorJSON = try Self.json(cursor)
         #expect(cursor.exitCode == 0)
         #expect(cursorJSON["permission"] as? String == "ask")
-        #expect(cursorJSON["agent_message"] as? String == HookDaemonFallback.message(for: .timeout))
+        #expect(cursorJSON["agent_message"] as? String == HookDaemonFallback.message(for: .timeout, owner: .unknown))
         #expect(cursor.stdout.contains("Wait for the human") == false)
     }
 
     @Test(arguments: HookHost.allCases)
     func everyHostRendersEachMode(host: HookHost) throws {
         for failure in HookDaemonFailure.allCases {
-            let message = HookDaemonFallback.message(for: failure)
+            let message = HookDaemonFallback.message(for: failure, owner: .unknown)
             let codecDeny = productionHostCodec(host).encodeDeny(reason: message, rule: nil, next: .none)
 
-            #expect(HookDaemonFallback.wire(host: host, failure: failure, mode: .deny) == codecDeny)
+            #expect(HookDaemonFallback.wire(host: host, failure: failure, mode: .deny, owner: .unknown) == codecDeny)
 
-            let ask = HookDaemonFallback.wire(host: host, failure: failure, mode: .ask)
+            let ask = HookDaemonFallback.wire(host: host, failure: failure, mode: .ask, owner: .unknown)
             if failure == .untrusted || failure == .protocol {
                 // Impersonation and malformed replies never soften.
                 #expect(ask == codecDeny)
             } else if host == .claude || host == .cursor {
                 #expect(ask.stdout.contains("\"ask\""))
-                #expect(ask.stdout.contains(message))
+                #expect(ask.stdout.contains(Self.inJSON(message)))
                 #expect(ask.exitCode == 0)
             } else {
                 // No ask primitive: the host's own deny wire, exit code included.
@@ -88,13 +110,13 @@ struct HookDaemonFallbackTests {
             stdout: allow.stdout, exitCode: allow.exitCode, stderr: HookObserveFallback.message + "\n")
         for failure in HookDaemonFailure.allCases {
             for mode in [HookWhenDown.ask, .deny] {
-                let wire = HookDaemonFallback.wire(host: host, failure: failure, mode: mode, ownerObserves: true)
+                let wire = HookDaemonFallback.wire(host: host, failure: failure, mode: mode, ownerObserves: true, owner: .unknown)
                 if failure == .unreachable {
                     #expect(wire == stepAside)
                 } else {
                     // A slow daemon (which an agent can cause) keeps the mode's
                     // render; impersonation and malformed replies still deny.
-                    #expect(wire == HookDaemonFallback.wire(host: host, failure: failure, mode: mode))
+                    #expect(wire == HookDaemonFallback.wire(host: host, failure: failure, mode: mode, owner: .unknown))
                 }
             }
         }
@@ -123,26 +145,26 @@ struct HookDaemonFallbackTests {
         let unreachable = await missing.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
         #expect(unreachable == HookDaemonFallback.wire(
-            host: .claude, failure: .unreachable, mode: .ask, ownerObserves: true))
+            host: .claude, failure: .unreachable, mode: .ask, ownerObserves: true, owner: .unknown))
         #expect(unreachable.stdout.isEmpty && unreachable.exitCode == 0)
 
         // An explicit RV_HOOK_WHEN_DOWN=deny is the stricter choice and wins.
         let explicitDeny = await missing.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes)
-        #expect(explicitDeny == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
+        #expect(explicitDeny == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny, owner: .unknown))
 
         // No transport resolved (Linux: XDG_RUNTIME_DIR empty or over-long) and
         // a dropped connection prove nothing about rvd: they keep asking.
         let unresolved = try await isolatedClient(transport: nil).hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
-        #expect(unresolved == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
+        #expect(unresolved == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask, owner: .unknown))
         let dropped = ScriptedTransport(
             ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
             sendError: .interrupted
         )
         let drop = try await isolatedClient(transport: dropped).hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
-        #expect(drop == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask),
+        #expect(drop == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask, owner: .unknown),
                 "a dropped connection still asks under observe")
 
         let slow = ScriptedTransport(
@@ -151,7 +173,7 @@ struct HookDaemonFallbackTests {
         )
         let timeout = try await isolatedClient(transport: slow).hookEvaluate(
             host: .cursor, stdin: "{}", whenDown: .ask, ownerObserves: observes)
-        #expect(timeout == HookDaemonFallback.wire(host: .cursor, failure: .timeout, mode: .ask),
+        #expect(timeout == HookDaemonFallback.wire(host: .cursor, failure: .timeout, mode: .ask, owner: .unknown),
                 "a slow daemon still asks under observe")
 
         let skewed = ScriptedTransport(
@@ -160,7 +182,7 @@ struct HookDaemonFallbackTests {
         )
         let protocolMiss = try await isolatedClient(transport: skewed).hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
-        #expect(protocolMiss == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .deny))
+        #expect(protocolMiss == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .deny, owner: .unknown))
     }
 
     /// Twin of the rvd state marker cases in rv-c/tests/run.sh: under owner
@@ -177,30 +199,30 @@ struct HookDaemonFallbackTests {
             let stopped = await client.hookEvaluate(
                 host: host, stdin: "{}", whenDown: .ask, ownerObserves: observes,
                 rvdStateAllowsObserve: { false })
-            #expect(stopped == HookDaemonFallback.wire(host: host, failure: .stopped, mode: .ask))
-            #expect(stopped.stdout.contains(HookDaemonFallback.message(for: .stopped)))
+            #expect(stopped == HookDaemonFallback.wire(host: host, failure: .stopped, mode: .ask, owner: .unknown))
+            #expect(stopped.stdout.contains(Self.inJSON(HookDaemonFallback.message(for: .stopped, owner: .unknown))))
             #expect(stopped.stderr.contains("allowed without being checked") == false)
 
             let restarting = await client.hookEvaluate(
                 host: host, stdin: "{}", whenDown: .ask, ownerObserves: observes,
                 rvdStateAllowsObserve: { true })
             #expect(restarting == HookDaemonFallback.wire(
-                host: host, failure: .unreachable, mode: .ask, ownerObserves: true))
+                host: host, failure: .unreachable, mode: .ask, ownerObserves: true, owner: .unknown))
         }
         // An explicit deny still wins, and outside observe mode the marker is
         // never consulted: the unreachable message stays.
         let denied = await client.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes,
             rvdStateAllowsObserve: { false })
-        #expect(denied == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
+        #expect(denied == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny, owner: .unknown))
         let enforce = await client.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: { _ in false },
             rvdStateAllowsObserve: {
                 Issue.record("marker read outside observe mode")
                 return false
             })
-        #expect(enforce == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask))
-        #expect(HookDaemonFallback.message(for: .stopped).contains("rv service restart"))
+        #expect(enforce == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask, owner: .unknown))
+        #expect(HookDaemonFallback.message(for: .stopped, owner: .unknown).contains("rv service restart"))
     }
 
     /// `.unreachable` is the only class observe mode allows on, so it is
@@ -265,14 +287,14 @@ struct HookDaemonFallbackTests {
 
     @Test func missingTransportIsAConnectionFailureAndFollowsMode() async throws {
         let client = try isolatedClient(transport: nil)
-        let connection = HookDaemonFallback.message(for: .connection)
+        let connection = HookDaemonFallback.message(for: .connection, owner: .unknown)
         let ask = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(ask == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
+        #expect(ask == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask, owner: .unknown))
         let deny = await client.hookEvaluate(host: .codex, stdin: "{}", whenDown: .deny)
         #expect(deny.exitCode == 2)
         #expect(deny.stderr.contains(connection))
         let grok = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .ask)
-        #expect(grok == HookDaemonFallback.wire(host: .grok, failure: .connection, mode: .deny),
+        #expect(grok == HookDaemonFallback.wire(host: .grok, failure: .connection, mode: .deny, owner: .unknown),
                 "hosts without an ask primitive deny")
     }
 
@@ -281,13 +303,13 @@ struct HookDaemonFallbackTests {
         let unset = await CLIProcess.$context.withValue(CLIProcess.Context(environment: [:])) {
             await client.hookEvaluate(host: .claude, stdin: "{}")
         }
-        #expect(unset == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
+        #expect(unset == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask, owner: .unknown))
         let deny = await CLIProcess.$context.withValue(
             CLIProcess.Context(environment: [HookWhenDown.environmentKey: "deny"])
         ) {
             await client.hookEvaluate(host: .claude, stdin: "{}")
         }
-        #expect(deny == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .deny))
+        #expect(deny == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .deny, owner: .unknown))
     }
 
     @Test func transportTimeoutIsClassifiedAndUsesTheHookBudget() async throws {
@@ -297,7 +319,7 @@ struct HookDaemonFallbackTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .timeout, mode: .ask))
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .timeout, mode: .ask, owner: .unknown))
         #expect(transport.lastSendTimeoutMs == ServiceClient.hookEvaluateTimeoutMs)
         #expect(transport.sendCount == 1, "a hook request is never resent")
     }
@@ -309,7 +331,7 @@ struct HookDaemonFallbackTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .cursor, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .protocol, mode: .deny),
+        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .protocol, mode: .deny, owner: .unknown),
                 "a protocol failure denies even in ask mode")
         #expect(wire.stdout.contains("\"deny\""))
         #expect(transport.invalidationCount == 1)
@@ -324,7 +346,7 @@ struct HookDaemonFallbackTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask, owner: .unknown))
         #expect(wire.stdout.contains("\"deny\""))
         #expect(transport.invalidationCount == 1)
     }
@@ -335,7 +357,7 @@ struct HookDaemonFallbackTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask, owner: .unknown))
         #expect(wire.stdout.contains("\"deny\""))
     }
 
@@ -349,7 +371,7 @@ struct HookDaemonFallbackTests {
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: { _ in true })
-        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask, owner: .unknown))
         #expect(wire.stdout.contains("\"deny\""))
         #expect(transport.invalidationCount == 1)
     }

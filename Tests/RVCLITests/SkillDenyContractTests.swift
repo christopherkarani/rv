@@ -80,15 +80,20 @@ private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -
             #expect(vm.fact.contains(needle) == true, Comment(rawValue: row.id))
         }
 
-        let text = hostDenyText(from: result, command: shell)
-        #expect(text != nil, Comment(rawValue: row.id))
-        #expect(text?.contains("\n") == false, Comment(rawValue: row.id))
-        #expect(text?.contains("═") == false, Comment(rawValue: row.id))
-        #expect(text?.contains("┌") == false, Comment(rawValue: row.id))
-        #expect(text?.hasPrefix("RV · Blocked") == true, Comment(rawValue: row.id))
-        #expect(text?.contains("RV · Blocked\n") == false, Comment(rawValue: row.id))
-        #expect(text?.contains("rv allow-once") == false, Comment(rawValue: row.id))
-        #expect(text?.contains("Terminal") == false, Comment(rawValue: row.id))
+        // B1: every stop is one shape: verdict + command + rule id, why,
+        // and one who line that never names an unlock.
+        let text = try #require(hostDenyText(from: result, command: shell), Comment(rawValue: row.id))
+        let stopLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(stopLines.count == 3, Comment(rawValue: row.id))
+        #expect(stopLines.first?.hasPrefix("✕ Stopped   ") == true, Comment(rawValue: row.id))
+        #expect(stopLines.first?.hasSuffix(" (\(ruleID.slashDisplay))") == true, Comment(rawValue: row.id))
+        #expect(stopLines.dropFirst().first?.hasPrefix("why     ") == true, Comment(rawValue: row.id))
+        #expect(stopLines.last?.hasPrefix("who     ask ") == true, Comment(rawValue: row.id))
+        #expect(text.contains("═") == false, Comment(rawValue: row.id))
+        #expect(text.contains("┌") == false, Comment(rawValue: row.id))
+        let body = stopLines.dropFirst().joined(separator: "\n")
+        #expect(body.contains("rv allow-once") == false, Comment(rawValue: row.id))
+        #expect(body.contains("Terminal") == false, Comment(rawValue: row.id))
 
         let test = testViewModel(from: result, command: shell)
         #expect(test.deny == vm, Comment(rawValue: row.id))

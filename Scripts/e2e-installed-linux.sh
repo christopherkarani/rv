@@ -727,8 +727,8 @@ d=json.loads(t)["hookSpecificOutput"]; r=d.get("permissionDecisionReason","")
 print(d["permissionDecision"] + ("+code" if "allow-once" in r else ""))'; }
 
 # rvd down first (it was stopped above)
-out="$(hook 'git status')"; [[ "$(printf '%s' "$out" | decision)" == "ask" && "$out" == *"RV daemon is not reachable"* ]]
-check gate "rvd down: Claude gets its native ask with 'RV daemon is not reachable' (RV_HOOK_WHEN_DOWN default)" $? "$out"
+out="$(hook 'git status')"; [[ "$(printf '%s' "$out" | decision)" == "ask" && "$out" == *"(rv.hook/unreachable)"* ]]
+check gate "rvd down: Claude gets its native ask with the rv.hook/unreachable stop (RV_HOOK_WHEN_DOWN default)" $? "$out"
 out="$(hookjson Bash command 'git status' | as_owner env RV_HOOK_WHEN_DOWN=deny rv hook --host claude)"; [[ "$(printf '%s' "$out" | decision)" == "deny" ]]
 check gate "rvd down, RV_HOOK_WHEN_DOWN=deny: deny" $? "$out"
 out="$(hookjson Bash command 'git status' | as_owner env RV_HOOK_WHEN_DOWN=allow rv hook --host claude)"; [[ "$(printf '%s' "$out" | decision)" == "ask" ]]

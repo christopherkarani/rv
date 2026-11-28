@@ -142,9 +142,8 @@ import Synchronization
         )
         let json = try dispatchDenyJSON(deny.stdout)
         #expect(json["decision"] as? String == "deny")
-        #expect(json["reason"] as? String == "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.")
-        #expect((json["reason"] as? String)?.contains("git reset --hard") == false)
-        #expect((json["reason"] as? String)?.contains("Terminal") == false)
+        #expect((json["reason"] as? String)?.hasPrefix("✕ Stopped   git reset --hard (core.git/reset-hard)\n") == true)
+        #expect((json["reason"] as? String)?.contains("\nwhy     destroys uncommitted changes\n") == true)
         #expect((json["reason"] as? String)?.contains("allow-once") == false)
         #expect(deny.status == 0)
 

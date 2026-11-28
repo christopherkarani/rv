@@ -194,7 +194,9 @@ struct LocalHookJudgeTests {
         #expect(refused.count == 1, "the broken bundle is selected and the pool asked")
         let rvd = try await fixture.rvdReply(host: .claude, stdin: stdin)
         #expect(rvd != packsOnly, "rvd must not give the packs-only answer for a broken bundle")
-        #expect(rvd.stdout.contains("Ask the owner to run `rv doctor`"), "\(rvd.stdout)")
+        // The why names the broken judge; the one step is the minted code
+        // (or, with none, the `rv doctor` the refusal names).
+        #expect(rvd.stdout.contains("\\nwhy     laya judge pool could not load the model\\nwho     ask "), "\(rvd.stdout)")
     }
 
     @Test func withoutAPoolClientAJudgedCallEscalates() async throws {
