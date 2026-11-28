@@ -56,6 +56,9 @@ struct UndoHookPointTests {
             for: hard, command: ShellCommand(rawValue: "git reset --hard"), cwd: Self.cwd, host: .hook(.claude), reason: .unlocked,
             deadline: tight, now: now))
         #expect(squeezed.budget == .milliseconds(500))
+        // The deadline is fixed when the request is made: time before the
+        // keep starts counts against it.
+        #expect(squeezed.deadline == now + .milliseconds(500))
         let spent = HookDeadline(expiresAt: now + .seconds(2), now: { now })
         #expect(UndoHookPoint.request(for: hard, command: ShellCommand(rawValue: "git reset --hard"), cwd: Self.cwd, host: .hook(.claude),
                                       reason: .unlocked, deadline: spent, now: now) == nil)
