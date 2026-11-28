@@ -59,9 +59,11 @@ struct CommandAliasTests {
 
     @Test("every alias parses as the command it names", arguments: CommandVocabulary.Alias.allCases)
     func parsesAsTarget(_ alias: CommandVocabulary.Alias) throws {
-        let sample = alias.runs.contains(CommandVocabulary.Alias.hostSlot) ? ["claude"] : []
+        // A host for `<host>`, a name for `secrets add`.
+        let hosted = alias.runs.contains(CommandVocabulary.Alias.hostSlot)
+        let sample = hosted ? ["claude"] : alias == .secretsAdd ? ["GH_TOKEN"] : []
         let new = try RV.parseAsRoot(CommandAlias.expanded(alias.words + sample))
-        let old = try RV.parseAsRoot(alias.runs.map { $0 == CommandVocabulary.Alias.hostSlot ? "claude" : $0 })
+        let old = try RV.parseAsRoot(alias.runs.map { $0 == CommandVocabulary.Alias.hostSlot ? "claude" : $0 } + (hosted ? [] : sample))
         #expect(type(of: new) == type(of: old))
     }
 
