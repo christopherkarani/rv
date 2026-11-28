@@ -147,7 +147,7 @@ public actor AllowOnceStore {
                                 ruleID: ruleID,
                                 code: code,
                                 expiresAt: Self.issuedExpiry(of: hash, in: written, now: now, ttl: ttl),
-                                redeemed: false
+                                redeemed: false, origin: .preArmed, stop: nil
                             )
                         }
                         pruneLiveUnlockCodes(against: written, now: now)
@@ -178,7 +178,8 @@ public actor AllowOnceStore {
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
         invocationDisplay: String? = nil,
-        rawCommand: String? = nil
+        rawCommand: String? = nil,
+        stop: AllowOnceStopContext? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
@@ -228,7 +229,7 @@ public actor AllowOnceStore {
                             ruleID: ruleID,
                             code: code,
                             expiresAt: Self.issuedExpiry(of: hash, in: written, now: now, ttl: ttl),
-                            redeemed: false
+                            redeemed: false, origin: .stop, stop: stop
                         )
                         pruneLiveUnlockCodes(against: written, now: now)
                         return .code(code)
@@ -311,6 +312,35 @@ public actor AllowOnceStore {
     package func issued(codeHash: String, now: Date) -> IssuedAllowOnce? {
         guard let entry = issuedCodes[codeHash], entry.expiresAt > now else { return nil }
         return entry
+    }
+
+    /// Every hook-stop code this instance issued that is still live and
+    /// not yet redeemed, by code hash: the asks the menu bar may show (K2).
+    /// Pre-armed codes are the owner's own and are left out; so is a code
+    /// issued without the exact command, which no prompt may approve.
+    package func liveStops(now: Date) -> [String: IssuedAllowOnce] {
+        issuedCodes.filter { _, issued in
+            issued.origin == .stop && issued.redeemed == false && issued.expiresAt > now && issued.command != nil
+        }
+    }
+
+    /// Display flip after rvd itself planted a grant for an issued code
+    /// (the menu bar's approval, K2): the pending row turns granted, as the
+    /// CLI flips it after a terminal redeem, so `rv wait` sees the answer.
+    /// Projection only, best-effort and non-blocking like `project`: rvd's
+    /// memory table holds the grant whatever this file says. A row that no
+    /// longer matches what rvd issued is left alone.
+    package func projectRedeemed(codeHash: String, now: Date) {
+        guard let issued = issuedCodes[codeHash] else { return }
+        try? withFileLock(nonBlocking: true) {
+            guard case let .granted(records, _) = try AllowOnceLedger.redeem(
+                records: loadRecords(), codeHash: codeHash, now: now,
+                expectedFingerprint: issued.fingerprint.rawValue,
+                expectedPayloadDigest: issued.payloadDigest?.rawValue)
+            else { return }
+            let written = try writeRecords(records)
+            pruneLiveUnlockCodes(against: written, now: now)
+        }
     }
 
     /// rvd planted the grant for this issued code. The code is spent, so a
