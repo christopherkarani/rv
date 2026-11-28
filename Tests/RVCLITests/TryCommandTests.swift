@@ -305,7 +305,9 @@ private struct TrySandbox {
         let errors = Mutex(Data())
         let drained = DispatchGroup()
         drained.enter()
-        DispatchQueue.global().async {
+        // Its own thread, not a global queue: parallel cases block every
+        // cooperative thread here, and global queues then get no thread.
+        Thread.detachNewThread {
             let data = err.fileHandleForReading.readDataToEndOfFile()
             errors.withLock { $0 = data }
             drained.leave()
