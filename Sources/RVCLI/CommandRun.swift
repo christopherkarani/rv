@@ -126,13 +126,17 @@ public enum CommandRun {
         let alsoMatches = kind == .explain
             ? ExplainTypedRules.matches(result: verdict.shown, command: ShellCommand(rawValue: raw), cwd: cwd, home: home)
             : []
+        let offPacks = kind == .explain
+            ? ExplainOffPacks.hits(result: verdict.shown, command: ShellCommand(rawValue: raw), home: home)
+            : []
         return try render(
             kind: kind,
             verdict: verdict,
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested,
-            alsoMatches: alsoMatches
+            alsoMatches: alsoMatches,
+            offPacks: offPacks
         )
     }
 
@@ -205,7 +209,8 @@ public enum CommandRun {
         command: ShellCommand,
         probe: ThemeProbe,
         requested: RequestedMode,
-        alsoMatches: [ExplainAlsoMatch] = []
+        alsoMatches: [ExplainAlsoMatch] = [],
+        offPacks: [ExplainOffPack] = []
     ) throws -> CLIResult {
         let result = verdict.shown
         let observed = verdict.observeOverrode
@@ -219,7 +224,7 @@ public enum CommandRun {
         if mode == .robot {
             return try robotResult(
                 kind: kind, result: result, observed: authorization, command: command, exitCode: exitCode,
-                alsoMatches: alsoMatches
+                alsoMatches: alsoMatches, offPacks: offPacks
             )
         }
 
@@ -231,6 +236,7 @@ public enum CommandRun {
         )
         // The person's own rules that also match, which a pack deny hides.
         explain.alsoMatches = alsoMatches
+        explain.offPacks = offPacks
         let lines = kind.usesExplainFrame
             ? ExplainRenderer().render(explain, palette: palette)
             : TestRenderer().render(
@@ -246,7 +252,8 @@ public enum CommandRun {
         observed: HookAuthorization?,
         command: ShellCommand,
         exitCode: Int32,
-        alsoMatches: [ExplainAlsoMatch]
+        alsoMatches: [ExplainAlsoMatch],
+        offPacks: [ExplainOffPack]
     ) throws -> CLIResult {
         // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
         // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
@@ -260,6 +267,7 @@ public enum CommandRun {
                 observed: observed
             )
             model.alsoMatches = alsoMatches
+            model.offPacks = offPacks
             let payload = explainRobotPayload(from: model)
             text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:

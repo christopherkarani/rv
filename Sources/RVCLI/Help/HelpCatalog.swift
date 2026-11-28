@@ -31,6 +31,7 @@ enum HelpCatalog {
         case .doctor: doctor
         case .allowOnce: allowOnce
         case .packs: packs
+        case .protect: protect
         case .scan: scan
         case .policy: policy
         case .allowlist: allowlist
@@ -95,7 +96,8 @@ enum HelpCatalog {
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
-                HelpRow(name: "packs", description: "List and enable or disable packs"),
+                HelpRow(name: "protect", description: "Protect a tool: rv protect redis; off asks the owner"),
+                HelpRow(name: "packs", description: "Every pack: list, test, turn on or off"),
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
@@ -1080,11 +1082,28 @@ enum HelpCatalog {
                 HelpRow(name: "rv packs enable <pack>"),
                 HelpRow(name: "rv packs disable <pack>"),
                 HelpRow(name: "rv packs info <pack>"),
+                HelpRow(name: "rv packs test <pack>"),
             ]),
         ],
         examples: [
             "rv packs",
             "rv packs enable core.git",
+            "rv packs test database.redis",
+        ]
+    )
+
+    static let protect = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv protect <tool>", description: "Turn on the pack for a tool; asks nobody"),
+                HelpRow(name: "rv protect <tool> off", description: "Turn it off; asks for Touch ID or your password"),
+            ]),
+        ],
+        examples: [
+            "rv protect redis",
+            "rv protect terraform",
         ]
     )
 
