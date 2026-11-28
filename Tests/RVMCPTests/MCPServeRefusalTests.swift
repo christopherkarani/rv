@@ -117,7 +117,7 @@ struct MCPServeRefusalTests {
         func next(_ cause: MCPServeRefusal.Cause) -> String { MCPServeRefusal(servers: ["wax"], cause: cause, log: "").next }
         #expect(next(.noSandbox("wax")) == #"add "sandbox": {"network": false} to wax in mcp.json, then rv mcp trust"#)
         #expect(next(.openNetwork("wax")) == "list the hosts wax needs in sandbox.hosts in mcp.json, then rv mcp trust")
-        #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets set WAX_TOKEN")
+        #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets add WAX_TOKEN")
         #expect(next(.placeholders(server: "wax", .unsupportedPlatform)) == "fix wax's placeholders in mcp.json, then rv mcp trust")
         #expect(next(.cageUnavailable) == "rv doctor")
         let inArgs = MCPServeRefusal(servers: ["wax"], cause: .secretInArguments(server: "wax", secret: .reference("WAX_TOKEN")), log: "")

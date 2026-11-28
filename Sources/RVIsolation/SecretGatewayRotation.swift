@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import RVDomain
 
 /// A provider's current value for a gateway entry, plus the expiry now on file.
 public struct SecretRefreshed: Sendable {
@@ -20,7 +21,7 @@ public struct SecretRefreshed: Sendable {
 /// is served the current value. Past twice the interval (the grace) a
 /// request waits for a refresh and is refused if it fails. A `probe` marker
 /// that differs from the last one (a Keychain item's modification date)
-/// makes the next request wait for a refresh, so `rv secrets set` reaches
+/// makes the next request wait for a refresh, so `rv secrets add` reaches
 /// running sessions without a restart.
 public struct SecretRefreshPolicy: Sendable {
     /// Nil refreshes only when the probe reports a change.

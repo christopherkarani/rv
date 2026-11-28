@@ -84,7 +84,7 @@ import RVTheme
 
 @Test func helpText_allowOnce_namesRedeemNotCommandMint() {
     let text = HelpDispatch.text(.allowOnce, palette: colorOffPalette)
-    #expect(text.contains("rv allow-once a1b2c3"))
+    #expect(text.contains("rv unlock a1b2c3"))
     #expect(text.contains("six-character"))
     #expect(text.contains("rv allow-once 'git reset --hard'") == false)
 }

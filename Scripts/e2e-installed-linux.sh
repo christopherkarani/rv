@@ -724,7 +724,7 @@ decision() { python3 -c 'import json,sys
 t=sys.stdin.read().strip()
 if not t: print("allow"); sys.exit()
 d=json.loads(t)["hookSpecificOutput"]; r=d.get("permissionDecisionReason","")
-print(d["permissionDecision"] + ("+code" if "allow-once" in r else ""))'; }
+print(d["permissionDecision"] + ("+code" if "rv unlock" in r else ""))'; }
 
 # rvd down first (it was stopped above)
 out="$(hook 'git status')"; [[ "$(printf '%s' "$out" | decision)" == "ask" && "$out" == *"(rv.hook/unreachable)"* ]]
@@ -755,12 +755,12 @@ lines_b=$(cat "$OWNER_HOME/.config/rv/audit.jsonl" 2>/dev/null | wc -l)
 [[ "$got" == "deny" ]]; check gate "rv's self-protection: 'rv host mode claude off' from the agent is refused" $? "$got"
 
 # allow-once: the 'ask' approved by the owner
-out="$(hook 'git clean -fd')"; code="$(printf '%s' "$out" | grep -o 'allow-once [0-9a-f]\{6\}' | head -1 | cut -d' ' -f2)"
+out="$(hook 'git clean -fd')"; code="$(printf '%s' "$out" | grep -oE '(unlock|allow-once) [0-9a-f]{6}' | head -1 | cut -d' ' -f2)"
 as_agent rv allow-once "$code" > "$WORK/ao-agent.log" 2>&1; [[ $? != 0 ]]
 check gate "allow-once from the agent (no TTY) is refused" $? "$(cat "$WORK/ao-agent.log")"
 as_owner "$TOOLS/pty_run.py" 60 assword wrong-password -- rv allow-once "$code" > "$WORK/ao-wrong.log" 2>&1; [[ $? != 0 ]]
 check gate "allow-once with a wrong password is refused" $?
-out="$(hook 'git clean -fd')"; code="$(printf '%s' "$out" | grep -o 'allow-once [0-9a-f]\{6\}' | head -1 | cut -d' ' -f2)"
+out="$(hook 'git clean -fd')"; code="$(printf '%s' "$out" | grep -oE '(unlock|allow-once) [0-9a-f]{6}' | head -1 | cut -d' ' -f2)"
 as_owner "$TOOLS/pty_run.py" 60 assword "$PASSWORD" -- rv allow-once "$code" > "$WORK/ao.log" 2>&1
 check gate "the owner redeems the allow-once code with the login password" $? "$(tail -2 "$WORK/ao.log")"
 g1="$(hook 'git clean -fd' | decision)"; g2="$(hook 'git clean -fd' | decision)"

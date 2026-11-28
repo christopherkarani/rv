@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVFileStore
 import RVIsolation
 
@@ -245,7 +246,7 @@ public enum MCPImport {
             }
             if MCPRedaction.isReference(value) {
                 plan.notes.append(
-                    "\(entry.name): header \(header) referenced \(value) in the host; store it with `rv secrets set` and use ${secret:NAME}")
+                    "\(entry.name): header \(header) referenced \(value) in the host; store it with `\(CommandVocabulary.Alias.secretsAdd.invocation)` and use ${secret:NAME}")
                 continue
             }
             var scheme = ""

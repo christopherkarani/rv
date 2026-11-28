@@ -60,7 +60,7 @@ _rv() {
           ws=('start:Start or attach' 'attach:Attach until stdin closes' 'status:Show the live host' 'close:Close the workspace')
           _describe -t commands 'workspace' ws
           ;;
-        allow-once)
+        unlock|allow-once)
           local -a ao
           ao=('mint:Mint a code' 'list:List rows' 'clear:Clear rows')
           _describe -t commands 'allow-once' ao

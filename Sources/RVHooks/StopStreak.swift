@@ -11,7 +11,7 @@ import RVDomain
 //     ✕ Stopped   git checkout . (core.git/checkout-discard)
 //     why     discards uncommitted changes
 //     again   3 tries stopped by this rule. Rephrasing won't get through.
-//     who     ask Chris to run  rv allow-once a7c835
+//     who     ask Chris to run  rv unlock a7c835
 //
 // The note is not a second instruction: `who` stays the one step, and the
 // note never names a command. It changes no verdict. Only rvd counts (in
