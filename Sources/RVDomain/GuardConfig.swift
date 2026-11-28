@@ -19,6 +19,16 @@ public enum JudgeEngine: String, Sendable {
     case laya
 }
 
+/// Whether the judge's verdict decides a call (`live`) or is only logged
+/// (`shadow`, the default). In shadow the judge still scores every
+/// pack-allowed command and its would-be verdict lands in judge-log.jsonl,
+/// but it never raises an allow: rule packs alone decide. Set
+/// `"judge": {"mode": "live"}` once the model is trusted.
+public enum JudgeMode: String, Sendable {
+    case live
+    case shadow
+}
+
 /// How rv guards one hook host. `block` enforces, `observe` allows and logs
 /// what enforcement would have blocked, `off` leaves the host unwired. A
 /// host with no stored entry follows the global `guard.mode` (enforce by
@@ -52,13 +62,22 @@ public struct GuardConfig: Sendable, Equatable {
     public var hosts: [HookHost: HostMode]
     /// `judge.engine`; nil when unset or unparseable.
     public var judgeEngine: JudgeEngine?
+    /// `judge.mode`; nil when unset or unparseable (shadow).
+    public var judgeMode: JudgeMode?
+
+    /// Whether the judge's verdict decides: only an explicit `live`.
+    public var judgeDecides: Bool { judgeMode == .live }
 
     public static let empty = GuardConfig()
 
-    public init(mode: GuardMode? = nil, hosts: [HookHost: HostMode] = [:], judgeEngine: JudgeEngine? = nil) {
+    public init(
+        mode: GuardMode? = nil, hosts: [HookHost: HostMode] = [:], judgeEngine: JudgeEngine? = nil,
+        judgeMode: JudgeMode? = nil
+    ) {
         self.mode = mode
         self.hosts = hosts
         self.judgeEngine = judgeEngine
+        self.judgeMode = judgeMode
     }
 
     /// Decodes `config.json` bytes: the one bytes-to-config entry, shared
@@ -94,7 +113,8 @@ public struct GuardConfig: Sendable, Equatable {
         self.init(
             mode: Self.chosenRaw(root, object: "guard", key: "mode").flatMap { GuardMode(rawValue: $0.lowercased()) },
             hosts: Self.hostModes(root),
-            judgeEngine: Self.chosenRaw(root, object: "judge", key: "engine").flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+            judgeEngine: Self.chosenRaw(root, object: "judge", key: "engine").flatMap { JudgeEngine(rawValue: $0.lowercased()) },
+            judgeMode: Self.chosenRaw(root, object: "judge", key: "mode").flatMap { JudgeMode(rawValue: $0.lowercased()) }
         )
     }
 

@@ -429,8 +429,12 @@ public final class SecretGateway: @unchecked Sendable {
         for fd in fds where fd >= 0 {
             shutdown(fd, Int32(SHUT_RDWR))
         }
+        // The loop leaves within one 200 ms poll once woken. The bound only
+        // covers a loop thread that gets no CPU: closing under it leaves the
+        // port accepting after stop returned, as a loaded 3-core CI runner
+        // showed with the old 2 s bound.
         for wait in waits {
-            _ = wait.wait(timeout: .now() + 2)
+            _ = wait.wait(timeout: .now() + 10)
         }
         for fd in fds where fd >= 0 {
             close(fd)

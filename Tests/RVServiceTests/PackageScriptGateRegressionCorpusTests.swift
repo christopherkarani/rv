@@ -162,7 +162,7 @@ struct PackageScriptGateRegressionCorpusTests {
         defer { remove(home) }
         let cwd = WorkingDirectory(rawValue: world.cwd.path)
         let judges: [(String, JudgeSelection)] = [
-            ("no-bundle", JudgeSelection(engine: .ft, bundle: nil)),
+            ("no-bundle", JudgeSelection(engine: .ft, bundle: nil, shadow: false)),
             ("allow-judge", PackageScriptGateFloorTests.fakeBundle),
         ]
         for (name, judge) in judges {

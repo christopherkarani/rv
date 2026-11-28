@@ -151,8 +151,8 @@ struct LocalHookDeciderTests {
 
         var observe: Data {
             switch self {
-            case .fileGlobal, .shellGlobal: Data(#"{"guard":{"mode":"observe"}}"#.utf8)
-            case .shellHost: Data(#"{"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
+            case .fileGlobal, .shellGlobal: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"observe"}}"#.utf8)
+            case .shellHost: Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce","hosts":{"claude":"observe"}}}"#.utf8)
             }
         }
     }
@@ -177,7 +177,7 @@ struct LocalHookDeciderTests {
         }
 
         let config = configDirectory.appendingPathComponent("config.json")
-        let enforce = Data(#"{"guard":{"mode":"enforce"}}"#.utf8)
+        let enforce = Data(#"{"judge":{"mode":"live"},"guard":{"mode":"enforce"}}"#.utf8)
         let observe = flip.observe
         let stop = UnfairLock(false)
         let flipper = Thread {
@@ -274,10 +274,13 @@ struct LocalHookFixture {
     let judge: (any JudgeClient)?
 
     /// `localDeadline` defaults to `testLocalDeadline`; tests of the real
-    /// deadline pass `LocalHookDecider.localDeadline`.
+    /// deadline pass `LocalHookDecider.localDeadline`. `judgeMode` defaults
+    /// to `live` (these tests characterize the judge deciding); nil writes
+    /// none (over the live judge `isolatedHomeDirectory` seeds), so the
+    /// judge runs in its default shadow.
     init(
         judgeBundle: Bool = false, guardMode: String? = nil, repo: Bool = true, judge: (any JudgeClient)? = nil,
-        localDeadline: Duration = testLocalDeadline
+        judgeMode: String? = "live", localDeadline: Duration = testLocalDeadline
     ) throws {
         let root = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: root.path))
@@ -292,10 +295,13 @@ struct LocalHookFixture {
         }
         let config = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
-        if let guardMode {
-            try Data(#"{"guard":{"mode":"\#(guardMode)"}}"#.utf8)
-                .write(to: config.appendingPathComponent("config.json"))
-        }
+        let sections = [
+            judgeMode.map { #""judge":{"mode":"\#($0)"}"# },
+            guardMode.map { #""guard":{"mode":"\#($0)"}"# },
+        ].compactMap(\.self)
+        // Always written: `isolatedHomeDirectory` seeds a live judge.
+        try Data("{\(sections.joined(separator: ","))}".utf8)
+            .write(to: config.appendingPathComponent("config.json"))
         if judgeBundle {
             let bundle = config.appendingPathComponent("models/\(JudgeRuntime.ftBundleName)", isDirectory: true)
             try FileManager.default.createDirectory(
