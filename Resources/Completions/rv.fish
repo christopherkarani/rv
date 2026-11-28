@@ -4,6 +4,7 @@ complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with
 complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persistent workspace host"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
 complete -c rv -n "__fish_use_subcommand" -a "try" -d "Watch rv stop a fake agent in a throwaway repo"
+complete -c rv -n "__fish_use_subcommand" -a "term" -d "Watch what rv is doing, full screen"
 complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
 complete -c rv -n "__fish_use_subcommand" -a "packs" -d "List and enable packs"
 complete -c rv -n "__fish_use_subcommand" -a "policy" -d "Typed rules"
