@@ -1,4 +1,5 @@
 import Foundation
+import RVHooks
 
 /// Positive safe-command lane (laya-guard `safe_commands` parity).
 ///
@@ -164,7 +165,12 @@ public enum SafeCommandLane {
         #"rv explain( \S+)+"#,
         #"rv box list( --(json|robot|plain))?"#,
         #"rv (service|policy) status( --(json|robot|plain))?"#,
-        #"rv( [a-z][a-z-]*){1,2} (--help|-h)"#,
+        // Only verbs whose --help just prints help (`rvHelpPageVerbs`):
+        // never `rv run`, `rv box` or another verb that passes its
+        // arguments on (`rv run shutdown -h`).
+        #"rv (\#(rvHelpPageVerbs.map(\.rawValue).joined(separator: "|")))( [a-z][a-z-]*)? (--help|-h)"#,
+        // Names, sources and delivery only; never a value.
+        #"rv secrets( list)?( --(json|robot|plain))?"#,
         #"rv (--help|-h|--version|version|help( [a-z][a-z-]*){0,2})"#,
         // H2: waits on the unlock ledger and rvd's events; it can never decide.
         #"rv wait [0-9A-Za-z]{6}( --timeout[ =][0-9]{1,4})?"#,

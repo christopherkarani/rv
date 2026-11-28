@@ -1,10 +1,10 @@
 == reset-hard, minted code
 exit 2
-stdout {"decision":"block","reason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835, then wait:  rv wait a7c835"}
+stdout {"decision":"block","reason":"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835  (you can wait: rv wait a7c835)"}
 stderr ✕ Stopped   git reset --hard origin/main (core.git/reset-hard)
 why     destroys uncommitted changes
 safer   git status
-who     ask Chris to run  rv allow-once a7c835, then wait:  rv wait a7c835
+who     ask Chris to run  rv allow-once a7c835  (you can wait: rv wait a7c835)
 
 == rm -rf home, who_acts
 exit 2
