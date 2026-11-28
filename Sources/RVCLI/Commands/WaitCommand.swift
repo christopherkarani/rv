@@ -49,13 +49,19 @@ struct Wait: AsyncParsableCommand {
         }
         let probe = ThemeProbeFactory.live(jsonFlag: false, robotFlag: false, plainFlag: false, noColorFlag: false)
         let palette = Palette(for: ColorCapability(probe: probe, mode: .pretty), background: probe.background)
-        let run = WaitRun(
+        let owner = WaitOwnerName.from(fullName: Self.accountFullName())
+        var run = WaitRun(
             ledger: LiveWaitLedger(store: AllowOnceStore.makeLive(home: home)),
             events: LiveWaitEvents(),
             limit: .seconds(timeout)
         )
+        // K2: the check words go out at once, so the person can match them
+        // against the menu bar's sheet while the agent waits.
+        run.onStart = {
+            // Unbuffered, ahead of the buffered `print`s that end the wait.
+            FileHandle.standardOutput.write(Data((WaitScreen.startLine(code: code, owner: owner, palette: palette) + "\n").utf8))
+        }
         let (ending, waited) = await run.wait(for: code)
-        let owner = WaitOwnerName.from(fullName: Self.accountFullName())
         for line in WaitScreen.lines(ending, code: code, owner: owner, waited: waited, palette: palette) {
             print(line)
         }
@@ -131,12 +137,15 @@ struct WaitRun: Sendable {
     var clock: @Sendable () -> Date = { Date() }
     var monotonic: @Sendable () -> ContinuousClock.Instant = { .now }
     var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    /// Runs once the code is known to be a live stop, before the first poll.
+    var onStart: @Sendable () -> Void = {}
 
     func wait(for code: WaitCode) async -> (WaitEnding, Duration) {
         let started = monotonic()
         guard let ask = WaitWatch.ask(for: code, in: await ledger.rows(now: clock())) else {
             return (.unknownCode, .zero)
         }
+        onStart()
         var stream: UUID?
         var cursor: UInt64?
         while true {
