@@ -83,9 +83,8 @@ enum HelpCatalog {
                 HelpRow(name: "secrets", description: "Keys your agents use but never see"),
             ]),
             HelpSection(heading: "Rules", rows: [
-                HelpRow(name: "protect, packs", description: "Protect a tool; list, test or switch rule packs"),
+                HelpRow(name: "protect, packs, proposals", description: "Protect a tool, switch packs, answer agent asks"),
                 HelpRow(name: "policy, allowlist, safety", description: "Your own rules, lasting exceptions, strictness"),
-                HelpRow(name: "proposals", description: "What agents asked rv to loosen; you decide"),
             ]),
             HelpSection(heading: "Team", rows: [
                 HelpRow(name: "managed, report, audit", description: "Org policy, this machine's posture, the audit trail"),
