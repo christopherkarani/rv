@@ -409,7 +409,7 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                        rv unlock clear
 
                 """,
-                exitCode: 2
+                exitCode: ExitStatus.usage.rawValue
             )
         }
         let ctx = CommandContext.current(command: "allow-once", format: format)
@@ -462,7 +462,7 @@ struct AllowOnceMint: AsyncParsableCommand {
     func run() async throws {
         let raw = commandParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard raw.isEmpty == false else {
-            try CommandContext.fail("rv allow-once mint: missing command\n", exitCode: 2)
+            try CommandContext.fail("rv allow-once mint: missing command\n", exitCode: ExitStatus.usage.rawValue)
         }
         let ctx = CommandContext.current(command: "allow-once", format: format)
         do {
@@ -479,7 +479,7 @@ struct AllowOnceMint: AsyncParsableCommand {
             )
             ctx.writeStdout(AllowOnceCLI.mintedMessage(code: code.rawValue))
         } catch AllowOnceError.emptyCommand {
-            try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
+            try ctx.fail("rv allow-once mint: missing command\n", exitCode: ExitStatus.usage.rawValue)
         } catch AllowOnceAttestError.serviceUnavailable {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceUnavailableMessage)\n", exitCode: 2)
         } catch AllowOnceAttestError.serviceDenied {
