@@ -31,6 +31,11 @@ public struct HookEvaluateWorld: Sendable {
     /// cwd. Nil (the port, or its answer) sends no house rules: the event
     /// passes like a foreign one. Read-only; it never changes policy.
     public var houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)?
+    /// B5: counts one stop shown to an agent session and returns how many
+    /// stops of the same rule that session has hit lately, this one
+    /// included. rvd keeps the count in memory; nil (tests, the C hook's
+    /// own worlds) counts nothing, and every stop reads as a first.
+    public var countStop: (@Sendable (StopStreakKey) -> Int)?
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
@@ -42,7 +47,8 @@ public struct HookEvaluateWorld: Sendable {
         )? = nil,
         voice: StopVoice = .plain,
         saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)? = nil,
-        houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)? = nil
+        houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)? = nil,
+        countStop: (@Sendable (StopStreakKey) -> Int)? = nil
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
@@ -52,5 +58,6 @@ public struct HookEvaluateWorld: Sendable {
         self.voice = voice
         self.saferAllowed = saferAllowed
         self.houseRules = houseRules
+        self.countStop = countStop
     }
 }

@@ -71,9 +71,7 @@ private func hookRequestBody(
             request: request,
             file: file,
             codec: codec,
-            evaluateFile: world.evaluateFile,
-            voice: world.voice,
-            saferAllowed: world.saferAllowed
+            world: world
         )
     case .shell(_, let command, let cwd, _):
         let result = await world.evaluate(command, cwd)
@@ -99,7 +97,8 @@ private func hookRequestBody(
             }
         }
         // The pack's safer command shows only when rv allows it here.
-        let voice = await world.voice.vetted(for: result, cwd: cwd, by: world.saferAllowed)
+        let vetted = await world.voice.vetted(for: result, command: command, cwd: cwd, by: world.saferAllowed)
+        let voice = world.voice(countingStopOf: result, authorization: auth, request: request, from: vetted)
         return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }
@@ -108,15 +107,13 @@ private func hookFileBody(
     request: HookRequest,
     file: FileToolAction,
     codec: any HostCodec,
-    evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult,
-    voice: StopVoice,
-    saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
+    world: HookEvaluateWorld
 ) async -> HookWire {
     if file.path.isEmpty {
-        return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: voice))
+        return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: world.voice))
     }
-    let result = await evaluateFile(file, request.cwd)
-    let vetted = await voice.vetted(for: result, cwd: request.cwd, by: saferAllowed)
+    let result = await world.evaluateFile(file, request.cwd)
+    let vetted = await world.voice.vetted(for: result, cwd: request.cwd, by: world.saferAllowed)
     return hookFileWire(from: result, using: codec, path: file.path, voice: vetted)
 }
 
