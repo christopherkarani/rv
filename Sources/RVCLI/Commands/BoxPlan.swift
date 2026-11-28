@@ -54,6 +54,10 @@ enum BoxTarget: Equatable, Sendable {
     case setupMac
     /// `rv box tidy [--yes]`: leftovers to the 7-day trash.
     case tidy(yes: Bool)
+    /// `rv box done`: the review on the way home.
+    case done
+    /// `rv box default [on | off]`: boxed by default.
+    case defaultSwitch(BoxDefaultRequest)
 }
 
 /// Why a box did not start, as one line and the one thing to do next.
@@ -196,6 +200,9 @@ enum BoxPlan {
             }
             return .success(.tidy(yes: rest.contains("--yes") || rest.contains("-y")))
         }
+        if first == "done" || first == "default" {
+            return homeTarget(first, rest)
+        }
         if first == "setup" {
             if rest.first == "mac", rest.dropFirst().contains(where: isWallOrProfileFlag) {
                 return .failure(wallFlagsRefusal("rv box setup mac"))
@@ -246,10 +253,27 @@ enum BoxPlan {
         BoxRefusal(why: "\(command) takes no --linux, --mac or --profile.", fix: command, exitCode: 64)
     }
 
+    /// `done` and `default`: neither takes anything but `--help`, and
+    /// `default` takes on or off.
+    private static func homeTarget(_ first: String, _ rest: [String]) -> Result<BoxTarget, BoxRefusal> {
+        let command = "rv box " + first
+        if rest.contains(where: isWallOrProfileFlag) { return .failure(wallFlagsRefusal(command)) }
+        let words = rest.filter { BoxDoneRun.words.contains($0) == false }
+        if first == "done" {
+            guard let stray = words.first else { return .success(.done) }
+            let why = stray.hasPrefix("-") ? "\(command) has no \(DisplayedText.field(stray)) option." : "\(command) takes no \(DisplayedText.field(stray))."
+            return .failure(BoxRefusal(why: why, fix: command, exitCode: 64))
+        }
+        return BoxDefaultRequest.parse(words).map(BoxTarget.defaultSwitch)
+    }
+
     static func checkFlags(
         linux: Bool, mac: Bool, profile: String?, target: BoxTarget
     ) -> BoxRefusal? {
         switch target {
+        case .done, .defaultSwitch:
+            guard linux || mac || profile != nil else { return nil }
+            return wallFlagsRefusal(target == .done ? "rv box done" : "rv box default")
         case .list, .setupMac, .tidy:
             guard linux || mac || profile != nil else { return nil }
             switch target {
@@ -296,6 +320,11 @@ enum BoxPlan {
             words += ["setup", "mac"]
         case .tidy(let yes):
             words += yes ? ["tidy", "--yes"] : ["tidy"]
+        case .done:
+            words.append("done")
+        case .defaultSwitch(let request):
+            words.append("default")
+            if case .turn(let on) = request { words.append(on ? "on" : "off") }
         }
         return words.joined(separator: " ")
     }
@@ -483,7 +512,7 @@ enum BoxPlan {
         switch target {
         case .shell:
             return .success(.shell(project: project))
-        case .list, .setupMac, .tidy:
+        case .list, .setupMac, .tidy, .done, .defaultSwitch:
             return .failure(BoxRefusal(why: "Nothing to launch.", fix: "rv box --help", exitCode: 64))
         case .agent(let agent, let rest):
             (name, arguments, hook) = (agent, rest, HookHost(rawValue: agent))
@@ -659,13 +688,13 @@ enum BoxPlan {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// After the runtime exits: its writes are still on the volume.
+    /// After the runtime exits: its writes are still on the volume, and
+    /// `rv box done` reviews them on the way home. It finds the box from
+    /// anywhere in the project, as `rv box` did.
     static func exitLine(project: String, workingDirectory: String, home: String?) -> String {
-        var command = "rv workspace close"
-        if normalized(workingDirectory) != project {
-            command += " --workspace " + shellPath(project, home: home)
-        }
-        return "  \(Glyph.next.rawValue) bring the writes home: \(command)\n"
+        let inside = normalized(workingDirectory) == project || isInside(workingDirectory, project)
+        let command = inside ? "rv box done" : "cd \(shellPath(project, home: home)) && rv box done"
+        return "  \(Glyph.next.rawValue) bring it home: \(command)\n"
     }
 
     /// `rv box setup mac`, before and after the helper's own progress.

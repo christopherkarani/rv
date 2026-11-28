@@ -33,6 +33,8 @@ struct BoxCommand: AsyncParsableCommand {
         HelpRow(name: "rv box list [--json]", description: "Every box, any strength, newest first; --json writes schema rv.boxes.v1"),
         HelpRow(name: "rv box setup mac", description: "Build the Mac box image now, in the foreground (about 26 GB)"),
         HelpRow(name: "rv box tidy [--yes]", description: "Move old box images to a 7-day trash; boxes with unsaved work are never touched. --yes answers the one question, so a script or an agent may run it"),
+        HelpRow(name: "rv box done", description: "Review what changed in this project's box, in numbers, then bring it all home, pick, drop to the 7-day trash, or keep it in the box. Your newer edits are never overwritten. At your terminal only"),
+        HelpRow(name: "rv box default [on | off]", description: "Boxed by default: rv opencode starts in a box and every boxed session ends with rv box done. Off until you turn it on; on or off needs you at your terminal and Touch ID or your password"),
     ]
 
     static let flags = [
@@ -43,7 +45,7 @@ struct BoxCommand: AsyncParsableCommand {
     ]
 
     /// Words offered after `rv box`: the known agents, `list` and `setup`.
-    static let completions = RuntimeAgentEntries.known + ["list", "setup", "tidy"]
+    static let completions = RuntimeAgentEntries.known + ["list", "setup", "tidy", "done", "default"]
 
     @Flag(name: .long, help: "Run in a network-less Linux micro-VM.")
     var linux = false
@@ -59,7 +61,7 @@ struct BoxCommand: AsyncParsableCommand {
 
     @Argument(
         parsing: .captureForPassthrough,
-        help: "An agent name and its arguments, -- and a command, list, tidy, or setup mac.",
+        help: "An agent name and its arguments, -- and a command, list, tidy, done, default, or setup mac.",
         completion: .list(BoxCommand.completions))
     var words: [String] = []
 
@@ -88,6 +90,18 @@ struct BoxCommand: AsyncParsableCommand {
                 return
             }
             try BoxTidyRun.run(yes: yes)
+        case .done:
+            if words.contains(where: { $0 == "--help" || $0 == "-h" }) {
+                _ = HelpDispatch.tryEmit(arguments: ["box", "--help"])
+                return
+            }
+            try BoxDoneRun.run()
+        case .defaultSwitch(let request):
+            if words.contains(where: { $0 == "--help" || $0 == "-h" }) {
+                _ = HelpDispatch.tryEmit(arguments: ["box", "--help"])
+                return
+            }
+            try await BoxDefaultFlow.run(request)
         case .shell, .agent, .command:
             try await BoxRun.run(linux: linux, mac: mac, profile: profile, captured: words, verbose: verbose)
         }
@@ -129,7 +143,10 @@ struct BoxListCommand: ParsableCommand {
 /// The imperative shell of `rv box`: reads the machine, then hands the
 /// launch `BoxPlan` resolved to `WorkspaceCommandRun`.
 enum BoxRun {
-    static func run(linux: Bool, mac: Bool, profile: String?, captured: [String], verbose: Bool = false) async throws {
+    static func run(
+        linux: Bool, mac: Bool, profile: String?, captured: [String], verbose: Bool = false,
+        presentation: BoxPresentation = .asked
+    ) async throws {
         #if !os(macOS)
         try refuse(BoxPlan.linuxHostRefusal)
         #else
@@ -150,7 +167,7 @@ enum BoxRun {
             }
             try await WorkspaceTUICommand.run(project)
         case .launch(let launch):
-            try runLaunch(launch, surroundings: surroundings, verbose: verbose) {
+            try runLaunch(launch, surroundings: surroundings, verbose: verbose, presentation: presentation) {
                 let elapsed = started.duration(to: clock.now).components
                 return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
             }
@@ -178,7 +195,8 @@ enum BoxRun {
 
     #if os(macOS)
     private static func runLaunch(
-        _ launch: BoxLaunch, surroundings: BoxSurroundings, verbose: Bool, elapsed: () -> Double
+        _ launch: BoxLaunch, surroundings: BoxSurroundings, verbose: Bool, presentation: BoxPresentation,
+        elapsed: () -> Double
     ) throws {
         if let microVM = launch.wall.microVM {
             do throws(WorkspaceMicroVM.Unready) {
@@ -189,8 +207,18 @@ enum BoxRun {
         }
         let home = surroundings.home
         let workingDirectory = surroundings.workingDirectory
-        writeStderr(BoxPlan.headerLine(launch, home: home))
+        if presentation == .asked { writeStderr(BoxPlan.headerLine(launch, home: home)) }
         let exitLine = BoxPlan.exitLine(project: launch.project, workingDirectory: workingDirectory, home: home)
+        // Boxed by default: the review comes on the way home, at a
+        // terminal. Anywhere else the exit line says how to ask for it.
+        let comeHome = {
+            let atTerminal = isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+            guard atTerminal, BoxDefaultSetting.isOn(home: CLIProcess.home()) else {
+                writeStderr(exitLine)
+                return
+            }
+            try BoxDoneRun.run(agent: launch.agentName, project: launch.project)
+        }
         do {
             // The ✓ lines wait for the host's launch, so a refused launch
             // never shows them above its ✕.
@@ -204,13 +232,20 @@ enum BoxRun {
                 resourceProfileID: launch.profile?.id,
                 microVM: launch.wall.microVM,
                 onLaunched: {
-                    writeStderr(BoxPlan.launchedLines(
-                        launch, seconds: elapsed(), home: home, workingDirectory: workingDirectory))
+                    switch presentation {
+                    case .asked:
+                        writeStderr(BoxPlan.launchedLines(
+                            launch, seconds: elapsed(), home: home, workingDirectory: workingDirectory))
+                    case .byDefault:
+                        writeStderr(BoxPlan.boxedLine(launch, home: home))
+                    }
                 }
             )
         } catch let exit as ExitCode {
             // The runtime ran and exited; its writes are still in the box.
-            writeStderr(exitLine)
+            // The review says why when it can't run; the runtime's own
+            // exit status is what this command exits with.
+            do { try comeHome() } catch {}
             throw exit
         } catch let error as ValidationError {
             // A refused trust pin can look like an unreachable host: ask
@@ -223,7 +258,7 @@ enum BoxRun {
             try refuse(BoxStartFailure.fallback,
                        detail: verbose ? BoxStartFailure.detail(String(describing: error)) : nil)
         }
-        writeStderr(exitLine)
+        try comeHome()
     }
 
     /// The machine, as `BoxPlan` reads it; nil when the current folder
@@ -352,11 +387,11 @@ extension HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "project", description: "The nearest folder at or above this one that holds .git, else this folder; never your home folder or one that holds it"),
                 HelpRow(name: "start", description: "The box starts in the project root; a relative path you name is taken from this folder"),
-                HelpRow(name: "writes", description: "Stay in the box until rv workspace close brings them home"),
+                HelpRow(name: "writes", description: "Stay in the box until rv box done brings them home, after showing what changed"),
                 HelpRow(name: "keys", description: "Only what the resource profile stages; rv init writes one for this project. With a profile staged, an agent found on PATH inside the project is refused"),
                 HelpRow(name: "platform", description: "macOS only; on Linux rv box refuses rather than use a weaker wall"),
             ]),
         ],
-        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list", "rv box tidy"]
+        examples: ["rv box claude", "rv box --linux -- npm test", "rv box done", "rv box list", "rv box tidy"]
     )
 }

@@ -11,7 +11,9 @@ import RVDomain
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
 /// (`rv host mode <host> observe|off`), moving files across a workspace's
-/// wall (`rv workspace upload|download`), or switching rv to observe
+/// wall (`rv workspace upload|download`), bringing a box's work home
+/// (`rv box done`, `rv workspace close`), turning boxed by default on or
+/// off (`rv box default on|off`), or switching rv to observe
 /// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule. A bare
@@ -372,7 +374,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace", "protect", "pause",
+    "workspace", "protect", "pause", "box",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -485,7 +487,17 @@ private func isWeakeningSub(
     case "workspace":
         // File transfer crosses the cage wall: `upload` reads host paths
         // into the workspace, `download` writes workspace files to the host.
-        return sub == "upload" || sub == "download"
+        // `close` publishes the box with no review: it is `rv box done`'s
+        // keep-all without the person seeing it.
+        return sub == "upload" || sub == "download" || sub == "close"
+    case "box":
+        // L5: `rv box done` brings a box's work home and `rv box default
+        // on|off` decides whether agents start boxed; both are the owner's.
+        // Bare `rv box default` only shows the setting. Every other word is
+        // an agent or command run in a box, which only tightens.
+        if sub == "done" { return true }
+        guard sub == "default" else { return false }
+        return tail.contains { $0.hasPrefix("-") == false || isUnmodelledWord($0) }
     case "pause":
         // `rv pause <duration>` watches every host; bare `rv pause` (the
         // countdown) and `rv pause --end` (back now) carry no positional.

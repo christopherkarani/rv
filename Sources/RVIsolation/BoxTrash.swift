@@ -72,6 +72,33 @@ public struct BoxTrash: Sendable {
         return .success(BoxTrashEntry(path: entry.path, trashedAt: Date(timeIntervalSince1970: TimeInterval(seconds))))
     }
 
+    /// A new entry for copies of a box's dropped work (`rv box done`):
+    /// `origin.json` names the project, and `copiesFolder` holds each file
+    /// at its path in the project. Nothing is moved: the box's files sit
+    /// on the box's own volume, which `rename` cannot leave.
+    public func makeEntry(from origin: String, now: Date) -> Result<BoxTrashEntry, MoveFailure> {
+        let manager = FileManager.default
+        let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
+        let entry = root.appendingPathComponent("\(seconds)-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try manager.createDirectory(at: root, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+            try manager.createDirectory(at: entry, withIntermediateDirectories: false,
+                                        attributes: [.posixPermissions: 0o700])
+            try manager.createDirectory(at: entry.appendingPathComponent(Self.copiesFolder, isDirectory: true),
+                                        withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let record = try JSONEncoder.trash.encode(Origin(from: origin, trashedAt: now))
+            try record.write(to: entry.appendingPathComponent("origin.json"), options: .withoutOverwriting)
+        } catch {
+            try? manager.removeItem(at: entry)
+            return .failure(.trashUnavailable)
+        }
+        return .success(BoxTrashEntry(path: entry.path, trashedAt: Date(timeIntervalSince1970: TimeInterval(seconds))))
+    }
+
+    /// The folder in an entry from `makeEntry` that holds the copies.
+    public static let copiesFolder = "files"
+
     /// Every entry, dated by its folder name. A folder whose name is not
     /// an entry's is not tidy's and is never listed (or emptied).
     public func entries() -> [BoxTrashEntry] {

@@ -107,6 +107,12 @@ enum CLIProcess: Sendable {
         context?.stdoutIsTTY ?? (isatty(STDOUT_FILENO) != 0)
     }
 
+    /// Whether stderr is a terminal. An installed context captures stderr,
+    /// so it never is one there.
+    static func stderrIsTTY() -> Bool {
+        context == nil && isatty(STDERR_FILENO) != 0
+    }
+
     /// The terminal the background probe asks. Installed contexts get none,
     /// so tests never write a query to the operator's terminal.
     static func terminalQueryChannel() -> any TerminalQueryChannel {
