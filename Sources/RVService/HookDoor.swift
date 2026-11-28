@@ -165,7 +165,8 @@ extension HookEvaluateWorld {
         pending: (any PendingApprovalCoordinating)?,
         clock: @escaping @Sendable () -> Date,
         recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil,
-        voice: StopVoice = .live
+        voice: StopVoice = .live,
+        stdin: String? = nil
     ) -> HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
         return deadlineGuarded(HookEvaluateWorld(
@@ -207,7 +208,12 @@ extension HookEvaluateWorld {
                     maskedSegments: Normalize.maskedSegments(of: command),
                     invocationPrefix: Normalize.invocationPrefix(of: command),
                     invocationDisplay: Normalize.invocationDisplay(of: command),
-                    rawCommand: command.rawValue
+                    rawCommand: command.rawValue,
+                    // K2: who asked, and the agent's own line when the
+                    // host sends one, for the menu bar's approval sheet.
+                    // Decoded only here, on a stop that mints a code.
+                    stop: AllowOnceStopContext(
+                        asker: host, agentSays: stdin.flatMap { HookAgentSays.line(host: host, stdin: $0) })
                 )
             },
             voice: voice,

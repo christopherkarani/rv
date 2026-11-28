@@ -69,4 +69,37 @@ public struct IssuedAllowOnce: Sendable, Equatable {
     public let expiresAt: Date
     /// rvd planted a grant for this code in this lifetime.
     public internal(set) var redeemed: Bool
+    /// How the code came to be. Only a hook stop is an ask the menu bar
+    /// shows (K2); a pre-armed code is the owner's own.
+    public let origin: Origin
+    /// The stop's context, for the menu bar's approval sheet. Display
+    /// only: never part of what a grant covers.
+    public let stop: AllowOnceStopContext?
+
+    public enum Origin: Sendable, Equatable {
+        /// A hook denied the command and handed the agent this code.
+        case stop
+        /// The owner ran `rv allow-once mint`.
+        case preArmed
+    }
+}
+
+/// What the hook knew about the agent behind a stop, kept with the issued
+/// code in rvd's memory for the menu bar's approval sheet (K2). Display
+/// only: who asked and, when the host sends one, the agent's own one-line
+/// description of the command. The agent wrote that line, so the sheet
+/// labels it as the agent's words and nothing decides on it.
+public struct AllowOnceStopContext: Sendable, Equatable {
+    /// Longest agent line kept, in unicode scalars.
+    public static let maxAgentSaysScalars = 512
+
+    public let asker: HookHost
+    public let agentSays: String?
+
+    public init(asker: HookHost, agentSays: String? = nil) {
+        self.asker = asker
+        let trimmed = agentSays?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.agentSays = trimmed.isEmpty
+            ? nil : String(String.UnicodeScalarView(trimmed.unicodeScalars.prefix(Self.maxAgentSaysScalars)))
+    }
 }

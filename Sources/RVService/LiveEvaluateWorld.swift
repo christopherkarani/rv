@@ -170,7 +170,8 @@ package struct LiveEvaluateWorld: Sendable {
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
         invocationDisplay: String? = nil,
-        rawCommand: String? = nil
+        rawCommand: String? = nil,
+        stop: AllowOnceStopContext? = nil
     ) async -> AllowOnceUnlockMint? {
         await GatedEvaluate.mintUnlockCode(
             for: result,
@@ -181,7 +182,8 @@ package struct LiveEvaluateWorld: Sendable {
             maskedSegments: maskedSegments,
             invocationPrefix: invocationPrefix,
             invocationDisplay: invocationDisplay,
-            rawCommand: rawCommand
+            rawCommand: rawCommand,
+            stop: stop
         )
     }
 

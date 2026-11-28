@@ -83,6 +83,33 @@ public struct AllowlistStore: Sendable {
         }
     }
 
+    /// The menu bar's Always allow (K2): leaves `entry`'s exact command
+    /// allowed from now on, with `entry`'s bindings, and returns the entries
+    /// as written. An entry with the same selector and bindings that never
+    /// expires is kept as it is. One with the same selector that expires
+    /// (or already has) or is legacy (unbound) is replaced, so an old row
+    /// cannot stand in for the new answer. A permanent entry bound to
+    /// another payload or wrapper is left beside it.
+    package func pinExact(_ entry: AllowlistEntry) throws -> [AllowlistEntry] {
+        var written: [AllowlistEntry] = []
+        try mutate { entries in
+            let current = entries.contains {
+                $0.selector == entry.selector && $0.expiresAt == nil
+                    && $0.maskedPayloadDigest == entry.maskedPayloadDigest
+                    && $0.invocationDigest == entry.invocationDigest
+            }
+            if current == false {
+                entries.removeAll {
+                    $0.selector == entry.selector
+                        && ($0.expiresAt != nil || ($0.maskedPayloadDigest == nil && $0.invocationDigest == nil))
+                }
+                entries.append(entry)
+            }
+            written = entries
+        }
+        return written
+    }
+
     public func remove(
         matching ruleOrCommand: String,
         tty: TTYCapability,

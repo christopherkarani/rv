@@ -17,6 +17,8 @@ public enum UIBridgeWire {
     public static let requestKey = "rv.ui-request"
     public static let actionRequestKey = "rv.ui-action-request"
     public static let hookRequestKey = "rv.ui-hook-request"
+    /// Unlock review (K2): the menu bar's answer to a stop's allow-once code.
+    public static let unlockRequestKey = "rv.ui-unlock-request"
 
     public static let maxBodyBytes = 1_048_576
 }

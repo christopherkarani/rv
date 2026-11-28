@@ -29,11 +29,11 @@ public actor ServiceRuntime {
     /// built in `init` before `self` can be captured, shares the same
     /// module reference and reads the same live set at peek time.
     private let compileSet: LiveCompileSet
-    private let configHome: HomeDirectory?
-    private let allowOnce: AllowOnceStore
+    let configHome: HomeDirectory?
+    let allowOnce: AllowOnceStore
     /// Step 8B.1 sole grant authority: service-held memory, one instance per
     /// daemon lifetime. A restart drops the table and invalidates every grant.
-    private let grants: EphemeralAllowOnceTable
+    let grants: EphemeralAllowOnceTable
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     /// Drains the hook-local evaluator's spool, one drain at a time off the
@@ -653,8 +653,8 @@ public actor ServiceRuntime {
         case .planted:
             await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             // Memory only. The attesting CLI flips its own display
-            // projection after planted:true; the daemon never writes the
-            // shared projection file (no cross-process append race).
+            // projection after planted:true; rvd writes that file only for
+            // a plant of its own (the menu bar's K2 `projectRedeemed`).
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: true, epoch: grants.epoch.uuidString,
                 presence: ownerPresence.promptsItself ? .daemonPrompt : .password
@@ -833,7 +833,7 @@ public actor ServiceRuntime {
                     host: params.host,
                     pending: pendingApprovals,
                     clock: clock,
-                    recordDecision: analyticsRecorder()
+                    recordDecision: analyticsRecorder(), stdin: params.stdin
                 ), host: params.host, clock: clock),
                 deadline: deadline
             ) }

@@ -165,6 +165,26 @@ struct WaitCommandTests {
         #expect(text(.unknownCode) == ["✕ rv has no stop with code a7c835.", "Use the code from rv's stop message."])
     }
 
+    @Test("the wait starts with the three check words the menu bar's sheet shows (K2)")
+    func startLineCarriesTheCheckWords() {
+        #expect(WaitScreen.startLine(code: Self.code, owner: "Chris", palette: colorOffPalette)
+            == "⏺ Waiting on Chris · check words: orchid · rocket · crane")
+    }
+
+    @Test("the start line goes out once the code is known, and never for an unknown code")
+    func startRunsOnlyForALiveStop() async {
+        let starts = Mutex(0)
+        var known = Self.run(ledger: ScriptedLedger([[Self.row(.pending)], [Self.row(.granted)]]),
+                             events: ScriptedEvents(stream: UUID()))
+        known.onStart = { starts.withLock { $0 += 1 } }
+        _ = await known.wait(for: Self.code)
+        #expect(starts.withLock { $0 } == 1)
+        var unknown = Self.run(ledger: ScriptedLedger([[]]), events: ScriptedEvents(stream: UUID()))
+        unknown.onStart = { starts.withLock { $0 += 1 } }
+        _ = await unknown.wait(for: Self.code)
+        #expect(starts.withLock { $0 } == 1)
+    }
+
     @Test("durations read as the frame writes them")
     func clockWords() {
         #expect(WaitScreen.clock(.seconds(40)) == "40s")

@@ -18,13 +18,21 @@ public struct GlanceNotice: Sendable, Equatable {
     public var title: String
     public var body: String
     public var level: GlanceNoticeLevel
+    /// Set when the banner is about exactly one stop the person can unlock
+    /// (K2): its actions open the approval sheet and Touch ID for that
+    /// code. Nil banners carry no actions.
+    public var unlockCodeHash: String?
 
-    public init(id: String, thread: String, title: String, body: String, level: GlanceNoticeLevel) {
+    public init(
+        id: String, thread: String, title: String, body: String, level: GlanceNoticeLevel,
+        unlockCodeHash: String? = nil
+    ) {
         self.id = id
         self.thread = thread
         self.title = title
         self.body = body
         self.level = level
+        self.unlockCodeHash = unlockCodeHash
     }
 }
 
@@ -53,9 +61,15 @@ public struct GlanceEtiquette: Sendable {
     public static let downID = "rv.rvd-down"
 
     /// Asks already announced, so an rvd that blips never re-alerts them.
-    private var announced: Set<ApprovalID> = []
-    /// The count each delivered ask banner shows, per agent.
-    private var shown: [HookHost: Int] = [:]
+    private var announced: Set<String> = []
+    /// What each delivered ask banner shows, per agent.
+    private var shown: [HookHost: Shown] = [:]
+
+    private struct Shown: Equatable {
+        var count: Int
+        /// The one unlock the banner's actions answer, if any.
+        var unlock: String?
+    }
     private var lastAskAlert: [HookHost: Date] = [:]
     private var lastDownAlert: Date?
 
@@ -72,32 +86,50 @@ public struct GlanceEtiquette: Sendable {
             return wasDown ? [] : wentDown(now: now)
         }
         var actions: [GlanceNoticeAction] = wasDown ? [.remove([Self.downID])] : []
-        actions += asks(new.pending, now: now)
+        actions += asks(Self.waiting(new), now: now)
         return actions
     }
 
-    private mutating func asks(_ pending: [ApprovalID: HookHost], now: Date) -> [GlanceNoticeAction] {
+    /// One waiting thing: a pending ask, or a stop the person can unlock.
+    private struct Waiting {
+        var host: HookHost
+        var unlock: GlanceUnlockAsk?
+    }
+
+    /// Everything waiting, keyed so the two sources never collide.
+    private static func waiting(_ state: GlanceState) -> [String: Waiting] {
+        var waiting: [String: Waiting] = [:]
+        for (id, host) in state.pending { waiting["ask:\(id.rawValue)"] = Waiting(host: host) }
+        for (hash, ask) in state.unlocks { waiting["unlock:\(hash)"] = Waiting(host: ask.host, unlock: ask) }
+        return waiting
+    }
+
+    private mutating func asks(_ waiting: [String: Waiting], now: Date) -> [GlanceNoticeAction] {
         var actions: [GlanceNoticeAction] = []
-        let hosts = Set(pending.values).union(shown.keys).sorted { $0.rawValue < $1.rawValue }
+        let hosts = Set(waiting.values.map(\.host)).union(shown.keys).sorted { $0.rawValue < $1.rawValue }
         for host in hosts {
-            let ids = pending.filter { $0.value == host }.map(\.key)
-            guard !ids.isEmpty else {
+            let mine = waiting.filter { $0.value.host == host }
+            guard !mine.isEmpty else {
                 shown[host] = nil
                 actions.append(.remove([Self.askID(host)]))
                 continue
             }
-            let fresh = ids.filter { !announced.contains($0) }
+            // Only a banner about exactly one stop answers it.
+            let only = mine.count == 1 ? mine.first?.value.unlock : nil
+            let current = Shown(count: mine.count, unlock: only?.codeHash)
+            let fresh = mine.keys.filter { !announced.contains($0) }
             announced.formUnion(fresh)
             if !fresh.isEmpty {
                 let loud = lastAskAlert[host].map { now.timeIntervalSince($0) >= Self.groupWindow } ?? true
                 if loud { lastAskAlert[host] = now }
-                actions.append(.post(Self.askNotice(host, count: ids.count, level: loud ? .timeSensitive : .passive)))
-            } else if shown[host] != ids.count {
-                actions.append(.post(Self.askNotice(host, count: ids.count, level: .passive)))
+                actions.append(.post(Self.askNotice(
+                    host, count: mine.count, level: loud ? .timeSensitive : .passive, unlock: only)))
+            } else if shown[host] != current {
+                actions.append(.post(Self.askNotice(host, count: mine.count, level: .passive, unlock: only)))
             }
-            shown[host] = ids.count
+            shown[host] = current
         }
-        announced.formIntersection(pending.keys)
+        announced.formIntersection(waiting.keys)
         return actions
     }
 
@@ -116,12 +148,21 @@ public struct GlanceEtiquette: Sendable {
         return actions
     }
 
-    static func askNotice(_ host: HookHost, count: Int, level: GlanceNoticeLevel) -> GlanceNotice {
-        let body = count == 1
-            ? "1 request is waiting in the menu bar"
-            : "\(count) from \(host.rawValue) · answer in the menu bar"
+    static func askNotice(
+        _ host: HookHost, count: Int, level: GlanceNoticeLevel, unlock: GlanceUnlockAsk? = nil
+    ) -> GlanceNotice {
+        // A banner can reach the lock screen: it never carries the command.
+        let body: String
+        if let unlock {
+            body = "A stopped command can run once with Touch ID · check the words: \(unlock.checkWords)"
+        } else if count == 1 {
+            body = "1 request is waiting in the menu bar"
+        } else {
+            body = "\(count) from \(host.rawValue) · answer in the menu bar"
+        }
         return GlanceNotice(
-            id: askID(host), thread: askID(host), title: "\(host.rawValue) needs you", body: body, level: level)
+            id: askID(host), thread: askID(host), title: "\(host.rawValue) needs you", body: body, level: level,
+            unlockCodeHash: unlock?.codeHash)
     }
 }
 

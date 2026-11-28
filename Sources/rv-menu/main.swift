@@ -5,19 +5,30 @@ import RVDomain
 import RVGlance
 import RVGlanceUI
 import RVIPC
+import RVOperatorUI
 import RVPolicy
 import RVXPC
 import SwiftUI
+import UserNotifications
 
 /// rv in the menu bar (K1, Glyph and Glance): the diamond and the Glance
 /// popover. No Dock icon. It reads rvd's live events and the pending list;
-/// it holds no key and can't answer an ask or loosen a rule.
+/// it holds no key and can't loosen a rule. One thing it can answer (K2):
+/// a stop's allow-once code, over the operator-UI channel, after a fresh
+/// Touch ID (or login password) prompt for that one answer.
 @main
 struct RVMenuApplication: App {
     @State private var model = GlanceModel()
+    @State private var unlocks = UnlockReviewModel(
+        bridge: MenuUnlockBridge(), authenticator: MenuUnlockAuthenticator())
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
+        // K2: the delegate is set before launch finishes, so a banner tap
+        // that launched the app reaches the router.
+        if UserNotificationSink.canNotify {
+            UNUserNotificationCenter.current().delegate = UnlockBannerRouter.shared
+        }
         // Intents get their own read-only reader and no freeze until rvd has the verb.
         GlanceIntentEnvironment.services = GlanceIntentServices(reader: GlanceReader(wire: XPCGlanceWire())) {
             GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
@@ -27,12 +38,13 @@ struct RVMenuApplication: App {
     var body: some Scene {
         MenuBarExtra {
             GlancePopover(
-                state: model.state, now: model.now, calendar: model.calendar, plain: model.lastStopPlain?.text
+                state: model.state, now: model.now, calendar: model.calendar, plain: model.lastStopPlain?.text,
+                unlocks: unlocks
             ) {
                 NSApplication.shared.terminate(nil)
             }
         } label: {
-            GlanceMenuLabel(glyph: model.glyph, waiting: model.state.pending.count)
+            GlanceMenuLabel(glyph: model.glyph, waiting: model.state.waitingCount)
                 .task { startOnce() }
         }
         .menuBarExtraStyle(.window)
@@ -46,6 +58,11 @@ struct RVMenuApplication: App {
         model.start(reader: reader, notices: UserNotificationSink()) {
             GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
         }
+        let model = model
+        let unlocks = unlocks
+        unlocks.onAsksChanged = { asks in model.setUnlocks(asks) }
+        unlocks.start()
+        UnlockBannerRouter.shared.attach(unlocks)
     }
 
     @MainActor private static var started = false
@@ -105,6 +122,35 @@ struct XPCGlanceWire: GlanceWire {
 }
 
 struct XPCGlanceWireTimeout: Error {}
+
+/// rvd's unlock review over the operator-UI XPC client: one persistent,
+/// registered connection that rvd admits only for the pinned operator UI
+/// running as the owner. An unpinned build is refused and shows no asks.
+struct MenuUnlockBridge: UnlockBridge {
+    private let client = XPCOperatorUIClient()
+
+    func list() async throws -> UIUnlockListDTO { try await client.unlockList() }
+    func bind(codeHash: String) async throws -> UIUnlockChallengeBundleDTO {
+        try await client.unlockBind(codeHash: codeHash)
+    }
+    func complete(_ completion: UIUnlockCompletion) async throws -> UIUnlockStatusDTO {
+        try await client.unlockComplete(completion)
+    }
+    func release(codeHash: String) async throws -> UIUnlockStatusDTO {
+        try await client.unlockRelease(codeHash: codeHash)
+    }
+}
+
+/// A fresh `LAContext` per answer (`OperatorAuthenticator`, reuse 0).
+struct MenuUnlockAuthenticator: UnlockAuthenticator {
+    private let authenticator = OperatorAuthenticator()
+
+    func authenticate(reason: String) async -> UIAuthenticationOutcome {
+        await MainActor.run { NSApplication.shared.activate() }
+        return await authenticator.authenticate(reason: reason)
+    }
+}
+
 #else
 import Foundation
 

@@ -5,8 +5,9 @@ import RVIPC
 // The plain-English line (K5): one short sentence under a stopped command
 // saying what it would have done. It explains a decision rvd already made;
 // it never makes one. The request is built from an event that is already
-// decided, and the line is a display-only string: nothing in rvd, policy
-// or IPC imports this file's types.
+// decided, and the line is a display-only string: nothing in policy or IPC
+// imports this file's types, and rvd uses it only to word the menu bar's
+// unlock sheet (K2) from its own raw copy of the command.
 //
 // Tense: every line describes the action's effect in the conditional
 // ("Would throw away uncommitted changes"), whatever the verdict, so a

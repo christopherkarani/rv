@@ -15,6 +15,8 @@ public final class XPCEvaluateListener: Sendable {
     private let actionListener = Mutex<xpc_connection_t?>(nil)
     private let hostRegistry: LiveWorkspaceHostRegistry
     private let uiSessions: LiveOperatorUISessionRegistry
+    /// K2 unlock reviews: one per rvd, shared by every UI connection.
+    private let unlockCeremonies: UnlockReviewCeremonyService
 
     public convenience init(
         runtime: ServiceRuntime,
@@ -41,6 +43,9 @@ public final class XPCEvaluateListener: Sendable {
         self.serviceName = machServiceName
         self.hostRegistry = hostRegistry
         self.uiSessions = uiSessions
+        self.unlockCeremonies = UnlockReviewCeremonyService(
+            allowOnce: runtime.allowOnce, grants: runtime.grants,
+            recorder: .live(home: runtime.configHome), presence: .live(runtime.ownerPresence))
     }
 
     public func start() {
@@ -98,7 +103,7 @@ public final class XPCEvaluateListener: Sendable {
         } : nil
         let session = XPCPeerSession(runtime: runtime, watchdog: watchdog,
             discoveryOnly: discoveryOnly, actionEndpoint: endpoint, hostRegistry: hostRegistry,
-            uiSessions: uiSessions)
+            uiSessions: uiSessions, unlockCeremonies: unlockCeremonies)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
         }
@@ -118,6 +123,7 @@ final class XPCPeerSession: Sendable {
     private let ceremonies: WorkspaceOperatorCeremonyService
     private let actionCeremonies: ActionApprovalCeremonyService
     private let hookCeremonies: HookReviewCeremonyService
+    private let unlockCeremonies: UnlockReviewCeremonyService?
     private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
@@ -132,6 +138,7 @@ final class XPCPeerSession: Sendable {
         ceremonies: WorkspaceOperatorCeremonyService? = nil,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
         hookCeremonies: HookReviewCeremonyService? = nil,
+        unlockCeremonies: UnlockReviewCeremonyService? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
@@ -144,6 +151,7 @@ final class XPCPeerSession: Sendable {
         self.ceremonies = ceremonies ?? runtime.ceremonies
         self.actionCeremonies = actionCeremonies ?? runtime.actionCeremonies
         self.hookCeremonies = hookCeremonies ?? runtime.hookCeremonies
+        self.unlockCeremonies = unlockCeremonies
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -158,6 +166,7 @@ final class XPCPeerSession: Sendable {
             let ceremonies = ceremonies
             let actionCeremonies = actionCeremonies
             let hookCeremonies = hookCeremonies
+            let unlockCeremonies = unlockCeremonies
             let id = connectionID
             return Task {
                 await registry.disconnect(connectionID: id)
@@ -167,6 +176,7 @@ final class XPCPeerSession: Sendable {
                     await ceremonies.uiConnectionLost(uiConnection)
                     await actionCeremonies.uiConnectionLost(uiConnection)
                     await hookCeremonies.uiConnectionLost(uiConnection)
+                    await unlockCeremonies?.uiConnectionLost(uiConnection)
                 }
             }
         }
@@ -219,7 +229,8 @@ final class XPCPeerSession: Sendable {
                     handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
                     sessions: self.uiSessions, ceremonies: self.ceremonies,
                     actionCeremonies: self.actionCeremonies,
-                    hookCeremonies: self.hookCeremonies)
+                    hookCeremonies: self.hookCeremonies,
+                    unlockCeremonies: self.unlockCeremonies)
                 return
             }
             let incomingReply: IncomingReply

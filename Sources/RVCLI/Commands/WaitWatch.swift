@@ -193,6 +193,14 @@ enum WaitScreen {
         }
     }
 
+    /// The first line, printed as the wait starts: who decides, and the
+    /// three check words the menu bar's approval sheet shows for this code
+    /// (K2), so the person can tell the sheet is about this stop.
+    static func startLine(code: WaitCode, owner: String, palette: Palette) -> String {
+        "\(paint("\(Glyph.ask.rawValue) Waiting on \(owner)", palette.mark, palette)) "
+            + paint("· check words: \(CheckWords.line(for: code.code))", palette.muted, palette)
+    }
+
     /// `1m 12s`, `40s`, `1h 5m`.
     static func clock(_ duration: Duration) -> String {
         let seconds = max(0, Int(duration.components.seconds))
