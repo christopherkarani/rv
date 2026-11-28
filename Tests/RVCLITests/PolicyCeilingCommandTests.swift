@@ -66,7 +66,7 @@ struct PolicyCeilingCommandTests {
             #expect(report.layers.map(\.status) == ["within", "exceeds"])
             #expect(report.layers[1].witness?.command == "git push --force origin main")
             #expect(report.pretty.contains(
-                "repo: exceeds the ceiling\n  witness: rv explain 'git push --force origin main'"), "\(report.pretty)")
+                "repo: exceeds the ceiling\n  witness: rv why 'git push --force origin main'"), "\(report.pretty)")
             let robot = try RobotJSON.encode(report)
             #expect(robot.contains("git push --force origin main"))
         }
@@ -226,7 +226,7 @@ struct PolicyCeilingCommandTests {
             try ceilingText.write(to: file, atomically: true, encoding: .utf8)
             let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
             #expect(outcome.saved == false)
-            #expect(outcome.lines.contains("  witness: rv explain 'git push --force origin main'"), "\(outcome.lines)")
+            #expect(outcome.lines.contains("  witness: rv why 'git push --force origin main'"), "\(outcome.lines)")
             let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
             #expect(try store.load() == nil)
         }
@@ -253,7 +253,7 @@ struct PolicyCeilingCommandTests {
                 Issue.record("expected a ceiling refusal")
             } catch let error as PolicyCeilingError {
                 #expect(error.refusal.hasPrefix("git push --force origin main exceeds the policy ceiling"))
-                #expect(error.refusal.contains("check: rv explain 'git push --force origin main'"), "\(error.refusal)")
+                #expect(error.refusal.contains("check: rv why 'git push --force origin main'"), "\(error.refusal)")
             }
         }
     }

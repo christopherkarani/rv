@@ -1,6 +1,6 @@
 ---
 name: rv
-description: How to behave when rv blocks you. Use when a tool call or shell command is denied with "RV · Blocked", asks for human approval, mentions an allow-once code, or when a network request returns an rv.egress.denied.v1 body or a Proxy-Status header naming rv-egress. Also use when a command needs an API key or other secret: run it with rv run --secret.
+description: How to behave when rv blocks you. Use when a tool call or shell command is denied with "✕ Stopped" or "RV · Blocked", asks for human approval, mentions an allow-once code, or when a network request returns an rv.egress.denied.v1 body or a Proxy-Status header naming rv-egress. Also use when a command needs an API key or other secret: run it with rv run --secret.
 ---
 
 # Working under rv
@@ -12,13 +12,22 @@ not an error to work around.
 
 ## Reading a denial
 
-- **Hook deny.** The tool result starts with `RV · Blocked.` and gives one
-  reason. It may end with a line like "Paste in Terminal to allow once" and a
-  six-character code. That code is for the human, not for you.
-- **Needs approval.** "This action requires human approval" means rv staged
-  the action for review. The human approves it in the RV app (macOS) or with
-  the code in Terminal. After they say it is approved, retry the exact same
-  command once.
+- **Hook deny.** Every stop has the same lines:
+
+  ```
+  ✕ Stopped   git reset --hard (core.git/reset-hard)
+  why     destroys uncommitted changes
+  safer   git status
+  who     ask Chris to run  rv allow-once a1b2c3
+  ```
+
+  The first line names the command and the rule that stopped it. `why` is
+  the reason. `safer`, when present, is a command rv allows here; you
+  may run it instead. `who` is the one step a person takes: the human named
+  there runs it, never you. A code in it is for the human, not for you.
+- **Needs approval.** A `who` line that says to approve it in RV, or that
+  carries an allow-once code, means rv staged the action for review. After
+  the human says it is approved, retry the exact same command once.
 - **Egress refusal.** A network request gets HTTP 403 (or 407) with a JSON body
   whose `schema` is `rv.egress.denied.v1`. Read these fields:
   - `reason`: `denied-policy` (the policy does not allow this host),
@@ -34,7 +43,7 @@ not an error to work around.
 1. Stop. Do not retry the blocked action and do not loop on it.
 2. Tell the human, once, in one short message: what you were trying to do,
    the reason rv gave, and the exact command for them to run (copy
-   `next_step` or the allow-once line verbatim). Ask for the narrowest grant
+   `next_step` or the `who` line verbatim). Ask for the narrowest grant
    that unblocks this one step: a single allow-once, or one egress approval.
 3. Continue with other work that does not need the blocked action, or wait.
 4. Retry only after the human says they granted it, and retry the exact
@@ -64,10 +73,9 @@ that key's API. The real value never reaches you or the transcript.
 These only read. If rv does not run where you are (for example inside a
 sandbox), quote them for the human instead.
 
-- `rv explain <command>` shows why rv allows or blocks a command.
+- `rv why <command>` shows why rv allows or blocks a command (`rv explain` is the same command).
 - `rv egress pending` lists egress proposals waiting for review.
 - `rv egress denials` lists recent egress refusals.
-- `rv secrets describe --json` lists the keys you can use, never a value.
 - `rv run --secret NAME -- <command>` runs a command with a key's stand-in.
 
 ## Commands only the human runs
@@ -75,9 +83,9 @@ sandbox), quote them for the human instead.
 Quote these for the human to run in their own Terminal. Never run them
 yourself; rv blocks agents from running them.
 
-- `rv allow-once <code>` redeems the code from a hook deny, once.
+- `rv unlock <code>` redeems the code from a hook deny, once (`rv allow-once <code>` is the same command).
 - `rv egress approve <id>` approves the egress proposal named in `next_step`.
-- `rv secrets set NAME` keeps a new key in rv.
+- `rv secrets add NAME` keeps a new key in rv.
 
 ## Never
 
@@ -99,5 +107,4 @@ Do not try to get around rv. In particular, never:
 
 If you think a rule is wrong, say so to the human and let them decide.
 
-This file is installed and owned by rv. The human's rv setup keeps it current;
-rv refuses edits to it from agents.
+This file is installed and owned by rv, and rv refuses edits to it from agents.

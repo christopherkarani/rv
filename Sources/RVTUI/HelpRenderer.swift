@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -42,7 +43,17 @@ public struct HelpRenderer: FrameRenderer {
             }
         }
 
-        if model.next.isEmpty == false {
+        if model.next.isEmpty == false, model.nextHeading.isEmpty {
+            // No heading: `  → rv setup    wire your agents`, the command
+            // last on the page and ready to copy (North Star v2).
+            appendBlank(&lines)
+            let nameWidth = model.next.map(\.command.count).max() ?? 0
+            for item in model.next {
+                let head = paint("\(CommandVocabulary.Glyph.next.rawValue) \(item.command)", slot: palette.heading, reset: palette.reset)
+                let gap = String(repeating: " ", count: nameWidth - item.command.count + 4)
+                lines.append("  \(head)\(gap)\(item.description)")
+            }
+        } else if model.next.isEmpty == false {
             appendBlank(&lines)
             lines.append(paint(model.nextHeading, slot: palette.silver, reset: palette.reset))
             let nameWidth = model.next.map(\.command.count).max() ?? 0

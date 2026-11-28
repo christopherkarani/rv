@@ -33,6 +33,33 @@ public struct DecisionRecord: Sendable, Equatable, Codable {
     /// The host's session id, when it is an opaque token
     /// (`DenialLedgerRecord.attributableSession`).
     public var session: String?
+    /// The call's id (`DecisionStamp`), shared with its denial-ledger row.
+    /// Nil on rows written before it existed.
+    public var id: String?
+    /// An allowed row that watch mode let run: what guarding would have
+    /// done. Nil for every other row, and on rows written before it existed.
+    public var wouldBe: DecisionWouldBe?
+
+    enum CodingKeys: String, CodingKey {
+        case time, verdict, host, tool, command, path, cwd, rule, session, id
+        case wouldBe = "would_be"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        time = try container.decode(Date.self, forKey: .time)
+        verdict = try container.decode(DecisionVerdict.self, forKey: .verdict)
+        host = try container.decode(LedgerHost.self, forKey: .host)
+        tool = try container.decode(LedgerTool.self, forKey: .tool)
+        command = try container.decodeIfPresent(String.self, forKey: .command)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        rule = try container.decodeIfPresent(String.self, forKey: .rule)
+        session = try container.decodeIfPresent(String.self, forKey: .session)
+        // Only an id as rv mints it: anything else would reach a terminal.
+        id = try container.decodeIfPresent(String.self, forKey: .id).flatMap(DecisionStamp.validID)
+        wouldBe = try container.decodeIfPresent(DecisionWouldBe.self, forKey: .wouldBe)
+    }
 
     public init(
         time: Date,
@@ -43,7 +70,9 @@ public struct DecisionRecord: Sendable, Equatable, Codable {
         path: String? = nil,
         cwd: String? = nil,
         rule: String? = nil,
-        session: String? = nil
+        session: String? = nil,
+        id: String? = nil,
+        wouldBe: DecisionWouldBe? = nil
     ) {
         self.time = time
         self.verdict = verdict
@@ -54,26 +83,61 @@ public struct DecisionRecord: Sendable, Equatable, Codable {
         self.cwd = cwd
         self.rule = rule
         self.session = session
+        self.id = id
+        self.wouldBe = wouldBe
     }
 }
 
-/// How a decision row hides what it must not keep: credential-shaped
-/// tokens (`ReviewSanitizer.redactCredentials`), the home directory, control
-/// characters, and anything past `maxCommandBytes`.
+/// How a decision row hides what it must not keep: credentials in the
+/// forms a command line carries them (`CommandLineRedaction`: `KEY=value`,
+/// token prefixes, `Bearer x`, URL userinfo, `-u name:pw`, `--password x`,
+/// per-program password flags, secret-shaped headers), the home directory,
+/// control characters, and anything past `maxCommandBytes`. rvd's live
+/// events use the same recipe (`LiveEventRedaction`), and `rv log` runs it
+/// again on read, so rows written by an older redactor are held to today's.
 public enum DecisionRedaction {
     /// Longest command a row keeps, in UTF-8 bytes, before the ellipsis.
     public static let maxCommandBytes = 512
+    /// Bytes of a command the redactor reads. Only `maxCommandBytes` are
+    /// kept, so the rest is cut first, keeping the redactor cheap inside the
+    /// hook-local evaluator's write budget.
+    static let maxScannedBytes = 4 * maxCommandBytes
 
-    public static func command(_ raw: String, home: HomePath?) -> String {
-        let flattened = String(String.UnicodeScalarView(raw.unicodeScalars.map {
+    public static func command(_ raw: String, home: HomePath?, maxBytes: Int = maxCommandBytes) -> String {
+        // A cut can land inside a token (a URL password before its `@`),
+        // where no rule can see it is a secret: the partial last token goes.
+        let wasCut = raw.utf8.count > maxScannedBytes
+        let scanned = wasCut ? droppingPartialLastToken(cut(raw, bytes: maxScannedBytes)) : raw
+        let flattened = String(String.UnicodeScalarView(scanned.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) ? " " : $0
         }))
-        let redacted = homeShown(in: ReviewSanitizer.redactCredentials(in: flattened), home: home)
-        return capped(redacted.trimmingCharacters(in: .whitespaces), bytes: maxCommandBytes)
+        let redacted = homeShown(in: CommandLineRedaction.redact(flattened), home: home)
+        let shown = capped(redacted.trimmingCharacters(in: .whitespaces), bytes: maxBytes)
+        return wasCut && shown.hasSuffix("…") == false ? shown + "…" : shown
     }
 
-    public static func path(_ raw: String, home: HomePath?) -> String {
-        capped(DenialPathRedaction.redact(raw, home: home), bytes: maxCommandBytes)
+    /// `text` up to its last whitespace: the token the cut went through is
+    /// dropped whole.
+    static func droppingPartialLastToken(_ text: String) -> String {
+        guard let last = text.lastIndex(where: \.isWhitespace) else { return "" }
+        return String(text[..<last])
+    }
+
+    public static func path(_ raw: String, home: HomePath?, maxBytes: Int = maxCommandBytes) -> String {
+        capped(DenialPathRedaction.redact(raw, home: home), bytes: maxBytes)
+    }
+
+    /// The first whole characters of `text` that fit in `bytes`.
+    static func cut(_ text: String, bytes limit: Int) -> String {
+        var kept = ""
+        var used = 0
+        for character in text {
+            let size = character.utf8.count
+            guard used + size <= limit else { break }
+            kept.append(character)
+            used += size
+        }
+        return kept
     }
 
     /// Every whole occurrence of the home path becomes `~`: followed by the

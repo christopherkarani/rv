@@ -34,6 +34,9 @@ import unicodedata
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
+# The session-start hello is a courtesy: a slow rv must not hold up a
+# session, so it gets far less time than a tool call.
+RV_SESSION_START_TIMEOUT_S = 2
 
 # The owner's config.json; None reads it from the passwd home, never $HOME
 # (hook environment can come from project config an agent writes).
@@ -57,19 +60,58 @@ _TOO_LONG_TO_ASK = (
 )
 
 # rv's own native ask, exactly as Sources/rv-c/hook_fallback.c (and its
-# Swift twin HookDaemonFallback) words each down class, with the layer the
-# prompt names. A native ask with any other text blocks.
+# Swift twin HookDaemonFallback) words each down class: the stop shape
+# with the class's rule id, why and fix, and the owner's first name or
+# "your user". Each maps to the layer the prompt names. A native ask with
+# any other text blocks.
 _DOWN_LAYERS = {
-    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.":
-        "rvd is not reachable",
-    "RV daemon did not answer in time. Retry; if it persists run `rv doctor`.":
-        "rvd did not answer in time",
-    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`.":
-        "the connection to rvd dropped",
+    "rv.hook/unreachable": ("rv's daemon is not running", "rv doctor", "rvd is not reachable"),
+    "rv.hook/timeout": ("rv's daemon did not answer in time", "rv doctor", "rvd did not answer in time"),
+    "rv.hook/connection": ("rv lost its daemon before a verdict", "rv doctor", "the connection to rvd dropped"),
     # Observe mode, but the rvd state marker says rvd ran and was stopped.
-    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal.":
-        "rvd was stopped or crashed",
+    "rv.hook/stopped": ("rvd stopped or crashed after it last ran", "rv service restart", "rvd was stopped or crashed"),
 }
+_OWNER_NAME_MAX = 32
+_OWNER_FALLBACK = "your user"
+
+
+def _owner_letter(ch):
+    code = ord(ch)
+    return ch.isascii() and ch.isalpha() or (0xC0 <= code <= 0x24F and code not in (0xD7, 0xF7))
+
+
+def _is_owner_name(name):
+    """The C hook's rv_owner_first_name rule: one word of Latin letters,
+    capitalised, with - or ' only between letters, at most 32 bytes."""
+    if not name or len(name.encode("utf-8")) > _OWNER_NAME_MAX:
+        return False
+    first = ord(name[0])
+    if not ("A" <= name[0] <= "Z" or (0xC0 <= first <= 0xDE and first != 0xD7)):
+        return False
+    for index, ch in enumerate(name):
+        if ch in "-'":
+            if index == len(name) - 1 or not _owner_letter(name[index + 1]) or not _owner_letter(name[index - 1]):
+                return False
+        elif not _owner_letter(ch):
+            return False
+    return True
+
+
+def _down_layer(reason):
+    """The layer a C hook down ask names, or None for any other text."""
+    lines = reason.split("\n")
+    if len(lines) != 3:
+        return None
+    for rule, (why, fix, layer) in _DOWN_LAYERS.items():
+        if lines[0] != "\u2715 Stopped   (%s)" % rule or lines[1] != "why     " + why:
+            continue
+        prefix, suffix = "who     ask ", " to run  " + fix
+        who = lines[2]
+        if not who.startswith(prefix) or not who.endswith(suffix):
+            return None
+        name = who[len(prefix):len(who) - len(suffix)]
+        return layer if name == _OWNER_FALLBACK or _is_owner_name(name) else None
+    return None
 
 # Claude Code permission modes that put a hook `ask` to a person: Manual
 # (sent as "default"), plan, acceptEdits, and auto. Hooks reference: "In
@@ -157,9 +199,61 @@ def _is_pre_tool_event(event, pre_tool_event):
     return _canonical(event, (pre_tool_event,)) == pre_tool_event
 
 
+# B4 house rules: rv's SessionStart reply carries them as additionalContext.
+# The hello never blocks and never decides a tool: anything but that exact
+# shape from rv (rv missing, slow, down, odd output) says nothing.
+_SESSION_START = "SessionStart"
+_HOUSE_RULES_MAX = 2048
+
+
+def _is_event(event, name):
+    # Exact name or a near-variant; absent or blank is never this event.
+    if not isinstance(event, str) or not _wire_key(event):
+        return False
+    return _canonical(event, (name,)) == name
+
+
+def _house_rules(host, raw):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=raw,
+            capture_output=True,
+            text=True,
+            timeout=RV_SESSION_START_TIMEOUT_S,
+        )
+        if completed.returncode != 0:
+            return None
+        parsed = json.loads((completed.stdout or "").strip(), object_pairs_hook=_reject_duplicate_keys)
+        hook = parsed.get("hookSpecificOutput") if isinstance(parsed, dict) else None
+        if not isinstance(hook, dict) or hook.get("hookEventName") != _SESSION_START:
+            return None
+        text = hook.get("additionalContext")
+        if not isinstance(text, str) or not text.strip() or len(text) > _HOUSE_RULES_MAX:
+            return None
+        return text
+    except Exception:
+        return None
+
+
+def _emit_house_rules(text):
+    if text is None:
+        return
+    payload = {"hookSpecificOutput": {"hookEventName": _SESSION_START, "additionalContext": text}}
+    try:
+        sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def main():
     try:
         raw = sys.stdin.read()
+        envelope = _parse(raw)
+        if envelope is not None and _is_event(envelope.get("hook_event_name"), _SESSION_START):
+            _emit_house_rules(_house_rules("claude", raw))
+            return
         mapped = _guard(raw)
         if mapped["action"] == "allow":
             return
@@ -420,9 +514,9 @@ def _map_rv_hook_result(stdout, exit_code):
                 exit_code == 0
                 and "decision" not in parsed
                 and isinstance(reason, str)
-                and reason in _DOWN_LAYERS
+                and _down_layer(reason) is not None
             ):
-                return {"action": "unchecked", "layer": _DOWN_LAYERS[reason], "reason": reason}
+                return {"action": "unchecked", "layer": _down_layer(reason), "reason": reason}
             return {
                 "action": "block",
                 "reason": _blocking_reason(reason or parsed.get("systemMessage")),

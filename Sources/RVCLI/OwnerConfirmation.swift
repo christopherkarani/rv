@@ -10,8 +10,14 @@ import RVIPC
 import RVService
 #endif
 
-/// Owner-presence gate for commands that change rv's own guard (packs,
-/// safety, allowlist, policy, egress review, workspace abandon).
+/// Owner-presence gate for commands that change rv's own guard (packs
+/// off, safety, allowlist, policy, egress review, workspace abandon).
+///
+/// Turning packs on is not gated (G6): `rv protect <tool>` and
+/// `rv packs enable` only tighten, so anyone, agents included, may add
+/// protection. Every way to turn a pack off (`rv protect <tool> off`,
+/// `rv packs disable`/`off`) goes through `packsOffAuthorization`, which
+/// calls `require` here.
 ///
 /// The command runs only after rvd confirms the device owner approved it:
 /// - macOS: rvd itself shows the LocalAuthentication prompt (Touch ID or the

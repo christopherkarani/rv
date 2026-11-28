@@ -19,6 +19,16 @@ public enum JudgeEngine: String, Sendable {
     case laya
 }
 
+/// Whether the judge's verdict decides a call (`live`) or is only logged
+/// (`shadow`, the default). In shadow the judge still scores every
+/// pack-allowed command and its would-be verdict lands in judge-log.jsonl,
+/// but it never raises an allow: rule packs alone decide. Set
+/// `"judge": {"mode": "live"}` once the model is trusted.
+public enum JudgeMode: String, Sendable {
+    case live
+    case shadow
+}
+
 /// How rv guards one hook host. `block` enforces, `observe` allows and logs
 /// what enforcement would have blocked, `off` leaves the host unwired. A
 /// host with no stored entry follows the global `guard.mode` (enforce by
@@ -52,13 +62,49 @@ public struct GuardConfig: Sendable, Equatable {
     public var hosts: [HookHost: HostMode]
     /// `judge.engine`; nil when unset or unparseable.
     public var judgeEngine: JudgeEngine?
+    /// `judge.mode`; nil when unset or unparseable (shadow).
+    public var judgeMode: JudgeMode?
+
+    /// Whether the judge's verdict decides: only an explicit `live`.
+    public var judgeDecides: Bool { judgeMode == .live }
+
+    /// `guard.temporary_blocks.<host>`: an agent's block that expires on its
+    /// own. It covers `hosts[host]` while open and never replaces it.
+    public var temporaryBlocks: [HookHost: GuardWindow]
+    /// `guard.pause`: the owner's `rv pause`. While open every host is
+    /// observed.
+    public var pause: GuardWindow?
 
     public static let empty = GuardConfig()
 
-    public init(mode: GuardMode? = nil, hosts: [HookHost: HostMode] = [:], judgeEngine: JudgeEngine? = nil) {
+    public init(
+        mode: GuardMode? = nil,
+        hosts: [HookHost: HostMode] = [:],
+        judgeEngine: JudgeEngine? = nil,
+        judgeMode: JudgeMode? = nil,
+        temporaryBlocks: [HookHost: GuardWindow] = [:],
+        pause: GuardWindow? = nil
+    ) {
         self.mode = mode
         self.hosts = hosts
         self.judgeEngine = judgeEngine
+        self.judgeMode = judgeMode
+        self.temporaryBlocks = temporaryBlocks
+        self.pause = pause
+    }
+
+    /// The agent's block of `host` in force at `now`, if any.
+    public func temporaryBlock(for host: HookHost, at now: Date) -> GuardWindow? {
+        guard let window = temporaryBlocks[host],
+              window.isOpen(at: now, limit: GuardWindow.temporaryBlockLimit)
+        else { return nil }
+        return window
+    }
+
+    /// The owner's pause in force at `now`, if any.
+    public func activePause(at now: Date) -> GuardWindow? {
+        guard let pause, pause.isOpen(at: now, limit: GuardWindow.pauseLimit) else { return nil }
+        return pause
     }
 
     /// Decodes `config.json` bytes: the one bytes-to-config entry, shared
@@ -94,13 +140,17 @@ public struct GuardConfig: Sendable, Equatable {
         self.init(
             mode: Self.chosenRaw(root, object: "guard", key: "mode").flatMap { GuardMode(rawValue: $0.lowercased()) },
             hosts: Self.hostModes(root),
-            judgeEngine: Self.chosenRaw(root, object: "judge", key: "engine").flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+            judgeEngine: Self.chosenRaw(root, object: "judge", key: "engine").flatMap { JudgeEngine(rawValue: $0.lowercased()) },
+            judgeMode: Self.chosenRaw(root, object: "judge", key: "mode").flatMap { JudgeMode(rawValue: $0.lowercased()) },
+            temporaryBlocks: Self.temporaryBlocks(root),
+            pause: GuardWindow(json: root["guard"]?["pause"])
         )
     }
 
-    /// The machine-wide mode: no host entry, no environment.
+    /// The machine-wide mode the owner stored: no host entry, no
+    /// environment, and no pause (a pause is not a posture `rv setup` keeps).
     public var machineMode: GuardMode {
-        GuardModeResolution.resolve(self, host: nil, environment: [:])
+        GuardModeResolution.resolveStored(self, host: nil)
     }
 
     /// `root[object][key]` if a non-empty string, else `root["object.key"]`
@@ -113,6 +163,16 @@ public struct GuardConfig: Sendable, Equatable {
             return flat
         }
         return nil
+    }
+
+    private static func temporaryBlocks(_ root: JSONValue) -> [HookHost: GuardWindow] {
+        guard let entries = root["guard"]?["temporary_blocks"]?.asObject else { return [:] }
+        var windows: [HookHost: GuardWindow] = [:]
+        for (key, value) in entries {
+            guard let host = HookHost(rawValue: key), let window = GuardWindow(json: value) else { continue }
+            windows[host] = window
+        }
+        return windows
     }
 
     private static func hostModes(_ root: JSONValue) -> [HookHost: HostMode] {
@@ -129,20 +189,33 @@ public struct GuardConfig: Sendable, Equatable {
     }
 }
 
-/// The guard-mode ladder: `RV_GUARD_MODE=enforce` > `guard.hosts.<host>` >
+/// The guard-mode ladder: `RV_GUARD_MODE=enforce` > an open `guard.pause` >
+/// an open `guard.temporary_blocks.<host>` > `guard.hosts.<host>` >
 /// `guard.mode` > enforce. Callers apply the organization pin
 /// (`ManagedGate.guardMode`) afterwards.
 public enum GuardModeResolution {
     /// The environment can only tighten: only `enforce` (any case) is
-    /// honoured, because rvd's launch environment is same-user editable. A
-    /// host entry of `block` is enforce; `observe` and `off` are observe (an
-    /// `off` host should be unwired, so a stale hook that still fires must
-    /// never block).
-    public static func resolve(_ config: GuardConfig, host: HookHost?, environment: [String: String]) -> GuardMode {
+    /// honoured, because rvd's launch environment is same-user editable.
+    /// The owner's pause observes every host; an agent's temporary block
+    /// enforces its host; both only while their window is open at `now`
+    /// (read on every evaluation, so neither needs rvd running to end).
+    public static func resolve(
+        _ config: GuardConfig, host: HookHost?, environment: [String: String], now: Date = Date()
+    ) -> GuardMode {
         if let raw = environment["RV_GUARD_MODE"],
            GuardMode(rawValue: raw.lowercased()) == .enforce {
             return .enforce
         }
+        if config.activePause(at: now) != nil { return .observe }
+        if let host, config.temporaryBlock(for: host, at: now) != nil { return .enforce }
+        return resolveStored(config, host: host)
+    }
+
+    /// The stored ladder alone: `guard.hosts.<host>` > `guard.mode` >
+    /// enforce. A host entry of `block` is enforce; `observe` and `off` are
+    /// observe (an `off` host should be unwired, so a stale hook that still
+    /// fires must never block).
+    public static func resolveStored(_ config: GuardConfig, host: HookHost?) -> GuardMode {
         if let host, let hostMode = config.hosts[host] {
             return hostMode == .block ? .enforce : .observe
         }

@@ -6,12 +6,7 @@ public struct ExplainRenderer: FrameRenderer {
     public init() {}
 
     public func render(_ model: ExplainViewModel, palette: Palette) -> [String] {
-        var children: [OutlineItem] = [
-            .text(
-                "Decision: \(model.explainDecisionWord)",
-                emphasis: outlineEmphasis(model.decisionTone)
-            ),
-        ]
+        var children: [OutlineItem] = [decisionItem(model, palette: palette)]
         if let note = model.observeNote {
             children.append(.leaf(label: observeNoteLabel, value: note, emphasis: .plain))
         }
@@ -69,6 +64,18 @@ public struct ExplainRenderer: FrameRenderer {
             )
         }
 
+        if !model.offPacks.isEmpty {
+            children.append(
+                .group(
+                    label: "Packs that are off",
+                    emphasis: .mark,
+                    children: model.offPacks.map {
+                        .group(label: $0.display, emphasis: .plain, children: [.text("$ \($0.turnOn)", emphasis: .fact)])
+                    }
+                )
+            )
+        }
+
         if let next = model.nextAction {
             children.append(.leaf(label: "Next", value: next, emphasis: .plain))
         }
@@ -80,6 +87,17 @@ public struct ExplainRenderer: FrameRenderer {
             palette: palette
         )
     }
+}
+
+/// `Decision: BLOCKED` in the verdict's tone; an observe verdict
+/// (`Decision: ◐ Would stop`, `Decision: ✕ Stopped, in every mode`)
+/// paints only its glyph, in the glyph's ink, and the words bold.
+private func decisionItem(_ model: ExplainViewModel, palette: Palette) -> OutlineItem {
+    let words = model.explainDecisionWord
+    guard model.observeDecisionWords != nil, leadsWithGlyph(words) else {
+        return .text("Decision: \(words)", emphasis: outlineEmphasis(model.decisionTone))
+    }
+    return .painted("Decision: " + paintLeadingGlyph(words, rest: palette.fact, palette: palette))
 }
 
 private func semanticItems(_ model: ExplainViewModel) -> [OutlineItem]? {

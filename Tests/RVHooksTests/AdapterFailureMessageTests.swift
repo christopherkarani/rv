@@ -126,13 +126,25 @@ struct AdapterFailureMessageTests {
     }
 }
 
-/// `kUnreachableMessage` in Sources/rv-c/hook_fallback.c.
-let daemonUnreachableMessage =
-    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
+/// The C hook's unreachable stop (`rv_hook_stop_text` in
+/// Sources/rv-c/hook_fallback.c) for an account with no usable first name.
+let daemonUnreachableMessage = cDownStop("rv.hook/unreachable", why: "rv's daemon is not running", fix: "rv doctor")
+
+/// The C hook's stop for a down class: the B1 shape, no command.
+func cDownStop(_ rule: String, why: String, fix: String, owner: String = "your user") -> String {
+    "✕ Stopped   (\(rule))\nwhy     \(why)\nwho     ask \(owner) to run  \(fix)"
+}
+
+/// `text` as it appears between the quotes of a JSON string.
+func jsonStringBody(_ text: String) -> String {
+    text.replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
+}
 
 /// Mirrors `rv_hook_fallback_render` for `.unreachable` in the default ask mode.
 func daemonDownWire(_ host: HookHost) -> AdapterStub {
-    let msg = daemonUnreachableMessage
+    let msg = jsonStringBody(daemonUnreachableMessage)
     switch host {
     case .claude:
         return .stdout(

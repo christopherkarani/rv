@@ -49,6 +49,13 @@ can write, and a same-user agent can make rvd unreachable on purpose.
 The Swift hook path (`RVCLI/Service/HookDaemonFallback.swift`, used for
 hosts not piped here) mirrors the classes, messages and modes.
 
+Parity gap, by design: the C fallback reads only the stored
+`guard.mode` / `guard.hosts.<host>` from config.json and ignores
+`guard.temporary_blocks.<host>` (an agent's one-hour block, F3). With rvd
+down, a host an agent blocked over a stored `observe` still steps aside
+here, while the Swift path enforces it. This errs toward the owner's stored
+mode, never toward a lockout.
+
 Not an SPM target by design (plain `clang -std=c11`). Constraints, all
 enforced by `tests/run.sh`:
 

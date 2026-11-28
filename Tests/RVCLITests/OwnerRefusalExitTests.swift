@@ -30,17 +30,18 @@ struct PacksInfoTests {
 /// Every owner-check refusal exits EX_NOPERM with one stderr line and no
 /// usage banner.
 struct OwnerRefusalExitTests {
-    @Test func packsEnableAndDisableRefuseWithNoPerm() async throws {
+    /// G6: adding protection asks nobody; turning a pack off still needs
+    /// the owner and refuses with EX_NOPERM.
+    @Test func packsDisableRefusesWithNoPerm_enableNeedsNoOwner() async throws {
         let home = try isolatedHome()
         let out = CLIOutputCapture()
         try await withCLIProcess(home: home, output: out) {
             var enable = try Packs.Enable.parse(["core.git"])
-            await #expect(throws: ExitCode(EX_NOPERM)) { try await enable.run() }
+            try await enable.run()
             var disable = try Packs.Disable.parse(["core.git"])
             await #expect(throws: ExitCode(EX_NOPERM)) { try await disable.run() }
         }
-        #expect(out.stderr == "rv: enable packs core.git needs owner authentication, which was not given\n"
-            + "rv: disable packs core.git needs owner authentication, which was not given\n")
+        #expect(out.stderr == "rv: disable packs core.git needs owner authentication, which was not given\n")
         #expect(out.stderr.contains("Usage") == false)
     }
 

@@ -129,8 +129,8 @@ import RVPolicy
         let pending = FakePendingApprovals()
         let reply = try await env.run(Self.codexStdin([:]), host: .codex, pending: pending)
         #expect(await pending.createCalls.isEmpty)
-        #expect(reply.stderr.contains(approvalUnrecordedLine))
-        #expect(reply.stderr.contains(approvalPendingLine) == false)
+        #expect(reply.stderr.contains("\nwho     ask "))
+        #expect(reply.stderr.contains(approveInRVLine()) == false)
     }
 
     /// rvd without a pending store records nothing either: the agent is
@@ -139,8 +139,8 @@ import RVPolicy
         let env = try Env()
         defer { env.tearDown() }
         let reply = try await env.run(Self.codexStdin(["session_id": Self.session]), host: .codex, pending: nil)
-        #expect(reply.stderr.contains(approvalUnrecordedLine))
-        #expect(reply.stderr.contains(approvalPendingLine) == false)
+        #expect(reply.stderr.contains("\nwho     ask "))
+        #expect(reply.stderr.contains(approveInRVLine()) == false)
     }
 
     /// A Codex turn id keys the pending approval when there is no session
@@ -152,7 +152,7 @@ import RVPolicy
         let reply = try await env.run(Self.codexStdin(["turn_id": "turn_main"]), host: .codex, pending: pending)
         let created = try #require(await pending.createCalls.first)
         #expect(created.identity.session == SessionID(validating: "turn_main"))
-        #expect(reply.stderr.contains(approvalPendingLine))
+        #expect(reply.stderr.contains("\nwho     ask "))
         let block = try #require(env.blocks().last)
         #expect(block.session == nil)
     }

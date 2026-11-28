@@ -37,6 +37,9 @@ package enum LocalHookEscalation: String, Sendable, CaseIterable {
     /// Enforce mode: the deny's hash-chained audit row could not be
     /// written by the write deadline, so rvd answers (and records) it.
     case auditUnwritten = "audit-unwritten"
+    /// A session-start event (B4): rvd words the house rules with the mode
+    /// its own launch environment enforces, which this process cannot see.
+    case houseRules = "house-rules"
 }
 
 /// The hook-local verdict: the exact host reply rvd would send, or a reason
@@ -120,6 +123,8 @@ package struct LocalHookDecider: Sendable {
             // rvd answers a call that is not this host's tool with the same
             // allow, before any evaluation.
             return .final(Self.reply(codec.encodeAllow()))
+        case .sessionStart:
+            return .escalate(.houseRules)
         case .request:
             break
         }
@@ -249,11 +254,17 @@ package struct LocalHookDecider: Sendable {
         let gated = GatedEvaluate(session, judge: probe)
         let home = self.home
         let ledger = LedgerHost.hook(host)
+        // The shell stop's inputs, kept for its safer-command vet.
+        let shellInputs = UnfairLock<EvaluationInputs?>(nil)
         let world = HookEvaluateWorld(
+            // One id per call, minted before evaluation: the ledger row
+            // `performBounded` writes and the decision-log row share it.
             evaluate: { command, cwd in
+              await DecisionCall.$current.withValue(DecisionCall()) {
                 let inputs = EvaluationInputs.gather(
                     home: home, cwd: cwd, environment: environment, host: ledger)
                 probe.recordGuardMode(inputs.guardMode)
+                shellInputs.withLock { $0 = inputs }
                 let decided = await gated.decideVerdict(
                     .apply,
                     GatedEvaluate.makeRequest(command: command, home: home),
@@ -277,8 +288,10 @@ package struct LocalHookDecider: Sendable {
                     decided.result, command: command, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
                     session: DecisionLogRecorder.currentSession))
                 return decided.result
+              }
             },
             evaluateFile: { action, cwd in
+              DecisionCall.$current.withValue(DecisionCall()) {
                 let mode = JudgeRuntime.effectiveGuardMode(
                     home: home, host: ledger, environment: environment,
                     config: GuardConfig.read(home: home))
@@ -290,6 +303,7 @@ package struct LocalHookDecider: Sendable {
                     decided.result, action: action, cwd: cwd, host: ledger, home: home, at: now, timedOut: false,
                     session: DecisionLogRecorder.currentSession))
                 return decided.result
+              }
             },
             mintOnDeny: { _, _ in
                 probe.escalate(.ask)
@@ -301,6 +315,14 @@ package struct LocalHookDecider: Sendable {
             mintOnDenyWithCommand: { _, _, _ in
                 probe.escalate(.ask)
                 return nil
+            },
+            voice: .live,
+            // The pass vets a safer command on its own rules, with no judge
+            // and nothing written, with the stop's own inputs (home, cwd,
+            // mode) when the shell door read them.
+            saferAllowed: { safer, cwd in
+                await gated.allowsSaferCommand(
+                    safer, cwd: cwd, home: home, now: now, inputs: shellInputs.withLock { $0 })
             }
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)

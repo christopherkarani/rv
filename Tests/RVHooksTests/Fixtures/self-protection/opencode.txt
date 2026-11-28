@@ -1,0 +1,7 @@
+== rv secrets set STRIPE_KEY
+exit 1
+stdout {"decision":"deny","reason":"✕ rv protects itself   rv secrets set STRIPE_KEY (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nsafer   rv secrets set --help\nwho     ask Chris to run  rv secrets set STRIPE_KEY","next":"ask Chris to run  rv secrets set STRIPE_KEY"}
+
+== echo uninstall | xargs rv
+exit 1
+stdout {"decision":"deny","reason":"✕ rv protects itself   echo uninstall | xargs rv (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nwho     ask Chris to run it in their own terminal","next":"ask Chris to run it in their own terminal"}

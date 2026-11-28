@@ -48,6 +48,14 @@ public enum PacksCommandError: Error, Equatable, Sendable {
     /// empty config, which would discard the owner's pack choices.
     case configUnreadable
     case criticalPatternUncompilable(RuleID)
+    /// A named pack, category or preset does not exist; `suggestion` is
+    /// the nearest real one.
+    case unknownSelection(String, suggestion: String?)
+    /// `[packs]` holds lines rv does not read as written. Saving over it
+    /// would drop them, so nothing is written until the owner fixes them.
+    case configInvalid([PolicyDocumentProblem])
+    /// A change made without the owner check would turn a pack off.
+    case wouldLoosen
 }
 
 /// In-process packs list / enable / disable for CLI and tests (temp HOME).
@@ -98,9 +106,51 @@ public enum PacksFacade {
         return row
     }
 
+    /// Every spelling `[packs]` and `rv packs enable/disable` accept: pack
+    /// ids, categories and presets.
+    public static func knownSelections(index: PackIndex) -> [String] {
+        Array(Set(index.packIDs.map(\.rawValue)).union(index.categories.keys).union(index.presets.keys)).sorted()
+    }
+
+    /// `[packs]` lines rv does not read as written; empty when the file is
+    /// absent or clean. Throws `configUnreadable` when it cannot be read.
+    public static func configProblems(home: HomeDirectory) throws -> [PolicyDocumentProblem] {
+        guard let text = try PacksConfigStore.loadText(home: home) else { return [] }
+        return PacksConfigStore.problems(in: text, known: knownSelections(index: try PackRegistry.loadIndex()))
+    }
+
+    /// Everything a pack change checks before it asks the owner anything:
+    /// every name is a real pack, category or preset (else the nearest
+    /// spelling), and `[packs]` reads exactly as written. Writes nothing.
+    public static func preflight(home: HomeDirectory, ids: [String]) throws {
+        let index = try PackRegistry.loadIndex()
+        let known = knownSelections(index: index)
+        let knownSet = Set(known)
+        for id in ids where knownSet.contains(id) == false {
+            throw PacksCommandError.unknownSelection(id, suggestion: PacksConfigStore.nearestSelection(to: id, in: known))
+        }
+        let problems: [PolicyDocumentProblem]
+        do {
+            problems = try configProblems(home: home)
+        } catch {
+            throw PacksCommandError.configUnreadable
+        }
+        if problems.isEmpty == false { throw PacksCommandError.configInvalid(problems) }
+    }
+
     /// Verb-argument / XPC boundary: raw operator strings become tokens here.
     public static func enable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
         try mutate(home: home, ids: ids, enabling: true)
+    }
+
+    /// `enable` for a caller that ran no owner check (`rv protect <tool>`,
+    /// `rv packs enable`): the same change, refused before anything is
+    /// written unless every pack that was on stays on.
+    public static func enableTightening(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
+        let index = try PackRegistry.loadIndex()
+        return try mutate(
+            home: home, selections: selectionTokens(ids, index: index), enabling: true, index: index,
+            requireTightening: true)
     }
 
     public static func disable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
@@ -149,6 +199,14 @@ public enum PacksFacade {
         return PackCatalog.make(enabled: enabled, index: index)
     }
 
+    /// The no-owner gate: every pack that was on must stay on. Today's
+    /// enable path only adds packs and drops disables (`effectiveOrdered`
+    /// is defaults ∪ enabled − disabled), so this never fires on real data;
+    /// it keeps a later change to that rule from loosening without the owner.
+    static func requireTightens(from before: Set<PackID>, to planned: Set<PackID>) throws {
+        guard planned.isSuperset(of: before) else { throw PacksCommandError.wouldLoosen }
+    }
+
     private static func mutate(home: HomeDirectory, ids: [String], enabling: Bool) throws -> PacksMutationResult {
         let index = try PackRegistry.loadIndex()
         return try mutate(
@@ -172,7 +230,8 @@ public enum PacksFacade {
         home: HomeDirectory,
         selections: [SelectionToken],
         enabling: Bool,
-        index: PackIndex
+        index: PackIndex,
+        requireTightening: Bool = false
     ) throws -> PacksMutationResult {
         let expansion: Set<PackID>
         do {
@@ -182,11 +241,17 @@ public enum PacksFacade {
         }
 
         var config: PacksConfig
+        let problems: [PolicyDocumentProblem]
         do {
             config = try PacksConfigStore.load(home: home)
+            problems = try PacksConfigStore.loadText(home: home)
+                .map { PacksConfigStore.problems(in: $0, known: knownSelections(index: index)) } ?? []
         } catch {
             throw PacksCommandError.configUnreadable
         }
+        // Rewriting `[packs]` keeps only what parse read: a misspelt key
+        // or entry would vanish with no word to the owner.
+        if problems.isEmpty == false { throw PacksCommandError.configInvalid(problems) }
         let before = Set(
             try PackSet.effectiveOrdered(
                 enabled: selectionTokens(config.enabled, index: index),
@@ -212,6 +277,17 @@ public enum PacksFacade {
             let named = Set(selections.map(\.rawValue))
             config.enabled = config.enabled.filter { !named.contains($0) }
             config.disabled = mergeUnique(config.disabled, selections.map(\.rawValue))
+        }
+
+        if requireTightening {
+            let planned = Set(
+                try PackSet.effectiveOrdered(
+                    enabled: selectionTokens(config.enabled, index: index),
+                    disabled: selectionTokens(config.disabled, index: index),
+                    index: index
+                )
+            )
+            try requireTightens(from: before, to: planned)
         }
 
         do {

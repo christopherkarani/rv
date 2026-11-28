@@ -26,6 +26,16 @@ private final class AuthProbe: @unchecked Sendable {
 
 private struct WriterRefused: Error {}
 
+/// Keeps what it is handed, as F2's proposal store will.
+private final class RecordingProposals: HostModeProposalSink, @unchecked Sendable {
+    private(set) var submitted: [HostModeProposal] = []
+
+    func submit(_ proposal: HostModeProposal) -> String? {
+        submitted.append(proposal)
+        return nil
+    }
+}
+
 /// A file manager whose removes (and, when asked, directory creates) fail:
 /// the seam for a host hook change that does not happen.
 private final class RefusingFileManager: FileManager, @unchecked Sendable {
@@ -111,12 +121,15 @@ struct HostCommandTests {
             #expect(before.stdout.contains(#""guard":"observe""#))
             #expect(before.stdout.contains(#"{"host":"grok","mode":"observe","wiring":"wired"}"#))
 
-            let probe = AuthProbe(allow: false)
+            // Under global observe a block stops agents: permanent only with
+            // the owner's check at a terminal.
+            let probe = AuthProbe(allow: true)
             let block = await HostModeRun.setMode(
-                .block, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
+                .block, for: .grok, env: environment, json: true, requester: Self.owner,
+                authenticate: probe.authenticate)
             #expect(block.exitCode == 0)
             #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
-            #expect(probe.calls == 0)
+            #expect(probe.calls == 1)
             #expect(store(home).read() == .entries([.grok: .block]))
             let after = HostModeRun.list(environment, json: true)
             #expect(after.stdout.contains(#"{"host":"grok","mode":"block","wiring":"wired"}"#))
@@ -163,7 +176,7 @@ struct HostCommandTests {
         }
     }
 
-    @Test func off_removesOnlyThatHostsHooks_andBlockRewiresWithoutAuth() async throws {
+    @Test func off_removesOnlyThatHostsHooks_andTheOwnersBlockRewires() async throws {
         try await withTempHomeAsync { home, layout, environment in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(atPath: layout.piDirectory, withIntermediateDirectories: true)
@@ -182,12 +195,13 @@ struct HostCommandTests {
             #expect(SetupRun.setup(environment).exitCode == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
 
-            let probe = AuthProbe(allow: false)
+            let probe = AuthProbe(allow: true)
             let block = await HostModeRun.setMode(
-                .block, for: .grok, env: environment, json: false, authenticate: probe.authenticate)
+                .block, for: .grok, env: environment, json: false, requester: Self.owner,
+                authenticate: probe.authenticate)
             #expect(block.exitCode == 0)
             #expect(block.stdout == "grok  block  wired\n")
-            #expect(probe.calls == 0)
+            #expect(probe.calls == 1)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
             #expect(store(home).read() == .entries([.grok: .block]))
         }
@@ -351,7 +365,8 @@ struct HostCommandTests {
             var environment = base
             environment.fileManager = RefusingFileManager(refuseCreateDirectory: true)
             let block = await HostModeRun.setMode(
-                .block, for: .grok, env: environment, json: true, authenticate: AuthProbe(allow: false).authenticate)
+                .block, for: .grok, env: environment, json: true, requester: Self.owner,
+                authenticate: AuthProbe(allow: true).authenticate)
             #expect(block.exitCode == 73)
             #expect(block.stderr.hasPrefix("rv host mode failed: unable to write grok hook"))
             #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
@@ -379,7 +394,7 @@ struct HostCommandTests {
             }
             for mode in [HostMode.block, .observe] {
                 let outcome = await HostModeRun.setMode(
-                    mode, for: .grok, env: environment, json: true,
+                    mode, for: .grok, env: environment, json: true, requester: Self.owner,
                     authenticate: AuthProbe(allow: true).authenticate)
                 #expect(outcome.exitCode != 0)
                 #expect(outcome.stdout.isEmpty)
@@ -483,6 +498,285 @@ struct HostCommandTests {
             #expect(outcome.stderr.hasPrefix("rv host mode failed:"))
         }
     }
+
+    // MARK: F3: a tighten that can't lock you out (Q4, 2026-11-27)
+
+    static let utc = TimeZone(identifier: "UTC")!
+    /// 14:12 UTC.
+    static let t0 = Date(timeIntervalSince1970: 1_764_252_720)
+    /// An agent in Claude Code (CLAUDECODE=1), no terminal.
+    static let claudeAgent = HostModeRequester(atTerminal: false, callingHosts: [.claude])
+
+    /// grok wired and stored `observe` by the owner.
+    private func observedGrok(_ environment: SetupEnvironment, _ layout: OwnedPaths) async throws {
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        #expect(SetupRun.setup(environment).exitCode == 0)
+        let observe = await HostModeRun.setMode(
+            .observe, for: .grok, env: environment, json: true, authenticate: AuthProbe(allow: true).authenticate)
+        #expect(observe.exitCode == 0)
+    }
+
+    @Test func agentBlockOfAnotherHost_holdsForAnHour_thenTheStoredModeIsBack() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let probe = AuthProbe(allow: false)
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent,
+                now: Self.t0, timeZone: Self.utc, authenticate: probe.authenticate)
+            #expect(block.exitCode == 0)
+            #expect(block.stdout == """
+                grok  block  wired  until 15:12
+                  An agent's block ends on its own after an hour; then grok is back to observe.
+                  To keep it blocked, you type:
+                → rv host mode grok block
+
+                """)
+            #expect(probe.calls == 0)
+            // The owner's mode is never overwritten: it is what comes back.
+            #expect(store(home).read() == .entries([.grok: .observe]))
+            let during = HostModeRun.list(environment, json: false, now: Self.t0.addingTimeInterval(600), timeZone: Self.utc)
+            #expect(during.stdout.contains("grok  block  wired  until 15:12\n"))
+            let duringJSON = HostModeRun.list(environment, json: true, now: Self.t0.addingTimeInterval(600))
+            #expect(duringJSON.stdout.contains(#"{"host":"grok","mode":"block","until":"2025-11-27T15:12:00Z","wiring":"wired"}"#))
+
+            // A fresh read an hour on, as a restarted rvd does: back to
+            // observe with nothing written.
+            let config = GuardConfig.read(home: environment.home)
+            #expect(GuardModeResolution.resolve(config, host: .grok, environment: [:], now: Self.t0.addingTimeInterval(3599)) == .enforce)
+            #expect(GuardModeResolution.resolve(config, host: .grok, environment: [:], now: Self.t0.addingTimeInterval(3600)) == .observe)
+            let after = HostModeRun.list(environment, json: false, now: Self.t0.addingTimeInterval(3600), timeZone: Self.utc)
+            #expect(after.stdout.contains("grok  observe  wired\n"))
+        }
+    }
+
+    @Test func agentBlockOfAnotherHost_json_namesTheEndAndWhatComesBack() async throws {
+        try await withTempHomeAsync { _, layout, environment in
+            try await observedGrok(environment, layout)
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(block.exitCode == 0)
+            #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","then":"observe","until":"2025-11-27T15:12:00Z","wiring":"wired"}"# + "\n")
+        }
+    }
+
+    /// Asking again neither extends the block nor makes it permanent.
+    @Test func agentBlockAgain_isNotExtendedOrMadePermanent() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            _ = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent,
+                now: Self.t0, timeZone: Self.utc, authenticate: AuthProbe(allow: false).authenticate)
+            let again = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent,
+                now: Self.t0.addingTimeInterval(1800), timeZone: Self.utc, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(again.exitCode == 0)
+            #expect(again.stdout.contains("An agent already blocked grok; it ends on its own at 15:12."))
+            #expect(store(home).read() == .entries([.grok: .observe]))
+            let window = try #require(store(home).readGuardConfig()?.temporaryBlocks[.grok])
+            #expect(window.until == Self.t0.addingTimeInterval(3600))
+        }
+    }
+
+    /// Acceptance: no agent path can put the agent's own host into block.
+    @Test func agentBlockOfItsOwnHost_isAProposal_andChangesNothing() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let config = store(home).configFile
+            let before = try Data(contentsOf: config)
+            let grokAgent = HostModeRequester(atTerminal: false, callingHosts: [.grok])
+            let sink = RecordingProposals()
+            let probe = AuthProbe(allow: true)
+            let outcome = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: grokAgent,
+                now: Self.t0, proposals: sink, authenticate: probe.authenticate)
+            #expect(outcome.exitCode == 77)
+            #expect(outcome.stdout == """
+                ⏺ asks  block grok: you decide
+                  Blocking grok would stop the agent that asked, so nothing changed.
+                  To do it, you type:
+                → rv host mode grok block
+
+                """)
+            #expect(probe.calls == 0)
+            #expect(sink.submitted == [HostModeProposal(host: .grok, mode: .block, reason: .ownHost)])
+            #expect(try Data(contentsOf: config) == before)
+            let resolved = GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:], now: Self.t0)
+            #expect(resolved == .observe)
+        }
+    }
+
+    @Test func blockWithNoAgentMarkerOrOfAnOffHost_isAProposal() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let unknown = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, now: Self.t0,
+                authenticate: AuthProbe(allow: true).authenticate)
+            #expect(unknown.exitCode == 77)
+            #expect(unknown.stdout == #"{"host":"grok","mode":"block","proposed":true,"reason":"unknown-caller","schema":"rv.host-mode-proposal.v1"}"# + "\n")
+
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: environment, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 0)
+            let fromOff = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent, now: Self.t0,
+                authenticate: AuthProbe(allow: true).authenticate)
+            #expect(fromOff.exitCode == 77)
+            #expect(fromOff.stdout.contains("grok is off; an agent can't wire it back in as block, so nothing changed."))
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+            #expect(store(home).read() == .entries([.grok: .off]))
+        }
+    }
+
+    /// Ending an agent's block early loosens: it needs the owner, and with
+    /// the owner the block is gone and the asked mode stands.
+    @Test func endingAnAgentsBlockEarly_needsTheOwner() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            _ = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0, authenticate: AuthProbe(allow: false).authenticate)
+            let refused = AuthProbe(allow: false)
+            let early = await HostModeRun.setMode(
+                .observe, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0.addingTimeInterval(60), authenticate: refused.authenticate)
+            #expect(early.exitCode == 77)
+            #expect(refused.calls == 1)
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok] != nil)
+
+            let owner = AuthProbe(allow: true)
+            let ended = await HostModeRun.setMode(
+                .observe, for: .grok, env: environment, json: true, requester: Self.owner,
+                now: Self.t0.addingTimeInterval(60), authenticate: owner.authenticate)
+            #expect(ended.exitCode == 0)
+            #expect(owner.calls == 1)
+            // The record stays, ended now: the cooldown counts from here.
+            let ended60 = Self.t0.addingTimeInterval(60)
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok] == GuardWindow(from: Self.t0, until: ended60))
+            #expect(GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:], now: ended60) == .observe)
+            #expect(store(home).read() == .entries([.grok: .observe]))
+
+            let reAsk = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0.addingTimeInterval(120), authenticate: AuthProbe(allow: false).authenticate)
+            #expect(reAsk.exitCode == 77)
+            #expect(reAsk.stdout.contains(#""reason":"cooldown""#))
+        }
+    }
+
+    /// Acceptance: an agent re-asking as each block ends cannot keep a host
+    /// blocked; inside six hours of the end it is a proposal.
+    @Test func agentReAskRightAfterExpiry_isAProposalUntilTheCooldownEnds() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let first = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(first.exitCode == 0)
+            let end = Self.t0.addingTimeInterval(3600)
+            let reAsk = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent,
+                now: end.addingTimeInterval(1), timeZone: Self.utc, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(reAsk.exitCode == 77)
+            #expect(reAsk.stdout.contains(
+                "An agent's block of grok ended less than 6 hours ago; another waits for you, so nothing changed."))
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok]?.until == end)
+            #expect(GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:], now: end.addingTimeInterval(1))
+                == .observe)
+
+            let later = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: end.addingTimeInterval(6 * 3600), authenticate: AuthProbe(allow: false).authenticate)
+            #expect(later.exitCode == 0)
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok]?.until == end.addingTimeInterval(6 * 3600 + 3600))
+        }
+    }
+
+    /// The owner prompt needs stdin and stdout on a terminal and no agent
+    /// marker; anything else goes to HostTighten unprompted.
+    @Test(arguments: [
+        (stdin: true, stdout: true, env: [String: String](), atTerminal: true),
+        (stdin: true, stdout: false, env: [:], atTerminal: false),
+        (stdin: false, stdout: true, env: [:], atTerminal: false),
+        (stdin: true, stdout: true, env: ["CLAUDECODE": "1"], atTerminal: false),
+    ])
+    func liveRequester_needsBothTTYsAndNoMarker(stdin: Bool, stdout: Bool, env: [String: String], atTerminal: Bool) {
+        let requester = CLIProcess.$context.withValue(
+            CLIProcess.Context(environment: env, stdinIsTTY: stdin, stdoutIsTTY: stdout)) { HostModeRequester.live() }
+        #expect(requester.atTerminal == atTerminal)
+        #expect(requester.callingHosts == (env.isEmpty ? [] : [.claude]))
+    }
+
+    /// An agent holding a pty (both TTYs, its marker set) never raises the
+    /// owner prompt for a permanent block: it gets the one-hour block.
+    @Test func agentWithAPty_isNotPrompted_andGetsTheOneHourBlock() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let probe = AuthProbe(allow: true)
+            let context = CLIProcess.Context(environment: ["CLAUDECODE": "1"], stdinIsTTY: true, stdoutIsTTY: true)
+            let outcome = await CLIProcess.$context.withValue(context) {
+                await HostModeRun.setMode(
+                    .block, for: .grok, env: environment, json: true, requester: .live(), now: Self.t0,
+                    authenticate: probe.authenticate)
+            }
+            #expect(outcome.exitCode == 0)
+            #expect(outcome.stdout.contains(#""until":"2025-11-27T15:12:00Z""#))
+            #expect(probe.calls == 0)
+            #expect(store(home).read() == .entries([.grok: .observe]))
+        }
+    }
+
+    /// The owner at a terminal sets block for good (and an agent's block
+    /// under it is replaced); a refused check changes nothing.
+    @Test func ownerAtTerminal_blocksForGood_orNothingChanges() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let before = try Data(contentsOf: store(home).configFile)
+            let refused = AuthProbe(allow: false)
+            let no = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.owner,
+                now: Self.t0, authenticate: refused.authenticate)
+            #expect(no.exitCode == 77)
+            #expect(refused.calls == 1)
+            #expect(try Data(contentsOf: store(home).configFile) == before)
+
+            _ = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0, authenticate: AuthProbe(allow: false).authenticate)
+            let yes = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.owner,
+                now: Self.t0.addingTimeInterval(60), authenticate: AuthProbe(allow: true).authenticate)
+            #expect(yes.exitCode == 0)
+            #expect(yes.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
+            #expect(store(home).read() == .entries([.grok: .block]))
+            #expect(store(home).readGuardConfig()?.temporaryBlocks.isEmpty == true)
+            let later = GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:],
+                now: Self.t0.addingTimeInterval(86_400))
+            #expect(later == .enforce)
+        }
+    }
+
+    /// The owner check is the real abstraction's test double: an
+    /// unattended context (no `.authenticated` seam) never passes it.
+    @Test func ownerCheck_throughTheSeam_failsClosedWithoutTheOwner() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(stdinIsTTY: true, stdoutIsTTY: true)) {
+                await HostModeRun.setMode(
+                    .block, for: .grok, env: environment, json: true, requester: .live(), now: Self.t0,
+                    authenticate: { try await CLIOwnerAuth.requireAuthenticated(reason: "test") })
+            }
+            #expect(outcome.exitCode == 77)
+            #expect(store(home).read() == .entries([.grok: .observe]))
+        }
+    }
+
+    /// The owner at a terminal: a block asks the owner check and is permanent.
+    static let owner = HostModeRequester(atTerminal: true, callingHosts: [])
 
     private func store(_ home: URL) -> HostModeStore {
         HostModeStore(configDirectory: home.appendingPathComponent(".config/rv", isDirectory: true))

@@ -89,7 +89,7 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.hasSuffix("\n"))
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
-    #expect(wire.stdout.contains(reason))
+    #expect(wire.stdout.contains(jsonQuoted(reason)))
 }
 
 @Test func openCodeEncodeDeny_sameReasonAsPi() {
@@ -207,5 +207,5 @@ func openCodeDecode_emptySessionIsNil(_ stdin: String) {
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
 }

@@ -42,6 +42,8 @@ enum ObserveReadProof {
             return true
         case "codesign":
             return codesignInspects(arguments)
+        case _ where isRVProgram(verb):
+            return rvReports(arguments)
         // `log show` only reads the unified log; `log erase`/`config` write.
         case "log":
             return arguments.first == "show"
@@ -66,6 +68,28 @@ enum ObserveReadProof {
         }
         return inspects
     }
+
+    /// rv itself, by name or at its installed path (`~/.local/bin/rv`,
+    /// `/Users/<you>/.local/bin/rv`): running the binary writes nothing
+    /// there, and an agent checking its own install (`rv --version`,
+    /// `rv doctor`) was escalated to enforce and blocked by the judge.
+    private static func isRVProgram(_ verb: String) -> Bool {
+        verb == "rv" || verb == "~/.local/bin/rv"
+            || (verb.hasPrefix("/") && verb.hasSuffix("/.local/bin/rv"))
+    }
+
+    /// rv subcommands that only report: no write, no change to the gate.
+    /// Exact argument lists; anything else (setup, a host mode change,
+    /// uninstall, an unknown flag) is no proof.
+    private static func rvReports(_ arguments: [String]) -> Bool {
+        let json = arguments.last == "--json" ? Array(arguments.dropLast()) : arguments
+        return rvReportForms.contains(json)
+    }
+
+    private static let rvReportForms: Set<[String]> = [
+        ["--version"], ["version"], ["--help"], ["help"], ["doctor"], ["blocks"],
+        ["host", "list"], ["service", "status"],
+    ]
 
     private static let codesignModifiers: Set<String> = ["--verbose", "--deep", "--strict"]
 

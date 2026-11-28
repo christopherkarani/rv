@@ -67,7 +67,7 @@ holds:
 The host got a block with no reason; rv puts this text in when a reason
 is empty. Run `rv doctor` and look at the Problems section.
 
-**`RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.`**
+**`✕ Stopped   (rv.hook/unreachable)` · `why     rv's daemon is not running`**
 `rvd` is not running.
 
 ```bash
@@ -83,7 +83,7 @@ reboot; `rv setup` says so and names the line to add to your shell
 profile (`rv service start >/dev/null`). In observe mode a host lets the
 call run unchecked instead, with a notice on stderr.
 
-**`RV daemon did not answer in time. Retry; if it persists run `rv doctor`.`**
+**`✕ Stopped   (rv.hook/timeout)` · `why     rv's daemon did not answer in time`**
 **`rv did not answer within 15s; the daemon may be busy or stopped. Run `rv doctor`.`**
 `rvd` is busy or hung. Retry once. If it keeps happening:
 
@@ -91,8 +91,8 @@ call run unchecked instead, with a notice on stderr.
 rv service restart
 ```
 
-**`RV daemon identity check failed (stale or mismatched rvd after an upgrade?) …`**
-**`RV daemon sent an unexpected reply (version skew after an upgrade?) …`**
+**`✕ Stopped   (rv.hook/untrusted)` · `why     rv's daemon failed its identity check`**
+**`✕ Stopped   (rv.hook/protocol)` · `why     rv's daemon sent a reply rv cannot read`**
 An old `rvd` is still running after an upgrade. `rv service restart`;
 if that does not fix it, `rv setup`.
 
@@ -104,7 +104,7 @@ The hook points at a binary that is gone or broken. Reinstall, then
 
 **A deny with a six-character code**
 That is rv working. If you meant it, redeem the code once from your
-terminal: `rv allow-once a1b2c3`. `rv explain '<command>'` shows which
+terminal: `rv unlock a1b2c3`. `rv why '<command>'` shows which
 pack and rule fired.
 
 ## `rv` commands refuse
@@ -126,7 +126,7 @@ Over SSH with no desktop session there is usually no unlocked keyring;
 use a source that does not need one (1Password, Vault, a cloud secret
 manager) in `secrets.json`. A first `set` has already saved the
 definition: once a keyring is available, run the same command again, or
-`rv secrets set NAME`, to store the value.
+`rv secrets add NAME`, to store the value.
 
 **`rv run: rv-isolation-exec is not installed beside rv, so the command cannot be started suspended until its placeholders are bound; reinstall rv`**
 Linux `rv run` needs the helper next to `rv` in `~/.local/bin`.
@@ -160,7 +160,7 @@ and run `rv setup`.
 | `mcp.json is unsafe (…); it must be a regular file only you can write` | `chmod 600 ~/.config/rv/mcp.json`; no symlink |
 | `<name> asks for a sandbox, but the MCP server sandbox is unavailable on this host (…); `rv mcp serve` will not run it uncaged` | Linux older than 6.7, or no Landlock or seccomp: run on a newer kernel, or remove the `sandbox` entry knowing it then runs uncaged |
 | `organization policy requires a sandbox for <name>, but …` | Same, and the organization requires the cage |
-| `<server> uses secret <name>, which secrets.json does not define` | `rv secrets set <name> …` |
+| `<server> uses secret <name>, which secrets.json does not define` | `rv secrets add <name> …` |
 | `<server> could not read secret <name>: …` | `rv secrets check <name>`; unlock the provider |
 | `mcp.json changed while it was being checked; not launching MCP servers` | Start the host again |
 | `rv cannot catch SIGINT, SIGTERM and SIGHUP here, so a signal would leave every MCP server running; not serving` | Linux only: rv could not set up how it hears signals (it needs one pipe, so usually rv is out of file descriptors). Close what holds them or raise the limit, then start the host again. Signals the parent left blocked are not the cause: serve unblocks the ones it handles |

@@ -585,7 +585,7 @@ private struct AllowingJudge: JudgePort {
 @Suite("Package script gate unresolved floor")
 struct PackageScriptGateFloorTests {
     static let fakeBundle = JudgeSelection(
-        engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+        engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true), shadow: false
     )
 
     fileprivate static func gated(
@@ -606,7 +606,7 @@ struct PackageScriptGateFloorTests {
 
     @Test("an unresolved script graph is indeterminate with or without a judge")
     func unresolvedIsIndeterminate() throws {
-        for judge in [Self.fakeBundle, JudgeSelection(engine: .ft, bundle: nil)] {
+        for judge in [Self.fakeBundle, JudgeSelection(engine: .ft, bundle: nil, shadow: false)] {
             let result = try Self.gated(#"cd "$D" && npm test"#, scripts: ["test": "node ok.js"], judge: judge)
             #expect(result.decision == .indeterminate(.packageScriptUnresolved), "\(judge)")
         }
@@ -630,7 +630,7 @@ struct PackageScriptGateFloorTests {
 
     @Test("a resolved, clean script graph stays allowed without a judge")
     func resolvedStaysAllowed() throws {
-        let result = try Self.gated("npm test", scripts: ["test": "node ok.js"], judge: JudgeSelection(engine: .ft, bundle: nil))
+        let result = try Self.gated("npm test", scripts: ["test": "node ok.js"], judge: JudgeSelection(engine: .ft, bundle: nil, shadow: false))
         #expect(result.decision == .allow)
     }
 }

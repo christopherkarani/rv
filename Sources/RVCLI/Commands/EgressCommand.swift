@@ -772,7 +772,7 @@ struct EgressDeny: AsyncParsableCommand {
     func run() async throws {
         let ctx = CommandContext.current(command: "egress deny", format: format)
         guard let reason, reason.isEmpty == false else {
-            try ctx.fail("rv egress deny: --reason is required\n", exitCode: 2)
+            try ctx.fail("rv egress deny: --reason is required\n", exitCode: ExitStatus.usage.rawValue)
         }
         do {
             let view = try await EgressReviewRun.ownerDeny(
@@ -811,7 +811,7 @@ struct EgressDenials: AsyncParsableCommand {
     func run() async throws {
         let ctx = CommandContext.current(command: "egress denials", format: format)
         guard limit > 0 else {
-            try ctx.fail("rv egress denials: --limit must be positive\n", exitCode: 2)
+            try ctx.fail("rv egress denials: --limit must be positive\n", exitCode: ExitStatus.usage.rawValue)
         }
         let home = try ctx.requireHome()
         let url = RVPolicyPaths.configDirectory(home: home)
