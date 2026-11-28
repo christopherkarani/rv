@@ -70,7 +70,8 @@ public struct JudgeContext: Sendable, Equatable {
 /// Load once (compilation is slow), reuse. Unlike LayaCoreMLJudge (three
 /// Korean questions over a frozen multilingual encoder), this runs one
 /// forward pass: [BOS] + token ids (no specials) + [EOS] through the
-/// fine-tuned encoder + Linear head, softmax over [allow, review, block].
+/// fine-tuned encoder + Linear head, softmax over [allow, review, block]
+/// (logits divided by the bundle's calibrated temperature first, v3).
 public final class FineTunedJudge: @unchecked Sendable {
     let model: MLModel
     let tokenizer: LayaTokenizer
@@ -78,6 +79,9 @@ public final class FineTunedJudge: @unchecked Sendable {
     public let labels: [LayaVerdict.Action]
     let maxLen: Int
     let lengths: [Int]
+    /// The bundle's calibration (`config.json` temperature and thresholds);
+    /// `.uncalibrated` for a v2 bundle.
+    public let calibration: FineTunedCalibration
     let lock = NSLock()
     let coreML: CoreMLGuard
     /// Keeps the compiled-model cache entry from being swept while loaded.
@@ -112,6 +116,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         var maxLen = 512
         var lengths = [16, 32, 64, 96, 128, 192, 256, 384, 512]
         var checkpoint = "laya-ft-v2-fp16"
+        var calibration = FineTunedCalibration.uncalibrated
         let configURL = bundleDir.appendingPathComponent("config.json")
         // Absent config keeps the shipped defaults. A present config that
         // cannot be read, or whose label order is not a valid permutation,
@@ -129,6 +134,7 @@ public final class FineTunedJudge: @unchecked Sendable {
                 if !parsed.isEmpty { lengths = parsed }
             }
             if let c = cfg["checkpoint"] as? String, !c.isEmpty { checkpoint = c }
+            calibration = try FineTunedCalibration.parse(cfg)
         }
         // Unknown or permuted-to-wrong-meaning labels must never load:
         // probabilities are read by label name, so a label set without
@@ -145,6 +151,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         self.maxLen = maxLen
         self.lengths = validLengths
         self.checkpoint = checkpoint
+        self.calibration = calibration
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
         // A bundle dir without its model is broken, not absent (badBundle,
@@ -204,10 +211,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         guard z.allSatisfy(\.isFinite) else {
             throw LayaError.predictionFailed("non-finite logits")
         }
-        let peak = z.max() ?? 0
-        let exps = z.map { exp($0 - peak) }
-        let total = exps.reduce(0, +)
-        let probs = exps.map { $0 / max(total, .leastNonzeroMagnitude) }
+        let probs = calibration.probabilities(logits: z)
 
         var probabilities: [LayaVerdict.Action: Double] = [:]
         for (label, p) in zip(labels, probs) { probabilities[label] = p }
@@ -229,7 +233,8 @@ public final class FineTunedJudge: @unchecked Sendable {
             risk: risk,
             checkpoint: checkpoint,
             latencyMilliseconds: Date().timeIntervalSince(start) * 1000,
-            truncated: truncated
+            truncated: truncated,
+            bundleThresholds: calibration.thresholds
         )
     }
 
@@ -237,6 +242,9 @@ public final class FineTunedJudge: @unchecked Sendable {
     public func judge(_ command: String, context: JudgeContext) throws -> LayaVerdict {
         try judge(command, contextLines: context.lines())
     }
+
+    /// The operating point the bundle ships (v3), nil for a v2 bundle.
+    public var bundleThresholds: LayaThresholds? { calibration.thresholds }
 }
 #else
 /// Linux seam: CoreML is unavailable, so the fine-tuned judge cannot run.
@@ -245,6 +253,10 @@ public struct FineTunedJudge: Sendable {
     public init(bundleDir: URL, coreML: CoreMLGuard = .current) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
+
+    public var calibration: FineTunedCalibration { .uncalibrated }
+
+    public var bundleThresholds: LayaThresholds? { nil }
 
     public func judge(_ command: String, contextLines: [String] = []) throws -> LayaVerdict {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")

@@ -51,8 +51,16 @@ REVIEW_DENY_COMMAND = ("exfil.sh", "evil", "/upload")
 STRICTNESS = {"allow": 0, "review": 1, "block": 2}
 LABELS = ("allow", "review", "block")
 HERE = os.path.dirname(os.path.abspath(__file__))
-SHELLDATA = "/tmp/shelldata"
-OUTDIR = "/tmp/laya-train"
+# SHELLDATA=<dir> overrides the medium-split dir (holds {train,validation}.jsonl).
+SHELLDATA = os.path.expanduser(os.environ.get("SHELLDATA", "/tmp/shelldata"))
+# Path overrides (unset = the historical /tmp defaults, byte-identical
+# behavior): LAYA_WORK=<dir> writes/reads v1 artifacts under <dir>/v1.
+_LAYA_WORK = os.environ.get("LAYA_WORK")
+OUTDIR = (os.path.join(os.path.expanduser(_LAYA_WORK), "v1") if _LAYA_WORK
+          else "/tmp/laya-train")
+# LAYA_V1_BOOTSTRAP=1: allow a missing augment.jsonl (first pass of a
+# from-scratch rebuild: base rows only, so augment.py has its base texts).
+BOOTSTRAP = os.environ.get("LAYA_V1_BOOTSTRAP") == "1"
 AUGMENT_PATH = os.path.join(OUTDIR, "augment.jsonl")
 HELDOUT_FILES = [
     os.path.join(HERE, "..", "testset_shell.jsonl"),
@@ -165,6 +173,9 @@ def process_split(split, heldout, exam_norm):
 
 def load_augment():
     if not os.path.exists(AUGMENT_PATH):
+        if BOOTSTRAP:
+            print(f"bootstrap: {AUGMENT_PATH} missing, base rows only")
+            return []
         sys.exit(f"FATAL: {AUGMENT_PATH} missing -- run augment.py first")
     rows = []
     with open(AUGMENT_PATH, encoding="utf-8") as f:

@@ -24,12 +24,24 @@ Run:
   cd Scripts/laya/training &&
   PYTHONPATH=/tmp/laya-pylibs:/tmp/laya-torchlibs /tmp/laya-venv/bin/python convert_ft.py
 
+v3 (dataset v3 / finetune_v3 checkpoint):
+  python3 convert_ft.py --version v3        (or LAYA_CONVERT_VERSION=v3)
+  Defaults then become: ft dir LAYA_WORK/v3/ft, data LAYA_WORK/v3/{train,validation}.jsonl
+  with hashes checked against LAYA_WORK/v3/stats.json, out dir <ft dir>/coreml,
+  checkpoint name laya-ft-v3-fp16, and LAYA_WORK/v3/calibration.json is REQUIRED:
+  its temperature and thresholds {block, review} go into the bundle config.json.
+  --ft-dir / --out-dir / --checkpoint-name / --calibration override any default.
+  Both versions write <ft dir>/convert-report.json (coreml_drift + bundle_size_mb
+  measurements for eval_v3.py --external). With no flags behavior is v2, unchanged.
+
 Exit 0 on success. Drift numbers are PRINTED (PASS/FAIL markers); the script
 does not widen tolerances -- report them honestly (ticket gates M1/M2).
 """
 
+import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -63,6 +75,61 @@ LENGTHS = [16, 32, 64, 96, 128, 192, 256, 384, 512]
 N_VAL_GOLDEN = 200
 DRIFT_TOL = 0.03
 ARGMAX_TOL = 0.99
+CHECKPOINT_NAME = "laya-ft-v2-fp16"
+CALIBRATION = None  # path to calibration.json (v3); None keeps the v2 config
+
+
+def configure(argv=None):
+    """Set the module paths from flags/env. No flags = v2 defaults (unchanged)."""
+    global FT_DIR, COREML_DIR, ONNX_FP16, GOLDEN_PATH, PT_PATH, TRAIN_PATH, VAL_PATH
+    global EXPECTED_HASH, CHECKPOINT_NAME, CALIBRATION
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--version", choices=("v2", "v3"),
+                    default=os.environ.get("LAYA_CONVERT_VERSION", "v2"))
+    ap.add_argument("--ft-dir", default=os.environ.get("LAYA_FT_DIR"))
+    ap.add_argument("--out-dir", default=os.environ.get("LAYA_COREML_OUT"))
+    ap.add_argument("--checkpoint-name", default=None)
+    ap.add_argument("--calibration", default=None)
+    a = ap.parse_args(argv)
+    if a.version == "v3":
+        work = Path(os.path.expanduser(
+            os.environ.get("LAYA_WORK", "~/CodingProjects/laya-train-work"))) / "v3"
+        FT_DIR = Path(a.ft_dir) if a.ft_dir else work / "ft"
+        TRAIN_PATH = work / "train.jsonl"
+        VAL_PATH = work / "validation.jsonl"
+        stats = json.loads((work / "stats.json").read_text())
+        EXPECTED_HASH = {k: stats["sha256"][k][:8] for k in ("train", "validation")}
+        CHECKPOINT_NAME = a.checkpoint_name or "laya-ft-v3-fp16"
+        CALIBRATION = Path(a.calibration) if a.calibration else work / "calibration.json"
+        if not CALIBRATION.exists():
+            raise SystemExit(f"{CALIBRATION} missing: run calibrate_v3.py first")
+    else:  # v2: the historical defaults, exactly as before
+        FT_DIR = Path(a.ft_dir) if a.ft_dir else Path("/tmp/laya-train/ft")
+        TRAIN_PATH = Path("/tmp/laya-train/v2/train.jsonl")
+        VAL_PATH = Path("/tmp/laya-train/v2/validation.jsonl")
+        EXPECTED_HASH = {"train": "d8e153ea", "validation": "5cd0c2b0"}
+        CHECKPOINT_NAME = a.checkpoint_name or "laya-ft-v2-fp16"
+        CALIBRATION = Path(a.calibration) if a.calibration else None
+    COREML_DIR = Path(a.out_dir) if a.out_dir else FT_DIR / "coreml"
+    ONNX_FP16 = FT_DIR / "model-fp16.onnx"
+    GOLDEN_PATH = FT_DIR / "golden.json"
+    PT_PATH = FT_DIR / "best_model.pt"
+    return a
+
+
+def write_convert_report(d_onnx, a_onnx, d_coreml, a_coreml, n_rows, ml_bytes=None):
+    """Measurements for eval_v3.py --external (gates coreml_drift, bundle_size_mb)."""
+    meas = [
+        {"gate": "coreml_drift", "slice": "golden", "group": "coreml-fp16 vs torch-fp32",
+         "value": float(d_coreml), "count": int(round((1 - a_coreml) * n_rows)), "n": n_rows},
+        {"gate": "coreml_drift", "slice": "golden", "group": "onnx-fp16 vs torch-fp32",
+         "value": float(d_onnx), "count": int(round((1 - a_onnx) * n_rows)), "n": n_rows},
+    ]
+    if ml_bytes is not None:
+        meas.append({"gate": "bundle_size_mb", "slice": "-", "group": "model.mlpackage",
+                     "value": ml_bytes / 1e6})
+    (FT_DIR / "convert-report.json").write_text(json.dumps(
+        {"checkpoint": CHECKPOINT_NAME, "measurements": meas}, indent=1) + "\n")
 
 
 def sha_prefix(path, n=8):
@@ -405,7 +472,8 @@ def dir_size(path):
     return total
 
 
-def main():
+def main(argv=None):
+    configure(argv)
     t0 = time.time()
     h_train = sha_prefix(TRAIN_PATH)
     h_val = sha_prefix(VAL_PATH)
@@ -473,6 +541,8 @@ def main():
 
     # Drift gates are gates, not reports: a failing bundle must never
     # reach the sidecar copy below (which is what makes it installable).
+    write_convert_report(d_onnx, a_onnx, d_coreml, a_coreml, len(rows),
+                         dir_size(COREML_DIR / "model.mlpackage"))
     if not (ok_onnx and ok_coreml):
         raise SystemExit(
             f"drift gate FAIL (onnx ok={ok_onnx}, coreml ok={ok_coreml}); "
@@ -486,7 +556,7 @@ def main():
         "logit_order": LABELS,
         "max_len": MAX_LEN,
         "lengths": LENGTHS,
-        "checkpoint": "laya-ft-v2-fp16",
+        "checkpoint": CHECKPOINT_NAME,
         "source": {
             "train_hash": h_train,
             "validation_hash": h_val,
@@ -495,6 +565,19 @@ def main():
             "onnx_fp16_mode": onnx_mode,
         },
     }
+    if CALIBRATION is not None:
+        cal = json.loads(Path(CALIBRATION).read_text())
+        cfg["temperature"] = float(cal["temperature"])
+        tb, tr = float(cal["block_threshold"]), float(cal["review_threshold"])
+        # Swift (LayaThresholds) refuses anything but 0 < review < block <= 1,
+        # and a refused bundle sends every judged call to review. Fail here
+        # instead of shipping an unusable bundle.
+        if not (0.0 < tr < tb <= 1.0):
+            raise SystemExit(f"calibration thresholds unusable by the runtime: "
+                             f"block={tb} review={tr} (need 0 < review < block <= 1); "
+                             f"see calibration notes: {cal.get('notes')}")
+        cfg["thresholds"] = {"block": tb, "review": tr}
+        cfg["source"]["calibration_sha256_prefix"] = sha_prefix(Path(CALIBRATION))
     (COREML_DIR / "config.json").write_text(json.dumps(cfg, indent=1) + "\n")
 
     def _mb(n):

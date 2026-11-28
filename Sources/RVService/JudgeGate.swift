@@ -186,6 +186,9 @@ public enum JudgeRuntime {
                    let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     do { _ = try LayaVerdict.Action.configLabels(cfg) }
                     catch { problems.append("config labels are not allow/review/block") }
+                    // The loader refuses the same calibration (bad bundle).
+                    do { _ = try FineTunedCalibration.parse(cfg) }
+                    catch { problems.append("config calibration invalid (temperature or thresholds)") }
                 } else {
                     problems.append("config.json unparseable")
                 }
@@ -344,7 +347,8 @@ public enum JudgeRuntime {
         let row = logRow(
             guardMode: inputs.guardMode, subject: .live(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
-            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
+            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek,
+            operatingPoint: reading.operatingPoint
         )
         // Only enforce floors an unscored allow; the log keeps the pack
         // result, as for engine-missing above.
@@ -403,7 +407,8 @@ public enum JudgeRuntime {
         return (result.observedAllow, reading.outcome, floorsWouldBe, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
-            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
+            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek,
+            operatingPoint: reading.operatingPoint
         ))
     }
 
@@ -414,6 +419,9 @@ public enum JudgeRuntime {
         let verdict: LayaVerdict?
         let action: LayaVerdict.Action?
         let note: String?
+        /// The thresholds `action` was resolved at, only when they came
+        /// from the bundle (logged as the shadow-mode operating point).
+        var operatingPoint: LayaThresholds? = nil
     }
 
     /// Verdict → provenance thresholds → truncation guard → raise. Shared by
@@ -432,14 +440,20 @@ public enum JudgeRuntime {
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
-            let t = thresholds(provenance: provenance)
+            let t = thresholds(provenance: provenance, bundle: verdict.bundleThresholds)
             var action = verdict.action(blockThreshold: t.block, reviewThreshold: t.review)
+            // Valid by construction: bundle review < block, and the min
+            // with the fixed untrusted pair keeps review < block.
+            let operatingPoint = verdict.bundleThresholds.flatMap { _ in
+                try? LayaThresholds(block: t.block, review: t.review)
+            }
             // The model never saw the truncated tail; an allow on a
             // partial view goes to a human instead of binding.
             if verdict.truncated, action == .allow { action = .review }
             return JudgeReading(
                 outcome: action == .allow ? result : raise(result, verdict: verdict, action: action),
-                verdict: verdict, action: action, note: verdict.truncated ? "truncated" : nil
+                verdict: verdict, action: action, note: verdict.truncated ? "truncated" : nil,
+                operatingPoint: operatingPoint
             )
         }
     }
@@ -473,7 +487,8 @@ public enum JudgeRuntime {
             var row = logRow(
                 guardMode: guardMode, subject: observing ? .wouldBe(returned) : .live(returned),
                 verdict: reading.verdict, action: reading.action, engine: engine,
-                note: noteFor(note, contextPartial: contextPartial), now: Date(), isPeek: isPeek
+                note: noteFor(note, contextPartial: contextPartial), now: Date(), isPeek: isPeek,
+                operatingPoint: reading.operatingPoint
             )
             row.isLateResult = true
             log(row)
@@ -785,7 +800,8 @@ public enum JudgeRuntime {
         engine: JudgeEngine,
         note: String?,
         now: Date,
-        isPeek: Bool
+        isPeek: Bool,
+        operatingPoint: LayaThresholds? = nil
     ) -> GatedEffect.JudgeLogRow {
         func kind(_ decision: Decision) -> GatedEffect.JudgeLogRow.Verdict {
             switch decision {
@@ -822,7 +838,8 @@ public enum JudgeRuntime {
                     malicious: (verdict.malicious * 10000).rounded() / 10000,
                     checkpoint: verdict.checkpoint,
                     milliseconds: (verdict.latencyMilliseconds * 10).rounded() / 10,
-                    truncated: verdict.truncated
+                    truncated: verdict.truncated,
+                    thresholds: operatingPoint
                 )
             }
         )
@@ -867,6 +884,11 @@ public enum JudgeRuntime {
             object["checkpoint"] = score.checkpoint
             object["ms"] = score.milliseconds
             if score.truncated { object["truncated"] = true }
+            // Only a bundle (v3) operating point is logged; the fixed
+            // thresholds are implied by its absence.
+            if let thresholds = score.thresholds {
+                object["thresholds"] = ["block": thresholds.block, "review": thresholds.review]
+            }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return false }
         // rvd and the hook-local evaluator both append here: a flocked

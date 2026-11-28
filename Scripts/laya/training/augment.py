@@ -33,7 +33,11 @@ import random
 
 SEED = 20261019
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUTDIR = "/tmp/laya-train"
+# Path overrides (unset = the historical /tmp defaults, byte-identical
+# behavior): LAYA_WORK=<dir> writes/reads v1 artifacts under <dir>/v1.
+_LAYA_WORK = os.environ.get("LAYA_WORK")
+OUTDIR = (os.path.join(os.path.expanduser(_LAYA_WORK), "v1") if _LAYA_WORK
+          else "/tmp/laya-train")
 OUT_PATH = os.path.join(OUTDIR, "augment.jsonl")
 HELDOUT_FILES = [
     os.path.join(HERE, "..", "testset_shell.jsonl"),

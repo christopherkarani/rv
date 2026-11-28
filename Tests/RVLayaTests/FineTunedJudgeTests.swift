@@ -58,10 +58,20 @@ struct FineTunedJudgeTests {
         var maxDrift = 0.0
         var agree = 0
         var worst: [(drift: Double, set: String, command: String)] = []
+        // The golden holds raw (temperature 1) torch probs; a v3 bundle
+        // divides logits by its temperature, and softmax(z / T) is
+        // p^(1/T) renormalized.
+        let temperature = judge.calibration.temperature
+        func calibrated(_ probs: [Double]) -> [Double] {
+            guard temperature != 1 else { return probs }
+            let scaled = probs.map { pow($0, 1 / temperature) }
+            let total = scaled.reduce(0, +)
+            return scaled.map { $0 / total }
+        }
         for row in golden.rows {
             let verdict = try judge.judge(row.text)
             var rowDrift = 0.0
-            for (label, gp) in zip(golden.labels, row.probs) {
+            for (label, gp) in zip(golden.labels, calibrated(row.probs)) {
                 let d = abs((verdict.probabilities.first { $0.key.rawValue == label }?.value ?? -1) - gp)
                 rowDrift = max(rowDrift, d)
                 maxDrift = max(maxDrift, d)
