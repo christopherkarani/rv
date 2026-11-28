@@ -45,7 +45,7 @@ public final class XPCEvaluateListener: Sendable {
         self.uiSessions = uiSessions
         self.unlockCeremonies = UnlockReviewCeremonyService(
             allowOnce: runtime.allowOnce, grants: runtime.grants,
-            recorder: .live(home: runtime.configHome))
+            recorder: .live(home: runtime.configHome), presence: .live(runtime.ownerPresence))
     }
 
     public func start() {

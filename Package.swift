@@ -315,6 +315,9 @@ let serviceLibraryAndDaemon: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
             "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC", "RVJudgePool",
+            // K2: rvd words the unlock sheet's plain line (PlainTemplate)
+            // from its own raw copy of the command. Display only.
+            "RVGlance",
         ],
         swiftSettings: testOwnerPresence
     ),

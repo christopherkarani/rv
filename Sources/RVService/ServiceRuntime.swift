@@ -653,8 +653,8 @@ public actor ServiceRuntime {
         case .planted:
             await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             // Memory only. The attesting CLI flips its own display
-            // projection after planted:true; the daemon never writes the
-            // shared projection file (no cross-process append race).
+            // projection after planted:true; rvd writes that file only for
+            // a plant of its own (the menu bar's K2 `projectRedeemed`).
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: true, epoch: grants.epoch.uuidString,
                 presence: ownerPresence.promptsItself ? .daemonPrompt : .password

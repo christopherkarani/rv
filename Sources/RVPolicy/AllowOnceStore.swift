@@ -327,20 +327,35 @@ public actor AllowOnceStore {
     /// Display flip after rvd itself planted a grant for an issued code
     /// (the menu bar's approval, K2): the pending row turns granted, as the
     /// CLI flips it after a terminal redeem, so `rv wait` sees the answer.
-    /// Projection only, best-effort and non-blocking like `project`: rvd's
-    /// memory table holds the grant whatever this file says. A row that no
-    /// longer matches what rvd issued is left alone.
-    package func projectRedeemed(codeHash: String, now: Date) {
-        guard let issued = issuedCodes[codeHash] else { return }
-        try? withFileLock(nonBlocking: true) {
-            guard case let .granted(records, _) = try AllowOnceLedger.redeem(
-                records: loadRecords(), codeHash: codeHash, now: now,
-                expectedFingerprint: issued.fingerprint.rawValue,
-                expectedPayloadDigest: issued.payloadDigest?.rawValue)
-            else { return }
-            let written = try writeRecords(records)
-            pruneLiveUnlockCodes(against: written, now: now)
+    /// Projection only: rvd's memory table holds the grant whatever this
+    /// file says. The lock is taken without blocking rvd's actor for long:
+    /// while another process holds it, this waits `pause` and tries again,
+    /// up to `attempts` times. A row that no longer matches what rvd issued
+    /// is left alone. True when the row is granted.
+    @discardableResult
+    package func projectRedeemed(
+        codeHash: String, now: Date, attempts: Int = 40, pause: Duration = .milliseconds(25)
+    ) async -> Bool {
+        for attempt in 1...max(1, attempts) {
+            guard let issued = issuedCodes[codeHash] else { return false }
+            do {
+                return try withFileLock(nonBlocking: true) {
+                    guard case let .granted(records, _) = try AllowOnceLedger.redeem(
+                        records: loadRecords(), codeHash: codeHash, now: now,
+                        expectedFingerprint: issued.fingerprint.rawValue,
+                        expectedPayloadDigest: issued.payloadDigest?.rawValue)
+                    else { return false }
+                    let written = try writeRecords(records)
+                    pruneLiveUnlockCodes(against: written, now: now)
+                    return true
+                }
+            } catch AllowOnceError.lockFailed where attempt < attempts {
+                try? await Task.sleep(for: pause)
+            } catch {
+                return false
+            }
         }
+        return false
     }
 
     /// rvd planted the grant for this issued code. The code is spent, so a

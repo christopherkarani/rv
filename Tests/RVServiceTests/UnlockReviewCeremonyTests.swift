@@ -2,6 +2,8 @@ import Foundation
 import Testing
 import RVDomain
 import RVEngine
+import RVFileStore
+import RVGlance
 import RVHistory
 import RVIPC
 @testable import RVIsolation
@@ -32,6 +34,8 @@ struct UnlockReviewCeremonyTests {
         let home: HomeDirectory
         let homeURL: URL
         let clock: Clock
+        /// The owner-check lockout the terminal path shares.
+        let presence: OwnerPresence
         let ui = AuthenticatedOperatorUIConnectionID()
 
         var configDirectory: URL { RVPolicyPaths.configDirectory(home: home) }
@@ -51,12 +55,15 @@ struct UnlockReviewCeremonyTests {
             hookBudget: testHookBudget)
         var recorder = UnlockReviewRecorder.live(home: home)
         if let recordAudit {
-            recorder.audit = { _, _ in recordAudit }
+            recorder.audit = { _, _, _, _ in recordAudit }
         }
+        let presence = OwnerPresence(authenticator: nil, clock: { clock.now })
         let ceremony = UnlockReviewCeremonyService(
-            allowOnce: store, grants: await runtime.grants, recorder: recorder, clock: { clock.now })
+            allowOnce: store, grants: await runtime.grants, recorder: recorder, presence: .live(presence),
+            clock: { clock.now })
         return Rig(
-            runtime: runtime, ceremony: ceremony, store: store, home: home, homeURL: homeURL, clock: clock)
+            runtime: runtime, ceremony: ceremony, store: store, home: home, homeURL: homeURL, clock: clock,
+            presence: presence)
     }
 
     /// rvd's hook path issuing a deny code, as `HookDoor` does.
@@ -97,16 +104,29 @@ struct UnlockReviewCeremonyTests {
         try String(contentsOf: AuditLog.fileURL(configDirectory: rig.configDirectory), encoding: .utf8)
     }
 
+    private func bind(_ code: String, _ rig: Rig) async throws(UnlockReviewError) -> UIUnlockChallengeBundleDTO {
+        try await rig.ceremony.bind(codeHash: sha256Hex(code), uiConnection: rig.ui)
+    }
+
+    private func allowlist(_ rig: Rig) -> [AllowlistEntry] {
+        guard case .ok(let entries) = AllowlistStore(baseDirectory: rig.configDirectory)
+            .loadForValidate(workspacePath: nil) else { return [] }
+        return entries
+    }
+
     // MARK: What the sheet is shown
 
-    @Test func theListShowsTheWholeStoppedCommandTheWordsAndTheAgentsOwnLine() async throws {
+    @Test func theSheetShowsTheWholeStoppedCommandTheWordsAndTheAgentsOwnLine() async throws {
         let rig = try await rig()
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }
         let long = "git push --force origin " + String(repeating: "feature-", count: 30)
         let code = try await stop(long, rig)
-        let items = await rig.ceremony.list().items
-        let item = try #require(items.first)
-        #expect(items.count == 1)
+        let rows = await rig.ceremony.list()
+        let row = try #require(rows.items.first)
+        #expect(rows.items.count == 1 && rows.omitted == 0)
+        #expect(row == UIUnlockSummaryDTO(
+            codeHash: sha256Hex(code), code: code, host: .claude, advisoryExpiresWall: row.advisoryExpiresWall))
+        let item = try await bind(code, rig).item
         #expect(item.code == code)
         #expect(item.codeHash == sha256Hex(code))
         #expect(item.command == long)
@@ -114,7 +134,40 @@ struct UnlockReviewCeremonyTests {
         #expect(item.agentSays == "Force-push my rebased branch")
         #expect(item.checkWords == CheckWords.words(for: try #require(AllowOnceUnlockCode(validating: code))))
         #expect(item.promptText == "allow once \"\(long)\" in /tmp/ws (rule core.git:push-force, code \(code))")
-        #expect(item.status == .waiting)
+        #expect(item.status == .awaitingAuthentication)
+    }
+
+    /// Review item 8: rvd words the plain line from its own raw copy of
+    /// the command, then escapes it like every other field.
+    @Test func thePlainLineIsWordedFromTheRawCommand() async throws {
+        let rig = try await rig()
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let raw = "git\treset --hard"
+        let code = try await stop(raw, rig)
+        let item = try await bind(code, rig).item
+        let fromRaw = PlainTemplate.line(for: PlainRequest(
+            host: .claude, tool: .bash, text: raw, outcome: .stopped, rule: pushRule.rawValue)).text
+        #expect(item.effect == DisplayedText.approvalField(fromRaw))
+        #expect(item.effect.isEmpty == false)
+        #expect(item.command == DisplayedText.approvalField(raw))
+    }
+
+    /// Review item 3: a flood of stops is a small reply: at most the cap,
+    /// oldest first, rows without any command text.
+    @Test func theListIsCappedAndCarriesNoCommandText() async throws {
+        let rig = try await rig()
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        for index in 0..<(UnlockReviewLimits.listCap + 5) {
+            try await stop("git push --force origin branch-\(index)", rig)
+            rig.clock.advance(by: 1)
+        }
+        let list = await rig.ceremony.list()
+        #expect(list.items.count == UnlockReviewLimits.listCap)
+        #expect(list.omitted == 5)
+        let wire = try #require(String(data: IPCJSON.encode(list), encoding: .utf8))
+        #expect(wire.contains("branch-") == false)
+        #expect(wire.contains("/tmp/ws") == false)
+        #expect(list.items.map(\.advisoryExpiresWall) == list.items.map(\.advisoryExpiresWall).sorted())
     }
 
     @Test func aPreArmedCodeIsTheOwnersOwnAndNeverAnAsk() async throws {
@@ -129,9 +182,8 @@ struct UnlockReviewCeremonyTests {
     @Test func aCommandTooLongForThePromptIsShownButCannotBeApproved() async throws {
         let rig = try await rig()
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }
-        try await stop("git push --force origin " + String(repeating: "b", count: 400), rig)
-        let bundle = try await rig.ceremony.bind(codeHash: try #require(await rig.ceremony.list().items.first).codeHash,
-                                                 uiConnection: rig.ui)
+        let code = try await stop("git push --force origin " + String(repeating: "b", count: 400), rig)
+        let bundle = try await bind(code, rig)
         #expect(bundle.item.approvable == false)
         await #expect(throws: UnlockReviewError.notShowable) { try await answer(bundle, rig) }
     }
@@ -172,21 +224,54 @@ struct UnlockReviewCeremonyTests {
         #expect(await evaluate("git push --force origin main", rig) == false)
     }
 
-    @Test func noAuthenticationGrantsNothingAndSpendsTheChallenge() async throws {
+    /// Review item 4: a declined prompt grants nothing, spends the
+    /// challenge, and writes an `approved: false` owner-action row.
+    @Test func aDeclinedPromptGrantsNothingIsAuditedAndSpendsTheChallenge() async throws {
         for outcome in [UIAuthenticationOutcome.cancelled, .failed, .unavailable, .timedOut, .invalidated] {
             let rig = try await rig()
             defer { try? FileManager.default.removeItem(at: rig.homeURL) }
             let code = try await stop("git push --force origin main", rig)
             let bundle = try await rig.ceremony.bind(codeHash: sha256Hex(code), uiConnection: rig.ui)
-            await #expect(throws: UnlockReviewError.authenticationRequired) {
-                try await answer(bundle, rig, outcome: outcome)
-            }
+            #expect(try await answer(bundle, rig, outcome: outcome) == .declined)
             await #expect(throws: UnlockReviewError.unknownCode) { try await answer(bundle, rig) }
+            let audit = try auditText(rig)
+            #expect(audit.contains("redeem allow-once code"))
+            #expect(audit.contains("\"outcome\":\"\(outcome.rawValue)\""))
+            #expect(audit.contains("\"decision\":\"denied\""))
             #expect(await evaluate("git push --force origin main", rig) == false)
             // The code stays live: a new review can still be opened.
             let again = try await rig.ceremony.bind(codeHash: sha256Hex(code), uiConnection: rig.ui)
             #expect(again.challenge.challengeID != bundle.challenge.challengeID)
         }
+    }
+
+    /// Review item 4: the terminal's lockout. Five declines in ten minutes
+    /// lock owner checks for ten minutes, for the menu bar and the
+    /// terminal alike; a prompt that never appeared is no strike.
+    @Test func fiveDeclinesLockOwnerChecksForTenMinutes() async throws {
+        let rig = try await rig()
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let code = try await stop("git push --force origin main", rig)
+        for _ in 0..<OwnerPresence.maxFailures {
+            #expect(try await answer(try await bind(code, rig), rig, outcome: .unavailable) == .declined)
+        }
+        #expect(await rig.presence.isLockedOut() == false)
+        var statuses: [UIUnlockStatus] = []
+        for _ in 0..<OwnerPresence.maxFailures {
+            statuses.append(try await answer(try await bind(code, rig), rig, outcome: .cancelled))
+        }
+        #expect(statuses == Array(repeating: .declined, count: OwnerPresence.maxFailures - 1) + [.lockedOut])
+        #expect(await rig.presence.isLockedOut())
+        // The sheet says so, and even a passed prompt grants nothing.
+        let locked = try await bind(code, rig)
+        #expect(locked.item.status == .lockedOut)
+        #expect(try await answer(locked, rig) == .lockedOut)
+        #expect(await evaluate("git push --force origin main", rig) == false)
+        #expect(try auditText(rig).contains("\"outcome\":\"lockedOut\""))
+        // Ten minutes on, the code (15 minutes) can still be allowed.
+        rig.clock.advance(by: OwnerPresence.lockout + 1)
+        #expect(try await answer(try await bind(code, rig), rig) == .allowedOnce)
+        #expect(await evaluate("git push --force origin main", rig))
     }
 
     @Test func anotherConnectionCanNeitherTakeOverNorAnswerAReview() async throws {
@@ -237,7 +322,7 @@ struct UnlockReviewCeremonyTests {
         #expect(try await rig.ceremony.release(codeHash: sha256Hex(code), uiConnection: rig.ui) == .waiting)
         await #expect(throws: UnlockReviewError.unknownCode) { try await answer(bundle, rig) }
         #expect(await evaluate("git push --force origin main", rig) == false)
-        #expect(await rig.ceremony.list().items.first?.status == .waiting)
+        #expect(try await bind(code, rig).item.status == .awaitingAuthentication)
     }
 
     @Test func theTerminalAndTheMenuBarCanNeverBothSpendOneCode() async throws {
@@ -300,6 +385,77 @@ struct UnlockReviewCeremonyTests {
         #expect(await evaluate(command, rig))
         #expect(await evaluate(command, rig))
         #expect(await evaluate("git push --force origin release", rig) == false)
+    }
+
+    /// Review item 2: no room for the once grant, but the entry is
+    /// written: the answer is Always allowed, which is the truth.
+    @Test func alwaysAllowWithNoRoomForTheOnceGrantStillSaysAlwaysAllowed() async throws {
+        let rig = try await rig()
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let command = "git push --force origin main"
+        let code = try await stop(command, rig)
+        for index in 0..<EphemeralAllowOnceTable.maxGrants {
+            _ = await rig.runtime.grants.plant(
+                fingerprint: GrantFingerprint(rawValue: "filler-\(index)"), cwd: wd("/tmp/other"),
+                codeHash: CodeHash(rawValue: "filler-\(index)"), now: start)
+        }
+        #expect(try await answer(try await bind(code, rig), rig, .alwaysAllow) == .alwaysAllowed)
+        #expect(allowlist(rig).count == 1)
+        #expect(await evaluate(command, rig))
+        // A lone once with no room still says nothing was allowed.
+        let other = try await stop("git push --force origin release", rig)
+        await #expect(throws: UnlockReviewError.notReviewable) { try await answer(try await bind(other, rig), rig) }
+    }
+
+    /// Review item 5: an expired or legacy entry for the same command can't
+    /// stand in for the answer: it is replaced, and the command runs.
+    @Test func alwaysAllowReplacesAnExpiredOrLegacyEntryForTheSameCommand() async throws {
+        let command = "git push --force origin main"
+        let shell = ShellCommand(rawValue: command)
+        let selector = AllowlistSelector.exactCommand(EvaluationWorld.matchingView(of: shell))
+        let stale = [
+            AllowlistEntry(
+                selector: selector, reason: "old", addedAt: start.addingTimeInterval(-7200),
+                expiresAt: start.addingTimeInterval(-3600),
+                maskedPayloadDigest: maskedPayloadContentDigest(Normalize.maskedSegments(of: shell)),
+                invocationDigest: maskedPayloadContentDigest(Normalize.invocationPrefix(of: shell))),
+            AllowlistEntry(selector: selector, reason: "legacy", addedAt: start.addingTimeInterval(-7200)),
+        ]
+        for old in stale {
+            let rig = try await rig()
+            defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+            try AllowlistStore(baseDirectory: rig.configDirectory).pin(old)
+            let code = try await stop(command, rig)
+            #expect(try await answer(try await bind(code, rig), rig, .alwaysAllow) == .alwaysAllowed)
+            let entries = allowlist(rig)
+            #expect(entries.count == 1)
+            #expect(entries.first?.expiresAt == nil)
+            #expect(entries.first?.maskedPayloadDigest != nil && entries.first?.invocationDigest != nil)
+            #expect(await evaluate(command, rig))
+            #expect(await evaluate(command, rig))
+        }
+    }
+
+    /// Review item 6: another process holding the ledger lock delays the
+    /// projection, it doesn't drop it, so `rv wait` still sees the grant.
+    @Test func theLedgerFlipWaitsOutABriefLockInsteadOfSkippingIt() async throws {
+        let rig = try await rig()
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let code = try await stop("git push --force origin main", rig)
+        let bundle = try await bind(code, rig)
+        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: rig.configDirectory)
+        let held = Mutex(false)
+        let holder = Thread {
+            _ = try? ExclusiveFileLock.withLock(at: lockURL) {
+                held.withLock { $0 = true }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+        }
+        holder.start()
+        while held.withLock({ $0 }) == false { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(try await answer(bundle, rig) == .allowedOnce)
+        let row = await rig.store.list(now: rig.clock.now).first { $0.codeHash == sha256Hex(code) }
+        #expect(row?.kind == .granted)
     }
 
     @Test func theAuditSummariesAreTheTerminalsInItsOrder() {
@@ -388,8 +544,8 @@ struct UnlockReviewCeremonyTests {
             Issue.record("the hook must answer")
             return
         }
-        let match = try #require(denied.stdout.firstMatch(of: /rv allow-once ([0-9a-f]{6})/))
-        let item = try #require(await rig.ceremony.list().items.first)
+        let match = try #require(denied.stdout.firstMatch(of: /rv (?:allow-once|unlock) ([0-9a-f]{6})/))
+        let item = try await bind(String(match.1), rig).item
         #expect(item.code == String(match.1))
         #expect(item.host == .claude)
         #expect(item.command == "git reset --hard")

@@ -116,6 +116,12 @@ public enum UIUnlockStatus: String, Sendable, Equatable, Codable, CaseIterable {
     /// Planted by another answer first (the terminal's `rv allow-once`, or
     /// another window): nothing new was granted.
     case alreadyAnswered
+    /// The owner's prompt was cancelled or failed: nothing was granted,
+    /// and the decline counts toward the owner-check lockout.
+    case declined
+    /// Too many declined owner checks lately (the terminal's lockout):
+    /// nothing can be approved until it ends.
+    case lockedOut
     case unknown
 }
 
@@ -135,6 +141,10 @@ public struct UIUnlockItemDTO: Sendable, Equatable, Codable {
     /// (`DisplayedText.approvalField`: invisible and control characters as
     /// visible escapes). Never shortened.
     public let command: String
+    /// rvd's plain-English line for what the command would do (K5's
+    /// template), worded from rvd's own raw copy of the command, then made
+    /// displayable like every other field.
+    public let effect: String
     public let workingDirectory: String
     public let rule: String?
     /// The agent's own description of the command, when its host sent one.
@@ -153,7 +163,7 @@ public struct UIUnlockItemDTO: Sendable, Equatable, Codable {
     public var approvable: Bool { promptText != nil }
 
     public init(
-        codeHash: String, code: String, checkWords: [String], host: HookHost?, command: String,
+        codeHash: String, code: String, checkWords: [String], host: HookHost?, command: String, effect: String,
         workingDirectory: String, rule: String?, agentSays: String?, promptText: String?,
         status: UIUnlockStatus, advisoryExpiresWall: Date
     ) {
@@ -162,6 +172,7 @@ public struct UIUnlockItemDTO: Sendable, Equatable, Codable {
         self.checkWords = checkWords
         self.host = host
         self.command = command
+        self.effect = effect
         self.workingDirectory = workingDirectory
         self.rule = rule
         self.agentSays = agentSays
@@ -171,11 +182,32 @@ public struct UIUnlockItemDTO: Sendable, Equatable, Codable {
     }
 }
 
-public struct UIUnlockListDTO: Sendable, Equatable, Codable {
-    public let items: [UIUnlockItemDTO]
+/// One waiting stop as the list carries it: just enough to show a row and
+/// open the sheet. The command and everything else come only with a bind,
+/// one ask at a time, so a flood of stops stays a small reply.
+public struct UIUnlockSummaryDTO: Sendable, Equatable, Codable {
+    public let codeHash: String
+    public let code: String
+    public let host: HookHost?
+    public let advisoryExpiresWall: Date
 
-    public init(items: [UIUnlockItemDTO]) {
+    public init(codeHash: String, code: String, host: HookHost?, advisoryExpiresWall: Date) {
+        self.codeHash = codeHash
+        self.code = code
+        self.host = host
+        self.advisoryExpiresWall = advisoryExpiresWall
+    }
+}
+
+public struct UIUnlockListDTO: Sendable, Equatable, Codable {
+    /// The oldest waiting stops, at most rvd's cap.
+    public let items: [UIUnlockSummaryDTO]
+    /// How many more were waiting past the cap.
+    public let omitted: Int
+
+    public init(items: [UIUnlockSummaryDTO], omitted: Int = 0) {
         self.items = items
+        self.omitted = omitted
     }
 }
 

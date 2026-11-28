@@ -366,6 +366,28 @@ actor OwnerPresence {
         }
     }
 
+    // MARK: Checks the pinned menu bar runs itself (K2)
+
+    /// True while declined checks have locked owner checks, for the menu
+    /// bar's prompts as for rvd's own.
+    func isLockedOut() -> Bool {
+        lockedOutVerdict() != nil
+    }
+
+    /// A decline the pinned operator UI reported for its own owner prompt:
+    /// the same strike a declined rvd prompt is, so the menu bar and the
+    /// terminal share one lockout. True when this strike locked checks.
+    func recordReportedDecline() -> Bool {
+        guard case .denied(let reply) = recordFailure(.declined) else { return false }
+        return reply.outcome == .lockedOut
+    }
+
+    /// The pinned operator UI's owner prompt passed: as an approved rvd
+    /// prompt, it clears the strikes.
+    func recordReportedApproval() {
+        failures.removeAll()
+    }
+
     private func lockedOutVerdict() -> Verdict? {
         let now = clock()
         guard let lockedUntil, now < lockedUntil else { return nil }

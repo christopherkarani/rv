@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVEngine
+import RVGlance
 import RVHistory
 import RVIPC
 import RVPolicy
@@ -29,8 +30,13 @@ import RVPolicy
 /// fingerprint, cwd, payload digest, connection, expiry, single use.
 /// Nothing the UI sends shapes what is granted: the command, the
 /// allowlist entry and the grant all come from rvd's own memory of the code.
+/// A declined prompt is reported too: it is audited and counts toward the
+/// terminal's owner-check lockout (`OwnerPresence`), which the menu bar
+/// shares.
 enum UnlockReviewLimits {
     static let challengeLifetime: TimeInterval = 5 * 60
+    /// Most asks one list reply carries; the rest are counted, not sent.
+    static let listCap = 20
     /// How a menu bar approval is recorded on the allowlist change
     /// (`authorized_by`).
     static let authorization = "owner (Touch ID or password in the rv menu bar)"
@@ -41,8 +47,6 @@ enum UnlockReviewError: Error, Sendable, Equatable {
     case unknownCode
     /// Held by another connection, already answered, or changed since bind.
     case notReviewable
-    /// The completion did not carry a device-owner authentication.
-    case authenticationRequired
     /// rvd could not show the whole command, so nothing may approve it.
     case notShowable
     /// The approval could not be written to the audit log or the allowlist.
@@ -59,7 +63,9 @@ enum UnlockReviewRules {
     }
 
     /// The trusted projection of one issued code.
-    static func item(codeHash: String, issued: IssuedAllowOnce, bound: Bool) -> UIUnlockItemDTO {
+    static func item(
+        codeHash: String, issued: IssuedAllowOnce, bound: Bool, lockedOut: Bool = false
+    ) -> UIUnlockItemDTO {
         let command = issued.command ?? ""
         return UIUnlockItemDTO(
             codeHash: codeHash,
@@ -67,12 +73,29 @@ enum UnlockReviewRules {
             checkWords: CheckWords.words(for: issued.code),
             host: issued.stop?.asker,
             command: DisplayedText.approvalField(command),
+            effect: effect(issued),
             workingDirectory: DisplayedText.approvalField(issued.cwd.rawValue),
             rule: issued.ruleID.map { DisplayedText.approvalField($0.rawValue) },
             agentSays: issued.stop?.agentSays.map(DisplayedText.approvalField),
             promptText: promptText(issued),
-            status: bound ? .awaitingAuthentication : .waiting,
+            status: lockedOut ? .lockedOut : bound ? .awaitingAuthentication : .waiting,
             advisoryExpiresWall: issued.expiresAt)
+    }
+
+    /// A list row: no command, folder or agent text.
+    static func summary(codeHash: String, issued: IssuedAllowOnce) -> UIUnlockSummaryDTO {
+        UIUnlockSummaryDTO(
+            codeHash: codeHash, code: issued.code.rawValue, host: issued.stop?.asker,
+            advisoryExpiresWall: issued.expiresAt)
+    }
+
+    /// K5's plain line, worded from rvd's own raw copy of the command (an
+    /// escaped copy could read as another command), then made displayable.
+    static func effect(_ issued: IssuedAllowOnce) -> String {
+        let line = PlainTemplate.line(for: PlainRequest(
+            host: issued.stop?.asker ?? .claude, tool: .bash, text: issued.command ?? "", outcome: .stopped,
+            rule: issued.ruleID?.rawValue))
+        return DisplayedText.approvalField(line.text)
     }
 
     /// rvd's own prompt text for the code: the words the terminal approves.
@@ -105,33 +128,78 @@ enum UnlockReviewRules {
         case .alwaysAllow: ["add allowlist exception for an exact command", "redeem allow-once code"]
         }
     }
+
+    /// Whether a reported outcome is a strike toward the lockout. As with
+    /// rvd's own prompt, a prompt that could not appear is no strike, or an
+    /// agent could lock the owner out through prompts nobody saw.
+    static func isStrike(_ outcome: UIAuthenticationOutcome) -> Bool {
+        switch outcome {
+        case .cancelled, .timedOut, .invalidated, .failed: true
+        case .authenticated, .unavailable: false
+        }
+    }
+}
+
+/// The owner-check lockout the terminal path keeps, as the ceremony uses it.
+/// Production is the runtime's one `OwnerPresence`.
+struct UnlockReviewPresence: Sendable {
+    var isLockedOut: @Sendable () async -> Bool
+    /// True when this decline locked checks.
+    var recordDecline: @Sendable () async -> Bool
+    var recordApproval: @Sendable () async -> Void
+
+    static func live(_ presence: OwnerPresence) -> UnlockReviewPresence {
+        UnlockReviewPresence(
+            isLockedOut: { await presence.isLockedOut() },
+            recordDecline: { await presence.recordReportedDecline() },
+            recordApproval: { await presence.recordReportedApproval() })
+    }
 }
 
 /// Writes what an approval changes outside rvd's memory: the audit row and
 /// the allowlist. Production is `live`; tests record or fail.
 struct UnlockReviewRecorder: Sendable {
-    var audit: @Sendable (_ summary: String, _ context: AuthenticatedRequestContext) async -> Bool
-    var pinAllowlist: @Sendable (_ entry: AllowlistEntry) -> Bool
+    /// One `owner.action` row: approved, or the outcome that refused it.
+    var audit: @Sendable (_ summary: String, _ approved: Bool, _ outcome: String, _ context: AuthenticatedRequestContext)
+        async -> Bool
+    /// Leaves the exact command allowed from now on; true only when the
+    /// allowlist as written (and the blocklist) now let it run.
+    var pinAllowlist: @Sendable (_ entry: AllowlistEntry, _ command: ShellCommand, _ now: Date) -> Bool
 
     static func live(home: HomeDirectory?) -> UnlockReviewRecorder {
         UnlockReviewRecorder(
-            audit: { summary, context in
+            audit: { summary, approved, outcome, context in
                 await OwnerPresence.audit(
-                    summary: summary, approved: true, outcome: ConfirmOwnerActionReply.Outcome.approved.rawValue,
-                    context: context, home: home)
+                    summary: summary, approved: approved, outcome: outcome, context: context, home: home)
             },
-            pinAllowlist: { entry in
+            pinAllowlist: { entry, command, now in
                 guard let home else { return false }
                 let store = AllowlistStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
                 do {
-                    try ConfigChangeAudit.$authorization.withValue(UnlockReviewLimits.authorization) {
-                        try store.pin(entry)
+                    let written = try ConfigChangeAudit.$authorization.withValue(UnlockReviewLimits.authorization) {
+                        try store.pinExact(entry)
                     }
-                    return true
+                    return UnlockReviewRules.covers(written, command: command, now: now)
+                        && UnlockReviewRules.covers(store.loadUserSnapshot(workspacePath: nil, now: now), command, now: now)
                 } catch {
                     return false
                 }
             })
+    }
+}
+
+extension UnlockReviewRules {
+    /// Whether `entries` let exactly `command` run by an exact-command
+    /// entry (never a rule entry).
+    static func covers(_ entries: [AllowlistEntry], command: ShellCommand, now: Date) -> Bool {
+        covers(AllowlistSnapshot(entries: entries.filter { $0.isActive(at: now) }), command, now: now)
+    }
+
+    static func covers(_ snapshot: AllowlistSnapshot, _ command: ShellCommand, now: Date) -> Bool {
+        snapshot.matches(
+            ruleID: nil, matchingView: EvaluationWorld.matchingView(of: command), now: now,
+            maskedSegments: Normalize.maskedSegments(of: command),
+            invocationPrefix: Normalize.invocationPrefix(of: command))
     }
 }
 
@@ -152,6 +220,7 @@ actor UnlockReviewCeremonyService {
     private let allowOnce: AllowOnceStore
     private let grants: EphemeralAllowOnceTable
     private let recorder: UnlockReviewRecorder
+    private let presence: UnlockReviewPresence
     private let clock: @Sendable () -> Date
     private var challenges: [String: Challenge] = [:]
 
@@ -159,25 +228,29 @@ actor UnlockReviewCeremonyService {
         allowOnce: AllowOnceStore,
         grants: EphemeralAllowOnceTable,
         recorder: UnlockReviewRecorder,
+        presence: UnlockReviewPresence,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.allowOnce = allowOnce
         self.grants = grants
         self.recorder = recorder
+        self.presence = presence
         self.clock = clock
     }
 
-    /// Every live stop rvd can vouch for, oldest first.
+    /// The oldest live stops rvd can vouch for, as rows only (at most
+    /// `listCap`; the rest counted).
     func list() async -> UIUnlockListDTO {
         prune()
         let stops = await allowOnce.liveStops(now: clock())
-        let items = stops
             .sorted { lhs, rhs in
                 lhs.value.expiresAt != rhs.value.expiresAt
                     ? lhs.value.expiresAt < rhs.value.expiresAt : lhs.key < rhs.key
             }
-            .map { UnlockReviewRules.item(codeHash: $0.key, issued: $0.value, bound: challenges[$0.key] != nil) }
-        return UIUnlockListDTO(items: items)
+        let shown = stops.prefix(UnlockReviewLimits.listCap)
+        return UIUnlockListDTO(
+            items: shown.map { UnlockReviewRules.summary(codeHash: $0.key, issued: $0.value) },
+            omitted: stops.count - shown.count)
     }
 
     /// Opens one review on one UI connection. Re-binding from the same
@@ -192,20 +265,23 @@ actor UnlockReviewCeremonyService {
             challenges.removeValue(forKey: codeHash)
             throw .unknownCode
         }
+        let lockedOut = await presence.isLockedOut()
         if let live = challenges[codeHash] {
             guard live.uiConnection == uiConnection else { throw .notReviewable }
-            return bundle(live, issued: issued)
+            return bundle(live, issued: issued, lockedOut: lockedOut)
         }
         let challenge = Challenge(
             id: UUID(), codeHash: codeHash, fingerprint: issued.fingerprint, cwd: issued.cwd,
             payloadDigest: issued.payloadDigest, uiConnection: uiConnection, issuedWall: now,
             expiresWall: min(now.addingTimeInterval(UnlockReviewLimits.challengeLifetime), issued.expiresAt))
         challenges[codeHash] = challenge
-        return bundle(challenge, issued: issued)
+        return bundle(challenge, issued: issued, lockedOut: lockedOut)
     }
 
     /// Applies one answer. The challenge is spent before anything else
-    /// runs, whatever the outcome: a replay finds nothing.
+    /// runs, whatever the outcome: a replay finds nothing. A declined
+    /// prompt grants nothing, is audited, and counts toward the lockout;
+    /// while locked out nothing is granted.
     func complete(
         _ completion: UIUnlockCompletion,
         uiConnection: AuthenticatedOperatorUIConnectionID,
@@ -217,7 +293,6 @@ actor UnlockReviewCeremonyService {
         }
         guard challenge.uiConnection == uiConnection else { throw .notReviewable }
         challenges.removeValue(forKey: completion.codeHash)
-        guard completion.outcome == .authenticated else { throw .authenticationRequired }
         let now = clock()
         guard let issued = await allowOnce.issued(codeHash: challenge.codeHash, now: now) else {
             throw .unknownCode
@@ -226,6 +301,18 @@ actor UnlockReviewCeremonyService {
             issued.payloadDigest == challenge.payloadDigest
         else { throw .notReviewable }
         if issued.redeemed { return .alreadyAnswered }
+        let summary = UnlockReviewRules.auditSummaries(completion.decision)[0]
+        if await presence.isLockedOut() {
+            _ = await recorder.audit(summary, false, ConfirmOwnerActionReply.Outcome.lockedOut.rawValue, context)
+            return .lockedOut
+        }
+        guard completion.outcome == .authenticated else {
+            guard await recorder.audit(summary, false, completion.outcome.rawValue, context) else {
+                throw .notRecorded
+            }
+            guard UnlockReviewRules.isStrike(completion.outcome) else { return .declined }
+            return await presence.recordDecline() ? .lockedOut : .declined
+        }
         guard UnlockReviewRules.promptText(issued) != nil else { throw .notShowable }
         let entry: AllowlistEntry?
         switch completion.decision {
@@ -237,10 +324,15 @@ actor UnlockReviewCeremonyService {
         }
         // Audit first, as the terminal does: an approval rvd cannot record
         // changes nothing.
+        let approved = ConfirmOwnerActionReply.Outcome.approved.rawValue
         for summary in UnlockReviewRules.auditSummaries(completion.decision) {
-            guard await recorder.audit(summary, context) else { throw .notRecorded }
+            guard await recorder.audit(summary, true, approved, context) else { throw .notRecorded }
         }
-        if let entry, recorder.pinAllowlist(entry) == false { throw .notRecorded }
+        if let entry, let command = issued.command,
+            recorder.pinAllowlist(entry, ShellCommand(rawValue: command), now) == false {
+            throw .notRecorded
+        }
+        await presence.recordApproval()
         switch await grants.plant(
             fingerprint: issued.fingerprint, cwd: issued.cwd,
             codeHash: CodeHash(rawValue: "tty:\(challenge.codeHash)"), now: now,
@@ -248,12 +340,15 @@ actor UnlockReviewCeremonyService {
         ) {
         case .planted:
             await allowOnce.markIssuedRedeemed(codeHash: challenge.codeHash)
-            await allowOnce.projectRedeemed(codeHash: challenge.codeHash, now: now)
+            _ = await allowOnce.projectRedeemed(codeHash: challenge.codeHash, now: now)
             return entry == nil ? .allowedOnce : .alwaysAllowed
         case .alreadyRedeemed:
             await allowOnce.markIssuedRedeemed(codeHash: challenge.codeHash)
             return entry == nil ? .alreadyAnswered : .alwaysAllowed
         case .refused:
+            // No room for one more grant. Always allow is already on the
+            // allowlist, so the retry runs by it; a lone once has nothing.
+            guard entry == nil else { return .alwaysAllowed }
             throw .notReviewable
         }
     }
@@ -280,13 +375,16 @@ actor UnlockReviewCeremonyService {
         challenges = challenges.filter { $0.value.expiresWall > now }
     }
 
-    private func bundle(_ challenge: Challenge, issued: IssuedAllowOnce) -> UIUnlockChallengeBundleDTO {
+    private func bundle(
+        _ challenge: Challenge, issued: IssuedAllowOnce, lockedOut: Bool
+    ) -> UIUnlockChallengeBundleDTO {
         UIUnlockChallengeBundleDTO(
             challenge: UIUnlockChallengeDTO(
                 challengeID: challenge.id, codeHash: challenge.codeHash,
                 uiConnectionID: challenge.uiConnection.rawValue, issuedWall: challenge.issuedWall,
                 advisoryLifetimeSeconds: max(0, challenge.expiresWall.timeIntervalSince(challenge.issuedWall))),
-            item: UnlockReviewRules.item(codeHash: challenge.codeHash, issued: issued, bound: true))
+            item: UnlockReviewRules.item(
+                codeHash: challenge.codeHash, issued: issued, bound: true, lockedOut: lockedOut))
     }
 }
 
