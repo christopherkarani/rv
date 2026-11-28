@@ -62,7 +62,7 @@ struct HookEvaluateTests {
         )
         let specific = json["hookSpecificOutput"] as? [String: Any]
         #expect(specific?["permissionDecision"] as? String == "deny")
-        #expect((json["systemMessage"] as? String)?.contains(approvalPendingLine) == true)
+        #expect((json["systemMessage"] as? String)?.contains("\nwho     ask ") == true)
         #expect(reply.stdout.contains("\"permissionDecision\":\"ask\"") == false)
         #expect(reply.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
@@ -497,15 +497,13 @@ private func assertGrokMintedResetHard(_ json: [String: Any]) throws {
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
     let code = try #require(allowOnceUnlockCode(in: reason))
-    let unlock = unlockLine(for: code)
-    #expect(
-        reason
-            == "RV · Blocked. \(unlock) Destroys uncommitted changes. Use 'git stash' first. \(approvalPendingLine)"
-    )
+    let unlock = unlockLine(for: code, owner: .current)
+    let lines = reason.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    #expect(lines.first == "✕ Stopped   git reset --hard (core.git/reset-hard)")
+    #expect(lines.contains("why     destroys uncommitted changes"))
+    #expect(lines.last == "who     \(unlock)")
     #expect(json["next"] as? String == unlock)
-    #expect(reason.hasPrefix("RV · Blocked. Paste in Terminal to allow once:"))
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(reason.contains("git reset --hard") == false)
 }
 
 private func hookEvaluateBody(

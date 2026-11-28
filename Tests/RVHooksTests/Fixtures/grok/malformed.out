@@ -1,1 +1,1 @@
-{"decision":"deny","reason":"rv received a hook payload it could not read and blocked the command. Run it in Terminal."}
+{"decision":"deny","reason":"✕ Stopped   (rv.hook/unreadable)\nwhy     rv could not read this hook request\nwho     ask your user to run  rv doctor","next":"ask your user to run  rv doctor"}

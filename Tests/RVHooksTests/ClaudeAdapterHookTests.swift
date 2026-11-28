@@ -141,7 +141,7 @@ struct ClaudeAdapterHookTests {
         )
         try expectClaudeDeny(result, reason: resetHardReason)
         #expect(result.spawnCount == 1)
-        #expect(result.stdout.contains(resetHardReason))
+        #expect(result.stdout.contains(jsonStringBody(resetHardReason)))
     }
 
     @Test func firstCallProductionRichDeny_reencodesDocumentedKeysOnly() async throws {
@@ -361,17 +361,15 @@ struct ClaudeAdapterHookTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/rv-c/hook_fallback.c")
         let source = try String(contentsOf: url, encoding: .utf8)
-        for (name, text) in [
-            ("kUnreachableMessage", cUnreachableReason),
-            ("kTimeoutMessage", cTimeoutReason),
-            ("kConnectionMessage", cConnectionReason),
-            ("kStoppedMessage", cStoppedReason),
-        ] {
+        for text in cDownTexts {
             #expect(
-                source.contains("static const char \(name)[] =\n    \"\(text)\";"),
-                "\(name) in hook_fallback.c drifted from this test's copy"
+                source.contains("static const struct RvFailureText \(text.name) = {\n    \"\(text.rule)\", \"\(text.why)\", \(text.fix)};"),
+                "\(text.name) in hook_fallback.c drifted from this test's copy"
             )
         }
+        #expect(source.contains("kDoctor[] = \"rv doctor\";"))
+        #expect(source.contains("kRestart[] = \"rv service restart\";"))
+        #expect(source.contains(#""\xE2\x9C\x95 Stopped   (%s)\nwhy     %s\nwho     ask %s to run  %s""#))
     }
 
     @Test(arguments: ["Bash", "Read"])
@@ -415,20 +413,25 @@ struct ClaudeAdapterHookTests {
     }
 }
 
-/// `kUnreachableMessage` / `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
-/// (pinned by `cDownReasons_matchHookFallbackSource`).
-private let cUnreachableReason =
-    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
-private let cTimeoutReason =
-    "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
+/// The C hook's down stops (`kUnreachableText` / `kTimeoutText` /
+/// `kConnectionText` / `kStoppedText` in `Sources/rv-c/hook_fallback.c`,
+/// pinned by `cDownReasons_matchHookFallbackSource`).
+private let cDownTexts: [(name: String, rule: String, why: String, fix: String)] = [
+    ("kUnreachableText", "rv.hook/unreachable", "rv's daemon is not running", "kDoctor"),
+    ("kTimeoutText", "rv.hook/timeout", "rv's daemon did not answer in time", "kDoctor"),
+    ("kConnectionText", "rv.hook/connection", "rv lost its daemon before a verdict", "kDoctor"),
+    ("kStoppedText", "rv.hook/stopped", "rvd stopped or crashed after it last ran", "kRestart"),
+]
+private let cUnreachableReason = daemonUnreachableMessage
+private let cTimeoutReason = cDownStop("rv.hook/timeout", why: "rv's daemon did not answer in time", fix: "rv doctor")
 private let cConnectionReason =
-    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
+    cDownStop("rv.hook/connection", why: "rv lost its daemon before a verdict", fix: "rv doctor", owner: "Chris")
 private let cStoppedReason =
-    "RV observe mode: rvd was stopped or crashed after it last ran, so this call was not allowed unchecked. Run `rv service restart` in your terminal."
+    cDownStop("rv.hook/stopped", why: "rvd stopped or crashed after it last ran", fix: "rv service restart")
 
 /// The C hook's `RV_HOOK_WHEN_DOWN=ask` reply for Claude (`render_ask`).
 private func cDownAskJSON(reason: String) -> String {
-    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(reason)\"},\"systemMessage\":\"\(reason)\"}\n"
+    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(jsonStringBody(reason))\"},\"systemMessage\":\"\(jsonStringBody(reason))\"}\n"
 }
 
 private func resetHardEvent() -> [String: Any] {
@@ -453,11 +456,10 @@ private let askReason =
     "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
 private let askJSON =
     "{\"decision\":\"ask\",\"reason\":\"\(askReason)\"}\n"
-private let resetHardReason =
-    "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
+private let resetHardReason = resetHardHostDeny
 
 private func claudeDenyJSON(reason: String) -> String {
-    "{\"systemMessage\":\"\(reason)\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"\(reason)\"}}\n"
+    "{\"systemMessage\":\"\(jsonStringBody(reason))\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"\(jsonStringBody(reason))\"}}\n"
 }
 
 private func adapterSource(rvPath: String) throws -> String {

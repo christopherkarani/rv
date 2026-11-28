@@ -21,13 +21,13 @@ struct HostAskHookTests {
         #expect(json["decision"] as? String != "allow")
         #expect(wire.exitCode == host.denyExitCode, "\(host)")
         #expect(wire.stdout.isEmpty == false)
-        #expect(wire.stdout.contains(approvalPendingLine), "\(host)")
+        #expect(wire.stdout.contains("\\nwho     ask "), "\(host)")
         #expect(wire.stdout.contains("\"continuation\":\"hostNative\"") == false)
         if host == .codex {
             #expect(json["decision"] as? String == "block")
         } else if host == .cursor {
             #expect(json["permission"] as? String == "deny")
-            #expect(json["agent_message"] as? String == cursorAgentAskLine)
+            #expect(json["agent_message"] as? String == json["user_message"] as? String)
         } else if host == .claude {
             let specific = json["hookSpecificOutput"] as? [String: Any]
             #expect(specific?["permissionDecision"] as? String == "deny")
@@ -57,7 +57,7 @@ struct HostAskHookTests {
         )
         #expect(wire.exitCode == host.denyExitCode, "\(host)")
         #expect(wire.stdout.isEmpty == false)
-        #expect(wire.stdout.contains(approvalPendingLine), "\(host)")
+        #expect(wire.stdout.contains("\\nwho     ask "), "\(host)")
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"continuation\":\"hostNative\"") == false)
@@ -75,7 +75,7 @@ struct HostAskHookTests {
         #expect(json["decision"] as? String == "deny")
         #expect(wire.exitCode == 1)
         #expect(wire.stdout.isEmpty == false)
-        #expect(wire.stdout.contains(approvalPendingLine))
+        #expect(wire.stdout.contains("\\nwho     ask "))
         #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"continuation\":\"hostNative\"") == false)
@@ -94,7 +94,7 @@ struct HostAskHookTests {
         #expect(specific?["permissionDecision"] as? String == "deny")
         #expect(wire.exitCode == 0)
         #expect(wire.stdout.isEmpty == false)
-        #expect((json["systemMessage"] as? String)?.contains(approvalPendingLine) == true)
+        #expect((json["systemMessage"] as? String)?.contains("\nwho     ask ") == true)
         #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"permissionDecision\":\"allow\"") == false)
         #expect(wire.stdout.contains("stopReason") == false)
@@ -111,9 +111,9 @@ struct HostAskHookTests {
         )
         #expect(json["decision"] as? String == "deny")
         #expect(wire.exitCode == 0)
-        #expect(wire.stdout.contains(approvalPendingLine))
+        #expect(wire.stdout.contains("\\nwho     ask "))
         let text = json["reason"] as? String ?? ""
-        #expect(text.contains("Destroys uncommitted changes"))
+        #expect(text.contains("\nwhy     destroys uncommitted changes\n"))
         #expect(text.contains("Terminal") == false)
     }
 
@@ -128,7 +128,7 @@ struct HostAskHookTests {
         )
         #expect(json["decision"] as? String == "deny")
         #expect(json["rule"] as? String == "core.secrets/env-exfil")
-        #expect(wire.stdout.contains(approvalPendingLine) == false)
+        #expect(wire.stdout.contains(approveInRVLine()) == false)
         #expect(wire.stdout.contains("rv allow-once") == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
@@ -159,7 +159,7 @@ struct HostAskHookTests {
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
         )
         #expect(json["decision"] as? String == "deny")
-        #expect(wire.stdout.contains(approvalPendingLine) == false)
+        #expect(wire.stdout.contains(approveInRVLine()) == false)
         #expect(wire.stdout.contains("rv allow-once") == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)

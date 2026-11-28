@@ -137,10 +137,13 @@ struct LogCommandTests {
         // rv blocks lists every row, judge notes included, and folds none
         // away, so it never prints rv log's hint to show them.
         #expect(blocks.components(separatedBy: "core.judge:laya-block").count == 3)
+        // What rv log prints of its own (its summary line, its hint to show
+        // every row) must stay out of rv blocks.
         let log = try output(home)
-        #expect(log.contains("every row"), "\(log)")
-        #expect(blocks.contains("every row") == false, "\(blocks)")
-        #expect(blocks.contains("→ rv log") == false, "\(blocks)")
+        for own in ["every row", "→ rv log", "2 judge notes in shadow"] {
+            #expect(log.contains(own), "rv log prints \(own): \(log)")
+            #expect(blocks.contains(own) == false, "rv blocks must not print \(own): \(blocks)")
+        }
     }
 
     // MARK: - rvd's decision log
