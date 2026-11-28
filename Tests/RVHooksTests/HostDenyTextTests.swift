@@ -45,7 +45,7 @@ func mintedResetHardHostDeny(_ code: AllowOnceUnlockCode) -> String {
     """
     ✕ Stopped   git reset --hard (core.git/reset-hard)
     why     destroys uncommitted changes
-    who     ask your user to run  rv allow-once \(code.rawValue)
+    who     ask your user to run  rv allow-once \(code.rawValue), then wait:  rv wait \(code.rawValue)
     """
 }
 
