@@ -38,6 +38,7 @@ enum HelpCatalog {
         case .blocks: blocks
         case .log: log
         case .host: host
+        case .pause: pause
         case .audit: audit
         case .secrets: secrets
         case .mcp: mcp
@@ -86,6 +87,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "log", description: "What rv stopped or would stop, newest first"),
                 HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
+                HelpRow(name: "pause", description: "Pause rv for up to an hour with Touch ID; it comes back on its own"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
                 HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
@@ -590,6 +592,10 @@ enum HelpCatalog {
                     description: "Loosening a host asks for device-owner authentication"
                 ),
                 HelpRow(
+                    name: "agents",
+                    description: "An agent's block ends on its own after an hour; blocking its own host waits for you"
+                ),
+                HelpRow(
                     name: "managed",
                     description: "An organization gate keeps enforce for every host"
                 ),
@@ -607,6 +613,28 @@ enum HelpCatalog {
             "rv host list",
             "rv host mode claude observe",
             "rv host mode cursor block",
+        ]
+    )
+
+    static let pause = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv pause [--json]"),
+                HelpRow(name: "rv pause <10m|30m|1h>"),
+                HelpRow(name: "rv pause --end"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "owner", description: "Pausing asks for Touch ID or your password at your terminal; agents can't pause rv"),
+                HelpRow(name: "watch", description: "Every host is watched, not blocked; rv's own files stay protected"),
+                HelpRow(name: "back", description: "rv comes back on its own, at most an hour later; --end comes back now"),
+            ]),
+        ],
+        examples: [
+            "rv pause 10m",
+            "rv pause",
+            "rv pause --end",
         ]
     )
 
