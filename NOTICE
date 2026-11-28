@@ -1,0 +1,11 @@
+rv
+Copyright 2025-2026 Christopher Karani and the rv contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software developed by the rv contributors
+(https://github.com/christopherkarani/rv).
+
+Third-party Swift packages are fetched at build time and are listed with
+their pinned versions in Package.resolved; each is covered by its own
+license.

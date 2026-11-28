@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/christopherkarani/rv/security/advisories/new
+    about: Gate bypasses, fail-open bugs, and secret leaks. Please report these privately, not as public issues.
+  - name: Ask a question on Discord
+    url: https://discord.gg/uZn9MDUYKx
+    about: Setup help and general questions.
+  - name: Read the docs
+    url: https://rykanv.com/docs/introduction
+    about: Install, packs, secrets placeholders, the MCP gateway, and troubleshooting.

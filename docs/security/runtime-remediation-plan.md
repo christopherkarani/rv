@@ -12,7 +12,7 @@ Read these first:
 - [Actual architecture and security boundary](runtime-boundary.md).
 - [Adversarial inventory and observed escapes](adversarial-inventory.md).
 - [Initial matrix, preserved before code changes](runtime-acceptance-initial.md).
-- [Existing phase-10 handoff and completion appendix](../rv-agent/handoffs/phase-10-contained-host-launch.md).
+- Existing phase-10 handoff and completion appendix (`docs/rv-agent/handoffs/phase-10-contained-host-launch.md`, kept outside the repo).
 
 ## 0. Goal and scope
 

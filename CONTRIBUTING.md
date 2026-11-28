@@ -1,7 +1,8 @@
 # Contributing to rv
 
 Thanks for helping. This file covers building, testing, and opening a PR.
-For the domain vocabulary, read [`CONTEXT.md`](CONTEXT.md) first.
+For the domain vocabulary, read [`CONTEXT.md`](CONTEXT.md) first. Everyone
+taking part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Toolchain
 
