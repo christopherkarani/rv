@@ -22,7 +22,7 @@ not an error to work around.
   ```
 
   The first line names the command and the rule that stopped it. `why` is
-  the reason. `safer`, when present, is a command the same rule allows; you
+  the reason. `safer`, when present, is a command rv allows here; you
   may run it instead. `who` is the one step a person takes: the human named
   there runs it, never you. A code in it is for the human, not for you.
 - **Needs approval.** A `who` line that says to approve it in RV, or that

@@ -94,6 +94,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("card.severity") == false)
     #expect(source.contains("card.pack") == false)
     #expect(source.contains("render(width)"))
+    #expect(source.contains("\\u2715 Stopped"))
+    #expect(source.contains("function stopLines"))
+    #expect(source.contains("· Blocked") == false)
 }
 
 @Test func openCodeTemplate_registersExecuteBeforeAndShellEnv() throws {
@@ -102,7 +105,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("\"shell.env\""))
     #expect(source.contains("session.shell"))
     #expect(source.contains("showToast"))
-    #expect(source.contains("RV · Blocked"))
+    #expect(source.contains("\\u2715 Stopped"))
+    #expect(source.contains("function stopLines"))
+    #expect(source.contains("RV · Blocked") == false)
     #expect(source.contains("confirmAsk") == false)
     #expect(source.contains("consultRvSpend") == false)
     #expect(source.contains("hostAsk") == false)
@@ -685,7 +690,7 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
         return
     }
     let joined = lines.joined(separator: "\n")
-    #expect(joined.contains("RV · Blocked"))
+    #expect(joined.contains("✕ Stopped"))
     #expect(joined.contains("Why"))
     #expect(joined.contains(resetHardReason))
     #expect(joined.contains("Cmd"))
@@ -702,6 +707,27 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
     #expect(result.cardPreview == "git reset --hard")
     #expect(result.cardNext == nil)
     #expect((result.narrowLines ?? []).count > lines.count)
+}
+
+/// B1: the person's card is rv's stop as rv wrote it: the verdict line on
+/// top, then why / safer / who one per line, the who said once, and no
+/// raw command echoed. The agent's `{ block, reason }` is unchanged.
+@Test func piAdapter_cardIsTheStopShape() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard origin/main"]],
+        stub: .stdout(stopShapeJSON, exit: 1)
+    )
+    #expect(result.block == true)
+    #expect(result.reason == stopShapeReason)
+    guard case .component(let lines) = result.rendererProbe else {
+        Issue.record("expected component renderer, got \(result.rendererProbe)")
+        return
+    }
+    #expect(Array(lines.prefix(4)) == stopShapeReason.split(separator: "\n").map(String.init))
+    #expect(lines.filter { $0.contains("rv allow-once a7c835") }.count == 1)
+    #expect(lines.contains { $0.hasPrefix("Next") || $0.hasPrefix("Cmd") || $0.hasPrefix("Meta") } == false)
+    #expect(result.cardNext == nil)
+    #expect(result.cardRule == nil)
 }
 
 @Test func piAdapter_sendMessageThrowStillBlocks() async throws {
@@ -1421,7 +1447,7 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     )
     #expect(result.threw == resetHardReason)
     #expect(result.toastCount == 1)
-    #expect(result.toastTitle == "RV · Blocked")
+    #expect(result.toastTitle == "✕ Stopped")
     #expect(result.toastVariant == "error")
     let message = result.toastMessage ?? ""
     #expect(message.contains("Why"))
@@ -1434,6 +1460,19 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     #expect(message.contains("Run it in Terminal, or rv allow-once.") == false)
     #expect(message.contains("rv allow-once") == false)
     #expect(message != resetHardReason)
+}
+
+/// B1: OpenCode's toast is rv's stop: the verdict line as its title, then
+/// why / safer / who with their line breaks, the who said once. The thrown
+/// Error the agent reads is unchanged.
+@Test func openCodeAdapter_toastIsTheStopShape() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard origin/main"]],
+        stub: .stdout(stopShapeJSON, exit: 1)
+    )
+    #expect(result.threw == stopShapeReason)
+    #expect(result.toastTitle == "✕ Stopped   git reset --hard origin/main (core.git/reset-hard)")
+    #expect(result.toastMessage == "why     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835")
 }
 
 @Test func openCodeAdapter_toastSplitsWrapperCommand() async throws {
@@ -1460,7 +1499,7 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     )
     #expect(result.threw == resetHardReason)
     #expect(result.toastCount == 1)
-    #expect(result.toastTitle == "RV · Blocked")
+    #expect(result.toastTitle == "✕ Stopped")
     #expect(result.toastVariant == "error")
     let message = result.toastMessage ?? ""
     #expect(message.contains(resetHardReason))
@@ -1518,7 +1557,7 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
         stub: .missing
     )
     #expect(openCode.threw?.hasPrefix("rv is not installed at ") == true)
-    #expect(openCode.toastTitle == "RV · Blocked")
+    #expect(openCode.toastTitle == "✕ Stopped")
     let missingMessage = openCode.toastMessage ?? ""
     #expect(missingMessage.contains("Why"))
     #expect(missingMessage.contains("rv is not installed at"))
@@ -1624,7 +1663,7 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
         #expect(result.toastCount == 0, Comment(rawValue: "\(host) \(kind)"))
     } else {
         #expect(result.threw == expectedFailure(kind), Comment(rawValue: "\(host) \(kind)"))
-        #expect(result.toastTitle == "RV · Blocked", Comment(rawValue: "\(host) \(kind)"))
+        #expect(result.toastTitle == "✕ Stopped", Comment(rawValue: "\(host) \(kind)"))
         let failedMessage = result.toastMessage ?? ""
         #expect(failedMessage.contains("Why"), Comment(rawValue: "\(host) \(kind)"))
         #expect(failedMessage.contains("`rv doctor`"), Comment(rawValue: "\(host) \(kind)"))
@@ -1648,6 +1687,14 @@ private let wrapperResetHardReason =
     "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let wrapperResetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
+/// rv's stop as the Pi / OpenCode codec writes it (the stop-shape golden).
+private let stopShapeReason =
+    "✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\n"
+    + "safer   git status\nwho     ask Chris to run  rv allow-once a7c835"
+private let stopShapeJSON =
+    "{\"decision\":\"deny\",\"reason\":\"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\\nwhy     "
+    + "destroys uncommitted changes\\nsafer   git status\\nwho     ask Chris to run  rv allow-once a7c835\","
+    + "\"rule\":\"core.git/reset-hard\",\"next\":\"ask Chris to run  rv allow-once a7c835\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 

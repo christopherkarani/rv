@@ -41,7 +41,8 @@ struct StopShapeGoldenTests {
     }
 
     /// The four stops: a minted unlock with a safer command, a stop the
-    /// pack's `who_acts` routes, an unfinished check, and a timed-out rvd.
+    /// pack's `who_acts` routes, an unfinished check, and a timed-out rvd;
+    /// then the same rule stopping commands that carry a credential.
     static func stops(_ codec: any HostCodec) throws -> [(name: String, wire: HookWire)] {
         let code = try #require(AllowOnceUnlockCode(validating: "a7c835"))
         return [
@@ -65,7 +66,16 @@ struct StopShapeGoldenTests {
                     using: codec, intent: .firstCall(verdict: .deny, unlockCode: nil), voice: voice)
             ),
             ("rvd timed out", codec.encodeDeny(hookCallStopPresentation(.timedOut, voice: voice))),
-        ]
+        ] + StopSecretProbe.commands.enumerated().map { index, command in
+            // A credential in the command never reaches the host's
+            // transcript: the verdict line shows it redacted.
+            (
+                "secret-bearing command \(index + 1)",
+                hookWire(
+                    from: resetHard(), command: ShellCommand(rawValue: command),
+                    using: codec, intent: .firstCall(verdict: .deny, unlockCode: nil), voice: voice)
+            )
+        }
     }
 
     static func render(_ stops: [(name: String, wire: HookWire)]) -> String {
@@ -98,6 +108,18 @@ struct StopShapeGoldenTests {
             return
         }
         #expect(actual == golden, "\(host)")
+    }
+
+    /// No host's wire carries a credential from the command, on stdout or
+    /// stderr, in any field (`reason`, `next`, `agent_message`, ...).
+    @Test(arguments: HookHost.allCases)
+    func noCodecEchoesACredential(_ host: HookHost) throws {
+        for stop in try Self.stops(productionHostCodec(host)) {
+            for secret in StopSecretProbe.secrets {
+                #expect(stop.wire.stdout.contains(secret) == false, "\(host) \(stop.name)")
+                #expect(stop.wire.stderr.contains(secret) == false, "\(host) \(stop.name)")
+            }
+        }
     }
 
     /// The shape, checked apart from the bytes: every stop's text has the

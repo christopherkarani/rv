@@ -46,6 +46,31 @@ public struct StopVoice: Sendable {
 
     /// No name ("your user") and no pack advice.
     public static let plain = StopVoice(owner: .unknown)
+
+    /// This voice, with `rule`'s safer command left out (its `who_acts`
+    /// stays): for a stop whose pack advice rv would itself stop.
+    public func withoutSaferCommand(for rule: RuleID) -> StopVoice {
+        let advice = self.advice
+        return StopVoice(owner: owner) { asked in
+            guard var found = advice(asked) else { return nil }
+            if asked == rule { found.saferCommand = nil }
+            return found
+        }
+    }
+
+    /// This voice for `result`'s stop at `cwd`: the stopping rule's safer
+    /// command stays only when `allowed` says rv lets it run there.
+    public func vetted(
+        for result: EvaluationResult,
+        cwd: WorkingDirectory?,
+        by allowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
+    ) async -> StopVoice {
+        guard let allowed, case .deny(let deny) = result.decision,
+              let safer = advice(deny.ruleID)?.saferCommand
+        else { return self }
+        let rule = deny.ruleID
+        return await allowed(ShellCommand(rawValue: safer), cwd) ? self : withoutSaferCommand(for: rule)
+    }
 }
 
 /// One stop, in the shape every host shows.
@@ -202,19 +227,23 @@ public func allowOnceUnlockCode(in text: String) -> AllowOnceUnlockCode? {
 /// Max characters of the command's first line in hook deny text.
 public let hookDenyCommandPreviewLimit = 96
 
-/// First line of `command` for host deny text. Extra lines and overlong
-/// first lines become a trailing ellipsis so Grok/Pi/OpenCode never paste
-/// a heredoc body into the transcript. Controls are escaped
-/// (`DisplayedText.field`), so a command cannot redraw the host's screen.
+/// First line of `command` for host deny text. Credentials are hidden
+/// first (`CommandLineRedaction`: URL userinfo, secret `KEY=`, `Bearer`,
+/// known token prefixes), since the stop reaches the host's transcript
+/// and the agent. Extra lines and overlong first lines become a trailing
+/// ellipsis so Grok/Pi/OpenCode never paste a heredoc body into the
+/// transcript. Any newline ends the line, `\r\n` included. Controls are
+/// escaped (`DisplayedText.field`), so a command cannot redraw the
+/// host's screen.
 public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
-    var raw = command.rawValue
-    while let last = raw.last, last == "\n" || last == "\r" {
+    var raw = CommandLineRedaction.redact(command.rawValue)
+    while let last = raw.last, last.isNewline {
         raw.removeLast()
     }
     var firstLine = ""
     var sawBreak = false
     for ch in raw {
-        if ch == "\n" || ch == "\r" {
+        if ch.isNewline {
             sawBreak = true
             break
         }
@@ -285,21 +314,36 @@ private func firstSentence(_ text: String) -> String {
 /// origin/main` reads `destroys …`: the verdict line shows the command.
 private func droppingCommandWords(_ text: String, command: ShellCommand) -> String {
     let words = text.split(separator: " ", omittingEmptySubsequences: true)
+    // `GITHUB_TOKEN=… git reset --hard` names the same program: leading
+    // environment assignments are not words the reason repeats.
     let commandWords = hookDenyCommandPreview(command).split(separator: " ", omittingEmptySubsequences: true)
+        .drop(while: isEnvironmentAssignment)
     var shared = 0
     while shared < words.count, shared < commandWords.count,
-          words[shared].lowercased() == commandWords[shared].lowercased()
+          words[shared].lowercased() == commandWords[commandWords.startIndex + shared].lowercased()
     {
         shared += 1
     }
     // `rm -rf on root or home paths …` keeps its subject: a bare
     // `on root …` would not read as a reason.
-    guard shared > 0, shared < words.count, prepositions.contains(words[shared].lowercased()) == false else {
+    // One shared word is not the same command (`git clone …` stopped by a
+    // `git reset --hard …` reason): drop only a run of two, or the whole
+    // command.
+    guard shared >= 2 || (shared > 0 && shared == commandWords.count) else { return text }
+    guard shared < words.count, prepositions.contains(words[shared].lowercased()) == false else {
         return text
     }
     let rest = words[shared...].joined(separator: " ")
     // `rm -rf is destructive` reads `it is destructive`, not `is destructive`.
     return predicateHeads.contains(words[shared].lowercased()) ? "it \(rest)" : rest
+}
+
+/// `NAME=value`, as a shell reads an assignment before the program.
+private func isEnvironmentAssignment(_ word: Substring) -> Bool {
+    guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
+    let name = word[..<equals]
+    guard let first = name.first, first == "_" || (first.isASCII && first.isLetter) else { return false }
+    return name.allSatisfy { $0 == "_" || ($0.isASCII && ($0.isLetter || $0.isNumber)) }
 }
 
 private let prepositions: Set<String> = [

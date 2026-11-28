@@ -85,7 +85,7 @@ enum HookDaemonFallback {
 
     /// The stop for `failure`, in the shape every stop has (B1): no command
     /// (the hook never read one), the rule id, why, and the owner's step.
-    static func notice(for failure: HookDaemonFailure, owner: OwnerName = .current) -> StopNotice {
+    static func notice(for failure: HookDaemonFailure, owner: OwnerName) -> StopNotice {
         StopNotice(
             subject: nil,
             rule: rule(for: failure),
@@ -95,7 +95,7 @@ enum HookDaemonFallback {
     }
 
     /// The stop text for `failure`.
-    static func message(for failure: HookDaemonFailure, owner: OwnerName = .current) -> String {
+    static func message(for failure: HookDaemonFailure, owner: OwnerName) -> String {
         notice(for: failure, owner: owner).text
     }
 
@@ -108,7 +108,7 @@ enum HookDaemonFallback {
         failure: HookDaemonFailure,
         mode: HookWhenDown,
         ownerObserves: Bool = false,
-        owner: OwnerName = .current
+        owner: OwnerName
     ) -> HookWire {
         let message = message(for: failure, owner: owner)
         // A daemon that fails identity verification may be an impostor, and a

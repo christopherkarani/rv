@@ -213,7 +213,8 @@ STOP_LABELS = ("why     ", "safer   ", "who     ")
 def stop_shape_ok(reason: object) -> bool:
     """B1: every stop is `✕ Stopped` + command + (rule id), one why of at
     most nine words, at most one safer line, then exactly one who line that
-    asks a person; no line before `who` names an unlock."""
+    asks a person (or, from a pack, says no one acts); no line before `who`
+    names an unlock."""
     if not isinstance(reason, str) or "\x1b" in reason:
         return False
     lines = reason.split("\n")
@@ -224,7 +225,9 @@ def stop_shape_ok(reason: object) -> bool:
         return False
     if len(body) == 3 and not body[1].startswith("safer   "):
         return False
-    if not body[-1].startswith("who     ask "):
+    # A who line asks a person; a pack's `who_acts` may instead say no one
+    # acts ("no one: there is no safe form", the fork bomb).
+    if not (body[-1].startswith("who     ask ") or body[-1].startswith("who     no one")):
         return False
     return not any("allow-once" in line or "rv unlock" in line for line in lines[1:-1])
 

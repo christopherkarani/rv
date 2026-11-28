@@ -210,7 +210,8 @@ extension HookEvaluateWorld {
                     rawCommand: command.rawValue
                 )
             },
-            voice: voice
+            voice: voice,
+            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) }
         ))
     }
 
@@ -237,7 +238,8 @@ extension HookEvaluateWorld {
                 try await world.recordHostAsk(request, action)
             },
             mintOnDenyWithCommand: mintWithCommand,
-            voice: world.voice
+            voice: world.voice,
+            saferAllowed: world.saferAllowed
         )
     }
 }

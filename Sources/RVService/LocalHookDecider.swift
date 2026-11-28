@@ -308,7 +308,13 @@ package struct LocalHookDecider: Sendable {
                 probe.escalate(.ask)
                 return nil
             },
-            voice: .live
+            voice: .live,
+            // The pass vets a safer command on its own rules, with no judge
+            // and nothing written, in the same home and mode.
+            saferAllowed: { safer, cwd in
+                await GatedEvaluate(session, judge: SaferVetNoJudge())
+                    .allowsSaferCommand(safer, cwd: cwd, home: home, now: now)
+            }
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)
         let classified = probe.classify(Self.reply(wire))

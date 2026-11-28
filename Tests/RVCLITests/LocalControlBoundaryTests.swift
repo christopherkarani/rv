@@ -13,7 +13,7 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
-            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny))
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny, owner: .unknown))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
@@ -29,7 +29,7 @@ struct LocalControlBoundaryTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .deny)
-        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .protocol, mode: .deny))
+        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .protocol, mode: .deny, owner: .unknown))
         #expect(transport.invalidationCount == 1)
     }
 
@@ -37,8 +37,8 @@ struct LocalControlBoundaryTests {
     @Test func daemonAuthenticationFailureDeniesAsUntrustedEvenWhenAsking() async throws {
         let client = try isolatedClient(transport: DaemonAuthFailingTransport())
         let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .untrusted, mode: .deny))
-        #expect(wire.stdout.contains("identity check failed"))
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .untrusted, mode: .deny, owner: .unknown))
+        #expect(wire.stdout.contains("failed its identity check"))
     }
 #endif
 

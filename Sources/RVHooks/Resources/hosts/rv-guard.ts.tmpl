@@ -5,6 +5,9 @@ const RV_HOOK_TIMEOUT_MS = 15000;
 const RV_DECISION_TYPE = "rv-decision";
 const RV_BLOCK_WIDGET = "rv-block";
 const RV_DISPLAY_BRAND = "RV";
+const RV_STOPPED_TITLE = "\u2715 Stopped";
+const RV_STOP_PREFIX = "\u2715 Stopped   ";
+const RV_STOP_LABEL_WIDTH = 8;
 const RV_CMD_PREVIEW = 96;
 const RV_ADAPTER_ERROR_REASON = "The rv hook adapter hit an unexpected error. Run `rv doctor`.";
 const RV_MALFORMED_REASON = "rv blocked a malformed bash tool call (missing command).";
@@ -101,7 +104,7 @@ function renderDecisionMessage(message, _options, theme) {
         summary:
           typeof message.content === "string" && message.content.length > 0
             ? message.content
-            : "Blocked.",
+            : "Stopped.",
       };
   return {
     render(width) {
@@ -120,11 +123,20 @@ function buildThemedDecisionLines(card, theme, width) {
     theme && typeof theme.fg === "function" ? theme.fg.bind(theme) : (_n, t) => t;
   const bold =
     theme && typeof theme.bold === "function" ? theme.bold.bind(theme) : (t) => t;
-  const brand = bold(card.title || RV_DISPLAY_BRAND);
-  const header = `${fg("error", brand)} ${fg("dim", "· Blocked")}`;
-  const lines = [header, ""];
   const n = Number(width);
   const contentWidth = Number.isFinite(n) && n > 0 ? n : 72;
+  if (Array.isArray(card.stop)) {
+    // rv's stop as rv wrote it: the verdict line is the title, then
+    // why / safer / who, one per line, each said once.
+    const lines = [fg("error", bold(card.title))];
+    for (const line of card.stop) {
+      lines.push(...wrapStopLine(line, contentWidth).map((part) => fg("dim", part.slice(0, RV_STOP_LABEL_WIDTH)) + part.slice(RV_STOP_LABEL_WIDTH)));
+    }
+    return lines;
+  }
+  const brand = bold(card.title || RV_DISPLAY_BRAND);
+  const header = `${fg("error", brand)} ${fg("dim", RV_STOPPED_TITLE)}`;
+  const lines = [header, ""];
   for (const row of decisionCardRows(card)) {
     lines.push(
       ...formatMinimalRow(row.label, row.value, contentWidth, (lab, val, first) => {
@@ -160,6 +172,10 @@ function decisionCardRows(card) {
 }
 
 function cardFromBlock(mapped, command) {
+  const stop = stopLines(mapped.reason);
+  if (stop) {
+    return { variant: "block", title: stop[0], summary: stop[0], stop: stop.slice(1) };
+  }
   const preview = previewCommand(command);
   if (typeof mapped.rule === "string" || typeof mapped.next === "string") {
     let summary = typeof mapped.reason === "string" ? mapped.reason : "";
@@ -172,7 +188,7 @@ function cardFromBlock(mapped, command) {
     return {
       variant: "block",
       title: RV_DISPLAY_BRAND,
-      summary: sanitizeVisibleText(summary) || "Blocked.",
+      summary: sanitizeVisibleText(summary) || "Stopped.",
       rule: typeof mapped.rule === "string" ? mapped.rule : undefined,
       nextStep: typeof mapped.next === "string" ? mapped.next : undefined,
       preview,
@@ -207,9 +223,37 @@ function cardFromReason(reason, preview) {
   return {
     variant: "block",
     title: RV_DISPLAY_BRAND,
-    summary: cleaned || "Blocked.",
+    summary: cleaned || "Stopped.",
     preview,
   };
+}
+
+// rv's stop text, one line per entry, when `reason` is one stop
+// ("\u2715 Stopped   <command> (<rule>)", then why / safer / who). Line
+// breaks are kept; controls are dropped from each line.
+function stopLines(reason) {
+  if (typeof reason !== "string") {
+    return undefined;
+  }
+  const lines = reason
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trimEnd())
+    .filter((line) => line.length > 0);
+  if (lines.length < 2 || !lines[0].startsWith(RV_STOP_PREFIX)) {
+    return undefined;
+  }
+  return lines;
+}
+
+// One stop line at `width`: continuation lines indent under the label.
+function wrapStopLine(line, width) {
+  if (line.length <= width) {
+    return [line];
+  }
+  const pad = "".padEnd(RV_STOP_LABEL_WIDTH, " ");
+  const label = line.slice(0, RV_STOP_LABEL_WIDTH);
+  const parts = wrapText(line.slice(RV_STOP_LABEL_WIDTH), Math.max(1, width - RV_STOP_LABEL_WIDTH));
+  return parts.map((part, index) => (index === 0 ? label : pad) + part);
 }
 
 function formatMinimalRow(label, value, width, paint) {

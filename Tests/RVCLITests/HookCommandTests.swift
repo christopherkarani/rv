@@ -154,7 +154,7 @@ private func runHonorHook(
 /// Daemon-unavailable fallback reason. No transport in these probes: that
 /// never reached rvd, so it is `.connection`, not the observe-eligible
 /// `.unreachable`. Written as it appears inside the wire's JSON string.
-private let daemonDownReason = HookDaemonFallback.message(for: .connection)
+private let daemonDownReason = HookDaemonFallback.message(for: .connection, owner: .unknown)
     .replacingOccurrences(of: "\n", with: "\\n")
 
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -178,12 +178,8 @@ private let daemonDownReason = HookDaemonFallback.message(for: .connection)
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(json["next"] as? String == stopWho(askStop(text)))
     #expect(wire.exitCode == expected.exit)
-    #expect(
-        text == """
-            ✕ Stopped   git reset --hard (core.git/reset-hard)
-            why     destroys uncommitted changes
-            who     ask your user to run it in their own terminal
-            """)
+    #expect(text == "✕ Stopped   git reset --hard (core.git/reset-hard)\nwhy     destroys uncommitted changes\n"
+        + "who     ask your user to run it in their own terminal")
     #expect(text.contains("Terminal") == false)
     #expect(text.contains("allow-once") == false)
     #expect(text.components(separatedBy: "✕ Stopped").count == 2)

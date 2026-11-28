@@ -441,7 +441,7 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The shell read: process env once, then config and stores once.
-    private static func liveInputs(
+    static func liveInputs(
         home: HomeDirectory?, cwd: WorkingDirectory?, host: LedgerHost = .tty
     ) -> EvaluationInputs {
         EvaluationInputs.gather(

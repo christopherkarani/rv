@@ -197,6 +197,14 @@ private func words(_ text: String) -> Int {
     #expect(long == "one two three four five six seven eight nine…")
     #expect(words(long) == stopWhyWordLimit)
     #expect(stopWhy("RESET MASTER deletes all binary logs.", command: nil) == "RESET MASTER deletes all binary logs")
+    // A leading environment assignment is not the program the reason names.
+    #expect(stopWhy("git reset --hard destroys uncommitted changes.",
+                    command: ShellCommand(rawValue: "GIT_DIR=.git LANG=C git reset --hard"))
+        == "destroys uncommitted changes")
+    // One shared word is a different command: the reason keeps its subject.
+    #expect(stopWhy("git reset --hard destroys uncommitted changes.",
+                    command: ShellCommand(rawValue: "git clone https://example.com/a.git"))
+        == "git reset --hard destroys uncommitted changes")
 }
 
 @Test func stopWhy_neverRepeatsAWayPast() {
@@ -388,4 +396,47 @@ private func words(_ text: String) -> Int {
         let other = Deny(ruleID: judge.ruleID, reason: "Blocked. Run \(named).")
         #expect(stopNotice(command: ShellCommand(rawValue: "x"), deny: other).who == ownTerminalLine(), "\(named)")
     }
+}
+
+/// Fake credentials in the shapes an agent's command carries them. None is
+/// a real key; each has the length and characters the redactor keys on.
+enum StopSecretProbe {
+    static let githubToken = "ghp_" + String(repeating: "A1b2", count: 9)
+    static let anthropicKey = "sk-ant-api03-" + String(repeating: "Zz9_", count: 8)
+    static let commands: [String] = [
+        "git clone https://bob:hunter2pass@github.com/acme/app.git",
+        "GITHUB_TOKEN=\(githubToken) git reset --hard",
+        "curl -H 'Authorization: Bearer \(githubToken)' https://api.github.com/user",
+        "rm -rf ~ # \(anthropicKey)",
+    ]
+    static let secrets = ["hunter2pass", githubToken, anthropicKey]
+}
+
+/// The verdict line reaches the host's transcript and the agent: a
+/// credential in the command is hidden before it is echoed, on every
+/// stop that shows the command.
+@Test(arguments: StopSecretProbe.commands)
+func stopVerdictLine_hidesCredentials(_ raw: String) {
+    let command = ShellCommand(rawValue: raw)
+    let preview = hookDenyCommandPreview(command)
+    let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
+    let notices = [
+        stopNotice(command: command, deny: Deny(ruleID: rule, reason: "x destroys things."), voice: .plain),
+        indeterminateStopNotice(.unresolvedInvocation, command: command, voice: .plain),
+    ]
+    for secret in StopSecretProbe.secrets {
+        #expect(preview.contains(secret) == false, "\(raw)")
+        for notice in notices {
+            #expect(notice.text.contains(secret) == false, "\(raw)")
+        }
+    }
+    #expect(preview.contains(CommandLineRedaction.placeholder), "\(raw)")
+}
+
+/// `\r\n` is one Character: the first line still ends there.
+@Test func hookDenyCommandPreview_endsTheLineAtCRLF() {
+    let preview = hookDenyCommandPreview(ShellCommand(rawValue: "git reset --hard\r\necho second"))
+    #expect(preview == "git reset --hard…")
+    #expect(hookDenyCommandPreview(ShellCommand(rawValue: "git reset --hard\r\n")) == "git reset --hard")
+    #expect(hookDenyCommandPreview(ShellCommand(rawValue: "a\u{2028}b")) == "a…")
 }
