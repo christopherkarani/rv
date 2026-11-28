@@ -88,7 +88,7 @@ private final class EvaluateProbe: Sendable {
     #expect(probe.files.isEmpty)
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains("no command text"))
+    #expect(wire.stdout.contains("(rv.hook/no-command)"))
 }
 
 @Test func hookDispatch_omittedEvaluateFileFailClosesIncomplete() async {
@@ -103,7 +103,8 @@ private final class EvaluateProbe: Sendable {
     )
     #expect(probe.commands.isEmpty)
     #expect(probe.files.isEmpty)
-    #expect(wire.stdout.contains(incompleteEvalSentence))
+    #expect(wire.stdout.contains(indeterminateStopWhy(.corePacksUnavailable)))
+    #expect(wire.stdout.contains("(rv.indeterminate/corePacksUnavailable)"))
 }
 
 @Test func hookDispatch_shellResetHardStillEvaluates() async {

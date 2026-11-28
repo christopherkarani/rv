@@ -143,17 +143,18 @@ struct AllowOnceGrantHonorTests {
         // spends nothing through the local evaluate door.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: try isolatedHome(),
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
         let wire = await client.hookEvaluate(host: .grok, stdin: stdin, whenDown: .deny)
-        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .connection, mode: .deny))
+        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .connection, mode: .deny, owner: .unknown))
         #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
 
@@ -190,20 +191,21 @@ struct AllowOnceGrantHonorTests {
         // ask/retry voice with a code arrives only through the daemon.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: try isolatedHome(),
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","command":"git reset --hard"}
         """
         let wire = await client.hookEvaluate(host: .cursor, stdin: stdin, whenDown: .deny)
-        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .connection, mode: .deny))
+        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .connection, mode: .deny, owner: .unknown))
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
-        #expect(json["agent_message"] as? String == cursorAgentStopLine)
+        #expect(json["agent_message"] as? String == json["user_message"] as? String)
         #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
     }
@@ -211,12 +213,13 @@ struct AllowOnceGrantHonorTests {
     @Test func grokHookEvaluateMissingCwdDoesNotMint() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: try isolatedHome(),
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
@@ -231,12 +234,13 @@ struct AllowOnceGrantHonorTests {
     @Test func grokHookEvaluateWithoutHomeDoesNotMint() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: nil,
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """

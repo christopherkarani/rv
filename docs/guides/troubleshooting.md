@@ -67,7 +67,7 @@ holds:
 The host got a block with no reason; rv puts this text in when a reason
 is empty. Run `rv doctor` and look at the Problems section.
 
-**`RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.`**
+**`✕ Stopped   (rv.hook/unreachable)` · `why     rv's daemon is not running`**
 `rvd` is not running.
 
 ```bash
@@ -83,7 +83,7 @@ reboot; `rv setup` says so and names the line to add to your shell
 profile (`rv service start >/dev/null`). In observe mode a host lets the
 call run unchecked instead, with a notice on stderr.
 
-**`RV daemon did not answer in time. Retry; if it persists run `rv doctor`.`**
+**`✕ Stopped   (rv.hook/timeout)` · `why     rv's daemon did not answer in time`**
 **`rv did not answer within 15s; the daemon may be busy or stopped. Run `rv doctor`.`**
 `rvd` is busy or hung. Retry once. If it keeps happening:
 
@@ -91,8 +91,8 @@ call run unchecked instead, with a notice on stderr.
 rv service restart
 ```
 
-**`RV daemon identity check failed (stale or mismatched rvd after an upgrade?) …`**
-**`RV daemon sent an unexpected reply (version skew after an upgrade?) …`**
+**`✕ Stopped   (rv.hook/untrusted)` · `why     rv's daemon failed its identity check`**
+**`✕ Stopped   (rv.hook/protocol)` · `why     rv's daemon sent a reply rv cannot read`**
 An old `rvd` is still running after an upgrade. `rv service restart`;
 if that does not fix it, `rv setup`.
 

@@ -88,7 +88,7 @@ struct LinuxCHookTests {
         // service (pinned by HookReviewCeremonyTests + c-hook-proof AC-001),
         // so no unlock code and no per-rule reason appear here.
         #expect(out.contains("\"decision\":\"deny\""))
-        #expect(out.contains("RV daemon is not reachable"))
+        #expect(out.contains("(rv.hook/unreachable)"))
         #expect(allowOnceUnlockCode(in: out) == nil)
         #expect(out.contains("git reset --hard") == false)
         #expect(out.contains("\"decision\":\"allow\"") == false)
