@@ -211,6 +211,7 @@ extension HookEvaluateWorld {
                 )
             },
             voice: voice,
+            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) },
             countStop: { key in StopStreakCounter.shared.record(key, now: clock()) }
         ))
     }
@@ -239,6 +240,7 @@ extension HookEvaluateWorld {
             },
             mintOnDenyWithCommand: mintWithCommand,
             voice: world.voice,
+            saferAllowed: world.saferAllowed,
             // A stop the agent never sees (the reply missed its deadline)
             // is not counted toward its streak.
             countStop: world.countStop.map { count in

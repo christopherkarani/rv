@@ -71,13 +71,15 @@ func stopStreakKey(
 extension HookEvaluateWorld {
     /// `voice` with the streak of the shell stop `result` shows, counted once.
     func voice(
-        countingStopOf result: EvaluationResult, authorization: HookAuthorization, request: HookRequest
+        countingStopOf result: EvaluationResult, authorization: HookAuthorization, request: HookRequest,
+        from base: StopVoice? = nil
     ) -> StopVoice {
+        let base = base ?? self.voice
         guard let countStop,
               let key = stopStreakKey(
                 result, authorization: authorization, host: request.host, session: request.session)
-        else { return self.voice }
-        var counted = self.voice
+        else { return base }
+        var counted = base
         counted.streak = countStop(key)
         return counted
     }

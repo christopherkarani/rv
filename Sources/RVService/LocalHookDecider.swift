@@ -249,6 +249,8 @@ package struct LocalHookDecider: Sendable {
         let gated = GatedEvaluate(session, judge: probe)
         let home = self.home
         let ledger = LedgerHost.hook(host)
+        // The shell stop's inputs, kept for its safer-command vet.
+        let shellInputs = UnfairLock<EvaluationInputs?>(nil)
         let world = HookEvaluateWorld(
             // One id per call, minted before evaluation: the ledger row
             // `performBounded` writes and the decision-log row share it.
@@ -257,6 +259,7 @@ package struct LocalHookDecider: Sendable {
                 let inputs = EvaluationInputs.gather(
                     home: home, cwd: cwd, environment: environment, host: ledger)
                 probe.recordGuardMode(inputs.guardMode)
+                shellInputs.withLock { $0 = inputs }
                 let decided = await gated.decideVerdict(
                     .apply,
                     GatedEvaluate.makeRequest(command: command, home: home),
@@ -308,7 +311,14 @@ package struct LocalHookDecider: Sendable {
                 probe.escalate(.ask)
                 return nil
             },
-            voice: .live
+            voice: .live,
+            // The pass vets a safer command on its own rules, with no judge
+            // and nothing written, with the stop's own inputs (home, cwd,
+            // mode) when the shell door read them.
+            saferAllowed: { safer, cwd in
+                await gated.allowsSaferCommand(
+                    safer, cwd: cwd, home: home, now: now, inputs: shellInputs.withLock { $0 })
+            }
         )
         let wire = await hookWire(host: host, stdin: stdin, world: world)
         let classified = probe.classify(Self.reply(wire))

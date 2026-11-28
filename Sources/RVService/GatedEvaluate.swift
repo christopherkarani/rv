@@ -117,6 +117,19 @@ public struct GatedEvaluate: Sendable {
         self.judge = judge
     }
 
+    private init(source: Source, judge: any JudgePort) {
+        self.source = source
+        self.judge = judge
+    }
+
+    /// This door's session and rules with no judge (`SaferVetNoJudge`): a
+    /// call that would reach the judge reads it as unavailable, so it never
+    /// waits on a slot or a model load, never takes an admission slot from
+    /// a real call, and never logs a late answer.
+    func withoutJudge() -> GatedEvaluate {
+        GatedEvaluate(source: source, judge: SaferVetNoJudge())
+    }
+
     /// Creates a door that defers session construction until first use, then reuses it.
     package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
         self.source = .deferred(
@@ -449,7 +462,7 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The shell read: process env once, then config and stores once.
-    private static func liveInputs(
+    static func liveInputs(
         home: HomeDirectory?, cwd: WorkingDirectory?, host: LedgerHost = .tty
     ) -> EvaluationInputs {
         EvaluationInputs.gather(
@@ -681,14 +694,8 @@ public struct GatedEvaluate: Sendable {
         // deadline the check trips it and `HookDoor` swaps in the timeout
         // deny, so no denial row is emitted for a reply nobody reads.
         let denialInTime = verb.recordsDenial && HookDeadline.permitsSideEffects()
-        if denialInTime, case .denialRow(var row)? = Self.denialRow(
-            for: finished, path: nil, host: host, tool: tool, now: now
-        ) {
-            // An enforced deny the host shows as an ask is listed as one.
-            if case .deny = finished.decision, HookAuthorization.project(result: finished, cwd: cwd) == .ask {
-                row.asked = true
-            }
-            effects.append(.denialRow(row))
+        if denialInTime, let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
+            effects.append(row)
         }
         // An allow-once grant spent in time keeps its reply even when the
         // deadline passes after (`HookDoor` sends no timeout deny then), so
@@ -1544,7 +1551,6 @@ public struct GatedEvaluate: Sendable {
             path: DenialPathRedaction.redact(row.path, home: home),
             observed: row.observed,
             wouldBe: row.wouldBe,
-            asked: row.asked,
             session: row.session,
             id: row.id
         )

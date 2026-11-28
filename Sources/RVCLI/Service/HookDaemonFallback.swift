@@ -88,7 +88,7 @@ enum HookDaemonFallback {
 
     /// The stop for `failure`, in the shape every stop has (B1): no command
     /// (the hook never read one), the rule id, why, and the owner's step.
-    static func notice(for failure: HookDaemonFailure, owner: OwnerName = .current) -> StopNotice {
+    static func notice(for failure: HookDaemonFailure, owner: OwnerName) -> StopNotice {
         StopNotice(
             subject: nil,
             rule: rule(for: failure),
@@ -98,7 +98,7 @@ enum HookDaemonFallback {
     }
 
     /// The stop text for `failure`.
-    static func message(for failure: HookDaemonFailure, owner: OwnerName = .current) -> String {
+    static func message(for failure: HookDaemonFailure, owner: OwnerName) -> String {
         notice(for: failure, owner: owner).text
     }
 
@@ -111,7 +111,7 @@ enum HookDaemonFallback {
         failure: HookDaemonFailure,
         mode: HookWhenDown,
         ownerObserves: Bool = false,
-        owner: OwnerName = .current
+        owner: OwnerName
     ) -> HookWire {
         let message = message(for: failure, owner: owner)
         // A daemon that fails identity verification may be an impostor, and a
@@ -246,7 +246,13 @@ enum HookObserveFallback {
               info.st_size >= 0, info.st_size <= configMaxBytes,
               let data = try? handle.readToEnd(), data.count == Int(info.st_size)
         else { return false }
-        return GuardModeResolution.resolve(GuardConfig(jsonData: data), host: host, environment: [:]) == .observe
+        // A pause never steps the fallback aside: with rvd down there is no
+        // ObserveFloor, so an agent could extend the pause or edit rv's
+        // config unchecked. Agents' temporary blocks still apply (they only
+        // tighten). rv.c ignores both and reads the stored mode.
+        var config = GuardConfig(jsonData: data)
+        config.pause = nil
+        return GuardModeResolution.resolve(config, host: host, environment: [:]) == .observe
     }
 
     /// Twin of rv.c's `rvd_state_allows_observe`: the rvd state marker under

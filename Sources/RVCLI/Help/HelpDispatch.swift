@@ -17,6 +17,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case test
     case `try`
     case term
+    case wait
     case explain
     case check
     case prompt
@@ -31,6 +32,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case doctor
     case allowOnce
     case packs
+    case protect
     case scan
     case policy
     case allowlist
@@ -38,6 +40,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case blocks
     case log
     case host
+    case pause
     case audit
     case secrets
     case mcp
@@ -165,6 +168,7 @@ extension HelpTopic {
         case .test: [Test.self]
         case .`try`: [Try.self]
         case .term: [Term.self]
+        case .wait: [Wait.self]
         case .explain: [Explain.self]
         case .check: [CheckCommand.self]
         case .prompt: [PromptCommand.self]
@@ -179,6 +183,7 @@ extension HelpTopic {
         case .doctor: [Doctor.self]
         case .allowOnce: [AllowOnceCommand.self]
         case .packs: [Packs.self]
+        case .protect: [Protect.self]
         case .scan: [Scan.self]
         case .policy: [Policy.self]
         case .allowlist: [AllowlistCommand.self]
@@ -186,6 +191,7 @@ extension HelpTopic {
         case .blocks: [Blocks.self]
         case .log: [Log.self]
         case .host: [HostCommand.self]
+        case .pause: [PauseCommand.self]
         case .audit: [Audit.self]
         case .secrets: [Secrets.self]
         case .mcp: [MCP.self]

@@ -21,6 +21,12 @@ public struct HookEvaluateWorld: Sendable {
     /// `.plain` says "your user" and offers no safer command; rvd and the
     /// hook-local pass give the owner's first name and the pack advice.
     public var voice: StopVoice
+    /// Whether a pack's safer command is one rv allows here, in the mode
+    /// that stopped the original (B1). A stop shows its `safer` line only
+    /// when this says yes, so the advice is never a command rv would stop
+    /// too. Nil (tests, worlds with no advice) shows the voice's advice as
+    /// it is.
+    public var saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
     /// B5: counts one stop shown to an agent session and returns how many
     /// stops of the same rule that session has hit in a row, this one
     /// included. rvd keeps the count in memory; nil (tests, the C hook's
@@ -36,6 +42,7 @@ public struct HookEvaluateWorld: Sendable {
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
         )? = nil,
         voice: StopVoice = .plain,
+        saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)? = nil,
         countStop: (@Sendable (StopStreakKey) -> Int)? = nil
     ) {
         self.evaluate = evaluate
@@ -44,6 +51,7 @@ public struct HookEvaluateWorld: Sendable {
         self.recordHostAsk = recordHostAsk
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
         self.voice = voice
+        self.saferAllowed = saferAllowed
         self.countStop = countStop
     }
 }

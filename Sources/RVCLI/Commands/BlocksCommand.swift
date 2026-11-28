@@ -30,8 +30,7 @@ enum BlocksRun {
 
     /// Every row says what happened after the timestamp, so a real stop
     /// never reads like a watched one: `✕ Stopped` (the command did not
-    /// run), `⏺ Asks` for one the host showed as an ask (the person may
-    /// have let it run), or `◐ Would stop` for a watch-mode row (the agent was not
+    /// run), or `◐ Would stop` for a watch-mode row (the agent was not
     /// blocked; `--json` `would_be` says whether guard mode would have
     /// asked or stopped). A host name is never one of these words. A row
     /// that names its agent session ends with `session=<id>`.
@@ -49,8 +48,7 @@ enum BlocksRun {
     }
 
     private static func verdict(_ record: DenialLedgerRecord) -> String {
-        if record.observed { return wouldStopWords }
-        return record.asked ? asksWords : stoppedWords
+        record.observed ? wouldStopWords : stoppedWords
     }
 
     // REQ-T7 named divergence: slashes are no longer spelled `\/`.

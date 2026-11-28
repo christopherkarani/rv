@@ -252,7 +252,10 @@ struct ObserveWatchedClassesTests {
         ("/dev/disk2", true), ("/dev/rdisk2s1", true), ("/dev/mmcblk0p1", true), ("/dev/vda", true),
         ("/dev/xvda", true), ("/dev/hda", true),
         ("/dev/null", false), ("/dev/zero", false), ("/dev/tty", false), ("/dev/stdout", false),
-        ("/dev/disk", false), ("/tmp/sda", false),
+        ("/dev/md0", true), ("/dev/md/root", true), ("/dev/dm-0", true), ("/dev/loop0", true),
+        ("/dev/loop0p1", true), ("/dev/mapper/vg-root", true), ("/dev/disk/by-id/ata-disk0", true),
+        ("/dev/disk", false), ("/tmp/sda", false), ("/dev/mapper/", false), ("/dev/loop", false),
+        ("/dev/mdx", false), ("/dev/dm-", false),
     ])
     func diskDevice(path: String, device: Bool) {
         #expect(ObserveCatastrophe.isDiskDevice(path) == device, "\(path)")
@@ -267,6 +270,19 @@ struct ObserveWatchedClassesTests {
     ])
     func writesDiskDevice(command: String, writes: Bool) {
         #expect(ObserveCatastrophe.writesDiskDevice(command) == writes, "\(command)")
+    }
+
+    @Test("catastrophic: shell and eval payloads are read with POSIX quoting", arguments: [
+        (#"sh -c 'sh -c '\''rm -rf /usr'\'''"#, [#"sh -c 'rm -rf /usr'"#, "rm -rf /usr"]),
+        (#"sh -c 'sh -c '"'"'rm -rf ~'"'"''"#, [#"sh -c 'rm -rf ~'"#, "rm -rf ~"]),
+        (#"sudo bash -lc "echo \"hi\"; rm -rf /usr""#, [#"echo "hi"; rm -rf /usr"#]),
+        (#"git status; timeout 5 zsh -e -c rm\ -rf\ ~"#, ["rm -rf ~"]),
+        (#"eval 'rm -rf /usr'"#, ["rm -rf /usr"]),
+        ("bash -o pipefail -c 'ls | wc -l'", ["ls | wc -l"]),
+        ("echo 'sh -c x'", []), ("bash script.sh", []), ("ls # sh -c 'rm -rf /'", []),
+    ])
+    func shellPayloads(command: String, payloads: [String]) {
+        #expect(ObserveShellPayloads.payloads(command) == payloads, "\(command)")
     }
 
     @Test("catastrophic: the disk set is all system.disk rules the pack ships")

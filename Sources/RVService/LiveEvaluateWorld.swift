@@ -16,6 +16,8 @@ package struct LiveEvaluateWorld: Sendable {
     package let home: HomeDirectory?
 
     private let gated: GatedEvaluate
+    /// The door a stop's safer command is vetted through (B1).
+    var vettingDoor: GatedEvaluate { gated }
     private let clock: @Sendable () -> Date
     private let allowlist: @Sendable (WorkingDirectory?, Date) -> AllowlistSnapshot
 

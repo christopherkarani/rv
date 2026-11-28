@@ -93,7 +93,9 @@ private func hookRequestBody(
                 )
             }
         }
-        let voice = world.voice(countingStopOf: result, authorization: auth, request: request)
+        // The pack's safer command shows only when rv allows it here.
+        let vetted = await world.voice.vetted(for: result, cwd: cwd, by: world.saferAllowed)
+        let voice = world.voice(countingStopOf: result, authorization: auth, request: request, from: vetted)
         return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }
@@ -108,7 +110,8 @@ private func hookFileBody(
         return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: world.voice))
     }
     let result = await world.evaluateFile(file, request.cwd)
-    return hookFileWire(from: result, using: codec, path: file.path, voice: world.voice)
+    let vetted = await world.voice.vetted(for: result, cwd: request.cwd, by: world.saferAllowed)
+    return hookFileWire(from: result, using: codec, path: file.path, voice: vetted)
 }
 
 /// File wire: `HookMapper` composes the presentation; a file result that

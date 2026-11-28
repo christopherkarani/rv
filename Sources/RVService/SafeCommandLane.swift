@@ -166,6 +166,8 @@ public enum SafeCommandLane {
         #"rv (service|policy) status( --(json|robot|plain))?"#,
         #"rv( [a-z][a-z-]*){1,2} (--help|-h)"#,
         #"rv (--help|-h|--version|version|help( [a-z][a-z-]*){0,2})"#,
+        // H2: waits on the unlock ledger and rvd's events; it can never decide.
+        #"rv wait [0-9A-Za-z]{6}( --timeout[ =][0-9]{1,4})?"#,
     ]
 
     private static func regexSearch(_ pattern: String, in text: String) -> Bool {

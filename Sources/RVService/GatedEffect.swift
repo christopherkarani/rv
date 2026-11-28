@@ -98,9 +98,6 @@ enum GatedEffect: Sendable, Equatable {
         /// The hook call's id (`DecisionCall.current`), so the ledger row
         /// and the decision-log row name the same call. Nil off the hook path.
         var id: String?
-        /// Enforced rows: the host showed this deny as an ask
-        /// (`HookAuthorization.project`), so the person may have let it run.
-        var asked = false
 
         /// The row the rule-oriented denial ledger keeps: a rule deny as
         /// it is; the observe floor's own stop for a program rv cannot see

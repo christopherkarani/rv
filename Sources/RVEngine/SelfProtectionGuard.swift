@@ -372,7 +372,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace",
+    "workspace", "protect", "pause",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -442,7 +442,11 @@ private func isWeakeningSub(
     if isUnmodelledWord(sub) { return true }
     switch verb {
     case "packs":
-        return sub == "disable"
+        return sub == "disable" || sub == "off"
+    case "protect":
+        // `rv protect <tool> off` loosens; `off` may sit anywhere, and a
+        // variable or glob may carry it. Adding protection only tightens.
+        return sub == "off" || tail.contains { $0 == "off" || isUnmodelledWord($0) }
     case "safety":
         return sub != SafetyLevel.strict.rawValue
     case "allowlist":
@@ -474,6 +478,10 @@ private func isWeakeningSub(
         // File transfer crosses the cage wall: `upload` reads host paths
         // into the workspace, `download` writes workspace files to the host.
         return sub == "upload" || sub == "download"
+    case "pause":
+        // `rv pause <duration>` watches every host; bare `rv pause` (the
+        // countdown) and `rv pause --end` (back now) carry no positional.
+        return true
     case "host":
         // `mode <host> block` is the one tightening form; a missing, extra,
         // unknown or unmodelled word fails closed. `--json`/`--robot` take

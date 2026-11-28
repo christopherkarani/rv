@@ -114,12 +114,13 @@ struct HostSpendRemovedTests {
         let home = try isolatedHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
             home: home,
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"toolName":"bash","cwd":"\(home.rawValue)","input":{"command":"cat .env"},"hostAsk":"spend"}
         """
@@ -152,12 +153,13 @@ struct HostSpendRemovedTests {
     @Test func piFirstCallAsk_encodesDenyWithoutCode() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: try isolatedHome(),
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
         """
@@ -176,12 +178,13 @@ struct HostSpendRemovedTests {
         let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: directory)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
+        var client = ServiceClient(
             transport: nil,
             allowOnceDirectory: directory,
             home: try isolatedHome(),
             clock: { now }
         )
+        client.stopOwner = .unknown
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
