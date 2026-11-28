@@ -110,7 +110,7 @@ public struct StopNotice: Sendable, Equatable {
     public var why: String
     /// One safer command, or nil.
     public var safer: String?
-    /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
+    /// Who acts ("ask Chris to run  rv unlock a1b2c3").
     public var who: String
     /// The third-try note (B5, `stopStreakNote`), or nil.
     public var again: String?
