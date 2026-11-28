@@ -162,28 +162,38 @@ Remote servers are never caged.
 
 ## Getting servers into mcp.json
 
-You can write `mcp.json` by hand and then trust it. Or let rv copy what
-your agent already has:
+You can write `mcp.json` by hand and then trust it. Or let rv find what
+your agents already have, in every host it knows:
 
 ```bash
-rv mcp list
+rv mcp add --preview
 ```
 
 ```bash
-rv mcp onboard --host cursor --dry-run
+rv mcp add
 ```
 
-```bash
-rv mcp onboard --host cursor
-```
-
+- `rv mcp add [<host>]` reads each host's MCP config (it never starts a
+  server), says how many servers it found and how many do not run
+  through rv, gives one line for each server it has to leave out and
+  why, and shows every host config entry it would rewrite, before and
+  after, with environment and header values masked. With one
+  confirmation (you present, at your own terminal) it imports the
+  servers, moves literal credentials into rv keys by name, and points
+  the hosts at `rv mcp serve`, keeping a copy of each file first in
+  `~/.config/rv/backups`. `--preview` changes nothing. `claude` is
+  short for `claude-code`.
+- `rv mcp remove [<host>]` puts back every entry `rv mcp add` (or
+  `rv mcp setup`) rewrote that is still as rv wrote it. The reviewed
+  servers and their keys stay in `mcp.json` and the Keychain.
+- Agents can run `--preview`, never `add` or `remove` themselves.
 - `rv mcp import --host <host>` copies a host's servers into `mcp.json`
   (literal credentials move into the Keychain or keyring); it needs you
   present.
 - `rv mcp setup --host <host>` rewrites the host's own config so each
   server runs as `rv mcp serve --server <name>`; `--undo` restores the
   entries it changed. Restart the host afterwards.
-- `rv mcp onboard --host <host>` does both.
+- `rv mcp onboard --host <host>` does both for one host.
 - Imported servers start with every tool on **ask**. Add `allow` rules
   and a `sandbox` as you review them.
 

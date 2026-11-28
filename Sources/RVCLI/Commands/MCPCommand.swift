@@ -1387,15 +1387,19 @@ enum MCPRun {
 
     /// Every server that will be signed: command, arguments, tool policy, env
     /// bindings, secret bindings, and every allow, ask, and deny name.
-    /// The digest is of that whole text. Nothing is clipped.
-    static func importPresenceReview(servers: [MCPServerDefinition]) -> (shown: String, reason: String) {
+    /// The digest is of that whole text. Nothing is clipped. `routes` are
+    /// the host config rewrites `rv mcp add` makes after the import, so one
+    /// confirmation covers both.
+    static func importPresenceReview(
+        servers: [MCPServerDefinition], routes: [String] = []
+    ) -> (shown: String, reason: String) {
         let policy = "ask before every tool"
         let lines = servers.flatMap { server -> [String] in
             let command = reviewField(server.name) + ": " + quotedReviewFields([server.command] + server.args)
             return ["\(command) (\(policy))"] + bindingLines(server) + sandboxLines(server)
                 + reviewedServerLines(server)
         }
-        let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
+        let body = (["tools: \(policy)"] + lines + routes).joined(separator: "\n")
         let digest = RVDigest.sha256Hex(Array(body.utf8))
         return (body + "\nsha256 \(digest)\n", "rv: import sha256 \(digest)\n\(body)")
     }
@@ -1447,86 +1451,11 @@ enum MCPRun {
             return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
-        let integrity = MCPIntegrity.status(
-            of: base.bytes, configDirectory: environment.configDirectory, signing: environment.approvalSigning)
-        if let problem = integrity.problem {
-            return .failure(CommandFailure("\(problem); nothing imported"))
-        }
-        if let definition = plan.secrets.first?.definition,
-            let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
+        if case .failure(let failure) = await commitImport(
+            plan, base: base, secrets: secrets, environment: environment,
+            toolModeForFreshConfig: toolModeForFreshConfig, show: show)
         {
-            return .failure(CommandFailure("organization policy: \(reason); nothing imported"))
-        }
-
-        for secret in plan.secrets where SecretValue(secret.value) == nil {
-            return .failure(CommandFailure(
-                "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
-        }
-        let review = importPresenceReview(servers: plan.servers)
-        guard reviewShowsEveryLiteral(plan, review.shown) else {
-            return .failure(CommandFailure("import review omitted a literal value; nothing imported"))
-        }
-        show(review.shown)
-        let outcome = await environment.presence.confirm(review.reason, .deviceOwner)
-        guard case .confirmed = outcome else {
-            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
-            return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
-        }
-        var stored: [String] = []
-        func rollback() -> Bool {
-            stored.allSatisfy { environment.keychain.delete(SecretKeychain.service, $0) }
-        }
-        func keychainFailure(_ name: String) -> CommandFailure {
-            let cleared = rollback()
-            let tail = cleared
-                ? "nothing imported"
-                : "could not remove secrets this import already stored in \(SecretKeychain.storeName)"
-            return CommandFailure("could not store \(name) \(SecretKeychainWriter.storeFailureSuffix); \(tail)")
-        }
-        for secret in plan.secrets {
-            guard environment.keychain.store(SecretKeychain.service, secret.definition.name, Data(secret.value.utf8)) else {
-                return .failure(keychainFailure(secret.definition.name))
-            }
-            stored.append(secret.definition.name)
-        }
-        if plan.secrets.isEmpty == false {
-            var updatedSecrets = secrets
-            updatedSecrets.secrets += plan.secrets.map(\.definition)
-            if case .failure(let error) = updatedSecrets.write(configDirectory: environment.configDirectory) {
-                let cleared = rollback()
-                let message = cleared ? error.message : "\(error.message); could not remove secrets this import already stored in \(SecretKeychain.storeName)"
-                return .failure(CommandFailure(message))
-            }
-        }
-        var updated = configuration
-        updated.servers += plan.servers
-        // A first import chooses the compact tool listing: clients see only
-        // rv_search_tools and rv_call_tool instead of every upstream schema.
-        // Existing configs keep whatever mode the operator already chose.
-        if let toolModeForFreshConfig, configuration.servers.isEmpty {
-            updated.toolMode = toolModeForFreshConfig
-        }
-        // End any custodian auth window an earlier key use opened (the
-        // integrity check) so signing authenticates for itself, after the
-        // confirmed review.
-        environment.approvalSigning.beginFreshAuth()
-        if case .failure(let error) = updated.write(configDirectory: environment.configDirectory, signing: environment.approvalSigning) {
-            let restoredSecrets: Bool
-            if plan.secrets.isEmpty {
-                restoredSecrets = true
-            } else if case .success = secrets.write(configDirectory: environment.configDirectory) {
-                restoredSecrets = true
-            } else {
-                restoredSecrets = false
-            }
-            let cleared = rollback()
-            let message = restoredSecrets && cleared
-                ? error.message
-                : "\(error.message); could not remove secrets this import already stored"
-            return .failure(CommandFailure(message))
-        }
-        guard fileMatches(updated, configDirectory: environment.configDirectory) else {
-            return .failure(CommandFailure("mcp.json changed while it was being signed"))
+            return .failure(failure)
         }
         lines.append("wrote mcp.json\(plan.secrets.isEmpty ? "" : " and secrets.json (values in \(SecretKeychain.storeName), service \(SecretKeychain.service))")")
         if toolModeForFreshConfig != nil, configuration.servers.isEmpty {
@@ -1766,7 +1695,8 @@ struct MCP: AsyncParsableCommand {
         commandName: "mcp",
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
-            MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPOnboard.self, MCPServe.self,
+            MCPList.self, MCPCheck.self, MCPAdd.self, MCPRemove.self, MCPImportCommand.self, MCPSetupCommand.self,
+            MCPOnboard.self, MCPServe.self,
             MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self, MCPCustodian.self,
         ],
         defaultSubcommand: MCPList.self

@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVMCP
 import RVPolicy
 import RVPresentation
 import RVService
@@ -75,7 +76,8 @@ struct Setup: AsyncParsableCommand {
                 json: json || robot
             ),
             clock: LiveSetupCeremonyClock(),
-            write: CeremonyCLI.stdoutWriter()
+            write: CeremonyCLI.stdoutWriter(),
+            mcpHint: Setup.liveMCPHint
         )
         try CeremonyCLI.emit(outcome)
     }
@@ -92,11 +94,24 @@ struct Setup: AsyncParsableCommand {
         probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe,
         authenticate: () async throws -> Void = {
             try await CLIOwnerAuth.requireAuthenticated(reason: "Authenticate to switch rv to observe mode.")
-        }
+        },
+        mcpHint: (HomeDirectory) -> String? = { _ in nil }
     ) async -> SetupOutcome {
         var outcome = await flow.run(intent, clock: clock, write: write, authenticate: authenticate)
         await appendHookServiceWarningIfNeeded(to: &outcome, probeService: probeService)
+        // Zero-setup MCP: after a green setup, say how many MCP servers the
+        // agents have outside rv, and the one command that brings them in.
+        if outcome.exitCode == 0, intent.json == false, let home = CLIProcess.home(), let hint = mcpHint(home) {
+            if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false { outcome.stderr += "\n" }
+            outcome.stderr += hint + "\n"
+        }
         return outcome
+    }
+
+    /// The `rv mcp add` hint for this home (`MCPAdoptRun.setupHint`).
+    static func liveMCPHint(home: HomeDirectory) -> String? {
+        MCPAdoptRun.setupHint(
+            environment: .live(home: home), project: MCPRun.projectURL(nil), rvExecutable: MCPExecutable.currentPath())
     }
 
     /// Liveness of the service the installed hooks talk to, over the same

@@ -7,7 +7,9 @@ import RVDomain
 /// that lowers protection: uninstalling, disabling packs, lowering safety,
 /// adding allowlist entries, redeeming or minting allow-once permits,
 /// applying, saving, or rolling back policy, saving its ceiling, approving egress/MCP calls, trusting an
-/// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
+/// edited mcp.json, bringing MCP servers under rv or taking them back out
+/// (`rv mcp add|remove` without `--preview`, `rv mcp setup --undo`),
+/// writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
 /// (`rv host mode <host> observe|off`), moving files across a workspace's
@@ -394,7 +396,8 @@ private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bo
     let verbIndexes = firstWord == 0 ? [firstWord] : args.indices.filter { args[$0].hasPrefix("-") == false }
     // Each candidate scans the tail: past a bound, fail closed instead of going quadratic.
     if verbIndexes.count > maxVerbCandidates { return true }
-    return verbIndexes.contains { isWeakeningVerb(args, at: $0) }
+    let literal = rvProgramNames.contains(program)
+    return verbIndexes.contains { isWeakeningVerb(args, at: $0, literalRV: literal) }
 }
 
 /// `rv <verb> --help` or `rv <verb> <sub> --help`: rv prints the help page
@@ -413,11 +416,13 @@ private func isHelpPageRequest(_ args: ArraySlice<String>) -> Bool {
     }
 }
 
-private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
+/// `literalRV`: the head is spelled `rv` / `rv-cli`, not a word that may
+/// resolve to rv.
+private func isWeakeningVerb(_ args: [String], at verbIndex: Int, literalRV: Bool) -> Bool {
     // Q1's new names (`rv unlock`, `rv watch claude`, `rv secrets add`) are
     // judged as the spelling the CLI runs for them (`CommandVocabulary.expand`).
     switch CommandVocabulary.expand(Array(args[verbIndex...])) {
-    case .expanded(let runs): return isWeakeningVerb(Array(args[..<verbIndex]) + runs, at: verbIndex)
+    case .expanded(let runs): return isWeakeningVerb(Array(args[..<verbIndex]) + runs, at: verbIndex, literalRV: literalRV)
     case .missingArgument: return false
     case .unchanged: break
     }
@@ -439,12 +444,13 @@ private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     return subIndexes.contains { index in
         let sub = rest[index]
         let third = rest[(index + 1)...].first { $0.hasPrefix("-") == false }
-        return isWeakeningSub(verb: verb, sub: sub, third: third, flags: flags, tail: rest[(index + 1)...])
+        return isWeakeningSub(
+            verb: verb, sub: sub, third: third, flags: flags, tail: rest[(index + 1)...], literalRV: literalRV)
     }
 }
 
 private func isWeakeningSub(
-    verb: String, sub: String, third: String?, flags: Set<String>, tail: ArraySlice<String>
+    verb: String, sub: String, third: String?, flags: Set<String>, tail: ArraySlice<String>, literalRV: Bool
 ) -> Bool {
     if isUnmodelledWord(sub) { return true }
     switch verb {
@@ -468,7 +474,19 @@ private func isWeakeningSub(
         let writesLayer = flags.contains("--save") || tail.contains(where: isUnmodelledWord)
         return sub == "apply" || ((sub == "draft" || sub == "rollback") && writesLayer)
     case "egress", "mcp":
-        return sub == "approve" || (verb == "mcp" && sub == "trust")
+        guard verb == "mcp" else { return sub == "approve" }
+        switch sub {
+        case "approve", "trust": return true
+        // `add` imports servers, moves keys and rewrites agent host
+        // configs; `remove` and `setup --undo` take them back out from under
+        // rv. `--preview` only reads. Only a literal rv head: `$C mcp add`
+        // is also an agent host CLI's own spelling, which the MCP host
+        // config guard denies outright, and rv's add and remove refuse a
+        // process with no terminal before reading anything.
+        case "add", "remove": return literalRV && flags.contains("--preview") == false
+        case "setup": return flags.contains("--undo") || tail.contains(where: isUnmodelledWord)
+        default: return false
+        }
     case "secrets":
         // Every secrets.json or Keychain write: an agent that defines or
         // imports a secret chooses which real value reaches a cage, or which

@@ -817,7 +817,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--dry-run]"),
-                HelpRow(name: "rv mcp onboard --host <host> [--server <name>...] [--dry-run]"),
+                HelpRow(name: "rv mcp add [<host>] [--server <name>...] [--preview]"),
+                HelpRow(name: "rv mcp remove [<host>] [--preview]"),
                 HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
@@ -883,10 +884,9 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv mcp list",
-            "rv mcp onboard --host cursor --dry-run",
-            "rv mcp onboard --host cursor",
-            "rv mcp check",
+            "rv mcp add --preview",
+            "rv mcp add cursor",
+            "rv mcp list", "rv mcp check",
         ]
     )
 
