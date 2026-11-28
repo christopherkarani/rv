@@ -135,6 +135,12 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
+            // Before anything is resolved: a secret named in `args` would
+            // land in the process's arguments, where `ps` shows it.
+            if let secret = argumentSecret(definition) {
+                planned.append(refused(definition, .secretInArguments(secret)))
+                continue
+            }
             if definition.placeholders.isEmpty == false {
                 switch placeholderServer(
                     definition, configuration: configuration, secrets: secrets, resolver: resolver,
@@ -168,10 +174,12 @@ public enum MCPLaunchPlanner {
             case .failure(let error): return .failure(error)
             case .success(let values): resolved = values
             }
+            // Secrets reach the server only through its environment;
+            // `argumentSecret` refused any `${secret:}` in its args above.
             for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
-            let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
             let launch = MCPUpstreamLaunch(
-                server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+                server: name, executable: envPath, arguments: [definition.command] + definition.args,
+                environment: environment)
             switch sandbox(definition, launch, .standard) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
@@ -185,8 +193,8 @@ public enum MCPLaunchPlanner {
         return .success(planned)
     }
 
-    /// A local server with `placeholders`: real values for its `secrets` and
-    /// `args` as for any server, placeholders leased for the rest, and a cage
+    /// A local server with `placeholders`: real values for its `secrets` as
+    /// for any server, placeholders leased for the rest, and a cage
     /// that may reach the secrets gateway. A placeholder refusal refuses this
     /// server only (`.refused`); a failure any server would hit fails the plan.
     /// Every refusal that needs no value comes before its own secrets are
@@ -237,9 +245,9 @@ public enum MCPLaunchPlanner {
         case .success(let values): resolved = values
         }
         for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
-        let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
         let launch = MCPUpstreamLaunch(
-            server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+            server: name, executable: envPath, arguments: [definition.command] + definition.args,
+            environment: environment)
         // By value, under any name: an alias secret, an `env` literal, an argument.
         if lease.holdsRealValue(environment: launch.environment, arguments: launch.arguments) {
             lease.revoke()
@@ -297,10 +305,43 @@ public enum MCPLaunchPlanner {
         return nil
     }
 
-    /// The secrets a local server's launch resolves: its `secrets` values
-    /// and every `${secret:NAME}` in its `args`.
+    /// The secrets a local server's launch resolves: its `secrets` values,
+    /// delivered as environment variables. A `${secret:}` in `args` is
+    /// never resolved (`argumentSecret` refuses the server first).
     package static func referencedSecrets(_ definition: MCPServerDefinition) -> [String] {
-        Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] }).sorted()
+        Set(definition.secrets.values).sorted()
+    }
+
+    /// How a local server's `args` would put a secret in its command line,
+    /// or nil. Such a server is not started: arguments are readable by
+    /// every user on the machine (`ps`, `/proc/<pid>/cmdline`), so a secret
+    /// goes by environment variable or not at all.
+    ///
+    /// Two ways, checked whatever the command is:
+    /// - `${secret:NAME}` in an arg. An arg that is not a valid template
+    ///   counts too: rv does not guess what it would expand to.
+    /// - `$VAR` or `${VAR}` for a variable in its `secrets`. A shell
+    ///   (`sh -c "srv --token $VAR"`) or any launcher that expands it puts
+    ///   the value in its child's arguments.
+    package static func argumentSecret(_ definition: MCPServerDefinition) -> MCPArgumentSecret? {
+        guard definition.remote == nil else { return nil }
+        for arg in definition.args where arg.contains("${secret:") {
+            return .reference(MCPSecretReference.names(in: arg)?.first ?? "?")
+        }
+        let variables = Set(definition.secrets.keys)
+        guard variables.isEmpty == false else { return nil }
+        for arg in definition.args {
+            if let variable = MCPArgumentSecret.expandedVariables(in: arg).first(where: variables.contains) {
+                return .expanded(variable: variable, secret: definition.secrets[variable] ?? variable)
+            }
+        }
+        return nil
+    }
+
+    /// Why a server with a secret in its arguments is off, and the fix, on
+    /// one line.
+    package static func argumentSecretMessage(_ found: MCPArgumentSecret) -> String {
+        found.reason + " to every user; " + found.fix
     }
 
     /// A server planned not to start: no secret values, no launch.
@@ -372,7 +413,7 @@ public enum MCPLaunchPlanner {
         // `delivery` says, so environment-only policy forbids it outright.
         case .organizationPolicy(.environmentDelivery):
             "organization policy sets secrets.allowEnvironmentDelivery to false, "
-                + "and a stdio server receives secrets in its environment or arguments"
+                + "and a stdio server receives secrets in its environment"
         case .expired(let date): "expired at \(SecretExpiry.text(date))"
         case .resolution(let error): error.message
         case .unusableToken, .unusableCredentials, .unusableEnvironmentValue, .notText, .lineBreak: "not usable as text"

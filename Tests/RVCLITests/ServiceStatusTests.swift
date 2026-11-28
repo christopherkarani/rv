@@ -38,7 +38,7 @@ struct ServiceStatusTests {
             state: .running,
             idleExitSeconds: 300,
             packsEnabled: [.coreGit, .coreFilesystem],
-            checks: []
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
@@ -93,7 +93,7 @@ struct ServiceStatusTests {
             state: .down,
             idleExitSeconds: 300,
             packsEnabled: [.coreGit, .coreFilesystem],
-            checks: []
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
@@ -159,7 +159,7 @@ struct ServiceStatusTests {
             idleExitSeconds: 300,
             packsEnabled: [.coreGit, .coreFilesystem],
             lastError: "peer supplied detail",
-            checks: []
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),

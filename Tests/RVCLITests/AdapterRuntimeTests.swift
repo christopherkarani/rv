@@ -82,11 +82,13 @@ import RVPolicy
             #expect(outcome.exitCode == 0, "\(outcome.stderr)")
             let claude = try String(contentsOfFile: layout.claudeSettings, encoding: .utf8)
             #expect(claude.contains(legacy) == false)
+            // One group per tool matcher, plus the SessionStart hello.
             #expect(claude.components(separatedBy: "/usr/bin/python3 -I -S \(adapter)").count - 1
-                == ClaudeSettingsMerge.matchers.count)
+                == ClaudeSettingsMerge.matchers.count + 1)
             let codex = try String(contentsOfFile: layout.codexHooksJSON, encoding: .utf8)
             #expect(codex.contains("\"python3 ") == false)
-            #expect(codex.components(separatedBy: "rv-guard.py").count - 1 == 1)
+            // The rewritten PreToolUse hook and the SessionStart hello.
+            #expect(codex.components(separatedBy: "rv-guard.py").count - 1 == 2)
             #expect(codex.contains("/usr/bin/python3 -I -S \(layout.codexHook)"))
         }
     }

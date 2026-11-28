@@ -59,7 +59,7 @@ enum SecretLeaseError: Error, Sendable, Equatable {
         case .organizationPolicy(let reason): "organization policy: \(reason)"
         case .expired(let name, let date):
             "secret \(name) expired at \(SecretExpiry.text(date)); store a new value and expiry with "
-                + "`rv secrets set \(name) --expires DATE`, or update its expires in secrets.json"
+                + "`\(CommandVocabulary.Alias.secretsAdd.invocation) \(name) --expires DATE`, or update its expires in secrets.json"
         case .awsCredentialsUnusable(let name):
             "secret \(name): \(AWSSigningBinding.unusableCredentials) "
                 + "(expected credential_process JSON with AccessKeyId, SecretAccessKey, and a valid Expiration)"
@@ -372,7 +372,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             switch reason {
             case .organizationPolicy(let rule): return .failure(.failed("organization policy: \(rule.message(secret: name))"))
             case .expired:
-                return .failure(.failed("\(name) has passed its expiry; extend it with `rv secrets set \(name) --expires`"))
+                return .failure(.failed("\(name) has passed its expiry; extend it with `\(CommandVocabulary.Alias.secretsAdd.invocation) \(name) --expires`"))
             case .resolution(let error): return .failure(error)
             case .unusableToken: return .failure(.invalidValue(OAuthAccessToken.unusable))
             case .unusableCredentials: return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))

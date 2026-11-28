@@ -122,7 +122,7 @@ struct MCPListOffTests {
         let row = try #require(report.rows.first { $0.name == "wax" })
         #expect(row.status == "off")
         #expect(row.offReason == "off · secret WAX_TOKEN is not set up")
-        #expect(MCPRun.nextLines(report) == ["→ rv secrets set WAX_TOKEN"])
+        #expect(MCPRun.nextLines(report) == ["→ rv secrets add WAX_TOKEN"])
     }
 
     /// What `rv mcp serve --server wax` answers the host with, from the

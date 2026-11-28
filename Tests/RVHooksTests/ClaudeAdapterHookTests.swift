@@ -453,7 +453,7 @@ private func fileToolEvent(_ tool: String) -> [String: Any] {
 }
 
 private let askReason =
-    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock."
 private let askJSON =
     "{\"decision\":\"ask\",\"reason\":\"\(askReason)\"}\n"
 private let resetHardReason = resetHardHostDeny

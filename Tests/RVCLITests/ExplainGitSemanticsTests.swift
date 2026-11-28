@@ -53,7 +53,7 @@ struct ExplainGitSemanticsTests {
         #expect(normal.stdout.contains("Decision: DENY"))
         #expect(normal.stdout.contains("Action       push"))
         #expect(normal.stdout.contains("Scope        remote"))
-        #expect(normal.stdout.contains("rv allow-once"))
+        #expect(normal.stdout.contains("rv unlock"))
         #expect(forced.stdout.contains("Decision: DENY"))
         #expect(forced.stdout.contains("force-push"))
         #expect(forced.stdout.contains("remote shared-branch mutation"))

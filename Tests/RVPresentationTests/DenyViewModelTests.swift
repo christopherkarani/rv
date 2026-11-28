@@ -64,7 +64,7 @@ private func mediumAllow() -> EvaluationResult {
     let vm = try #require(denyViewModel(from: denyResult(reason: reason), command: resetHard))
     #expect(vm.fact == "git reset --hard destroys uncommitted changes")
     #expect(vm.packReason == reason)
-    #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
+    #expect(vm.nextAction == "run it in Terminal, or rv unlock")
     #expect(vm.ruleID.rawValue == "core.git:reset-hard")
     #expect(vm.ruleID.slashDisplay == "core.git/reset-hard")
     #expect(vm.ruleDisplay == "core.git/reset-hard")
@@ -79,7 +79,7 @@ private func mediumAllow() -> EvaluationResult {
 @Test func explainViewModel_denyHasFactNext() {
     let vm = explainViewModel(from: denyResult(), command: resetHard)
     #expect(vm.fact == "git reset --hard destroys uncommitted changes")
-    #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
+    #expect(vm.nextAction == "run it in Terminal, or rv unlock")
     #expect(vm.patternName == "reset-hard")
     #expect(vm.severity == .critical)
     #expect(vm.explanation == nil)

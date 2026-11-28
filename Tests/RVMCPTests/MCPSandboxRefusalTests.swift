@@ -69,14 +69,14 @@ struct MCPSandboxRefusalTests {
     @Test func aServerWithoutASandboxIsRefusedAloneBeforeItsSecretsAreResolved() {
         Self.expectRefusedAlone(
             MCPServerDefinition(
-                name: "bare", command: "b", args: ["--key=${secret:REFUSED_ARG}"], secrets: ["KEY": "REFUSED_SECRET"]),
+                name: "bare", command: "b", secrets: ["KEY": "REFUSED_SECRET"]),
             reason: #"bare needs a sandbox; add "sandbox" to its mcp.json entry"#)
     }
 
     @Test func aServerAskingForOpenNetworkIsRefusedAloneBeforeItsSecretsAreResolved() {
         Self.expectRefusedAlone(
             MCPServerDefinition(
-                name: "open", command: "o", args: ["--key=${secret:REFUSED_ARG}"], secrets: ["KEY": "REFUSED_SECRET"],
+                name: "open", command: "o", secrets: ["KEY": "REFUSED_SECRET"],
                 sandbox: MCPSandboxPolicy(network: true)),
             reason: "open stays off the network; list the hosts it needs in sandbox.hosts")
     }
