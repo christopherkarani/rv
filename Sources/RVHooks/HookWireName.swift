@@ -55,6 +55,15 @@ enum HookWireName {
     /// pre-tool event (evaluated) rather than foreign (allowed unchecked).
     /// A near-variant of `preToolEvent` is the pre-tool event too. Any
     /// other spelling names a different event and stays foreign.
+    /// A named non-tool event (`SessionStart`): its exact spelling or a
+    /// near-variant. Absent or blank is never this event; it stays the
+    /// pre-tool event (`isPreToolEvent`), so a payload cannot skip
+    /// evaluation by leaving its name out.
+    static func isEvent(_ raw: String?, named event: String) -> Bool {
+        guard let raw, key(raw).isEmpty == false else { return false }
+        return canonical(raw, among: [event]) == event
+    }
+
     static func isPreToolEvent(_ raw: String?, preToolEvent: String) -> Bool {
         guard let raw, key(raw).isEmpty == false else { return true }
         return canonical(raw, among: [preToolEvent]) == preToolEvent

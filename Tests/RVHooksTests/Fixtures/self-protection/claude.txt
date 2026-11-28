@@ -1,0 +1,7 @@
+== rv secrets set STRIPE_KEY
+exit 0
+stdout {"systemMessage":"✕ rv protects itself   rv secrets set STRIPE_KEY (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nsafer   rv secrets set --help\nwho     ask Chris to run  rv secrets set STRIPE_KEY","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ rv protects itself   rv secrets set STRIPE_KEY (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nsafer   rv secrets set --help\nwho     ask Chris to run  rv secrets set STRIPE_KEY"}}
+
+== echo uninstall | xargs rv
+exit 0
+stdout {"systemMessage":"✕ rv protects itself   echo uninstall | xargs rv (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nwho     ask Chris to run it in their own terminal","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ rv protects itself   echo uninstall | xargs rv (rv.indeterminate/selfProtection)\nwhy     agents can't change rv's own settings\nwho     ask Chris to run it in their own terminal"}}

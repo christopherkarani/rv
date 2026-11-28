@@ -561,13 +561,13 @@ struct BoxPlanTests {
         #expect(BoxPlan.hostRefusal(trustText).text
             == "✕ Boxes can't open on this Mac: the box helper's trust pin doesn't match this rv.\n  → see the fix (it needs an administrator): rv doctor\n")
         #expect(BoxPlan.hostRefusal(WorkspaceCommandRun.hostNotReachableText).text
-            == "✕ Workspace host is not reachable.\n  → rv workspace status\n")
+            == "✕ The box helper started but rv can't reach it.\n  → check on it: rv workspace status\n")
         #expect(BoxPlan.hostRefusal(timedOutText).text
-            == "✕ Workspace host did not become ready in time.\n  → rv workspace status\n")
+            == "✕ The box is taking longer than usual to start.\n  → check on it: rv workspace status\n")
         #expect(BoxPlan.hostRefusal(startingText).text
             == "◐ The box is still starting in the background.\n  → run rv box again once it is ready: rv workspace status\n")
         #expect(BoxPlan.hostRefusal("runtime resource profile 'main' is unavailable for this project").text
-            == "✕ Runtime resource profile 'main' is unavailable for this project.\n  → rv doctor\n")
+            == "✕ The profile for this box doesn't serve this project.\n  → write one for this project: rv init\n")
     }
 
     @Test("paths show under ~ and copy back safely")

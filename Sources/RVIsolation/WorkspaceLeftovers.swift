@@ -278,7 +278,7 @@ extension WorkspaceHosts {
     }
 
     /// DiskArbitration can wedge; never wait on it unbounded.
-    private static func hdiutilInfo(timeout: TimeInterval = 15) -> Data? {
+    static func hdiutilInfo(timeout: TimeInterval = 15) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         process.arguments = ["info", "-plist"]

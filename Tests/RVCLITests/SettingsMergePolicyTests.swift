@@ -38,6 +38,17 @@ private enum SharedMergeHost: CaseIterable, Sendable {
     }
 
     /// Wraps hook-entry fragments into this host's document shape.
+    /// `document`, plus rv's SessionStart group where the host has one (B4).
+    func wiredDocument(_ entries: String) -> Data {
+        switch self {
+        case .claude:
+            let hook = "{\"hooks\":[{\"type\":\"command\",\"command\":\"RV_BINARY=/r \(adapterLauncher)/usr/bin/python3 -I -S /c/hooks/rv-guard.py\",\"timeout\":\(timeout)}]}"
+            return Data("{\"hooks\":{\"PreToolUse\":[\(entries)],\"SessionStart\":[\(hook)]}}".utf8)
+        case .antigravity:
+            return document(entries)
+        }
+    }
+
     func document(_ entries: String) -> Data {
         switch self {
         case .claude:
@@ -131,10 +142,17 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
             currentEntry(matcher: $0, timeout: host.timeout)
         }.joined(separator: ",")
         #expect(
-            SettingsMergePolicy.inspectionState(of: host.document(full), descriptor: descriptor)
+            SettingsMergePolicy.inspectionState(of: host.wiredDocument(full), descriptor: descriptor)
                 == .wired(bakedPath: "/r"),
             "\(host) full current coverage"
         )
+        if descriptor.wiring.sessionStartListKey != nil {
+            // B4: without rv's SessionStart group the hello is missing.
+            #expect(
+                SettingsMergePolicy.inspectionState(of: host.document(full), descriptor: descriptor) == .outdated,
+                "\(host) no SessionStart group"
+            )
+        }
     }
 }
 
