@@ -107,6 +107,9 @@ public struct GlanceState: Sendable, Equatable {
     public var posture: GlancePosture = .guarding
     /// Each ask waiting for a human, and the agent that asked.
     public var pending: [ApprovalID: HookHost] = [:]
+    /// Each stop waiting for the person's unlock (K2), by code hash. The
+    /// menu bar's unlock review fills it; the feed never does.
+    public var unlocks: [String: GlanceUnlockAsk] = [:]
     public var agents: [HookHost: GlanceAgent] = [:]
     public var today: GlanceToday
     public var lastStop: GlanceStop?
@@ -139,7 +142,7 @@ public struct GlanceState: Sendable, Equatable {
         case .down: return .notRunning
         case .live, .liveWithoutEvents: break
         }
-        if !pending.isEmpty { return .needsYou }
+        if !pending.isEmpty || !unlocks.isEmpty { return .needsYou }
         if let lastStop, now >= lastStop.at, now.timeIntervalSince(lastStop.at) < Self.stopFlash {
             return .justStopped
         }
@@ -160,9 +163,12 @@ public struct GlanceState: Sendable, Equatable {
         agents.values.filter { !$0.isIdle(at: now) }.count
     }
 
+    /// Asks and unlockable stops waiting for the person.
+    public var waitingCount: Int { pending.count + unlocks.count }
+
     /// The agents with an ask waiting, in a stable order.
     public var waitingHosts: [HookHost] {
-        Set(pending.values).sorted { $0.rawValue < $1.rawValue }
+        Set(pending.values).union(unlocks.values.map(\.host)).sorted { $0.rawValue < $1.rawValue }
     }
 
     /// rvd stopped answering. The time is kept only when it was answering
@@ -173,6 +179,7 @@ public struct GlanceState: Sendable, Equatable {
         link = .down(reason)
         downSince = since
         pending = [:]
+        unlocks = [:]
     }
 
     /// Starts today's counts over once local midnight has passed.

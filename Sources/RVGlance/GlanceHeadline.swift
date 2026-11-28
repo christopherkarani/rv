@@ -21,7 +21,7 @@ public struct GlanceHeadline: Sendable, Equatable {
             let stopped = state.downSince.map { "rvd stopped \(Self.ago($0, now: now, calendar: calendar))" }
             self.init(title: "rv isn't running", subtitle: "\(stopped ?? "rvd isn't answering") · agents are unguarded")
         case .needsYou:
-            let count = state.pending.count
+            let count = state.waitingCount
             let who = Self.waitingWords(state.waitingHosts)
             self.init(title: glyph.title, subtitle: "\(Self.plural(count, "request")) · \(who)")
         case .justStopped:
