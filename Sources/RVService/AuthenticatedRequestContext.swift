@@ -72,9 +72,11 @@ public enum ServiceMethodAuthorization {
         /// still re-validates every field and enforces per-epoch code
         /// single-use, so a buggy caller cannot plant garbage or doubles.
         case ttyAttestation
-        /// Owner-action confirmation. Any authenticated local peer may ask;
-        /// authority comes only from the presence proof rvd verifies in the
-        /// handler (`OwnerPresence`), never from the caller's identity alone.
+        /// Owner-action confirmation. A kernel-attested peer running as
+        /// rvd's own user (the owner) may ask; authority comes only from the
+        /// presence proof rvd verifies in the handler (`OwnerPresence`),
+        /// never from the caller's identity alone. Another user's process
+        /// never raises the owner's prompt.
         case ownerConfirm
         /// Live events (`events`): read-only and redacted, but every
         /// agent's decisions pass through it, so only a kernel-attested
@@ -179,7 +181,8 @@ public enum ServiceMethodAuthorization {
                 return true
             }
         case .ownerConfirm:
-            return context.peer != nil
+            guard let peer = context.peer else { return false }
+            return peer.evidence.effectiveUserID == ownerUserID
         case .proposals:
             guard let peer = context.peer else { return false }
             return peer.evidence.effectiveUserID == ownerUserID

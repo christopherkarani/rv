@@ -226,6 +226,20 @@ struct LoosenProposalServiceTests {
         #expect(filed == .error(.authorizationDenied))
     }
 
+    /// Another user's process never raises the owner's prompt, either for
+    /// a proposal or through `confirmOwnerAction` (it predates F2).
+    @Test func anotherUserCannotAskForTheOwnersConfirmation() {
+        let id = UUID()
+        let stranger = AuthenticatedRequestContext.captured(
+            peer: .socketPeer(processID: 99, effectiveUserID: UInt32(geteuid()) &+ 1, connectionID: id), connectionID: id)
+        let owner = AuthenticatedRequestContext.captured(
+            peer: .socketPeer(processID: 99, effectiveUserID: UInt32(geteuid()), connectionID: id), connectionID: id)
+        let confirm = IPCMethod.confirmOwnerAction(ConfirmOwnerActionParams(
+            summary: "turn rv off", proof: nil, clientSemver: ProtocolVersion.serviceSemver))
+        #expect(ServiceMethodAuthorization.permits(confirm, context: stranger) == false)
+        #expect(ServiceMethodAuthorization.permits(confirm, context: owner))
+    }
+
     /// A change too long for the prompt is shown from its start, marked
     /// cut, with the fingerprint; never "shown in your terminal".
     @Test func aLongCommandIsShownFromItsStartWithTheFingerprint() throws {
