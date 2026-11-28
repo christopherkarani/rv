@@ -15,8 +15,8 @@ public struct TestViewModel: Equatable, Sendable {
     public var resultTone: DecisionTone
     public var columns: Int
     public var deny: DenyViewModel?
-    /// Observe-mode note under the result, when observe let a would-be
-    /// block or ask run.
+    /// Observe-mode note under the result, when observe mode was read for
+    /// a verdict that is not an allow: watched (it ran) or stopped.
     package var observeNote: String?
 
     public init(
@@ -101,16 +101,26 @@ package func remapMatchSpan(
     MatchSpan.projected(span: span, matchedText: matchedText, searchText: searchText, onto: command)
 }
 
-/// `observed`: observe let `result` (the would-be verdict) run, which
-/// enforce would have authorized this way; adds the observe note.
+/// `observed`: what observe mode did with `result` (watched: the would-be
+/// verdict ran; stopped: the observe floor kept it); adds the observe note.
 public func testViewModel(
     from result: EvaluationResult,
     command: ShellCommand,
     columns: Int = 80,
-    observed: HookAuthorization? = nil
+    observed: ObserveOutcome? = nil
 ) -> TestViewModel {
     var model = baseTestViewModel(from: result, command: command, columns: columns)
-    model.observeNote = observed.flatMap { observeNote(for: result.decision, authorization: $0) }
+    // Under observe the result line leads with what happened, never
+    // BLOCKED for a command that ran: `◐ Would stop (rule)` or
+    // `✕ Stopped (rule)`; the note under it says why (and whether guard
+    // mode would ask first).
+    if let observed, result.decision != .allow {
+        var word = observeDecisionWords(for: observed)
+        if case .deny(let deny) = result.decision { word += " (\(deny.ruleID.rawValue))" }
+        model.resultWord = word
+        if case .watched = observed { model.resultTone = .incomplete }
+        model.observeNote = observeNote(for: result.decision, outcome: observed, leadingWords: false, rule: false)
+    }
     return model
 }
 
@@ -164,10 +174,10 @@ private func baseTestViewModel(
             columns: columns,
             deny: deny
         )
-    case .indeterminate:
+    case .indeterminate(let reason):
         return TestViewModel(
             command: command,
-            reason: incompleteEvalSentence,
+            reason: indeterminateSentence(reason),
             resultWord: resultWord,
             resultTone: tone,
             columns: columns
