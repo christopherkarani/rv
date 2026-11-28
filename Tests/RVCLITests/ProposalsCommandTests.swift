@@ -41,8 +41,15 @@ struct ProposalsCommandTests {
 
         func call<T>(_ method: IPCMethod, _ pick: (IPCResult) -> T?) async -> Result<T, ServiceClient.ServiceCommandError> {
             let id = UUID()
+            // The genuine rv CLI (pinned `.cli`), as rvd sees it on macOS.
+            let code = PeerCodeIdentity(identifier: "dev.rv.cli", teamIdentifier: "TEAM", cdHash: Data([1]),
+                executablePath: "/usr/local/bin/rv", isAdHoc: false, hardenedRuntime: true, injectionExceptions: [])
             let context = AuthenticatedRequestContext.captured(
-                peer: .socketPeer(processID: 77, effectiveUserID: UInt32(geteuid()), connectionID: id), connectionID: id)
+                peer: AuthenticatedPeer(
+                    evidence: PlatformPeerEvidence(processID: 77, effectiveUserID: UInt32(geteuid()), auditToken: Data([7]),
+                        codeIdentity: code, componentRole: .cli),
+                    connectionID: id),
+                connectionID: id)
             let result = await runtime.dispatch(IPCRequest(method: method), context: context).result
             guard let reply = pick(result) else { return .failure(.service("\(result)")) }
             return .success(reply)
@@ -262,6 +269,30 @@ struct ProposalsCommandTests {
         #expect(filed.stdout.contains("proposal p-2."))
         let on = Set(try PacksFacade.effectiveIDs(home: fixture.home).map(\.rawValue))
         #expect(on.isSuperset(of: ["database.redis", "containers.docker"]))
+    }
+
+    /// Security review M1: a category is never one proposal for "pack
+    /// backup". Each pack in it is its own proposal, by exact id, so the
+    /// owner approves exactly what goes off.
+    @Test func aCategoryOffIsOneProposalPerPackByExactID() async throws {
+        let fixture = try Self.fixture()
+        _ = try await Self.run(fixture, terminal: false) {
+            var command = try Packs.Enable.parse(["backup"])
+            try await command.run()
+        }
+        let filed = try await Self.run(fixture, terminal: false) {
+            var command = try Packs.Disable.parse(["backup", "--propose"])
+            try await command.run()
+        }
+        #expect(filed.exit == 0)
+        let listed = try await Self.run(fixture, terminal: true) {
+            var command = try ProposalsList.parse([])
+            try await command.run()
+        }
+        for pack in ["backup.borg", "backup.rclone", "backup.restic", "backup.velero"] {
+            #expect(listed.stdout.contains("Looser: pack \(pack) is turned off"))
+        }
+        #expect(listed.stdout.contains("pack backup is turned off") == false)
     }
 
     // MARK: the owner decides

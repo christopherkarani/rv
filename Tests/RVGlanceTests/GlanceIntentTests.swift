@@ -94,10 +94,10 @@ struct GlanceIntentTests {
         let services = GlanceIntentServices(reader: GlanceReader(wire: wire), calendar: GlanceSamples.calendar)
         let said = await services.statusSentence(now: GlanceSamples.now)
         #expect(said == "rv needs you · 1 request · claude is waiting · 1 command checked, 1 stopped today")
-        guard wire.methods.count == 2, case .pendingList = wire.methods[0],
-              case .events(let params) = wire.methods[1]
+        guard wire.methods.count == 3, case .pendingList = wire.methods[0],
+              case .listProposals = wire.methods[1], case .events(let params) = wire.methods[2]
         else {
-            Issue.record("expected pendingList then events, got \(wire.methods)")
+            Issue.record("expected pendingList, listProposals then events, got \(wire.methods)")
             return
         }
         #expect(params == EventsParams(after: 0, waitMs: 0))

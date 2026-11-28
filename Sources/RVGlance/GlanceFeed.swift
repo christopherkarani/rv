@@ -84,6 +84,9 @@ public struct GlanceFeed: Sendable {
         switch await reader.pendingAsks() {
         case .success(let asks):
             state.replacePending(asks)
+            // Proposals are seeded with the asks. A read that fails keeps
+            // what the events said; it never takes the link down.
+            if case .success(let ids) = await reader.pendingProposals() { state.replaceProposals(ids) }
             needsPending = false
             return nil
         case .failure(let failure):

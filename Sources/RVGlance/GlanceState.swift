@@ -201,6 +201,12 @@ public struct GlanceState: Sendable, Equatable {
         pending = asks
     }
 
+    /// Replaces the waiting proposals with what `listProposals` holds: on
+    /// connect and after missed events, so none is lost between polls.
+    public mutating func replaceProposals(_ ids: Set<ProposalID>) {
+        proposals = ids
+    }
+
     private mutating func apply(_ event: LiveEvent) {
         let at = Date(timeIntervalSince1970: Double(event.atMs) / 1000)
         let counts = at >= today.day

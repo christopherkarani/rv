@@ -361,8 +361,18 @@ func packsOffAuthorization(
     if propose == false, LoosenRoute.isOwnerTerminal() {
         return try await OwnerConfirmation.require(summary)
     }
-    for pack in packs {
-        _ = try await LoosenRoute.propose(.packOff(pack: pack), command: command)
+    // A category or preset is filed as one proposal per pack in it now, so
+    // the owner approves exactly the packs that go off.
+    let ids: [PackID]
+    do {
+        ids = try PacksFacade.packIDs(named: packs)
+    } catch PacksCommandError.unknownID(let token) {
+        try CommandContext.fail("unknown pack id: \(DisplayedText.field(token.rawValue))\n")
+    } catch {
+        try CommandContext.fail("rv \(command): the bundled packs cannot be read. Run rv doctor.\n")
+    }
+    for id in ids {
+        _ = try await LoosenRoute.propose(.packOff(pack: id.rawValue), command: command)
     }
     return nil
 }

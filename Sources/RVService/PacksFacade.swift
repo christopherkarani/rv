@@ -319,6 +319,22 @@ public enum PacksFacade {
         )
     }
 
+    /// Every pack a name turns off: a pack id is itself, a category or a
+    /// preset is the packs in it now, in catalog order. A loosen proposal
+    /// (F2) names each of these packs, never the category or preset, so the
+    /// owner approves exactly the packs that go off and a pack added to the
+    /// category later is not turned off by an old approval.
+    public static func packIDs(named names: [String]) throws -> [PackID] {
+        let index = try PackRegistry.loadIndex()
+        let expansion: Set<PackID>
+        do {
+            expansion = try PackSet.expand(selectionTokens(names, index: index), index: index, rejectUnknown: true)
+        } catch PackSetError.unknownID(let token) {
+            throw PacksCommandError.unknownID(token)
+        }
+        return PackSet.order(expansion, index: index)
+    }
+
     private static func selectionTokens(_ raws: [String], index: PackIndex) -> [SelectionToken] {
         raws.flatMap { SelectionToken.tokens(from: $0, index: index) }
     }

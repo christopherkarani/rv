@@ -85,11 +85,14 @@ public enum ServiceMethodAuthorization {
         /// asks, resolutions and session ids follow `pendingList`'s gate
         /// per caller (`LiveEventView`).
         case ownerEvents
-        /// Loosen proposals (F2): file, list and decline. Any
-        /// kernel-attested peer, agents included: none of these loosens
-        /// anything. Approving is `decideProposal` too, but its authority
-        /// comes only from the owner check rvd runs in the handler, on a
-        /// prompt rvd builds from the stored row.
+        /// Loosen proposals (F2): file, list and decide. A kernel-attested
+        /// peer running as rvd's own user (the owner): rows carry full
+        /// commands and paths. Filing and listing loosen nothing. Deciding
+        /// is narrowed further in the handler (`ServiceRuntime`): where rvd
+        /// shows its own prompt, only the pinned CLI may ask, so no other
+        /// process picks the moment the owner's prompt appears; where rvd
+        /// checks a password, the owner's password is the authority for
+        /// approve and decline alike.
         case proposals
     }
 
@@ -175,8 +178,11 @@ public enum ServiceMethodAuthorization {
                 // sends the owner's password for the handler to verify.
                 return true
             }
-        case .ownerConfirm, .proposals:
+        case .ownerConfirm:
             return context.peer != nil
+        case .proposals:
+            guard let peer = context.peer else { return false }
+            return peer.evidence.effectiveUserID == ownerUserID
         case .ownerEvents:
             // The same peer credential the transports capture (XPC audit
             // token euid, SO_PEERCRED uid), compared with rvd's own.

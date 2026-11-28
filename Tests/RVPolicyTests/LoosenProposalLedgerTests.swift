@@ -44,11 +44,48 @@ struct LoosenProposalLedgerTests {
         var records: [LoosenProposal] = []
         for index in 0..<LoosenProposalLedger.maxPending {
             records = try LoosenProposalLedger.propose(
-                .packOff(pack: "core.p\(index)"), from: nil, cwd: nil, records: records, now: Self.now).records
+                .packOff(pack: "core.p\(index)"), from: "agent\(index)", cwd: nil, records: records, now: Self.now).records
         }
         #expect(throws: LoosenProposalError.full) {
-            try LoosenProposalLedger.propose(.safetyNormal, from: nil, cwd: nil, records: records, now: Self.now)
+            try LoosenProposalLedger.propose(.safetyNormal, from: "another", cwd: nil, records: records, now: Self.now)
         }
+    }
+
+    /// Security review L1: one proposer cannot fill every slot.
+    @Test func oneProposerHoldsAtMostItsShare() throws {
+        var records: [LoosenProposal] = []
+        for index in 0..<LoosenProposalLedger.maxPendingPerProposer {
+            records = try LoosenProposalLedger.propose(
+                .packOff(pack: "core.p\(index)"), from: "claude", cwd: nil, records: records, now: Self.now).records
+        }
+        #expect(throws: LoosenProposalError.full) {
+            try LoosenProposalLedger.propose(.safetyNormal, from: "claude", cwd: nil, records: records, now: Self.now)
+        }
+        let other = try LoosenProposalLedger.propose(.safetyNormal, from: "codex", cwd: nil, records: records, now: Self.now)
+        #expect(other.created)
+    }
+
+    /// Security review L1: the same change is one proposal, whoever filed it
+    /// from wherever.
+    @Test func theSameChangeFromAnotherProposerOrPlaceIsTheSameProposal() throws {
+        let first = try LoosenProposalLedger.propose(Self.change, from: "claude", cwd: "~/a", records: [], now: Self.now)
+        let again = try LoosenProposalLedger.propose(Self.change, from: "codex", cwd: "~/b", records: first.records, now: Self.now)
+        #expect(again.created == false)
+        #expect(again.proposal.id == first.proposal.id)
+        #expect(again.records.count == 1)
+    }
+
+    /// Security review L2: filing and deciding report what their sweep ended.
+    @Test func filingAndDecidingReportWhatExpired() throws {
+        let old = try LoosenProposalLedger.propose(Self.change, from: nil, cwd: nil, records: [], now: Self.now)
+        let later = Self.now.addingTimeInterval(LoosenProposalLedger.lifetime + 1)
+        let filed = try LoosenProposalLedger.propose(.safetyNormal, from: nil, cwd: nil, records: old.records, now: later)
+        #expect(filed.expired.map(\.id) == [old.proposal.id])
+        let next = try LoosenProposalLedger.propose(.packOff(pack: "core.git"), from: nil, cwd: nil, records: old.records,
+            now: Self.now.addingTimeInterval(LoosenProposalLedger.lifetime / 2))
+        let decided = try LoosenProposalLedger.decide(
+            next.proposal.id, shownHash: next.proposal.contentHash, to: .rejected, records: next.records, now: later)
+        #expect(decided.expired.map(\.id) == [old.proposal.id])
     }
 
     @Test func oldProposalsExpireAndCannotBeApproved() throws {

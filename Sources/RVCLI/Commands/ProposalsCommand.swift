@@ -114,8 +114,10 @@ struct ProposalsReject: AsyncParsableCommand {
         let proposal = try ProposalsRun.parseID(id, command: command)
         try ProposalsRun.requireOwnerTerminal(command: command, format: format)
         let item = try await ProposalsRun.pendingItem(proposal, command: command)
+        // Where rvd checks a password, a decline needs it too.
+        let proof = try ProposalsRun.ownerProof(for: item, verb: "decline")
         let answer = await LoosenRoute.service().decideProposal(DecideProposalParams(
-            id: item.id, contentHash: item.contentHash, decision: .reject, reason: reason,
+            id: item.id, contentHash: item.contentHash, decision: .reject, reason: reason, proof: proof,
             clientSemver: ProtocolVersion.serviceSemver))
         let reply = try ProposalsRun.reply(answer, command: command)
         guard reply.outcome == .rejected else {
@@ -179,19 +181,19 @@ enum ProposalsRun {
     /// Linux: the owner's login password, read from the terminal for rvd
     /// to check. macOS: none (rvd shows its own prompt). A test context
     /// reads no terminal and sends none; rvd's check still decides.
-    static func ownerProof(for item: ProposalItem) throws -> OwnerProof? {
+    static func ownerProof(for item: ProposalItem, verb: String = "approve") throws -> OwnerProof? {
         #if canImport(LocalAuthentication)
         return nil
         #else
         if CLIProcess.context != nil { return nil }
         if let locked = OwnerConfirmation.refusalIfAccountLocked() {
-            try CommandContext.fail("rv: approving \(item.id) was not done: \(locked)\n", exitCode: OwnerConfirmation.refusalExitCode)
+            try CommandContext.fail("rv: \(verb) \(item.id) was not done: \(locked)\n", exitCode: OwnerConfirmation.refusalExitCode)
         }
         guard let password = OwnerConfirmation.ownerPasswordForRvd(
-            prompt: "rv: approve \(item.id) [\(item.contentHash.prefix(12))]\nPassword for \(UserName.current ?? "your account"): ")
+            prompt: "rv: \(verb) \(item.id) [\(item.contentHash.prefix(12))]\nPassword for \(UserName.current ?? "your account"): ")
         else {
             try CommandContext.fail(
-                "rv: approving \(item.id) needs your login password at an interactive terminal\n",
+                "rv: \(verb) \(item.id) needs your login password at an interactive terminal\n",
                 exitCode: OwnerConfirmation.refusalExitCode)
         }
         return OwnerProof(password: password)

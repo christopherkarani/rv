@@ -89,6 +89,20 @@ struct LoosenProposalServiceTests {
             peer: .socketPeer(processID: 4242, effectiveUserID: UInt32(geteuid()), connectionID: id), connectionID: id)
     }
 
+    /// The pinned rv CLI, running as rvd's user: the only caller that may
+    /// decide where rvd shows its own prompt.
+    static func cli() -> AuthenticatedRequestContext {
+        let code = PeerCodeIdentity(identifier: "dev.rv.cli", teamIdentifier: "TEAM", cdHash: Data([1]),
+            executablePath: "/usr/local/bin/rv", isAdHoc: false, hardenedRuntime: true, injectionExceptions: [])
+        let id = UUID()
+        return .captured(
+            peer: AuthenticatedPeer(
+                evidence: PlatformPeerEvidence(processID: 7, effectiveUserID: UInt32(geteuid()), auditToken: Data([7]),
+                    codeIdentity: code, componentRole: .cli),
+                connectionID: id),
+            connectionID: id)
+    }
+
     static let change = PolicyLoosen.allowRule(rule: "core.git:reset-hard", reason: "rebasing the release branch")
 
     static func call(_ runtime: ServiceRuntime, _ method: IPCMethod,
@@ -108,7 +122,7 @@ struct LoosenProposalServiceTests {
 
     static func decide(
         _ runtime: ServiceRuntime, _ item: ProposalItem, _ decision: DecideProposalParams.Decision,
-        hash: String? = nil, proof: OwnerProof? = nil, context: AuthenticatedRequestContext = agent()
+        hash: String? = nil, proof: OwnerProof? = nil, context: AuthenticatedRequestContext = cli()
     ) async -> DecideProposalReply? {
         let result = await call(runtime, .decideProposal(DecideProposalParams(
             id: item.id, contentHash: hash ?? item.contentHash, decision: decision, proof: proof,
@@ -152,6 +166,82 @@ struct LoosenProposalServiceTests {
         #expect(reply.proposal?.status == .rejected)
         #expect(applied.count == 0)
         #expect(prompt.shown.isEmpty)
+    }
+
+    // MARK: security review M2 / L3
+
+    /// Where rvd shows its own prompt, an agent's process cannot decide:
+    /// it never picks the moment the owner's prompt appears.
+    @Test func anAgentCannotApproveOrDeclineWhereRvdPrompts() async throws {
+        let applied = Applied()
+        let prompt = Prompt(approve: true)
+        let fixture = try Self.fixture(prompt: prompt, applier: applied.applier)
+        let item = try await Self.propose(fixture.runtime)
+        for decision in [DecideProposalParams.Decision.approve, .reject] {
+            let result = await Self.call(fixture.runtime, .decideProposal(DecideProposalParams(
+                id: item.id, contentHash: item.contentHash, decision: decision,
+                clientSemver: ProtocolVersion.serviceSemver)), context: Self.agent())
+            #expect(result == .error(.authorizationDenied))
+        }
+        #expect(prompt.shown.isEmpty)
+        #expect(applied.count == 0)
+        #expect(try fixture.store.list(now: Date()).all.first?.status == .pending)
+    }
+
+    /// Where rvd checks a password, a decline needs it too.
+    @Test func withoutRvdsPromptDecliningNeedsTheOwnersPassword() async throws {
+        let fixture = try Self.fixture(prompt: nil, password: Password(accepted: "secret"), applier: Applied().applier)
+        let item = try await Self.propose(fixture.runtime)
+        let none = try #require(await Self.decide(fixture.runtime, item, .reject, context: Self.agent()))
+        #expect(none.outcome == .ownerRefused)
+        #expect(none.owner?.outcome == .proofRequired)
+        #expect(try fixture.store.list(now: Date()).all.first?.status == .pending)
+        let right = try #require(await Self.decide(
+            fixture.runtime, item, .reject, proof: OwnerProof(password: "secret"), context: Self.agent()))
+        #expect(right.outcome == .rejected)
+    }
+
+    /// One prompt per proposal, and not again right away.
+    @Test func theOwnersPromptForOneProposalIsRateLimited() async throws {
+        let prompt = Prompt(approve: false)
+        let fixture = try Self.fixture(prompt: prompt, applier: Applied().applier)
+        let item = try await Self.propose(fixture.runtime)
+        #expect(await Self.decide(fixture.runtime, item, .approve)?.owner?.outcome == .declined)
+        let again = try #require(await Self.decide(fixture.runtime, item, .approve))
+        #expect(again.outcome == .ownerRefused)
+        #expect(again.owner?.outcome == .busy)
+        #expect(prompt.shown.count == 1)
+    }
+
+    /// Rows carry full commands and paths: only rvd's own user reads them.
+    @Test func anotherUserCannotFileListOrDecide() async throws {
+        let fixture = try Self.fixture(applier: Applied().applier)
+        let id = UUID()
+        let stranger = AuthenticatedRequestContext.captured(
+            peer: .socketPeer(processID: 99, effectiveUserID: UInt32(geteuid()) &+ 1, connectionID: id), connectionID: id)
+        let listed = await Self.call(fixture.runtime, .listProposals(ListProposalsParams()), context: stranger)
+        #expect(listed == .error(.authorizationDenied))
+        let filed = await Self.call(fixture.runtime, .proposeLoosen(ProposeLoosenParams(
+            change: Self.change, from: nil, cwd: nil, clientSemver: ProtocolVersion.serviceSemver)), context: stranger)
+        #expect(filed == .error(.authorizationDenied))
+    }
+
+    /// A change too long for the prompt is shown from its start, marked
+    /// cut, with the fingerprint; never "shown in your terminal".
+    @Test func aLongCommandIsShownFromItsStartWithTheFingerprint() throws {
+        let command = "echo " + String(repeating: "a", count: 900)
+        let record = LoosenProposal(
+            id: ProposalID(number: 3), change: .allowCommand(command: command, reason: "r"), from: nil, cwd: nil,
+            createdAt: Date(),
+            contentHash: LoosenProposalLedger.contentHash(
+                id: ProposalID(number: 3), change: .allowCommand(command: command, reason: "r"), from: nil, cwd: nil))
+        let prompt = LoosenProposalService.prompt(for: record)
+        #expect(prompt.unicodeScalars.count <= ConfirmOwnerActionParams.maxSummaryBytes)
+        #expect(prompt.hasPrefix("approve rv proposal p-3: the exact command "))
+        #expect(prompt.contains("echo aaaa"))
+        #expect(prompt.contains("… (cut; rv proposals p-3 shows all of it)"))
+        #expect(prompt.hasSuffix("[\(record.fingerprint)]"))
+        #expect(prompt.contains("shown in your terminal") == false)
     }
 
     @Test func anUnauthenticatedCallerCannotFileListOrDecide() async throws {
@@ -335,7 +425,7 @@ struct LoosenProposalServiceTests {
             change: .packOff(pack: "core.nope"), from: nil, cwd: nil, clientSemver: ProtocolVersion.serviceSemver)))
         guard case .proposeLoosen(let reply) = result else { Issue.record("\(result)"); return }
         #expect(reply.outcome == .invalid)
-        #expect(reply.problem == "core.nope is not a pack, category or preset")
+        #expect(reply.problem == "core.nope is not a pack id")
     }
 
     // MARK: events

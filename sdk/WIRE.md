@@ -196,9 +196,9 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 13 | `policyStatus` | `PolicyStatusParams` | `PolicyStatusReply` | Read-only diagnostic (additive, `sdk/VERSIONING.md` §3). Python SDK: raw-only. See §4.6. |
 | 14 | `events` | `EventsParams` | `EventsReply` | Live decisions, asks and resolutions; long poll up to 5 s. **Owner only**: a peer whose uid is not rvd's gets `authorizationDenied`; asks, resolutions and session ids only for callers `pendingList` admits. Additive; not in the Python SDK yet (Swift clients: `EventsCall`). See §4.7. |
-| 15 | `proposeLoosen` | `ProposeLoosenParams` | `ProposeLoosenReply` | Files one loosen as a proposal; never applies. Any kernel-attested peer. Implicit-hello eligible. See §4.8. |
-| 16 | `listProposals` | `ListProposalsParams` | `ListProposalsReply` | Read-only. Any kernel-attested peer. See §4.8. |
-| 17 | `decideProposal` | `DecideProposalParams` | `DecideProposalReply` | `reject` needs a kernel-attested peer; `approve` is applied only after rvd's own owner check on rvd's text for the stored row, bound by `contentHash`. Implicit-hello eligible. See §4.8. |
+| 15 | `proposeLoosen` | `ProposeLoosenParams` | `ProposeLoosenReply` | Files one loosen as a proposal; never applies. A kernel-attested peer running as rvd's user. Implicit-hello eligible. See §4.8. |
+| 16 | `listProposals` | `ListProposalsParams` | `ListProposalsReply` | Read-only. A kernel-attested peer running as rvd's user. See §4.8. |
+| 17 | `decideProposal` | `DecideProposalParams` | `DecideProposalReply` | A peer running as rvd's user; where rvd shows its own prompt (macOS) only the pinned CLI, else the owner's password for `approve` and `reject` alike. `approve` is applied only after rvd's own owner check on rvd's text for the stored row, bound by `contentHash`. Implicit-hello eligible. See §4.8. |
 
 ### 4.1 Evaluate family
 
@@ -359,16 +359,17 @@ approves that exact proposal.
 
 - `PolicyLoosen{kind, ...}`, a closed set decoded strictly (an unknown kind or
   any extra key fails): `allowRule{rule, reason}`, `allowCommand{command,
-  reason}`, `safetyNormal{}`, `packOff{pack}`. Bounds: ids 128 bytes, command
+  reason}`, `safetyNormal{}`, `packOff{pack}` (one exact pack id: the CLI files a
+  category or preset as one proposal per pack in it). Bounds: ids 128 bytes, command
   4096, reason 280; `from`/`cwd` labels 1024 (stored cut to 256).
 - `ProposalItem{id: "p-N", change, from?, cwd?, createdAtMs, contentHash,
   status: pending|approved|rejected|expired, decidedAtMs?, declineReason?}`.
   `contentHash` is SHA-256 hex over a length-prefixed encoding of
   `rv.loosen.v1`, id, the change's fields, `from` and `cwd`.
 - `proposeLoosen` -> `{outcome: filed|invalid|full|unavailable, proposal?,
-  created, problem?}`. The same pending change and labels return the existing
-  proposal (`created: false`). At most 32 pending; a pending one expires after
-  7 days.
+  created, problem?}`. The same pending change returns the existing proposal
+  (`created: false`), whoever filed it. At most 32 pending, and 8 per `from`;
+  a pending one expires after 7 days.
 - `decideProposal{id, contentHash, decision: approve|reject, reason?, proof?,
   clientSemver}` -> `{outcome: approved|rejected|changed|notFound|notPending|
   ownerRefused|invalid|applyFailed|unavailable, proposal?, owner?, problem?}`.
@@ -377,9 +378,16 @@ approves that exact proposal.
   rvd's owner check (macOS: rvd's prompt; Linux: `proof.password`) with rvd's
   own text (`approve rv proposal p-N: <change> [<fingerprint>]`), then
   re-checks the hash under the store lock, applies and marks it approved;
-  a failed apply leaves it pending (`applyFailed`).
+  a failed apply leaves it pending (`applyFailed`). A change too long for the
+  prompt is shown from its start, marked cut, with the fingerprint. Where rvd
+  shows its own prompt, only the pinned CLI may decide (else
+  `authorizationDenied`), one prompt per proposal at a time and not again
+  within 10 s (`ownerRefused` with `owner.outcome: busy`); where rvd checks a
+  password, `reject` needs `proof.password` too. The hash has no key: what
+  binds an approval is that the row still hashes to the hash the owner was
+  shown.
 - Live event kind `proposal`: `{id, status, kind, from?}`, published on filing,
-  approving, declining and expiry; visible only to callers `pendingList`
+  approving, declining and every expiry rvd's sweeps find; visible only to callers `pendingList`
   admits.
 - Skew: an rvd from before these methods answers `decodeFailed`; the CLI then
   refuses the loosen (nothing changes).

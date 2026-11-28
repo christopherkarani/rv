@@ -73,6 +73,9 @@ public enum LoosenProposalLedger {
     /// Pending proposals one machine holds at most: an agent cannot bury
     /// the owner's list.
     public static let maxPending = 32
+    /// Pending proposals one proposer (`from`) holds at most, so one agent
+    /// cannot fill every slot for a week.
+    public static let maxPendingPerProposer = 8
     /// Decided rows kept for `rv proposals` history.
     public static let maxDecided = 200
     /// A pending proposal expires after this long.
@@ -126,26 +129,31 @@ public enum LoosenProposalLedger {
         return (swept, expired)
     }
 
-    /// Adds a proposal, or returns the pending one with the same change and
-    /// labels (`created == false`). Throws `.invalid` and `.full`.
+    /// Adds a proposal, or returns the pending one with the same change
+    /// (`created == false`), whoever filed it from wherever: the owner sees
+    /// each change once. Throws `.invalid` and `.full`. `expired` is what
+    /// the sweep ended now, for rvd to announce.
     public static func propose(
         _ change: PolicyLoosen, from: String?, cwd: String?, records: [LoosenProposal], now: Date
-    ) throws(LoosenProposalError) -> (proposal: LoosenProposal, records: [LoosenProposal], created: Bool) {
+    ) throws(LoosenProposalError) -> (
+        proposal: LoosenProposal, records: [LoosenProposal], created: Bool, expired: [LoosenProposal]
+    ) {
         if let problem = change.problem { throw .invalid(problem) }
         let from = label(from)
         let cwd = label(cwd)
-        let (swept, _) = sweep(records, now: now)
-        if let existing = swept.first(where: {
-            $0.status == .pending && $0.change == change && $0.from == from && $0.cwd == cwd
-        }) {
-            return (existing, swept, false)
+        let (swept, expired) = sweep(records, now: now)
+        if let existing = swept.first(where: { $0.status == .pending && $0.change == change }) {
+            return (existing, swept, false, expired)
         }
-        guard swept.filter({ $0.status == .pending }).count < maxPending else { throw .full }
+        let pending = swept.filter { $0.status == .pending }
+        guard pending.count < maxPending, pending.filter({ $0.from == from }).count < maxPendingPerProposer else {
+            throw .full
+        }
         let id = ProposalID(number: (swept.map(\.id.number).max() ?? 0) + 1)
         let proposal = LoosenProposal(
             id: id, change: change, from: from, cwd: cwd, createdAt: now,
             contentHash: contentHash(id: id, change: change, from: from, cwd: cwd))
-        return (proposal, prune(swept + [proposal]), true)
+        return (proposal, prune(swept + [proposal]), true, expired)
     }
 
     /// The pending proposal `id`, only while its content still hashes to
@@ -161,13 +169,14 @@ public enum LoosenProposalLedger {
         return record
     }
 
-    /// Marks `id` decided, compare-and-set on `shownHash`.
+    /// Marks `id` decided, compare-and-set on `shownHash`. `expired` is
+    /// what the sweep ended now.
     public static func decide(
         _ id: ProposalID, shownHash: String, to status: ProposalStatus, declineReason: String? = nil,
         records: [LoosenProposal], now: Date
-    ) throws(LoosenProposalError) -> (proposal: LoosenProposal, records: [LoosenProposal]) {
+    ) throws(LoosenProposalError) -> (proposal: LoosenProposal, records: [LoosenProposal], expired: [LoosenProposal]) {
         precondition(status == .approved || status == .rejected, "decide only approves or rejects")
-        let (swept, _) = sweep(records, now: now)
+        let (swept, expired) = sweep(records, now: now)
         var record = try pending(id, shownHash: shownHash, in: swept)
         record.status = status
         record.decidedAt = now
@@ -179,7 +188,7 @@ public enum LoosenProposalLedger {
             }
         }
         let next = swept.map { $0.id == id ? record : $0 }
-        return (record, prune(next))
+        return (record, prune(next), expired)
     }
 
     /// Keeps every pending row and the newest `maxDecided` decided rows.

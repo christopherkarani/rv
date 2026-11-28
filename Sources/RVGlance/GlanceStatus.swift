@@ -57,6 +57,7 @@ extension GlanceReader {
             state.markDown(failure.reason, at: now)
             return state
         }
+        if case .success(let ids) = await pendingProposals() { state.replaceProposals(ids) }
         switch await events(EventsParams(after: 0, waitMs: 0)) {
         case .events(let reply):
             state.apply(reply, now: now, calendar: calendar)

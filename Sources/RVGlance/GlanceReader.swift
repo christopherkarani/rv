@@ -20,19 +20,22 @@ public enum GlancePoll: Sendable, Equatable {
     case down(String)
 }
 
-/// The menu bar's only way to talk to rvd. It can ask for two things,
-/// live events and the pending list, and nothing else: the menu bar reads
+/// The menu bar's only way to talk to rvd. It can ask for three things,
+/// live events, the pending list and the loosen proposals waiting, and
+/// nothing else: the menu bar reads
 /// rv, it never changes it (no resolve, no rule, no mode, no pause).
 public struct GlanceReader: Sendable {
     /// The only methods the menu bar ever encodes.
     public enum Read: Sendable, Equatable {
         case events(EventsParams)
         case pendingList
+        case proposals
 
         public var method: IPCMethod {
             switch self {
             case .events(let params): .events(params)
             case .pendingList: .pendingList
+            case .proposals: .listProposals(ListProposalsParams())
             }
         }
     }
@@ -66,6 +69,21 @@ public struct GlanceReader: Sendable {
         switch await call(.pendingList, timeoutMs: Self.unaryTimeoutMs) {
         case .success(.pendingList(let reply)):
             return .success(Dictionary(reply.items.map { ($0.id, $0.host) }, uniquingKeysWith: { first, _ in first }))
+        case .success(let other):
+            return .failure(GlanceReadFailure(Self.describe(other)))
+        case .failure(let text):
+            return .failure(text)
+        }
+    }
+
+    /// The loosen proposals waiting for the owner (F2). An rvd that predates
+    /// proposals has none.
+    public func pendingProposals() async -> Result<Set<ProposalID>, GlanceReadFailure> {
+        switch await call(.proposals, timeoutMs: Self.unaryTimeoutMs) {
+        case .success(.listProposals(let reply)):
+            return .success(Set(reply.proposals.filter { $0.status == .pending }.map(\.id)))
+        case .success(.error(.unknownMethod)), .success(.error(.decodeFailed)):
+            return .success([])
         case .success(let other):
             return .failure(GlanceReadFailure(Self.describe(other)))
         case .failure(let text):

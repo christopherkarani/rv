@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import RVDomain
 import RVEngine
 import RVHistory
@@ -36,9 +37,10 @@ package struct LoosenApplier: Sendable {
                     return parseAllowlistRuleID(rule) == nil ? "\(rule) is not a rule id (pack:rule)" : nil
                 case .packOff(let pack):
                     guard let index = try? PackRegistry.loadIndex() else { return "rv cannot read its pack index" }
-                    // The names `rv packs disable` takes: a pack id, a category or a preset.
-                    return PacksFacade.knownSelections(index: index).contains(pack)
-                        ? nil : "\(pack) is not a pack, category or preset"
+                    // One exact pack id: what the owner approves is the one
+                    // pack that goes off. The CLI names each pack of a
+                    // category or preset as its own proposal.
+                    return index.packIDs.contains(where: { $0.rawValue == pack }) ? nil : "\(pack) is not a pack id"
                 case .allowCommand, .safetyNormal:
                     return nil
                 }
@@ -64,10 +66,34 @@ package struct LoosenApplier: Sendable {
                     case .safetyNormal:
                         try SafetyStore(configDirectory: configDirectory).saveMachine(.normal)
                     case .packOff(let pack):
+                        guard let index = try? PackRegistry.loadIndex(),
+                            index.packIDs.contains(where: { $0.rawValue == pack })
+                        else { throw LoosenProposalError.invalid("\(pack) is not a pack id") }
                         _ = try PacksFacade.disable(home: home, ids: [pack])
                     }
                 }
             })
+    }
+}
+
+/// One owner prompt per proposal at a time, and at most one per
+/// `interval` for the same proposal.
+final class ProposalPromptLimiter: Sendable {
+    static let interval: TimeInterval = 10
+    private let state = Mutex<(inFlight: Set<ProposalID>, last: [ProposalID: Date])>((inFlight: [], last: [:]))
+
+    func begin(_ id: ProposalID, now: Date) -> Bool {
+        state.withLock { state in
+            if state.inFlight.contains(id) { return false }
+            if let last = state.last[id], now.timeIntervalSince(last) < Self.interval, now >= last { return false }
+            state.inFlight.insert(id)
+            state.last[id] = now
+            return true
+        }
+    }
+
+    func end(_ id: ProposalID) {
+        _ = state.withLock { $0.inFlight.remove(id) }
     }
 }
 
@@ -83,6 +109,7 @@ package struct LoosenProposalService: Sendable {
     package let store: LoosenProposalStore?
     package let applier: LoosenApplier?
     package let publish: @Sendable (LiveEventPayload, Date) -> Void
+    let prompts = ProposalPromptLimiter()
 
     package init(
         store: LoosenProposalStore?, applier: LoosenApplier?,
@@ -110,6 +137,7 @@ package struct LoosenProposalService: Sendable {
         }
         switch filed {
         case .success(let result):
+            for expired in result.expired { announce(expired, at: now) }
             if result.created { announce(result.proposal, at: now) }
             return ProposeLoosenReply(outcome: .filed, proposal: Self.item(result.proposal), created: result.created)
         case .failure(.invalid(let problem)):
@@ -136,6 +164,8 @@ package struct LoosenProposalService: Sendable {
     package func decide(
         _ params: DecideProposalParams,
         now: @escaping @Sendable () -> Date,
+        declineNeedsOwner: Bool = false,
+        limitsPrompts: Bool = true,
         confirm: @Sendable (_ prompt: String) async -> (approved: Bool, reply: ConfirmOwnerActionReply)
     ) async -> DecideProposalReply {
         guard let store, let applier else { return DecideProposalReply(outcome: .unavailable) }
@@ -152,16 +182,25 @@ package struct LoosenProposalService: Sendable {
         }
         switch params.decision {
         case .reject:
-            let declined = await Self.offActor { () throws(LoosenProposalError) -> LoosenProposal in
+            // Where the password is the authority, a decline needs it too:
+            // no other process may decline the owner's proposals.
+            if declineNeedsOwner {
+                let owner = await confirm(Self.declinePrompt(for: record))
+                guard owner.approved else {
+                    return DecideProposalReply(outcome: .ownerRefused, proposal: Self.item(record), owner: owner.reply)
+                }
+            }
+            let declined = await Self.offActor { () throws(LoosenProposalError) -> (LoosenProposal, [LoosenProposal]) in
                 try store.update { records throws(LoosenProposalError) in
                     let result = try LoosenProposalLedger.decide(
                         params.id, shownHash: params.contentHash, to: .rejected, declineReason: params.reason,
                         records: records, now: now())
-                    return (result.proposal, result.records)
+                    return ((result.proposal, result.expired), result.records)
                 }
             }
             switch declined {
-            case .success(let row):
+            case .success(let (row, expired)):
+                for other in expired { announce(other, at: now()) }
                 announce(row, at: now())
                 return DecideProposalReply(outcome: .rejected, proposal: Self.item(row))
             case .failure(let error):
@@ -172,7 +211,16 @@ package struct LoosenProposalService: Sendable {
             if let problem = applier.problem(record.change) {
                 return DecideProposalReply(outcome: .invalid, proposal: Self.item(record), problem: problem)
             }
+            // One prompt per proposal at a time, and not again within
+            // `promptInterval`: a caller cannot keep the owner's prompt up.
+            if limitsPrompts {
+                guard prompts.begin(record.id, now: now()) else {
+                    return DecideProposalReply(
+                        outcome: .ownerRefused, proposal: Self.item(record), owner: ConfirmOwnerActionReply(outcome: .busy))
+                }
+            }
             let owner = await confirm(Self.prompt(for: record))
+            if limitsPrompts { prompts.end(record.id) }
             guard owner.approved else {
                 return DecideProposalReply(outcome: .ownerRefused, proposal: Self.item(record), owner: owner.reply)
             }
@@ -180,7 +228,7 @@ package struct LoosenProposalService: Sendable {
             // Compare-and-set under the store lock, then apply, then save:
             // a row that changed while the owner read the prompt is refused,
             // and a failed apply leaves the row pending.
-            let applied = await Self.offActor { () throws(LoosenProposalError) -> LoosenProposal in
+            let applied = await Self.offActor { () throws(LoosenProposalError) -> (LoosenProposal, [LoosenProposal]) in
                 try store.update { records throws(LoosenProposalError) in
                     let result = try LoosenProposalLedger.decide(
                         params.id, shownHash: params.contentHash, to: .approved, records: records, now: now())
@@ -189,11 +237,12 @@ package struct LoosenProposalService: Sendable {
                     } catch {
                         throw .applyFailed(Self.applyProblem(error))
                     }
-                    return (result.proposal, result.records)
+                    return ((result.proposal, result.expired), result.records)
                 }
             }
             switch applied {
-            case .success(let row):
+            case .success(let (row, expired)):
+                for other in expired { announce(other, at: now()) }
                 announce(row, at: now())
                 return DecideProposalReply(outcome: .approved, proposal: Self.item(row), owner: owner.reply)
             case .failure(.applyFailed(let problem)):
@@ -208,14 +257,30 @@ package struct LoosenProposalService: Sendable {
     // MARK: - Pure helpers
 
     /// rvd's prompt for approving `record`: rv's words for the change and
-    /// the fingerprint the terminal shows, never the agent's text. Escaped
-    /// for an approval prompt; a command too long to show whole is named
-    /// by fingerprint only, never cut.
+    /// the fingerprint `rv proposals` shows, never the agent's text.
+    /// Escaped for an approval prompt. A change too long to show whole is
+    /// shown from its start, marked cut, with the fingerprint that names
+    /// all of it (`rv proposals <id>` prints it whole); the prompt never
+    /// claims the terminal showed anything.
     package static func prompt(for record: LoosenProposal) -> String {
+        "approve rv proposal \(record.id): \(fitted(record)) [\(record.fingerprint)]"
+    }
+
+    /// rvd's prompt for declining `record` (password platforms only).
+    package static func declinePrompt(for record: LoosenProposal) -> String {
+        "decline rv proposal \(record.id): \(fitted(record)) [\(record.fingerprint)]"
+    }
+
+    private static func fitted(_ record: LoosenProposal) -> String {
         let looser = DisplayedText.approvalField(record.change.looser)
-        let full = "approve rv proposal \(record.id): \(looser) [\(record.fingerprint)]"
-        if full.unicodeScalars.count <= ConfirmOwnerActionParams.maxSummaryBytes { return full }
-        return "approve rv proposal \(record.id): an allowlist exception for the exact command shown in your terminal [\(record.fingerprint)]"
+        let frame = "decline rv proposal \(record.id):  [\(record.fingerprint)]".unicodeScalars.count
+        let budget = ConfirmOwnerActionParams.maxSummaryBytes - frame
+        guard looser.unicodeScalars.count > budget else { return looser }
+        let marker = "… (cut; rv proposals \(record.id) shows all of it)"
+        let keep = max(0, budget - marker.unicodeScalars.count)
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: looser.unicodeScalars.prefix(keep))
+        return String(scalars) + marker
     }
 
     package static func authorization(presence: ConfirmOwnerActionReply.Presence?, id: ProposalID) -> String {

@@ -464,7 +464,11 @@ public actor ServiceRuntime {
         case .listProposals(let params):
             result = .listProposals(await proposals.list(params, now: clock()))
         case .decideProposal(let params):
-            result = .decideProposal(await decideProposal(params, context: context))
+            if Self.decidesProposals(context: context, rvdPromptsItself: ownerPresence.promptsItself) {
+                result = .decideProposal(await decideProposal(params, context: context))
+            } else {
+                result = .error(.authorizationDenied)
+            }
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -522,6 +526,18 @@ public actor ServiceRuntime {
         )
     }
 
+    /// Who may approve or decline a proposal (security review M2). Where
+    /// rvd shows its own prompt (macOS), only the pinned CLI: any other
+    /// process, an agent's included, could otherwise choose the moment the
+    /// owner's Touch ID panel appears, or take the one prompt slot first.
+    /// Where rvd checks a password (Linux, where socket peers carry no
+    /// role), the owner's password in the request is the authority, for a
+    /// decline too (`LoosenProposalService.decide`).
+    package static func decidesProposals(context: AuthenticatedRequestContext, rvdPromptsItself: Bool) -> Bool {
+        guard context.peer != nil else { return false }
+        return rvdPromptsItself == false || context.componentRole == .cli
+    }
+
     /// Approve or decline one loosen proposal. Approving runs the same
     /// owner check and audit as `confirmOwnerAction`, on rvd's own prompt
     /// for the stored row; an approval rvd could not record is not given.
@@ -530,7 +546,10 @@ public actor ServiceRuntime {
     ) async -> DecideProposalReply {
         let presence = ownerPresence
         let home = configHome
-        return await proposals.decide(params, now: clock) { prompt in
+        return await proposals.decide(
+            params, now: clock, declineNeedsOwner: presence.promptsItself == false,
+            limitsPrompts: presence.promptsItself
+        ) { prompt in
             let reply: ConfirmOwnerActionReply
             switch await presence.confirm(prompt, proof: params.proof, context: context) {
             case .approved:

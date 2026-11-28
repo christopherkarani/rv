@@ -5,8 +5,13 @@ import RVFileStore
 /// Durable loosen proposals (`loosen-proposals.jsonl`, owner-only, in the
 /// rv config directory). Only rvd writes it: agents file proposals through
 /// rvd, never by writing here, and the self-protection guard keeps them
-/// out of rv's config directory. A row edited behind rvd's back no longer
-/// hashes to the hash rvd recorded, so it can never be approved.
+/// out of rv's config directory. The content hash has no key, so a writer
+/// who can edit this file can also recompute it: the hash is not what
+/// protects a row. What does is that rvd applies a row only when its
+/// content still hashes to the hash the owner was shown (`rv proposals`
+/// prints it, and rvd's own prompt names it), checked again under the
+/// store lock after the owner answers. A row edited after it was shown
+/// is refused as changed.
 public struct LoosenProposalStore: Sendable {
     public let configDirectory: URL
     private let file: FileLockedJSONLStore<LoosenProposal>
@@ -42,13 +47,14 @@ public struct LoosenProposalStore: Sendable {
         }
     }
 
-    /// Files `change`. Returns the proposal and whether it is new.
+    /// Files `change`. Returns the proposal, whether it is new, and the
+    /// rows the expiry sweep ended now.
     public func propose(
         _ change: PolicyLoosen, from: String?, cwd: String?, now: Date
-    ) throws(LoosenProposalError) -> (proposal: LoosenProposal, created: Bool) {
+    ) throws(LoosenProposalError) -> (proposal: LoosenProposal, created: Bool, expired: [LoosenProposal]) {
         try update { records throws(LoosenProposalError) in
             let result = try LoosenProposalLedger.propose(change, from: from, cwd: cwd, records: records, now: now)
-            return ((result.proposal, result.created), result.records)
+            return ((result.proposal, result.created, result.expired), result.records)
         }
     }
 

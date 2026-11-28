@@ -77,6 +77,7 @@ struct GlanceFeedTests {
         let replies = Mutex([stream, restarted])
         let wire = FakeWire { method in
             if case .pendingList = method { return .pendingList(PendingListReply(generation: 1, items: [])) }
+            if case .listProposals = method { return .listProposals(ListProposalsReply(proposals: [])) }
             let next = replies.withLock { $0.isEmpty ? restarted : $0.removeFirst() }
             return .events(EventsReply(stream: next, cursor: 1, resync: next == restarted, events: [Self.denied(1)]))
         }

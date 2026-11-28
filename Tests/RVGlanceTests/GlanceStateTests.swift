@@ -130,6 +130,17 @@ struct GlanceStateTests {
         #expect(state.glyph(at: now) == .guarding)
     }
 
+    /// Security review L2: proposals are seeded from `listProposals`, and
+    /// a dead rvd clears them.
+    @Test func proposalsAreSeededAndClearedWhenRvdGoesDown() {
+        var state = GlanceState(now: now, calendar: calendar)
+        state.apply(reply([]), now: now, calendar: calendar)
+        state.replaceProposals([ProposalID(rawValue: "p-4")!])
+        #expect(state.glyph(at: now) == .needsYou)
+        state.markDown("gone", at: now)
+        #expect(state.proposals.isEmpty)
+    }
+
     @Test func unknownEventsAndMissedCountsAreKept() {
         var state = GlanceState(now: now, calendar: calendar)
         state.apply(EventsReply(stream: stream, cursor: 9, missed: 3, events: [
