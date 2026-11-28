@@ -38,7 +38,7 @@ public struct StopVoice: Sendable {
     public var owner: OwnerName
     /// The pack advice for a rule id, or nil.
     public var advice: @Sendable (RuleID) -> StopAdvice?
-    /// How many stops of this rule the session has hit in a row, this one
+    /// How many stops of this rule the session has hit lately, this one
     /// included (B5); 0 when nothing counted.
     public var streak: Int
 

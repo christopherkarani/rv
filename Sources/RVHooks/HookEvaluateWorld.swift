@@ -28,7 +28,7 @@ public struct HookEvaluateWorld: Sendable {
     /// it is.
     public var saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
     /// B5: counts one stop shown to an agent session and returns how many
-    /// stops of the same rule that session has hit in a row, this one
+    /// stops of the same rule that session has hit lately, this one
     /// included. rvd keeps the count in memory; nil (tests, the C hook's
     /// own worlds) counts nothing, and every stop reads as a first.
     public var countStop: (@Sendable (StopStreakKey) -> Int)?

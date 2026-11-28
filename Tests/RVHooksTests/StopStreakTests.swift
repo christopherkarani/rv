@@ -28,9 +28,9 @@ struct StopStreakTests {
     @Test func thirdStop_saysSoCalmlyBeforeWho() throws {
         let text = try #require(Self.text(streak: 3))
         let lines = text.split(separator: "\n").map(String.init)
-        #expect(lines.suffix(2).first == "again   3 stops for this in a row. Rephrasing won't get through; stop here.")
+        #expect(lines.suffix(2).first == "again   3 tries stopped by this rule. Rephrasing won't get through.")
         #expect(lines.last?.hasPrefix("who     ") == true)
-        #expect(try #require(Self.text(streak: 7)).contains("again   7 stops for this in a row."))
+        #expect(try #require(Self.text(streak: 7)).contains("again   7 tries stopped by this rule."))
     }
 
     /// Acceptance: still one instruction, the rule id, and no way past.
@@ -53,7 +53,7 @@ struct StopStreakTests {
             path: FileToolPath(rawValue: "/Users/c/.ssh/id_ed25519"),
             deny: Deny(ruleID: RuleID(pack: .coreSecrets, pattern: "ssh-key"), reason: "x"),
             voice: StopVoice(owner: .unknown, streak: 4)).text
-        #expect(text.contains("\nagain   4 stops for this in a row."))
+        #expect(text.contains("\nagain   4 tries stopped by this rule."))
     }
 
     // MARK: - Counting through the hook door
@@ -94,9 +94,9 @@ struct StopStreakTests {
             let wire = await hookWire(host: .claude, stdin: Self.payload(command, session: "s1"), world: Self.world(tally))
             outputs.append(wire.stdout + wire.stderr)
         }
-        #expect(outputs[0].contains("stops for this in a row") == false)
-        #expect(outputs[1].contains("stops for this in a row") == false)
-        #expect(outputs[2].contains("3 stops for this in a row"))
+        #expect(outputs[0].contains("tries stopped by this rule") == false)
+        #expect(outputs[1].contains("tries stopped by this rule") == false)
+        #expect(outputs[2].contains("3 tries stopped by this rule"))
         #expect(tally.all.map(\.rule) == Array(repeating: Self.rule.rawValue, count: 3))
         #expect(Set(tally.all.map(\.host)) == [.claude])
     }
@@ -107,7 +107,7 @@ struct StopStreakTests {
             _ = await hookWire(host: .claude, stdin: Self.payload("git reset --hard", session: session), world: Self.world(tally))
         }
         let wire = await hookWire(host: .claude, stdin: Self.payload("git reset --hard", session: "b"), world: Self.world(tally))
-        #expect((wire.stdout + wire.stderr).contains("stops for this in a row") == false)
+        #expect((wire.stdout + wire.stderr).contains("tries stopped by this rule") == false)
     }
 
     @Test func noSessionOrAnAllow_countsNothing() async {

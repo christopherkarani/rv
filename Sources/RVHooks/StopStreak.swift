@@ -4,12 +4,13 @@ import RVDomain
 //
 // An agent that rephrases a stopped command usually lands on the same rule
 // again (`git restore .`, then `git checkout -- .`, then `git checkout .`).
-// From the third stop of one rule in a row in one session, the stop says
+// From the third stop under one rule in one session (each within 10
+// minutes of the last), the stop says
 // so, calmly, on its own line before `who`:
 //
 //     ✕ Stopped   git checkout . (core.git/checkout-discard)
 //     why     discards uncommitted changes
-//     again   3 stops for this in a row. Rephrasing won't get through; stop here.
+//     again   3 tries stopped by this rule. Rephrasing won't get through.
 //     who     ask Chris to run  rv allow-once a7c835
 //
 // The note is not a second instruction: `who` stays the one step, and the
@@ -40,7 +41,7 @@ public let stopStreakNoticeFrom = 3
 /// The `again` line's text for a streak, or nil below `stopStreakNoticeFrom`.
 public func stopStreakNote(_ streak: Int) -> String? {
     guard streak >= stopStreakNoticeFrom else { return nil }
-    return "\(streak) stops for this in a row. Rephrasing won't get through; stop here."
+    return "\(streak) tries stopped by this rule. Rephrasing won't get through."
 }
 
 /// The key a stop of `result` counts under, or nil when it is not counted.

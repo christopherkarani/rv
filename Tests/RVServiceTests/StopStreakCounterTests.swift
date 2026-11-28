@@ -37,7 +37,7 @@ struct StopStreakCounterTests {
         let counter = StopStreakCounter()
         _ = counter.record(Self.key("oldest"), now: start)
         _ = counter.record(Self.key("oldest"), now: start)
-        for index in 0..<StopStreakCounter.maximumSessions {
+        for index in 0..<StopStreakCounter.maximumKeys {
             _ = counter.record(Self.key("s\(index)"), now: start.addingTimeInterval(Double(index + 1) * 0.001))
         }
         // Within the window: kept, it would read 3.
