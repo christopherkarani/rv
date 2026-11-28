@@ -11,11 +11,13 @@ _rv() {
     'try:Watch rv stop a fake agent in a throwaway repo'
     'term:Watch what rv is doing, full screen'
     'wait:Wait for the answer to a stop'
+    'pause:Pause rv for a while (owner only)'
     'explain:Explain a decision'
     'check:Check a plan before an agent runs it'
     'prompt:One glyph for your shell prompt'
     'news:What is new in this rv, measured on your week'
     'packs:List and enable packs'
+    'protect:Protect a tool'
     'policy:Typed rules'
     'scan:Session forensics'
     'allow-once:Mint and redeem single-use unlock codes'
@@ -46,7 +48,7 @@ _rv() {
       case $words[1] in
         box)
           local -a bx
-          bx=('list:List boxes' 'setup:Set up Mac boxes once')
+          bx=('list:List boxes' 'setup:Set up Mac boxes once' 'tidy:Move old box images to the trash')
           _describe -t commands 'box' bx
           ;;
         workspace)

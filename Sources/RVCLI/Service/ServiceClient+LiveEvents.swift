@@ -24,22 +24,58 @@ extension ServiceClient {
     /// error) answers `handshakeRequired`: the poll says hello on it and
     /// asks once more.
     public func liveEvents(_ params: EventsParams) async -> Result<LiveEventsPoll, ServiceCommandError> {
-        guard let transport = eventsTransport else { return .failure(.noTransport) }
+        switch await exchange(params) {
+        case .polled(let result):
+            return outcome(result)
+        case .noTransport:
+            return .failure(.noTransport)
+        case .helloRefused:
+            return .failure(.service("helloRefused"))
+        case .helloFailed(let text):
+            return .failure(.transport(text))
+        }
+    }
+
+    /// A live feed over this client's events channel (`LiveEventFeed`):
+    /// the cursor, reconnects, skew and cancellation handled.
+    public func liveFeed(
+        start: LiveFeedStart = .now, pacing: LiveFeedPacing = LiveFeedPacing()
+    ) -> LiveEventFeed<ServiceClient> {
+        LiveEventFeed(source: self, start: start, pacing: pacing)
+    }
+
+    private enum Exchange {
+        case polled(Result<EventsReply, PollFailure>)
+        case noTransport
+        case helloRefused
+        case helloFailed(String)
+    }
+
+    /// A cancelled poll stops at its next step: it sends nothing more, and
+    /// never invalidates `eventsTransport`, which a newer feed on this
+    /// client may already be using.
+    private func exchange(_ params: EventsParams) async -> Exchange {
+        guard let transport = eventsTransport else { return .noTransport }
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
         let first = await pollOnce(params, using: transport)
         guard case .failure(.service(.protocolSkew(.handshakeRequired))) = first else {
-            return outcome(first)
+            return .polled(first)
         }
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
         do {
             let ack = try await transport.hello(clientSemver: ProtocolVersion.serviceSemver)
+            if Task.isCancelled { return .polled(.failure(.cancelled)) }
             guard ack.status == .ok else {
                 transport.invalidate()
-                return .failure(.service("helloRefused"))
+                return .helloRefused
             }
         } catch {
+            if Task.isCancelled { return .polled(.failure(.cancelled)) }
             transport.invalidate()
-            return .failure(.transport(String(describing: error)))
+            return .helloFailed(String(describing: error))
         }
-        return outcome(await pollOnce(params, using: transport))
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
+        return .polled(await pollOnce(params, using: transport))
     }
 
     private func pollOnce(
@@ -63,6 +99,8 @@ extension ServiceClient {
         case service(IPCError)
         case call(IPCCallError)
         case transport(String)
+        /// The poll's task was cancelled before it finished.
+        case cancelled
     }
 
     private func outcome(_ result: Result<EventsReply, PollFailure>) -> Result<LiveEventsPoll, ServiceCommandError> {
@@ -77,6 +115,38 @@ extension ServiceClient {
             return .failure(mapCallError(error))
         case .failure(.transport(let text)):
             return .failure(.transport(text))
+        case .failure(.cancelled):
+            return .failure(.transport("cancelled"))
+        }
+    }
+}
+
+extension ServiceClient: LiveEventsPolling {
+    /// One poll, as `LiveEventFeed` reads it: an old rvd is `unsupported`,
+    /// a refused hello or a skewed frame is `skewed`, a non-owner is
+    /// `refused`, and anything else that is not a reply is `failed`.
+    public func pollLiveEvents(_ params: EventsParams) async -> LiveEventsPollResult {
+        switch await exchange(params) {
+        case .polled(.success(let reply)):
+            return .reply(reply)
+        case .polled(.failure(.service(let error))):
+            if EventsCall.isUnsupported(.error(error)) { return .unsupported }
+            switch error {
+            case .protocolSkew: return .skewed
+            case .authorizationDenied: return .refused
+            default: return .failed(String(describing: error))
+            }
+        case .polled(.failure(.call(let error))):
+            if case .transport(let text) = mapCallError(error) { return .failed(text) }
+            return .failed(String(describing: error))
+        case .polled(.failure(.transport(let text))), .helloFailed(let text):
+            return .failed(text)
+        case .polled(.failure(.cancelled)):
+            return .failed("cancelled")
+        case .helloRefused:
+            return .skewed
+        case .noTransport:
+            return .failed("noTransport")
         }
     }
 }

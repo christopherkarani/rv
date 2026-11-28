@@ -45,7 +45,7 @@ func mintedResetHardHostDeny(_ code: AllowOnceUnlockCode) -> String {
     """
     ✕ Stopped   git reset --hard (core.git/reset-hard)
     why     destroys uncommitted changes
-    who     ask your user to run  rv allow-once \(code.rawValue)
+    who     ask your user to run  rv allow-once \(code.rawValue)  (you can wait: rv wait \(code.rawValue))
     """
 }
 
@@ -136,7 +136,7 @@ private func words(_ text: String) -> Int {
         ✕ Stopped   git reset --hard origin/main (core.git/reset-hard)
         why     destroys uncommitted changes
         safer   git status
-        who     ask Christopher to run  rv allow-once a1b2c3
+        who     ask Christopher to run  rv allow-once a1b2c3  (you can wait: rv wait a1b2c3)
         """)
     let earlier = hostDenyLine(command: resetHard, deny: resetHardDeny, unlock: .earlierPending, voice: voice)
     #expect(earlier.hasSuffix("who     ask Christopher to run the earlier code with  rv allow-once"))
@@ -239,8 +239,9 @@ private func words(_ text: String) -> Int {
 @Test func hostDenyText_indeterminateNamesItsReason() {
     let reasons: [IndeterminateReason] = [
         .budgetExhausted, .commandTooLarge, .corePacksUnavailable, .inlineProgramNeedsJudge,
-        .selfProtection, .packageScriptUnresolved, .unresolvedInvocation,
+        .packageScriptUnresolved, .unresolvedInvocation,
     ]
+    // Self-protection has its own verdict and text (B2, SelfProtectionStopTests).
     for reason in reasons {
         let text = hostDenyText(from: EvaluationResult(outcome: .indeterminate(reason)), command: resetHard)
         let lines = text?.split(separator: "\n").map(String.init) ?? []
@@ -351,8 +352,8 @@ private func words(_ text: String) -> Int {
     #expect(AllowOnceUnlockCode(validating: "abc") == nil)
     #expect(AllowOnceUnlockCode(validating: "ABCDEF") == nil)
     let code = try mintedUnlock()
-    #expect(unlockLine(for: code) == "ask your user to run  rv allow-once a1b2c3")
-    #expect(unlockLine(for: code, owner: OwnerName(gecos: "Chris")) == "ask Chris to run  rv allow-once a1b2c3")
+    #expect(unlockLine(for: code) == "ask your user to run  rv allow-once a1b2c3  (you can wait: rv wait a1b2c3)")
+    #expect(unlockLine(for: code, owner: OwnerName(gecos: "Chris")) == "ask Chris to run  rv allow-once a1b2c3  (you can wait: rv wait a1b2c3)")
     #expect(allowOnceUnlockCode(in: ownTerminalLine()) == nil)
     #expect(allowOnceUnlockCode(in: unlockLine(for: code)) == code)
 }
