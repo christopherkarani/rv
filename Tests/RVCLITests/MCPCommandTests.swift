@@ -170,6 +170,16 @@ struct MCPCommandTests {
         #expect(platformDefault == (MCPSandbox.enforced ? enforced : uncaged))
     }
 
+    @Test func checkFlagsASecretInALocalServersArgs() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "argy", command: "a", args: ["--token=${secret:API_TOKEN}"]),
+            MCPServerDefinition(name: "envy", command: "e", secrets: ["API_TOKEN": "API_TOKEN"]),
+        ])
+        let problems = MCPRun.argumentSecretProblems(configuration, configDirectory: URL(fileURLWithPath: "/nonexistent"))
+        #expect(problems.map(\.message) == ["argy: " + MCPLaunchPlanner.argumentSecretMessage("API_TOKEN")])
+        #expect(problems.allSatisfy { $0.message.contains("\n") == false })
+    }
+
     @Test func problemLinesLabelEachProblem() {
         let report = MCPRun.Report(
             servers: 1, direct: 0, blocked: 0, integrity: "none", integrityProblem: nil, rows: [],

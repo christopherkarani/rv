@@ -94,7 +94,7 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .secretUndefined(_, let secret): "secret \(MCPDisplayedText.field(secret)) is not set up"
         case .secretUnavailable(_, let secret): "rv could not read secret \(MCPDisplayedText.field(secret))"
         case .secretInArguments(_, let secret):
-            "secret \(MCPDisplayedText.field(secret)) is in its arguments, where ps shows it"
+            "secret \(MCPDisplayedText.field(secret)) is in its args, where ps shows it"
         case .noSandbox: "not sealed: it has no sandbox"
         case .openNetwork: "not sealed: its sandbox network is open"
         case .cageUnavailable: "rv can't seal it on this host"
@@ -120,8 +120,7 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .unknownServer, .blocked: "rv mcp list"
         case .secretUndefined(_, let secret): "rv secrets set \(MCPDisplayedText.field(secret))"
         case .secretUnavailable, .secretsUnusable: "rv secrets check"
-        case .secretInArguments(let server, let secret):
-            "move ${secret:\(MCPDisplayedText.field(secret))} from \(MCPDisplayedText.field(server))'s args to its \"secrets\" in mcp.json, then rv mcp trust"
+        case .secretInArguments(_, let secret): MCPLaunchPlanner.argumentSecretFix(secret)
         case .noSandbox(let server):
             "add \"sandbox\": {\"network\": false} to \(MCPDisplayedText.field(server)) in mcp.json, then rv mcp trust"
         case .openNetwork(let server):

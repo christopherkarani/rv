@@ -130,7 +130,8 @@ public enum MCPImport {
 
     /// Why a server whose credential is an argument is skipped, and the fix.
     static func argumentCredentialSkip(_ host: MCPHost) -> String {
-        "a credential is in its arguments, where ps shows it; pass it as an environment variable in \(host.rawValue)'s config, then import again"
+        "a credential is in its args, where ps shows it to every user; pass it as an environment variable instead "
+            + "(\"env\": {\"API_KEY\": \"...\"} in \(host.rawValue)'s config), then rv mcp import"
     }
 
     /// Credential header values become `${secret:NAME}` (an auth scheme such

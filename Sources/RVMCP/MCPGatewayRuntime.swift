@@ -193,8 +193,8 @@ public enum MCPLaunchPlanner {
         return .success(planned)
     }
 
-    /// A local server with `placeholders`: real values for its `secrets` and
-    /// `args` as for any server, placeholders leased for the rest, and a cage
+    /// A local server with `placeholders`: real values for its `secrets` as
+    /// for any server, placeholders leased for the rest, and a cage
     /// that may reach the secrets gateway. A placeholder refusal refuses this
     /// server only (`.refused`); a failure any server would hit fails the plan.
     /// Every refusal that needs no value comes before its own secrets are
@@ -325,10 +325,18 @@ public enum MCPLaunchPlanner {
         return nil
     }
 
-    /// Why a server with a secret in its arguments is off, and the fix.
+    /// Why a server with a secret in its arguments is off, and the fix, on
+    /// one line.
     package static func argumentSecretMessage(_ secret: String) -> String {
-        "secret \(MCPDisplayedText.field(secret)) is in its arguments, where ps shows it to every user; "
-            + "bind it to an environment variable in the server's \"secrets\" instead"
+        "secret \(MCPDisplayedText.field(secret)) is in its args, where ps shows it to every user; "
+            + argumentSecretFix(secret)
+    }
+
+    /// The one fix: deliver the secret as an environment variable instead.
+    package static func argumentSecretFix(_ secret: String) -> String {
+        let name = MCPDisplayedText.field(secret)
+        return "remove ${secret:\(name)} from args and add \"secrets\": {\"\(name)\": \"\(name)\"} "
+            + "so the server reads $\(name), then rv mcp trust"
     }
 
     /// A server planned not to start: no secret values, no launch.
@@ -400,7 +408,7 @@ public enum MCPLaunchPlanner {
         // `delivery` says, so environment-only policy forbids it outright.
         case .organizationPolicy(.environmentDelivery):
             "organization policy sets secrets.allowEnvironmentDelivery to false, "
-                + "and a stdio server receives secrets in its environment or arguments"
+                + "and a stdio server receives secrets in its environment"
         case .expired(let date): "expired at \(SecretExpiry.text(date))"
         case .resolution(let error): error.message
         case .unusableToken, .unusableCredentials, .unusableEnvironmentValue, .notText, .lineBreak: "not usable as text"
