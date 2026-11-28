@@ -21,8 +21,46 @@ public enum BoxHomecomingScan {
     public static let maxEntries = 400_000
 
     /// Everything that changed between `savedRoot` (the project as it was
-    /// when the box started at `startedAt`) and `boxRoot`.
-    public static func review(savedRoot: String, boxRoot: String, startedAt: Date) -> Result<BoxReview, Failure> {
+    /// when the box started at `startedAt`) and `boxRoot`. With the
+    /// `snapshot` rv took when the box started, names replaced outside the
+    /// box since are listed in `replaced`.
+    public static func review(
+        savedRoot: String, boxRoot: String, startedAt: Date, snapshot: BoxSnapshot? = nil
+    ) -> Result<BoxReview, Failure> {
+        var review: BoxReview
+        switch changes(savedRoot: savedRoot, boxRoot: boxRoot, startedAt: startedAt) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let value): review = value
+        }
+        if let snapshot {
+            switch replaced(savedRoot: savedRoot, snapshot: snapshot) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let names): review.replaced = names
+            }
+        }
+        return .success(review)
+    }
+
+    /// The names under `savedRoot` that publish would refuse to write
+    /// over: a different file (device, inode or kind) than `snapshot`
+    /// recorded, a file whose link count changed, or a new name that is a
+    /// hard link to another. Publish rejects the whole close for any one.
+    public static func replaced(savedRoot: String, snapshot: BoxSnapshot) -> Result<[String], Failure> {
+        let live: [String: BoxInodeStamp]
+        switch stamps(savedRoot) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let value): live = value
+        }
+        return .success(live.keys.sorted().filter { relative in
+            guard let now = live[relative] else { return false }
+            guard let then = snapshot.stamps[relative] else {
+                return now.kind != .directory && now.links > 1
+            }
+            return now.isStill(then) == false
+        })
+    }
+
+    private static func changes(savedRoot: String, boxRoot: String, startedAt: Date) -> Result<BoxReview, Failure> {
         let saved: [String: BoxTreeEntry]
         let box: [String: BoxTreeEntry]
         switch walk(savedRoot, budget: maxEntries, skipAtRoot: { _ in false }) {
@@ -131,6 +169,30 @@ public enum BoxHomecomingScan {
         return .success(entries)
     }
 
+    /// The device, inode and link count of every name under `root`.
+    static func stamps(_ root: String) -> Result<[String: BoxInodeStamp], Failure> {
+        var stamps: [String: BoxInodeStamp] = [:]
+        var pending = [""]
+        while let relative = pending.popLast() {
+            let directory = relative.isEmpty ? root : root + "/" + relative
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
+                return .failure(.unreadable(directory))
+            }
+            for name in names {
+                let child = relative.isEmpty ? name : relative + "/" + name
+                var info = stat()
+                guard (root + "/" + child).contains("\0") == false, lstat(root + "/" + child, &info) == 0 else {
+                    return .failure(.unreadable(root + "/" + child))
+                }
+                let stamp = BoxInodeStamp(info)
+                stamps[child] = stamp
+                guard stamps.count <= maxEntries else { return .failure(.tooLarge(maxEntries)) }
+                if stamp.kind == .directory { pending.append(child) }
+            }
+        }
+        return .success(stamps)
+    }
+
     /// `lstat(2)`, as a tree entry; nil when it can't be read.
     static func entry(at path: String) -> BoxTreeEntry? {
         guard path.contains("\0") == false else { return nil }
@@ -165,6 +227,11 @@ enum BoxFileRead {
     static func contents(_ path: String, limit: Int) -> Data? {
         guard let descriptor = openRegular(path) else { return nil }
         defer { close(descriptor) }
+        return contents(descriptor: descriptor, limit: limit)
+    }
+
+    /// The rest of an open file's bytes, or nil past `limit`.
+    static func contents(descriptor: Int32, limit: Int) -> Data? {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 65_536)
         while true {
@@ -195,10 +262,15 @@ enum BoxFileRead {
 
     /// The link's target text; nil when it is not a link.
     static func linkTarget(_ path: String) -> String? {
+        linkTarget(path, in: AT_FDCWD)
+    }
+
+    /// The target of the link `name` in the folder `folder`.
+    static func linkTarget(_ name: String, in folder: Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
         let count = buffer.withUnsafeMutableBufferPointer { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
-            return readlink(path, base, raw.count - 1)
+            return readlinkat(folder, name, base, raw.count - 1)
         }
         guard count >= 0 else { return nil }
         return String(decoding: buffer[0..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
@@ -229,5 +301,87 @@ enum BoxFileRead {
             total += count
         }
         return total
+    }
+}
+
+/// One name's identity: which file it is, not what it holds.
+public struct BoxInodeStamp: Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable {
+        case directory
+        case regular
+        case symlink
+        case other
+    }
+
+    public var device: UInt64
+    public var inode: UInt64
+    public var links: UInt64
+    public var kind: Kind
+
+    public init(device: UInt64, inode: UInt64, links: UInt64, kind: Kind) {
+        self.device = device
+        self.inode = inode
+        self.links = links
+        self.kind = kind
+    }
+
+    init(_ info: stat) {
+        let kind: Kind
+        switch info.st_mode & S_IFMT {
+        case S_IFDIR: kind = .directory
+        case S_IFREG: kind = .regular
+        case S_IFLNK: kind = .symlink
+        default: kind = .other
+        }
+        self.init(device: UInt64(info.st_dev), inode: UInt64(info.st_ino), links: UInt64(info.st_nlink), kind: kind)
+    }
+
+    /// Publish's rule (`workspaceInodeAcceptableForPublish`): the same
+    /// file, and for a file or link, no new names for it. A folder's link
+    /// count moves with what is inside it.
+    func isStill(_ recorded: BoxInodeStamp) -> Bool {
+        guard device == recorded.device, inode == recorded.inode, kind == recorded.kind else { return false }
+        return kind == .directory || links == recorded.links
+    }
+}
+
+/// Every name's identity when the box started, as the workspace host
+/// recorded it beside the lifecycle log.
+public struct BoxSnapshot: Equatable, Sendable {
+    public var stamps: [String: BoxInodeStamp]
+
+    public init(stamps: [String: BoxInodeStamp]) {
+        self.stamps = stamps
+    }
+
+    /// The host's snapshot file (`WorkspaceRecovery.writeSnapshot`), read
+    /// only when it is the regular file recorded as `device`/`inode`.
+    public static func read(path: String, device: UInt64, inode: UInt64) -> BoxSnapshot? {
+        guard let descriptor = BoxFileRead.openRegular(path) else { return nil }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, UInt64(info.st_dev) == device, UInt64(info.st_ino) == inode,
+            let data = BoxFileRead.contents(descriptor: descriptor, limit: 512 * 1024 * 1024),
+            let file = try? JSONDecoder().decode(File.self, from: data)
+        else { return nil }
+        var stamps: [String: BoxInodeStamp] = [:]
+        for entry in file.entries {
+            guard let kind = BoxInodeStamp.Kind(rawValue: entry.kind), kind != .other, stamps[entry.path] == nil
+            else { return nil }
+            stamps[entry.path] = BoxInodeStamp(device: entry.device, inode: entry.inode, links: entry.linkCount, kind: kind)
+        }
+        return BoxSnapshot(stamps: stamps)
+    }
+
+    private struct File: Decodable {
+        struct Entry: Decodable {
+            var path: String
+            var device: UInt64
+            var inode: UInt64
+            var linkCount: UInt64
+            var kind: String
+        }
+
+        var entries: [Entry]
     }
 }

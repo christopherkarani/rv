@@ -91,7 +91,7 @@ enum BoxDefaultCoverage {
 enum BoxDefaultText {
     static func status(on: Bool) -> String {
         guard on else {
-            return "\(Glyph.rv.rawValue) rv · boxed by default is off · agents start on your Mac\n"
+            return "\(Glyph.rv.rawValue) rv · boxed by default is off · \(offMeans)\n"
                 + "  \(Glyph.next.rawValue) turn it on: rv box default on\n"
         }
         return (["\(Glyph.rv.rawValue) rv · boxed by default is on · changes come home as a review"]
@@ -105,7 +105,11 @@ enum BoxDefaultText {
             + ["  \(Glyph.next.rawValue) Undo: rv box default off"]
     ).joined(separator: "\n") + "\n"
 
-    static let turnedOff = "  \(Glyph.done.rawValue) Agents start on your Mac again, outside a box.\n"
+    /// What off means, said truly: `rv opencode` always runs in its own
+    /// workspace; off only drops rv box's front door and the review.
+    static let offMeans = "rv opencode keeps its own workspace without a review, and other agents start in a box only with rv box"
+
+    static let turnedOff = "  \(Glyph.done.rawValue) Boxed by default is off. rv opencode keeps its own workspace without a review, and other agents start in a box only with rv box.\n"
         + "  \(Glyph.next.rawValue) Turn it back on: rv box default on\n"
 
     static func already(on: Bool) -> String {
@@ -184,7 +188,7 @@ enum BoxDefaultFlow {
 
     private static func refuse(_ refusal: BoxRefusal) throws -> Never {
         CommandContext.writeStderr(BoxInk.paint(refusal.text, palette: BoxInk.palette(
-            isTerminal: CLIProcess.stdoutIsTTY(), environment: CLIProcess.environment())))
+            isTerminal: CLIProcess.stderrIsTTY(), environment: CLIProcess.environment())))
         throw ExitCode(refusal.exitCode)
     }
 }

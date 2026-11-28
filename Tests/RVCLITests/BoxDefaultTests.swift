@@ -19,7 +19,7 @@ struct BoxDefaultTests {
             try await BoxDefaultFlow.run(.show, supportsBoxes: true)
         }
         #expect(capture.stdout == """
-            ◆ rv · boxed by default is off · agents start on your Mac
+            ◆ rv · boxed by default is off · rv opencode keeps its own workspace without a review, and other agents start in a box only with rv box
               → turn it on: rv box default on
 
             """)
@@ -110,7 +110,7 @@ struct BoxDefaultTests {
             try await BoxDefaultFlow.run(.turn(on: false), supportsBoxes: true)
         }
         #expect(capture.stdout == """
-              ✓ Agents start on your Mac again, outside a box.
+              ✓ Boxed by default is off. rv opencode keeps its own workspace without a review, and other agents start in a box only with rv box.
               → Turn it back on: rv box default on
 
             """)
@@ -139,6 +139,23 @@ struct BoxDefaultTests {
         }
         #expect(capture.stderr.hasPrefix("✕ Boxes run on macOS only today"))
         #expect(BoxDefaultSetting.isOn(home: home) == false)
+    }
+
+    /// The refusal goes to stderr, so stderr decides its colour: a
+    /// terminal on stdout must not paint a captured or piped stderr.
+    @Test func aRefusalIsPlainWhenStderrIsNotATerminal() async throws {
+        let home = try isolatedHome()
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(
+            home: home, environment: ["TERM": "xterm-256color"], stdinIsTTY: true, stdoutIsTTY: true,
+            ownerAuthOutcome: .authenticated, output: capture
+        ) {
+            await #expect(throws: ExitCode(1)) {
+                try await BoxDefaultFlow.run(.turn(on: true), supportsBoxes: false)
+            }
+        }
+        #expect(capture.stderr.hasPrefix("✕ Boxes run on macOS only today"))
+        #expect(capture.stderr.contains("\u{1B}[") == false)
     }
 
     @Test func anUnreadableSettingIsOff() throws {

@@ -65,6 +65,9 @@ public struct BoxPathChange: Equatable, Sendable {
         case special
         /// A link that points outside the project.
         case linkLeavesProject
+        /// A copy an earlier `rv box done` started and never finished
+        /// (`BoxHomecomingApply.unfinishedPrefix`).
+        case unfinishedCopy
     }
 
     public var relative: String
@@ -111,6 +114,8 @@ public struct BoxReviewItem: Equatable, Sendable, Identifiable {
         case removedFolder
         /// `.git`: commits, the index and refs only make sense together.
         case git
+        /// A folder whose permissions changed; its files are their own items.
+        case folderMode
     }
 
     /// The path shown; a folder's ends with `/`.
@@ -149,8 +154,15 @@ public struct BoxReview: Equatable, Sendable {
     public var blocked: [String]
     /// When the box started; edits outside it after this are yours.
     public var startedAt: Date
+    /// Names outside the box that are now a different file than the one
+    /// the box started from (an app that saves by writing a new file and
+    /// renaming it over the old one). Publish refuses to write over them,
+    /// so while there are any, nothing comes home.
+    public var replaced: [String] = []
 
-    public var isEmpty: Bool { items.isEmpty && yours.isEmpty && refused.isEmpty && blocked.isEmpty }
+    public var isEmpty: Bool {
+        items.isEmpty && yours.isEmpty && refused.isEmpty && blocked.isEmpty && replaced.isEmpty
+    }
     public var fileCount: Int { items.reduce(0) { $0 + $1.fileCount } }
 
     /// The lines every counted file adds and removes.
@@ -221,24 +233,41 @@ public enum BoxHomecoming {
         case (nil, nil):
             return nil
         case (let saved?, let box?):
-            if saved.isDirectory, box.isDirectory { return nil }
+            if saved.isDirectory, box.isDirectory {
+                // Publish sets each folder's mode from the box, so a mode
+                // change comes home like any other. A folder touched outside
+                // the box keeps your mode: rv can't tell your chmod from a
+                // file you added, and never writes over your edits.
+                guard saved.mode != box.mode else { return nil }
+                if saved.changedAt > startedAt { return change(.yoursKept, lines: nil) }
+                return change(.changed, lines: nil)
+            }
             if saved.shape != box.shape { return change(.kindChanged, lines: nil) }
             if box.kind == .special { return change(.cannotComeHome(.special), lines: nil) }
             if sameContent, saved.mode == box.mode { return nil }
             let yoursNewer = saved.changedAt > startedAt
             let boxNewer = box.changedAt > startedAt
+            // A link the box pointed out of the project never comes home,
+            // not even beside yours.
+            if boxNewer, leaves(box) { return change(.cannotComeHome(.linkLeavesProject), lines: nil) }
             if yoursNewer, boxNewer, sameContent == false { return change(.bothKept) }
             if yoursNewer, boxNewer == false { return change(.yoursKept) }
             if leaves(box) { return change(.cannotComeHome(.linkLeavesProject), lines: nil) }
             return change(.changed, lines: sameContent ? .zero : lines)
         case (let saved?, nil):
-            if saved.isDirectory == false, saved.changedAt > startedAt { return change(.yoursKept) }
+            // Changed outside the box after it started (a folder you made,
+            // or a file you edited): yours, whatever the box did.
+            if saved.changedAt > startedAt { return change(.yoursKept) }
             return change(.removed, lines: saved.isDirectory ? nil : lines)
         case (nil, let box?):
             if box.kind == .special { return change(.cannotComeHome(.special), lines: nil) }
+            if box.isDirectory == false, BoxHomecomingApply.isUnfinishedCopy(relative) {
+                return change(.cannotComeHome(.unfinishedCopy), lines: nil)
+            }
             // An untouched copy with no saved name: you removed it outside
-            // the box after it started, and it stays removed.
-            if box.isDirectory == false, box.changedAt <= startedAt { return change(.yoursKept, lines: nil) }
+            // the box after it started, and it stays removed. (`review`
+            // hands a folder back to the box when the box put work in it.)
+            if box.changedAt <= startedAt { return change(.yoursKept, lines: nil) }
             if leaves(box) { return change(.cannotComeHome(.linkLeavesProject), lines: nil) }
             return change(.added, lines: box.isDirectory ? nil : lines)
         }
@@ -252,7 +281,7 @@ public enum BoxHomecoming {
         var refused: [BoxPathChange] = []
         var blocked: [String] = []
         var choosable: [BoxPathChange] = []
-        for change in changes.sorted(by: { $0.relative < $1.relative }) {
+        for change in settled(changes).sorted(by: { $0.relative < $1.relative }) {
             switch change.kind {
             case .added, .changed, .removed:
                 choosable.append(change)
@@ -274,7 +303,9 @@ public enum BoxHomecoming {
         let removedFolders = Set(choosable.filter { $0.kind == .removed && $0.isFolder }.map(\.relative))
         var groups: [String: BoxReviewItem] = [:]
         for change in choosable {
-            let (id, shape) = group(change.relative, newFolders: newFolders, removedFolders: removedFolders)
+            let (id, shape) = change.kind == .changed && change.isFolder
+                ? (change.relative + "/", .folderMode)
+                : group(change.relative, newFolders: newFolders, removedFolders: removedFolders)
             groups[id, default: BoxReviewItem(id: id, shape: shape, changes: [])].changes.append(change)
         }
         let items = groups.values.sorted { lhs, rhs in
@@ -284,6 +315,37 @@ public enum BoxHomecoming {
             return left != right ? left > right : lhs.id < rhs.id
         }
         return BoxReview(items: items, yours: yours, refused: refused, blocked: blocked, startedAt: startedAt)
+    }
+
+    /// Folder changes settled against what is inside them, so a folder is
+    /// never shown as gone while something in it stays:
+    /// - a folder the box removed that holds your newer edits comes back
+    ///   with them, so its removal is not a choice (its other files are);
+    /// - a folder you removed outside the box that the box put work in is
+    ///   the box's new folder, not yours.
+    static func settled(_ changes: [BoxPathChange]) -> [BoxPathChange] {
+        func isYours(_ change: BoxPathChange) -> Bool { change.kind == .yoursKept || change.kind == .bothKept }
+        func ancestors(_ relative: String) -> [String] {
+            var found: [String] = []
+            var parent = BoxPath.parent(relative)
+            while parent.isEmpty == false {
+                found.append(parent)
+                parent = BoxPath.parent(parent)
+            }
+            return found
+        }
+        let underYours = Set(changes.filter(isYours).flatMap { ancestors($0.relative) })
+        let underBox = Set(changes.filter { isYours($0) == false }.flatMap { ancestors($0.relative) })
+        return changes.compactMap { change in
+            guard change.isFolder else { return change }
+            if change.kind == .removed, underYours.contains(change.relative) { return nil }
+            if change.kind == .yoursKept, change.saved == nil, underBox.contains(change.relative) {
+                var added = change
+                added.kind = .added
+                return added
+            }
+            return change
+        }
     }
 
     /// The item a change belongs to: `.git`, the shallowest folder the box
@@ -319,6 +381,8 @@ public enum BoxHomecoming {
         var folders: [String] = []
         var files: [BoxHomeStep] = []
         var emptied: [String] = []
+        // Folder modes go last, once everything inside is in place.
+        var modes: [String] = []
         var kept = 0
         var dropped = 0
         func drop(_ change: BoxPathChange) {
@@ -331,8 +395,12 @@ public enum BoxHomecoming {
                     files.append(.remove(change.relative))
                 }
             case .changed:
-                trash.append(change.relative)
-                files.append(.restore(change.relative))
+                if change.isFolder {
+                    modes.append(change.relative)
+                } else {
+                    trash.append(change.relative)
+                    files.append(.restore(change.relative))
+                }
             case .removed:
                 if change.isFolder {
                     folders.append(change.relative)
@@ -357,9 +425,14 @@ public enum BoxHomecoming {
                 if let name = change.beside { beside.append(.placeBeside(change.relative, as: name)) }
                 files.append(.restore(change.relative))
             default:
-                if change.saved != nil {
+                switch (change.saved?.isDirectory, change.box?.isDirectory) {
+                case (true?, _):
+                    modes.append(change.relative)
+                case (_?, _):
                     files.append(.restore(change.relative))
-                } else {
+                case (nil, true?):
+                    emptied.append(change.relative)
+                case (nil, _):
                     trash.append(change.relative)
                     files.append(.remove(change.relative))
                 }
@@ -374,6 +447,7 @@ public enum BoxHomecoming {
             + folders.sorted { depth($0) < depth($1) }.map(BoxHomeStep.restore)
             + files
             + emptied.sorted { depth($0) > depth($1) }.map(BoxHomeStep.removeFolder)
+            + modes.sorted { depth($0) > depth($1) }.map(BoxHomeStep.restore)
         return BoxHomePlan(steps: steps, keptFiles: kept, droppedFiles: dropped)
     }
 

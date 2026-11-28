@@ -50,6 +50,30 @@ struct BoxHomecomingTests {
         #expect(Self.classify(saved: Self.file(Self.after), box: Self.file(Self.after), same: true) == nil)
     }
 
+    /// Folders follow the same rule as files: a change the box made is a
+    /// choice, a change made outside it after it started is yours.
+    @Test func foldersFollowTheSameRule() {
+        let untouched = BoxTreeEntry(kind: .directory, mode: 0o755, changedAt: Self.before)
+        let opened = BoxTreeEntry(kind: .directory, mode: 0o777, changedAt: Self.after)
+        // The box changed a folder's mode.
+        #expect(Self.classify(saved: untouched, box: opened) == .changed)
+        // You touched the folder outside the box too: your mode stays.
+        #expect(Self.classify(saved: Self.folder, box: opened) == .yoursKept)
+        // A folder you made outside the box.
+        #expect(Self.classify(saved: Self.folder, box: nil) == .yoursKept)
+        #expect(Self.classify(saved: untouched, box: nil) == .removed)
+        // A folder you removed outside the box, which the box left alone.
+        #expect(Self.classify(saved: nil, box: untouched) == .yoursKept)
+        #expect(Self.classify(saved: nil, box: Self.folder) == .added)
+    }
+
+    @Test func aLinkTheBoxPointedOutIsRefusedEvenWhenYouChangedItToo() {
+        let yours = BoxTreeEntry(kind: .symlink(target: "b"), changedAt: Self.after)
+        let boxs = BoxTreeEntry(kind: .symlink(target: "/etc/passwd"), changedAt: Self.after)
+        #expect(Self.classify("lnk", saved: yours, box: boxs, inside: false) == .cannotComeHome(.linkLeavesProject))
+        #expect(Self.classify("lnk", saved: yours, box: boxs, inside: true) == .bothKept)
+    }
+
     @Test func whatPublishCannotCopyIsRefusedAndAKindChangeBlocks() {
         let fifo = BoxTreeEntry(kind: .special, changedAt: Self.after)
         #expect(Self.classify(saved: nil, box: fifo) == .cannotComeHome(.special))
@@ -216,7 +240,9 @@ struct BoxHomecomingTests {
         }
         let good = "/Users/chris/code/.rv-saved-0123456789ab"
         #expect(BoxHomecomingSource.find(workspace: workspace, in: [record(good)])
-            == BoxHomecomingSource(project: "/Users/chris/code/app", savedRoot: good, startedAt: Self.start))
+            == BoxHomecomingSource(
+                project: "/Users/chris/code/app", savedRoot: good, startedAt: Self.start,
+                saved: (device: 1, inode: 2), volumeDevice: 3))
         #expect(BoxHomecomingSource.find(workspace: workspace, in: [record(good, id: UUID())]) == nil)
         #expect(BoxHomecomingSource.find(workspace: workspace, in: [record(good, kind: .runtimeStarted)]) == nil)
         // A saved path anywhere but beside the project, under rv's name, is not trusted.

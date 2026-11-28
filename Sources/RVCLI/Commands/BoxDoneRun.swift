@@ -54,10 +54,8 @@ enum BoxDoneRun {
             write(BoxDoneRender.noSource)
             throw ExitCode(1)
         }
-        let running: Int
-        switch client.listRuntimes() {
-        case .success(let runtimes): running = runtimes.filter(\.running).count
-        case .failure(let error): try BoxRun.refuse(BoxStartFailure.refusal(WorkspaceCommandRun.text(error)))
+        if case .failure(let error) = client.listRuntimes() {
+            try BoxRun.refuse(BoxStartFailure.refusal(WorkspaceCommandRun.text(error)))
         }
         let home = BoxRun.passwdHome()
         let configDirectory = home.map { RVPolicyPaths.configDirectory(home: $0) }
@@ -65,7 +63,14 @@ enum BoxDoneRun {
         let machine = BoxDoneMachine(
             source: source,
             boxRoot: endpoint.canonicalPath,
-            stillRunning: running,
+            // A runtime rv can't list counts as running: nothing closes
+            // over one it can't see.
+            running: { () -> Int in
+                switch client.listRuntimes() {
+                case .success(let runtimes): return runtimes.filter(\.running).count
+                case .failure: return 1
+                }
+            },
             agent: agent,
             home: home.flatMap { BoxRun.canonical($0.rawValue) },
             trash: BoxTrash(configDirectory: configDirectory),
@@ -76,10 +81,16 @@ enum BoxDoneRun {
                 return readLine()
             },
             write: write,
-            close: {
+            close: { () -> BoxCloseRefusal? in
                 switch client.closeWorkspace() {
-                case .success: nil
-                case .failure(let error): WorkspaceCommandRun.text(error)
+                case .success:
+                    return nil
+                case .failure(.publishRejected(let image, let reason)):
+                    return BoxCloseRefusal(
+                        reason: reason.isEmpty ? "the host refused to publish the box" : DisplayedText.field(reason),
+                        retainedImage: image.isEmpty ? nil : image)
+                case .failure(let error):
+                    return BoxCloseRefusal(reason: WorkspaceCommandRun.text(error), retainedImage: nil)
                 }
             }
         )
