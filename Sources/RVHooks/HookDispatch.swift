@@ -96,7 +96,7 @@ private func hookRequestBody(
             }
         }
         // The pack's safer command shows only when rv allows it here.
-        let voice = await world.voice.vetted(for: result, cwd: cwd, by: world.saferAllowed)
+        let voice = await world.voice.vetted(for: result, command: command, cwd: cwd, by: world.saferAllowed)
         return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }

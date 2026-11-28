@@ -14,6 +14,7 @@ struct SelfProtectionReadVerbsTests {
         "rv log -n 20 --host claude", "rv why a7c-835", "rv explain \"git reset --hard\"", "rv box list",
         "rv service status", "rv policy status --json", "rv uninstall --help", "rv secrets set --help",
         "rv --help", "rv help secrets", "rv --version", "rv wait a7c835", "rv wait a7c835 --timeout 600",
+        "rv secrets", "rv secrets list", "rv secrets list --json", "rv host mode -h",
     ])
     func readOnlyVerbs_enterTheSafeLane(_ command: String) {
         #expect(SafeCommandLane.isSafe(command), "\(command)")
@@ -25,6 +26,10 @@ struct SelfProtectionReadVerbsTests {
         "rv secrets set K --help --force", "rv a b c --help", "rv doctor; rv uninstall", "rv why $(rv uninstall)",
         "/tmp/rv doctor", "rv service restart", "rv policy apply",
         "rv wait a7c835; rv uninstall", "rv wait $(cat x)", "rv wait a7c835 --timeout 600 --then-run x",
+        // Passthrough verbs: their -h may belong to the program they run.
+        "rv run shutdown -h", "rv box claude -h", "rv opencode run -h", "rv workspace run -h", "rv test x -h",
+        "rv try -h", "rv mcp serve -h", "rv hook -h", "rv allow-once -h", "rv allowlist add -h",
+        "rv secrets check", "rv secrets list --reveal",
     ])
     func writeVerbsAndOtherFlags_stayOut(_ command: String) {
         #expect(SafeCommandLane.isSafe(command) == false, "\(command)")

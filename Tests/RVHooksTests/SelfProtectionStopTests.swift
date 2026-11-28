@@ -20,8 +20,39 @@ struct SelfProtectionStopTests {
             ✕ rv protects itself   rv uninstall (rv.indeterminate/selfProtection)
             why     agents can't change rv's own settings
             safer   rv uninstall --help
-            who     ask Chris to run  rv uninstall
+            who     ask Chris to run it in their own terminal
             """)
+    }
+
+    /// rv never asks the owner, in its own voice, to run a command that
+    /// weakens it just because the agent picked it.
+    @Test(arguments: [
+        "rv uninstall", "rv setup --observe", "rv host mode claude observe", "rv pause 10m",
+        "rv allowlist add git", "rv allow-once abc123", "rv packs disable core.git", "rv secrets remove K",
+        "rv secrets set --force K", "rv host mode claude enforce extra",
+    ])
+    func weakeningCommands_goToTheirOwnTerminal(_ command: String) throws {
+        let text = try #require(Self.text(command))
+        #expect(text.hasSuffix("who     ask Chris to run it in their own terminal"), "\(command)")
+    }
+
+    @Test(arguments: ["rv secrets set STRIPE_KEY", "rv host mode claude enforce", "rv host mode codex block"])
+    func tighteningCommands_areNamedForTheOwner(_ command: String) throws {
+        let text = try #require(Self.text(command))
+        #expect(text.hasSuffix("who     ask Chris to run  \(command)"))
+    }
+
+    /// The help page is shown only when the hook door says rv allows it.
+    @Test func helpPage_isVettedLikeAnySaferCommand() async throws {
+        let stopped = EvaluationResult(outcome: .indeterminate(.selfProtection))
+        let command = ShellCommand(rawValue: "rv uninstall")
+        let refused = await Self.chris.vetted(for: stopped, command: command, cwd: nil) { _, _ in false }
+        let text = hostDenyText(from: stopped, command: command, voice: refused)
+        #expect(text?.contains("\nsafer") == false)
+        let allowed = await Self.chris.vetted(for: stopped, command: command, cwd: nil) { safer, _ in
+            safer.rawValue == "rv uninstall --help"
+        }
+        #expect(hostDenyText(from: stopped, command: command, voice: allowed)?.contains("\nsafer   rv uninstall --help\n") == true)
     }
 
     /// S3: the secrets stop names the owner's exact command and lets the
@@ -52,8 +83,8 @@ struct SelfProtectionStopTests {
     }
 
     @Test func noOwnerName_saysYourUser() throws {
-        let text = try #require(Self.text("rv safety normal", voice: .plain))
-        #expect(text.hasSuffix("who     ask your user to run  rv safety normal"))
+        let text = try #require(Self.text("rv secrets set K", voice: .plain))
+        #expect(text.hasSuffix("who     ask your user to run  rv secrets set K"))
     }
 
     /// Acceptance: one instruction, the rule id, never an unlock or
@@ -72,6 +103,10 @@ struct SelfProtectionStopTests {
         #expect(rvHelpCommand(["rv", "uninstall", "--force"]) == "rv uninstall --help")
         #expect(rvHelpCommand(["rv", "--force"]) == nil)
         #expect(rvHelpCommand(["rv", "Uninstall"]) == nil)
+        for passthrough in [["rv", "run", "shutdown"], ["rv", "box", "claude"], ["rv", "opencode", "run"],
+                            ["rv", "explain", "x"], ["rv", "test", "x"], ["rv", "allow-once", "abc123"]] {
+            #expect(rvHelpCommand(passthrough) == nil, "\(passthrough)")
+        }
     }
 
     /// Per-codec goldens (`Fixtures/self-protection/<host>.txt`): the
@@ -106,5 +141,15 @@ struct SelfProtectionStopTests {
             deny: Deny(ruleID: rule, reason: "rv's own config holds its policy and keys."),
             voice: Self.chris)
         #expect(text.contains("\nsafer   rv secrets list\n"))
+    }
+
+    /// rv's own advice is vetted like a pack's: refused, it is not shown.
+    @Test func builtinAdvice_isVetted() async throws {
+        let rule = try #require(RuleID(rawValue: "core.secrets:home-rv-config"))
+        let stopped = EvaluationResult(outcome: .deny(Deny(ruleID: rule, reason: "x"), matched: nil))
+        let refused = await Self.chris.vetted(for: stopped, cwd: nil) { _, _ in false }
+        #expect(refused.advice(rule)?.saferCommand == nil)
+        let allowed = await Self.chris.vetted(for: stopped, cwd: nil) { _, _ in true }
+        #expect(allowed.advice(rule)?.saferCommand == "rv secrets list")
     }
 }

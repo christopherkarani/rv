@@ -12,12 +12,14 @@ import RVDomain
 //     safer   rv secrets set --help
 //     who     ask Chris to run  rv secrets set STRIPE_KEY
 //
-// The `who` line names the human's command, the one the agent tried, when
-// it is a plain `rv` invocation the owner can paste; anything else (a
-// pipe, a script, a clipped line) asks them to run it in their own
-// terminal. The safer command is that verb's help page, which
-// self-protection always lets through (`isHelpPageRequest`), so the agent
-// can read what the owner will run without the judge in the way.
+// The `who` line names the human's command, the one the agent tried, only
+// when it is a plain `rv` invocation that cannot weaken rv (storing a key,
+// turning a guard up, `ownerPasteable`); anything else (an uninstall, a
+// watch mode, a pipe, a script) asks them to run it in their own terminal.
+// The safer command is that verb's help page (`rvHelpPageVerbs`), which
+// self-protection lets through and the hook door checks is allowed before
+// it shows it, so the agent can read about the command without the judge
+// in the way.
 
 /// The verdict word self-protection uses in place of `Stopped`.
 public let selfProtectionVerdict = "rv protects itself"
@@ -33,10 +35,15 @@ public func selfProtectionStopNotice(command: ShellCommand?, voice: StopVoice = 
         subject: command.map(hookDenyCommandPreview),
         rule: indeterminateStopRule(.selfProtection),
         why: selfProtectionWhy,
-        safer: words.flatMap(rvHelpCommand),
-        who: words.map { ownerRunsLine($0.joined(separator: " "), owner: voice.owner) }
+        safer: voice.offersSelfProtectionHelp ? command.flatMap(selfProtectionSaferCommand) : nil,
+        who: words.flatMap(ownerPasteable).map { ownerRunsLine($0, owner: voice.owner) }
             ?? ownTerminalLine(owner: voice.owner)
     )
+}
+
+/// The help page a self-protection stop of `command` offers, or nil.
+public func selfProtectionSaferCommand(_ command: ShellCommand) -> String? {
+    plainRVInvocation(command).flatMap(rvHelpCommand)
 }
 
 /// The words of `command` when it is one plain `rv` invocation: `rv`
@@ -53,20 +60,46 @@ func plainRVInvocation(_ command: ShellCommand) -> [String]? {
     return words
 }
 
-/// `rv <verb> [<sub>] --help` for a plain rv invocation: the leading
-/// lowercase words (at most two), the exact form self-protection lets
-/// through. Nil when the verb itself is not such a word.
-func rvHelpCommand(_ words: [String]) -> String? {
-    let verbs = words.dropFirst().prefix(while: isHelpWord).prefix(2)
-    // A help page for an unlock verb still reads as "run allow-once": the
-    // agent is never pointed at one, not even its help.
-    guard let verb = verbs.first, unlockVerbs.contains(verb) == false else { return nil }
-    return ([CommandVocabulary.program] + verbs + ["--help"]).joined(separator: " ")
+/// The agent's command, for the owner to paste, only when it cannot
+/// weaken rv: storing a key (`rv secrets set NAME ...`) or turning a
+/// host's guard up (`rv host mode <host> enforce|block`). rv never asks
+/// the owner, in its own voice, to run an uninstall, a watch mode, a
+/// pause, an allowlist entry or an unlock the agent picked; those get the
+/// own-terminal line.
+func ownerPasteable(_ words: [String]) -> String? {
+    let verbs = Array(words.dropFirst())
+    let secrets = CommandVocabulary.Command.secrets.rawValue
+    let host = CommandVocabulary.Command.host.rawValue
+    switch verbs.first {
+    case secrets? where verbs.count >= 3 && verbs[1] == "set" && verbs[2].hasPrefix("-") == false:
+        break
+    case host? where verbs.count == 4 && verbs[1] == "mode" && ["enforce", "block"].contains(verbs[3]):
+        break
+    default:
+        return nil
+    }
+    return words.joined(separator: " ")
 }
 
-private let unlockVerbs: Set<String> = [
-    CommandVocabulary.Command.allowOnce.rawValue, CommandVocabulary.Command.allowlist.rawValue, "unlock",
+/// The verbs whose help page an agent may read without the judge, and
+/// that a self-protection stop may offer: each one's `--help` (also after
+/// one subcommand word) only prints help. Verbs that pass their arguments
+/// on to another program (`run`, `box`, `opencode`, `workspace`, `mcp`),
+/// that evaluate or run what follows (`explain`, `test`, `try`, `check`,
+/// `prompt`, `hook`, `term`), and the unlock verbs are left out.
+public let rvHelpPageVerbs: [CommandVocabulary.Command] = [
+    .wait, .news, .packs, .protect, .policy, .scan, .service, .setup, .initialize, .uninstall, .doctor,
+    .egress, .safety, .blocks, .log, .host, .pause, .audit, .secrets, .login, .managed, .report,
 ]
+
+/// `rv <verb> [<sub>] --help` for a plain rv invocation: the verb (one of
+/// `rvHelpPageVerbs`) and at most one lowercase subcommand word, the exact
+/// form self-protection lets through. Nil for any other verb.
+func rvHelpCommand(_ words: [String]) -> String? {
+    let verbs = words.dropFirst().prefix(while: isHelpWord).prefix(2)
+    guard let verb = verbs.first, rvHelpPageVerbs.contains(where: { $0.rawValue == verb }) else { return nil }
+    return ([CommandVocabulary.program] + verbs + ["--help"]).joined(separator: " ")
+}
 
 private func isHelpWord(_ word: String) -> Bool {
     guard let first = word.unicodeScalars.first, ("a"..."z").contains(first) else { return false }
