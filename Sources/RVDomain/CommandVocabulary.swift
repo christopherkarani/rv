@@ -23,6 +23,7 @@ public enum CommandVocabulary {
         case test
         case `try`
         case term
+        case wait
         case explain
         case check
         case prompt
@@ -45,6 +46,8 @@ public enum CommandVocabulary {
         /// `rv log`: the same ledger as `blocks`, in fixed columns.
         case log
         case host
+        /// `rv pause 10m` (H4).
+        case pause
         case audit
         case secrets
         case login

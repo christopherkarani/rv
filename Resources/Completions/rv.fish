@@ -6,6 +6,7 @@ complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persi
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
 complete -c rv -n "__fish_use_subcommand" -a "try" -d "Watch rv stop a fake agent in a throwaway repo"
 complete -c rv -n "__fish_use_subcommand" -a "term" -d "Watch what rv is doing, full screen"
+complete -c rv -n "__fish_use_subcommand" -a "wait" -d "Wait for the answer to a stop"
 complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
 complete -c rv -n "__fish_use_subcommand" -a "check" -d "Check a plan before an agent runs it"
 complete -c rv -n "__fish_use_subcommand" -a "prompt" -d "One glyph for your shell prompt"
