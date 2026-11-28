@@ -123,6 +123,29 @@ public struct LogRow: Equatable, Sendable {
     public var target: String
     public var code: String?
     public var session: String?
+    /// `★ first save · kept 14 files` on the one row that was rv's first
+    /// save; nil on every other row.
+    public var firstSave: String? = nil
+}
+
+/// The first save (C5): the first real stop by a pack rule, which `rv
+/// log` stars by its code, with what the stop kept when that was counted.
+public struct LogFirstSave: Equatable, Sendable {
+    public static let star = "★"
+    public var code: String
+    /// `kept 14 files · 2,314 lines`; nil when nothing was counted (rv
+    /// never guesses a receipt).
+    public var receipt: String?
+
+    public init(code: String, receipt: String? = nil) {
+        self.code = code
+        self.receipt = receipt
+    }
+
+    /// `★ first save · kept 14 files · 2,314 lines`, or `★ first save`.
+    public var text: String {
+        ([Self.star + " first save"] + (receipt.map { [$0] } ?? [])).joined(separator: " · ")
+    }
 }
 
 /// `rv log`: the newest decisions in fixed columns, one summary line.
@@ -166,7 +189,7 @@ public struct LogViewModel: Equatable, Sendable {
     public init(
         entries: [LogEntry], query: LogQuery, now: Date, calendar: Calendar,
         windowDays: Int = 7, coveredFrom: Date? = nil, ledgerOff: Bool = false,
-        commandsRecorded: Bool = true, skippedDays: [String] = []
+        commandsRecorded: Bool = true, skippedDays: [String] = [], firstSave: LogFirstSave? = nil
     ) {
         let windowStart = now.addingTimeInterval(-Double(windowDays) * 86_400)
         let newestFirst = entries
@@ -176,7 +199,11 @@ public struct LogViewModel: Equatable, Sendable {
         let listed = folds ? newestFirst.filter { $0.isShadowJudgeNote == false } : newestFirst
         let shown = query.all ? listed : Array(listed.prefix(LogQuery.defaultLimit))
         let allToday = listed.allSatisfy { calendar.isDate($0.time, inSameDayAs: now) }
-        self.rows = shown.map { Self.row($0, now: now, calendar: calendar) }
+        self.rows = shown.map { entry in
+            var row = Self.row(entry, now: now, calendar: calendar)
+            if let firstSave, entry.stopped, entry.code == firstSave.code { row.firstSave = firstSave.text }
+            return row
+        }
         self.matching = listed.count
         self.stopped = listed.filter(\.stopped).count
         self.wouldStop = listed.count - stopped
