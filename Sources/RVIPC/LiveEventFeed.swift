@@ -282,14 +282,18 @@ package struct LiveFeedReader: Sendable {
         // delivered: a duplicated or replayed reply never repeats one.
         let floor = sameStream ? cursor ?? 0 : 0
         var last = floor
+        var fresh = 0
         for event in reply.events where !sameStream || event.sequence > floor {
             queued.append(.event(event))
             last = max(last, event.sequence)
+            fresh += 1
         }
         stream = reply.stream
         // Never move the cursor backwards on one stream.
         cursor = sameStream ? max(reply.cursor, last, floor) : max(reply.cursor, last)
-        if reply.events.isEmpty, pacing.waitMs <= 0 || elapsed < .milliseconds(pacing.waitMs / 2) {
+        // Nothing new queued (an empty reply, or one of only duplicates)
+        // that came back early: rvd is at its waiter cap, so pause.
+        if fresh == 0, pacing.waitMs <= 0 || elapsed < .milliseconds(pacing.waitMs / 2) {
             pause = pacing.busyPause
         }
     }
@@ -301,9 +305,12 @@ package struct LiveFeedReader: Sendable {
     }
 }
 
-/// One poll that a cancelled reader stops waiting on. The poll itself runs
-/// on to its own deadline (`waitMs` plus the transport margin), then its
-/// reply is dropped; the cursor lives in the reader, so nothing is lost.
+/// One poll that a cancelled reader stops waiting on. The poll runs in a
+/// task of its own (a continuation cannot host child tasks), so the
+/// reader's cancellation is passed on to it by hand: a cancelled feed
+/// leaves no orphan poll holding an rvd waiter slot or touching the
+/// connection a later feed uses. Its result, if one still comes, is
+/// dropped; the cursor lives in the reader, so nothing is lost.
 enum LiveFeedPoll {
     static func run<Source: LiveEventsPolling>(
         _ params: EventsParams, on source: Source
@@ -312,18 +319,19 @@ enum LiveFeedPoll {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<LiveEventsPollResult?, Never>) in
                 guard once.arm(continuation) else { return }
-                Task {
+                once.start(Task {
                     once.resume(with: await source.pollLiveEvents(params))
-                }
+                })
             }
         } onCancel: {
-            once.resume(with: nil)
+            once.cancel()
         }
     }
 }
 
 /// Resumes one continuation once, whichever of the poll and cancellation
-/// comes first. Cancellation may land before the continuation is armed.
+/// comes first, and cancels the poll's task on cancellation. Cancellation
+/// may land before the continuation is armed or the task is started.
 private final class LiveFeedOnce: Sendable {
     private enum State {
         case idle
@@ -333,6 +341,7 @@ private final class LiveFeedOnce: Sendable {
     }
 
     private let state = Mutex(State.idle)
+    private let poll = Mutex<(task: Task<Void, Never>?, cancelled: Bool)>((nil, false))
 
     /// False when cancellation already came; the continuation is resumed.
     func arm(_ continuation: CheckedContinuation<LiveEventsPollResult?, Never>) -> Bool {
@@ -346,6 +355,25 @@ private final class LiveFeedOnce: Sendable {
         }
         if early { continuation.resume(returning: nil) }
         return !early
+    }
+
+    /// Holds the poll's task, or cancels it at once if cancellation came
+    /// between `arm` and here.
+    func start(_ task: Task<Void, Never>) {
+        let cancelNow = poll.withLock { poll -> Bool in
+            poll.task = task
+            return poll.cancelled
+        }
+        if cancelNow { task.cancel() }
+    }
+
+    func cancel() {
+        let task = poll.withLock { poll -> Task<Void, Never>? in
+            poll.cancelled = true
+            return poll.task
+        }
+        task?.cancel()
+        resume(with: nil)
     }
 
     func resume(with result: LiveEventsPollResult?) {

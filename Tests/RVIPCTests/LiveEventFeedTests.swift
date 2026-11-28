@@ -192,6 +192,39 @@ struct LiveEventFeedTests {
         #expect(source.params.isEmpty)
     }
 
+    /// Cancellation reaches the poll itself: opening and closing feeds in
+    /// a loop leaves no polls running (each one would hold an rvd waiter).
+    @Test func openCloseLoopsLeaveNoPollsBehind() async {
+        let source = CancellablePolls()
+        for _ in 0..<20 {
+            let reader = Task {
+                var iterator = LiveEventFeed(source: source, start: .now, pacing: LiveFeedPacing()).makeAsyncIterator()
+                return await iterator.next()
+            }
+            let started = source.started
+            while source.started == started { await Task.yield() }
+            reader.cancel()
+            #expect(await reader.value == nil)
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while source.inFlight > 0, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(source.started == 20)
+        #expect(source.inFlight == 0)
+    }
+
+    /// A reply of only duplicates that comes back early queues nothing new,
+    /// so the feed pauses as it does for an empty one instead of spinning.
+    @Test func anEarlyAllDuplicateReplyPauses() async {
+        let clock = TestClock()
+        let one = LiveEventsPollResult.reply(EventsReply(stream: first, cursor: 1, events: [decision(1)]))
+        let source = ScriptedPolls(
+            [one, one, .reply(EventsReply(stream: first, cursor: 2, events: [decision(2)]))],
+            pollTakes: [.seconds(5), .zero, .zero], clock: clock)
+        let updates = await take(3, from: feed(source, clock: clock))
+        #expect(updates == [.link(.live), .event(decision(1)), .event(decision(2))])
+        #expect(clock.sleeps == [.seconds(1)])
+    }
+
     @Test func backoffDoublesToItsCap() {
         let pacing = LiveFeedPacing(firstBackoff: .milliseconds(100), maxBackoff: .milliseconds(700))
         #expect((1...6).map { pacing.backoff(attempt: $0) } == [
@@ -285,6 +318,24 @@ private final class ScriptedPolls: LiveEventsPolling, Sendable {
         if hangWhenEmpty {
             await withCheckedContinuation { continuation in hung.withLock { $0.append(continuation) } }
         }
+        return .refused
+    }
+}
+
+/// Polls that park until cancelled, counting how many are still running.
+private final class CancellablePolls: LiveEventsPolling, Sendable {
+    private let counts = Mutex((started: 0, inFlight: 0))
+
+    var started: Int { counts.withLock { $0.started } }
+    var inFlight: Int { counts.withLock { $0.inFlight } }
+
+    func pollLiveEvents(_ params: EventsParams) async -> LiveEventsPollResult {
+        counts.withLock {
+            $0.started += 1
+            $0.inFlight += 1
+        }
+        defer { counts.withLock { $0.inFlight -= 1 } }
+        try? await Task.sleep(for: .seconds(60))
         return .refused
     }
 }

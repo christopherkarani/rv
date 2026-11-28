@@ -304,6 +304,22 @@ struct ServiceClientLiveFeedTests {
         #expect(transport.helloCount == 1)
     }
 
+    /// A cancelled poll sends nothing and never invalidates the events
+    /// channel, which a newer feed on the same client may be using.
+    @Test func aCancelledPollLeavesTheChannelAlone() async {
+        let transport = ScriptedTransport(
+            ack: ack, helloError: .decodeFailed, responseResults: [.error(.protocolSkew(.handshakeRequired))])
+        let client = client(transport)
+        let poll = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await client.pollLiveEvents(EventsParams())
+        }
+        #expect(await poll.value == .failed("cancelled"))
+        #expect(transport.sendCount == 0)
+        #expect(transport.helloCount == 0)
+        #expect(transport.invalidationCount == 0)
+    }
+
     /// The whole chain: the feed over a client over its events channel.
     @Test func theFeedReadsEventsThroughTheClient() async {
         let event = LiveEvent(sequence: 1, atMs: 0, payload: .decision(LiveDecision(

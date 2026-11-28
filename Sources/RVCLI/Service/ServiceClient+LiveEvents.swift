@@ -51,22 +51,30 @@ extension ServiceClient {
         case helloFailed(String)
     }
 
+    /// A cancelled poll stops at its next step: it sends nothing more, and
+    /// never invalidates `eventsTransport`, which a newer feed on this
+    /// client may already be using.
     private func exchange(_ params: EventsParams) async -> Exchange {
         guard let transport = eventsTransport else { return .noTransport }
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
         let first = await pollOnce(params, using: transport)
         guard case .failure(.service(.protocolSkew(.handshakeRequired))) = first else {
             return .polled(first)
         }
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
         do {
             let ack = try await transport.hello(clientSemver: ProtocolVersion.serviceSemver)
+            if Task.isCancelled { return .polled(.failure(.cancelled)) }
             guard ack.status == .ok else {
                 transport.invalidate()
                 return .helloRefused
             }
         } catch {
+            if Task.isCancelled { return .polled(.failure(.cancelled)) }
             transport.invalidate()
             return .helloFailed(String(describing: error))
         }
+        if Task.isCancelled { return .polled(.failure(.cancelled)) }
         return .polled(await pollOnce(params, using: transport))
     }
 
@@ -91,6 +99,8 @@ extension ServiceClient {
         case service(IPCError)
         case call(IPCCallError)
         case transport(String)
+        /// The poll's task was cancelled before it finished.
+        case cancelled
     }
 
     private func outcome(_ result: Result<EventsReply, PollFailure>) -> Result<LiveEventsPoll, ServiceCommandError> {
@@ -105,6 +115,8 @@ extension ServiceClient {
             return .failure(mapCallError(error))
         case .failure(.transport(let text)):
             return .failure(.transport(text))
+        case .failure(.cancelled):
+            return .failure(.transport("cancelled"))
         }
     }
 }
@@ -129,6 +141,8 @@ extension ServiceClient: LiveEventsPolling {
             return .failed(String(describing: error))
         case .polled(.failure(.transport(let text))), .helloFailed(let text):
             return .failed(text)
+        case .polled(.failure(.cancelled)):
+            return .failed("cancelled")
         case .helloRefused:
             return .skewed
         case .noTransport:
