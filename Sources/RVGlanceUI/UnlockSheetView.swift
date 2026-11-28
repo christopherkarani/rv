@@ -61,7 +61,7 @@ struct UnlockSheetBody: View {
             .padding(8)
             .glanceTile(cornerRadius: 9)
             .accessibilityLabel(Text("Command: \(sheet.command)"))
-            Text(sheet.effect).font(.system(size: 12))
+            Text(sheet.effect).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
             if let says = sheet.agentSays {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(sheet.agentSaysLabel).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -79,13 +79,19 @@ struct UnlockSheetBody: View {
             HStack {
                 Button(UnlockSheet.denyLabel) { model.deny() }
                 Spacer()
-                Button(UnlockSheet.alwaysAllowLabel) { model.allow(.alwaysAllow) }
+                Button(UnlockSheet.alwaysAllowLabel) { allow(.alwaysAllow) }
                     .disabled(busy || !sheet.canApprove)
-                Button(UnlockSheet.allowOnceLabel) { model.allow(.allowOnce) }
+                Button(UnlockSheet.allowOnceLabel) { allow(.allowOnce) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(busy || !sheet.canApprove)
             }
         }
+    }
+
+    /// Answers the review this sheet shows, and no other.
+    private func allow(_ decision: UIUnlockDecision) {
+        guard let challenge = sheet.challengeID else { return }
+        model.allow(decision, on: challenge)
     }
 }
 

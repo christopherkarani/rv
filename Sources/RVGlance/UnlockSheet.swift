@@ -23,14 +23,14 @@ public struct GlanceUnlockAsk: Sendable, Equatable {
         self.checkWords = checkWords
     }
 
-    /// The asks rvd listed, keyed by code hash. An ask rvd recorded no
-    /// agent for can still be answered on the sheet, but never notifies.
-    public static func asks(from items: [UIUnlockItemDTO]) -> [String: GlanceUnlockAsk] {
+    /// The asks rvd listed, keyed by code hash, with the words worked out
+    /// here from each code. An ask with no agent or no readable code can
+    /// still be answered on the sheet, but never notifies.
+    public static func asks(from items: [UIUnlockSummaryDTO]) -> [String: GlanceUnlockAsk] {
         var asks: [String: GlanceUnlockAsk] = [:]
         for item in items {
-            guard let host = item.host else { continue }
-            asks[item.codeHash] = GlanceUnlockAsk(
-                codeHash: item.codeHash, host: host, checkWords: item.checkWords.joined(separator: CheckWords.separator))
+            guard let host = item.host, let code = AllowOnceUnlockCode(validating: item.code) else { continue }
+            asks[item.codeHash] = GlanceUnlockAsk(codeHash: item.codeHash, host: host, checkWords: CheckWords.line(for: code))
         }
         return asks
     }
@@ -39,6 +39,9 @@ public struct GlanceUnlockAsk: Sendable, Equatable {
 /// The sheet for one unlock ask.
 public struct UnlockSheet: Sendable, Equatable {
     public var codeHash: String
+    /// The review this sheet shows. A tap answers only this challenge, so
+    /// it can never land on a review that was bound again meanwhile.
+    public var challengeID: UUID?
     /// "Needs you".
     public var title: String
     /// "claude is waiting · expires in 12m".
@@ -71,19 +74,19 @@ public struct UnlockSheet: Sendable, Equatable {
 
     public var canApprove: Bool { unavailable == nil }
 
-    public init(_ item: UIUnlockItemDTO, now: Date) {
+    public init(_ item: UIUnlockItemDTO, challengeID: UUID? = nil, now: Date) {
         let agent = item.host?.rawValue ?? "the agent"
         // The words are worked out here from the code, the way `rv wait`
         // works them out, never taken from the reply.
         let code = AllowOnceUnlockCode(validating: item.code)
         let words = code.map(CheckWords.line(for:)) ?? "unavailable"
         codeHash = item.codeHash
+        self.challengeID = challengeID
         title = "Needs you"
         subtitle = "\(agent) is waiting · \(Self.expiry(item.advisoryExpiresWall, now: now))"
         who = "\(item.host.map(GlanceAgent.displayName) ?? "An agent") · \(item.workingDirectory)"
         command = item.command
-        effect = PlainTemplate.line(for: PlainRequest(
-            host: item.host ?? .claude, tool: .bash, text: item.command, outcome: .stopped, rule: item.rule)).text
+        effect = item.effect
         agentSaysLabel = "\(agent) says"
         agentSays = item.agentSays
         checkWords = "Check the words in your terminal: \(words)"
@@ -93,6 +96,8 @@ public struct UnlockSheet: Sendable, Equatable {
             + "Undo with rv allowlist remove."
         if code == nil {
             unavailable = "rv sent a code this app can't read, so it can't be approved here."
+        } else if item.status == .lockedOut {
+            unavailable = Self.lockedOutLine
         } else if !item.approvable {
             unavailable = "This command is too long to approve in a prompt. Run it yourself in a terminal instead."
         } else {
@@ -100,17 +105,23 @@ public struct UnlockSheet: Sendable, Equatable {
         }
     }
 
-    /// The Touch ID prompt's reason. Built from the code and its words
-    /// only, never from text an agent wrote, so the prompt cannot be
-    /// dressed up; the sheet beside it shows the whole command.
-    public static func touchIDReason(code: AllowOnceUnlockCode, decision: UIUnlockDecision) -> String {
-        let words = CheckWords.line(for: code)
-        let code = code.rawValue
+    public static let lockedOutLine =
+        "Too many declined Touch ID or password checks. rv won't ask again for 10 minutes."
+
+    /// The Touch ID prompt's reason: rvd's own prompt text for the code
+    /// (the terminal's words: the whole command, escaped, at most 300
+    /// characters, its folder, rule and code) and the check words, so the
+    /// system prompt names the command even where it covers the sheet. Never
+    /// the agent's words. Nil when rvd gave no prompt text: then nothing
+    /// may be approved here.
+    public static func touchIDReason(_ item: UIUnlockItemDTO, decision: UIUnlockDecision) -> String? {
+        guard let prompt = item.promptText, let code = AllowOnceUnlockCode(validating: item.code) else { return nil }
+        let words = "check words \(CheckWords.line(for: code))"
         switch decision {
         case .allowOnce:
-            return "allow the stopped command once (code \(code), \(words))"
+            return "\(prompt), \(words)"
         case .alwaysAllow:
-            return "always allow the stopped command (code \(code), \(words))"
+            return "always allow from now on, and \(prompt), \(words)"
         }
     }
 
@@ -132,6 +143,10 @@ public enum UnlockOutcomeText {
             "\(CommandVocabulary.Glyph.done.rawValue) Always allowed. \(agent) can retry it now."
         case .alreadyAnswered:
             "\(CommandVocabulary.Glyph.done.rawValue) Already answered in a terminal."
+        case .declined:
+            "\(CommandVocabulary.Glyph.stopped.rawValue) Still stopped. Touch ID didn't pass."
+        case .lockedOut:
+            "\(CommandVocabulary.Glyph.stopped.rawValue) Still stopped. \(UnlockSheet.lockedOutLine)"
         case .waiting, .awaitingAuthentication, .unknown:
             "\(CommandVocabulary.Glyph.stopped.rawValue) Still stopped."
         }
@@ -140,9 +155,9 @@ public enum UnlockOutcomeText {
 
 /// The unlock banner's actions (K2), and where a tap on one leads. Pure:
 /// the macOS app registers the category with these ids and hands each
-/// response here. A banner action never answers anything by itself: the
-/// most it does is open the sheet and start the Touch ID prompt, which the
-/// person still has to pass, beside the sheet showing the whole command.
+/// response here. A banner action never answers anything and never starts
+/// Touch ID: it only opens the sheet, where the whole command is shown and
+/// the person taps Allow themselves.
 public enum UnlockNoticeAction {
     public static let category = "rv.unlock"
     public static let allowOnce = "rv.unlock.allow-once"
@@ -152,11 +167,9 @@ public enum UnlockNoticeAction {
     public static let openBanner = "com.apple.UNNotificationDefaultActionIdentifier"
     public static let dismissBanner = "com.apple.UNNotificationDismissActionIdentifier"
 
+    /// Open the sheet for this ask. Nothing more.
     public struct Route: Sendable, Equatable {
         public var codeHash: String
-        /// Set when the action itself asked to allow: the sheet opens and
-        /// Touch ID starts at once.
-        public var then: UIUnlockDecision?
     }
 
     /// Nil for a dismissal, an unknown action, or a banner that names no
@@ -164,8 +177,7 @@ public enum UnlockNoticeAction {
     public static func route(actionID: String, codeHash: String?) -> Route? {
         guard let codeHash, isCodeHash(codeHash) else { return nil }
         switch actionID {
-        case allowOnce: return Route(codeHash: codeHash, then: .allowOnce)
-        case openBanner: return Route(codeHash: codeHash, then: nil)
+        case allowOnce, openBanner: return Route(codeHash: codeHash)
         default: return nil
         }
     }

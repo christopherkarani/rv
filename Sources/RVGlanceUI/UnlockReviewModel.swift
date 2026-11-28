@@ -22,17 +22,14 @@ public final class UnlockReviewModel {
     @ObservationIgnored public var onAsksChanged: (([String: GlanceUnlockAsk]) -> Void)?
     @ObservationIgnored private var lastAsks: [String: GlanceUnlockAsk] = [:]
 
-    /// How often the list is re-read while nothing else prompts it.
-    static let pollInterval: Duration = .seconds(4)
-
     public init(bridge: any UnlockBridge, authenticator: any UnlockAuthenticator) {
         self.bridge = bridge
         self.authenticator = authenticator
     }
 
-    /// The sheet for the ask under review, if any.
+    /// The sheet for the ask under review, if any, naming its challenge.
     public var sheet: UnlockSheet? {
-        review.onSheet.map { UnlockSheet($0.item, now: now) }
+        review.onSheet.map { UnlockSheet($0.item, challengeID: $0.challenge.challengeID, now: now) }
     }
 
     public func start() {
@@ -40,7 +37,10 @@ public final class UnlockReviewModel {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.send(.refreshRequested)
-                try? await Task.sleep(for: Self.pollInterval)
+                // 4 s while rvd answers; backs off to 5 minutes when it
+                // refuses (an unpinned build) or is down.
+                let delay = self?.review.pollDelay ?? .seconds(4)
+                try? await Task.sleep(for: delay)
             }
         }
     }
@@ -50,14 +50,14 @@ public final class UnlockReviewModel {
         pollTask = nil
     }
 
-    /// Opens the sheet for one ask; `then` (from a banner's Allow once)
-    /// starts Touch ID as soon as rvd binds the review.
-    public func open(codeHash: String, then: UIUnlockDecision? = nil) {
-        Task { await send(.openTapped(codeHash: codeHash, then: then)) }
+    /// Opens the sheet for one ask. Touch ID waits for an Allow tap on it.
+    public func open(codeHash: String) {
+        Task { await send(.openTapped(codeHash: codeHash)) }
     }
 
-    public func allow(_ decision: UIUnlockDecision) {
-        Task { await send(.allowTapped(decision)) }
+    /// An Allow tap on the sheet that showed `challenge`.
+    public func allow(_ decision: UIUnlockDecision, on challenge: UUID) {
+        Task { await send(.allowTapped(challenge: challenge, decision)) }
     }
 
     public func deny() {

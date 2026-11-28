@@ -4,14 +4,25 @@ import RVGlance
 import SwiftUI
 import UserNotifications
 
-/// Routes a tap on an unlock banner (K2). "Allow once…" opens the sheet in
-/// a panel and starts Touch ID for that one code; a plain tap opens the
-/// sheet; a dismissal does nothing and the command stays stopped. If the
-/// prompt cannot run from here, the sheet is already open to try again.
+/// Routes a tap on an unlock banner (K2). "Allow once…" and a plain tap
+/// both open the sheet in a panel, showing the whole command; Touch ID
+/// starts only when the person taps Allow there. A dismissal does nothing
+/// and the command stays stopped. Set as the notification delegate at
+/// launch, so a tap that launched the app is not lost: a route that comes
+/// before the model is attached waits for it.
 public final class UnlockBannerRouter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     public static let shared = UnlockBannerRouter()
-    @MainActor public var unlocks: UnlockReviewModel?
+    @MainActor private var unlocks: UnlockReviewModel?
+    @MainActor private var pending: UnlockNoticeAction.Route?
     @MainActor private var panel: NSPanel?
+
+    @MainActor public func attach(_ unlocks: UnlockReviewModel) {
+        self.unlocks = unlocks
+        if let pending {
+            self.pending = nil
+            show(pending)
+        }
+    }
 
     public func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
@@ -29,13 +40,16 @@ public final class UnlockBannerRouter: NSObject, UNUserNotificationCenterDelegat
     }
 
     @MainActor private func show(_ route: UnlockNoticeAction.Route) {
-        guard let unlocks else { return }
+        guard let unlocks else {
+            pending = route
+            return
+        }
         let panel = panel ?? Self.makePanel(unlocks)
         self.panel = panel
         NSApplication.shared.activate()
         panel.center()
         panel.makeKeyAndOrderFront(nil)
-        unlocks.open(codeHash: route.codeHash, then: route.then)
+        unlocks.open(codeHash: route.codeHash)
     }
 
     @MainActor private static func makePanel(_ unlocks: UnlockReviewModel) -> NSPanel {

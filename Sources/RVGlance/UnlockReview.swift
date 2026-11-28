@@ -5,12 +5,17 @@ import RVIPC
 // K2 review state for the menu bar's unlock sheet, as a pure reducer: the
 // shell runs the commands it returns (rvd calls, the Touch ID prompt) and
 // feeds the replies back as events. The rules it keeps:
-// - every Allow tap asks for a fresh device-owner authentication; nothing
-//   is ever sent to rvd without one, and a cancelled or failed prompt
-//   sends nothing (the review stays open for another try);
+// - Touch ID starts only from an Allow tap on the sheet, which shows the
+//   whole command, and that tap names the challenge it answers: a tap
+//   meant for one review can never land on another. Nothing else (a
+//   banner action, a list reply, a bind reply) starts it;
+// - every Allow asks for a fresh device-owner authentication, whose prompt
+//   names the command in rvd's own words;
 // - a completion echoes exactly the challenge rvd bound for the ask on the
 //   sheet, and only once: rvd spends the challenge on any answer, so a
-//   retry binds afresh;
+//   retry binds afresh. A cancelled or failed prompt is reported as such:
+//   rvd grants nothing, audits it, and counts it toward the owner-check
+//   lockout; the sheet then binds again so the person can retry;
 // - Deny sends no answer: it closes the review and the command stays
 //   stopped, its code still good in a terminal.
 //
@@ -50,9 +55,8 @@ public protocol UnlockAuthenticator: Sendable {
 public struct UnlockReview: Sendable, Equatable {
     public enum Phase: Sendable, Equatable {
         case idle
-        /// Waiting for rvd to bind the review; `then` is an answer the
-        /// person already gave (from a notification's Allow once).
-        case binding(codeHash: String, then: UIUnlockDecision?)
+        /// Waiting for rvd to bind the review.
+        case binding(codeHash: String)
         case reviewing(UIUnlockChallengeBundleDTO)
         case authenticating(UIUnlockChallengeBundleDTO, UIUnlockDecision)
         case completing(UIUnlockChallengeBundleDTO, UIUnlockDecision)
@@ -62,12 +66,12 @@ public struct UnlockReview: Sendable, Equatable {
 
     public enum Event: Sendable, Equatable {
         case refreshRequested
-        case listReplied(Result<[UIUnlockItemDTO], UnlockFailure>)
-        /// Open the sheet for one ask. `then` answers right after the bind
-        /// (a notification's Allow once): the Touch ID prompt still runs.
-        case openTapped(codeHash: String, then: UIUnlockDecision?)
+        case listReplied(Result<UIUnlockListDTO, UnlockFailure>)
+        /// Open the sheet for one ask. Only opens it.
+        case openTapped(codeHash: String)
         case bindReplied(codeHash: String, Result<UIUnlockChallengeBundleDTO, UnlockFailure>)
-        case allowTapped(UIUnlockDecision)
+        /// An Allow tap on the sheet showing `challenge`.
+        case allowTapped(challenge: UUID, UIUnlockDecision)
         case authenticated(challenge: UUID, UIUnlockDecision, UIAuthenticationOutcome)
         case completeReplied(challenge: UUID, Result<UIUnlockStatus, UnlockFailure>)
         case denyTapped
@@ -82,18 +86,23 @@ public struct UnlockReview: Sendable, Equatable {
         case release(codeHash: String)
     }
 
-    public private(set) var items: [UIUnlockItemDTO] = []
+    /// The list's rows: no command text.
+    public private(set) var items: [UIUnlockSummaryDTO] = []
+    /// How many more asks rvd had past its list cap.
+    public private(set) var omitted = 0
     public private(set) var phase: Phase = .idle
     public private(set) var notice: String?
     /// Asks the person denied: hidden until rvd stops listing them.
     public private(set) var dismissed: Set<String> = []
     /// False after rvd refused or missed the last list.
     public private(set) var reachable = true
+    /// Lists refused or missed in a row; the poll backs off on them.
+    public private(set) var listFailures = 0
 
     public init() {}
 
     /// The asks to show, oldest first.
-    public var waiting: [UIUnlockItemDTO] {
+    public var waiting: [UIUnlockSummaryDTO] {
         items.filter { !dismissed.contains($0.codeHash) }
     }
 
@@ -112,6 +121,18 @@ public struct UnlockReview: Sendable, Equatable {
         }
     }
 
+    /// How long to wait before the next list: 4 s while rvd answers, then
+    /// doubling on each refusal or miss up to 5 minutes, so a menu bar rvd
+    /// won't answer (an unpinned build, rvd down) asks rarely.
+    public var pollDelay: Duration { Self.pollDelay(afterFailures: listFailures) }
+
+    public static func pollDelay(afterFailures failures: Int) -> Duration {
+        let base = 4
+        let cap = 300
+        guard failures > 0 else { return .seconds(base) }
+        return .seconds(min(cap, base << min(failures, 7)))
+    }
+
     public mutating func reduce(_ event: Event) -> [Command] {
         switch event {
         case .refreshRequested:
@@ -119,10 +140,12 @@ public struct UnlockReview: Sendable, Equatable {
 
         case .listReplied(.success(let listed)):
             reachable = true
-            items = listed
-            dismissed.formIntersection(listed.map(\.codeHash))
-            if case .reviewing(let bundle) = phase,
-                !listed.contains(where: { $0.codeHash == bundle.challenge.codeHash }) {
+            listFailures = 0
+            items = listed.items
+            omitted = listed.omitted
+            dismissed.formIntersection(listed.items.map(\.codeHash))
+            if case .reviewing(let bundle) = phase, listed.omitted == 0,
+                !listed.items.contains(where: { $0.codeHash == bundle.challenge.codeHash }) {
                 phase = .idle
                 notice = "That stop was answered elsewhere or expired."
             }
@@ -130,22 +153,24 @@ public struct UnlockReview: Sendable, Equatable {
 
         case .listReplied(.failure):
             // Quiet: a menu bar without the operator role (or with rvd
-            // down) simply has nothing to show. The sheet says so if open.
+            // down) simply has nothing to show, and asks less often.
             reachable = false
+            listFailures += 1
             return []
 
-        case .openTapped(let codeHash, let then):
+        case .openTapped(let codeHash):
             guard !isBusy else { return [] }
             notice = nil
-            phase = .binding(codeHash: codeHash, then: then)
+            phase = .binding(codeHash: codeHash)
             return [.bind(codeHash: codeHash)]
 
         case .bindReplied(let codeHash, let result):
-            guard case .binding(let pending, let then) = phase, pending == codeHash else { return [] }
+            guard case .binding(let pending) = phase, pending == codeHash else { return [] }
             switch result {
             case .success(let bundle) where bundle.challenge.codeHash == codeHash && bundle.item.codeHash == codeHash:
+                // Only shows the sheet: Touch ID waits for a tap on it.
                 phase = .reviewing(bundle)
-                return then.map { reduce(.allowTapped($0)) } ?? []
+                return []
             case .success:
                 // rvd bound something other than the ask on the sheet.
                 phase = .idle
@@ -157,39 +182,41 @@ public struct UnlockReview: Sendable, Equatable {
                 return [.list]
             }
 
-        case .allowTapped(let decision):
-            guard case .reviewing(let bundle) = phase else { return [] }
-            guard bundle.item.approvable, let code = AllowOnceUnlockCode(validating: bundle.item.code) else {
-                notice = UnlockSheet(bundle.item, now: bundle.challenge.issuedWall).unavailable
+        case .allowTapped(let challenge, let decision):
+            guard case .reviewing(let bundle) = phase, bundle.challenge.challengeID == challenge else { return [] }
+            let sheet = UnlockSheet(bundle.item, challengeID: challenge, now: bundle.challenge.issuedWall)
+            guard sheet.canApprove, let reason = UnlockSheet.touchIDReason(bundle.item, decision: decision) else {
+                notice = sheet.unavailable
                 return []
             }
             notice = nil
             phase = .authenticating(bundle, decision)
-            return [.authenticate(
-                challenge: bundle.challenge.challengeID, decision,
-                reason: UnlockSheet.touchIDReason(code: code, decision: decision))]
+            return [.authenticate(challenge: challenge, decision, reason: reason)]
 
         case .authenticated(let challenge, let decision, let outcome):
             guard case .authenticating(let bundle, let asked) = phase,
                 bundle.challenge.challengeID == challenge, asked == decision
             else { return [] }
-            guard outcome == .authenticated else {
-                // Nothing goes to rvd: it would spend the challenge for an
-                // answer the owner never gave.
-                phase = .reviewing(bundle)
-                notice = Self.notAuthenticated(outcome)
-                return []
-            }
+            // Every outcome goes to rvd: an authenticated one may grant,
+            // any other only spends the challenge and is recorded.
+            notice = Self.notAuthenticated(outcome)
             phase = .completing(bundle, decision)
             return [.complete(UIUnlockCompletion(
                 challengeID: bundle.challenge.challengeID, codeHash: bundle.challenge.codeHash,
-                decision: decision, outcome: .authenticated))]
+                decision: decision, outcome: outcome))]
 
         case .completeReplied(let challenge, let result):
             guard case .completing(let bundle, _) = phase, bundle.challenge.challengeID == challenge else { return [] }
+            let codeHash = bundle.challenge.codeHash
             switch result {
+            case .success(.declined), .success(.lockedOut):
+                // Nothing was granted and the challenge is spent: bind a
+                // fresh one so the sheet stays up for another try.
+                if case .success(.lockedOut) = result { notice = UnlockSheet.lockedOutLine }
+                phase = .binding(codeHash: codeHash)
+                return [.bind(codeHash: codeHash), .list]
             case .success(let status):
-                phase = .answered(codeHash: bundle.challenge.codeHash, status)
+                phase = .answered(codeHash: codeHash, status)
             case .failure(let failure):
                 // rvd spent the challenge: a retry must bind again.
                 phase = .idle
@@ -225,7 +252,7 @@ public struct UnlockReview: Sendable, Equatable {
         switch outcome {
         case .authenticated: nil
         case .cancelled: "Touch ID was cancelled. Nothing was allowed."
-        case .unavailable: "Touch ID and your password aren't available here. Use rv allow-once in a terminal."
+        case .unavailable: "Touch ID and your password aren't available here. Use rv unlock in a terminal."
         case .timedOut: "Touch ID timed out. Nothing was allowed."
         case .invalidated: "Touch ID was interrupted. Nothing was allowed."
         case .failed: "Touch ID didn't recognise you. Nothing was allowed."
@@ -244,7 +271,7 @@ public enum UnlockReviewRunner {
         switch command {
         case .list:
             do {
-                return .listReplied(.success(try await bridge.list().items))
+                return .listReplied(.success(try await bridge.list()))
             } catch {
                 return .listReplied(.failure(.unreachable))
             }

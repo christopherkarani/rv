@@ -24,6 +24,11 @@ struct RVMenuApplication: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
+        // K2: the delegate is set before launch finishes, so a banner tap
+        // that launched the app reaches the router.
+        if UserNotificationSink.canNotify {
+            UNUserNotificationCenter.current().delegate = UnlockBannerRouter.shared
+        }
         // Intents get their own read-only reader and no freeze until rvd has the verb.
         GlanceIntentEnvironment.services = GlanceIntentServices(reader: GlanceReader(wire: XPCGlanceWire())) {
             GlancePosture(config: GuardConfig.read(home: HomeDirectory.process()))
@@ -57,10 +62,7 @@ struct RVMenuApplication: App {
         let unlocks = unlocks
         unlocks.onAsksChanged = { asks in model.setUnlocks(asks) }
         unlocks.start()
-        UnlockBannerRouter.shared.unlocks = unlocks
-        if UserNotificationSink.canNotify {
-            UNUserNotificationCenter.current().delegate = UnlockBannerRouter.shared
-        }
+        UnlockBannerRouter.shared.attach(unlocks)
     }
 
     @MainActor private static var started = false
