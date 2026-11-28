@@ -16,9 +16,10 @@ public struct OffPackHit: Equatable, Sendable {
 }
 
 /// Evaluates commands against bundled packs that are not the ones in force,
-/// for `rv explain` ("would stop if database.redis were on").
+/// for `rv explain` ("a rule in database.redis matches").
 ///
-/// Read-only and advisory: it runs the pinned pack `evaluate` on a pack set
+/// Read-only and advisory: it runs `evaluateWithSemantics` (the pack
+/// evaluate plus the semantic analyzers, as the hook door does) on a pack set
 /// of the caller's choosing and never changes a verdict. Patterns compile
 /// on demand, and only for packs a command could reach (one of their
 /// keywords is in its matching view: the engine skips a pack otherwise).
@@ -43,7 +44,9 @@ public struct PackProbe: Sendable {
     ///
     /// Each hit is a deny the pack's own rule gives (critical or high). A
     /// medium or low match lets the command run, so it is not a stop. Packs
-    /// already on are left out: what they do is the verdict itself.
+    /// already on are left out: what they do is the verdict itself. The
+    /// owner's allowlist and typed policy rules are not applied, so a hit
+    /// says a rule matches, not that the hook would stop the command.
     public func offPacksThatWouldStop(_ command: ShellCommand, enabled: [PackID]) -> [OffPackHit] {
         let view = Normalize.matchingView(of: command).rawValue
         guard view.isEmpty == false else { return [] }
@@ -59,7 +62,7 @@ public struct PackProbe: Sendable {
             return []
         }
         return candidates.compactMap { candidate in
-            let result = evaluate(
+            let result = evaluateWithSemantics(
                 EvaluationRequest(command: command, enabledPacks: dayOnePackIDs + [candidate.id]),
                 packs: snapshots,
                 engine: engine,

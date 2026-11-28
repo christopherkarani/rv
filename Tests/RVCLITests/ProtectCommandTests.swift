@@ -126,6 +126,26 @@ struct ProtectCommandTests {
         """)
     }
 
+    /// G6b: a tool whose name is two words is one tool, not two.
+    @Test func multiWordToolNames_areOneTool() async throws {
+        let expected: [[String]: String] = [
+            ["docker", "compose"]: "containers.compose", ["github", "actions"]: "cicd.github_actions",
+            ["gitlab", "ci"]: "cicd.gitlab_ci", ["aws", "secrets"]: "secrets.aws_secrets",
+            ["Google", "Cloud"]: "cloud.gcp",
+        ]
+        for (words, id) in expected {
+            let home = try isolatedHome()
+            let capture = CLIOutputCapture()
+            try await withCLIProcess(home: home, output: capture) { try await Protect.parse(words).run() }
+            #expect(capture.stderr.isEmpty, "\(words)")
+            #expect(try PacksFacade.effectiveIDs(home: home).contains(PackID(rawValue: id)), "\(words)")
+        }
+        // Off still needs the owner, and reads the joined name.
+        let request = try ProtectRequest(words: ["docker", "off", "compose"])
+        #expect(request.tool == "docker compose")
+        #expect(request.off)
+    }
+
     @Test func toolNames_mapToPacks() throws {
         let tools = try ProtectTools.bundled()
         let expected: [String: String] = [
@@ -177,7 +197,7 @@ struct ProtectCommandTests {
     }
 
     /// The no-owner enable path never turns a pack off.
-    @Test func enableTightening_refusesAnythingThatWouldLoosen() throws {
+    @Test func enableTightening_keepsEveryPackThatWasOn() throws {
         let home = try isolatedHome()
         let result = try PacksFacade.enableTightening(home: home, ids: ["database"])
         #expect(result.changed.isEmpty == false)
