@@ -14,6 +14,7 @@ public struct RV: AsyncParsableCommand {
             Test.self,
             Try.self,
             Term.self,
+            Wait.self,
             Explain.self,
             CheckCommand.self,
             PromptCommand.self,
