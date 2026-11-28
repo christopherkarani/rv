@@ -3658,15 +3658,15 @@ struct MCPCommandTests {
             environment: bare.environment(presence: Self.present),
             show: { text in review.withLock { $0 += text } }
         ).get()
-        let text = review.withLock { $0 }
-        #expect(result.contains("wrote mcp.json"))
-        #expect(text.contains("${secret:"))
-        #expect(text.contains("→ secret"))
-        #expect(bare.keychain.items.withLock { $0 }.isEmpty == false)
-        let written = bare.text(".config/rv/mcp.json")
-        #expect(written.contains("${secret:"))
-        #expect(written.contains(token) == false)
-        #expect(written.contains(other) == false)
+        let text = review.withLock { $0 } + result
+        // E4: a credential in the args would be shown by ps, so the server is
+        // skipped whole: nothing is written and none of its values are stored.
+        #expect(result.contains("nothing to import"))
+        #expect(text.contains("a credential is in its args"))
+        #expect(text.contains(token) == false)
+        #expect(text.contains(other) == false)
+        #expect(bare.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: bare.config.appendingPathComponent("mcp.json").path) == false)
     }
 
     @Test func importRefusesASplitterInsideAToken() async throws {
