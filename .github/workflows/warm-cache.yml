@@ -1,12 +1,10 @@
 name: warm-cache
 
-# Prime the toolchain and SwiftPM caches on main so PR branches restore
-# them instead of cold-building. Cache entries expire after 7 days of
-# disuse, so refresh weekly even without main pushes.
+# Keep the toolchain and SwiftPM caches alive. Main pushes no longer run
+# this: pr.yml's main run saves the Linux build per merge, and the macOS
+# package key only changes with Package.resolved. Entries expire after 7
+# days of disuse, so refresh weekly (or by hand after a cache purge).
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -73,8 +71,9 @@ jobs:
           path: |
             .build
             ~/.cache/org.swift.swiftpm
-          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-${{ github.sha }}
           restore-keys: |
+            swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}-
             swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
 
       # Build (do not run) everything `swift test` needs, so PRs restore it.
