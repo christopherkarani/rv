@@ -57,6 +57,253 @@ struct DecisionRedactionTests {
     @Test func pathsUseTheBlocksRedaction() {
         #expect(DecisionRedaction.path("/Users/ann/.ssh/id_ed25519", home: home) == "~/.ssh/id_ed25519")
     }
+
+    /// Every command-line form a credential travels in, through the one
+    /// redactor rvd's live events also use (`CommandLineRedaction`).
+    static let forms: [(command: String, shown: String, secret: String)] = [
+        ("curl -u bob:hunter2 https://api.example.com", "curl -u bob:[redacted] https://api.example.com", "hunter2"),
+        ("curl -ubob:hunter2 https://api.example.com", "curl -ubob:[redacted] https://api.example.com", "hunter2"),
+        ("mysql -phunter2 -u root shop", "mysql -p[redacted] -u root shop", "hunter2"),
+        ("sshpass -p hunter2 ssh host.example", "sshpass -p [redacted] ssh host.example", "hunter2"),
+        ("docker login -u bob -p hunter2 registry.example", "docker login -u bob -p [redacted] registry.example", "hunter2"),
+        ("redis-cli -h cache -a hunter2 get k", "redis-cli -h cache -a [redacted] get k", "hunter2"),
+        ("pg_dump --password hunter2 shop", "pg_dump --password [redacted] shop", "hunter2"),
+        ("gh auth login --token hunter2", "gh auth login --token [redacted]", "hunter2"),
+        ("deploy --api-key abc123 --env prod", "deploy --api-key [redacted] --env prod", "abc123"),
+        ("git clone https://bob:hunter2@git.example.com/r.git", "git clone https://bob:[redacted]@git.example.com/r.git", "hunter2"),
+        (#"curl -H "Authorization: Basic Ym9iOmh1bnRlcjI=" https://x.example"#,
+         #"curl -H "Authorization: [redacted] [redacted]" https://x.example"#, "Ym9iOmh1bnRlcjI="),
+        ("curl -H 'X-Api-Key: abc123' https://x.example", "curl -H 'X-Api-Key: [redacted]' https://x.example", "abc123"),
+        ("curl -H 'Cookie: session=abc123' https://x.example", "curl -H 'Cookie: [redacted]' https://x.example", "abc123"),
+    ]
+
+    @Test(arguments: forms.indices)
+    func everyCredentialFormIsHidden(_ index: Int) {
+        let form = Self.forms[index]
+        let shown = DecisionRedaction.command(form.command, home: home)
+        #expect(shown == form.shown)
+        #expect(shown.contains(form.secret) == false)
+        // `rv log` redacts again on read; a redacted row stays as it is.
+        #expect(DecisionRedaction.command(shown, home: home) == shown)
+    }
+
+    /// Inputs the #675 review found leaking, each with what must survive.
+    static let leaks: [(command: String, secret: String, kept: String)] = [
+        // A scheme word's value, with the header's quotes escaped or absent.
+        (#"bash -c "curl -H \"Authorization: Bearer tokSECRETC\" https://api""#, "SECRETC", "https://api"),
+        (#"docker run alpine sh -c "wget --header \"Authorization: Bearer SECRETW\" https://x""#, "SECRETW", "https://x"),
+        ("curl -H Authorization: Bearer tokSECRETD https://x", "SECRETD", "https://x"),
+        ("curl -H 'Authorization: Basic SECRETB' https://x", "SECRETB", "https://x"),
+        // Known token prefixes inside quotes.
+        (#"echo "ghp_0123456789abcdefghijABCDEFGHIJ012345" | gh auth login --with-token"#, "0123456789abcdef", "gh auth login"),
+        ("export KEY='sk-live0123456789abcdef' && run", "live0123456789", "&& run"),
+        (#"curl -H "X-Slack: xoxb-1234567890-abcdefghij" https://x"#, "1234567890-abc", "https://x"),
+        ("echo AKIAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE", "echo"),
+        // JSON values under secret-named keys.
+        (#"curl -d '{"token":"SECRETL"}' https://x"#, "SECRETL", "https://x"),
+        ("cat <<EOF > c.json\n{\"password\": \"SECRETK and more\"}\nEOF", "SECRETK", "c.json"),
+        (#"bash -c "curl -d '{\"api_key\":\"SECRETJ\"}' https://x""#, "SECRETJ", "https://x"),
+        // A header in `--header="…"`.
+        (#"wget --header="X-Api-Key: SECRETM" https://x"#, "SECRETM", "https://x"),
+        // A quoted value with a space.
+        ("sshpass -p 'my SECRETN' ssh host", "SECRETN", "ssh host"),
+        ("curl -u 'bob:my SECRETU' https://x", "SECRETU", "https://x"),
+        // More flags and positional keys.
+        ("curl --oauth2-bearer SECRETO https://x", "SECRETO", "https://x"),
+        ("aws configure set aws_secret_access_key SECRETP", "SECRETP", "aws configure set"),
+        // A quoted `KEY=` / `--flag=` value with a space runs to its quote.
+        (#"psql --password="hunter SECRETV7" db"#, "SECRETV7", "\" db"),
+        (#"PGPASSWORD="pa ss SECRETV9" psql"#, "SECRETV9", "\" psql"),
+        (#"export API_TOKEN="part1 SECRETV10""#, "SECRETV10", "export API_TOKEN="),
+    ]
+
+    @Test(arguments: leaks.indices)
+    func reviewedLeaksAreHidden(_ index: Int) {
+        let leak = Self.leaks[index]
+        let shown = DecisionRedaction.command(leak.command, home: home)
+        #expect(shown.contains(leak.secret) == false, "\(shown)")
+        #expect(shown.contains(leak.kept), "\(shown)")
+        #expect(shown.contains("[redacted]"))
+        #expect(DecisionRedaction.command(shown, home: home) == shown)
+    }
+
+    /// The 2 KB pre-cut can land inside a URL password, before its `@`:
+    /// the token it cuts through is dropped, not shown.
+    @Test func theCutNeverShowsHalfAToken() {
+        let command = "X_TOKEN=" + String(repeating: "a", count: 1990) + " git clone https://bob:SECRETQ"
+            + String(repeating: "p", count: 40) + "@github.com/x"
+        #expect(command.utf8.count > DecisionRedaction.maxScannedBytes)
+        let shown = DecisionRedaction.command(command, home: home, maxBytes: 4096)
+        #expect(shown.contains("SECRETQ") == false, "\(shown.suffix(80))")
+        #expect(shown.hasSuffix("git clone…"))
+        // A cut quoted JSON value is hidden to the end.
+        let json = String(repeating: "x", count: 2030) + #" -d '{"password": "SECRETR aaaaaaaaaaaaaaaaaaaaaaa"#
+        #expect(DecisionRedaction.command(json, home: home, maxBytes: 4096).contains("SECRETR") == false)
+    }
+
+    @Test func liveEventsAndTheLogHideTheSame() {
+        for form in Self.forms {
+            #expect(DecisionRedaction.command(form.command, home: nil) == CommandLineRedaction.redact(form.command))
+        }
+    }
+
+    /// rv-hook-local redacts inside its 750 ms write budget: an 8 KB
+    /// command (cut to `maxScannedBytes` first) must take a sliver of it.
+    @Test func anEightKilobyteCommandIsCheap() {
+        let chunk = "curl -u bob:hunter2 -H 'X-Api-Key: abc' https://x.example/a?b=c && mysql -phunter2 shop; "
+        let command = String(repeating: chunk, count: 8 * 1024 / chunk.utf8.count + 1)
+        #expect(command.utf8.count >= 8 * 1024)
+        let clock = ContinuousClock()
+        var shown = ""
+        let elapsed = clock.measure {
+            for _ in 0..<10 { shown = DecisionRedaction.command(command, home: home) }
+        }
+        #expect(shown.contains("hunter2") == false)
+        #expect(shown.hasSuffix("…"))
+        #expect(shown.utf8.count <= DecisionRedaction.maxCommandBytes + "…".utf8.count)
+        // Ten runs; one must stay far inside the budget even in a debug build.
+        #expect(elapsed < .milliseconds(500), "\(elapsed) for 10 runs")
+    }
+}
+
+@Suite("Decision ids")
+struct DecisionIDTests {
+    static let bad = ["\u{1B}c", "A7C835000001", "a7c83500000", "a7c835000001x", "a7c-83500000", ""]
+
+    @Test func anIDThatIsNot12HexDigitsIsDroppedWhenRead() throws {
+        for bad in Self.bad {
+            var record = row(.denied, at: noon)
+            record.id = "a7c835000001"
+            let good = try #require(String(data: DecisionLog.encoder.encode(record), encoding: .utf8))
+            let forged = good.replacingOccurrences(
+                of: #""id":"a7c835000001""#, with: #""id":"# + String(data: try JSONEncoder().encode(bad), encoding: .utf8)!)
+            #expect(forged != good)
+            let decoded = try DecisionLog.decoder.decode(DecisionRecord.self, from: Data(forged.utf8))
+            #expect(decoded.id == nil && decoded.code == nil, "\(bad.debugDescription)")
+            #expect(try DecisionLog.decoder.decode(DecisionRecord.self, from: Data(good.utf8)).code == "a7c-835")
+        }
+    }
+
+    @Test func aLedgerRowsIDIsCheckedToo() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = DenialLedgerRecord(
+            timestamp: noon, host: .hook(.claude), tool: .bash, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            category: .pack(.coreGit), path: "", id: "a7c835000001")
+        let good = try #require(String(data: encoder.encode(record), encoding: .utf8))
+        #expect(try decoder.decode(DenialLedgerRecord.self, from: Data(good.utf8)).code == "a7c-835")
+        for bad in Self.bad {
+            let forged = good.replacingOccurrences(
+                of: #""id":"a7c835000001""#, with: #""id":"# + String(data: try JSONEncoder().encode(bad), encoding: .utf8)!)
+            let decoded = try decoder.decode(DenialLedgerRecord.self, from: Data(forged.utf8))
+            #expect(decoded.id == nil && decoded.code == nil, "\(bad.debugDescription)")
+        }
+        // A row with no id has no code: never one made from its fields.
+        var bare = record
+        bare.id = nil
+        #expect(bare.code == nil)
+        #expect(DecisionStamp.validID(DecisionStamp.mintID()) != nil)
+    }
+}
+
+@Suite("Decision log stops")
+struct DecisionLogStopsTests {
+    private func write(_ lines: [String], day: String, in log: DecisionLog) throws {
+        try FileManager.default.createDirectory(at: log.directory, withIntermediateDirectories: true)
+        let url = log.fileURL(day: day)
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+        chmod(url.path, 0o600)
+    }
+
+    @Test func idAndWouldBeRoundTrip() throws {
+        let log = temporaryLog()
+        defer { try? FileManager.default.removeItem(at: log.directory) }
+        let watched = DecisionRecord(
+            time: noon.addingTimeInterval(0.437), verdict: .allowed, host: .hook(.codex), tool: .bash,
+            command: "git push --force", id: "b207de11aa01",
+            wouldBe: DecisionWouldBe(verdict: .denied, rule: "core.git:push-force-long", ask: true)
+        )
+        #expect(log.append(watched, now: noon, prunes: false))
+        let line = try String(contentsOf: log.fileURL(day: "2026-11-22"), encoding: .utf8)
+        #expect(line.contains(#""id":"b207de11aa01""#))
+        #expect(line.contains(#""would_be":{"ask":true,"rule":"core.git:push-force-long","verdict":"denied"}"#))
+        #expect(log.records(since: noon.addingTimeInterval(-60), now: noon) == [watched])
+        #expect(watched.code == "b20-7de")
+    }
+
+    @Test func onlyStopsAndWouldStopsAreRead() {
+        let log = temporaryLog()
+        defer { try? FileManager.default.removeItem(at: log.directory) }
+        let rows = [
+            row(.allowed, at: noon),
+            row(.denied, at: noon.addingTimeInterval(1), command: "git reset --hard"),
+            row(.refused, at: noon.addingTimeInterval(2), command: "make"),
+            DecisionRecord(time: noon.addingTimeInterval(3), verdict: .allowed, host: .hook(.claude), tool: .bash,
+                           command: "rm -rf dist", wouldBe: DecisionWouldBe(verdict: .denied, rule: "core.filesystem:rm")),
+            // A command that spells the skip pattern is still JSON-escaped.
+            row(.denied, at: noon.addingTimeInterval(4), command: #"echo '"verdict":"allowed"'"#),
+        ]
+        for record in rows { log.append(record, now: noon, prunes: false) }
+        let stops = log.stops(since: noon.addingTimeInterval(-60), now: noon.addingTimeInterval(60))
+        #expect(stops.records.map(\.command) == ["git reset --hard", "make", "rm -rf dist", #"echo '"verdict":"allowed"'"#])
+        #expect(stops.skippedDays.isEmpty)
+        #expect(stops.startedAt == noon)
+    }
+
+    @Test func daysBeforeTheWindowAreNotRead() throws {
+        let log = temporaryLog()
+        defer { try? FileManager.default.removeItem(at: log.directory) }
+        let old = noon.addingTimeInterval(-8 * 86_400)
+        log.append(row(.denied, at: old), now: old, prunes: false)
+        log.append(row(.denied, at: noon), now: noon, prunes: false)
+        let stops = log.stops(since: noon.addingTimeInterval(-7 * 86_400), now: noon)
+        #expect(stops.records.map(\.time) == [noon])
+        // The log began before the window: nothing is older than it there.
+        #expect(stops.startedAt == nil)
+    }
+
+    @Test func anOversizedDayIsSkippedAndNamed() throws {
+        let log = temporaryLog()
+        defer { try? FileManager.default.removeItem(at: log.directory) }
+        log.append(row(.denied, at: noon), now: noon, prunes: false)
+        let big = log.fileURL(day: "2026-11-21")
+        #expect(FileManager.default.createFile(atPath: big.path, contents: nil, attributes: [.posixPermissions: 0o600]))
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: UInt64(DecisionLog.maxFileBytes + 1))
+        try handle.close()
+        let stops = log.stops(since: noon.addingTimeInterval(-7 * 86_400), now: noon)
+        #expect(stops.skippedDays == ["2026-11-21"])
+        #expect(stops.records.map(\.time) == [noon])
+    }
+
+    /// A busy day: 100 000 rows, almost all allows. The pass must stay fast.
+    @Test func aHundredThousandLinesStayFast() throws {
+        let log = temporaryLog()
+        defer { try? FileManager.default.removeItem(at: log.directory) }
+        let encoder = DecisionLog.encoder
+        let allow = try #require(String(data: try encoder.encode(DecisionRecord(
+            time: noon.addingTimeInterval(0.123), verdict: .allowed, host: .hook(.claude), tool: .bash,
+            command: "git status --short && npm test -- --watch=false", cwd: "~/code/app", session: "cc8a1",
+            id: "0123456789ab"
+        )), encoding: .utf8))
+        let deny = try #require(String(data: try encoder.encode(DecisionRecord(
+            time: noon.addingTimeInterval(0.5), verdict: .denied, host: .hook(.claude), tool: .bash,
+            command: "git reset --hard", rule: "core.git:reset-hard", id: "a7c835000001"
+        )), encoding: .utf8))
+        var lines = Array(repeating: allow, count: 100_000)
+        for index in stride(from: 0, to: lines.count, by: 1000) { lines[index] = deny }
+        try write(lines, day: "2026-11-22", in: log)
+        let clock = ContinuousClock()
+        var stops = DecisionLogStops(records: [])
+        let elapsed = clock.measure {
+            stops = log.stops(since: noon.addingTimeInterval(-7 * 86_400), now: noon.addingTimeInterval(60))
+        }
+        #expect(stops.records.count == 100)
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+    }
 }
 
 @Suite("Decision log store")

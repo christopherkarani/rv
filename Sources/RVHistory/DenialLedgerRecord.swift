@@ -169,6 +169,10 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     /// (`attributableSession`), so a row names the agent session. Nil for
     /// the TTY and rows written before it existed; encoded only when set.
     public var session: String?
+    /// The hook call's id (`DecisionStamp`), the same one its decision-log
+    /// row carries. Nil for the TTY and rows written before it existed;
+    /// encoded only when set.
+    public var id: String?
 
     public init(
         timestamp: Date,
@@ -180,7 +184,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny,
         asked: Bool = false,
-        session: String? = nil
+        session: String? = nil,
+        id: String? = nil
     ) {
         self.timestamp = timestamp
         self.host = host
@@ -192,6 +197,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.wouldBe = wouldBe
         self.asked = asked && observed == false
         self.session = session
+        self.id = id
     }
 
     /// Longest session id a row keeps.
@@ -230,6 +236,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case wouldBe = "would_be"
         case asked
         case session
+        case id
     }
 
     public init(from decoder: Decoder) throws {
@@ -253,6 +260,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         let decodedAsked = try container.decodeIfPresent(Bool.self, forKey: .asked) ?? false
         asked = observed == false && decodedAsked
         session = try container.decodeIfPresent(String.self, forKey: .session)
+        // Only an id as rv mints it: anything else would reach a terminal.
+        id = try container.decodeIfPresent(String.self, forKey: .id).flatMap(DecisionStamp.validID)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -270,5 +279,6 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
             try container.encode(true, forKey: .asked)
         }
         try container.encodeIfPresent(session, forKey: .session)
+        try container.encodeIfPresent(id, forKey: .id)
     }
 }
