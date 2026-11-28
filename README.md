@@ -1,344 +1,303 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="Resources/rv-banner-dark.png">
-    <img src="Resources/rv-banner.png" alt="rv — shell guard for coding agents" width="1280">
+    <img src="Resources/rv-banner.png" alt="rv" width="1280">
   </picture>
 </p>
 
+<h3 align="center">Let your agents run.</h3>
+
 <p align="center">
-  <a href="https://github.com/christopherkarani/rv/releases/latest"><img src="https://img.shields.io/github/v/release/christopherkarani/rv" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-0f172a" alt="Apache 2.0"></a>
-  <a href="https://github.com/christopherkarani/rv"><img src="https://img.shields.io/github/stars/christopherkarani/rv?style=flat" alt="Stars"></a>
-  <a href="https://discord.gg/uZn9MDUYKx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <img src="https://img.shields.io/badge/packs-95-7928ca" alt="95 rule packs">
-  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20(Apple%20Silicon)%20%7C%20Linux-111827" alt="macOS 15+ Apple Silicon and Linux">
+  rv stops the one command you'd regret. Everything else just works.<br>
+  A local guard for Claude Code, Codex, Cursor and 7 more coding agents.
 </p>
 
-# rv
+<p align="center">
+  <a href="https://github.com/christopherkarani/rv/releases/latest"><img src="https://img.shields.io/github/v/release/christopherkarani/rv?color=0f172a" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-0f172a" alt="Apache 2.0"></a>
+  <img src="https://img.shields.io/badge/macOS%2015%2B%20%C2%B7%20Linux-111827" alt="macOS 15+ and Linux">
+  <img src="https://img.shields.io/badge/rule%20packs-95-7928ca" alt="95 rule packs">
+  <a href="https://discord.gg/uZn9MDUYKx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+</p>
 
-**Your coding agent just tried to run `rm -rf /`. rv said no.**
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#what-rv-does">What it does</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="docs/guides/README.md">Guides</a> ·
+  <a href="https://rykanv.com/docs/introduction">Docs</a> ·
+  <a href="https://discord.gg/uZn9MDUYKx">Discord</a>
+</p>
 
-rv is a fail-closed policy gate for AI coding agents. It sits on your
-agent's pre-tool hook and blocks destructive shell commands, and reads or
-edits of secret files, *before* the host runs them. One gate, three
-verdicts: **allow · deny · indeterminate**. It never asks the agent; only
-you can override, with a one-time code.
+<p align="center">
+  <img src="docs/assets/readme/rv-test.svg" alt="rv test lets git status run and stops git reset --hard and cat .env" width="800">
+</p>
 
-```sh
-$ rv test 'git reset --hard'
-{"decision":"deny","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.test.v1"}
+Coding agents are fast, and most of what they run is fine. But one
+`git reset --hard` with work you haven't committed, one `rm -rf ~`, or one
+`cat .env` pasted into a transcript is enough to ruin a day.
 
-$ rv test 'git status'
-{"decision":"allow","schema":"rv.test.v1"}
-```
+**rv sits in your agent's tool hook and checks every shell command and
+file read before it runs.** The safe ones run as normal. The one you'd
+regret is stopped, with the reason and the rule that caught it. Only you
+can let it through, with Touch ID or your password. The agent can't
+approve itself.
 
-**Guides:** [install and first run](docs/guides/install.md) ·
-[secrets placeholders](docs/guides/secrets-placeholders.md) ·
-[MCP gateway](docs/guides/mcp-gateway.md) ·
-[audit log](docs/guides/audit-log.md) ·
-[troubleshooting](docs/guides/troubleshooting.md) ·
-[known limits](docs/guides/known-limits.md)
+Every decision happens on your machine. No account, and your commands
+never leave it.
 
-## Install (30 seconds)
+## Install
 
 ```sh
 curl -fsSL https://rykanv.com/install | sh
-rv setup    # auto-detects your agents and wires their hooks
-rv doctor   # verify everything is live
+rv setup     # finds the agents on this machine and wires their hooks
+rv doctor    # checks that the service, packs and hooks are live
 ```
 
-Want to watch before you enforce? Install in observe mode: rv logs what it
-would block and lets everything run.
+Then try it. `rv test` checks a command without running it:
 
 ```sh
-curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
-rv setup --observe   # same thing for an existing install (asks Touch ID if rv is already enforcing)
-rv blocks            # what observe would have blocked
+rv test 'git reset --hard'   # BLOCKED  core.git:reset-hard
+rv test 'git status'         # ALLOWED
 ```
 
-On macOS the installer also fetches the on-device judge weights (~649 MB,
-verified by SHA-256, fully offline after) so the neural judge binds on first
-run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
-installer anytime to pick up the weights.
+That's it. Next time your agent reaches for a destructive command, rv
+stops it and tells the agent why.
 
-Works with **Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes,
-OpenClaw, Antigravity, and Muse**. Hooks are only written for hosts already
-on your machine. Requires macOS 15+ (Apple Silicon) or Linux
-(aarch64/x86_64) with glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+,
-RHEL 10+), libcurl and libsqlite3; the installer checks these first. musl
-(Alpine) is not supported. On a Linux host with no login manager
-(containers, WSL without systemd, `su`/`sudo -u` logins), `/run/user/<uid>`
-must exist, owned by you, mode 0700, or `XDG_RUNTIME_DIR` must name such a
-directory: `rvd` keeps its socket there and only root can create it
-(`sudo install -d -m 0755 /run/user && sudo install -d -m 0700 -o $(id -u) /run/user/$(id -u)`).
-`/run` is usually a tmpfs, so make it again after a reboot or container
-restart. The installer checks this before downloading. Every download is
-checked against the release's `SHA256SUMS`, which must carry a valid
-signature from rv's release key (`SHA256SUMS.sig`); on macOS each binary
-must also carry rv's Developer ID signature (see
-[SECURITY.md](SECURITY.md#release-integrity)).
+> **Not sure yet? Watch first.** Install in observe mode and rv stops
+> nothing. It logs what it *would* have stopped, so you can trust it
+> before it acts:
+>
+> ```sh
+> curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
+> rv blocks    # what rv would have stopped
+> ```
+>
+> On an existing install, `rv setup --observe` does the same.
+
+Requirements: macOS 15+ on Apple Silicon, or Linux (x86_64 or aarch64,
+glibc 2.35+). The installer checks the rest and tells you what's missing.
+The [install guide](docs/guides/install.md) covers containers, WSL,
+pinning a version and uninstalling.
+
+## Works with
+
+**Claude Code** · **Codex** · **Cursor** · **Grok** · **OpenCode** ·
+**Pi** · **Hermes** · **OpenClaw** · **Antigravity** · **Muse**
+
+`rv setup` only wires the agents already on your machine. One policy
+covers all of them, and `rv host mode <agent> block|observe|off` sets each
+one on its own.
+
+## What rv does
+
+### Stops the command you'd regret
+
+95 rule packs cover git, the filesystem, disks, cloud CLIs, Kubernetes,
+Terraform, databases, CI, payments and more. Three are on from day one:
+
+| On by default | Stops things like |
+| --- | --- |
+| `core.git` | `git reset --hard`, `git push --force`, `git clean -fd`, `git checkout -- .`, `git stash clear` |
+| `core.filesystem` | `rm -rf /`, `rm -rf ~`, `find / -delete` |
+| `system.disk` | `dd` onto a disk, `mkfs`, `wipefs`, `diskutil eraseDisk` |
+
+Secret files such as `.env`, SSH keys and cloud credentials are guarded
+too, in shell commands and, for Claude Code, Cursor and Grok, in the
+agent's own file tools.
+
+Browse the rest with `rv packs` and turn one on with
+`rv packs enable <id>`. Packs read what a command *does*, not just its
+first word, so `npm test` can't hide a payload: rv checks the scripts in
+`package.json` that it would actually run.
+
+When something is stopped, `rv explain '<command>'` shows the rule, what
+it would have destroyed, and a safer way to do it.
+
+### Your agents use your keys. They can never leak them.
+
+```sh
+rv secrets set STRIPE_SECRET_KEY                       # hidden prompt, kept in your Keychain or keyring
+rv run --secret STRIPE_SECRET_KEY -- npm run deploy    # the command sees a stand-in, never the key
+```
+
+The agent and the command only ever hold a stand-in. rv swaps in the real
+key on its way to the API it belongs to, and scrubs it from everything that
+comes back. Values can come from Keychain, 1Password, Vault, AWS, GCP,
+Azure, Infisical or Bitwarden, and `rv secrets scan` catches keys before
+they land in a commit.
+→ [Secrets guide](docs/guides/secrets-placeholders.md)
+
+### Your agents can use any tool. Nothing bad happens.
+
+`rv mcp serve` puts your MCP servers behind one gateway. You decide which
+tools run, which ask you first, and which never run. Tool definitions stay
+exactly as you reviewed them (`rv mcp trust`), servers can run sandboxed,
+and `rv mcp check` fails if anything goes around rv.
+→ [MCP gateway guide](docs/guides/mcp-gateway.md)
+
+### Give it a box (macOS)
+
+`rv workspace` runs an agent on a private copy of your project. It can
+write only inside that copy, reach only the hosts you allow, and never
+sees your Keychain. Its changes come back when the workspace closes.
+→ [What the box does and doesn't cover](docs/security/runtime-acceptance.md)
+
+### Keeps the receipts
+
+Every stop, override and change to rv's own rules lands in a hash-chained
+audit log. `rv audit verify` proves nothing was edited out, and
+`rv audit export --format ocsf` hands it to your SIEM.
+→ [Audit log guide](docs/guides/audit-log.md)
+
+## When rv stops something you meant
+
+Every stop shows a six-character code. Run it from your own terminal:
+
+```sh
+rv allow-once a1b2c3   # lets that one command run once, in that directory
+```
+
+It asks for Touch ID or your password, so an agent can't use it. The
+same check guards every command that loosens rv. For a permanent
+exception, use `rv allowlist add`.
+
+If an agent is blocked and you don't know why, `rv doctor` tells you
+what's wrong and how to fix it. The
+[troubleshooting guide](docs/guides/troubleshooting.md) lists every
+message rv can show.
 
 ## How it works
 
-Every shell and file-tool call from every host goes to one daemon (`rvd`)
-and through one pipeline:
-
 ```text
-agent ─▶ hook ─▶ rvd ─▶ rule packs ─▶ script gate ─▶ on-device judge ─▶ policy ─▶ allow / deny / indeterminate
-                        safe-first     npm bodies     Laya (CoreML)      override
-                        deny = floor   evaluated      can only raise     ladder
+agent ──▶ hook ──▶ rvd ──▶ rule packs ──▶ your policy ──▶ runs / stopped
+                   local     95 packs,      allowlist,
+                   daemon    safe first     allow-once
 ```
 
-| Stage | What it does |
-| --- | --- |
-| **Rule packs** | 95 packs: git, filesystem, disks, cloud CLIs, Kubernetes, databases, Terraform, CI/CD, payments and more. Safe patterns run first; the first blocking hit denies. |
-| **Script gate** | `npm test` can't hide a payload: rv evaluates the real `pre`/`post`/body scripts in `package.json`. |
-| **Judge** | With a Laya CoreML bundle installed (macOS), pack-allowed commands get a local risk score. It can only raise a verdict, never lower a pack deny. Nothing leaves your machine. |
-| **Policy** | A fixed override ladder: rebase recovery → pinned rules → allowlist → allow-once → contained-delete allowance, with `normal` or `strict` safety. Indeterminate (too large, budget spent, core packs missing) can never be overridden. |
+Every shell and file-tool call from every agent goes to one local daemon,
+`rvd`, and through one pipeline. A few rules hold everywhere:
 
-Four rules hold everywhere:
+- **Fail closed.** If rv can't decide (the daemon is down, slow, or not
+  the one it should be), the call is stopped, not quietly allowed.
+- **A stop is a floor.** Nothing later in the pipeline can turn a pack's
+  stop into a yes. Only you can, with your own Touch ID or password.
+- **Nothing leaves your machine.** Commands are decided locally. The audit
+  log records the rule and the agent, never your command text.
+- **rv protects itself.** Agents can't turn rv off, edit its rules, or
+  redeem their own codes, in observe mode too.
 
-- **Fail closed.** If `rvd` is down, slow or fails its identity check, the call is blocked.
-- **Deny is a floor.** Nothing later in the pipeline can lower a pack deny.
-- **Only you override.** The agent can't redeem its own code or change rv's rules.
-- **Observe never relaxes rv's own protection.** In observe mode, rv admin commands and rv's config stay guarded while `rvd` runs ([details](docs/guides/install.md#observe-first-then-enforce)).
+On macOS, an optional on-device model can add a second opinion. It can
+only make a verdict stricter, never looser.
 
-## What gets blocked
+For the module map, see [the architecture map](rv-architecture-map.pdf)
+and [`docs/architecture`](docs/architecture).
 
-Three packs are on by default: `core.filesystem`, `core.git` and
-`system.disk`. Browse the rest with `rv packs`; `rv packs enable <id>`
-turns one on after owner authentication.
+## Why not just…
 
-| Category | Examples |
-| --- | --- |
-| Destructive git | `reset --hard`, `push --force`, `clean -fd`, `stash clear`, `checkout -- .` |
-| Destructive filesystem | `rm -rf /`, `rm -rf ~`, `find -delete`, fork bombs, disk wipes |
-| Secret paths | `.env`, SSH keys, cloud credentials: shell *and* Read/Edit/Write on Grok, Claude, Cursor |
-| Cloud and infra (opt-in packs) | `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`, `DROP TABLE`, … |
+| | rv | Your agent's permission prompts | A container or VM |
+| --- | :-: | :-: | :-: |
+| Stops `git reset --hard` before it runs | ✅ | if you read every prompt | ❌ the damage happens inside |
+| One policy for 10 agents | ✅ | ❌ set up per agent | — |
+| Reads what a command does, not its prefix | ✅ 95 packs | ❌ prefix rules | — |
+| Agent never holds your real API keys | ✅ | ❌ | only if you don't mount them |
+| Per-tool rules for MCP servers | ✅ | partly | ❌ |
+| Agent can't approve its own override | ✅ Touch ID / password | ❌ in auto-approve modes | — |
+| Keeps your normal dev loop | ✅ | ✅ | ❌ |
+| Tamper-evident log of every stop | ✅ | ❌ | ❌ |
 
-Not sure why something blocked? `rv explain 'git reset --hard'` shows
-which pack and rule fired. rv does not read file contents, so a search
-tool with no explicit path can still match inside secret files in the
-working directory ([known limits](docs/guides/known-limits.md#the-hook-guard)).
-
-## When you're blocked (and you meant it)
-
-Every hook deny prints a six-character code. Redeem it once, from your
-own terminal:
-
-```sh
-rv allow-once a1b2c3    # next matching call in this directory runs once
-```
-
-Redeeming needs owner authentication: Touch ID or your password on
-macOS, your login password on Linux. The same check guards every command
-that changes the gate: `rv allowlist add`, `rv packs enable`,
-`rv safety strict|normal`, `rv policy draft --save`, `rv egress approve`,
-`rv workspace abandon`. Typed rules live in `~/.config/rv/policy.toml`
-(`rv policy show`).
-
-On Linux the account needs a local password; an SSH-key-only user or
-root in a container usually can't pass
-([details](docs/guides/install.md#owner-authentication)).
-
-## Locked out?
-
-When rv can't decide (the daemon `rvd` is down or slow, or the `rv` binary
-is gone), every hook fails closed: the agent's tool call is blocked, never
-quietly allowed. The block message says which of these it was:
-
-| Message starts with | What it means | What to do |
-| --- | --- | --- |
-| `RV daemon is not reachable` | `rvd` isn't running | `rv doctor`; `rv setup` repairs the service |
-| `RV daemon did not answer in time`, `rv did not answer within 15s` | `rvd` is busy or hung | Retry; then `rv service status`, `rv service restart` |
-| `RV daemon identity check failed`, `RV daemon sent an unexpected reply` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
-| `rv is not installed at <path>` | the hook points at a binary that's gone | Reinstall rv, then `rv setup` |
-| `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
-| `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
-| `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
-| `rv degraded: judge late` | the judge did not answer this command in time | Retry; if it keeps happening, `rv doctor` |
-| `rv degraded: judge unavailable (circuit open, retrying in Ns)` | the judge failed several times in a row, so rv skips it for a minute and sends what it would have scored to review | Retry after N seconds; `rv doctor` shows the circuit |
-| `Laya judge unavailable; failing closed` | the judge couldn't score this command | `rv doctor` |
-
-Run these from your own terminal, not through the agent:
-
-```sh
-rv doctor                 # what's broken and how to fix it
-rv service status         # is rvd running, down, or skewed?
-rv service restart        # restart rvd
-rv setup                  # repair the rvd service and host hooks
-rv host list              # each host's mode and hook wiring
-rv host mode claude off   # stop guarding one host (asks for owner authentication)
-rv uninstall              # remove rv's hooks, rvd and binaries; keeps your secrets and audit log (owner-auth)
-```
-
-`rv host mode <host> block` turns guarding back on.
-
-## Features
-
-rv is one binary with 27 commands. Beyond the shell guard:
-
-### Secrets without exposure
-Agents in a contained workspace (macOS), or a command started with
-`rv run`, see placeholders, never values. The real value is injected at
-the boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical or
-Bitwarden, and scrubbed from everything that comes back. Hook-guarded
-agents get secret-path blocking instead.
-
-```sh
-rv run --secret NAME -- command   # placeholders for one command (macOS, Linux)
-rv login connect vercel           # reuse an existing Vercel or GitHub login
-rv secrets scan                   # catch leaks before they land
-```
-→ [Secrets placeholders guide](docs/guides/secrets-placeholders.md)
-
-### MCP gateway
-`rv mcp serve` puts every MCP server behind one gateway: per-tool
-allow/ask/deny, human approval for `ask`, tool definitions pinned to what
-you reviewed, sandboxed servers and a full audit trail. While it is in
-use, the hook guard also stops agents adding servers around it.
-
-```sh
-rv mcp serve    # run the gateway
-rv mcp trust    # review and pin tool definitions
-rv mcp check    # fail if any server bypasses rv
-```
-→ [MCP gateway guide](docs/guides/mcp-gateway.md)
-
-### Contained workspaces (macOS)
-`rv workspace` and `rv opencode` run agents on a private copy of the
-project under a deny-default Seatbelt profile: workspace-only writes,
-proxied HTTPS, no Keychain. `--microvm <image>` uses a network-less Linux
-micro-VM instead (macOS 26+). Work is published back when the workspace
-closes. This is a hardening layer, not a finished isolation boundary
-([acceptance audit](docs/security/runtime-acceptance.md)).
-
-### Egress control
-Contained runtimes reach the network only through a per-runtime proxy
-with SNI-bound tunnels and binary pinning. Blocked hosts queue for review
-in `rv egress`; `rv egress approve` needs owner authentication.
-
-### Tamper-evident audit
-Every deny, override, MCP and secret event, and every change to the gate
-itself, lands in a SHA-256 hash-chained `audit.jsonl` (rule and host,
-never command text). `rv audit verify` checks the chain; export as OCSF
-1.3.0 to your SIEM.
-→ [Audit log guide](docs/guides/audit-log.md)
-
-### Session forensics
-`rv scan` replays past agent sessions offline and reports which commands
-your enabled packs would have denied.
-
-### Signed organization policy
-Fleet-wide, restrict-only rules signed with Ed25519 and pinned root-owned
-on disk: MCP tool rules, secret sources, audit forwarding, required packs,
-strict safety. User config can never loosen them. `rv report` emits
-posture for MDM and fleet tools.
-
-## Supported hosts
-
-Claude Code · Codex · Cursor · Grok · OpenCode · Pi · Hermes · OpenClaw ·
-Antigravity · Muse
-
-`rv setup` only wires hosts already on your machine. `rv host mode <host>
-block|observe|off` sets each one separately.
-
-## Fleet console
-
-rv Console, the fleet dashboard for teams, is developed separately and is
-no longer part of this repository. Machines send it their audit trail with
-`rv audit forward` (per machine, or fleet-wide through `audit.forward` in
-the organization policy) and their posture with `rv report --json`; both
-are documented above and stay open source. The console's earlier source
-remains in this repository's history under Apache 2.0, up to commit
-`eda11f2b`.
-
-## Platform support
-
-| | macOS 15+ (Apple Silicon) | Linux (x86_64, aarch64; glibc 2.35+) |
-| --- | --- | --- |
-| Hook guard, packs, `rv test`, audit log | yes | yes |
-| Secrets gateway binds a placeholder to the process tree it was leased to | yes (libproc) | yes (`/proc`); refuses where `/proc` hides processes |
-| `rv run` (placeholders for one command) | yes | yes; needs `rv-isolation-exec` beside rv (the installer puts it there) and Linux 5.9+ |
-| MCP gateway: per-tool policy, tool pinning, audit | yes | yes, with the custodian installed |
-| MCP approvals signed by a key the agent cannot use | RVApprovals.app (Touch ID or password) | `sudo rv mcp custodian install` (login password through PAM; systemd) |
-| MCP server sandbox | Seatbelt | Landlock, a seccomp socket filter and, for `sandbox.hosts`, a connector; Linux 6.7+ (x86-64 tested), see [limits](docs/security/mcp-linux-sandbox.md) |
-| Contained workspaces, micro-VMs | yes | no |
-| On-device judge | yes | no (packs only) |
+rv works alongside a sandbox, not instead of one. Use both if you like:
+`rv workspace` is rv's own.
 
 ## Everyday commands
 
 ```sh
-rv test 'rm -rf /'          # evaluate a command, don't run it
-rv explain 'rm -rf /'       # why would this block?
-rv packs                    # browse the 95 packs
-rv blocks                   # what got denied lately?
-rv host list                # per-host mode (block / observe / off) and wiring
-rv workspace vms            # micro-VM runtime sessions, newest first
-rv scan                     # audit past agent sessions
-rv audit verify             # check the audit hash chain
-rv doctor                   # service, packs, hosts, judge health
-rv uninstall                # remove rv's hooks, rvd and binaries (owner-auth)
-rv uninstall --remove-models  # ...and the judge weights in ~/.config/rv/models
-rv uninstall --purge        # ...and all of rv's data, including stored secret values
+rv test '<cmd>'       # would rv stop this? (doesn't run it)
+rv explain '<cmd>'    # which rule, why, and a safer way
+rv blocks             # what was stopped lately
+rv packs              # browse the 95 packs
+rv host list          # each agent's mode: block, observe or off
+rv scan               # replay past agent sessions: what would rv have stopped?
+rv doctor             # is everything wired and healthy?
+rv uninstall          # remove rv's hooks, service and binaries
 ```
 
-`rv uninstall` removes rv's hooks, stops the service, then deletes every
-file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`,
-plus `config.json` and the policy, allowlist, analytics and denial files in
-`~/.config/rv`. It keeps your own data so a reinstall picks it up: secret
-definitions and the values rv stored in the Keychain or Secret Service
-(service `rv.secrets`), MCP config and its trust, pin and approval state
-(on macOS also the MCP OAuth tokens under `rv.mcp.oauth`),
-the audit log and its key, the judge weights, rvd's log and MCP caches. It
-prints each kept path, how many secret values it kept and where, and the
-commands that remove them once rv is gone. `rv uninstall --purge` removes
-all of that too, deleting only the secret values rv itself stored; a value
-it cannot delete (no session bus, locked keyring) is named and the command
-exits non-zero after removing the rest. The Linux custodian's system files
-stay for `sudo rv mcp custodian uninstall`. If rvd is not running, you
-confirm at the terminal with your login password (or Touch ID) instead;
-without a local owner check it refuses and says how to start rvd.
+`rv --help` lists everything. Every command speaks `--json` for scripts
+and agents.
 
-All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
-Anonymous usage counters are on by default; opt out with
-`"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
-in `~/.config/rv/config.json`.
+<details>
+<summary><b>Platform support</b></summary>
 
-## Architecture
+| | macOS 15+ (Apple Silicon) | Linux (x86_64, aarch64) |
+| --- | :-: | :-: |
+| Stops, packs, `rv test`, audit log | ✅ | ✅ |
+| `rv run --secret` (stand-ins for one command) | ✅ | ✅ (Linux 5.9+) |
+| MCP gateway | ✅ | ✅ |
+| MCP server sandbox | ✅ Seatbelt | ✅ Landlock + seccomp (Linux 6.7+) |
+| `rv workspace` boxes | ✅ | — |
+| On-device model | ✅ | — (packs only) |
 
-```text
- rv (C front door) ──exec──▶ Swift CLI (RVCLI) ──Unix socket / XPC──▶ rvd (RVService)
-                                                                     │
-   Capabilities   RVPolicy · RVHooks · RVMCP · RVIsolation · RVScan · RVLaya
-   Core           RVEngine · RVPacks · RVHistory · RVIPC
-   Foundation     RVDomain · RVFileStore
-```
+Details and edge cases: [install guide](docs/guides/install.md) ·
+[known limits](docs/guides/known-limits.md).
+</details>
 
-A small C front door execs the Swift CLI, which talks to the `rvd` daemon
-over a Unix socket (XPC on macOS): 15 IPC methods, one gated evaluation
-path for every door. `RVEngine` parses and evaluates commands against
-`RVPacks`; `RVIsolation` holds the cage, egress proxy and secrets
-gateway. See the [architecture map](rv-architecture-map.pdf) for the full
-module graph.
+<details>
+<summary><b>Privacy</b></summary>
 
-## For developers
+rv decides everything on your machine and never sends your commands,
+paths or secrets anywhere. It does send anonymous usage counts: one event
+at install, then at most one a day with the rv and OS version, how many
+calls were allowed and stopped, which packs are on, and which agents are
+wired. Turn them off with `"analytics": {"enabled": false}` in
+`~/.config/rv/config.json`.
+</details>
+
+## Roadmap
+
+What's coming next, in the open:
+
+- **0.3: every stop has a next step.** Stops that say what they'd cost
+  ("14 files, 2,314 lines") and offer a safer command. `rv protect <tool>`,
+  `rv why` and `rv log` as the everyday words. `rv try` as a 4-second demo.
+- **0.4: agents ask, you decide.** A menu bar app, `rv term` (a live
+  terminal dashboard), `rv box` as the front door to boxes, and `rv undo`.
+- **Later:** a week of watching turns into one confident "start guarding",
+  and recap views of what rv stopped for you.
+
+## For teams
+
+rv is free and open source for everything on your machine, and stays that
+way: we will never charge for a stop. **rv Console** is a separate,
+commercial fleet view for teams (shared rules, SSO, history), fed by the
+open `rv audit forward` and `rv report --json`. Signed organization
+policy, which can only tighten rules, is in rv itself. Ask about early
+access on [Discord](https://discord.gg/uZn9MDUYKx) or at
+[rykanv.com](https://rykanv.com).
+
+## Contributing
+
+rv is Swift 6.4 and builds on macOS and Linux:
 
 ```sh
 git clone https://github.com/christopherkarani/rv && cd rv
-swift build --build-tests   # Swift 6.4
-swift test                  # full suite (this is the PR gate)
+swift build --build-tests
+swift test
 ```
 
-A Python SDK lives in [`sdk/python`](sdk/python). Security model and
-evidence: [`docs/security`](docs/security). Before opening a PR, read
-[CONTRIBUTING.md](CONTRIBUTING.md); report vulnerabilities per
-[SECURITY.md](SECURITY.md).
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the domain words in
+[CONTEXT.md](CONTEXT.md). New rule packs are one of the best places to
+help: each one is a JSON file in
+[`Sources/RVPacks/Resources/packs`](Sources/RVPacks/Resources/packs).
+There's a Python SDK in [`sdk/python`](sdk/python).
 
-Site: [rykanv.com](https://rykanv.com) · Docs:
-[rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) ·
-Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
+Found a security issue? Please report it privately, as described in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+<p align="center">
+  <br>
+  If rv saved you from a bad command, a ⭐ helps other people find it.
+</p>
