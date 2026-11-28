@@ -516,6 +516,7 @@ enum MCPRun {
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
             "approving needs you present: \(OwnerAuthWording.method). A pseudo-terminal cannot approve",
+            "the confirmation code is in the agent's terminal or its MCP log; an agent retry keeps the same code",
         ])
             .joined(separator: "\n") + "\n"
     }
@@ -1968,6 +1969,7 @@ struct MCPServe: AsyncParsableCommand {
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log,
+            notice: { MCPPersonTerminal.post($0) },
             placeholdersBound: { server, definitions in
                 for line in MCPRun.placeholderBindingLog(server: server, definitions: definitions) { log(line) }
             })

@@ -261,9 +261,9 @@ code, out = owner(["mcp", "approve", approval], [("confirmation code", typed), (
 step("approve with a wrong password is refused", code != 0 and "authentication failed" in out, last(out))
 reply = g.call(4, "write_note", {"note": "x"})
 step("the call still asks", "ran write_note" not in text_of(reply), text_of(reply) or reply)
-# A reused pending request mints a fresh code; only the newest works.
+# E2: a retry shows the same code again; the code the owner is reading never changes.
 code_line = g.codes(at_least=len(printed) + 1)
-typed = code_line[-1] if code_line else typed
+step("a retry shows the same confirmation code", len(code_line) > len(printed) and set(code_line) == {typed}, code_line)
 
 # 8. the agent talks to the key daemon itself
 agent = Custodian()

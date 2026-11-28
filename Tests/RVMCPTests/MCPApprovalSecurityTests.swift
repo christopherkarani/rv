@@ -7,6 +7,7 @@ import Foundation
 #if canImport(Security)
 import Security
 #endif
+import Synchronization
 import Testing
 @testable import RVMCP
 
@@ -73,26 +74,155 @@ struct MCPApprovalSecurityTests {
         #expect(Set((0..<20).map { _ in MCPConfirmationCode.generate() }).count == 20)
     }
 
-    @Test func onlyTheNewestPrintedCodeApproves() throws {
+    /// E2: an agent retry never changes the code the person is reading.
+    /// The retry gets the same request back, the row is not rewritten, and
+    /// the first code still approves; the plaintext never reaches the file.
+    @Test func aRetryKeepsTheCodeThePersonIsReading() throws {
         let directory = Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MCPApprovalStore(configDirectory: directory, signing: .file(configDirectory: directory))
-        let first = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: []))
+        let fileURL = directory.appendingPathComponent(MCPApprovalStore.fileName)
+        let first = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: ["title"]))
         let firstCode = try #require(first.code)
+        #expect(first.reused == false)
         #expect(store.hasCode(id: first.id))
         #expect(store.verifyCode(id: first.id, typed: firstCode))
         #expect(store.verifyCode(id: first.id, typed: firstCode.lowercased().replacingOccurrences(of: "-", with: " ")))
         #expect(store.verifyCode(id: first.id, typed: "AAAAA-AAAAA") == false)
         #expect(store.verifyCode(id: "nope", typed: firstCode) == false)
+        let before = try Data(contentsOf: fileURL)
 
-        let second = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: []))
-        #expect(second.id == first.id)
+        for _ in 0..<5 {
+            let retry = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: ["title"]))
+            #expect(retry == MCPApprovalTicket(id: first.id, code: nil, reused: true))
+        }
+        #expect(try Data(contentsOf: fileURL) == before, "a retry rewrote the pending request")
+        #expect(store.verifyCode(id: first.id, typed: firstCode))
+        #expect(store.pending().count == 1)
+        let raw = try String(contentsOf: fileURL, encoding: .utf8)
+        #expect(raw.contains(firstCode) == false)
+        #expect(raw.contains(MCPConfirmationCode.normalize(firstCode)) == false)
+    }
+
+    /// A different call never maps to a waiting request, and its code never
+    /// approves another: tool, arguments, argument names and definition
+    /// each make a new request with its own code.
+    @Test func aDifferentCallGetsItsOwnRequestAndCode() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory, signing: .file(configDirectory: directory))
+        let base = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: ["title"]))
+        let baseCode = try #require(base.code)
+        let changed = MCPToolBinding(definitionHash: "d2", pinStatus: .changed)
+        let others = [
+            store.request(server: "gl", tool: "create", argumentsHash: "h", argumentKeys: ["title"]),
+            store.request(server: "gh", tool: "delete", argumentsHash: "h", argumentKeys: ["title"]),
+            store.request(server: "gh", tool: "create", argumentsHash: "h2", argumentKeys: ["title"]),
+            store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: ["body"]),
+            store.request(server: "gh", tool: "create", argumentsHash: "h", argumentKeys: ["title"], binding: changed),
+        ]
+        var ids: Set<String> = [base.id]
+        for other in others {
+            let ticket = try #require(other)
+            #expect(ticket.reused == false)
+            #expect(ids.insert(ticket.id).inserted, "a different call reused request \(ticket.id)")
+            let code = try #require(ticket.code)
+            #expect(store.verifyCode(id: ticket.id, typed: baseCode) == false)
+            #expect(store.verifyCode(id: base.id, typed: code) == false)
+        }
+        #expect(store.pending().count == 6)
+        #expect(store.verifyCode(id: base.id, typed: baseCode))
+    }
+
+    /// Single use: once a request is granted and consumed, or refused, the
+    /// same call asks again with a new request and a new code, and the old
+    /// code approves nothing.
+    @Test func aCodeIsSingleUse() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory, signing: .file(configDirectory: directory))
+        let first = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []))
+        let firstCode = try #require(first.code)
+        #expect(store.grant(id: first.id, server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []) != nil)
+        // Granted, not yet used: the code no longer checks (it is not pending).
+        #expect(store.verifyCode(id: first.id, typed: firstCode) == false)
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []) == .granted(id: first.id))
+
+        let second = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []))
+        #expect(second.id != first.id)
+        #expect(second.reused == false)
         let secondCode = try #require(second.code)
-        #expect(store.verifyCode(id: first.id, typed: secondCode))
-        #expect(firstCode == secondCode || store.verifyCode(id: first.id, typed: firstCode) == false)
+        #expect(store.verifyCode(id: second.id, typed: firstCode) == false)
+        #expect(store.verifyCode(id: second.id, typed: secondCode))
 
-        let raw = try String(contentsOf: directory.appendingPathComponent(MCPApprovalStore.fileName), encoding: .utf8)
-        #expect(raw.contains(secondCode) == false)
+        #expect(store.remove(id: second.id) != nil)
+        let third = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []))
+        #expect(third.id != second.id)
+        #expect(third.reused == false)
+        #expect(store.verifyCode(id: third.id, typed: secondCode) == false)
+    }
+
+    /// The gateway shows the same plaintext code on every retry of a call it
+    /// asked for; another gateway (another serve process) that retries the
+    /// same call cannot show it and keeps it, never mints a new one.
+    @Test func theGatewayShowsTheSameCodeOnEveryRetry() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory, signing: .file(configDirectory: directory))
+        let gate = MCPApprovalGate.store(store)
+        let first = try #require(gate.request("gh", "create", "h", ["title"], .unbound))
+        let code = try #require(first.code)
+        for _ in 0..<3 {
+            #expect(gate.request("gh", "create", "h", ["title"], .unbound) == MCPApprovalTicket(id: first.id, code: code, reused: true))
+        }
+        let other = MCPApprovalGate.store(store)
+        #expect(other.request("gh", "create", "h", ["title"], .unbound) == MCPApprovalTicket(id: first.id, code: nil, reused: true))
+        #expect(store.verifyCode(id: first.id, typed: code))
+        // A different call through the same gateway never shows this code.
+        let different = try #require(gate.request("gh", "create", "h2", ["title"], .unbound))
+        #expect(different.id != first.id)
+        #expect(different.reused == false)
+    }
+
+    /// A request recorded while no key could be made has no code yet; the
+    /// first retry that can make one gives it one (nobody is reading an
+    /// older code), and later retries keep it.
+    @Test func aRequestWithoutACodeGetsOneOnRetry() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyReady = Mutex(false)
+        let signing = MCPApprovalSigning(
+            status: { .enrolled },
+            mac: { purpose, fields, _ in keyReady.withLock { $0 } ? MCPSigner(key: Self.key)?.mac(purpose.rawValue, fields) : nil },
+            verify: { candidate, purpose, fields in
+                (MCPSigner(key: Self.key)?.verify(candidate, purpose.rawValue, fields) ?? false) ? .valid : .forged
+            })
+        let store = MCPApprovalStore(configDirectory: directory, signing: signing)
+        let keyless = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []))
+        #expect(keyless.code == nil)
+        #expect(store.hasCode(id: keyless.id) == false)
+        keyReady.withLock { $0 = true }
+        let minted = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []))
+        #expect(minted.id == keyless.id)
+        let code = try #require(minted.code)
+        #expect(store.verifyCode(id: minted.id, typed: code))
+        let request = try #require(store.pending().first)
+        #expect(store.argumentKeysAreBound(request))
+        #expect(store.request(server: "gh", tool: "push", argumentsHash: "h", argumentKeys: []) == MCPApprovalTicket(id: keyless.id, code: nil, reused: true))
+        #expect(store.verifyCode(id: minted.id, typed: code))
+    }
+
+    @Test func shownCodesAreBoundedAndKeyedByTheWholeCall() {
+        let shown = MCPShownCodes()
+        for index in 0..<(MCPShownCodes.capacity + 5) { shown.remember("C\(index)", for: ["id\(index)"]) }
+        #expect(shown.code(for: ["id0"]) == nil)
+        #expect(shown.code(for: ["id\(MCPShownCodes.capacity + 4)"]) == "C\(MCPShownCodes.capacity + 4)")
+        let fresh = shown.show(MCPApprovalTicket(id: "a", code: "AAAAA-BBBBB"), key: ["a", "gh"])
+        #expect(fresh.code == "AAAAA-BBBBB")
+        #expect(shown.show(MCPApprovalTicket(id: "a", reused: true), key: ["a", "gh"]).code == "AAAAA-BBBBB")
+        #expect(shown.show(MCPApprovalTicket(id: "a", reused: true), key: ["a", "gl"]).code == nil)
+        // A new request (not reused) with no code never borrows a shown one.
+        #expect(shown.show(MCPApprovalTicket(id: "a"), key: ["a", "gh"]).code == nil)
     }
 
     @Test func editedOrUnsignedGrantsAreRejectedAsForged() throws {

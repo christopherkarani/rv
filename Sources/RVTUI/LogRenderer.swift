@@ -59,6 +59,9 @@ public struct LogRenderer: FrameRenderer {
                     lines.append(Self.indent + label)
                 }
                 lines.append(self.row(for: row, widths: widths, palette: palette))
+                if let star = firstSaveLine(row, widths: widths, columns: frame.columns, palette: palette) {
+                    lines.append(star)
+                }
             }
         }
         if model.ledgerOff == false, model.rows.isEmpty == false || model.judgeNotesHidden > 0 {
@@ -123,6 +126,20 @@ public struct LogRenderer: FrameRenderer {
         let line = Self.indent + cells.joined(separator: Self.gap)
         // A row with no code ends in its padding.
         return row.code == nil ? String(line.reversed().drop(while: { $0 == " " }).reversed()) : line
+    }
+
+    /// The first save's line, under its row's verdict cell (v3): the
+    /// `★` in the heading ink, the words plain.
+    private func firstSaveLine(_ row: LogRow, widths: Widths, columns: Int?, palette: Palette) -> String? {
+        guard let text = row.firstSave else { return nil }
+        let lead = Self.indent.count + widths.time + widths.agent + Self.gap.count * 2
+        let room = columns.map { max(1, $0 - lead) }
+        let shown = room.map { TerminalWidth.clip(text, to: $0) } ?? text
+        let star = LogFirstSave.star
+        let painted = shown.hasPrefix(star)
+            ? paint(star, slot: palette.heading, reset: palette.reset) + shown.dropFirst(star.count)
+            : shown
+        return String(repeating: " ", count: lead) + painted
     }
 
     struct Widths: Equatable {

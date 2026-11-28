@@ -29,6 +29,8 @@ package struct DecisionLogRecorder: Sendable {
         return DecisionLogRecorder(home: home) { record in
             guard DecisionLog.isEnabled(inConfigDirectory: configDirectory) else { return }
             DecisionLog(configDirectory: configDirectory).append(record, now: clock())
+            // The first real stop: `first-save.json` once, one notice.
+            FirstSaveNotice.consider(record, configDirectory: configDirectory)
         }
     }
 

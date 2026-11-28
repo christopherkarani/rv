@@ -31,6 +31,9 @@ public enum MCPGatewayOutput: Sendable, Equatable {
     /// Any other audit event (for example a rejected forged grant).
     case event(AuditEvent)
     case log(String)
+    /// A line for the person, not the agent: the gateway's stderr, and the
+    /// terminal it runs in when it has one. Never sent to the client.
+    case notice(String)
     /// Stop this upstream now: kill its process, or close its connection.
     /// The core already counts it failed; its exit may still be reported.
     case stopUpstream(server: String)
@@ -1052,12 +1055,21 @@ public struct MCPGatewayCore {
                 reason: "awaiting approval", outcome: .awaiting(approvalID: ticket.id))),
             .toClient(Self.toolError(id: client, text)),
         ]
-        if let code = ticket.code {
-            let shownCode = MCPDisplayedText.field(code)
-            outputs.append(.log(
-                "approval \(shownID) for \(shownServer) tool \(shownTool): confirmation code \(shownCode)"))
-        }
+        outputs += Self.codeNotice(ticket, server: shownServer, tool: shownTool).map { [.notice($0)] } ?? []
         return outputs
+    }
+
+    /// The line that tells the person which code approves this call. A
+    /// retry shows the same code again; a retry this process cannot show
+    /// the code for says the first one still works.
+    static func codeNotice(_ ticket: MCPApprovalTicket, server: String, tool: String) -> String? {
+        let shownID = MCPDisplayedText.field(ticket.id)
+        if let code = ticket.code {
+            return "approval \(shownID) for \(server) tool \(tool): confirmation code \(MCPDisplayedText.field(code))"
+        }
+        guard ticket.reused else { return nil }
+        return "approval \(shownID) for \(server) tool \(tool) is still waiting: its confirmation code is the one shown when it first asked"
+            + " (for a new code, run `rv mcp deny \(shownID)` and let the agent retry)"
     }
 
     static func elicitationMessage(server: String, tool: String, arguments: JSONValue, note: String? = nil) -> String {
