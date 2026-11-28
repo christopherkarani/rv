@@ -19,7 +19,7 @@ not run.
 ## 1. Store a secret
 
 ```text
-rv secrets set <name> [--gateway <url> --base-url-env <var> | --provider <id> | --environment]
+rv secrets add <name> [--gateway <url> --base-url-env <var> | --provider <id> | --environment]
                      [--allow <rule>]... [--surface header|query|path]... [--placeholder-prefix <p>]
                      [--expires <date>|none] [--refresh <interval>|none] [--resource-profile <id>]
 ```
@@ -44,7 +44,7 @@ no values.
 | `VERCEL_TOKEN` | `https://api.vercel.com` | `read-only` |
 
 ```bash
-rv secrets set OPENAI_API_KEY
+rv secrets add OPENAI_API_KEY
 ```
 
 That writes this definition (captured from a run; note no value):
@@ -69,7 +69,7 @@ rv secrets set: ACME_API_KEY is new: pass --gateway URL --base-url-env VAR, or -
 ```
 
 ```bash
-rv secrets set ACME_API_KEY --gateway https://api.acme.example --base-url-env ACME_BASE_URL --allow read-only
+rv secrets add ACME_API_KEY --gateway https://api.acme.example --base-url-env ACME_BASE_URL --allow read-only
 ```
 
 Or use a shipped provider profile (`rv secrets providers` lists them:
@@ -77,7 +77,7 @@ anthropic, openai, openrouter, github, vercel, stripe, npm, pypi);
 `--allow` and `--surface` may only narrow a profile:
 
 ```bash
-rv secrets set GITHUB_TOKEN --provider github
+rv secrets add GITHUB_TOKEN --provider github
 ```
 
 The flags that shape a gateway secret:
@@ -93,7 +93,7 @@ The flags that shape a gateway secret:
 
 `--allow`, `--surface` and the delivery apply only when the secret is
 first defined. To change them later, edit `secrets.json`. Running
-`rv secrets set NAME` again for an existing secret stores a new value,
+`rv secrets add NAME` again for an existing secret stores a new value,
 which running gateway sessions use from their next request. So does
 running the command that defined it again with the same flags; with
 different flags it is refused.
@@ -101,11 +101,11 @@ different flags it is refused.
 Values can also come from 1Password, Vault, AWS Secrets Manager, GCP,
 Azure, Infisical or Bitwarden, or an OAuth token minted by rv: write the
 `source` in `secrets.json` by hand (`rv help secrets` lists the source
-kinds). On Linux the Keychain-backed sources (`rv secrets set`,
+kinds). On Linux the Keychain-backed sources (`rv secrets add`,
 `rv login connect`) need `secret-tool`; without it:
 
 ```text
-rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but the value you gave was not stored: once the Secret Service keyring is available, run this command again or `rv secrets set OPENAI_API_KEY` to store it
+rv secrets set: could not store OPENAI_API_KEY (no secret store: rv keeps values in the Secret Service through secret-tool; install libsecret-tools and a keyring such as gnome-keyring); its definition was saved to secrets.json, but the value you gave was not stored: once the Secret Service keyring is available, run this command again or `rv secrets add OPENAI_API_KEY` to store it
 ```
 
 Check what you have:
@@ -212,7 +212,7 @@ What the program gets back when the gateway refuses:
 | --- | --- |
 | `403` | The placeholder came from a process outside the command's tree, the request is outside the `allow` rules, the placeholder is on a surface the secret does not allow, or it appears twice. |
 | `400` | With `allow` rules, a path an upstream could read differently (`%2f`, `..`, `//`, …). |
-| `502` | The upstream answered `401` (the stored value was rejected; no challenge is passed on), or answered compressed. Update the value with `rv secrets set`. |
+| `502` | The upstream answered `401` (the stored value was rejected; no challenge is passed on), or answered compressed. Update the value with `rv secrets add`. |
 | `408` | The client was too slow to send its request. |
 | `503 gateway busy` | Too many connections at once. |
 

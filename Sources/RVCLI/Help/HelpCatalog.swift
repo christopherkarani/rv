@@ -75,10 +75,10 @@ enum HelpCatalog {
                 accentNames: true
             ),
             HelpSection(heading: "Everyday", rows: [
-                HelpRow(name: "explain", description: "Why rv stopped a command, or let it run"),
+                HelpRow(name: "why", description: "Why rv stopped a command, or let it run"),
                 HelpRow(name: "log, blocks", description: "What rv stopped or would stop, newest first"),
-                HelpRow(name: "allow-once, wait", description: "Run a stopped command once; wait for that answer"),
-                HelpRow(name: "host, pause", description: "Watch or guard each agent; pause rv for an hour"),
+                HelpRow(name: "unlock, wait", description: "Run a stopped command once; wait for that answer"),
+                HelpRow(name: "guard, watch, host, pause", description: "Guard or watch an agent; pause rv an hour"),
                 HelpRow(name: "secrets", description: "Keys your agents use but never see"),
             ]),
             HelpSection(heading: "Rules", rows: [
@@ -230,7 +230,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv wait <code> --timeout <seconds>"),
             ]),
             HelpSection(heading: "Notes", rows: [
-                HelpRow(name: "who decides", description: "Only the person, with rv allow-once in a terminal or the review window. rv wait reads the answer; it can never give one"),
+                HelpRow(name: "who decides", description: "Only the person, with rv unlock in a terminal or the review window. rv wait reads the answer; it can never give one"),
                 HelpRow(name: "the code", description: "The six characters in rv's stop message (a7c835 or a7c-835)"),
                 HelpRow(name: "--timeout", description: "Seconds to wait, 1 to 3600 (default 100, under an agent's 2 minute shell limit)"),
             ]),
@@ -298,7 +298,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv explain [--json] [--robot] [--plain] [--no-color] <command>"),
+                HelpRow(name: "rv why [--json] [--robot] [--plain] [--no-color] <command>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
@@ -312,8 +312,8 @@ enum HelpCatalog {
             glossary,
         ],
         examples: [
-            "rv explain 'git reset --hard'",
-            "rv explain 'git status'",
+            "rv why 'git reset --hard'",
+            "rv why 'git status'",
         ]
     )
 
@@ -566,6 +566,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv host [list] [--json]"),
+                HelpRow(name: "rv guard <host> [--json]"),
+                HelpRow(name: "rv watch <host> [--json]"),
                 HelpRow(name: "rv host mode [<host>] [--json]"),
                 HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
             ]),
@@ -599,8 +601,8 @@ enum HelpCatalog {
         ],
         examples: [
             "rv host list",
-            "rv host mode claude observe",
-            "rv host mode cursor block",
+            "rv watch claude",
+            "rv guard cursor",
         ]
     )
 
@@ -674,10 +676,10 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
-                HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
-                HelpRow(name: "rv secrets set <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
+                HelpRow(name: "rv secrets add <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
+                HelpRow(name: "rv secrets add <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
                 HelpRow(name: "rv secrets providers [<id>] [--json]"),
-                HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
+                HelpRow(name: "rv secrets add <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
@@ -799,8 +801,8 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv secrets set OPENAI_API_KEY --resource-profile main",
-            "rv secrets set GITHUB_TOKEN --provider github",
+            "rv secrets add OPENAI_API_KEY --resource-profile main",
+            "rv secrets add GITHUB_TOKEN --provider github",
             "rv secrets check",
             "rv secrets scan .",
             "rv run --secret OPENAI_API_KEY -- codex",
@@ -1030,10 +1032,10 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv allow-once <code>"),
-                HelpRow(name: "rv allow-once mint -- <command>"),
-                HelpRow(name: "rv allow-once list"),
-                HelpRow(name: "rv allow-once clear"),
+                HelpRow(name: "rv unlock <code>"),
+                HelpRow(name: "rv unlock mint -- <command>"),
+                HelpRow(name: "rv unlock list"),
+                HelpRow(name: "rv unlock clear"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
@@ -1046,7 +1048,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "expiry",
-                    description: "A code works once and expires; rv allow-once list shows what is still open"
+                    description: "A code works once and expires; rv unlock list shows what is still open"
                 ),
                 HelpRow(
                     name: "terminal",
@@ -1059,8 +1061,8 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv allow-once a1b2c3",
-            "rv allow-once mint -- git reset --hard",
+            "rv unlock a1b2c3",
+            "rv unlock mint -- git reset --hard",
         ]
     )
 

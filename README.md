@@ -117,7 +117,7 @@ turns one on after owner authentication.
 | Secret paths | `.env`, SSH keys, cloud credentials: shell *and* Read/Edit/Write on Grok, Claude, Cursor |
 | Cloud and infra (opt-in packs) | `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`, `DROP TABLE`, … |
 
-Not sure why something blocked? `rv explain 'git reset --hard'` shows
+Not sure why something blocked? `rv why 'git reset --hard'` shows
 which pack and rule fired. rv does not read file contents, so a search
 tool with no explicit path can still match inside secret files in the
 working directory ([known limits](docs/guides/known-limits.md#the-hook-guard)).
@@ -128,7 +128,7 @@ Every hook deny prints a six-character code. Redeem it once, from your
 own terminal:
 
 ```sh
-rv allow-once a1b2c3    # next matching call in this directory runs once
+rv unlock a1b2c3    # next matching call in this directory runs once
 ```
 
 Redeeming needs owner authentication: Touch ID or your password on
@@ -173,7 +173,7 @@ rv host mode claude off   # stop guarding one host (asks for owner authenticatio
 rv uninstall              # remove rv's hooks, rvd and binaries; keeps your secrets and audit log (owner-auth)
 ```
 
-`rv host mode <host> block` turns guarding back on.
+`rv guard <host>` turns guarding back on.
 
 ## Features
 
@@ -271,7 +271,7 @@ remains in this repository's history under Apache 2.0, up to commit
 
 ```sh
 rv test 'rm -rf /'          # evaluate a command, don't run it
-rv explain 'rm -rf /'       # why would this block?
+rv why 'rm -rf /'       # why would this block?
 rv packs                    # what is on; rv packs --all browses the 95 packs
 rv blocks                   # what got denied lately?
 rv host list                # per-host mode (block / observe / off) and wiring
@@ -316,14 +316,14 @@ in `~/.config/rv/config.json`.
 | ⏺ asks | It waits for a person to say yes. |
 | → next | The one command to type next. |
 | ◆ rv | rv speaking. |
-| guarding | An agent's mode that stops commands (`rv host mode <host> block`). |
-| watching | An agent's mode that only logs them (`rv host mode <host> observe`). |
+| guarding | An agent's mode that stops commands (rv guard). |
+| watching | An agent's mode that only logs them (rv watch). |
 | rule | One pattern rv checks a command against. |
 | pack | A named set of rules, such as `core.git`. |
-| code | Six characters on a stop; a person runs it once with `rv allow-once`. |
+| code | Six characters on a stop; a person runs it once with rv unlock. |
 | incomplete | rv could not finish checking, so it stops the command. |
 
-`rv explain --help` prints the same list.
+`rv why --help` prints the same list.
 
 ## Architecture
 

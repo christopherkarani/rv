@@ -1,3 +1,4 @@
+import RVDomain
 import Testing
 import RVTheme
 @testable import RVCLI
@@ -62,7 +63,7 @@ import RVTheme
         #expect(text.contains("\n\(group)\n"), "root help missing group \(group)")
     }
     #expect(text.hasSuffix("  → rv setup    wire your agents and start rvd\n"))
-    for name in ["allow-once", "packs", "scan", "policy", "allowlist", "safety", "blocks", "explain"] {
+    for name in ["why", "unlock", "guard", "watch", "packs", "scan", "policy", "allowlist", "safety", "blocks"] {
         #expect(text.contains(name), "root help missing \(name)")
     }
     #expect(text.contains("Examples") == false)
@@ -203,8 +204,11 @@ import RVTheme
     let listed = Set(HelpCatalog.page(.root).sections.flatMap(\.rows).flatMap(HelpCatalog.commands(in:)))
     let hidden = Set(UnknownCommand.internalCommands.map(\.rawValue))
     let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
+    // A command shown by its new name (`why` for `explain`) counts.
+    let shownAs = Dictionary(grouping: CommandVocabulary.Alias.allCases.filter { $0.words.count == 1 }, by: { $0.runs[0] })
     for name in names where hidden.contains(name) == false {
-        #expect(listed.contains(name), "root help missing \(name)")
+        let spellings = [name] + (shownAs[name] ?? []).map(\.rawValue)
+        #expect(spellings.contains(where: listed.contains), "root help missing \(name)")
     }
     #expect(listed.isDisjoint(with: hidden))
 }

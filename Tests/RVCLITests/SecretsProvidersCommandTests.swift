@@ -26,7 +26,7 @@ struct SecretsProvidersCommandTests {
         let text = SecretsRun.providerShowText(row)
         #expect(text.contains("endpoint git: https://github.com  surfaces: header  allow: github-clone"))
         #expect(text.contains("GH_TOKEN -> api via $GH_API_URL"))
-        #expect(text.contains("use: rv secrets set GITHUB_TOKEN --provider github"))
+        #expect(text.contains("use: rv secrets add GITHUB_TOKEN --provider github"))
         #expect(SecretsRun.providers("gitlab")
             == .failure("no provider profile gitlab; `rv secrets providers` lists them"))
     }

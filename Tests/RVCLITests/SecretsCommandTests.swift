@@ -81,7 +81,7 @@ struct SecretsCommandTests {
         let configuration = try SecretsRun.configuration(fixture.environment()).get()
         let text = SecretsRun.listText(SecretsRun.list(configuration, profiles: []))
         #expect(text.hasPrefix("No secrets configured."))
-        #expect(text.contains("rv secrets set NAME --gateway"))
+        #expect(text.contains("rv secrets add NAME --gateway"))
     }
 
     @Test func setDefinesANewGatewaySecretAndStoresTheValueInTheKeychain() throws {
@@ -228,7 +228,7 @@ struct SecretsCommandTests {
         #expect(SecretsRun.set(
             name: "GH", value: Data("v".utf8), definition: nil, agents: [], description: nil,
             environment: environment)
-            == .failure("GH reads from host $GH; rv secrets set only stores values it reads from rv.secrets"))
+            == .failure("GH reads from host $GH; rv secrets add only stores values it reads from rv.secrets"))
     }
 
     @Test func setStoresExpiryAndRefreshAndUpdatesThemWhenTheValueRotates() throws {
@@ -329,8 +329,8 @@ struct SecretsCommandTests {
         #expect(report.secrets.map(\.expires) == ["2026-11-04", "2026-12-31", "2026-11-02", "2026-10-30"])
         #expect(report.secrets.map(\.refresh) == ["15m", nil, nil, nil])
         #expect(report.warnings == [
-            "SOON expires in 2 days (2026-11-04); rotate it with rv secrets set SOON --expires DATE",
-            "TODAY expires within a day (2026-11-02); rotate it with rv secrets set TODAY --expires DATE",
+            "SOON expires in 2 days (2026-11-04); rotate it with rv secrets add SOON --expires DATE",
+            "TODAY expires within a day (2026-11-02); rotate it with rv secrets add TODAY --expires DATE",
             "GONE expired at 2026-10-30; launches that use it fail until it is rotated",
         ])
         let text = SecretsRun.listText(report)
@@ -527,7 +527,7 @@ struct SecretsCommandTests {
     /// `set`'s refusal for flags that would change an existing secret.
     static func alreadyDefined(_ name: String) -> CommandFailure {
         CommandFailure(
-            "\(name) is already defined; `rv secrets set \(name)` with no flags other than --expires, --refresh or "
+            "\(name) is already defined; `rv secrets add \(name)` with no flags other than --expires, --refresh or "
                 + "--resource-profile replaces its value; edit secrets.json to change anything else")
     }
 
@@ -655,7 +655,7 @@ struct SecretsCommandTests {
         #expect(failure.message
             == "could not store ACME_KEY \(SecretKeychainWriter.storeFailureSuffix); its definition was saved to "
                 + "secrets.json, but the value you gave was not stored: once \(SecretKeychain.storeName) is available, run this "
-                + "command again or `rv secrets set ACME_KEY` to store it")
+                + "command again or `rv secrets add ACME_KEY` to store it")
     }
 
     /// Allow rules, surfaces, the placeholder prefix and the order of agents
@@ -1076,9 +1076,9 @@ struct SecretsCommandTests {
         let painted = try SecretsRun.hookRun(workTree: work, environment: fixture.environment(), palette: color).get()
         #expect(painted.failed)
         // Red ✕ and blue →, as in the policy refusals; the rest of each line stays plain.
-        #expect(painted.text == "\u{1B}[1;31m✕\u{1B}[0m leak.txt:1  aws-access-key-id\n\u{1B}[1;34m→\u{1B}[0m move it: rv secrets set AWS_ACCESS_KEY_ID\n")
+        #expect(painted.text == "\u{1B}[1;31m✕\u{1B}[0m leak.txt:1  aws-access-key-id\n\u{1B}[1;34m→\u{1B}[0m move it: rv secrets add AWS_ACCESS_KEY_ID\n")
         let plain = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
-        #expect(plain.text == "✕ leak.txt:1  aws-access-key-id\n→ move it: rv secrets set AWS_ACCESS_KEY_ID\n")
+        #expect(plain.text == "✕ leak.txt:1  aws-access-key-id\n→ move it: rv secrets add AWS_ACCESS_KEY_ID\n")
     }
 
     @Test func hookFindsPatternsPastTheFirstMebibyteAndReportsOversizedFiles() throws {
@@ -1099,7 +1099,7 @@ struct SecretsCommandTests {
         let result = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
         #expect(result.failed)
         #expect(result.text.contains("✕ big.txt:120001  aws-access-key-id\n"))
-        #expect(result.text.hasSuffix("→ move it: rv secrets set AWS_ACCESS_KEY_ID\n"))
+        #expect(result.text.hasSuffix("→ move it: rv secrets add AWS_ACCESS_KEY_ID\n"))
         #expect(result.text.contains("not scanned (over 8 MiB): huge.bin"))
         #expect(result.text.contains(token) == false)
 

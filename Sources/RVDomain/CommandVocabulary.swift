@@ -160,6 +160,12 @@ public enum CommandVocabulary {
                 .joined(separator: " ")
         }
 
+        /// What a person types, before any arguments: `rv why`,
+        /// `rv secrets add`. Messages that name a command to type use it.
+        public var invocation: String {
+            ([CommandVocabulary.program] + words).joined(separator: " ")
+        }
+
         /// `rv host mode <host> block`.
         public var target: String {
             ([CommandVocabulary.program] + runs).joined(separator: " ")

@@ -223,7 +223,7 @@ enum InitRun {
                 lines.append("  secret \(DisplayedText.field(name)) (defined; staged at launch)")
             } else {
                 lines.append(
-                    "  secret \(DisplayedText.field(name)) (not defined; run `rv secrets set \(name)`)")
+                    "  secret \(DisplayedText.field(name)) (not defined; run `\(CommandVocabulary.Alias.secretsAdd.invocation) \(name)`)")
             }
         }
         lines += plan.notes.map { "note: \($0)" }

@@ -273,7 +273,7 @@ enum AllowOnceCLI {
     static func mintedMessage(code: String) -> String {
         """
         allow-once code: \(code)
-        rv allow-once \(code)
+        \(CommandVocabulary.Alias.unlock.invocation) \(code)
         This code lives only in rvd's memory: it is lost if rvd restarts, and expires in 24 hours.
 
         """
@@ -403,10 +403,10 @@ struct AllowOnceRedeem: AsyncParsableCommand {
         guard let code, code.isEmpty == false else {
             try CommandContext.fail(
                 """
-                usage: rv allow-once mint -- <command>
-                       rv allow-once <code>
-                       rv allow-once list
-                       rv allow-once clear
+                usage: rv unlock mint -- <command>
+                       rv unlock <code>
+                       rv unlock list
+                       rv unlock clear
 
                 """,
                 exitCode: 2
