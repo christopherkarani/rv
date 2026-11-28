@@ -15,6 +15,15 @@ enum BoxTidyRun {
     /// The words `rv box tidy` takes after `tidy`.
     static let words: Set = ["--yes", "-y", "--help", "-h"]
 
+    /// Nothing changes without a yes: the typed `y`, or `--yes`. `--yes`
+    /// is for scripts and agents: an agent may run `rv box tidy --yes`,
+    /// since tidy only ever moves to the 7-day trash and never touches a
+    /// box that may hold unsaved work.
+    ///
+    /// The machine is read twice: once for the question, and again after
+    /// the yes. Only what was asked about and is still a leftover moves
+    /// (`BoxTidy.confirm`), and attachment is checked once more right
+    /// before each rename and before each trash entry is emptied.
     static func run(yes: Bool) throws {
         #if !os(macOS)
         try BoxRun.refuse(BoxPlan.linuxHostRefusal)
@@ -22,39 +31,41 @@ enum BoxTidyRun {
         guard let home = BoxRun.passwdHome() else { try BoxRun.refuse(BoxPlan.noHome) }
         let shownHome = BoxRun.canonical(home.rawValue)
         let trash = BoxTrash(configDirectory: RVPolicyPaths.configDirectory(home: home))
-        let now = Date()
-        let plan = BoxTidy.plan(WorkspaceHosts.tidyScan(trash: trash), now: now)
-        write(BoxTidyRender.summary(plan, home: shownHome))
-        if let hold = plan.hold {
+        let asked = BoxTidy.plan(WorkspaceHosts.tidyScan(trash: trash), now: Date())
+        write(BoxTidyRender.summary(asked, home: shownHome))
+        if let hold = asked.hold {
             write(BoxTidyRender.holdText(hold, home: shownHome))
-            write(BoxTidyRender.done(apply(plan, moving: false, trash: trash, now: now)))
             return
         }
-        guard plan.moves.isEmpty == false else {
-            write(BoxTidyRender.done(apply(plan, moving: false, trash: trash, now: now)))
-            return
-        }
-        var moving = yes
-        if moving == false {
+        guard asked.isEmpty == false else { return }
+        if yes == false {
             guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
                 write(BoxTidyRender.notAsked)
-                write(BoxTidyRender.done(apply(plan, moving: false, trash: trash, now: now)))
                 return
             }
-            write(BoxTidyRender.question(plan))
+            write(BoxTidyRender.question(asked))
             let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased()
-            moving = answer == "y" || answer == "yes"
-            if moving == false { write(BoxTidyRender.declined) }
+            guard answer == "y" || answer == "yes" else {
+                write(BoxTidyRender.declined)
+                return
+            }
         }
-        write(BoxTidyRender.done(apply(plan, moving: moving, trash: trash, now: now)))
+        // The answer may have taken minutes: a box may have started, or
+        // claimed an image, meanwhile. Read the machine again.
+        let now = Date()
+        let confirmed = BoxTidy.confirm(asked, rescanned: BoxTidy.plan(WorkspaceHosts.tidyScan(trash: trash), now: now))
+        if let hold = confirmed.hold {
+            write(BoxTidyRender.holdText(hold, home: shownHome))
+            return
+        }
+        let outcome = BoxTidy.apply(
+            confirmed, trash: trash, now: now,
+            attachedNow: WorkspaceHosts.attachedImageNames, detach: detach)
+        write(BoxTidyRender.done(outcome, asked: asked.moves.count + asked.expired.count))
         #endif
     }
 
     #if os(macOS)
-    private static func apply(_ plan: BoxTidyPlan, moving: Bool, trash: BoxTrash, now: Date) -> BoxTidyOutcome {
-        BoxTidy.apply(plan, moving: moving, trash: trash, now: now, detach: detach)
-    }
-
     /// `hdiutil detach <device>`, never `-force`: an image something still
     /// uses stays attached. Bounded, since DiskArbitration can wedge.
     private static func detach(_ device: String) -> Bool {

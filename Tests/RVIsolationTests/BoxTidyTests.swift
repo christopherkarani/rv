@@ -152,10 +152,14 @@ struct BoxTrashTests {
         try FileManager.default.createDirectory(at: stranger, withIntermediateDirectories: false)
         let outside = scratch.appendingPathComponent("1-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: false)
-        #expect(trash.empty(BoxTrashEntry(path: stranger.path, trashedAt: .distantPast)) == false)
-        #expect(trash.empty(BoxTrashEntry(path: outside.path, trashedAt: .distantPast)) == false)
+        #expect(trash.empty(BoxTrashEntry(path: stranger.path, trashedAt: .distantPast), attachedNames: []) == false)
+        #expect(trash.empty(BoxTrashEntry(path: outside.path, trashedAt: .distantPast), attachedNames: []) == false)
         #expect(trash.entries() == [entry])
-        #expect(trash.empty(entry))
+        // Attached again since it was trashed, or attachment unknown: kept.
+        #expect(trash.empty(entry, attachedNames: ["rv-inode-e.sparseimage"]) == false)
+        #expect(trash.empty(entry, attachedNames: nil) == false)
+        #expect(trash.entries() == [entry])
+        #expect(trash.empty(entry, attachedNames: ["rv-inode-other.sparseimage"]))
         #expect(trash.entries().isEmpty)
         #expect(FileManager.default.fileExists(atPath: stranger.path))
         #expect(FileManager.default.fileExists(atPath: outside.path))
@@ -186,9 +190,12 @@ struct BoxTrashTests {
             trash: trash.entries())
         let plan = BoxTidy.plan(scan, now: now)
         var detached: [String] = []
-        let outcome = BoxTidy.apply(plan, moving: true, trash: trash, now: now) { device in
+        var attached: Set = ["rv-inode-s.sparseimage", "rv-inode-d.sparseimage"]
+        let outcome = BoxTidy.apply(plan, trash: trash, now: now, attachedNow: { attached }) { device in
             detached.append(device)
-            return device == "/dev/disk8"
+            guard device == "/dev/disk8" else { return false }
+            attached.remove("rv-inode-d.sparseimage")
+            return true
         }
         #expect(outcome == BoxTidyOutcome(moved: 2, stayed: 1, emptied: 1))
         #expect(detached == ["/dev/disk8", "/dev/disk7"])
@@ -202,16 +209,77 @@ struct BoxTrashTests {
         #expect(entries.count == 3)
     }
 
-    @Test func declinedRunsOnlyEmptyTheExpiredTrash() throws {
+    /// Checked again right before each rename: a file attached since the
+    /// plan was made stays, and so does everything when rv cannot tell.
+    @Test func aLeftoverAttachedAtTheRenameStays() throws {
         defer { try? FileManager.default.removeItem(at: scratch) }
         let trash = BoxTrash(root: scratch.appendingPathComponent("trash"))
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let loose = try leftover("rv-inode-a.sparseimage")
+        let claimed = try leftover("rv-inode-a.sparseimage", contents: "unsaved")
+        let loose = try leftover("rv-inode-b.sparseimage")
         let plan = BoxTidy.plan(BoxTidyScan(
-            boxes: [], imageFiles: [BoxTidyImageFile(path: loose, modified: .distantPast)], attachedImages: []),
-            now: now)
-        let outcome = BoxTidy.apply(plan, moving: false, trash: trash, now: now) { _ in true }
-        #expect(outcome == BoxTidyOutcome())
-        #expect(FileManager.default.fileExists(atPath: loose))
+            boxes: [], imageFiles: [claimed, loose].map { BoxTidyImageFile(path: $0, modified: .distantPast) },
+            attachedImages: []), now: now)
+        #expect(plan.moves.count == 2)
+        let unknown = BoxTidy.apply(plan, trash: trash, now: now, attachedNow: { nil }) { _ in true }
+        #expect(unknown == BoxTidyOutcome(stayed: 2))
+        let outcome = BoxTidy.apply(plan, trash: trash, now: now,
+                                    attachedNow: { ["rv-inode-a.sparseimage"] }) { _ in true }
+        #expect(outcome == BoxTidyOutcome(moved: 1, stayed: 1))
+        #expect(try String(contentsOfFile: claimed, encoding: .utf8) == "unsaved")
+        #expect(FileManager.default.fileExists(atPath: loose) == false)
+    }
+
+    /// After the yes the machine is read again: only what was asked about
+    /// and is still a leftover moves.
+    @Test func confirmKeepsOnlyWhatWasAskedAndIsStillFree() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let files = ["/t/rv-inode-a.sparseimage", "/t/rv-inode-b.sparseimage"]
+            .map { BoxTidyImageFile(path: $0, modified: .distantPast) }
+        let expired = BoxTrashEntry(path: "/trash/1-x", trashedAt: .distantPast)
+        let asked = BoxTidy.plan(BoxTidyScan(boxes: [], imageFiles: files, attachedImages: [], trash: [expired]),
+                                 now: now)
+        // Meanwhile a box claimed b, and c showed up.
+        let claimedB = BoxTidyBox(project: "/p", lastActive: now, state: .unfinished,
+                                  images: ["/private/t/rv-inode-b.sparseimage"])
+        let later = files + [BoxTidyImageFile(path: "/t/rv-inode-c.sparseimage", modified: .distantPast)]
+        let rescanned = BoxTidy.plan(BoxTidyScan(boxes: [claimedB], imageFiles: later, attachedImages: [],
+                                                 trash: [expired]), now: now)
+        let confirmed = BoxTidy.confirm(asked, rescanned: rescanned)
+        #expect(confirmed.moves == [.imageFile(path: "/t/rv-inode-a.sparseimage")])
+        #expect(confirmed.expired == [expired])
+        #expect(confirmed.kept == [claimedB])
+        // A box that started meanwhile holds everything.
+        let starting = BoxTidyBox(project: "/q", lastActive: now, state: .busy)
+        let held = BoxTidy.confirm(asked, rescanned: BoxTidy.plan(
+            BoxTidyScan(boxes: [starting], imageFiles: files, attachedImages: []), now: now))
+        #expect(held.hold == .boxBusy(project: "/q"))
+        #expect(held.moves.isEmpty)
+    }
+
+    /// Any lifecycle line that does not decode may name an image: hold.
+    @Test func aLogWithAnyUnreadableLineIsNotClean() throws {
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let log = scratch.appendingPathComponent("workspace-sessions.jsonl")
+        #expect(WorkspaceLifecycleLog.readsCleanly(at: log))
+        let record = WorkspaceLifecycleRecord(
+            kind: .created, workspace: UUID(), originalPath: "/tmp/proj",
+            protectedPath: "/private/tmp/rv-saved/proj", volumeDevice: 1, disk: "/dev/disk9",
+            runtime: nil, recordedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        guard case .success = WorkspaceLifecycleLog.append(record, to: log) else {
+            Issue.record("append failed")
+            return
+        }
+        #expect(WorkspaceLifecycleLog.readsCleanly(at: log))
+        let good = try String(contentsOf: log, encoding: .utf8)
+        try (good + "{\"torn").write(to: log, atomically: true, encoding: .utf8)
+        #expect(WorkspaceLifecycleLog.readsCleanly(at: log) == false)
+        try (good + "not json\n" + good).write(to: log, atomically: true, encoding: .utf8)
+        #expect(WorkspaceLifecycleLog.records(at: log).count == 2)
+        #expect(WorkspaceLifecycleLog.readsCleanly(at: log) == false)
+        try FileManager.default.removeItem(at: log)
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
+        #expect(WorkspaceLifecycleLog.readsCleanly(at: log) == false)
     }
 }

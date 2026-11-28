@@ -90,14 +90,20 @@ public struct BoxTrash: Sendable {
     }
 
     /// Empties one entry for good. Only a real folder directly inside the
-    /// trash whose name is an entry's; anything else is left alone.
+    /// trash whose name is an entry's; anything else is left alone. An
+    /// entry holding a file that is attached now (by file name, from
+    /// `attachedNames`) stays, and so does every entry when
+    /// `attachedNames` is nil (rv could not tell what is attached).
     @discardableResult
-    public func empty(_ entry: BoxTrashEntry) -> Bool {
+    public func empty(_ entry: BoxTrashEntry, attachedNames: Set<String>?) -> Bool {
         let url = URL(fileURLWithPath: entry.path)
-        guard url.deletingLastPathComponent().standardizedFileURL.path == root.standardizedFileURL.path,
+        guard let attachedNames,
+            url.deletingLastPathComponent().standardizedFileURL.path == root.standardizedFileURL.path,
             Self.entryDate(url.lastPathComponent) != nil,
             let attributes = try? FileManager.default.attributesOfItem(atPath: entry.path),
-            attributes[.type] as? FileAttributeType == .typeDirectory
+            attributes[.type] as? FileAttributeType == .typeDirectory,
+            let contents = try? FileManager.default.contentsOfDirectory(atPath: entry.path),
+            contents.contains(where: attachedNames.contains) == false
         else { return false }
         return (try? FileManager.default.removeItem(at: url)) != nil
     }

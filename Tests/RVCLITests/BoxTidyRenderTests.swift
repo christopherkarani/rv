@@ -24,7 +24,7 @@ struct BoxTidyRenderTests {
         let plan = Self.plan(kept: [Self.app], moves: 252)
         #expect(BoxTidyRender.summary(plan, home: Self.home, timeZone: Self.utc) == """
             ◆ rv 1 box never finished · 252 old images
-              ◐ ~/code/app   may hold unsaved work · Nov 19 · rv workspace start --workspace ~/code/app
+              ◐ ~/code/app   may hold unsaved work · Nov 19 · cd ~/code/app && rv box
 
             """)
         #expect(BoxTidyRender.question(plan) == "  Move 252 to trash? The box with unsaved work stays. y/n ")
@@ -48,10 +48,13 @@ struct BoxTidyRenderTests {
 
     @Test func nothingToTidy() {
         #expect(BoxTidyRender.summary(Self.plan(), home: Self.home) == "✓ Nothing to tidy.\n")
-        // Only the expired trash: the done line says so, no heading.
-        #expect(BoxTidyRender.summary(Self.plan(expired: 2), home: Self.home) == "")
+        // Only the expired trash: it is named, and emptying it waits for a yes.
+        #expect(BoxTidyRender.summary(Self.plan(expired: 2), home: Self.home) == "◆ rv 2 in the trash past 7 days\n")
+        #expect(BoxTidyRender.question(Self.plan(expired: 2)) == "  Empty 2 from the trash for good? y/n ")
+        #expect(BoxTidyRender.question(Self.plan(moves: 3, expired: 2))
+            == "  Move 3 to trash and empty 2 for good? y/n ")
         #expect(BoxTidyRender.done(BoxTidyOutcome(emptied: 2)) == "  ✓ Tidied · emptied 2 from the trash\n")
-        #expect(BoxTidyRender.done(BoxTidyOutcome()) == "")
+        #expect(BoxTidyRender.done(BoxTidyOutcome()) == "  Nothing moved.\n")
     }
 
     @Test func holdsSayWhyAndWhatNext() {
@@ -77,7 +80,16 @@ struct BoxTidyRenderTests {
     }
 
     @Test func noTerminalNamesTheYesFlag() {
-        #expect(BoxTidyRender.notAsked == "  → to move them: rv box tidy --yes\n")
+        #expect(BoxTidyRender.notAsked == "  → nothing changed; to tidy: rv box tidy --yes\n")
+    }
+
+    /// Something a box claimed after the yes is left alone, and said so.
+    @Test func leftoversClaimedAfterTheYesAreCounted() {
+        #expect(BoxTidyRender.done(BoxTidyOutcome(moved: 2), asked: 3) == """
+              ✓ Tidied · trash empties in 7 days
+              ◐ 1 left alone: in use since you were asked.
+
+            """)
     }
 
     @Test func tidyIsATarget() {
