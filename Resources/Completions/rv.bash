@@ -7,7 +7,7 @@ _rv() {
   fi
   case "$cmd" in
     box)
-      COMPREPLY=( $(compgen -W "list setup --linux --mac --profile" -- "$cur") )
+      COMPREPLY=( $(compgen -W "list setup tidy --linux --mac --profile" -- "$cur") )
       ;;
     workspace)
       COMPREPLY=( $(compgen -W "start attach status close" -- "$cur") )

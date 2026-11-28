@@ -32,16 +32,18 @@ struct BoxCommand: AsyncParsableCommand {
             description: "Run any command in the box"),
         HelpRow(name: "rv box list [--json]", description: "Every box, any strength, newest first; --json writes schema rv.boxes.v1"),
         HelpRow(name: "rv box setup mac", description: "Build the Mac box image now, in the foreground (about 26 GB)"),
+        HelpRow(name: "rv box tidy [--yes]", description: "Move old box images to a 7-day trash; boxes with unsaved work are never touched. --yes answers the one question, so a script or an agent may run it"),
     ]
 
     static let flags = [
         HelpRow(name: "--linux", description: "A network-less Linux micro-VM booted from \(BoxWall.linuxImage), fetched once (macOS 26+, Apple silicon); a bare name runs from the VM's PATH"),
         HelpRow(name: "--mac", description: "A network-less macOS VM cloned from the Mac box image (macOS 27); build it once with rv box setup mac"),
+        HelpRow(name: "--verbose", description: "When a box can't start, also print the workspace host's own words"),
         HelpRow(name: "--profile", description: "Resource profile to stage. Default: the one profile that serves this agent here, else the defaultProfile in runtime-resources.json, else none. A VM box never stages a profile that shares host files"),
     ]
 
     /// Words offered after `rv box`: the known agents, `list` and `setup`.
-    static let completions = RuntimeAgentEntries.known + ["list", "setup"]
+    static let completions = RuntimeAgentEntries.known + ["list", "setup", "tidy"]
 
     @Flag(name: .long, help: "Run in a network-less Linux micro-VM.")
     var linux = false
@@ -52,9 +54,12 @@ struct BoxCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Owner resource profile ID to stage. Default: the profile that serves this agent here.")
     var profile: String?
 
+    @Flag(name: .long, help: "When a box can't start, also print the workspace host's own words.")
+    var verbose = false
+
     @Argument(
         parsing: .captureForPassthrough,
-        help: "An agent name and its arguments, -- and a command, list, or setup mac.",
+        help: "An agent name and its arguments, -- and a command, list, tidy, or setup mac.",
         completion: .list(BoxCommand.completions))
     var words: [String] = []
 
@@ -77,8 +82,14 @@ struct BoxCommand: AsyncParsableCommand {
             try list.run()
         case .setupMac:
             try BoxRun.setupMac()
+        case .tidy(let yes):
+            if words.contains(where: { $0 == "--help" || $0 == "-h" }) {
+                _ = HelpDispatch.tryEmit(arguments: ["box", "--help"])
+                return
+            }
+            try BoxTidyRun.run(yes: yes)
         case .shell, .agent, .command:
-            try await BoxRun.run(linux: linux, mac: mac, profile: profile, captured: words)
+            try await BoxRun.run(linux: linux, mac: mac, profile: profile, captured: words, verbose: verbose)
         }
     }
 }
@@ -118,7 +129,7 @@ struct BoxListCommand: ParsableCommand {
 /// The imperative shell of `rv box`: reads the machine, then hands the
 /// launch `BoxPlan` resolved to `WorkspaceCommandRun`.
 enum BoxRun {
-    static func run(linux: Bool, mac: Bool, profile: String?, captured: [String]) async throws {
+    static func run(linux: Bool, mac: Bool, profile: String?, captured: [String], verbose: Bool = false) async throws {
         #if !os(macOS)
         try refuse(BoxPlan.linuxHostRefusal)
         #else
@@ -139,7 +150,7 @@ enum BoxRun {
             }
             try await WorkspaceTUICommand.run(project)
         case .launch(let launch):
-            try runLaunch(launch, surroundings: surroundings) {
+            try runLaunch(launch, surroundings: surroundings, verbose: verbose) {
                 let elapsed = started.duration(to: clock.now).components
                 return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
             }
@@ -167,7 +178,7 @@ enum BoxRun {
 
     #if os(macOS)
     private static func runLaunch(
-        _ launch: BoxLaunch, surroundings: BoxSurroundings, elapsed: () -> Double
+        _ launch: BoxLaunch, surroundings: BoxSurroundings, verbose: Bool, elapsed: () -> Double
     ) throws {
         if let microVM = launch.wall.microVM {
             do throws(WorkspaceMicroVM.Unready) {
@@ -202,7 +213,15 @@ enum BoxRun {
             writeStderr(exitLine)
             throw exit
         } catch let error as ValidationError {
-            try refuse(BoxPlan.hostRefusal(error.message))
+            // A refused trust pin can look like an unreachable host: ask
+            // the installed helper's peer-trust check only then.
+            let trust = BoxStartFailure.mayBeTrust(error.message) ? WorkspaceCommandRun.currentHostTrustReason() : nil
+            try refuse(BoxStartFailure.refusal(error.message, hostTrustReason: trust),
+                       detail: verbose ? BoxStartFailure.detail(error.message) : nil)
+        } catch {
+            // Anything else the start throws is still one line and one fix.
+            try refuse(BoxStartFailure.fallback,
+                       detail: verbose ? BoxStartFailure.detail(String(describing: error)) : nil)
         }
         writeStderr(exitLine)
     }
@@ -303,8 +322,9 @@ enum BoxRun {
         return String(cString: resolved)
     }
 
-    static func refuse(_ refusal: BoxRefusal) throws -> Never {
+    static func refuse(_ refusal: BoxRefusal, detail: String? = nil) throws -> Never {
         writeStderr(refusal.text)
+        if let detail { writeStderr(detail) }
         throw ExitCode(refusal.exitCode)
     }
 
@@ -337,6 +357,6 @@ extension HelpCatalog {
                 HelpRow(name: "platform", description: "macOS only; on Linux rv box refuses rather than use a weaker wall"),
             ]),
         ],
-        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list"]
+        examples: ["rv box claude", "rv box --linux -- npm test", "rv box list", "rv box tidy"]
     )
 }
