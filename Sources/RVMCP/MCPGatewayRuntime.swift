@@ -477,6 +477,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let event: @Sendable (AuditEvent) -> Void
     private let log: @Sendable (String) -> Void
     private let logRelay: MCPLogRelay
+    /// Where a `.notice` goes besides stderr: the person's terminal.
+    private let notice: (@Sendable (String) -> Void)?
     private let writeBufferBytes: Int
     private let clientStallSeconds: TimeInterval
     /// `MCPGatewayRuntime.stopGrace`, unless a test widens it.
@@ -552,8 +554,10 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void,
+        notice: (@Sendable (String) -> Void)? = nil,
         placeholdersBound: @escaping @Sendable (String, [SecretDefinition]) -> Void = { _, _ in }
     ) {
+        self.notice = notice
         self.core = core
         self.connections = connections
         self.relaunch = relaunch
@@ -1040,6 +1044,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 event(item)
             case .log(let text):
                 log(text)
+            case .notice(let text):
+                log(text)
+                notice?(text)
             case .stopUpstream(let server):
                 stopUpstream(server)
             case .restartUpstream(let server, let launch):
