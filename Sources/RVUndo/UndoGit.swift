@@ -9,14 +9,14 @@ import Foundation
 ///
 /// A repository's own config can make git run commands: hooks
 /// (`reference-transaction` on `update-ref`, `post-checkout` on `switch`),
-/// `core.fsmonitor`, and clean/smudge filters. rvd runs these copies
-/// outside any box the agent is in, so none of them may run:
-/// - hooks and fsmonitor are switched off on the command line, which
-///   outranks every config file;
+/// `core.fsmonitor`, commit signing, and clean/smudge filters. rvd runs
+/// these copies outside any box the agent is in, so none of them may run:
+/// - hooks, fsmonitor, signing and auto maintenance are switched off on
+///   the command line, which outranks every config file;
 /// - global and system config are not read;
-/// - before saving, `keep` refuses a repository whose config names any
-///   filter (`filtersConfigured`), since a filter's name is the repo's
-///   to choose and cannot be switched off by name in advance.
+/// - rvd never runs a git command that reads working-tree files (that is
+///   where filters run): `UndoGitCopy` reads the files itself and hands
+///   git their bytes with `hash-object --no-filters`.
 /// Every run has a deadline; past it the process is killed.
 public struct UndoGit: Sendable {
     let executable: URL
@@ -47,6 +47,9 @@ public struct UndoGit: Sendable {
         "-c", "core.untrackedCache=false",
         "-c", "core.pager=cat",
         "-c", "protocol.allow=never",
+        "-c", "commit.gpgSign=false",
+        "-c", "gc.auto=0",
+        "-c", "maintenance.auto=false",
     ]
 
     static func environment(base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
@@ -58,7 +61,7 @@ public struct UndoGit: Sendable {
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_PAGER": "cat",
             "GIT_OPTIONAL_LOCKS": "0",
-            // `stash create` writes commits; it needs a name, never yours.
+            // rv's kept commits need a name, never yours.
             "GIT_AUTHOR_NAME": "rv", "GIT_AUTHOR_EMAIL": "rv@localhost",
             "GIT_COMMITTER_NAME": "rv", "GIT_COMMITTER_EMAIL": "rv@localhost",
         ]
@@ -74,21 +77,43 @@ public struct UndoGit: Sendable {
     /// Runs `git <hardening> <arguments>` in the repository. Output goes
     /// to an owner-only temp file, read once git exits, so a chatty git
     /// never blocks on a full pipe.
-    func run(_ arguments: [String]) throws(UndoSkip) -> Output {
+    /// `input`, when given, is git's stdin (through a temp file too).
+    /// `indexFile` points git at an index other than the repository's.
+    func run(
+        _ arguments: [String], input: Data? = nil, indexFile: String? = nil, maxOutput: Int = UndoGit.maxOutput
+    ) throws(UndoSkip) -> Output {
         let outPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-undo-git-\(UUID().uuidString)").path
         let fd = open(outPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
         guard fd >= 0 else { throw .io(outPath, errno: errno) }
         defer { unlink(outPath) }
         let out = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var stdin = FileHandle.nullDevice
+        let inPath = outPath + ".in"
+        if let input {
+            let inFD = open(inPath, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+            guard inFD >= 0 else { throw .io(inPath, errno: errno) }
+            let handle = FileHandle(fileDescriptor: inFD, closeOnDealloc: true)
+            do {
+                try handle.write(contentsOf: input)
+                try handle.seek(toOffset: 0)
+            } catch {
+                unlink(inPath)
+                throw .io(inPath, errno: EIO)
+            }
+            stdin = handle
+        }
+        defer { if input != nil { unlink(inPath) } }
         let process = Process()
         process.executableURL = executable
         process.arguments = Self.hardening + arguments
         process.currentDirectoryURL = URL(fileURLWithPath: repository, isDirectory: true)
-        process.environment = Self.environment()
+        var environment = Self.environment()
+        if let indexFile { environment["GIT_INDEX_FILE"] = indexFile }
+        process.environment = environment
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = stdin
         let done = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in done.signal() }
         do {
@@ -106,24 +131,22 @@ public struct UndoGit: Sendable {
         }
         try? out.close()
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: outPath),
-            let size = attributes[.size] as? NSNumber, size.intValue <= Self.maxOutput,
+            let size = attributes[.size] as? NSNumber, size.intValue <= maxOutput,
             let data = FileManager.default.contents(atPath: outPath)
         else { throw .gitFailed("too much output") }
         return Output(status: process.terminationStatus, stdout: data)
     }
 
     /// `run`, requiring exit 0, trimmed text out.
-    func text(_ arguments: [String]) throws(UndoSkip) -> String {
-        let output = try run(arguments)
+    func text(_ arguments: [String], input: Data? = nil, indexFile: String? = nil) throws(UndoSkip) -> String {
+        let output = try run(arguments, input: input, indexFile: indexFile)
         guard output.status == 0 else { throw .gitFailed(arguments.first ?? "git") }
         return String(decoding: output.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// True when the repository's config names a filter driver.
-    func filtersConfigured() throws(UndoSkip) -> Bool {
-        let output = try run(["config", "--list", "--name-only"])
-        // Exit 1 with no output: no config at all.
-        let names = String(decoding: output.stdout, as: UTF8.self).split(whereSeparator: \.isNewline)
-        return names.contains { $0.lowercased().hasPrefix("filter.") }
+    /// True for a full commit id: 40 (SHA-1) or 64 (SHA-256) lowercase hex.
+    public static func isObjectID(_ text: String) -> Bool {
+        (text.utf8.count == 40 || text.utf8.count == 64)
+            && text.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
     }
 }

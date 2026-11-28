@@ -50,8 +50,9 @@ struct Undo: AsyncParsableCommand {
             throw ExitCode(1)
         }
         print(screen.question(repository: repository), terminator: "")
+        // No is the default: restoring is a choice the person makes out loud.
         let answer = (readLine() ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-        guard answer.isEmpty || answer == "y" || answer == "yes" else {
+        guard answer == "y" || answer == "yes" else {
             print("  Nothing changed.")
             return
         }
@@ -59,7 +60,7 @@ struct Undo: AsyncParsableCommand {
             let outcome = try UndoRestore.restore(manifest, from: store, into: repository, now: manifest.createdAt)
             screen.restored(outcome, store: store, manifest: manifest).forEach { print($0) }
         } catch {
-            print("  " + screen.paint("\(CommandVocabulary.Glyph.stopped.rawValue) \(error.note)", palette.deny))
+            print("  " + screen.paint("\(CommandVocabulary.Glyph.stopped.rawValue) \(UndoText.plain(error.note))", palette.deny))
             throw ExitCode(1)
         }
     }
@@ -102,8 +103,12 @@ struct UndoScreen {
     }
 
     /// The copy, the command it came before, and what rv kept.
+    /// Manifest text (the person's own files, so anything running as them
+    /// could have written it), safe for the terminal.
+    private func plain(_ text: String) -> String { UndoText.plain(text) }
+
     func summary(_ manifest: UndoManifest) -> [String] {
-        let head = "  \(paint(clock(manifest.createdAt), palette.muted))  \(manifest.host)  \(manifest.command)   "
+        let head = "  \(paint(clock(manifest.createdAt), palette.muted))  \(plain(manifest.host))  \(plain(manifest.command))   "
             + paint(manifest.reason.rawValue, palette.muted)
         var lines = ["", head]
         let indent = "         "
@@ -111,29 +116,29 @@ struct UndoScreen {
         case .skipped:
             lines.append(indent + "\(paint(Glyph.rv.rawValue, palette.heading)) rv kept no copy.")
         case .git where manifest.tally.files == 0:
-            let head = manifest.git.map { String($0.head.prefix(7)) } ?? ""
+            let head = manifest.git.map { plain(String($0.head.prefix(7))) } ?? ""
             lines.append(indent + "\(paint(Glyph.rv.rawValue, palette.heading)) rv kept a copy first: HEAD at \(head)")
         case .git, .files:
             lines.append(indent + "\(paint(Glyph.rv.rawValue, palette.heading)) rv kept a copy first: \(Self.amount(manifest.tally))")
         }
-        lines += manifest.notes.map { indent + paint($0, palette.muted) }
+        lines += manifest.notes.map { indent + paint(plain($0), palette.muted) }
         lines.append("")
         return lines
     }
 
     func question(repository: String) -> String {
-        "  Restore into \(shown(repository))?  \(paint("[Y/n]", palette.muted)) "
+        "  Restore into \(shown(repository))?  \(paint("[y/N]", palette.muted)) "
     }
 
     func restored(_ outcome: UndoRestoreOutcome, store: UndoStore, manifest: UndoManifest) -> [String] {
         let done = paint("\(Glyph.done.rawValue) Back,", palette.allow)
         switch outcome {
         case .branch(let branch):
-            return ["  \(done) on branch \(paint(branch, palette.heading)). Nothing was overwritten."]
+            return ["  \(done) on branch \(paint(plain(branch), palette.heading)). Nothing was overwritten."]
         case .files(let restored, let left):
             var lines = ["  \(done) \(restored == 1 ? "1 file" : "\(TryScreen.grouped(restored)) files"). Nothing was overwritten."]
             if left.isEmpty == false {
-                lines.append("  Already there, so left alone: \(left.joined(separator: ", ")).")
+                lines.append("  Already there, so left alone: \(left.map(plain).joined(separator: ", ")).")
                 lines.append("  Their copy is in \(shown(store.dataDirectory(of: manifest).path)).")
             }
             return lines
@@ -143,9 +148,9 @@ struct UndoScreen {
     func list(_ copies: [UndoManifest]) -> [String] {
         guard copies.isEmpty == false else { return none(repository: nil) }
         return copies.map { manifest in
-            "  \(paint(clock(manifest.createdAt), palette.muted))  \(manifest.host)  \(manifest.command)   "
+            "  \(paint(clock(manifest.createdAt), palette.muted))  \(plain(manifest.host))  \(plain(manifest.command))   "
                 + paint(manifest.kind == .skipped ? "no copy" : Self.amount(manifest.tally), palette.muted)
-                + "   \(manifest.id)"
+                + "   \(plain(manifest.id))"
         }
     }
 

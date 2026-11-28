@@ -66,6 +66,12 @@ public enum UndoLimits {
     public static let maxBytes: UInt64 = 256 * 1024 * 1024
     /// Most files and directories one copy may hold.
     public static let maxEntries = 20_000
+    /// Deepest a kept tree may nest.
+    public static let maxDepth = 64
+    /// The whole store: at most this many copies and bytes; the oldest
+    /// go first.
+    public static let storeMaxCopies = 50
+    public static let storeMaxBytes: UInt64 = 2 * 1024 * 1024 * 1024
     /// Free space a copy must leave on the disk.
     public static let freeSpaceFloor: UInt64 = 1024 * 1024 * 1024
     /// The longest a copy may take on the hook path.

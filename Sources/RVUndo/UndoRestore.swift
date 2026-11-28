@@ -22,6 +22,9 @@ public enum UndoRestoreRefusal: Error, Sendable, Equatable {
     case gitUnavailable
     case gitFailed(String)
     case io(String)
+    /// The manifest is not in the shape rv writes (any process running as
+    /// the person can edit it): nothing from it is used.
+    case notOurs
 
     public var note: String {
         switch self {
@@ -31,6 +34,7 @@ public enum UndoRestoreRefusal: Error, Sendable, Equatable {
         case .gitUnavailable: "git was not found."
         case .gitFailed(let what): "git could not restore it (\(what)). Nothing was overwritten."
         case .io(let what): "Could not restore \(what). Nothing was overwritten."
+        case .notOurs: "This copy's record was changed after rv wrote it, so rv will not restore it."
         }
     }
 }
@@ -43,6 +47,7 @@ public enum UndoRestore {
         _ manifest: UndoManifest, from store: UndoStore, into repository: String, now: Date = Date(),
         timeZone: TimeZone = .current, git: URL? = UndoGit.locate()
     ) throws(UndoRestoreRefusal) -> UndoRestoreOutcome {
+        guard isWellFormed(manifest) else { throw .notOurs }
         guard UndoKeeper.realPath(repository) == UndoKeeper.realPath(manifest.repoRoot) else {
             throw .otherRepository(manifest.repoRoot)
         }
@@ -56,6 +61,36 @@ public enum UndoRestore {
         case .files:
             return try restoreFiles(manifest, from: store)
         }
+    }
+
+    /// True when every field a restore acts on is in the shape rv writes:
+    /// the id, a ref that is this copy's own, full commit ids (never a
+    /// revision expression or an option), and plain relative paths, none
+    /// inside `.git` (where a restored file would be a hook or config).
+    static func isWellFormed(_ manifest: UndoManifest) -> Bool {
+        guard manifest.schema == UndoManifest.schema, UndoStore.isID(manifest.id),
+            manifest.repoRoot.hasPrefix("/")
+        else { return false }
+        if let git = manifest.git {
+            guard git.ref == UndoKeeper.refName(manifest.id), UndoGit.isObjectID(git.head),
+                git.stash.map(UndoGit.isObjectID) ?? true
+            else { return false }
+        }
+        return manifest.paths.allSatisfy(isPlainRelativePath)
+    }
+
+    static func isPlainRelativePath(_ path: String) -> Bool {
+        guard path.isEmpty == false, path.hasPrefix("/") == false else { return false }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        return components.allSatisfy { component in
+            component.isEmpty == false && component != "." && component != ".."
+                && foldedGitName(component) != ".git"
+        }
+    }
+
+    /// `.GIT` is `.git` on a case-insensitive disk.
+    private static func foldedGitName(_ component: Substring) -> String {
+        component.lowercased()
     }
 
     /// `rv/restore-1403`, from when the copy was kept.
@@ -78,7 +113,9 @@ public enum UndoRestore {
                 throw .gitFailed(arguments.first ?? "git")
             }
         }
-        guard (try? runner.text(["cat-file", "-e", kept.head + "^{commit}"])) != nil else {
+        guard (try? runner.text(["cat-file", "-e", kept.head + "^{commit}"])) != nil,
+            kept.stash.map({ (try? runner.text(["cat-file", "-e", $0 + "^{commit}"])) != nil }) ?? true
+        else {
             throw .gitFailed("the kept commit is gone")
         }
         guard try text(["status", "--porcelain", "--untracked-files=no"]).isEmpty else { throw .unsavedChanges }
@@ -105,18 +142,23 @@ public enum UndoRestore {
             let root = try UndoTree.openDirectory(manifest.repoRoot)
             var restored = 0
             var leftInPlace: [String] = []
-            let budget = UndoBudget(maxBytes: .max, maxEntries: .max, deadline: .now + .seconds(600))
+            // Nothing inside a `.git` folder is ever put back, at any depth:
+            // the store is the person's to write, so anyone running as them
+            // could have planted a hook there.
+            let budget = UndoBudget(
+                maxBytes: .max, maxEntries: .max, deadline: .now + .seconds(600),
+                isSecret: { shown in isPlainRelativePath(shown) == false }, clones: true)
             for shown in manifest.paths {
                 let components = shown.split(separator: "/").map(String.init)
-                guard let name = components.last, components.allSatisfy({ $0 != "." && $0 != ".." && $0.isEmpty == false })
-                else { continue }
+                guard isPlainRelativePath(shown), let name = components.last else { continue }
                 let from = try openChain(components.dropLast(), under: data, create: false, shown: shown)
                 let to = try openChain(components.dropLast(), under: root, create: true, shown: shown)
                 if UndoTree.exists(name, in: to) {
                     leftInPlace.append(shown)
                     continue
                 }
-                restored += try UndoTree.copy(name, from: from, to: to, shown: shown, budget: budget).files
+                var secrets: [String] = []
+                restored += try UndoTree.copy(name, from: from, to: to, shown: shown, budget: budget, secrets: &secrets).files
             }
             return .files(restored: restored, leftInPlace: leftInPlace)
         } catch {

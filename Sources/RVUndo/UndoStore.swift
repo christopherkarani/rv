@@ -139,27 +139,101 @@ public struct UndoStore: Sendable {
     /// Removes one copy's directory (links inside are removed, never
     /// followed).
     func remove(id: String) {
-        guard Self.isID(id) else { return }
-        try? FileManager.default.removeItem(at: root.appendingPathComponent(id, isDirectory: true))
+        guard Self.isID(id), let rootFD = try? UndoTree.openDirectory(root.path) else { return }
+        UndoRemove.tree(id, in: rootFD.raw, deadline: nil)
     }
 
-    /// Removes copies older than `retention`, and copies a crash left
-    /// without a manifest once they are an hour old. Returns what went, so
-    /// the caller can drop their git refs.
-    @discardableResult
-    public func prune(now: Date, retention: TimeInterval = UndoLimits.retention) -> [UndoManifest] {
-        let kept = list()
-        let expired = kept.filter { now.timeIntervalSince($0.createdAt) > retention }
-        for manifest in expired { remove(id: manifest.id) }
-        let listed = Set(kept.map(\.id))
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-        for id in names where Self.isID(id) && listed.contains(id) == false {
-            let path = root.appendingPathComponent(id).path
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                let modified = attributes[.modificationDate] as? Date, now.timeIntervalSince(modified) > 3600
-            else { continue }
-            remove(id: id)
+    /// Skipped requests keep only their note; at most this many are kept.
+    static let maxSkipped = 10
+
+    /// Which copies go, oldest first: expired ones, skipped notes past
+    /// `maxSkipped`, then the oldest copies while the store holds more than
+    /// `maxCopies` or `maxBytes`. Skipped notes go before real copies, so a
+    /// flood of skipped requests can never push a real copy out. Pure.
+    static func evictions(
+        _ manifests: [UndoManifest], now: Date, retention: TimeInterval = UndoLimits.retention,
+        maxCopies: Int = UndoLimits.storeMaxCopies, maxBytes: UInt64 = UndoLimits.storeMaxBytes
+    ) -> [UndoManifest] {
+        let newestFirst = manifests.sorted { $0.createdAt > $1.createdAt }
+        var going = Set<String>()
+        for manifest in newestFirst where now.timeIntervalSince(manifest.createdAt) > retention {
+            going.insert(manifest.id)
         }
-        return expired
+        for manifest in newestFirst.filter({ $0.kind == .skipped && going.contains($0.id) == false })
+            .dropFirst(maxSkipped) {
+            going.insert(manifest.id)
+        }
+        func staying() -> [UndoManifest] { newestFirst.filter { going.contains($0.id) == false } }
+        func over(_ left: [UndoManifest]) -> Bool {
+            left.count > maxCopies || left.reduce(UInt64(0)) { $0 + $1.storedBytes } > maxBytes
+        }
+        for kind in [UndoManifest.Kind.skipped, .files, .git] {
+            while over(staying()), let oldest = staying().last(where: { $0.kind == kind }) {
+                going.insert(oldest.id)
+            }
+        }
+        return newestFirst.reversed().filter { going.contains($0.id) }
+    }
+
+    /// Removes what `evictions` names, oldest first, and copies a crash
+    /// left without a manifest once they are an hour old. Each copy loses
+    /// its manifest first, so a removal cut short by `deadline` leaves a
+    /// leftover a later prune finishes, never a half copy `rv undo` lists.
+    /// Returns the copies whose manifests went, so the caller can drop
+    /// their git refs.
+    @discardableResult
+    public func prune(
+        now: Date, deadline: ContinuousClock.Instant? = nil, retention: TimeInterval = UndoLimits.retention,
+        maxCopies: Int = UndoLimits.storeMaxCopies, maxBytes: UInt64 = UndoLimits.storeMaxBytes
+    ) -> [UndoManifest] {
+        guard let rootFD = try? UndoTree.openDirectory(root.path) else { return [] }
+        let kept = list()
+        var removed: [UndoManifest] = []
+        for manifest in Self.evictions(kept, now: now, retention: retention, maxCopies: maxCopies, maxBytes: maxBytes) {
+            if let deadline, ContinuousClock.now >= deadline { return removed }
+            let copyFD = openat(rootFD.raw, manifest.id, UndoTree.directoryFlags)
+            if copyFD >= 0 {
+                _ = unlinkat(copyFD, Self.manifestName, 0)
+                close(copyFD)
+            }
+            removed.append(manifest)
+            UndoRemove.tree(manifest.id, in: rootFD.raw, deadline: deadline)
+        }
+        let listed = Set(kept.map(\.id)).subtracting(removed.map(\.id))
+        let budget = UndoBudget(maxEntries: .max, deadline: deadline ?? .now + .seconds(86_400))
+        let names = (try? UndoTree.names(in: rootFD, shown: root.path, budget: budget)) ?? []
+        for id in names where Self.isID(id) && listed.contains(id) == false {
+            if let deadline, ContinuousClock.now >= deadline { break }
+            var info = stat()
+            guard fstatat(rootFD.raw, id, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+            let leftover = removed.contains { $0.id == id }
+            guard leftover || now.timeIntervalSince1970 - Double(UndoStat.mtime(info).seconds) > 3600 else { continue }
+            UndoRemove.tree(id, in: rootFD.raw, deadline: deadline)
+        }
+        return removed
+    }
+}
+
+extension UndoManifest {
+    /// Bytes this copy holds in the store (git copies live in the repo).
+    var storedBytes: UInt64 { kind == .files ? tally.bytes : 0 }
+}
+
+/// Text from a manifest, which any process running as the person can
+/// write, made safe for a terminal: control characters (C0, DEL, C1),
+/// format characters (bidi overrides and isolates, zero-width marks) and
+/// line or paragraph separators are dropped.
+public enum UndoText {
+    public static func plain(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned:
+                continue
+            default:
+                scalars.append(scalar)
+            }
+        }
+        return String(scalars)
     }
 }

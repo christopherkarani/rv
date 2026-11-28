@@ -11,13 +11,14 @@ public enum UndoSkip: Error, Sendable, Equatable {
     case tooBig(bytes: UInt64)
     case tooManyFiles(count: Int)
     case outOfTime
+    case tooDeep(levels: Int)
     case lowDisk(free: UInt64)
     case outsideRepository(String)
     case wholeRepository
     case secret(String)
     case notInRepository
     case missing(String)
-    case gitRunsRepoCommands
+    case unmergedFiles
     case gitUnavailable
     case gitFailed(String)
     case io(String, errno: Int32)
@@ -31,6 +32,8 @@ public enum UndoSkip: Error, Sendable, Equatable {
             "Too many files to keep a copy (over \(count))."
         case .outOfTime:
             "Keeping a copy took too long, so rv let the command go without one."
+        case .tooDeep(let levels):
+            "Too deeply nested to keep a copy (over \(levels) levels)."
         case .lowDisk(let free):
             "Not enough free disk to keep a copy (\(UndoSize.words(free)) free)."
         case .outsideRepository(let path):
@@ -43,8 +46,8 @@ public enum UndoSkip: Error, Sendable, Equatable {
             "Not in a repository, so rv kept no copy."
         case .missing(let path):
             "Nothing to copy at \(path)."
-        case .gitRunsRepoCommands:
-            "This repository runs its own commands when git saves (filter), so rv kept no copy."
+        case .unmergedFiles:
+            "A merge is half done here (unmerged files), so rv kept no copy."
         case .gitUnavailable:
             "git was not found, so rv kept no copy."
         case .gitFailed(let what):
@@ -86,11 +89,18 @@ public struct UndoTally: Sendable, Equatable, Codable {
     }
 }
 
-/// Bounds one walk: size, entry count, and a deadline.
+/// Bounds one walk: size, entry count, depth and a deadline, plus what
+/// the walk must leave out (secrets) and whether it may clone.
 struct UndoBudget {
     var maxBytes: UInt64 = UndoLimits.maxBytes
     var maxEntries: Int = UndoLimits.maxEntries
+    var maxDepth: Int = UndoLimits.maxDepth
     var deadline: ContinuousClock.Instant
+    /// True for a path (as shown: relative to the walk's root) rv's
+    /// secret-path matcher names. Such an entry is never read or copied.
+    var isSecret: (String) -> Bool = { _ in false }
+    /// Clone regular files (APFS) instead of copying their bytes.
+    var clones = false
 
     func check(_ tally: UndoTally) throws(UndoSkip) {
         if tally.bytes > maxBytes { throw .tooBig(bytes: tally.bytes) }
@@ -125,16 +135,25 @@ enum UndoTree {
     }
 
     /// Counts what copying `name` in `parent` would take, within `budget`.
-    static func scan(_ name: String, in parent: borrowing UndoFD, shown: String, budget: UndoBudget)
-        throws(UndoSkip) -> UndoTally {
+    /// Entries the budget names as secrets are left out and listed in
+    /// `secrets`.
+    static func scan(
+        _ name: String, in parent: borrowing UndoFD, shown: String, budget: UndoBudget, secrets: inout [String]
+    ) throws(UndoSkip) -> UndoTally {
         var tally = UndoTally()
-        try scan(name, in: parent.raw, shown: shown, budget: budget, into: &tally)
+        try scan(name, in: parent.raw, shown: shown, depth: 0, budget: budget, into: &tally, secrets: &secrets)
         return tally
     }
 
     private static func scan(
-        _ name: String, in parent: Int32, shown: String, budget: UndoBudget, into tally: inout UndoTally
+        _ name: String, in parent: Int32, shown: String, depth: Int, budget: UndoBudget,
+        into tally: inout UndoTally, secrets: inout [String]
     ) throws(UndoSkip) {
+        guard depth <= budget.maxDepth else { throw .tooDeep(levels: budget.maxDepth) }
+        if budget.isSecret(shown) {
+            secrets.append(shown)
+            return
+        }
         var info = stat()
         guard fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw .io(shown, errno: errno) }
         tally.entries += 1
@@ -146,8 +165,10 @@ enum UndoTree {
             let fd = openat(parent, name, directoryFlags)
             guard fd >= 0 else { throw .io(shown, errno: errno) }
             let directory = UndoFD(fd)
-            for child in try names(in: directory, shown: shown) {
-                try scan(child, in: directory.raw, shown: shown + "/" + child, budget: budget, into: &tally)
+            for child in try names(in: directory, shown: shown, budget: budget, already: tally.entries) {
+                try scan(
+                    child, in: directory.raw, shown: shown + "/" + child, depth: depth + 1, budget: budget,
+                    into: &tally, secrets: &secrets)
             }
         default:
             break
@@ -155,21 +176,29 @@ enum UndoTree {
         try budget.check(tally)
     }
 
-    /// Copies `name` in `source` to the same name in `destination`, byte
-    /// by byte, within `budget`.
+    /// Copies `name` in `source` to the same name in `destination` (a
+    /// clone per regular file when the budget allows, else byte by byte),
+    /// within `budget`. Secrets are left out and listed in `secrets`.
     static func copy(
         _ name: String, from source: borrowing UndoFD, to destination: borrowing UndoFD, shown: String,
-        budget: UndoBudget
+        budget: UndoBudget, secrets: inout [String]
     ) throws(UndoSkip) -> UndoTally {
         var tally = UndoTally()
-        try copy(name, from: source.raw, to: destination.raw, shown: shown, budget: budget, into: &tally)
+        try copy(
+            name, from: source.raw, to: destination.raw, shown: shown, depth: 0, budget: budget, into: &tally,
+            secrets: &secrets)
         return tally
     }
 
     private static func copy(
-        _ name: String, from source: Int32, to destination: Int32, shown: String, budget: UndoBudget,
-        into tally: inout UndoTally
+        _ name: String, from source: Int32, to destination: Int32, shown: String, depth: Int, budget: UndoBudget,
+        into tally: inout UndoTally, secrets: inout [String]
     ) throws(UndoSkip) {
+        guard depth <= budget.maxDepth else { throw .tooDeep(levels: budget.maxDepth) }
+        if budget.isSecret(shown) {
+            secrets.append(shown)
+            return
+        }
         var info = stat()
         guard fstatat(source, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw .io(shown, errno: errno) }
         let mode = mode_t(info.st_mode & 0o777)
@@ -179,7 +208,13 @@ enum UndoTree {
             let target = try linkTarget(name, in: source, shown: shown)
             guard symlinkat(target, destination, name) == 0 else { throw .io(shown, errno: errno) }
         case S_IFREG:
-            try copyFile(name, from: source, to: destination, mode: mode, shown: shown, budget: budget, into: &tally)
+            if budget.clones, UndoClone.cloneFile(name, from: source, to: destination) {
+                tally.files += 1
+                tally.bytes += UInt64(max(0, info.st_size))
+                tally.lines = nil
+            } else {
+                try copyFile(name, from: source, to: destination, mode: mode, shown: shown, budget: budget, into: &tally)
+            }
         case S_IFDIR:
             let fd = openat(source, name, directoryFlags)
             guard fd >= 0 else { throw .io(shown, errno: errno) }
@@ -188,8 +223,10 @@ enum UndoTree {
             let made = openat(destination, name, directoryFlags)
             guard made >= 0 else { throw .io(shown, errno: errno) }
             let to = UndoFD(made)
-            for child in try names(in: from, shown: shown) {
-                try copy(child, from: from.raw, to: to.raw, shown: shown + "/" + child, budget: budget, into: &tally)
+            for child in try names(in: from, shown: shown, budget: budget, already: tally.entries) {
+                try copy(
+                    child, from: from.raw, to: to.raw, shown: shown + "/" + child, depth: depth + 1, budget: budget,
+                    into: &tally, secrets: &secrets)
             }
             // Last, so a read-only directory still took its children.
             _ = fchmod(to.raw, mode)
@@ -215,7 +252,22 @@ enum UndoTree {
         let output = openat(destination, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0))
         guard output >= 0 else { throw .io(shown, errno: errno) }
         let to = UndoFD(output)
-        let (src, sink) = (from.raw, to.raw)
+        let left = budget.maxBytes - min(budget.maxBytes, tally.bytes)
+        let (copied, lines) = try pump(
+            from: from.raw, to: to.raw, shown: shown, limit: left, deadline: budget.deadline, counted: tally.bytes)
+        guard fchmod(to.raw, mode) == 0 else { throw .io(shown, errno: errno) }
+        tally.files += 1
+        tally.bytes += copied
+        tally.lines = tally.lines.map { $0 + lines }
+    }
+
+    /// Copies every byte from `src` to `sink`, at most `limit` of them,
+    /// before `deadline`. Returns the bytes and newlines copied.
+    @discardableResult
+    static func pump(
+        from src: Int32, to sink: Int32, shown: String, limit: UInt64, deadline: ContinuousClock.Instant?,
+        counted: UInt64 = 0
+    ) throws(UndoSkip) -> (bytes: UInt64, lines: Int) {
         var lines = 0
         var copied: UInt64 = 0
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
@@ -239,16 +291,13 @@ enum UndoTree {
             }
             for byte in buffer[0..<count] where byte == 0x0A { lines += 1 }
             copied += UInt64(count)
-            if tally.bytes + copied > budget.maxBytes { throw .tooBig(bytes: tally.bytes + copied) }
-            if ContinuousClock.now >= budget.deadline { throw .outOfTime }
+            if copied > limit { throw .tooBig(bytes: counted + copied) }
+            if let deadline, ContinuousClock.now >= deadline { throw .outOfTime }
         }
-        guard fchmod(to.raw, mode) == 0 else { throw .io(shown, errno: errno) }
-        tally.files += 1
-        tally.bytes += copied
-        tally.lines = tally.lines.map { $0 + lines }
+        return (copied, lines)
     }
 
-    private static func linkTarget(_ name: String, in directory: Int32, shown: String) throws(UndoSkip) -> String {
+    static func linkTarget(_ name: String, in directory: Int32, shown: String) throws(UndoSkip) -> String {
         let capacity = Int(PATH_MAX)
         var buffer = [CChar](repeating: 0, count: capacity + 1)
         let count = readlinkat(directory, name, &buffer, capacity)
@@ -257,8 +306,12 @@ enum UndoTree {
         return String(cString: buffer)
     }
 
-    /// The entries of an open directory, without `.` and `..`.
-    static func names(in directory: borrowing UndoFD, shown: String) throws(UndoSkip) -> [String] {
+    /// The entries of an open directory, without `.` and `..`. A huge
+    /// directory is stopped while it is read: past the entry limit (with
+    /// `already` entries counted before it) or the deadline.
+    static func names(
+        in directory: borrowing UndoFD, shown: String, budget: UndoBudget, already: Int = 0
+    ) throws(UndoSkip) -> [String] {
         let copy = dup(directory.raw)
         guard copy >= 0 else { throw .io(shown, errno: errno) }
         guard let stream = fdopendir(copy) else {
@@ -275,7 +328,12 @@ enum UndoTree {
                 }
             }
             if name != ".", name != ".." { names.append(name) }
+            if names.count & 0xFF == 0 {
+                if already + names.count > budget.maxEntries { throw .tooManyFiles(count: budget.maxEntries) }
+                if ContinuousClock.now >= budget.deadline { throw .outOfTime }
+            }
         }
+        if already + names.count > budget.maxEntries { throw .tooManyFiles(count: budget.maxEntries) }
         return names.sorted()
     }
 
@@ -316,14 +374,88 @@ enum UndoTree {
 
 /// Copy-on-write clones. macOS (APFS) only; elsewhere never clones.
 enum UndoClone {
-    static func clone(_ name: String, from source: borrowing UndoFD, to destination: borrowing UndoFD) -> Bool {
+    /// Clones one regular file, to the same name. Directories are never
+    /// cloned whole: the walk visits each entry, so the secret matcher sees
+    /// every one. Fails across volumes (EXDEV), off APFS, or when the name
+    /// exists: the caller copies bytes instead.
+    static func cloneFile(_ name: String, from source: Int32, to destination: Int32) -> Bool {
+        cloneFile(name, from: source, to: destination, as: name)
+    }
+
+    static func cloneFile(_ name: String, from source: Int32, to destination: Int32, as newName: String) -> Bool {
         #if os(macOS)
-        // CLONE_NOFOLLOW: a link is cloned as the link. A directory clones
-        // whole, links inside it stay links. Fails across volumes (EXDEV)
-        // or off APFS: the caller copies bytes instead.
-        return clonefileat(source.raw, name, destination.raw, name, UInt32(CLONE_NOFOLLOW)) == 0
+        // CLONE_NOFOLLOW: a link swapped in is cloned as the link, never
+        // followed.
+        return clonefileat(source, name, destination, newName, UInt32(CLONE_NOFOLLOW)) == 0
         #else
         return false
         #endif
+    }
+}
+
+/// Walks to many paths under one root, sorted, reusing the directories it
+/// already opened: siblings share one open parent. Every step is an
+/// `openat` with `O_NOFOLLOW` from the directory above.
+struct UndoDirCursor: ~Copyable {
+    private var stack: [(name: String, fd: Int32)] = []
+    private let root: Int32
+
+    init(root: borrowing UndoFD) throws(UndoSkip) {
+        let fd = dup(root.raw)
+        guard fd >= 0 else { throw .io("", errno: errno) }
+        self.root = fd
+    }
+
+    deinit {
+        for entry in stack { close(entry.fd) }
+        close(root)
+    }
+
+    /// The open directory for `components` (relative to the root).
+    /// ENOENT reads as `.missing`; anything else (a link included) as
+    /// `.outsideRepository`.
+    mutating func directory(_ components: ArraySlice<String>, shown: String) throws(UndoSkip) -> Int32 {
+        var common = 0
+        for (index, component) in components.enumerated() {
+            guard index < stack.count, stack[index].name == component else { break }
+            common += 1
+        }
+        while stack.count > common { close(stack.removeLast().fd) }
+        for component in components.dropFirst(common) {
+            let parent = stack.last?.fd ?? root
+            let next = openat(parent, component, UndoTree.directoryFlags)
+            guard next >= 0 else { throw errno == ENOENT ? .missing(shown) : .outsideRepository(shown) }
+            stack.append((component, next))
+        }
+        return stack.last?.fd ?? root
+    }
+}
+
+/// Removes trees with descriptors, never following a link, and stops at a
+/// deadline (what is left is removed by a later prune).
+enum UndoRemove {
+    /// Removes `name` in `parent`. False when the deadline cut it short.
+    @discardableResult
+    static func tree(_ name: String, in parent: Int32, deadline: ContinuousClock.Instant?, depth: Int = 0) -> Bool {
+        if let deadline, ContinuousClock.now >= deadline { return false }
+        var info = stat()
+        guard fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return true }
+        guard info.st_mode & S_IFMT == S_IFDIR else {
+            _ = unlinkat(parent, name, 0)
+            return true
+        }
+        guard depth < 256 else { return false }
+        let fd = openat(parent, name, UndoTree.directoryFlags)
+        guard fd >= 0 else { return false }
+        let directory = UndoFD(fd)
+        // Owner-only directories we made may be read-only now (a kept copy
+        // of a read-only folder): open them up to empty them.
+        _ = fchmod(directory.raw, 0o700)
+        let budget = UndoBudget(maxEntries: .max, maxDepth: .max, deadline: deadline ?? .now + .seconds(86_400))
+        guard let children = try? UndoTree.names(in: directory, shown: name, budget: budget) else { return false }
+        for child in children {
+            guard tree(child, in: directory.raw, deadline: deadline, depth: depth + 1) else { return false }
+        }
+        return unlinkat(parent, name, AT_REMOVEDIR) == 0
     }
 }
