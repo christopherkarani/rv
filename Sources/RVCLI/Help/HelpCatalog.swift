@@ -17,6 +17,7 @@ enum HelpCatalog {
         case .test: test
         case .`try`: tryDemo
         case .term: term
+        case .wait: wait
         case .explain: explain
         case .check: check
         case .prompt: prompt
@@ -31,6 +32,7 @@ enum HelpCatalog {
         case .doctor: doctor
         case .allowOnce: allowOnce
         case .packs: packs
+        case .protect: protect
         case .scan: scan
         case .policy: policy
         case .allowlist: allowlist
@@ -74,12 +76,12 @@ enum HelpCatalog {
             HelpSection(heading: "Everyday", rows: [
                 HelpRow(name: "explain", description: "Why rv stopped a command, or let it run"),
                 HelpRow(name: "log, blocks", description: "What rv stopped or would stop, newest first"),
-                HelpRow(name: "allow-once", description: "Run a stopped command once, with its code"),
+                HelpRow(name: "allow-once, wait", description: "Run a stopped command once; wait for that answer"),
                 HelpRow(name: "host", description: "Watch or guard each agent, or turn rv off for it"),
                 HelpRow(name: "secrets", description: "Keys your agents use but never see"),
             ]),
             HelpSection(heading: "Rules", rows: [
-                HelpRow(name: "packs", description: "Rule packs: list, turn on, turn off"),
+                HelpRow(name: "protect, packs", description: "Protect a tool; list, test or switch rule packs"),
                 HelpRow(name: "policy, allowlist, safety", description: "Your own rules, lasting exceptions, strictness"),
             ]),
             HelpSection(heading: "Team", rows: [
@@ -214,6 +216,27 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "read-only", description: "Reads the audit log, the decision log and the pending requests; never writes them and never answers a request"),
                 HelpRow(name: "commands checked", description: "Needs an rvd that keeps the decision log; an older one shows only would-stops and stops"),
+            ]),
+        ]
+    )
+
+    static let wait = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv wait <code>"),
+                HelpRow(name: "rv wait <code> --timeout <seconds>"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "who decides", description: "Only the person, with rv allow-once in a terminal or the review window. rv wait reads the answer; it can never give one"),
+                HelpRow(name: "the code", description: "The six characters in rv's stop message (a7c835 or a7c-835)"),
+                HelpRow(name: "--timeout", description: "Seconds to wait, 1 to 3600 (default 100, under an agent's 2 minute shell limit)"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Unlocked: retry the exact command"),
+                HelpRow(name: "1", description: "Still waiting, expired, already used, or rv restarted"),
+                HelpRow(name: "2", description: "No stop has this code"),
             ]),
         ]
     )
@@ -1023,11 +1046,28 @@ enum HelpCatalog {
                 HelpRow(name: "rv packs enable <pack>"),
                 HelpRow(name: "rv packs disable <pack>"),
                 HelpRow(name: "rv packs info <pack>"),
+                HelpRow(name: "rv packs test <pack>"),
             ]),
         ],
         examples: [
             "rv packs",
             "rv packs enable core.git",
+            "rv packs test database.redis",
+        ]
+    )
+
+    static let protect = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv protect <tool>", description: "Turn on the pack for a tool; asks nobody"),
+                HelpRow(name: "rv protect <tool> off", description: "Turn it off; asks for Touch ID or your password"),
+            ]),
+        ],
+        examples: [
+            "rv protect redis",
+            "rv protect terraform",
         ]
     )
 

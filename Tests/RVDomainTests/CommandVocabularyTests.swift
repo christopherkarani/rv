@@ -32,10 +32,11 @@ struct CommandVocabularyTests {
         #expect([Verdict.allowed, Verdict.blocked] == ["allowed", "blocked"])
     }
 
-    @Test func protectIsDecidedByChris() {
-        let protect = CommandVocabulary.plannedNames.filter { $0.spelling.hasPrefix("rv protect ") }
-        #expect(protect.map(\.today) == ["rv packs enable <pack>", "rv packs disable <pack>"])
-        #expect(protect.allSatisfy { $0.status == .decided })
+    /// Chris chose `rv protect <tool>` (2026-11-22); G6 shipped it, so it
+    /// is a command and no longer a planned name.
+    @Test func protectShipped() {
+        #expect(CommandVocabulary.Command.protect.invocation == "rv protect")
+        #expect(CommandVocabulary.plannedNames.contains { $0.spelling.hasPrefix("rv protect") } == false)
     }
 
     @Test func plannedTopLevelWordsAreNotCommandsYet() {
@@ -43,7 +44,7 @@ struct CommandVocabularyTests {
         let words = CommandVocabulary.plannedNames.map { $0.spelling.split(separator: " ").map(String.init) }
         #expect(words.allSatisfy { $0.first == CommandVocabulary.program })
         let newWords = Set(words.map { $0[1] }).subtracting(commands)
-        #expect(newWords == ["keys", "protect", "rules"])
+        #expect(newWords == ["keys", "rules"])
         let spellings = CommandVocabulary.plannedNames.map(\.spelling)
         #expect(Set(spellings).count == spellings.count)
     }

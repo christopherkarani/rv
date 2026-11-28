@@ -226,3 +226,48 @@ public struct PacksRenderer: FrameRenderer {
         return unwrapped.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
+
+/// `rv packs test <pack>` (G4, Packs v6b "Write your own. Prove it works."):
+///
+///     ✓ flushall         stops 1 · allows 2
+///     ✕ flushdb          stops 1 · allows 1
+///         ✕ stop: redis-cli FLUSHDB ran
+///     – stdin-unverified no examples
+///
+///     ✓ Ready. rv packs enable database.redis
+///
+/// A rule with no examples cannot be reached from a command; it neither
+/// passes nor fails. The next command is the last line.
+public struct PackTestRenderer: FrameRenderer {
+    public init() {}
+
+    public func render(_ model: PackTestViewModel, palette: Palette) -> [String] {
+        let width = (model.rules.map(\.name.count).max() ?? 0) + 3
+        var lines: [String] = []
+        for rule in model.rules {
+            let name = padRight(rule.name, to: width)
+            guard rule.hasExamples else {
+                lines.append(paint("  – \(name)no examples", slot: palette.muted, reset: palette.reset))
+                continue
+            }
+            let counts = paint("stops \(rule.stops) · allows \(rule.allows)", slot: palette.muted, reset: palette.reset)
+            let mark = rule.failures.isEmpty
+                ? paint("✓", slot: palette.allow, reset: palette.reset)
+                : paint("✕", slot: palette.deny, reset: palette.reset)
+            lines.append("  \(mark) \(name)\(counts)")
+            for failure in rule.failures {
+                lines.append("      " + paint("✕", slot: palette.deny, reset: palette.reset) + " \(failure)")
+            }
+        }
+        lines.append("")
+        if model.passed {
+            var last = "  " + paint("✓ Ready.", slot: palette.allow, reset: palette.reset)
+            if let turnOn = model.turnOn { last += " " + paint(turnOn, slot: palette.mark, reset: palette.reset) }
+            lines.append(last)
+        } else {
+            let count = model.failedCount
+            lines.append("  " + paint("✕ \(count) \(count == 1 ? "rule" : "rules") failed.", slot: palette.deny, reset: palette.reset))
+        }
+        return lines
+    }
+}

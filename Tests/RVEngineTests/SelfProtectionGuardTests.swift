@@ -6,6 +6,11 @@ import RVDomain
 struct SelfProtectionGuardTests {
     static let weakening: [String] = [
         "rv packs disable core.filesystem",
+        "rv packs off core.filesystem",
+        "rv protect git off",
+        "rv protect off redis",
+        "rv protect redis $X",
+        "rv-cli protect docker off",
         "rv uninstall",
         "rv uninstall --yes",
         "rv uninstall --purge",
@@ -293,6 +298,9 @@ struct SelfProtectionGuardTests {
         "rv guard",
         "rv watch --help",
         "rv unlock --help",
+        "rv packs on database.redis",
+        "rv protect redis",
+        "rv protect terraform",
         "rv safety",
         "rv safety strict",
         "rv policy show",
