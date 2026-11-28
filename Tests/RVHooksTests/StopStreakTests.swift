@@ -116,7 +116,7 @@ struct StopStreakTests {
             _ = await hookWire(host: .claude, stdin: Self.payload("git reset --hard", session: nil), world: Self.world(tally))
             _ = await hookWire(
                 host: .claude, stdin: Self.payload("git status", session: "s1"),
-                world: Self.world(tally, result: EvaluationResult(outcome: .allow)))
+                world: Self.world(tally, result: EvaluationResult(outcome: .plain)))
         }
         #expect(tally.all.isEmpty)
     }

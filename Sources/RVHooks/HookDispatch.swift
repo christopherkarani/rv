@@ -93,7 +93,7 @@ private func hookRequestBody(
                 )
             }
         }
-        let voice = world.voice(countingStopOf: result, verdict: auth.verdict, request: request)
+        let voice = world.voice(countingStopOf: result, authorization: auth, request: request)
         return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }
@@ -108,8 +108,7 @@ private func hookFileBody(
         return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: world.voice))
     }
     let result = await world.evaluateFile(file, request.cwd)
-    let voice = world.voice(countingStopOf: result, verdict: nil, request: request)
-    return hookFileWire(from: result, using: codec, path: file.path, voice: voice)
+    return hookFileWire(from: result, using: codec, path: file.path, voice: world.voice)
 }
 
 /// File wire: `HookMapper` composes the presentation; a file result that

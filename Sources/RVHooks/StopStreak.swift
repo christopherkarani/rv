@@ -15,10 +15,10 @@ import RVDomain
 // The note is not a second instruction: `who` stays the one step, and the
 // note never names a command. It changes no verdict. Only rvd counts (in
 // memory, `HookEvaluateWorld.countStop`); a stop with no session id, or a
-// world with no counter, reads as a first stop. The hook-local pass
-// (`rv-hook-local`) has no counter: every deny a person can lift goes on
-// to rvd and is counted there, but a pinned deny it answers itself reads
-// as a first stop.
+// world with no counter, reads as a first stop. Only stops a person can
+// lift, and unfinished checks, count (`stopStreakKey`): the hook-local
+// pass (`rv-hook-local`) always hands those to rvd, so both give the same
+// reply for every call the local pass answers.
 
 /// One agent session's stops of one rule, as rvd counts them.
 public struct StopStreakKey: Hashable, Sendable {
@@ -43,31 +43,42 @@ public func stopStreakNote(_ streak: Int) -> String? {
     return "\(streak) stops for this in a row. Rephrasing won't get through; stop here."
 }
 
-/// The key a stop of `result` counts under, or nil when nothing stopped
-/// (an allow, including an observe would-be) or the call has no session.
+/// The key a stop of `result` counts under, or nil when it is not counted.
+///
+/// Counted: an unfinished check, and a deny a person or the Policy gate
+/// may still lift. These are exactly the stops the hook-local pass always
+/// hands to rvd, so the local pass and rvd give the same reply for every
+/// call the local pass answers. Not counted: an allow (including an
+/// observe would-be, which runs), a pinned deny no one can lift, a file
+/// tool's stop, and a call with no session id.
 func stopStreakKey(
-    _ result: EvaluationResult, verdict: HostAskVerdict? = nil, host: HookHost, session: SessionID?
+    _ result: EvaluationResult, authorization: HookAuthorization, host: HookHost, session: SessionID?
 ) -> StopStreakKey? {
-    guard let session, verdict != .allow else { return nil }
+    guard let session, authorization != .allow else { return nil }
     switch result.decision {
     case .allow:
         return nil
     case .deny(let deny):
+        guard authorization == .ask || HookAuthorization.policyGateAccess(for: result) == .consider else {
+            return nil
+        }
         return StopStreakKey(host: host, session: session, rule: deny.ruleID.rawValue)
     case .indeterminate(let reason):
-        return StopStreakKey(
-            host: host, session: session, rule: "rv.indeterminate:\(reason?.rawValue ?? "incomplete")")
+        return StopStreakKey(host: host, session: session, rule: "rv.indeterminate:\(reason.rawValue)")
     }
 }
 
 extension HookEvaluateWorld {
-    /// `voice` with the streak of the stop `result` shows, counted once.
-    func voice(countingStopOf result: EvaluationResult, verdict: HostAskVerdict?, request: HookRequest) -> StopVoice {
+    /// `voice` with the streak of the shell stop `result` shows, counted once.
+    func voice(
+        countingStopOf result: EvaluationResult, authorization: HookAuthorization, request: HookRequest
+    ) -> StopVoice {
         guard let countStop,
-              let key = stopStreakKey(result, verdict: verdict, host: request.host, session: request.session)
-        else { return voice }
-        var voice = voice
-        voice.streak = countStop(key)
-        return voice
+              let key = stopStreakKey(
+                result, authorization: authorization, host: request.host, session: request.session)
+        else { return self.voice }
+        var counted = self.voice
+        counted.streak = countStop(key)
+        return counted
     }
 }
