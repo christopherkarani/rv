@@ -180,6 +180,14 @@ public struct GatedEvaluate: Sendable {
            WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
             result = WiringPathGuard.deny(path: action.path.rawValue)
         }
+        // Edit/Write to what switches off or silences the commit check:
+        // the ignore file, a repository's git config or hooks, the global
+        // git config. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           Self.touchesScanControls(action.path.rawValue, home: home, cwd: cwd)
+            || Self.writesRVHook(action.path.rawValue, home: home, cwd: cwd) {
+            result = SecretsScanGuard.deny(searchText: action.path.rawValue)
+        }
         // Edit/Write to a host MCP config while rv's MCP gateway is in use.
         if case .allow = result.decision, action.kind != .read,
            let guarded = MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home, now: now)),
@@ -1062,9 +1070,12 @@ public struct GatedEvaluate: Sendable {
         // whose candidates really land on secret paths (F-2: symlinks
         // disarming path rules must not buy an allow).
         let stance = run(secretPaths)
-        guard secretPaths.escalatesToAliasPass(stance) else { return stance }
-        return run(secretPaths.withResolution(
-            SecretPathCandidateResolver.resolution(home: home, cwd: cwd)))
+        let resolved = secretPaths.escalatesToAliasPass(stance)
+            ? run(secretPaths.withResolution(SecretPathCandidateResolver.resolution(home: home, cwd: cwd)))
+            : stance
+        // `git commit --no-verify` or moving core.hooksPath skips rv's
+        // commit check, but only in a repository that has it.
+        return SecretsScanHookProbe.tighten(resolved, command: request.command, cwd: cwd, home: home)
     }
 
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
@@ -1101,6 +1112,30 @@ public struct GatedEvaluate: Sendable {
         cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
     }
 
+    /// The `pre-commit` file that holds rv's hook block, wherever
+    /// `core.hooksPath` puts it (`.husky/pre-commit`): an edit could cut
+    /// the block out. Only a path named `pre-commit` is probed.
+    static func writesRVHook(_ typed: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        guard (typed as NSString).lastPathComponent.lowercased() == "pre-commit",
+              let hook = SecretsScanHookProbe.installedHook(cwd: cwd, home: home)
+        else { return false }
+        let homePath = home?.rawValue ?? FileManager.default.homeDirectoryForCurrentUser.path
+        guard let lexical = WiringPathGuard.absolute(typed, home: homePath, cwd: cwd) else { return false }
+        let target = WiringPathGuard.absolute(hook, home: homePath, cwd: cwd) ?? hook
+        let resolvedTarget = SecretPathCandidateResolver.resolvedPath(target)
+        let resolvedPath = SecretPathCandidateResolver.resolvedPath(lexical)
+        return lexical == target || (resolvedPath != nil && resolvedPath == resolvedTarget)
+    }
+
+    /// `SecretsScanGuard.protectsFile` for a file-door path as typed, made
+    /// absolute against the cwd and home, and as its symlink target.
+    static func touchesScanControls(_ typed: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        let homePath = home?.rawValue ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let lexical = WiringPathGuard.absolute(typed, home: homePath, cwd: cwd) ?? typed
+        let resolved = lexical.hasPrefix("/") ? SecretPathCandidateResolver.resolvedPath(lexical) : nil
+        return [lexical, resolved].compactMap { $0 }.contains { SecretsScanGuard.protectsFile($0, home: homePath) }
+    }
+
     /// The audit row for a deny the Policy gate overrode; nil otherwise.
     /// `withDenial` is false when `HookDoor` will answer with the timeout
     /// deny instead (past the hook deadline, no grant spent): the row then
@@ -1126,7 +1161,7 @@ public struct GatedEvaluate: Sendable {
         } else {
             denial = GatedEffect.DenialRow(
                 at: now, host: host, tool: tool, ruleID: deny.ruleID, category: .pack(deny.ruleID.pack), path: "",
-                session: attributedSession())
+                session: attributedSession(), id: DecisionCall.current?.id)
         }
         let name: String
         switch override {
@@ -1153,11 +1188,14 @@ public struct GatedEvaluate: Sendable {
         observed: Bool = false,
         wouldBe: LedgerWouldBe = .deny
     ) -> GatedEffect? {
+        let call = DecisionCall.current
         if case .indeterminate(let reason) = result.outcome {
             let ruleID = indeterminateRuleID(reason)
+            if observed { call?.note(DecisionWouldBe(verdict: .refused, rule: ruleID.rawValue)) }
             return .denialRow(GatedEffect.DenialRow(
                 at: now, host: host, tool: tool, ruleID: ruleID, category: .pack(ruleID.pack), path: path ?? "",
-                observed: observed, wouldBe: wouldBe, indeterminate: reason, session: attributedSession()
+                observed: observed, wouldBe: wouldBe, indeterminate: reason, session: attributedSession(),
+                id: call?.id
             ))
         }
         guard case .deny(let deny, let matched) = result.outcome else { return nil }
@@ -1179,9 +1217,14 @@ public struct GatedEvaluate: Sendable {
         } else {
             category = .pack(deny.ruleID.pack)
         }
+        // Watch mode let it run: the decision-log row for this call says
+        // what guarding would have done (`DecisionLogRecorder`).
+        if observed {
+            call?.note(DecisionWouldBe(verdict: .denied, rule: deny.ruleID.rawValue, ask: wouldBe == .ask))
+        }
         return .denialRow(GatedEffect.DenialRow(
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
-            observed: observed, wouldBe: wouldBe, session: attributedSession()
+            observed: observed, wouldBe: wouldBe, session: attributedSession(), id: call?.id
         ))
     }
 
@@ -1420,7 +1463,8 @@ public struct GatedEvaluate: Sendable {
             path: DenialPathRedaction.redact(row.path, home: home),
             observed: row.observed,
             wouldBe: row.wouldBe,
-            session: row.session
+            session: row.session,
+            id: row.id
         )
         let ledger = DenialLedger(configDirectory: configDir)
         if let wait, wait.expired { return false }
