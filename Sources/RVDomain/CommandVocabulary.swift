@@ -36,6 +36,8 @@ public enum CommandVocabulary {
         case allowlist
         case egress
         case safety
+        /// Loosen proposals agents filed (F2).
+        case proposals
         case blocks
         case host
         case audit

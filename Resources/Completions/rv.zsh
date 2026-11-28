@@ -22,6 +22,7 @@ _rv() {
     'uninstall:Remove rv-owned files'
     'doctor:Read-only health'
     'safety:Show or set normal or strict'
+    'proposals:Approve or decline loosen proposals'
     'blocks:List recent denials'
     'host:Per-host mode: block, observe, or off'
     'audit:Unified audit trail'
@@ -83,6 +84,11 @@ _rv() {
           local -a sf
           sf=('normal:File-tool secrets plus shell evaluate' 'strict:Also deny ls / test / stat of a catalog path')
           _describe -t commands 'safety' sf
+          ;;
+        proposals)
+          local -a pr
+          pr=('list:Show proposals' 'approve:Approve one with your owner check' 'reject:Decline one; nothing changes')
+          _describe -t commands 'proposals' pr
           ;;
         operator)
           local -a op

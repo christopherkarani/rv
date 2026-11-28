@@ -22,6 +22,10 @@ public enum IPCMethod: Sendable, Equatable {
     case mintAllowOnce(MintAllowOnceParams)
     /// Live events long poll (`IPCEvents.swift`).
     case events(EventsParams)
+    /// Loosen proposals (`IPCProposals.swift`).
+    case proposeLoosen(ProposeLoosenParams)
+    case listProposals(ListProposalsParams)
+    case decideProposal(DecideProposalParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -44,6 +48,9 @@ public enum IPCResult: Sendable, Equatable {
     case confirmOwnerAction(ConfirmOwnerActionReply)
     case mintAllowOnce(MintAllowOnceReply)
     case events(EventsReply)
+    case proposeLoosen(ProposeLoosenReply)
+    case listProposals(ListProposalsReply)
+    case decideProposal(DecideProposalReply)
     case uiRegistered(UIRegisteredDTO)
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
@@ -86,6 +93,9 @@ extension IPCMethod: Codable {
         case confirmOwnerAction
         case mintAllowOnce
         case events
+        case proposeLoosen
+        case listProposals
+        case decideProposal
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -129,6 +139,12 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .mintAllowOnce)
         case .events(let params):
             try container.encode(params, forKey: .events)
+        case .proposeLoosen(let params):
+            try container.encode(params, forKey: .proposeLoosen)
+        case .listProposals(let params):
+            try container.encode(params, forKey: .listProposals)
+        case .decideProposal(let params):
+            try container.encode(params, forKey: .decideProposal)
         }
     }
 
@@ -177,6 +193,12 @@ extension IPCMethod: Codable {
             self = .mintAllowOnce(params)
         } else if let params = try container.decodeIfPresent(EventsParams.self, forKey: .events) {
             self = .events(params)
+        } else if let params = try container.decodeIfPresent(ProposeLoosenParams.self, forKey: .proposeLoosen) {
+            self = .proposeLoosen(params)
+        } else if let params = try container.decodeIfPresent(ListProposalsParams.self, forKey: .listProposals) {
+            self = .listProposals(params)
+        } else if let params = try container.decodeIfPresent(DecideProposalParams.self, forKey: .decideProposal) {
+            self = .decideProposal(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -206,6 +228,9 @@ extension IPCResult: Codable {
         case confirmOwnerAction
         case mintAllowOnce
         case events
+        case proposeLoosen
+        case listProposals
+        case decideProposal
         case uiRegistered
         case uiReviewList
         case uiChallengeBundle
@@ -263,6 +288,12 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .mintAllowOnce)
         case .events(let reply):
             try container.encode(reply, forKey: .events)
+        case .proposeLoosen(let reply):
+            try container.encode(reply, forKey: .proposeLoosen)
+        case .listProposals(let reply):
+            try container.encode(reply, forKey: .listProposals)
+        case .decideProposal(let reply):
+            try container.encode(reply, forKey: .decideProposal)
         case .uiRegistered(let reply):
             try container.encode(reply, forKey: .uiRegistered)
         case .uiReviewList(let reply):
@@ -339,6 +370,12 @@ extension IPCResult: Codable {
             self = .mintAllowOnce(reply)
         } else if let reply = try container.decodeIfPresent(EventsReply.self, forKey: .events) {
             self = .events(reply)
+        } else if let reply = try container.decodeIfPresent(ProposeLoosenReply.self, forKey: .proposeLoosen) {
+            self = .proposeLoosen(reply)
+        } else if let reply = try container.decodeIfPresent(ListProposalsReply.self, forKey: .listProposals) {
+            self = .listProposals(reply)
+        } else if let reply = try container.decodeIfPresent(DecideProposalReply.self, forKey: .decideProposal) {
+            self = .decideProposal(reply)
         } else if let reply = try container.decodeIfPresent(
             UIRegisteredDTO.self, forKey: .uiRegistered) {
             self = .uiRegistered(reply)

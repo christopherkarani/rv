@@ -42,6 +42,15 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".pending-approvals.lock", isDirectory: false)
     }
 
+    /// Loosen proposals rvd stores for the owner (F2).
+    public static func loosenProposalsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("loosen-proposals.jsonl", isDirectory: false)
+    }
+
+    public static func loosenProposalsLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".loosen-proposals.lock", isDirectory: false)
+    }
+
     public static func typedRulesFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent("typed-rules.json", isDirectory: false)
     }
@@ -183,6 +192,8 @@ public enum RVPolicyPaths: Sendable {
             denylistLockFile(inConfigDir: configDir),
             pendingApprovalsFile(inConfigDir: configDir),
             pendingApprovalsLockFile(inConfigDir: configDir),
+            loosenProposalsFile(inConfigDir: configDir),
+            loosenProposalsLockFile(inConfigDir: configDir),
             egressLoadedSnapshotFile(inConfigDir: configDir),
             egressDenialsFile(inConfigDir: configDir),
             egressDenialsLockFile(inConfigDir: configDir),

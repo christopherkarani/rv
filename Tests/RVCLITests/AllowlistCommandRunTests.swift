@@ -7,7 +7,7 @@ import RVPolicy
 
 struct AllowlistCommandRunTests {
     @Test func add_missingHome() async throws {
-        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(environment: [:], stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(1)) {
                 try await command.run()
@@ -59,16 +59,20 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test func add_requiresTTY() async throws {
+    /// F2: off a terminal an exception is only ever a proposal for rvd to
+    /// store. With no rvd to take it, nothing is written and the exit is
+    /// the owner-gate refusal, even with the owner seam set.
+    @Test func add_offATerminal_isNeverAChange() async throws {
         let home = try isolatedHome()
         let out = CLIOutputCapture()
         try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated, output: out) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(OwnerConfirmation.refusalExitCode)) {
                 try await command.run()
             }
         }
-        #expect(out.stderr == "rv allowlist add: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
+        #expect(out.stderr == "rv allowlist add: this makes rv less strict, so it needs \(ProposalText.ownerName) at a terminal (rvd is not reachable to save it as a proposal). Nothing changed\n")
+        #expect(AllowlistCLI.store(home: home).loadForValidate(workspacePath: nil) == .missing)
     }
 
     @Test func add_slashRuleSucceedsOnTTY() async throws {
@@ -154,11 +158,11 @@ struct AllowlistCommandRunTests {
         let out = CLIOutputCapture()
         try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
             var tty = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(OwnerConfirmation.refusalExitCode)) {
                 try await tty.run()
             }
         }
-        #expect(out.stderr == "rv allowlist add-command: requires an interactive TTY (stdin and stdout): rv takes this only from a person at a terminal, so an agent cannot approve itself. Run it in your own Terminal\n")
+        #expect(out.stderr == "rv allowlist add-command: this makes rv less strict, so it needs \(ProposalText.ownerName) at a terminal (rvd is not reachable to save it as a proposal). Nothing changed\n")
     }
 
     @Test func addCommand_lockAndParseErrors() async throws {
@@ -434,7 +438,7 @@ struct AllowlistCommandRunTests {
     }
 
     @Test func addCommand_andValidate_missingHome() async throws {
-        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(environment: [:], stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var add = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(1)) {
                 try await add.run()

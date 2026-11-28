@@ -59,7 +59,7 @@ struct OperatorCommandRunTests {
         #expect(missingHomeOutput.stderr == "rv safety: HOME is not set\n")
         #expect(missingHomeOutput.stdout.isEmpty)
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             try await Safety.parse([]).run()
             await #expect(throws: ExitCode(1)) {
                 try await Safety.parse(["loud"]).run()

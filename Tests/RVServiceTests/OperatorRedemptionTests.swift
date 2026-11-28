@@ -555,7 +555,10 @@ struct OperatorRedemptionTests {
             // pending row, never consumes a permit.
             .mintAllowOnce,
             // Reads the live event ring; writes nothing.
-            .events:
+            .events,
+            // F2 loosen proposals: file, list, decide. Approving applies
+            // the stored row after rvd's own owner check; no permit.
+            .proposeLoosen, .listProposals, .decideProposal:
             return false
         }
     }

@@ -47,6 +47,10 @@ enum CLIProcess: Sendable {
         /// `--wait`). Nil in an installed context reads as rvd unavailable,
         /// so tests never reach the live daemon.
         var policyStatusSource: PolicyStatusSource?
+        /// Stand-in for rvd's loosen-proposal methods (F2). Nil in an
+        /// installed context answers "no transport", so tests never reach
+        /// the live daemon.
+        var proposalService: (any ProposalServicing)?
 
         init(
             home: HomeDirectory? = nil,

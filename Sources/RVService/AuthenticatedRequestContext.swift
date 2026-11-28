@@ -85,6 +85,12 @@ public enum ServiceMethodAuthorization {
         /// asks, resolutions and session ids follow `pendingList`'s gate
         /// per caller (`LiveEventView`).
         case ownerEvents
+        /// Loosen proposals (F2): file, list and decline. Any
+        /// kernel-attested peer, agents included: none of these loosens
+        /// anything. Approving is `decideProposal` too, but its authority
+        /// comes only from the owner check rvd runs in the handler, on a
+        /// prompt rvd builds from the stored row.
+        case proposals
     }
 
     public static func requirement(for method: IPCMethod) -> Requirement {
@@ -107,6 +113,8 @@ public enum ServiceMethodAuthorization {
             return .ownerEvents
         case .confirmOwnerAction:
             return .ownerConfirm
+        case .proposeLoosen, .listProposals, .decideProposal:
+            return .proposals
         }
     }
 
@@ -167,7 +175,7 @@ public enum ServiceMethodAuthorization {
                 // sends the owner's password for the handler to verify.
                 return true
             }
-        case .ownerConfirm:
+        case .ownerConfirm, .proposals:
             return context.peer != nil
         case .ownerEvents:
             // The same peer credential the transports capture (XPC audit

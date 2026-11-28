@@ -103,6 +103,8 @@ public enum LiveEventPayload: Sendable, Equatable {
     /// A pending row left awaiting-human (a human answered, it expired,
     /// or the agent's retry used the answer).
     case resolution(LiveResolution)
+    /// A loosen proposal was filed, decided or expired (F2).
+    case proposal(LiveProposal)
     case unknown(kind: String)
 
     public var kind: String {
@@ -110,6 +112,7 @@ public enum LiveEventPayload: Sendable, Equatable {
         case .decision: "decision"
         case .ask: "ask"
         case .resolution: "resolution"
+        case .proposal: "proposal"
         case .unknown(let kind): kind
         }
     }
@@ -123,6 +126,7 @@ extension LiveEvent: Codable {
         case decision
         case ask
         case resolution
+        case proposal
     }
 
     public init(from decoder: Decoder) throws {
@@ -142,6 +146,9 @@ extension LiveEvent: Codable {
         case "resolution":
             payload = (try? container.decode(LiveResolution.self, forKey: .resolution)).map { .resolution($0) }
                 ?? .unknown(kind: kind)
+        case "proposal":
+            payload = (try? container.decode(LiveProposal.self, forKey: .proposal)).map { .proposal($0) }
+                ?? .unknown(kind: kind)
         default:
             payload = .unknown(kind: kind)
         }
@@ -159,6 +166,8 @@ extension LiveEvent: Codable {
             try container.encode(ask, forKey: .ask)
         case .resolution(let resolution):
             try container.encode(resolution, forKey: .resolution)
+        case .proposal(let proposal):
+            try container.encode(proposal, forKey: .proposal)
         case .unknown:
             break
         }

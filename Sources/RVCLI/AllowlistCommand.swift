@@ -70,6 +70,9 @@ struct AllowlistAdd: AsyncParsableCommand {
     @Option(name: [.customShort("r"), .customLong("reason")], help: "Required reason.")
     var reason: String
 
+    @Flag(name: .customLong("propose"), help: "Send it to the owner as a proposal; change nothing now.")
+    var propose = false
+
     @OptionGroup
     var layer: AllowlistLayerFlags
 
@@ -78,7 +81,6 @@ struct AllowlistAdd: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
-        let authorization = try await OwnerConfirmation.require("add allowlist exception for rule \(rule)")
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
@@ -87,6 +89,12 @@ struct AllowlistAdd: AsyncParsableCommand {
         guard let ruleID = parseAllowlistRuleID(rule) else {
             try ctx.fail("rv allowlist add: invalid rule id\n", exitCode: 2)
         }
+        // An exception is looser: from an agent or a script it becomes a
+        // proposal the owner approves later; nothing changes here.
+        let route = try await LoosenRoute.ownerOrProposal(
+            .allowRule(rule: ruleID.rawValue, reason: trimmed),
+            summary: "add allowlist exception for rule \(rule)", command: "allowlist add", propose: propose)
+        guard case .owner(let authorization) = route else { return }
         let entry = AllowlistEntry(
             selector: .rule(ruleID),
             reason: trimmed,
@@ -119,6 +127,9 @@ struct AllowlistAddCommand: AsyncParsableCommand {
     @Option(name: [.customShort("r"), .customLong("reason")], help: "Required reason.")
     var reason: String
 
+    @Flag(name: .customLong("propose"), help: "Send it to the owner as a proposal; change nothing now.")
+    var propose = false
+
     @OptionGroup
     var layer: AllowlistLayerFlags
 
@@ -127,12 +138,16 @@ struct AllowlistAddCommand: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
-        let authorization = try await OwnerConfirmation.require("add allowlist exception for an exact command")
         let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             try ctx.fail("rv allowlist add-command: reason required\n", exitCode: 2)
         }
+        let route = try await LoosenRoute.ownerOrProposal(
+            .allowCommand(command: command, reason: trimmed),
+            summary: "add allowlist exception for an exact command", command: "allowlist add-command",
+            propose: propose)
+        guard case .owner(let authorization) = route else { return }
         let shell = ShellCommand(rawValue: command)
         let matchingView = EvaluationWorld.matchingView(of: shell)
         let entry = AllowlistEntry(

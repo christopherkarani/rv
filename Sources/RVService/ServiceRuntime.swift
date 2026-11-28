@@ -67,6 +67,8 @@ public actor ServiceRuntime {
     package nonisolated let events: LiveEventBus
     /// Finishes once the pending store's events reach `events`.
     nonisolated let pendingEventsForwarded: Task<Void, Never>?
+    /// Loosen proposals (F2): stored here, applied only after the owner check.
+    let proposals: LoosenProposalService
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -117,7 +119,8 @@ public actor ServiceRuntime {
         ownerPresence: OwnerPresence = OwnerPresence(),
         hookBudget: Duration = HookDeadline.budget,
         policyStatusService: PolicyStatusService = PolicyStatusService(),
-        judge: any JudgePort = LiveJudgePort()
+        judge: any JudgePort = LiveJudgePort(),
+        loosenApplier: LoosenApplier? = nil
     ) {
         self.ownerPresence = ownerPresence
         self.hookBudget = hookBudget
@@ -164,6 +167,10 @@ public actor ServiceRuntime {
         let events = LiveEventBus()
         self.events = events
         self.pendingEventsForwarded = self.pendingApprovals.map { LivePendingEvents.forward($0, to: events) }
+        self.proposals = LoosenProposalService(
+            store: resolvedHome.map { LoosenProposalStore(configDirectory: RVPolicyPaths.configDirectory(home: $0)) },
+            applier: loosenApplier ?? resolvedHome.map(LoosenApplier.live(home:)),
+            publish: { payload, time in events.publish(payload, at: time) })
         self.approvals = ApprovalRuntime(
             allowOnce: self.allowOnce,
             clock: clock,
@@ -331,8 +338,12 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot, .policyStatus,
             .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
-            .proposeWorkspaceLaunch, .launchProposalStatus, .events:
+            .proposeWorkspaceLaunch, .launchProposalStatus, .events, .listProposals:
             return nil
+        case .proposeLoosen(let params):
+            return params.clientSemver
+        case .decideProposal(let params):
+            return params.clientSemver
         case .attestTTYRedemption(let params):
             return params.clientSemver
         case .confirmOwnerAction(let params):
@@ -442,6 +453,12 @@ public actor ServiceRuntime {
             result = await mintAllowOnce(params, context: context)
         case .events(let params):
             result = .events(await liveEvents(params, context: context, sameUIDSocket: sameUIDSocket))
+        case .proposeLoosen(let params):
+            result = .proposeLoosen(await proposals.propose(params, now: clock()))
+        case .listProposals(let params):
+            result = .listProposals(await proposals.list(params, now: clock()))
+        case .decideProposal(let params):
+            result = .decideProposal(await decideProposal(params, context: context))
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -457,7 +474,7 @@ public actor ServiceRuntime {
         guard enabled else { return false }
         switch ServiceMethodAuthorization.requirement(for: method) {
         // `ownerEvents` checks the uid: `socketSessionReadsEvents`.
-        case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm, .ownerEvents:
+        case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm, .ownerEvents, .proposals:
             return false
         case .diagnostic, .agent, .hookConsult, .controlRead:
             return true
@@ -497,6 +514,33 @@ public actor ServiceRuntime {
             matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now,
             maskedSegments: maskedSegments, invocationPrefix: invocationPrefix
         )
+    }
+
+    /// Approve or decline one loosen proposal. Approving runs the same
+    /// owner check and audit as `confirmOwnerAction`, on rvd's own prompt
+    /// for the stored row; an approval rvd could not record is not given.
+    private func decideProposal(
+        _ params: DecideProposalParams, context: AuthenticatedRequestContext
+    ) async -> DecideProposalReply {
+        let presence = ownerPresence
+        let home = configHome
+        return await proposals.decide(params, now: clock) { prompt in
+            let reply: ConfirmOwnerActionReply
+            switch await presence.confirm(prompt, proof: params.proof, context: context) {
+            case .approved:
+                reply = ConfirmOwnerActionReply(
+                    outcome: .approved, presence: presence.promptsItself ? .daemonPrompt : .password)
+            case .denied(let denied):
+                reply = denied
+            }
+            let recorded = await OwnerPresence.audit(
+                summary: prompt, approved: reply.outcome == .approved, outcome: reply.outcome.rawValue,
+                context: context, home: home)
+            if reply.outcome == .approved, recorded == false {
+                return (false, ConfirmOwnerActionReply(outcome: .auditUnwritable))
+            }
+            return (reply.outcome == .approved, reply)
+        }
     }
 
     /// The device owner approves `params.summary`: rvd verifies presence
@@ -1083,6 +1127,12 @@ public actor ServiceRuntime {
             method = "mintAllowOnce"
         case .events:
             method = "events"
+        case .proposeLoosen:
+            method = "proposeLoosen"
+        case .listProposals:
+            method = "listProposals"
+        case .decideProposal:
+            method = "decideProposal"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

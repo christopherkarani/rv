@@ -29,6 +29,7 @@ enum HelpCatalog {
         case .policy: policy
         case .allowlist: allowlist
         case .safety: safety
+        case .proposals: proposals
         case .blocks: blocks
         case .host: host
         case .audit: audit
@@ -71,6 +72,7 @@ enum HelpCatalog {
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
+                HelpRow(name: "proposals", description: "What agents asked rv to loosen; approve with Touch ID"),
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
@@ -465,7 +467,7 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv safety"),
-                HelpRow(name: "rv safety normal"),
+                HelpRow(name: "rv safety normal [--propose]"),
                 HelpRow(name: "rv safety strict"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -477,11 +479,50 @@ enum HelpCatalog {
                     name: "strict",
                     description: "Also deny ls / test / stat of a catalog path"
                 ),
+                HelpRow(
+                    name: "--propose",
+                    description: "Normal is looser: send it to the owner as a proposal (what an agent runs)"
+                ),
             ]),
         ],
         examples: [
             "rv safety",
             "rv safety strict",
+        ]
+    )
+
+    static let proposals = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv proposals [--all]"),
+                HelpRow(name: "rv proposals <id>"),
+                HelpRow(name: "rv proposals approve <id>"),
+                HelpRow(name: "rv proposals reject <id> [--reason <text>]"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "agents",
+                    description: "An agent can read rv and make it stricter; anything looser it asks for becomes a proposal"
+                ),
+                HelpRow(
+                    name: "looser",
+                    description: "An allowlist exception, safety normal, or a pack off, asked from a script or an agent"
+                ),
+                HelpRow(
+                    name: "approve",
+                    description: "Shows rv's summary and fingerprint, then Touch ID or your password; rvd applies exactly that"
+                ),
+                HelpRow(
+                    name: "terminal",
+                    description: "Approve and reject run only in your own Terminal; an agent cannot approve itself"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv proposals",
+            "rv proposals approve p-21",
         ]
     )
 
@@ -1065,10 +1106,16 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv allowlist list"),
-                HelpRow(name: "rv allowlist add <rule> --reason <reason>"),
-                HelpRow(name: "rv allowlist add-command <command> --reason <reason>"),
+                HelpRow(name: "rv allowlist add <rule> --reason <reason> [--propose]"),
+                HelpRow(name: "rv allowlist add-command <command> --reason <reason> [--propose]"),
                 HelpRow(name: "rv allowlist remove <rule>"),
                 HelpRow(name: "rv allowlist validate"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "--propose",
+                    description: "An exception is looser: send it to the owner as a proposal (what an agent runs); rv proposals shows it"
+                ),
             ]),
         ],
         examples: [

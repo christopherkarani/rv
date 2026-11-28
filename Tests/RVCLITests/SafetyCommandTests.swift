@@ -28,11 +28,11 @@ struct SafetyCommandTests {
     @Test func set_writesMachineConfig() async throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             try await SafetyRun.set(.strict, home: home)
         }
         #expect(SafetyRun.show(home: home, workspace: nil) == "strict")
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             try await SafetyRun.set(.normal, home: home)
         }
         #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
@@ -41,7 +41,7 @@ struct SafetyCommandTests {
     @Test func set_recordsTheOwnerCheckThatAuthorizedIt() async throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             try await SafetyRun.set(.strict, home: home)
         }
         let events = AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
@@ -57,7 +57,7 @@ struct SafetyCommandTests {
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let config = RVPolicyPaths.configDirectory(home: home)
         let output = CLIOutputCapture()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, output: output) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: output) {
             try await SafetyRun.set(.strict, home: home)
             let log = AuditLog.fileURL(configDirectory: config)
             try FileManager.default.removeItem(at: log)

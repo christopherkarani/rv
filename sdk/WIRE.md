@@ -175,7 +175,7 @@ core-packs readiness. First failure wins.
 
 ## 4. Methods
 
-`Sources/RVIPC/IPCMethods.swift`. All 14 operations are unary request/response
+`Sources/RVIPC/IPCMethods.swift`. All 17 operations are unary request/response
 (`events` is a bounded long poll, still one request and one reply).
 `cwd`/`host`/`session` inputs are untrusted metadata: they route and label, they
 never confer authority (§7 of `sdk/README.md`, identity model).
@@ -196,6 +196,9 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 13 | `policyStatus` | `PolicyStatusParams` | `PolicyStatusReply` | Read-only diagnostic (additive, `sdk/VERSIONING.md` §3). Python SDK: raw-only. See §4.6. |
 | 14 | `events` | `EventsParams` | `EventsReply` | Live decisions, asks and resolutions; long poll up to 5 s. **Owner only**: a peer whose uid is not rvd's gets `authorizationDenied`; asks, resolutions and session ids only for callers `pendingList` admits. Additive; not in the Python SDK yet (Swift clients: `EventsCall`). See §4.7. |
+| 15 | `proposeLoosen` | `ProposeLoosenParams` | `ProposeLoosenReply` | Files one loosen as a proposal; never applies. Any kernel-attested peer. Implicit-hello eligible. See §4.8. |
+| 16 | `listProposals` | `ListProposalsParams` | `ListProposalsReply` | Read-only. Any kernel-attested peer. See §4.8. |
+| 17 | `decideProposal` | `DecideProposalParams` | `DecideProposalReply` | `reject` needs a kernel-attested peer; `approve` is applied only after rvd's own owner check on rvd's text for the stored row, bound by `contentHash`. Implicit-hello eligible. See §4.8. |
 
 ### 4.1 Evaluate family
 
@@ -347,6 +350,39 @@ lifetime (`stream`, a UUID).
   replies is disconnected once a reply waits 10 s to be sent.
 - A subscriber keeps rvd busy: while polls keep arriving, rvd's idle exit
   (`--idle-exit-seconds`) does not fire. Stop polling to let it exit.
+
+### 4.8 Loosen proposals
+
+`Sources/RVIPC/IPCProposals.swift`, `Sources/RVService/LoosenProposals.swift`.
+An agent's loosen is stored by rvd and applied only after the device owner
+approves that exact proposal.
+
+- `PolicyLoosen{kind, ...}`, a closed set decoded strictly (an unknown kind or
+  any extra key fails): `allowRule{rule, reason}`, `allowCommand{command,
+  reason}`, `safetyNormal{}`, `packOff{pack}`. Bounds: ids 128 bytes, command
+  4096, reason 280; `from`/`cwd` labels 1024 (stored cut to 256).
+- `ProposalItem{id: "p-N", change, from?, cwd?, createdAtMs, contentHash,
+  status: pending|approved|rejected|expired, decidedAtMs?, declineReason?}`.
+  `contentHash` is SHA-256 hex over a length-prefixed encoding of
+  `rv.loosen.v1`, id, the change's fields, `from` and `cwd`.
+- `proposeLoosen` -> `{outcome: filed|invalid|full|unavailable, proposal?,
+  created, problem?}`. The same pending change and labels return the existing
+  proposal (`created: false`). At most 32 pending; a pending one expires after
+  7 days.
+- `decideProposal{id, contentHash, decision: approve|reject, reason?, proof?,
+  clientSemver}` -> `{outcome: approved|rejected|changed|notFound|notPending|
+  ownerRefused|invalid|applyFailed|unavailable, proposal?, owner?, problem?}`.
+  A hash that is not the stored row's, or a row whose content no longer hashes
+  to the hash rvd recorded, is `changed`, before any prompt. `approve` runs
+  rvd's owner check (macOS: rvd's prompt; Linux: `proof.password`) with rvd's
+  own text (`approve rv proposal p-N: <change> [<fingerprint>]`), then
+  re-checks the hash under the store lock, applies and marks it approved;
+  a failed apply leaves it pending (`applyFailed`).
+- Live event kind `proposal`: `{id, status, kind, from?}`, published on filing,
+  approving, declining and expiry; visible only to callers `pendingList`
+  admits.
+- Skew: an rvd from before these methods answers `decodeFailed`; the CLI then
+  refuses the loosen (nothing changes).
 
 ## 5. Domain value shapes
 

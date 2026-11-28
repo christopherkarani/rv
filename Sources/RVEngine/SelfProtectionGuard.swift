@@ -328,8 +328,19 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace",
+    "workspace", "proposals",
 ]
+
+/// `--propose` makes the CLI send a loosen to rvd as a proposal and never
+/// take the owner path, on a terminal or not (F2): it cannot loosen
+/// anything, so an agent may run it. Only when the flag follows the
+/// subcommand, no `--` could turn it into a positional, and every word is
+/// plain text (a variable or glob could drop or move it).
+let proposeFlag = "--propose"
+
+private func onlyProposes(_ tail: ArraySlice<String>) -> Bool {
+    tail.contains(proposeFlag) && tail.contains("--") == false && tail.contains(where: isUnmodelledWord) == false
+}
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
 /// that expands to other words (`*`, `?`, `[`, `{`). Where it decides the
@@ -400,9 +411,12 @@ private func isWeakeningSub(
     case "packs":
         return sub == "disable"
     case "safety":
-        return sub != SafetyLevel.strict.rawValue
+        return sub != SafetyLevel.strict.rawValue && onlyProposes(tail) == false
     case "allowlist":
-        return sub == "add" || sub == "add-command"
+        return (sub == "add" || sub == "add-command") && onlyProposes(tail) == false
+    case "proposals":
+        // The owner approves; an agent may file, list, read and decline.
+        return sub == "approve"
     case "allow-once":
         return sub == "redeem" || sub == "mint" || isUnlockCode(sub)
     case "policy":

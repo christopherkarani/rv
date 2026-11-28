@@ -31,6 +31,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case policy
     case allowlist
     case safety
+    case proposals
     case blocks
     case host
     case audit
@@ -174,6 +175,7 @@ extension HelpTopic {
         case .policy: [Policy.self]
         case .allowlist: [AllowlistCommand.self]
         case .safety: [Safety.self]
+        case .proposals: [ProposalsCommand.self]
         case .blocks: [Blocks.self]
         case .host: [HostCommand.self]
         case .audit: [Audit.self]
