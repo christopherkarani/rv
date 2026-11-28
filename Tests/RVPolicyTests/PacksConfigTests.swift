@@ -113,3 +113,27 @@ private func packsPosixMode(_ url: URL) throws -> Int {
     let text = "[packs]\nenabled = [\"a\"]\nenabled = [\"b\"]\n"
     #expect(PacksConfigStore.parse(text).enabled == ["b"])
 }
+
+// G6b: the two [packs] shapes the G3 scanner reads differently from the
+// pre-G3 parser, pinned so they cannot drift back unnoticed.
+
+@Test func packsConfig_parse_itemsOnAMultiLineListsOpeningLineAreRead() {
+    let text = "[packs]\nenabled = [\"a\",\n  \"b\",\n]\n"
+    #expect(PacksConfigStore.parse(text).enabled == ["a", "b"])
+    #expect(PacksConfigStore.problems(in: text, known: ["a", "b"]).isEmpty)
+}
+
+@Test func packsConfig_parse_repeatedMultiLineKeyReplaces() {
+    let text = "[packs]\nenabled = [\n  \"a\",\n]\nenabled = [\n  \"b\",\n]\n"
+    #expect(PacksConfigStore.parse(text).enabled == ["b"])
+}
+
+@Test func packsConfig_problems_junkAfterClosingBracket() {
+    let text = "[packs]\nenabled = [\"a\"] x\ndisabled = [\n  \"b\",\n] y\n"
+    let problems = PacksConfigStore.problems(in: text, known: ["a", "b"])
+    #expect(problems.map(\.line) == [2, 5])
+    #expect(problems.map(\.problem) == ["x after ] is not read", "y after ] is not read"])
+    #expect(problems.map(\.key) == ["enabled", "disabled"])
+    // The list itself is still read.
+    #expect(PacksConfigStore.parse(text) == PacksConfig(enabled: ["a"], disabled: ["b"]))
+}

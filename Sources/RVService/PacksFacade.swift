@@ -199,6 +199,14 @@ public enum PacksFacade {
         return PackCatalog.make(enabled: enabled, index: index)
     }
 
+    /// The no-owner gate: every pack that was on must stay on. Today's
+    /// enable path only adds packs and drops disables (`effectiveOrdered`
+    /// is defaults ∪ enabled − disabled), so this never fires on real data;
+    /// it keeps a later change to that rule from loosening without the owner.
+    static func requireTightens(from before: Set<PackID>, to planned: Set<PackID>) throws {
+        guard planned.isSuperset(of: before) else { throw PacksCommandError.wouldLoosen }
+    }
+
     private static func mutate(home: HomeDirectory, ids: [String], enabling: Bool) throws -> PacksMutationResult {
         let index = try PackRegistry.loadIndex()
         return try mutate(
@@ -279,7 +287,7 @@ public enum PacksFacade {
                     index: index
                 )
             )
-            guard planned.isSuperset(of: before) else { throw PacksCommandError.wouldLoosen }
+            try requireTightens(from: before, to: planned)
         }
 
         do {
