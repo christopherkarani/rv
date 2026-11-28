@@ -238,7 +238,7 @@ struct CheckReport: Equatable, Sendable {
             lines.append(line)
         }
         if let first = steps.first(where: { $0.outcome != .fine }) {
-            lines.append("\(CommandVocabulary.Glyph.next.rawValue) \(CommandVocabulary.Command.explain.invocation) '\(Self.quoted(first.command))'   why, step by step")
+            lines.append("\(CommandVocabulary.Glyph.next.rawValue) \(CommandVocabulary.Alias.why.invocation) '\(Self.quoted(first.command))'   why, step by step")
         }
         if person > 0 {
             lines.append("  rv check approves nothing: a person still decides those steps when they run.")

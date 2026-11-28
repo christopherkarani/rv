@@ -143,3 +143,21 @@ import RVTheme
     #expect(lines[index + 1] == "  " + String(repeating: " ", count: "rv workspace status".count) + "  Start the host")
     #expect(lines.allSatisfy { $0.count <= long.count + 2 })
 }
+
+/// No Next heading: each item is a `→` line, the command ready to copy.
+@Test func helpRenderer_nextWithoutHeading_drawsArrowLines() {
+    let model = HelpViewModel(
+        title: "◆ rv",
+        blurb: "Stops destructive commands.",
+        sections: [HelpSection(heading: "Get started", rows: [HelpRow(name: "setup", description: "Wire hooks")])],
+        nextHeading: "",
+        next: [HelpNextItem(command: "rv setup", description: "wire your agents and start rvd")]
+    )
+    let lines = HelpRenderer().render(model, palette: colorOffPalette)
+    #expect(lines.first == "◆ rv  Stops destructive commands.")
+    #expect(lines.suffix(2) == ["", "  → rv setup    wire your agents and start rvd"])
+    #expect(lines.contains("Next") == false)
+    let painted = HelpRenderer().render(model, palette: Palette(for: ColorCapability(colorsEnabled: true)))
+    #expect(painted.last?.hasSuffix("    wire your agents and start rvd") == true)
+    #expect(painted.last?.contains("\u{001B}[") == true)
+}

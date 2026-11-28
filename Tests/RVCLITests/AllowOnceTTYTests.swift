@@ -411,7 +411,7 @@ struct AllowOnceTTYTests {
 
     @Test func theMintedMessageSaysTheCodeDiesWithRvd() {
         let text = AllowOnceCLI.mintedMessage(code: "abc123")
-        #expect(text.hasPrefix("allow-once code: abc123\nrv allow-once abc123\n"))
+        #expect(text.hasPrefix("allow-once code: abc123\nrv unlock abc123\n"))
         #expect(text.contains("lost if rvd restarts"))
         #expect(text.contains("24 hours"))
     }

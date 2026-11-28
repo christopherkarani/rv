@@ -193,7 +193,7 @@ struct TryCommandTests {
       ◐ Would stop  git reset --hard
                     would discard 14 files · 2,314 lines
 
-      → rv host mode claude block    stop it for real
+      → rv guard claude    stop it for real
 
     """
 

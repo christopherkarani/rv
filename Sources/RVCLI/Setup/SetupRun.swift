@@ -206,7 +206,7 @@ enum SetupRun {
             .keys.map(\.rawValue).sorted()
         var line = Self.observeNoticeLine
         for host in pinned {
-            line += "; \(host) stays block (rv host mode \(host) observe to change)"
+            line += "; \(host) stays block (\(CommandVocabulary.Alias.watch.invocation) \(host) to change)"
         }
         return line + "\n"
     }

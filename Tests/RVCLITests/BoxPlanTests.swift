@@ -668,7 +668,7 @@ struct BoxCommandTests {
         #expect(page.contains("rv box list [--json]"))
         #expect(page.contains("rv box setup mac"))
         #expect(page.contains("rv-macvm") == false)
-        let root = HelpCatalog.page(.root).sections.flatMap(\.rows).map(\.name)
+        let root = HelpCatalog.page(.root).sections.flatMap(\.rows).flatMap(HelpCatalog.commands(in:))
         #expect(root.contains("box"))
     }
 }

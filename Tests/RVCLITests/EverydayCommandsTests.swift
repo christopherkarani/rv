@@ -97,7 +97,7 @@ struct CheckCommandTests {
         #expect(text.contains("  ✓ npm test\n"))
         #expect(text.contains("  ✕ git push --force origin main   rewrites main"))
         #expect(text.contains("  ◐ rm -rf build") && text.contains("would stop · runs in watch mode · deletes files"))
-        #expect(text.contains("→ rv explain 'git push --force origin main'"))
+        #expect(text.contains("→ rv why 'git push --force origin main'"))
         #expect(text.contains("rv check approves nothing"))
     }
 
@@ -112,7 +112,7 @@ struct CheckCommandTests {
         let long = "echo '" + String(repeating: "x", count: 80) + "'"
         let text = CheckReport(steps: [CheckStep(command: long, outcome: .asks, rule: "r", reason: "why")]).text
         #expect(text.contains("…   asks a person · why"))
-        #expect(text.contains("rv explain 'echo '\\''x"))
+        #expect(text.contains("rv why 'echo '\\''x"))
     }
 
     @Test("first sentence keeps one step on one line")
