@@ -26,8 +26,10 @@ struct UnstoredHostModeProposals: HostModeProposalSink {
 
 /// Who asked for a host mode change, as far as the CLI can tell. Neither
 /// fact is proof: `atTerminal` only decides whether the owner check may be
-/// shown (agents run without a terminal and are never prompted); the
-/// check itself is what makes a block permanent.
+/// shown; the check itself is what makes a block permanent. Like
+/// `DaemonDownOwnerConfirmation`, it needs stdin and stdout on a terminal,
+/// and here also no agent marker: an agent holding a pty is not prompted,
+/// and its block goes to `HostTighten` instead.
 struct HostModeRequester: Equatable, Sendable {
     var atTerminal: Bool
     var callingHosts: Set<HookHost>
@@ -36,9 +38,10 @@ struct HostModeRequester: Equatable, Sendable {
     static let unattended = HostModeRequester(atTerminal: false, callingHosts: [])
 
     static func live() -> HostModeRequester {
-        HostModeRequester(
-            atTerminal: CLIProcess.stdinIsTTY(),
-            callingHosts: AgentHostMarkers.callingHosts(in: CLIProcess.environment()))
+        let callingHosts = AgentHostMarkers.callingHosts(in: CLIProcess.environment())
+        return HostModeRequester(
+            atTerminal: CLIProcess.stdinIsTTY() && CLIProcess.stdoutIsTTY() && callingHosts.isEmpty,
+            callingHosts: callingHosts)
     }
 }
 

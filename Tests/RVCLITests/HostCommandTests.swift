@@ -651,7 +651,80 @@ struct HostCommandTests {
                 now: Self.t0.addingTimeInterval(60), authenticate: owner.authenticate)
             #expect(ended.exitCode == 0)
             #expect(owner.calls == 1)
-            #expect(store(home).readGuardConfig()?.temporaryBlocks.isEmpty == true)
+            // The record stays, ended now: the cooldown counts from here.
+            let ended60 = Self.t0.addingTimeInterval(60)
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok] == GuardWindow(from: Self.t0, until: ended60))
+            #expect(GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:], now: ended60) == .observe)
+            #expect(store(home).read() == .entries([.grok: .observe]))
+
+            let reAsk = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0.addingTimeInterval(120), authenticate: AuthProbe(allow: false).authenticate)
+            #expect(reAsk.exitCode == 77)
+            #expect(reAsk.stdout.contains(#""reason":"cooldown""#))
+        }
+    }
+
+    /// Acceptance: an agent re-asking as each block ends cannot keep a host
+    /// blocked; inside six hours of the end it is a proposal.
+    @Test func agentReAskRightAfterExpiry_isAProposalUntilTheCooldownEnds() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let first = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: Self.t0, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(first.exitCode == 0)
+            let end = Self.t0.addingTimeInterval(3600)
+            let reAsk = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: false, requester: Self.claudeAgent,
+                now: end.addingTimeInterval(1), timeZone: Self.utc, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(reAsk.exitCode == 77)
+            #expect(reAsk.stdout.contains(
+                "An agent's block of grok ended less than 6 hours ago; another waits for you, so nothing changed."))
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok]?.until == end)
+            #expect(GuardModeResolution.resolve(
+                GuardConfig.read(home: environment.home), host: .grok, environment: [:], now: end.addingTimeInterval(1))
+                == .observe)
+
+            let later = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, requester: Self.claudeAgent,
+                now: end.addingTimeInterval(6 * 3600), authenticate: AuthProbe(allow: false).authenticate)
+            #expect(later.exitCode == 0)
+            #expect(store(home).readGuardConfig()?.temporaryBlocks[.grok]?.until == end.addingTimeInterval(6 * 3600 + 3600))
+        }
+    }
+
+    /// The owner prompt needs stdin and stdout on a terminal and no agent
+    /// marker; anything else goes to HostTighten unprompted.
+    @Test(arguments: [
+        (stdin: true, stdout: true, env: [String: String](), atTerminal: true),
+        (stdin: true, stdout: false, env: [:], atTerminal: false),
+        (stdin: false, stdout: true, env: [:], atTerminal: false),
+        (stdin: true, stdout: true, env: ["CLAUDECODE": "1"], atTerminal: false),
+    ])
+    func liveRequester_needsBothTTYsAndNoMarker(stdin: Bool, stdout: Bool, env: [String: String], atTerminal: Bool) {
+        let requester = CLIProcess.$context.withValue(
+            CLIProcess.Context(environment: env, stdinIsTTY: stdin, stdoutIsTTY: stdout)) { HostModeRequester.live() }
+        #expect(requester.atTerminal == atTerminal)
+        #expect(requester.callingHosts == (env.isEmpty ? [] : [.claude]))
+    }
+
+    /// An agent holding a pty (both TTYs, its marker set) never raises the
+    /// owner prompt for a permanent block: it gets the one-hour block.
+    @Test func agentWithAPty_isNotPrompted_andGetsTheOneHourBlock() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try await observedGrok(environment, layout)
+            let probe = AuthProbe(allow: true)
+            let context = CLIProcess.Context(environment: ["CLAUDECODE": "1"], stdinIsTTY: true, stdoutIsTTY: true)
+            let outcome = await CLIProcess.$context.withValue(context) {
+                await HostModeRun.setMode(
+                    .block, for: .grok, env: environment, json: true, requester: .live(), now: Self.t0,
+                    authenticate: probe.authenticate)
+            }
+            #expect(outcome.exitCode == 0)
+            #expect(outcome.stdout.contains(#""until":"2025-11-27T15:12:00Z""#))
+            #expect(probe.calls == 0)
             #expect(store(home).read() == .entries([.grok: .observe]))
         }
     }
@@ -692,7 +765,7 @@ struct HostCommandTests {
     @Test func ownerCheck_throughTheSeam_failsClosedWithoutTheOwner() async throws {
         try await withTempHomeAsync { home, layout, environment in
             try await observedGrok(environment, layout)
-            let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(stdinIsTTY: true)) {
+            let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(stdinIsTTY: true, stdoutIsTTY: true)) {
                 await HostModeRun.setMode(
                     .block, for: .grok, env: environment, json: true, requester: .live(), now: Self.t0,
                     authenticate: { try await CLIOwnerAuth.requireAuthenticated(reason: "test") })

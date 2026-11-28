@@ -12,7 +12,10 @@ import RVDomain
 /// - a block of the asking agent's own host, of a host rv cannot tell apart
 ///   from it (no agent marker at all), or of a host that is `off` (unwired:
 ///   blocking it means wiring hooks back in, which an expiry cannot undo
-///   exactly) is a proposal: nothing changes until the owner types it.
+///   exactly) is a proposal: nothing changes until the owner types it;
+/// - so does a block of a host an agent's block covered less than
+///   `GuardWindow.temporaryBlockCooldown` ago, so an agent re-asking as
+///   each hour ends cannot keep another host blocked for good.
 ///
 /// Pure: the shell (`HostModeRun.setMode`) reads the facts and writes the
 /// result.
@@ -25,6 +28,9 @@ public enum HostTighten {
         case unknownCaller = "unknown-caller"
         /// The host is `off`, so blocking it would wire hooks back in.
         case hostOff = "host-off"
+        /// An agent's block of this host ended less than
+        /// `GuardWindow.temporaryBlockCooldown` ago.
+        case cooldown
     }
 
     public enum Outcome: Sendable, Equatable {
@@ -40,20 +46,29 @@ public enum HostTighten {
 
     /// The outcome of a `block` asked for without the owner's check.
     /// `storedMode` is the host's effective stored mode (its entry, else the
-    /// global `guard.mode`); `openBlock` an agent's block already open now.
+    /// global `guard.mode`); `lastBlock` the agent's block stored for this
+    /// host, open or ended (`guard.temporary_blocks.<host>` keeps it after
+    /// it ends, as the cooldown's start).
     public static func unconfirmedBlock(
         of host: HookHost,
         storedMode: HostMode,
-        openBlock: GuardWindow?,
+        lastBlock: GuardWindow?,
         callingHosts: Set<HookHost>,
         now: Date
     ) -> Outcome {
         // Already enforcing: storing `block` changes nothing agents feel.
         if storedMode == .block { return .permanent }
-        if let openBlock { return .alreadyTemporary(openBlock) }
+        if let lastBlock, lastBlock.isOpen(at: now, limit: GuardWindow.temporaryBlockLimit) {
+            return .alreadyTemporary(lastBlock)
+        }
         if storedMode == .off { return .proposal(.hostOff) }
         if callingHosts.isEmpty { return .proposal(.unknownCaller) }
         if callingHosts.contains(host) { return .proposal(.ownHost) }
+        // A record that is not open (ended, overlong, or with a clock set
+        // back before it) starts the cooldown from its `until`.
+        if let lastBlock, now < lastBlock.until.addingTimeInterval(GuardWindow.temporaryBlockCooldown) {
+            return .proposal(.cooldown)
+        }
         return .temporary(GuardWindow(startingAt: now, lasting: GuardWindow.temporaryBlockLimit))
     }
 }

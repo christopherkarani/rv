@@ -182,7 +182,7 @@ enum HostModeRun {
                     }
                 } else {
                     switch HostTighten.unconfirmedBlock(
-                        of: host, storedMode: storedMode, openBlock: openBlock,
+                        of: host, storedMode: storedMode, lastBlock: config?.temporaryBlocks[host],
                         callingHosts: requester.callingHosts, now: now) {
                     case .permanent:
                         break
@@ -227,14 +227,21 @@ enum HostModeRun {
                 // would reject the installed rvd and deny every tool call.
                 try SetupRun.requireTrustedDaemon(env)
             }
-            let clearsAgentBlock = authorization != nil && config?.temporaryBlocks[host] != nil
+            // The owner's permanent block replaces the agent's record; the
+            // owner ending an open one early keeps it, ended now, so the
+            // cooldown counts from here. An ended record is left alone.
+            let clearsAgentBlock = authorization != nil && mode == .block && config?.temporaryBlocks[host] != nil
+            let endsAgentBlock = authorization != nil && mode != .block ? openBlock : nil
             do {
                 try await ConfigChangeAudit.$authorization.withValue(authorization) {
                     try store.save(mode, for: host) {
                         if mode == .off { try applyWiring(from: wiredFrom, to: mode, host: host, env: env) }
                     }
                     if clearsAgentBlock {
-                        try store.clearTemporaryBlock(for: host, direction: mode == .block ? .tightening : .loosening)
+                        try store.clearTemporaryBlock(for: host, direction: .tightening)
+                    }
+                    if let endsAgentBlock {
+                        try store.endTemporaryBlock(for: host, window: endsAgentBlock, at: now)
                     }
                 }
             } catch let error as SetupError {
@@ -329,6 +336,7 @@ enum HostModeRun {
         case .ownHost: "Blocking \(host) would stop the agent that asked, so nothing changed."
         case .unknownCaller: "rv can't tell which agent asked, and blocking \(host) could stop it, so nothing changed."
         case .hostOff: "\(host) is off; an agent can't wire it back in as block, so nothing changed."
+        case .cooldown: "An agent's block of \(host) ended less than 6 hours ago; another waits for you, so nothing changed."
         }
         let command = "\(CommandVocabulary.Command.host.invocation) mode \(host) \(proposal.mode.rawValue)"
         return SetupOutcome(

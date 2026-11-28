@@ -16,6 +16,9 @@ public struct GuardWindow: Sendable, Equatable {
 
     /// The longest an agent's block of a host lasts (Q4, 2026-11-27).
     public static let temporaryBlockLimit: TimeInterval = 60 * 60
+    /// After an agent's block of a host ends, how long before another
+    /// agent's block of it may start without the owner.
+    public static let temporaryBlockCooldown: TimeInterval = 6 * 60 * 60
 
     public init(from: Date, until: Date) {
         self.from = from
@@ -33,6 +36,13 @@ public struct GuardWindow: Sendable, Equatable {
     /// than `limit`.
     public func isOpen(at now: Date, limit: TimeInterval) -> Bool {
         from <= now && now < until && until.timeIntervalSince(from) <= limit
+    }
+
+    /// This window cut short at `now` (whole seconds), still a valid
+    /// record: the cooldown then counts from `now`.
+    public func ended(at now: Date) -> GuardWindow {
+        let end = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down))
+        return GuardWindow(from: min(from, end.addingTimeInterval(-1)), until: end)
     }
 
     /// Whole seconds left at `now`, 0 once closed.
