@@ -122,8 +122,15 @@ struct Setup: AsyncParsableCommand {
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
         }
-        let observing = GuardConfig.read(home: home).machineMode == .observe
-        outcome.stderr += (observing ? SetupServiceWarning.observeText : SetupServiceWarning.text) + "\n"
+        let config = GuardConfig.read(home: home)
+        let text = if config.machineMode == .observe {
+            SetupServiceWarning.observeText
+        } else if let pause = config.activePause(at: Date()) {
+            SetupServiceWarning.pausedText(until: pause.until)
+        } else {
+            SetupServiceWarning.text
+        }
+        outcome.stderr += text + "\n"
     }
 
     private func hasWiredHosts(home: HomeDirectory) -> Bool {
@@ -152,6 +159,14 @@ enum SetupServiceWarning {
     /// Under observe a missing daemon makes hooks step aside instead.
     static let observeText =
         "Warning: the RV background service (rvd) is not answering. In observe mode hooks let commands run unchecked and unlogged while it is down (a slow rvd still prompts). Run `rv doctor`."
+
+    /// Paused, rv is watching, but a missing daemon does not honour the
+    /// pause: hooks fall back to the stored modes and block or prompt.
+    static func pausedText(until: Date, timeZone: TimeZone = .current) -> String {
+        "Warning: the RV background service (rvd) is not answering. rv is paused (watching) until "
+            + "\(ClockText.hourMinute(until, timeZone: timeZone)), but while rvd is down installed hooks "
+            + "block or prompt on every command. Run `rv doctor`."
+    }
 
     static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
         hasWiredHosts && serviceUp == false

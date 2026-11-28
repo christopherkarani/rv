@@ -10,7 +10,7 @@ import RVPolicy
 public struct HookDoor: Sendable {
     /// Deny reason when the daemon ran past `HookDeadline.budget`: the client
     /// has already given up, so nothing was committed on its behalf.
-    static let timeoutReason = "rv timed out evaluating this action and committed nothing; retry it."
+    static let timeoutReason = hookCallStopNotice(.timedOut).why
 
     /// `deadline` defaults to a budget starting now. The daemon passes one
     /// started at frame receipt. Pass it with a `deadlineGuarded` world (as
@@ -61,7 +61,7 @@ public struct HookDoor: Sendable {
             logIfSlow(timing, host: host, deadline: deadline, to: slowLog)
         }
         guard deadline.permitsSideEffects() else {
-            return timeoutReply(host: host)
+            return timeoutReply(host: host, voice: world.voice)
         }
         let wireStart = ContinuousClock.now
         let wire = await HookDeadline.$current.withValue(deadline) {
@@ -75,7 +75,7 @@ public struct HookDoor: Sendable {
         // unlock code that does not exist; the client gave up anyway. A
         // grant spent in time is the exception: its allow is delivered.
         if deadline.requiresTimeoutReply {
-            return timeoutReply(host: host)
+            return timeoutReply(host: host, voice: world.voice)
         }
         return reply(wire)
     }
@@ -97,8 +97,8 @@ public struct HookDoor: Sendable {
         if let message { log.report(message, running: running) }
     }
 
-    private static func timeoutReply(host: HookHost) -> HookEvaluateReply {
-        reply(productionHostCodec(host).encodeDeny(reason: timeoutReason, rule: nil, next: .none))
+    private static func timeoutReply(host: HookHost, voice: StopVoice) -> HookEvaluateReply {
+        reply(productionHostCodec(host).encodeDeny(hookCallStopPresentation(.timedOut, voice: voice)))
     }
 
     /// A host ask with no id to key its approval by: no row is created,
@@ -164,7 +164,8 @@ extension HookEvaluateWorld {
         host: HookHost,
         pending: (any PendingApprovalCoordinating)?,
         clock: @escaping @Sendable () -> Date,
-        recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil
+        recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil,
+        voice: StopVoice = .live
     ) -> HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
         return deadlineGuarded(HookEvaluateWorld(
@@ -208,7 +209,9 @@ extension HookEvaluateWorld {
                     invocationDisplay: Normalize.invocationDisplay(of: command),
                     rawCommand: command.rawValue
                 )
-            }
+            },
+            voice: voice,
+            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) }
         ))
     }
 
@@ -234,7 +237,9 @@ extension HookEvaluateWorld {
                 guard HookDeadline.permitsSideEffects() else { return }
                 try await world.recordHostAsk(request, action)
             },
-            mintOnDenyWithCommand: mintWithCommand
+            mintOnDenyWithCommand: mintWithCommand,
+            voice: world.voice,
+            saferAllowed: world.saferAllowed
         )
     }
 }

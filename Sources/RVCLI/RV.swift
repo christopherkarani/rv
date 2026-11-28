@@ -37,6 +37,7 @@ public struct RV: AsyncParsableCommand {
             Blocks.self,
             Log.self,
             HostCommand.self,
+            PauseCommand.self,
             Audit.self,
             Secrets.self,
             Login.self,

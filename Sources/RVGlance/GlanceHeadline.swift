@@ -32,7 +32,7 @@ public struct GlanceHeadline: Sendable, Equatable {
         case .boxed:
             self.init(title: glyph.title, subtitle: "\(Self.plural(state.boxesRunning, "box")) running · \(rvd)")
         case .paused:
-            let back = state.pausedUntil.map { GlanceClock.time($0, calendar: calendar) } ?? "later"
+            let back = state.pauseEnd.map { GlanceClock.time($0, calendar: calendar) } ?? "later"
             self.init(title: glyph.title, subtitle: "back at \(back) · \(rvd)")
         case .guarding:
             let agents = state.activeAgentCount(at: now)

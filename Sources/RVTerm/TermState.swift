@@ -155,6 +155,8 @@ public struct TermState: Equatable, Sendable {
     public static let inspectorWidth = 124
 
     public var mode: TermMode
+    /// The owner's `rv pause` ends here; `mode` is `.watching` meanwhile.
+    public var pausedUntil: Date?
     public var tally: TermTally
     /// Oldest first.
     public private(set) var rows: [TermRow] = []

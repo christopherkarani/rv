@@ -46,6 +46,7 @@ struct Term: AsyncParsableCommand {
         }
         var sources = TermSources(home: home)
         var state = TermState(now: Date(), mode: sources.mode(), start: start)
+        state.pausedUntil = sources.pausedUntil()
         // v5b's Watched lives on as Stream's would-stop filter.
         if view?.lowercased() == "watched" { state.wouldStopsOnly = true }
         sources.refresh(&state)
@@ -78,14 +79,22 @@ struct TermSources: Sendable {
         self.configDirectory = RVPolicyPaths.configDirectory(home: home)
     }
 
-    func mode() -> TermMode {
-        GuardConfig.read(home: home).machineMode == .observe ? .watching : .guarding
+    /// Watching while paused, else the stored machine-wide mode.
+    func mode(now: Date = Date()) -> TermMode {
+        let config = GuardConfig.read(home: home)
+        return config.activePause(at: now) != nil || config.machineMode == .observe ? .watching : .guarding
+    }
+
+    /// When the owner's `rv pause` ends, while one is open.
+    func pausedUntil(now: Date = Date()) -> Date? {
+        GuardConfig.read(home: home).activePause(at: now)?.until
     }
 
     /// Reads whatever is new since the last call into `state`.
     mutating func refresh(_ state: inout TermState) {
         let now = Date()
-        state.mode = mode()
+        state.mode = mode(now: now)
+        state.pausedUntil = pausedUntil(now: now)
         let ledger = AuditLedger(configDirectory: configDirectory)
         var audit: [AuditEvent] = []
         while true {

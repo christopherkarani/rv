@@ -148,10 +148,14 @@ private func robotProbe() -> ThemeProbe {
     #expect(!pretty.stdout.contains("Result: BLOCKED"))
 }
 
-@Test func hostDenyText_indeterminateNoRuleID() {
+@Test func hostDenyText_indeterminateNamesItsReasonNotAPackRule() {
     let result = EvaluationResult(outcome: .indeterminate(.commandTooLarge))
     let text = hostDenyText(from: result, command: ShellCommand(rawValue: "x"))
-    #expect(text == "rv could not finish evaluating this command. Run it in Terminal.")
+    #expect(text == """
+        ✕ Stopped   x (rv.indeterminate/commandTooLarge)
+        why     it is too large for rv to check
+        who     ask your user to run it in their own terminal
+        """)
 }
 
 @Test func prettyWriter_joinsWithNewline() {

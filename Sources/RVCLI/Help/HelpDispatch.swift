@@ -41,6 +41,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case blocks
     case log
     case host
+    case pause
     case audit
     case secrets
     case mcp
@@ -192,6 +193,7 @@ extension HelpTopic {
         case .blocks: [Blocks.self]
         case .log: [Log.self]
         case .host: [HostCommand.self]
+        case .pause: [PauseCommand.self]
         case .audit: [Audit.self]
         case .secrets: [Secrets.self]
         case .mcp: [MCP.self]

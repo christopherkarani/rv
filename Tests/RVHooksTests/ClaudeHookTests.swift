@@ -172,7 +172,7 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test func claudeHookWireRichDeny_resetHardIsOneShortLine() throws {
+@Test func claudeHookWireRichDeny_resetHardIsTheStopShape() throws {
     let wire = hookWire(
         from: resetHardDenyResult(),
         command: resetHard,
@@ -184,11 +184,9 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(parsed.systemMessage == resetHardHostDeny)
     #expect(parsed.permissionDecisionReason == resetHardHostDeny)
-    #expect(parsed.systemMessage.contains("\n") == false)
-    #expect(parsed.permissionDecisionReason.contains("\n") == false)
     #expect(parsed.systemMessage.hasPrefix("Error:") == false)
-    #expect(parsed.systemMessage.components(separatedBy: "RV · Blocked").count == 2)
-    #expect(parsed.permissionDecisionReason.components(separatedBy: "RV · Blocked").count == 2)
+    #expect(parsed.systemMessage.components(separatedBy: "✕ Stopped").count == 2)
+    #expect(parsed.permissionDecisionReason.components(separatedBy: "\nwho     ").count == 2)
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
@@ -204,7 +202,7 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
 
 @Test func claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() throws {
     let wire = codec.encodeDeny(
-        reason: hostDenyLine(command: resetHard, reason: resetHardMatch.reason),
+        reason: hostDenyLine(command: resetHard, deny: Deny(ruleID: resetHardMatch.ruleID, reason: resetHardMatch.reason)),
         rule: resetHardMatch.ruleID,
         next: .ttyHint
     )

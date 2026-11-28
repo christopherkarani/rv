@@ -165,6 +165,9 @@ enum DoctorRun {
             blocksEnabled: DenialLedgerPreferences.isEnabled(
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             ),
+            judgeLive: GuardConfig.read(
+                configDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
+            ).judgeDecides,
             leftovers: environment.leftovers,
             problems: (environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
@@ -173,6 +176,7 @@ enum DoctorRun {
                     + [DoctorInstallChecks.systemdUserManager(
                         $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
             } ?? []) + judgeProblems(environment: environment, diagnostics: diagnostics, paths: paths)
+                + packsConfigProblems(home: environment.home)
         )
         model.modeWord = modeWord(GuardModeResolution.resolve(
             GuardConfig.read(home: environment.home), host: nil,
@@ -249,6 +253,21 @@ enum DoctorRun {
             )
         case .unreadable:
             DoctorPacksView(enabled: [], registry: .broken)
+        }
+    }
+
+    /// Each `[packs]` line rv does not read, by file and line: a misspelt
+    /// key or entry, or a pack id a bundle update dropped (G6b). The doors
+    /// skip such a line, so the pack it names is not enforced; the owner
+    /// is told where. An unreadable file is the broken pack registry row.
+    static func packsConfigProblems(home: HomeDirectory) -> [DoctorProblem] {
+        guard let problems = try? PacksFacade.configProblems(home: home) else { return [] }
+        let file = DisplayedText.field(PacksConfigStore.configURL(home: home).path)
+        return problems.map { problem in
+            let location = problem.line.map { "\(file):\($0)" } ?? file
+            return DoctorProblem(
+                id: "packs-config", severity: .warn,
+                summary: "\(location)  [packs] \(problem.problem); rv skips this line", fix: problem.fix)
         }
     }
 

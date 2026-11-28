@@ -372,7 +372,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace", "protect",
+    "workspace", "protect", "pause",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -478,6 +478,10 @@ private func isWeakeningSub(
         // File transfer crosses the cage wall: `upload` reads host paths
         // into the workspace, `download` writes workspace files to the host.
         return sub == "upload" || sub == "download"
+    case "pause":
+        // `rv pause <duration>` watches every host; bare `rv pause` (the
+        // countdown) and `rv pause --end` (back now) carry no positional.
+        return true
     case "host":
         // `mode <host> block` is the one tightening form; a missing, extra,
         // unknown or unmodelled word fails closed. `--json`/`--robot` take

@@ -29,7 +29,7 @@ func hookPermissionAllowJSON() -> String {
 
 func hookPermissionDenyJSON(reason: String) -> String {
     let text = hookBlockReason(reason)
-    return hookPermissionDenyJSON(userMessage: text, agentMessage: cursorAgentStopLine)
+    return hookPermissionDenyJSON(userMessage: text, agentMessage: text)
 }
 
 func hookPermissionDenyJSON(userMessage: String, agentMessage: String) -> String {

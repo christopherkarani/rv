@@ -51,20 +51,21 @@ enum MachineConfigJSON {
         /// a missing key. Equal readings record no event.
         var describe: @Sendable (JSONValue?) -> String
         /// Which way replacing the stored value (nil when missing) with the
-        /// new one moves the gate.
-        var direction: @Sendable (_ prior: JSONValue?, _ new: JSONValue) -> ConfigChangeAudit.Direction
+        /// new one (nil when removed) moves the gate.
+        var direction: @Sendable (_ prior: JSONValue?, _ new: JSONValue?) -> ConfigChangeAudit.Direction
 
         var name: String { keyPath.joined(separator: ".") }
     }
 
-    /// Stores `value` at `setting.keyPath`; every other key is kept. Each
+    /// Stores `value` at `setting.keyPath` (nil removes the key); every
+    /// other key is kept. Each
     /// key on the way must hold an object or nothing (an object is then
     /// created): any other value is refused (`unreadable`), since replacing
     /// it would drop what the owner keeps there. Records `config.changed`
     /// (`setting.name`) write-ahead when the described value changes.
     /// `beforeWrite` runs after that record and before the file moves.
     static func set(
-        _ value: JSONValue, for setting: Setting, in url: URL, beforeWrite: () throws -> Void = {}
+        _ value: JSONValue?, for setting: Setting, in url: URL, beforeWrite: () throws -> Void = {}
     ) throws {
         guard setting.keyPath.isEmpty == false else { throw OwnerConfigWriteError.unwritable }
         try file(url).update(
@@ -89,7 +90,7 @@ enum MachineConfigJSON {
     }
 
     private static func store(
-        _ value: JSONValue, at keyPath: ArraySlice<String>, in object: inout [String: JSONValue]
+        _ value: JSONValue?, at keyPath: ArraySlice<String>, in object: inout [String: JSONValue]
     ) throws(OwnerConfigWriteError) {
         guard let key = keyPath.first else { return }
         let rest = keyPath.dropFirst()
@@ -97,6 +98,8 @@ enum MachineConfigJSON {
             object[key] = value
             return
         }
+        // Removing below a key that is not there changes nothing.
+        if value == nil, object[key] == nil { return }
         var child: [String: JSONValue] = [:]
         if let existing = object[key] {
             guard let existingObject = existing.asObject else { throw .unreadable }

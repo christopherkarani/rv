@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"✕ Stopped   git reset --hard (core.git/reset-hard)\nwhy     destroys uncommitted changes\nwho     ask your user to run it in their own terminal"}}
