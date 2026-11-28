@@ -139,7 +139,7 @@ struct MCPManagedPolicyTests {
         // A secret in args is refused before policy is asked: ps would show it.
         if case .success(let planned) = MCPLaunchPlanner.plan(
             servers: ["argy"], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
-            requireSandbox: true), case .refused("argy", .secretInArguments("API_TOKEN"))? = planned.first?.1
+            requireSandbox: true), case .refused("argy", .secretInArguments(.reference("API_TOKEN")))? = planned.first?.1
         {
         } else {
             Issue.record("argy must be refused for its arg secret")

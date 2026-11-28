@@ -107,8 +107,8 @@ struct MCPServeRefusalTests {
         #expect(cause([.refused(server: "p", .placeholder(.unknownSecret("K")))]) == .secretUndefined(server: "p", secret: "K"))
         #expect(cause([.refused(server: "wax", .sandbox("x")), .process(launch)]) == nil)
         #expect(cause([]) == nil)
-        #expect(cause([.refused(server: "wax", .secretInArguments("WAX_TOKEN"))])
-            == .secretInArguments(server: "wax", secret: "WAX_TOKEN"))
+        #expect(cause([.refused(server: "wax", .secretInArguments(.reference("WAX_TOKEN")))])
+            == .secretInArguments(server: "wax", secret: .reference("WAX_TOKEN")))
     }
 
     /// Every off state names its own fix; none sends the person to a
@@ -120,7 +120,7 @@ struct MCPServeRefusalTests {
         #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets set WAX_TOKEN")
         #expect(next(.placeholders(server: "wax", .unsupportedPlatform)) == "fix wax's placeholders in mcp.json, then rv mcp trust")
         #expect(next(.cageUnavailable) == "rv doctor")
-        let inArgs = MCPServeRefusal(servers: ["wax"], cause: .secretInArguments(server: "wax", secret: "WAX_TOKEN"), log: "")
+        let inArgs = MCPServeRefusal(servers: ["wax"], cause: .secretInArguments(server: "wax", secret: .reference("WAX_TOKEN")), log: "")
         #expect(inArgs.next == #"remove ${secret:WAX_TOKEN} from args and add "secrets": {"WAX_TOKEN": "WAX_TOKEN"} so the server reads $WAX_TOKEN, then rv mcp trust"#)
         #expect(inArgs.reason.contains("\n") == false && inArgs.next.contains("\n") == false)
         // Lease detail is the gateway's, not mcp.json's: it stays out of the agent's text.
@@ -183,8 +183,8 @@ struct MCPServeRefusalTests {
         // A secret secrets.json does not define, by `secrets` or in a remote header.
         #expect(cause("missing", cage: true) == .secretUndefined(server: "missing", secret: "NOPE"))
         // A secret in args is off even though it is defined, caged or not.
-        #expect(cause("argsecret", cage: true) == .secretInArguments(server: "argsecret", secret: "WAX_TOKEN"))
-        #expect(cause("argsecret", cage: false) == .secretInArguments(server: "argsecret", secret: "WAX_TOKEN"))
+        #expect(cause("argsecret", cage: true) == .secretInArguments(server: "argsecret", secret: .reference("WAX_TOKEN")))
+        #expect(cause("argsecret", cage: false) == .secretInArguments(server: "argsecret", secret: .reference("WAX_TOKEN")))
         #expect(cause("webmissing", cage: true) == .secretUndefined(server: "webmissing", secret: "NOPE"))
         // Placeholders: the planner's own checks.
         #expect(cause("held", cage: true) == nil)

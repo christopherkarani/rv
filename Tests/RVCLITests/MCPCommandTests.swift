@@ -32,7 +32,7 @@ struct MCPCommandTests {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
                 approvalSigning: approvalSigning ?? .file(configDirectory: config), presence: presence,
-                oauthTokens: .file(configDirectory: config))
+                oauthTokens: .file(configDirectory: config), hasTerminal: { true })
         }
 
         func approvalEvents() -> [AuditEvent] {
@@ -174,7 +174,7 @@ struct MCPCommandTests {
             MCPServerDefinition(name: "envy", command: "e", secrets: ["API_TOKEN": "API_TOKEN"]),
         ])
         let problems = MCPRun.argumentSecretProblems(configuration, configDirectory: URL(fileURLWithPath: "/nonexistent"))
-        #expect(problems.map(\.message) == ["argy: " + MCPLaunchPlanner.argumentSecretMessage("API_TOKEN")])
+        #expect(problems.map(\.message) == ["argy: " + MCPLaunchPlanner.argumentSecretMessage(.reference("API_TOKEN"))])
         #expect(problems.allSatisfy { $0.message.contains("\n") == false })
     }
 

@@ -25,8 +25,9 @@ struct MCPEnvironment: Sendable {
     var oauthTokens: MCPOAuthTokenStore = .none
     /// Whether this process has a terminal the person can answer on. Trust
     /// and onboard ask for that first, so an agent's shell gets one line
-    /// and the fix instead of a prompt nobody will answer.
-    var hasTerminal: @Sendable () -> Bool = { true }
+    /// and the fix instead of a prompt nobody will answer. No terminal
+    /// unless one is proven: `live` checks `/dev/tty`.
+    var hasTerminal: @Sendable () -> Bool = { false }
 
     static func live(home: HomeDirectory) -> MCPEnvironment {
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
@@ -538,7 +539,7 @@ enum MCPRun {
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
             "approving needs you present: \(OwnerAuthWording.method). A pseudo-terminal cannot approve",
-            "the confirmation code is in the agent's terminal or its MCP log; an agent retry keeps the same code",
+            "the confirmation code is in the terminal where the agent runs; an agent retry keeps the same code",
         ])
             .joined(separator: "\n") + "\n"
     }

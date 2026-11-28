@@ -47,7 +47,7 @@ struct MCPImportTests {
         // those servers are skipped, and none of their values are stored.
         #expect(plan.servers.map(\.name) == ["context7"])
         #expect(Set(plan.skipped.map(\.name)) == ["bare", "db"])
-        #expect(plan.skipped.allSatisfy { $0.reason == MCPImport.argumentCredentialSkip(.cursor) })
+        #expect(plan.skipped.allSatisfy { $0.reason.hasPrefix("a credential is in its args, where ps shows it") })
         #expect(plan.secrets.map(\.definition.name) == ["GITHUB_TOKEN"])
         #expect(plan.secrets.allSatisfy {
             $0.definition.source == .keychain(service: SecretKeychain.service, account: $0.definition.name)
@@ -214,14 +214,14 @@ struct MCPImportTests {
             let planned = try MCPLaunchPlanner.plan(
                 servers: ["s"], configuration: configuration, secrets: known, resolver: resolver, baseEnvironment: [:]
             ).get()
-            guard case .refused("s", .secretInArguments("S_KEY"))? = planned.first?.1 else {
+            guard case .refused("s", .secretInArguments(.reference("S_KEY")))? = planned.first?.1 else {
                 Issue.record("expected s refused for its arg secret: \(planned.map(\.1))")
                 continue
             }
             #expect(planned[0].0.secretValues.isEmpty)
         }
         #expect(resolved.withLock { $0 } == 0)
-        let message = MCPLaunchPlanner.argumentSecretMessage("S_KEY")
+        let message = MCPLaunchPlanner.argumentSecretMessage(.reference("S_KEY"))
         #expect(message == #"secret S_KEY is in its args, where ps shows it to every user; remove ${secret:S_KEY} from args and add "secrets": {"S_KEY": "S_KEY"} so the server reads $S_KEY, then rv mcp trust"#)
         #expect(message.contains("\n") == false)
     }
@@ -263,6 +263,89 @@ struct MCPImportTests {
         ), case .refused(_, .sandbox(_))? = refused.first?.1 else {
             Issue.record("launch without a sandbox must be refused where the cage is enforced")
             return
+        }
+    }
+
+    /// E4: a `$VAR` for one of the server's secret variables in its args is
+    /// refused whatever the command: a shell (or anything that expands it)
+    /// would put the value in its child's argv.
+    @Test func aShellExpandingASecretVariableIntoArgvIsRefused() throws {
+        let sealed = MCPSandboxPolicy(network: false)
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(
+                name: "wrapped", command: "sh", args: ["-c", #"exec my-server --token "$API_KEY""#],
+                secrets: ["API_KEY": "GH"], sandbox: sealed),
+            MCPServerDefinition(
+                name: "braced", command: "node", args: ["srv.js", "--key=${API_KEY:-none}"],
+                secrets: ["API_KEY": "GH"], sandbox: sealed),
+            MCPServerDefinition(
+                name: "fine", command: "sh", args: ["-c", #"exec my-server --home "$HOME" --x "$API_KEYS" $$ $1"#],
+                secrets: ["API_KEY": "GH"], sandbox: sealed),
+        ])
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
+        ])
+        let resolved = Mutex<[String]>([])
+        let resolver = SecretResolver { source in
+            if case .hostEnvironment(let variable) = source { resolved.withLock { $0.append(variable) } }
+            return .success(SecretValue("tok_shell_value_123")!)
+        }
+        let planned = try MCPLaunchPlanner.plan(
+            servers: ["wrapped", "braced", "fine"], configuration: configuration, secrets: secrets, resolver: resolver,
+            baseEnvironment: [:], requireSandbox: true
+        ).get()
+        let expected = MCPArgumentSecret.expanded(variable: "API_KEY", secret: "GH")
+        for (index, name) in ["wrapped", "braced"].enumerated() {
+            guard case .refused(name, .secretInArguments(expected))? = Optional(planned[index].1) else {
+                Issue.record("\(name) must be refused: \(planned[index].1)")
+                continue
+            }
+        }
+        #expect(planned[2].1.process?.environment["API_KEY"] == "tok_shell_value_123")
+        #expect(resolved.withLock { $0 } == ["UNUSED"], "only the server that runs resolves its secret")
+        let message = MCPLaunchPlanner.argumentSecretMessage(expected)
+        #expect(message == "its args expand $API_KEY (secret GH) into a command line, where ps shows it to every user; remove $API_KEY from args so the server reads $API_KEY from its environment itself, then rv mcp trust")
+        #expect(MCPServeRefusal.cause(
+            serving: "wrapped", configuration: configuration, integrity: .trusted, secrets: secrets, requireSandbox: true,
+            placeholdersSupported: true) == .secretInArguments(server: "wrapped", secret: expected))
+    }
+
+    @Test func expandedVariablesReadShellForms() {
+        #expect(MCPArgumentSecret.expandedVariables(in: #"a $A ${B} ${C:-x} "$D_1"x $$ $1 $ ${} $-"#) == ["A", "B", "C", "D_1"])
+        #expect(MCPArgumentSecret.expandedVariables(in: "plain") == [])
+    }
+
+    /// E4: import skips a shell wrapper that expands a credential from its
+    /// env into argv, and a host `${VAR}` arg, each with the advice that fits.
+    @Test func importSkipsArgsThatExpandACredential() {
+        let plan = MCPImport.plan(
+            entries: [
+                entry(
+                    "wrapped", transport: .stdio(command: "sh", args: ["-c", "srv --key $TOKEN"]),
+                    environment: ["TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"]),
+                entry(
+                    "referenced", transport: .stdio(command: "srv", args: ["--token", "${GITHUB_TOKEN}"]),
+                    environment: ["GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"]),
+                entry(
+                    "envonly", transport: .stdio(command: "srv", args: []),
+                    environment: ["GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"]),
+            ],
+            configuration: MCPConfiguration(), secrets: SecretsConfiguration())
+        #expect(plan.servers.map(\.name) == ["envonly"])
+        #expect(plan.secrets.count == 1)
+        let reasons = Dictionary(plan.skipped.map { ($0.name, $0.reason) }, uniquingKeysWith: { first, _ in first })
+        #expect(reasons["wrapped"] == "its args expand $TOKEN, a credential, into a command line where ps shows it to every user; have the server read $TOKEN itself instead of passing it in args, then rv mcp import")
+        #expect(reasons["referenced"] == "rv does not expand ${GITHUB_TOKEN} in args, and a value there is shown by ps to every user; remove it from the args in cursor's config so the server reads $GITHUB_TOKEN itself, then rv mcp import")
+    }
+
+    /// E3: only a bare launcher name, or one in a system bin directory, opens
+    /// its registry; a lookalike file anywhere else gets no network.
+    @Test func onlyARealLauncherGetsItsRegistry() {
+        for command in ["npx", "/usr/bin/npx", "/usr/local/bin/npx", "/opt/homebrew/bin/npx"] {
+            #expect(MCPImport.sealedSandbox(command: command).hosts == ["registry.npmjs.org"], "\(command)")
+        }
+        for command in ["./npx", "/tmp/x/npx", "bin/uv", "/usr/local/bin/../../tmp/npx", "/home/me/.local/bin/uvx", "NPX"] {
+            #expect(MCPImport.sealedSandbox(command: command) == MCPSandboxPolicy(network: false), "\(command)")
         }
     }
 }
