@@ -140,6 +140,9 @@ private func distinctiveDoctorSnapshot() -> DoctorSnapshotReply {
         idleExitSeconds: 300,
         packsEnabled: [.coreGit],
         lastError: "DOCTOR-NOT-EVALUATE",
-        checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
+        checks: [
+            DoctorCheck(id: .xpc, status: .ok, message: "listener"),
+            DoctorCheck(id: .packs, status: .ok, message: "ready"),
+        ]
     )
 }

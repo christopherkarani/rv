@@ -162,6 +162,8 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/MCPProcessGroup.swift:[0-9]*:final class MCPProcessGroup: MCPSupervisedGroup' \
     | grep -v 'Sources/RVMCP/MCPProcessGroup.swift:[0-9]*:final class MCPExitGate: Sendable' \
     | grep -v 'Sources/RVMCP/MCPLaunchEnd.swift:[0-9]*:final class MCPLaunchEnd: Sendable' \
+    | grep -v 'Sources/RVMCP/MCPApprovals.swift:[0-9]*:public final class MCPShownCodes: Sendable' \
+    | grep -v 'Sources/RVIPC/LiveEventFeed.swift:[0-9]*:private final class LiveFeedOnce: Sendable' \
     | grep -v 'Sources/rv-mcp-signal-probe/main.swift:.*final class Count' \
     | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class GatewaySink: SecretResponseSink' \
     | grep -v 'Sources/RVMCP/CustodianSocketClient.swift:' \
