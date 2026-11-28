@@ -211,7 +211,9 @@ rv mcp check    # fail if any server bypasses rv
 project under a deny-default Seatbelt profile: workspace-only writes,
 proxied HTTPS, no Keychain. `--microvm <image>` uses a network-less Linux
 micro-VM instead (macOS 26+). Work is published back when the workspace
-closes. This is a hardening layer, not a finished isolation boundary
+closes; `rv box done` shows what changed first, in numbers, and lets you
+keep, pick or drop it (dropped work waits 7 days in a trash). `rv box
+default on` starts `rv opencode` in a box by default. This is a hardening layer, not a finished isolation boundary
 ([acceptance audit](docs/security/runtime-acceptance.md)).
 
 ### Egress control
