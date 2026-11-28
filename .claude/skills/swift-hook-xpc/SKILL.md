@@ -76,20 +76,27 @@ in corpus, not re-decided here.
 | `Decision` | Return |
 |---|---|
 | `.allow` (including medium/low match) | `nil` |
-| `.deny` | one sentence + display `rule_id` + next step |
-| `.indeterminate` | PLAN incomplete-eval sentence — no pack `rule_id` |
+| `.deny` | the stop (`StopNotice.text`), display `rule_id` in the verdict line |
+| `.indeterminate` | the same stop, rule `rv.indeterminate/<reason>` — no pack `rule_id` |
 
 Nil means allow **only after** you switched on `Decision`. HANDOFF /
 cohesiveness “nil unless deny” is stale (that overshoot is FN-01).
 
-Canonical deny line — copy from `host-contracts-v1.md`, do not paraphrase:
+One shape for every stop (B1, `Sources/RVHooks/HostDenyText.swift`), plain
+text, no ANSI, on every host:
 
 ```
-Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.
+✕ Stopped   git reset --hard (core.git/reset-hard)
+why     destroys uncommitted changes
+safer   git status
+who     ask Chris to run  rv allow-once a1b2c3
 ```
 
-That one line is the hook string. The pretty three-line TTY frame is
-`rv test` / `explain` only. No redeemable code. No banner on allow.
+`why` is under ten words; `safer` only when the pack has a
+`safer_command` and rv allows it in that cwd and mode (`HookEvaluateWorld.saferAllowed`,
+a peek with no judge that writes nothing); exactly one `who` (the owner's passwd first name, or
+"your user"), and no stop tells the agent to run an unlock itself. The C
+hook (`hook_fallback.c`) prints the same shape for daemon-down stops.
 
 Display `rule_id` is slash (`core.git/reset-hard`). Robot JSON `rule_id` is
 colon (`core.git:reset-hard`).

@@ -70,6 +70,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("→  rv setup"))
         #expect(outcome.stdout.contains("safety normal"))
         #expect(outcome.stdout.contains("block ledger on"))
+        #expect(outcome.stdout.contains("judge  shadow · logs only"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
 }
@@ -1092,4 +1093,20 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 @Test func doctor_modeWordUsesTheVocabulary() {
     #expect(DoctorRun.modeWord(.enforce) == CommandVocabulary.PlannedWord.guarding)
     #expect(DoctorRun.modeWord(.observe) == CommandVocabulary.PlannedWord.watching)
+}
+
+/// G6b: a pack id a bundle update dropped (or any line rv skips) is named
+/// by file and line, so the owner knows which pack is no longer enforced.
+@Test func doctorNamesTheSkippedPacksLine() throws {
+    let home = try isolatedHome()
+    let url = PacksConfigStore.configURL(home: home)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "[packs]\nenabled = [\n  \"database.redis\",\n  \"database.gone\",\n]\n".write(
+        to: url, atomically: true, encoding: .utf8)
+    let problems = DoctorRun.packsConfigProblems(home: home)
+    #expect(problems.count == 1)
+    #expect(problems.first?.id == "packs-config")
+    #expect(problems.first?.severity == .warn)
+    #expect(problems.first?.summary == "\(url.path):4  [packs] no pack, category or preset is named database.gone; rv skips this line")
+    #expect(DoctorRun.packsConfigProblems(home: try isolatedHome()).isEmpty)
 }

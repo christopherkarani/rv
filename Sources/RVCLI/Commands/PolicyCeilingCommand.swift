@@ -34,7 +34,7 @@ struct PolicyCheck: AsyncParsableCommand, CommandUsage {
     func run() async throws {
         let ctx = CommandContext.current(command: "policy check", format: format)
         guard ceiling else {
-            try ctx.fail("rv policy check: pass --ceiling\n", exitCode: 2)
+            try ctx.fail("rv policy check: pass --ceiling\n", exitCode: ExitStatus.usage.rawValue)
         }
         let home = try ctx.requireHome()
         let workspace = URL(fileURLWithPath: CLIProcess.workspacePath(), isDirectory: true)

@@ -98,6 +98,27 @@ enum GatedEffect: Sendable, Equatable {
         /// The hook call's id (`DecisionCall.current`), so the ledger row
         /// and the decision-log row name the same call. Nil off the hook path.
         var id: String?
+
+        /// The row the rule-oriented denial ledger keeps: a rule deny as
+        /// it is; the observe floor's own stop for a program rv cannot see
+        /// under its rule id (`observe.floor:unanalyzable`), so `rv blocks`
+        /// lists what watch mode stopped; no other indeterminate refusal.
+        /// That rule takes no allow-once: the gate never spends a grant on
+        /// an indeterminate verdict.
+        var ledgerRow: DenialRow? {
+            switch indeterminate {
+            case nil:
+                return self
+            case .observeUnanalyzable?:
+                guard let rule = RuleID(rawValue: IndeterminateReason.observeUnanalyzable.rawValue) else { return nil }
+                return DenialRow(
+                    at: at, host: host, tool: tool, ruleID: rule, category: .pack(rule.pack), path: path,
+                    observed: observed, wouldBe: wouldBe, indeterminate: nil, session: session, id: id
+                )
+            default:
+                return nil
+            }
+        }
     }
 
     struct OverrideRow: Sendable, Equatable {

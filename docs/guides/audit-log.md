@@ -24,7 +24,7 @@ names, argument *names*, fingerprints and home-redacted paths.
 
 ## One record
 
-From a run on Linux (`rv secrets set` of a new secret):
+From a run on Linux (`rv secrets add` of a new secret):
 
 ```json
 {"decision":"info","detail":{"added":"OPENAI_API_KEY","authorized_by":"none","direction":"loosening","new":"1 definitions","prior":"0 definitions","setting":"secrets"},"kind":"config.changed","prev":"0000000000000000000000000000000000000000000000000000000000000000","schema":"rv.audit.v1","source":"audit.jsonl","subject":"secrets","time":"2026-11-17T19:37:03Z"}
@@ -131,7 +131,7 @@ a `command.denied` row marked `detail.verdict: indeterminate`. Its `subject` is
 command: `selfProtection` (an rv command that would weaken rv),
 `packageScriptUnresolved`, `unresolvedInvocation`,
 `inlineProgramNeedsJudge`, `commandTooLarge`, `budgetExhausted` or
-`corePacksUnavailable`. `rv test` and `rv explain` record nothing. The
+`corePacksUnavailable`. `rv test` and `rv why` record nothing. The
 OCSF export codes these rows `rv.command.denied-indeterminate`; one that
 observe mode let run is `rv.command.observed-deny`.
 

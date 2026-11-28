@@ -89,8 +89,8 @@ linux_c_hook_proof() {
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
     fail "no-daemon deny missing decision JSON"
   fi
-  if ! grep -q 'RV daemon connection failed' "$out/deny.out"; then
-    fail "no-daemon deny missing connection-failed reason"
+  if ! grep -q '(rv.hook/connection)' "$out/deny.out"; then
+    fail "no-daemon deny missing the rv.hook/connection stop"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
     fail "no-daemon deny echoes the command"
@@ -428,25 +428,19 @@ obj = json.loads(text)
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
 reason = obj.get("reason") or ""
-minted_lead = re.compile(
-    "^RV · Blocked\\. Paste in Terminal to allow once: "
-    "rv allow-once [0-9a-f]{6}\\. "
-)
-earlier_lead = (
-    "RV · Blocked. A one-shot unlock is already pending for this "
-    "command. Paste the earlier rv allow-once code in Terminal."
-)
-if minted_lead.match(reason):
-    if "This unlocks the reviewed command once, including its sudo, env, and path spellings." not in reason:
-        raise SystemExit("minted reason missing unlock line: %r" % (reason,))
-elif reason.startswith(earlier_lead):
-    pass
-else:
-    raise SystemExit("reason=%r" % (reason,))
-if "Destroys uncommitted changes." not in reason:
+# B1 stop shape: verdict + command + rule, why, an optional safer
+# command, and one who line naming the owner's unlock code.
+lines = reason.split("\n")
+if lines[0] != "\u2715 Stopped   git reset --hard (core.git/reset-hard)":
+    raise SystemExit("verdict line=%r" % (lines[0],))
+if "why     destroys uncommitted changes" not in lines:
     raise SystemExit("reason missing pack why: %r" % (reason,))
-if "git reset --hard" in reason:
-    raise SystemExit("reason echoes command")
+minted_who = re.compile("^who     ask .{1,32} to run  rv allow-once ([0-9a-f]{6})  \\(you can wait: rv wait \\1\\)$")
+earlier_who = re.compile("^who     ask .{1,32} to run the earlier code with  rv allow-once$")
+if not (minted_who.match(lines[-1]) or earlier_who.match(lines[-1])):
+    raise SystemExit("who line=%r" % (lines[-1],))
+if len(lines) not in (3, 4) or (len(lines) == 4 and not lines[2].startswith("safer   ")):
+    raise SystemExit("reason is not one stop: %r" % (reason,))
 if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
     raise SystemExit("extra host keys present")
 PY
@@ -469,7 +463,7 @@ obj = json.loads(text)
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
 reason = obj.get("reason") or ""
-if not (reason.startswith("RV daemon ") or reason.startswith("RV could not read this hook request")):
+if not reason.startswith("\u2715 Stopped   (rv.hook/"):
     raise SystemExit("reason=%r" % (reason,))
 if "git reset --hard" in reason:
     raise SystemExit("reason echoes command")
@@ -602,7 +596,7 @@ set -e
 [[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
 grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
   || fail "staged rv deny missing decision JSON"
-grep -q 'RV daemon is not reachable' "$PROOF_ROOT/staged-deny.out" \
+grep -q '(rv.hook/unreachable)' "$PROOF_ROOT/staged-deny.out" \
   || fail "staged rv deny missing unreachable reason"
 if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
   fail "staged rv deny echoes the command"

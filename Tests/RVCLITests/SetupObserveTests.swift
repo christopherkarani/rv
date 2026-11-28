@@ -173,7 +173,7 @@ struct SetupObserveTests {
             try writeConfig(home, #"{"guard":{"hosts":{"claude":"block","cursor":"observe"}}}"#)
             let outcome = await observeSetup(environment, probe: ObserveAuthProbe(allow: false))
             #expect(outcome.exitCode == 0)
-            #expect(outcome.stderr.contains("claude stays block (rv host mode claude observe to change)"))
+            #expect(outcome.stderr.contains("claude stays block (rv watch claude to change)"))
             #expect(outcome.stderr.contains("cursor stays") == false)
             #expect(try HostModeStore(configDirectory: configURL(home).deletingLastPathComponent()).read()
                 == .entries([.claude: .block, .cursor: .observe]))

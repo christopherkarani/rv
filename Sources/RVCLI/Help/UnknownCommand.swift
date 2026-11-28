@@ -6,15 +6,16 @@ import RVDomain
 /// "Unexpected argument". This names the closest real command instead.
 public enum UnknownCommand {
     /// Every top-level spelling a user can type: the vocabulary table
-    /// (which includes `help`), plus every name and alias the parser
-    /// accepts, so a command or alias added later is never refused here.
+    /// (which includes `help`), every name and alias the parser accepts,
+    /// and Q1's new names (`CommandAlias`), so a command or alias added
+    /// later is never refused here.
     static var known: [String] {
         let table = CommandVocabulary.Command.allCases.map(\.rawValue)
         let parsed = RV.configuration.subcommands.flatMap { command in
             [command._commandName] + command.configuration.aliases
         }
         var seen = Set<String>()
-        return (table + parsed).filter { seen.insert($0).inserted }
+        return (table + parsed + CommandAlias.leadingWords).filter { seen.insert($0).inserted }
     }
 
     /// Commands rv runs for a program, not a person: the hook entry point
@@ -36,7 +37,7 @@ public enum UnknownCommand {
         arguments: [String], known: [String]? = nil, candidates: [String]? = nil
     ) -> String? {
         guard let first = arguments.first, first.hasPrefix("-") == false else { return nil }
-        if let refusal = VersionSpelling.refusal(arguments) { return refusal }
+        if let refusal = VersionSpelling.refusal(arguments) ?? CommandAlias.refusal(arguments) { return refusal }
         let names = known ?? Self.known
         guard names.contains(first) == false else { return nil }
         let suggestible = candidates ?? (known == nil ? Self.candidates : names)

@@ -15,6 +15,8 @@ enum OutlineItem: Equatable, Sendable {
     case leaf(label: String, value: String, emphasis: OutlineEmphasis)
     case regex(label: String, pattern: String)
     case text(String, emphasis: OutlineEmphasis)
+    /// One short line already painted (a glyph in its ink); never wrapped.
+    case painted(String)
     case group(label: String, emphasis: OutlineEmphasis, children: [OutlineItem])
     case spacer
 }
@@ -95,6 +97,8 @@ private func walkOutline(
                 labelWidth: labelWidth,
                 into: &lines
             )
+        case .painted(let value):
+            lines.append(paint(prefix, slot: palette.muted, reset: palette.reset) + value)
         case .spacer:
             lines.append(paint(hang, slot: palette.muted, reset: palette.reset))
         }

@@ -29,7 +29,7 @@ private final class LateJudge: JudgePort, Sendable {
 
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private let fakeBundle = JudgeSelection(
-    engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+    engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true), shadow: false
 )
 /// Pack-allowed and outside the safe lane, so it reaches the judge.
 private let judged = ShellCommand(rawValue: "python3 deploy.py --prod")

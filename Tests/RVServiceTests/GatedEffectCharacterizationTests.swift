@@ -98,7 +98,7 @@ struct GatedEffectCharacterizationTests {
             allowlist: { .empty }, host: .hook(.claude), tool: .bash,
             inputs: EvaluationInputs(
                 guardMode: .enforce,
-                judge: JudgeSelection(engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle")),
+                judge: JudgeSelection(engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle"), shadow: false),
                 store: .gather(home: home, cwd: WorkingDirectory(validating: repo.path))
             )
         )

@@ -372,7 +372,7 @@ let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 let subcommandVerbs: Set<String> = [
     "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
-    "workspace",
+    "workspace", "protect", "pause",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -414,6 +414,13 @@ private func isHelpPageRequest(_ args: ArraySlice<String>) -> Bool {
 }
 
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
+    // Q1's new names (`rv unlock`, `rv watch claude`, `rv secrets add`) are
+    // judged as the spelling the CLI runs for them (`CommandVocabulary.expand`).
+    switch CommandVocabulary.expand(Array(args[verbIndex...])) {
+    case .expanded(let runs): return isWeakeningVerb(Array(args[..<verbIndex]) + runs, at: verbIndex)
+    case .missingArgument: return false
+    case .unchanged: break
+    }
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
     // `setup --observe` sheds oversight; a variable or glob may carry the flag.
@@ -442,7 +449,11 @@ private func isWeakeningSub(
     if isUnmodelledWord(sub) { return true }
     switch verb {
     case "packs":
-        return sub == "disable"
+        return sub == "disable" || sub == "off"
+    case "protect":
+        // `rv protect <tool> off` loosens; `off` may sit anywhere, and a
+        // variable or glob may carry it. Adding protection only tightens.
+        return sub == "off" || tail.contains { $0 == "off" || isUnmodelledWord($0) }
     case "safety":
         return sub != SafetyLevel.strict.rawValue
     case "allowlist":
@@ -463,7 +474,8 @@ private func isWeakeningSub(
         // imports a secret chooses which real value reaches a cage, or which
         // host the gateway sends it to (a Varlock `@proxy(domain=...)`).
         switch sub {
-        case "set", "remove", "oauth-reset": return true
+        // `add` is `set`'s new name; matched here too for `rv secrets --x add`.
+        case "set", CommandVocabulary.Alias.secretsAdd.words[1], "remove", "oauth-reset": return true
         case "import": return flags.contains("--dry-run") == false
         case "hook": return third.map { $0 == "uninstall" || isUnmodelledWord($0) } == true
         default: return false
@@ -474,6 +486,10 @@ private func isWeakeningSub(
         // File transfer crosses the cage wall: `upload` reads host paths
         // into the workspace, `download` writes workspace files to the host.
         return sub == "upload" || sub == "download"
+    case "pause":
+        // `rv pause <duration>` watches every host; bare `rv pause` (the
+        // countdown) and `rv pause --end` (back now) carry no positional.
+        return true
     case "host":
         // `mode <host> block` is the one tightening form; a missing, extra,
         // unknown or unmodelled word fails closed. `--json`/`--robot` take

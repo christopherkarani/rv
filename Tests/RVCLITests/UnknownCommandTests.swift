@@ -21,7 +21,8 @@ struct UnknownCommandTests {
         #expect(UnknownCommand.message(arguments: []) == nil)
         #expect(UnknownCommand.message(arguments: ["--version"]) == nil)
         #expect(UnknownCommand.message(arguments: ["help", "explain"]) == nil)
-        for name in UnknownCommand.known {
+        // `rv guard` and `rv watch` alone name no agent: CommandAliasTests.
+        for name in UnknownCommand.known where CommandAlias.refusal([name]) == nil {
             #expect(UnknownCommand.message(arguments: [name]) == nil, "\(name) is a real command")
         }
     }
