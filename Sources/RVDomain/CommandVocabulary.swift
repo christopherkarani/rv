@@ -28,6 +28,7 @@ public enum CommandVocabulary {
         case prompt
         case news
         case packs
+        case protect
         case policy
         case scan
         case service
@@ -147,10 +148,8 @@ public enum CommandVocabulary {
 
     /// Planned names from the North Star build plan, "Decisions for Chris" Q1.
     public static let plannedNames: [PlannedName] = [
-        // Chris chose `rv protect <tool>` over `rv packs on/off` on
-        // 2026-11-22 (build plan G6).
-        PlannedName(spelling: "rv protect <tool>", today: "rv packs enable <pack>", status: .decided),
-        PlannedName(spelling: "rv protect <tool> off", today: "rv packs disable <pack>", status: .decided),
+        // `rv protect <tool>` (Chris, 2026-11-22) shipped in G6: it is
+        // `Command.protect` now, not a planned name.
         PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
         PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
         PlannedName(spelling: "rv guard <host>", today: "rv host mode <host> block", status: .recommended),

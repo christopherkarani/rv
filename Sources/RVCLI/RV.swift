@@ -19,6 +19,7 @@ public struct RV: AsyncParsableCommand {
             PromptCommand.self,
             NewsCommand.self,
             Packs.self,
+            Protect.self,
             Policy.self,
             Scan.self,
             Service.self,

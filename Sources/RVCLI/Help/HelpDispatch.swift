@@ -31,6 +31,7 @@ public enum HelpTopic: Equatable, Sendable, CaseIterable {
     case doctor
     case allowOnce
     case packs
+    case protect
     case scan
     case policy
     case allowlist
@@ -179,6 +180,7 @@ extension HelpTopic {
         case .doctor: [Doctor.self]
         case .allowOnce: [AllowOnceCommand.self]
         case .packs: [Packs.self]
+        case .protect: [Protect.self]
         case .scan: [Scan.self]
         case .policy: [Policy.self]
         case .allowlist: [AllowlistCommand.self]
