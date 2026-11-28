@@ -97,7 +97,7 @@ can write, at most 1 MiB, at most 128 servers. Unknown keys are errors.
 | --- | --- | --- | --- |
 | `name` | yes | yes | 1 to 64 of `A-Z a-z 0-9 . _ -`; unique |
 | `description` | yes | yes | Shown in reviews |
-| `command`, `args` | yes | no | What to run; found on `PATH` through `/usr/bin/env`. `args` may hold `${secret:NAME}` |
+| `command`, `args` | yes | no | What to run; found on `PATH` through `/usr/bin/env`. A `${secret:NAME}` in `args` turns the server off: `ps` shows arguments to every user. Use `secrets` |
 | `env` | yes | no | Literal, non-secret environment values |
 | `secrets` | yes | no | `{"VAR": "SECRET_NAME"}`: the server gets the real value in `VAR`, and rv scrubs it from what the server returns |
 | `placeholders` | yes | no | Secret names handed as placeholders (macOS only) |

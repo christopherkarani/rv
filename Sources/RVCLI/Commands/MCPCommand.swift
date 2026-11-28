@@ -233,6 +233,7 @@ enum MCPRun {
         }
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
         problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
+        problems += argumentSecretProblems(configuration, configDirectory: environment.configDirectory)
         let auditing = configuration.servers.filter { $0.sandbox?.enforcement == .audit }
         return Report(
             servers: configuration.servers.count,
@@ -474,6 +475,17 @@ enum MCPRun {
                     ? MCPPlatformSupport.runsUncaged(server: server.name)
                     : MCPPlatformSupport.sandboxUnenforced(server: server.name)
             return Problem(path: path, message: message)
+        }
+    }
+
+    /// Local servers that name a secret in their args: serve never starts
+    /// them, because a process's arguments are readable by every user.
+    static func argumentSecretProblems(_ configuration: MCPConfiguration, configDirectory: URL) -> [Problem] {
+        let path = MCPConfiguration.fileURL(configDirectory: configDirectory).path
+        return configuration.servers.compactMap { server in
+            MCPLaunchPlanner.argumentSecret(server).map {
+                Problem(path: path, message: "\(server.name): " + MCPLaunchPlanner.argumentSecretMessage($0))
+            }
         }
     }
 

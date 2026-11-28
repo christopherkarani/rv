@@ -88,6 +88,7 @@ public enum MCPImport {
                 plan.skipped.append((entry.name, "an environment value carries a second secret"))
                 continue
             }
+            let secretsBefore = plan.secrets.count
             var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
             // Imported servers ask for every tool until the person allows
             // one. Defaults are inert, so this must be an ask glob.
@@ -113,6 +114,18 @@ public enum MCPImport {
                 }
             }
             definition.args = templatedArgs(args, entry: entry, plan: &plan, secretName: secretName)
+            // rv never passes a secret in a process's arguments (`ps` shows
+            // them to every user), so a server that takes its credential
+            // as an argument is not imported, and none of its values are
+            // stored: a literal credential in its args, a `${VAR}` the
+            // host would have expanded there, or a `$VAR` a shell
+            // (`sh -c "srv --key $TOKEN"`) expands from its environment.
+            if let found = MCPLaunchPlanner.argumentSecret(definition) {
+                plan.secrets.removeSubrange(secretsBefore...)
+                plan.skipped.append((entry.name, Self.argumentCredentialSkip(
+                    found, host: entry.host, referenced: Self.referencedCredential(args, templated: definition.args, found: found))))
+                continue
+            }
             plan.servers.append(definition)
             takenServers.insert(entry.name)
         }
@@ -138,13 +151,64 @@ public enum MCPImport {
     /// serve refuses a local server with no sandbox where the cage is
     /// enforced, so an unsealed import would only be a server that is off.
     public static func sealedSandbox(command: String) -> MCPSandboxPolicy {
-        let launcher = (command as NSString).lastPathComponent.lowercased()
-        return MCPSandboxPolicy(network: false, hosts: launcherHosts[launcher] ?? [])
+        MCPSandboxPolicy(network: false, hosts: launcher(command).flatMap { launcherHosts[$0] } ?? [])
+    }
+
+    /// Directories a launcher named by absolute path may sit in.
+    static let launcherDirectories: Set<String> = [
+        "/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin",
+    ]
+
+    /// The launcher `command` names: a bare name (`npx`, found on `PATH`),
+    /// or an absolute path directly in a system bin directory
+    /// (`/opt/homebrew/bin/uvx`). Anything else (`./npx`, `/tmp/x/npx`,
+    /// `bin/uv`) gets no registry: a file the person or the agent can
+    /// write, merely named like a launcher, must not open the network.
+    static func launcher(_ command: String) -> String? {
+        if command.contains("/") == false { return command }
+        let path = command as NSString
+        guard command.hasPrefix("/"), command.contains("/./") == false, command.contains("/../") == false,
+            launcherDirectories.contains(path.deletingLastPathComponent)
+        else { return nil }
+        return path.lastPathComponent
     }
 
     /// The import line's sealed note: what the sandbox lets the server reach.
     public static func sealedNote(_ sandbox: MCPSandboxPolicy) -> String {
         sandbox.hosts.isEmpty ? "sealed, no network" : "sealed, reaches only " + sandbox.hosts.joined(separator: ", ")
+    }
+
+    /// Why a server whose credential is an argument is skipped, and the fix.
+    /// `referenced`: the credential arg was a host reference (`${VAR}`).
+    static func argumentCredentialSkip(_ found: MCPArgumentSecret, host: MCPHost, referenced: String?) -> String {
+        if let variable = referenced {
+            let name = MCPDisplayedText.field(variable)
+            return "rv does not expand ${\(name)} in args, and a value there is shown by ps to every user; "
+                + "remove it from the args in \(host.rawValue)'s config so the server reads $\(name) itself, then rv mcp import"
+        }
+        if case .expanded(let variable, _) = found {
+            let name = MCPDisplayedText.field(variable)
+            return "its args expand $\(name), a credential, into a command line where ps shows it to every user; "
+                + "have the server read $\(name) itself instead of passing it in args, then rv mcp import"
+        }
+        return "a credential is in its args, where ps shows it to every user; pass it as an environment variable instead "
+            + "(\"env\": {\"API_KEY\": \"...\"} in \(host.rawValue)'s config), then rv mcp import"
+    }
+
+    /// The variable a credential arg referenced in the host
+    /// (`--token ${GITHUB_TOKEN}`, `--token=$GITHUB_TOKEN`, a bare `$TOKEN`),
+    /// or nil. `templated` is `templatedArgs(args)`, one output per arg, and
+    /// `found` what `argumentSecret` found in it.
+    static func referencedCredential(_ args: [String], templated: [String], found: MCPArgumentSecret) -> String? {
+        for (arg, output) in zip(args, templated) {
+            let value = arg.hasPrefix("-") ? arg.split(separator: "=", maxSplits: 1).last.map(String.init) ?? arg : arg
+            guard MCPRedaction.isReference(value), let variable = MCPArgumentSecret.expandedVariables(in: value).first else {
+                continue
+            }
+            if output.contains("${secret:") { return variable }
+            if case .expanded(variable, _) = found { return variable }
+        }
+        return nil
     }
 
     /// Credential header values become `${secret:NAME}` (an auth scheme such

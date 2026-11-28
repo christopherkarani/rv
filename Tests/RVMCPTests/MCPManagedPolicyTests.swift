@@ -134,9 +134,16 @@ struct MCPManagedPolicyTests {
             {"version": 1, "secrets": {"allowEnvironmentDelivery": false}}
             """)
         let reason = "organization policy sets secrets.allowEnvironmentDelivery to false, "
-            + "and a stdio server receives secrets in its environment or arguments"
+            + "and a stdio server receives secrets in its environment"
         #expect(plan("envy") == .secretUnavailable(server: "envy", secret: "API_TOKEN", reason: reason))
-        #expect(plan("argy") == .secretUnavailable(server: "argy", secret: "API_TOKEN", reason: reason))
+        // A secret in args is refused before policy is asked: ps would show it.
+        if case .success(let planned) = MCPLaunchPlanner.plan(
+            servers: ["argy"], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+            requireSandbox: true), case .refused("argy", .secretInArguments("API_TOKEN"))? = planned.first?.1
+        {
+        } else {
+            Issue.record("argy must be refused for its arg secret")
+        }
         #expect(resolved.withLock { $0 } == 0, "a refused secret must not be resolved")
         // Remote headers are spent host-side by the gateway, never in a child's environment.
         #expect(plan("remote") == nil)
