@@ -192,11 +192,10 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     )
     try assertCodexHonorPath(
         wire,
-        reason:
-            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)"
+        reason: hostDenyLine(command: command, deny: deny, kind: .ask(recorded: true))
     )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
@@ -254,7 +253,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     #expect(wire.exitCode == 2)
     #expect(wire.stdout.contains("\"decision\":\"block\""))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
 }
 
 @Test func codexDecode_readsCwdSessionAndProposedAction() throws {

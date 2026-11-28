@@ -22,8 +22,14 @@ public enum CommandVocabulary {
         case box
         case test
         case `try`
+        case term
+        case wait
         case explain
+        case check
+        case prompt
+        case news
         case packs
+        case protect
         case policy
         case scan
         case service
@@ -39,7 +45,11 @@ public enum CommandVocabulary {
         /// Loosen proposals agents filed (F2).
         case proposals
         case blocks
+        /// `rv log`: the same ledger as `blocks`, in fixed columns.
+        case log
         case host
+        /// `rv pause 10m` (H4).
+        case pause
         case audit
         case secrets
         case login
@@ -143,12 +153,9 @@ public enum CommandVocabulary {
 
     /// Planned names from the North Star build plan, "Decisions for Chris" Q1.
     public static let plannedNames: [PlannedName] = [
-        // Chris chose `rv protect <tool>` over `rv packs on/off` on
-        // 2026-11-22 (build plan G6).
-        PlannedName(spelling: "rv protect <tool>", today: "rv packs enable <pack>", status: .decided),
-        PlannedName(spelling: "rv protect <tool> off", today: "rv packs disable <pack>", status: .decided),
+        // `rv protect <tool>` (Chris, 2026-11-22) shipped in G6: it is
+        // `Command.protect` now, not a planned name.
         PlannedName(spelling: "rv why", today: "rv explain", status: .recommended),
-        PlannedName(spelling: "rv log", today: "rv blocks", status: .recommended),
         PlannedName(spelling: "rv unlock", today: "rv allow-once", status: .recommended),
         PlannedName(spelling: "rv guard <host>", today: "rv host mode <host> block", status: .recommended),
         PlannedName(spelling: "rv watch <host>", today: "rv host mode <host> observe", status: .recommended),

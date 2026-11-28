@@ -196,8 +196,10 @@ allow-once redemption and owner confirmation require an owner check that
 
 **Stops.** Shell commands that match a blocking rule in an enabled rule
 pack, commands whose `package.json` scripts would run such a command, and
-(on macOS with the judge installed) pack-allowed commands the judge scores
-as risky.
+(on macOS with the judge installed, and only when `judge.mode` is `live` in
+`config.json`) pack-allowed commands the judge scores as risky. By default
+the judge runs in shadow: it scores and logs to `judge-log.jsonl`, and
+never stops or asks.
 
 **How.**
 
@@ -222,10 +224,14 @@ as risky.
   budget exhausted (1,500 ms CPU, 150 ms per search, 6 s wall) **[C40]**,
   core packs that failed to load **[C41]**. The policy gate never turns
   indeterminate into allow **[C42]**.
-- **Judge (macOS, source only).** It sees only pack-allowed calls, can
+- **Judge (macOS, source only).** Unless `judge.mode` is `live`, the judge
+  is in shadow (the default): every pack-allowed call it scores gets the
+  packs-only answer, in enforce and observe, on rvd and on the hook-local
+  path, and its verdict only reaches `judge-log.jsonl` with a `shadow`
+  note. Live, it sees only pack-allowed calls, can
   raise but never lower a verdict, and a judge block cannot be overridden
-  **[C43]**. While the judge loads, when its queue (12) is full, or when a
-  prediction fails, the call goes to review (ask) **[C44]**. It runs a local
+  **[C43]**. While a live judge loads, when its queue (12) is full, or when
+  a prediction fails, the call goes to review (ask) **[C44]**. It runs a local
   CoreML model; no networking code was found in the judge module **[C23]**.
 - **Policy gate override ladder**: rebase recovery, pinned check,
   allowlist, allow-once, contained delete (only `rm -rf` variants at the
@@ -270,8 +276,10 @@ as risky.
   dynamic remote command; a runner whose verb is a shell, an interpreter
   or a process or service control verb; an unresolved alias; an
   over-budget command) is sent to Terminal as
-  `observe.floor:unanalyzable`, never hard-denied; a deny stays the deny
-  **[C53]**. A command proven to
+  `observe.floor:unanalyzable`, never hard-denied; a deny stays the deny,
+  except a deny observe only watches (`out-of-repo-write`,
+  `unresolved-path`, `unwrap-limited`), which becomes
+  `observe.floor:unanalyzable` too **[C53]**. A command proven to
   only read a wiring file is observed **[C53]**. These floors are lexical:
   code the agent can already run as the user can stop `rvd`, after which
   observe steps aside (below).
@@ -686,9 +694,9 @@ gives the hook no signal for auto-run, background agents or
 | `rvd` fails its identity check, sends a malformed reply, or skews in major version; hook input invalid | Deny **[C153]** | Deny |
 | `rvd` exceeds its own 7 s budget | Side effects attempted after 7 s are skipped and the reply becomes a timeout deny, unless an allow-once grant was already spent (its allow is sent); a slow reply that attempted no side effect is returned as computed **[C156]** | Same |
 | Pattern budget exhausted, command over 64 KiB, core packs missing | Indeterminate (not overridable) **[C39] [C40] [C41]** | Same |
-| Judge loading, queue full, or prediction failed (macOS) | Ask **[C44]** | Recorded as observed |
+| Judge loading, queue full, or prediction failed (macOS) | With `judge.mode` `live`: ask **[C44]**. In shadow (the default): packs-only, logged | Live: recorded as observed. Shadow: packs-only, logged |
 | Judge bundle dir absent; Linux | Packs-only evaluation, not fail-closed **[C50]** | Same |
-| Judge bundle present but unloadable (macOS) | Review (`judge-refused`) | Recorded as observed |
+| Judge bundle present but unloadable (macOS) | With `judge.mode` `live`: review (`judge-refused`). In shadow: packs-only, logged | Live: recorded as observed. Shadow: packs-only, logged |
 | Audit append fails: deny | Deny stands; its record is lost; one stderr line per kind per minute **[C157]** | — |
 | Audit append fails: override (allow-once, allowlist, rebase recovery, contained delete) | Override not applied; command stays denied **[C158]** | — |
 | Audit append fails: owner approval | Approval refused; no grant **[C62]** | — |
@@ -730,6 +738,7 @@ evaluation **[C48]**.
 | Allow-once rows | store a redacted command and the cwd **[C171]** | as JSONL stores |
 | Pending approvals | store the full proposed action **[C172]** | as JSONL stores |
 | Denial ledger `blocks.jsonl` | timestamp, host, tool, rule, category, path, observed; no argv; 200 rows or 7 days (the file may hold up to 50 more rows between rewrites; `rv blocks` reads at most 200); on unless `blocks.enabled` is false **[C173]** | as JSONL stores |
+| Decision log `decisions/<yyyy-mm-dd>.jsonl` | every hook decision rvd answers (allowed, denied, refused): time, host, tool, the command with credential-shaped tokens and the home directory redacted and cut at 512 bytes, or a file tool's redacted path, the cwd with home as `~`, the rule for a deny, the host session id. Written by rvd after its reply, and by the hook-local evaluator for calls it answers itself (within its write deadline, waiting at most 50 ms for the lock); one file per UTC day, files older than 7 days deleted; never forwarded or chained; on unless `decisions.enabled` is false | 0600 files in a 0700 directory, appended through the JSONL append log; read back owner-only |
 | Judge log `judge-log.jsonl` (macOS) | scores and a 16-hex-character unsalted SHA-256 prefix of the command **[C174]** | no explicit mode |
 | Analytics identity and counters | `~/.config/rv/analytics-*` **[C175]** | no explicit mode |
 | `rvd` log | rvd's stderr. When stderr is discarded (launchd on macOS) it goes to `~/Library/Logs/rv/rvd.log` (macOS) or `~/.local/state/rv/rvd.log` (Linux); under systemd it stays on stderr, so the journal keeps it **[C176]** | file: 0700 dir, 0600 file, symlinks refused |

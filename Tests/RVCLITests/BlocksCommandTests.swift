@@ -3,6 +3,7 @@ import Testing
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVTheme
 @testable import RVCLI
 
 struct BlocksCommandTests {
@@ -92,9 +93,9 @@ struct BlocksCommandTests {
         )
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("Z  observed  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
-        #expect(lines[1].contains("observed") == false)
-        #expect(lines[1].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[0].hasSuffix("Z  ◐ Would stop  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[1].contains("Watched") == false)
+        #expect(lines[1].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
     }
 
     /// A row that names its agent session prints it last (`session=<id>`)
@@ -115,17 +116,18 @@ struct BlocksCommandTests {
         ledger.append(record(0, session: "0b7f3c2e-1d2a"), now: now)
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git    session=0b7f3c2e-1d2a"))
-        #expect(lines[1].hasSuffix("Z  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[0].hasSuffix("Z  ✕ Stopped  claude  Bash  core.git:reset-hard  core.git    session=0b7f3c2e-1d2a"))
+        #expect(lines[1].hasSuffix("Z  ✕ Stopped  claude  Bash  core.git:reset-hard  core.git  "))
         let json = try BlocksRun.list(home: home, json: true, now: now)
         let rows = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
         #expect(rows[0]["session"] as? String == "0b7f3c2e-1d2a")
         #expect(rows[1]["session"] == nil)
     }
 
-    /// Observed would-ask rows (enforcement would have asked a human) say
-    /// `observed ask`; would-deny rows keep printing `observed`. JSON
-    /// carries `would_be` on observed rows only.
+    /// Every watch-mode row says `◐ Would stop`, a would-ask one too (a
+    /// hook cannot pause, so guard mode stops the agent either way); real
+    /// stops say `✕ Stopped`, so the two never look alike. JSON carries
+    /// `would_be` (ask or deny) on observed rows only.
     @Test func observedWouldAskRowsAreDistinct() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
@@ -148,9 +150,9 @@ struct BlocksCommandTests {
         ledger.append(record(0, .claude, observed: true, wouldBe: .ask), now: now)
         let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 3)
-        #expect(lines[0].hasSuffix("Z  observed ask  claude  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[1].hasSuffix("Z  observed  codex  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[2].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[0].hasSuffix("Z  ◐ Would stop  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[1].hasSuffix("Z  ◐ Would stop  codex  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[2].hasSuffix("Z  ✕ Stopped  cursor  Bash  core.git:reset-hard  core.git  "))
         let json = try BlocksRun.list(home: home, json: true, now: now)
         let rows = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
@@ -161,6 +163,18 @@ struct BlocksCommandTests {
         #expect(rows[1]["would_be"] as? String == "deny")
         #expect(rows[2]["would_be"] == nil)
         #expect(rows[2]["observed"] == nil)
+
+        // Colour rule: on a colour terminal only the glyph takes ink
+        // (amber ◐, red ✕); the default (piped) palette stays plain.
+        let colour = Palette(for: ColorCapability(colorsEnabled: true))
+        let painted = try BlocksRun.list(home: home, json: false, now: now, palette: colour)
+            .split(separator: "\n").map(String.init)
+        #expect(painted[0].hasSuffix("Z  \u{1B}[1;33m◐\u{1B}[0m Would stop  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(painted[1].hasSuffix("Z  \u{1B}[1;33m◐\u{1B}[0m Would stop  codex  Bash  core.git:reset-hard  core.git  "))
+        #expect(painted[2].hasSuffix("Z  \u{1B}[1;31m✕\u{1B}[0m Stopped  cursor  Bash  core.git:reset-hard  core.git  "))
+        let plain = try BlocksRun.list(home: home, json: false, now: now, palette: colorOffPalette)
+        #expect(!plain.contains("\u{1B}"))
+        #expect(plain == (try BlocksRun.list(home: home, json: false, now: now)))
     }
 
     @Test func fileToolPathEscapesControls() throws {

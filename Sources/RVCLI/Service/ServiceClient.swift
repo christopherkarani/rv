@@ -5,6 +5,9 @@ import RVHooks
 import RVIPC
 import RVPolicy
 import RVService
+#if canImport(XPC)
+import RVXPC
+#endif
 
 public struct RoutedEvaluation: Sendable, Equatable {
     public let result: EvaluationResult
@@ -25,6 +28,10 @@ public struct ServiceClient: Sendable {
     private let store: AllowOnceStore
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
+    /// Whose name a daemon-down stop's `who` line asks (B1): this account's
+    /// passwd first name. Tests set `.unknown` so a stop never carries the
+    /// test machine's account name.
+    package var stopOwner: OwnerName = .current
 
 #if canImport(XPC)
     public init(
@@ -426,14 +433,15 @@ public struct ServiceClient: Sendable {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
             // Only an absent daemon; an explicit RV_HOOK_WHEN_DOWN=deny wins.
             guard whenDown == .ask, failure == .unreachable, ownerObserves(host) else {
-                return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
+                return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, owner: stopOwner)
             }
             // ... and only when rvd never ran here or announced its restart:
             // a stopped or crashed rvd keeps the ask/deny fallback.
             guard rvdStateAllowsObserve() else {
-                return HookDaemonFallback.wire(host: host, failure: .stopped, mode: whenDown)
+                return HookDaemonFallback.wire(host: host, failure: .stopped, mode: whenDown, owner: stopOwner)
             }
-            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: true)
+            return HookDaemonFallback.wire(
+                host: host, failure: failure, mode: whenDown, ownerObserves: true, owner: stopOwner)
         }
         guard let transport else {
             return unavailable(.connection)

@@ -25,7 +25,7 @@ import RVDomain
     #expect(json["decision"] as? String == "deny")
     #expect(json["reason"] as? String == resetHardHostDeny)
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == ownTerminalLine())
     #expect(wire.exitCode == 0)
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
@@ -36,7 +36,7 @@ import RVDomain
     let short = codec.encodeDeny(reason: resetHardHostDeny, rule: nil, next: .none)
     #expect(
         short.stdout
-            == "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\"}\n"
+            == "{\"decision\":\"deny\",\"reason\":\(jsonQuoted(resetHardHostDeny))}\n"
     )
 
     let withVoice = codec.encodeDeny(
@@ -46,7 +46,7 @@ import RVDomain
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(withVoice.stdout.utf8)) as? [String: Any])
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] as? String == ttyUnlockHint)
+    #expect(json["next"] as? String == ownTerminalLine())
     #expect(withVoice.stdout.contains("core.git:reset-hard") == false)
 
     let code = try mintedUnlock()
@@ -55,7 +55,7 @@ import RVDomain
     #expect(mintedJSON["next"] as? String == unlockLine(for: code))
 }
 
-@Test func hookWire_invalidUnlockCodeOmitsNext() throws {
+@Test func hookWire_invalidUnlockCodeOffersNoCode() throws {
     let result = EvaluationResult(
         outcome: .deny(
             Deny(
@@ -73,7 +73,7 @@ import RVDomain
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == ownTerminalLine())
     #expect(json["reason"] as? String == resetHardHostDeny)
     #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
 }
@@ -142,7 +142,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
         #expect(json["user_message"] as? String == resetHardHostDeny)
-        #expect(json["agent_message"] as? String == cursorAgentStopLine)
+        #expect(json["agent_message"] as? String == resetHardHostDeny)
         #expect(json["permissionDecision"] == nil)
         #expect(json["hookSpecificOutput"] == nil)
         #expect(json["decision"] == nil)
@@ -166,7 +166,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")
         #expect(json["reason"] as? String == resetHardHostDeny)
-        #expect(json["next"] == nil)
+        #expect(json["next"] as? String == ownTerminalLine())
     }
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
@@ -264,7 +264,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains(incompleteEvalSentence))
+    #expect(wire.stdout.contains(indeterminateStopWhy(.commandTooLarge)))
     #expect(wire.stdout.contains("core.git") == false)
     #expect(wire.stdout.contains("\"remediation\"") == false)
 }
@@ -279,9 +279,9 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let object = try JSONSerialization.jsonObject(with: Data(wire.stdout.utf8))
     let json = try #require(object as? [String: Any])
     #expect(json["decision"] as? String == "deny")
-    #expect(json["reason"] as? String == incompleteEvalSentence)
+    #expect(json["reason"] as? String == indeterminateStopNotice(.commandTooLarge, command: ShellCommand(rawValue: "x")).text)
     #expect(json["rule"] == nil)
-    #expect(json["next"] == nil)
+    #expect(json["next"] as? String == ownTerminalLine())
 }
 
 @Test func hookWire_denyAndIndeterminateCallEncodeDeny() {
@@ -312,7 +312,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     )
     #expect(incompleteWire.stdout == "spy\n")
     #expect(incompleteCodec.denyCalls.count == 1)
-    #expect(incompleteCodec.denyCalls[0].reason == incompleteEvalSentence)
+    #expect(incompleteCodec.denyCalls[0].reason == indeterminateStopNotice(.commandTooLarge, command: ShellCommand(rawValue: "x")).text)
     #expect(incompleteCodec.denyCalls[0].rule == nil)
     #expect(incompleteCodec.denyCalls[0].next == .none)
 }
@@ -328,7 +328,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     )
     #expect(spy.denyCalls.count == 1)
     #expect(spy.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
-    #expect(spy.denyCalls[0].reason.contains(approvalPendingLine))
+    #expect(spy.denyCalls[0].reason.contains("\nwho     ask "))
 }
 
 @Test func hookWire_mintedUnlockCodePassesTypedNext() throws {
@@ -467,7 +467,7 @@ private final class EncodeDoorSpy: HostCodec {
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
     #expect(spy.denyReasons.count == 1)
-    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
+    #expect(spy.denyReasons.first?.contains("\nwho     ask ") == true)
 }
 
 @Test func hookWire_boundMandatoryHumanClaudeEncodesAskDeny() {
@@ -488,7 +488,7 @@ private final class EncodeDoorSpy: HostCodec {
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
     #expect(spy.denyReasons.count == 1)
-    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
+    #expect(spy.denyReasons.first?.contains("\nwho     ask ") == true)
 }
 
 @Test func hookWire_unlockablePackDenyWithCwdEncodesAskDeny() {
@@ -506,7 +506,7 @@ private final class EncodeDoorSpy: HostCodec {
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
     #expect(spy.denyReasons.count == 1)
-    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
+    #expect(spy.denyReasons.first?.contains("\nwho     ask ") == true)
 }
 
 @Test func hookWire_convenienceIsFirstCallOnly() {
@@ -524,7 +524,7 @@ private final class EncodeDoorSpy: HostCodec {
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
     #expect(spy.denyReasons.count == 1)
-    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
+    #expect(spy.denyReasons.first?.contains("\nwho     ask ") == true)
     // hookWire(..., afterSpend: true) does not compile.
 }
 
@@ -581,7 +581,7 @@ private final class EncodeDoorSpy: HostCodec {
         intent: intent
     )
     #expect(claude.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(claude.stdout.contains(expected))
+    #expect(claude.stdout.contains(jsonQuoted(expected)))
     #expect(claude.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 
     let codex = hookWire(
@@ -605,7 +605,7 @@ private final class EncodeDoorSpy: HostCodec {
     let cursorJSON = try #require(JSONSerialization.jsonObject(with: Data(cursor.stdout.utf8)) as? [String: Any])
     #expect(cursorJSON["permission"] as? String == "deny")
     #expect(cursorJSON["user_message"] as? String == expected)
-    #expect(cursorJSON["agent_message"] as? String == cursorAgentStopLine)
+    #expect(cursorJSON["agent_message"] as? String == expected)
     #expect(cursor.exitCode == 0)
 }
 
@@ -624,7 +624,7 @@ private final class EncodeDoorSpy: HostCodec {
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
     #expect(allowOnceUnlockCode(in: wire.stdout) == code)
-    #expect(wire.stdout.contains(approvalPendingLine))
+    #expect(wire.stdout.contains("\\nwho     ask "))
 }
 
 @Test func hookWire_firstCallIntentAskEncodesAskDenyOnPackDeny() {
@@ -642,7 +642,7 @@ private final class EncodeDoorSpy: HostCodec {
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
     #expect(spy.denyReasons.count == 1)
-    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
+    #expect(spy.denyReasons.first?.contains("\nwho     ask ") == true)
 }
 
 @Test func hookWire_firstCallIntentDenyDoesNotAskOnSpendablePackDeny() {

@@ -13,12 +13,14 @@ public enum HookWireIntent: Sendable, Equatable {
     )
 }
 
-/// Returns the host wire for `intent`.
+/// Returns the host wire for `intent`, in `voice` (owner name and pack
+/// advice; `.plain` says "your user" and offers no safer command).
 public func hookWire(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: any HostCodec,
-    intent: HookWireIntent
+    intent: HookWireIntent,
+    voice: StopVoice = .plain
 ) -> HookWire {
     switch intent {
     case .firstCall(let verdict, let unlockCode, let askRecorded):
@@ -28,7 +30,8 @@ public func hookWire(
             using: codec,
             verdict: verdict,
             unlockCode: unlockCode,
-            askRecorded: askRecorded
+            askRecorded: askRecorded,
+            voice: voice
         )
     }
 }
@@ -38,13 +41,15 @@ public func hookWire(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: any HostCodec,
-    cwd: WorkingDirectory? = nil
+    cwd: WorkingDirectory? = nil,
+    voice: StopVoice = .plain
 ) -> HookWire {
     hookWire(
         from: result,
         command: command,
         using: codec,
-        intent: firstCallIntent(from: result, cwd: cwd)
+        intent: firstCallIntent(from: result, cwd: cwd),
+        voice: voice
     )
 }
 
@@ -62,7 +67,8 @@ private func encodeFirstCall(
     using codec: any HostCodec,
     verdict: HostAskVerdict,
     unlockCode: AllowOnceUnlockMint?,
-    askRecorded: Bool
+    askRecorded: Bool,
+    voice: StopVoice
 ) -> HookWire {
     switch verdict {
     case .allow:
@@ -73,85 +79,112 @@ private func encodeFirstCall(
                 from: result,
                 command: command,
                 unlockCode: unlockCode,
-                askRecorded: askRecorded
+                askRecorded: askRecorded,
+                voice: voice
             )
         )
     case .deny:
         return codec.encodeDeny(
-            denyPresentation(from: result, command: command, unlockCode: unlockCode)
+            denyPresentation(from: result, command: command, unlockCode: unlockCode, voice: voice)
         )
     }
 }
 
 /// Composes the live evaluated deny. An evaluated allow or indeterminate
 /// reaching deny dispatch is an incomplete evaluation, so it renders the
-/// incomplete sentence, never allow (REQ-T4).
+/// incomplete stop, never allow (REQ-T4).
 func denyPresentation(
     from result: EvaluationResult,
     command: ShellCommand,
-    unlockCode: AllowOnceUnlockMint?
+    unlockCode: AllowOnceUnlockMint?,
+    voice: StopVoice = .plain
 ) -> HookDenyPresentation {
     switch result.decision {
     case .allow:
-        return HookDenyPresentation(reason: incompleteEvalSentence)
+        return incompletePresentation(nil, command: command, voice: voice)
     case .indeterminate(let reason):
-        return HookDenyPresentation(reason: indeterminateSentence(reason))
+        return incompletePresentation(reason, command: command, voice: voice)
     case .deny(let deny):
+        let notice = stopNotice(command: command, deny: deny, kind: .deny, unlock: unlockCode, voice: voice)
         return HookDenyPresentation(
-            reason: hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
+            reason: notice.text,
             rule: deny.ruleID,
             next: unlockHookVoiceNext(unlockCode),
-            matched: denyMatch(from: result)
+            matched: denyMatch(from: result),
+            nextText: notice.who
         )
     }
 }
 
-/// Composes the ask-denial: same deny content plus the approval-pending
-/// guidance. The policy verdict stays ASK; only the wire renders deny
-/// because no host can pause for a human. The TTY unlock line still
-/// applies, so a minted code and the RVOperatorUI row are offered
-/// together. The guidance joins AFTER `hostDenyLine`: annotating the
-/// reason would lose it to the two-sentence truncation on multi-sentence
-/// reasons. When the pending row failed to record, the guidance and the
-/// ask agent text say so instead of promising an approval that cannot
-/// exist (M-25).
+/// Composes the ask-denial: the same stop, with one `who`. The policy
+/// verdict stays ASK; only the wire renders deny because no host can pause
+/// for a human. A minted code is the one step offered (the RVOperatorUI
+/// row exists too, and the owner sees it there); with no code, a recorded
+/// row on macOS names the RV app, and a row that failed to record (M-25)
+/// promises nothing and sends the owner to their own terminal.
 func askDenyPresentation(
     from result: EvaluationResult,
     command: ShellCommand,
     unlockCode: AllowOnceUnlockMint?,
-    askRecorded: Bool
+    askRecorded: Bool,
+    voice: StopVoice = .plain
 ) -> HookDenyPresentation {
     switch result.decision {
-    case .allow, .indeterminate:
-        return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .allow:
+        return incompletePresentation(nil, command: command, voice: voice)
+    case .indeterminate(let reason):
+        return incompletePresentation(reason, command: command, voice: voice)
     case .deny(let deny):
-        let line =
-            "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
+        let notice = stopNotice(
+            command: command, deny: deny, kind: .ask(recorded: askRecorded), unlock: unlockCode, voice: voice)
         return HookDenyPresentation(
-            reason: line,
+            reason: notice.text,
             rule: deny.ruleID,
             next: unlockHookVoiceNext(unlockCode),
             matched: denyMatch(from: result),
-            agentText: cursorAgentAskMessage(recorded: askRecorded)
+            nextText: notice.who
         )
     }
 }
 
 /// Composes the file-tool deny, or `nil` when the file result allows —
 /// file allow stays allow, unlike evaluated allow (REQ-T4).
-func fileDenyPresentation(from result: EvaluationResult) -> HookDenyPresentation? {
+func fileDenyPresentation(
+    from result: EvaluationResult,
+    path: FileToolPath? = nil,
+    voice: StopVoice = .plain
+) -> HookDenyPresentation? {
     switch result.decision {
     case .allow:
         return nil
-    case .indeterminate:
-        return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .indeterminate(let reason):
+        let notice = indeterminateStopNotice(reason, command: nil, voice: voice)
+        return HookDenyPresentation(reason: noticeText(notice, path: path), nextText: notice.who)
     case .deny(let deny):
+        let notice = fileStopNotice(path: path, deny: deny, voice: voice)
         return HookDenyPresentation(
-            reason: hostFileDenyLine(reason: deny.reason),
+            reason: notice.text,
             rule: deny.ruleID,
-            matched: denyMatch(from: result)
+            matched: denyMatch(from: result),
+            nextText: notice.who
         )
     }
+}
+
+private func noticeText(_ notice: StopNotice, path: FileToolPath?) -> String {
+    var notice = notice
+    notice.subject = path.map(hookDenyPathPreview)
+    return notice.text
+}
+
+/// An unfinished evaluation: the indeterminate stop, never an allow.
+private func incompletePresentation(
+    _ reason: IndeterminateReason?,
+    command: ShellCommand,
+    voice: StopVoice
+) -> HookDenyPresentation {
+    let notice = indeterminateStopNotice(reason, command: command, voice: voice)
+    return HookDenyPresentation(reason: notice.text, nextText: notice.who)
 }
 
 private func denyMatch(from result: EvaluationResult) -> RuleMatch? {

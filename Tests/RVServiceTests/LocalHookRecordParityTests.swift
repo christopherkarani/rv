@@ -48,12 +48,14 @@ struct LocalHookRecordParityTests {
         #expect(shellFinals > 50)
 
         for name in Self.records {
-            let mine = Self.text(name, local.home)
+            // Each call's id (`DecisionStamp`) is fresh on each side; it
+            // must be there on both, so it is compared as a shape.
+            let mine = Self.idsMasked(Self.text(name, local.home)
                 .replacingOccurrences(of: Self.jsonEscaped(local.home.path), with: "<home>")
-                .replacingOccurrences(of: local.home.path, with: "<home>")
-            let theirs = Self.text(name, rvd.home)
+                .replacingOccurrences(of: local.home.path, with: "<home>"))
+            let theirs = Self.idsMasked(Self.text(name, rvd.home)
                 .replacingOccurrences(of: Self.jsonEscaped(rvd.home.path), with: "<home>")
-                .replacingOccurrences(of: rvd.home.path, with: "<home>")
+                .replacingOccurrences(of: rvd.home.path, with: "<home>"))
             let first = zip(mine.split(separator: "\n"), theirs.split(separator: "\n")).first { $0 != $1 }
             #expect(mine == theirs, """
                 \(name) differs (\(mine.split(separator: "\n").count) local rows, \
@@ -82,10 +84,15 @@ struct LocalHookRecordParityTests {
         #expect(try Self.counts(local.home) == ingested)
     }
 
+    /// `"id":"a7c835000001"` → `"id":"<id>"`.
+    static func idsMasked(_ text: String) -> String {
+        text.replacing(/"id":"[0-9a-f]{12}"/, with: #""id":"<id>""#)
+    }
+
     @Test func analyticsOptOutSpoolsNoDecision() async throws {
         let fixture = try LocalHookFixture()
         let config = RVPolicyPaths.configDirectory(home: fixture.home)
-        try Data(#"{"analytics":{"enabled":false}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
+        try Data(#"{"judge":{"mode":"live"},"analytics":{"enabled":false}}"#.utf8).write(to: config.appendingPathComponent("config.json"))
         let outcome = await fixture.decider.decide(host: .claude, stdin: claudeBash("ls", cwd: fixture.workspace))
         guard case .final = outcome else {
             Issue.record("ls must be decided locally, got \(outcome)")

@@ -1,28 +1,115 @@
 import RVDomain
 
-/// Label on the observe-mode line of `rv test` / `rv explain`.
-package let observeNoteLabel = "Observe mode"
+/// Label on the watch-mode (`guard.mode` observe) line of `rv test` /
+/// `rv explain`.
+package let observeNoteLabel = "Watch mode"
 
-/// Robot `mode` / `effective` when observe let a would-be verdict run.
+/// Robot `mode` / `effective` when observe mode was read for a verdict
+/// that is not an allow: `effective` is `allow` when observe let it run,
+/// `deny` when observe still stopped it.
 package let observeRobotMode = "observe"
 package let observeRobotEffective = "allow"
+package let observeRobotStoppedEffective = "deny"
 
-/// What observe did with a would-be verdict, or nil when enforce would
-/// have allowed it too. `authorization` is enforce's projection of that
-/// verdict (`HookAuthorization.project`), the same one the observed
-/// denial row's `would_be` comes from: `.ask` reads "would ask", a pinned
-/// deny "would block". An indeterminate is never asked about.
-package func observeNote(for wouldBe: Decision, authorization: HookAuthorization) -> String? {
-    let tail = "It logs it and lets it run."
-    switch wouldBe {
+/// Verdict words shared by every watch-mode surface (`rv test`,
+/// `rv explain`, `rv blocks`), from the locked term cut (`✓ ran`,
+/// `◐ would stop`, `✕ stopped`): a real stop and a logged one never read
+/// alike. Everything watch mode logs and lets run says `wouldStopWords`,
+/// a would-be ask too (a hook cannot pause, so guard mode stops the agent
+/// either way); the note says whether guard mode would ask first. Only
+/// `rv explain`'s decision line says `stoppedInEveryModeWords`; a row or
+/// note says `stoppedWords`. Glyphs from `CommandVocabulary.Glyph`.
+package let stoppedWords = "\(CommandVocabulary.Glyph.stopped.rawValue) Stopped"
+package let stoppedInEveryModeWords = stoppedWords + ", in every mode"
+package let wouldStopWords = "\(CommandVocabulary.Glyph.watched.rawValue) Would stop"
+
+/// How observe mode treated a verdict that is not an allow.
+public enum ObserveOutcome: Sendable, Equatable {
+    /// Observe let the would-be verdict run; enforce would have authorized
+    /// it this way (`HookAuthorization.project`, the same projection the
+    /// observed denial row's `would_be` comes from).
+    case watched(HookAuthorization)
+    /// The observe floor kept it (catastrophic, or rv's own protection):
+    /// it did not run, in observe as in enforce.
+    case stopped
+    /// The observe floor stopped what enforce lets run (stopping rvd,
+    /// writing rv's install): without rvd an observe hook would let every
+    /// later call through, while enforce fails closed. Never "in every
+    /// mode".
+    case stoppedInObserve
+
+    /// It did not run.
+    package var isStop: Bool { self == .stopped || self == .stoppedInObserve }
+}
+
+/// The observe-mode line for a verdict, or nil when it is an allow (an
+/// allow under observe is byte-identical to enforce). Every watched
+/// verdict reads "would stop"; the note says "Guard mode would ask first"
+/// for `.watched(.ask)`. An indeterminate is never asked about. `leadingWords` false drops the
+/// verdict words, for a frame whose decision or result line already says
+/// them (`rv explain`, `rv test`); `rule` false drops the rule id too, for
+/// a result line that already names it.
+package func observeNote(
+    for verdict: Decision, outcome: ObserveOutcome, leadingWords: Bool = true, rule includesRule: Bool = true
+) -> String? {
+    let words = observeDecisionWords(for: outcome)
+    let rule: String
+    switch verdict {
     case .allow:
         return nil
     case .deny(let deny):
-        let rule = deny.ruleID.rawValue
-        return authorization == .ask
-            ? "rv would ask before it runs this (\(rule)). \(tail)"
-            : "rv would block this (\(rule)). \(tail)"
+        rule = includesRule ? " (\(deny.ruleID.rawValue))" : ""
     case .indeterminate:
-        return "rv would block this: it could not finish evaluating it. \(tail)"
+        rule = ""
+    }
+    let tail: String
+    switch (verdict, outcome) {
+    case (.indeterminate, .watched):
+        tail = ": rv could not finish evaluating it. It logs it and lets it run."
+    case (_, .watched):
+        tail = "\(rule). It logs it and lets it run."
+    case (.indeterminate, .stopped):
+        tail = ". Guard mode stops it too."
+    case (_, .stopped):
+        tail = "\(rule). \(stoppedTail)"
+    case (_, .stoppedInObserve):
+        tail = "\(rule). \(observeOnlyTail)"
+    }
+    guard leadingWords == false else { return words + tail }
+    switch (verdict, outcome) {
+    case (.indeterminate, .watched):
+        return "rv could not finish evaluating it. It logs it and lets it run."
+    case (_, .watched):
+        return "Guard mode would \(outcome == .watched(.ask) ? "ask first" : "stop it")\(rule). It logs it and lets it run."
+    case (.indeterminate, .stopped):
+        return "Guard mode stops it too."
+    case (_, .stopped):
+        // The rule sits with the verdict it decided, not after the list.
+        return "Guard mode stops it too\(rule). \(stoppedTail)"
+    case (_, .stoppedInObserve):
+        return "Guard mode lets it run: without rvd, every call asks first\(rule)."
     }
 }
+
+/// The verdict words under observe. `decisionLine`: `rv explain`'s
+/// decision line, the one place a stop says "in every mode".
+package func observeDecisionWords(for outcome: ObserveOutcome, decisionLine: Bool = false) -> String {
+    switch outcome {
+    case .watched:
+        wouldStopWords
+    case .stopped:
+        decisionLine ? stoppedInEveryModeWords : stoppedWords
+    case .stoppedInObserve:
+        stoppedWords
+    }
+}
+
+/// Exactly what observe always stops (`ObserveCatastrophe`, `ObserveFloor`).
+private let stoppedTail = "Watch mode always stops a disk wipe, rm -rf ~ or /, and rv's own files."
+/// A stop watch mode makes and guard mode does not (guard mode fails
+/// closed without rvd).
+private let observeOnlyTail = "rv keeps itself running while it watches."
+
+/// `rv explain`'s reason for a stop only observe makes.
+package let observeOnlyStopSentence =
+    "rv keeps itself running while it watches, so watch mode sends this to Terminal. Run it in Terminal."

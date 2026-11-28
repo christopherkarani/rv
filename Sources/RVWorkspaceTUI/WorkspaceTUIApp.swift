@@ -8,28 +8,38 @@ import SwiftTUICLI
 public enum WorkspaceTUILaunch {
     /// `background` must be detected before this call: SwiftTUI puts the
     /// terminal in raw mode and owns its input from here on.
+    /// `sessionsStarted` counts shell starts in this project's layout
+    /// directory, this one included (nil when unknown); the footer
+    /// teaches the keys while it is small.
     @MainActor
-    public static func run(_ model: WorkspaceTUIModel, background: TerminalBackground = .dark) async throws {
+    public static func run(
+        _ model: WorkspaceTUIModel, background: TerminalBackground = .dark, sessionsStarted: Int? = nil
+    ) async throws {
         model.startEventDelivery()
         defer {
             model.detachSession()
         }
-        try await TerminalRunner.run(WorkspaceShellApp(model: model, ink: WorkspaceInk(background: background)))
+        try await TerminalRunner.run(WorkspaceShellApp(
+            model: model, ink: WorkspaceInk(background: background),
+            teaching: WorkspaceFooter.teaches(sessionsStarted: sessionsStarted)))
     }
 }
 
 struct WorkspaceShellApp: App {
     private let model: WorkspaceTUIModel?
     private let ink: WorkspaceInk
+    private let teaching: Bool
 
     nonisolated init() {
         model = nil
         ink = WorkspaceInk(background: .dark)
+        teaching = true
     }
 
-    init(model: WorkspaceTUIModel, ink: WorkspaceInk) {
+    init(model: WorkspaceTUIModel, ink: WorkspaceInk, teaching: Bool) {
         self.model = model
         self.ink = ink
+        self.teaching = teaching
     }
 
     var body: some Scene {
@@ -37,6 +47,7 @@ struct WorkspaceShellApp: App {
             if let model {
                 WorkspaceShellView(model: model)
                     .environment(\.workspaceInk, ink)
+                    .environment(\.workspaceTeaching, teaching)
             } else {
                 Text("RV workspace is not connected")
             }
@@ -53,6 +64,7 @@ struct WorkspaceShellView: View {
     @State private var revision = 0
     @Environment(\.requestTermination) private var requestTermination
     @Environment(\.workspaceInk) private var ink
+    @Environment(\.workspaceTeaching) private var teaching
 
     var body: some View {
         let _ = revision
@@ -98,39 +110,35 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private func header(_ snapshot: WorkspaceTUISnapshot) -> some View {
-        let name = URL(fileURLWithPath: snapshot.project).lastPathComponent
         let terminalNeedsAttention = snapshot.terminal?.running == false
             || snapshot.terminal?.lease == .readOnly
             || snapshot.terminal?.overflowed == true
-        let indicatorColor: Color
-        if snapshot.connection == .disconnected {
-            indicatorColor = ink.danger
-        } else if terminalNeedsAttention {
-            indicatorColor = ink.attention
-        } else if snapshot.phase == "active", snapshot.protected {
-            indicatorColor = ink.ok
-        } else {
-            indicatorColor = ink.attention
-        }
-        let headerLabel = WorkspaceStatusLabel.header(
-            connection: snapshot.connection, terminalNeedsAttention: terminalNeedsAttention,
-            phase: snapshot.phase, protected: snapshot.protected)
-        HStack(spacing: 1) {
-            Text("RV  \(name)")
-                .bold()
+        let paneIDs = snapshot.view.activeTab?.tree.leafIDs ?? []
+        let agents = paneIDs.filter { id in
+            snapshot.view.panes[id].map {
+                WorkspaceStatusLabel.isAgent(WorkspacePaneChrome.title($0, terminal: snapshot.terminals[id]))
+            } ?? false
+        }.count
+        let header = WorkspaceHeader.make(
+            project: snapshot.project, connection: snapshot.connection,
+            terminalNeedsAttention: terminalNeedsAttention, phase: snapshot.phase,
+            protected: snapshot.protected, panes: paneIDs.count, agents: agents,
+            pending: snapshot.review.pendingCount)
+        // Healthy is grey; the right edge is the only place colour shows.
+        HStack(spacing: 0) {
+            Text("◆ ").foregroundStyle(ink.rv)
+            Text(header.name)
+                .foregroundStyle(ink.fg)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 0)
-            if let badge = WorkspaceReviewText.badge(snapshot.review) {
-                Text("⚑ \(badge)")
-                    .foregroundStyle(ink.attention)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-            }
-            Text("● \(headerLabel)")
-                .foregroundStyle(indicatorColor)
+            Text(header.words)
+                .foregroundStyle(ink.mute)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            Spacer(minLength: 1)
+            Text(header.edge.text)
+                .foregroundStyle(ink.color(header.edge.tone))
+                .lineLimit(1)
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity)
@@ -152,7 +160,7 @@ struct WorkspaceShellView: View {
                     snapshot.review, mode: snapshot.mode, now: Date(),
                     columns: columns, rows: rows)
                     .joined(separator: "\n"))
-                    .foregroundStyle(ink.attention)
+                    .foregroundStyle(ink.soft)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         } else {
@@ -174,30 +182,30 @@ struct WorkspaceShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             if snapshot.mode == .help {
                 Text(WorkspaceHelp.text)
-                    .foregroundStyle(ink.attention)
+                    .foregroundStyle(ink.soft)
             }
             if snapshot.mode == .launcher {
                 Text(launcherText(snapshot.launcher) + "    Esc close")
-                    .foregroundStyle(ink.attention)
+                    .foregroundStyle(ink.soft)
             }
             if case .runCommand(let input, let error) = snapshot.mode {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Run command: " + input).foregroundStyle(ink.attention).lineLimit(1)
+                    Text("Run command: " + input).foregroundStyle(ink.soft).lineLimit(1)
                     if let error {
-                        Text(error).foregroundStyle(ink.danger).lineLimit(1)
+                        Text(error).foregroundStyle(ink.stop).lineLimit(1)
                     }
-                    Text("Enter run · Esc launcher").foregroundStyle(ink.muted)
+                    Text("Enter run · Esc launcher").foregroundStyle(ink.mute)
                 }
             }
             if snapshot.mode == .resize {
                 Text(WorkspaceOverlayText.resizeHelp())
-                    .foregroundStyle(ink.attention)
+                    .foregroundStyle(ink.soft)
             }
             if case .scroll(let pane) = snapshot.mode {
                 Text(WorkspaceOverlayText.scrollStatus(
                     anchor: snapshot.scrollAnchors[pane] ?? 0, unread: false
                 ))
-                .foregroundStyle(ink.attention)
+                .foregroundStyle(ink.soft)
             }
             if case .navigator(let index) = snapshot.mode {
                 Text(WorkspaceOverlayText.navigatorRows(
@@ -205,14 +213,14 @@ struct WorkspaceShellView: View {
                     selected: index,
                     tabTitles: navigatorTabTitles(snapshot.view)
                 ).joined(separator: "\n"))
-                .foregroundStyle(ink.attention)
+                .foregroundStyle(ink.soft)
             }
             if case .confirmCancel(let pane) = snapshot.mode {
                 let title = snapshot.view.panes[pane].map {
                     WorkspacePaneChrome.title($0, terminal: snapshot.terminals[pane])
                 }
                 Text(WorkspaceOverlayText.confirmText(paneTitle: title))
-                    .foregroundStyle(ink.danger)
+                    .foregroundStyle(ink.stop)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -225,25 +233,22 @@ struct WorkspaceShellView: View {
             return "\(tab.id == snapshot.view.activeTabID ? "●" : "○") \(index + 1):\(String(title.prefix(12)))"
         }
         Text(tabs.isEmpty ? "No tabs" : tabs.joined(separator: "   "))
-            .foregroundStyle(ink.muted)
+            .foregroundStyle(ink.mute)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private func footer(_ snapshot: WorkspaceTUISnapshot) -> some View {
-        let count = snapshot.view.activeTab?.tree.leafCount ?? 0
-        let connection: String
-        if snapshot.connection == .disconnected {
-            connection = snapshot.reconnecting ? " · reconnecting…" : " · workspace disconnected · Enter retry"
-        } else {
-            connection = ""
-        }
         let hint = snapshot.feedback
             ?? WorkspaceOverlayText.modeHint(for: snapshot.mode)
-            ?? "\(snapshot.view.tabs.count) tabs · \(count) panes\(connection) · Ctrl-B ? help · Ctrl-B w runtimes"
+            ?? WorkspaceFooter.text(
+                tabs: snapshot.view.tabs.count, panes: snapshot.view.activeTab?.tree.leafCount ?? 0,
+                teaching: teaching, connection: snapshot.connection, reconnecting: snapshot.reconnecting)
         Text(hint)
-            .foregroundStyle(snapshot.feedback == nil ? ink.muted : ink.attention)
+            .foregroundStyle(snapshot.feedback == nil
+                ? (snapshot.connection == .disconnected ? ink.stop : ink.mute)
+                : ink.watch)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

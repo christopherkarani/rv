@@ -1,1 +1,1 @@
-{"decision":"deny","reason":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."}
+{"decision":"deny","reason":"✕ Stopped   git reset --hard (core.git/reset-hard)\nwhy     destroys uncommitted changes\nwho     ask your user to run it in their own terminal"}
