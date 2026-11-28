@@ -70,8 +70,7 @@ that key's API. The real value never reaches you or the transcript.
 
 ## Commands you may run
 
-These only read. If rv does not run where you are (for example inside a
-sandbox), quote them for the human instead.
+These only read. Where rv does not run (a sandbox), quote them for the human.
 
 - `rv why <command>` shows why rv allows or blocks a command (`rv explain` is the same command).
 - `rv egress pending` lists egress proposals waiting for review.

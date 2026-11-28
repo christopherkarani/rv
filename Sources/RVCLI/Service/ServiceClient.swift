@@ -557,48 +557,35 @@ public struct ServiceClient: Sendable {
     /// Probes rvd over the hook-consult session: the same daemon-identity
     /// rule hooks apply (admin manifest when installed, else the sibling
     /// `rvd` pin), so a healthy manifest-free install reads as running.
-    func diagnostics() async -> ServiceDiagnosticResult {
-        let localCorePacksReady = door.corePacksReady
-        switch await route() {
-        case .xpc(let transport, let serviceSemver):
+    ///
+    /// Compiling the packs in this process takes seconds, so it happens only
+    /// when rvd has no usable answer. A reachable rvd's own pack check speaks
+    /// for the fallback (ready only when it reports ok; a missing check is not ready): the same pack
+    /// files, and a version-skewed rvd never reaches this arm. `checkingLocalPacks: false` skips the compile on
+    /// every arm (bare `rv`, which never shows the fallback) and reports
+    /// the fallback as not ready.
+    func diagnostics(checkingLocalPacks: Bool = true) async -> ServiceDiagnosticResult {
+        let route = await route()
+        var snapshotFailure: (any Error)?
+        if case .xpc(let transport, _) = route {
             do {
                 let snapshot = try await send(DoctorSnapshotCall(), using: transport, hookConsult: true)
                 return .xpc(
                     snapshot: snapshot,
-                    localCorePacksReady: localCorePacksReady
-                )
-            } catch IPCCallError.identityMismatch {
-                return localDiagnostic(
-                    cause: .requestFailed(.invalidResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch IPCCallError.unexpectedResult {
-                return localDiagnostic(
-                    cause: .requestFailed(.unexpectedResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch let IPCCallError.service(error) {
-                if case .protocolSkew = error {
-                    return localDiagnostic(
-                        cause: .skew(.protocolMismatch),
-                        corePacksReady: localCorePacksReady,
-                        serviceSemver: serviceSemver
-                    )
-                }
-                return localDiagnostic(
-                    cause: .requestFailed(.service(error)),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
+                    localCorePacksReady: snapshot.checks.first { $0.id == .packs }?.status == .ok
                 )
             } catch {
-                return localDiagnostic(
-                    cause: .requestFailed(Self.diagnosticFailure(from: error)),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
+                snapshotFailure = error
             }
+        }
+        let localCorePacksReady = checkingLocalPacks && door.corePacksReady
+        switch route {
+        case .xpc(_, let serviceSemver):
+            return localDiagnostic(
+                cause: Self.snapshotFailureCause(snapshotFailure),
+                corePacksReady: localCorePacksReady,
+                serviceSemver: serviceSemver
+            )
         case .down:
             return localDiagnostic(cause: .down, corePacksReady: localCorePacksReady)
         case .skew(let reason, let serviceSemver):
@@ -612,6 +599,24 @@ public struct ServiceClient: Sendable {
                 cause: .requestFailed(failure),
                 corePacksReady: localCorePacksReady
             )
+        }
+    }
+
+    /// Why a reachable rvd's doctor snapshot failed.
+    private static func snapshotFailureCause(_ error: (any Error)?) -> ServiceFallbackCause {
+        switch error {
+        case IPCCallError.identityMismatch?:
+            .requestFailed(.invalidResponse)
+        case IPCCallError.unexpectedResult?:
+            .requestFailed(.unexpectedResponse)
+        case IPCCallError.service(.protocolSkew(_))?:
+            .skew(.protocolMismatch)
+        case IPCCallError.service(let service)?:
+            .requestFailed(.service(service))
+        case let error?:
+            .requestFailed(diagnosticFailure(from: error))
+        case nil:
+            .requestFailed(.unexpectedResponse)
         }
     }
 
