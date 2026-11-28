@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
+import RVTerm
 @testable import RVCLI
 
 /// H4 `rv pause 10m`: owner check, a visible countdown, back on its own,
@@ -75,7 +76,9 @@ struct PauseCommandTests {
     /// real seam fails closed without the owner.
     @Test func agentWithAPty_failsTheOwnerCheck_andNothingIsWritten() async throws {
         try await withHome { home, environment in
-            let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(stdinIsTTY: true)) {
+            // Both TTYs and no marker: the requester counts as at a terminal,
+            // so the real owner seam is what refuses.
+            let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(stdinIsTTY: true, stdoutIsTTY: true)) {
                 await PauseRun.pause(
                     for: 600, env: environment, requester: .live(), now: { Self.t0 },
                     authenticate: { try await CLIOwnerAuth.requireAuthenticated(reason: $0) })
@@ -133,6 +136,43 @@ struct PauseCommandTests {
         }
     }
 
+    /// An agent holding a pty keeps its marker, so it is never prompted.
+    @Test func agentWithAPtyAndItsMarker_isNeverPrompted() async throws {
+        try await withHome { home, environment in
+            let probe = OwnerProbe(allow: true)
+            let context = CLIProcess.Context(environment: ["CLAUDECODE": "1"], stdinIsTTY: true, stdoutIsTTY: true)
+            let outcome = await CLIProcess.$context.withValue(context) {
+                await PauseRun.pause(
+                    for: 600, env: environment, requester: .live(), now: { Self.t0 }, authenticate: probe.check)
+            }
+            #expect(outcome.exitCode == 77)
+            #expect(probe.summaries.isEmpty)
+            #expect(store(home).readGuardConfig()?.pause == nil)
+        }
+    }
+
+    /// Setup's rvd-down warning while paused says the pause does not hold.
+    @Test func setupWarning_whilePaused_saysHooksStillBlock() {
+        let text = SetupServiceWarning.pausedText(until: Self.t0.addingTimeInterval(600), timeZone: Self.utc)
+        #expect(text.contains("rv is paused (watching) until 14:22"))
+        #expect(text.contains("block or prompt on every command"))
+    }
+
+    @Test func term_whilePaused_isWatchingWithTheCountdown() async throws {
+        try await withHome { home, environment in
+            let now = Date()
+            try store(home).savePause(GuardWindow(startingAt: now.addingTimeInterval(-60), lasting: 600))
+            let sources = TermSources(home: environment.home)
+            #expect(sources.mode(now: now) == .watching)
+            var state = TermState(now: now, mode: sources.mode(now: now))
+            state.pausedUntil = sources.pausedUntil(now: now)
+            let top = TermScreen.render(state, width: 80, height: 24)[0].map(\.text).joined()
+            #expect(top.contains(" ◐ paused · 9 min "))
+            #expect(sources.mode(now: now.addingTimeInterval(600)) == .guarding)
+            #expect(sources.pausedUntil(now: now.addingTimeInterval(600)) == nil)
+        }
+    }
+
     @Test func ownerRefusesTheCheck_nothingIsPaused() async throws {
         try await withHome { home, environment in
             let probe = OwnerProbe(allow: false)
@@ -155,6 +195,14 @@ struct PauseCommandTests {
             #expect(end.stdout == "✓ ◆ rv is back.\n")
             #expect(store(home).readGuardConfig()?.pause == nil)
             #expect(PauseRun.end(environment).stdout == "◆ rv is guarding.\n")
+            #expect(PauseRun.end(environment, json: true).stdout == #"{"paused":false,"schema":"rv.pause.v1"}"# + "\n")
+            _ = await PauseRun.pause(
+                for: 600, env: environment, requester: Self.owner, now: { Self.t0 },
+                authenticate: OwnerProbe(allow: true).check)
+            let endJSON = PauseRun.end(environment, json: true)
+            #expect(endJSON.exitCode == 0)
+            #expect(endJSON.stdout == #"{"paused":false,"schema":"rv.pause.v1"}"# + "\n")
+            #expect(store(home).readGuardConfig()?.pause == nil)
             #expect(PauseRun.status(environment, json: false, now: Self.t0).stdout == """
                 ◆ rv is guarding.
                   To pause it for ten minutes, you type:

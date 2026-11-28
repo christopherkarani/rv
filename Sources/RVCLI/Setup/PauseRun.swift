@@ -142,13 +142,14 @@ enum PauseRun {
 
     /// `rv pause --end`: back now. A tightening, so no owner check; any
     /// pause record, open or not, is removed.
-    static func end(_ env: SetupEnvironment, now: Date = Date()) -> SetupOutcome {
+    static func end(_ env: SetupEnvironment, json: Bool = false, now: Date = Date()) -> SetupOutcome {
+        let back = (try? RobotJSON.encode(StatusDocument(paused: false))).map { $0 + "\n" } ?? ""
         let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: env.home))
         guard let config = store.readGuardConfig() else {
             return failure(ConfigUnreadableRefusal.message(prefix: "rv pause failed"), exitCode: ConfigUnreadableRefusal.exitCode)
         }
         guard config.pause != nil else {
-            return SetupOutcome(stdout: "\(rvGlyph) rv is guarding.\n", exitCode: 0)
+            return SetupOutcome(stdout: json ? back : "\(rvGlyph) rv is guarding.\n", exitCode: 0)
         }
         do {
             try ConfigChangeAudit.$authorization.withValue(nil) {
@@ -157,6 +158,7 @@ enum PauseRun {
         } catch {
             return writeFailure(error)
         }
+        if json { return SetupOutcome(stdout: back, exitCode: 0) }
         return SetupOutcome(stdout: "\(CommandVocabulary.Glyph.done.rawValue) \(rvGlyph) rv is back.\n", exitCode: 0)
     }
 

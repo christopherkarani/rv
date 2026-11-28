@@ -32,7 +32,7 @@ struct PauseCommand: AsyncParsableCommand {
             try CommandContext.failHomeMissing(command: "pause")
         }
         if end {
-            try CeremonyCLI.emit(PauseRun.end(env))
+            try CeremonyCLI.emit(PauseRun.end(env, json: format.json || format.robot))
         }
         guard let duration, let seconds = PauseRun.duration(duration) else {
             try CeremonyCLI.emit(PauseRun.status(env, json: format.json || format.robot))

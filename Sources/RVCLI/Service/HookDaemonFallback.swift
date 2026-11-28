@@ -213,7 +213,13 @@ enum HookObserveFallback {
               info.st_size >= 0, info.st_size <= configMaxBytes,
               let data = try? handle.readToEnd(), data.count == Int(info.st_size)
         else { return false }
-        return GuardModeResolution.resolve(GuardConfig(jsonData: data), host: host, environment: [:]) == .observe
+        // A pause never steps the fallback aside: with rvd down there is no
+        // ObserveFloor, so an agent could extend the pause or edit rv's
+        // config unchecked. Agents' temporary blocks still apply (they only
+        // tighten). rv.c ignores both and reads the stored mode.
+        var config = GuardConfig(jsonData: data)
+        config.pause = nil
+        return GuardModeResolution.resolve(config, host: host, environment: [:]) == .observe
     }
 
     /// Twin of rv.c's `rvd_state_allows_observe`: the rvd state marker under

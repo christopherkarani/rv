@@ -19,6 +19,8 @@ public enum GlancePosture: Sendable, Equatable {
     case guarding
     /// The hosts in observe mode; empty means the machine-wide mode is observe.
     case watching([HookHost])
+    /// The owner's `rv pause`: every host watched until `until`.
+    case paused(until: Date)
 
     /// The posture `config.json` asks for. A file rvd cannot read is enforce
     /// for rvd, so it is guarding here too; a missing file (nil) is guarding.
@@ -30,8 +32,13 @@ public enum GlancePosture: Sendable, Equatable {
         self.init(config: GuardConfig(jsonData: configJSON))
     }
 
-    /// The posture a decoded config asks for (`.empty` is guarding).
-    public init(config: GuardConfig) {
+    /// The posture a decoded config asks for (`.empty` is guarding). An
+    /// open `rv pause` outranks the stored modes.
+    public init(config: GuardConfig, now: Date = Date()) {
+        if let pause = config.activePause(at: now) {
+            self = .paused(until: pause.until)
+            return
+        }
         let observing = config.hosts.filter { $0.value == .observe }.map(\.key)
             .sorted { $0.rawValue < $1.rawValue }
         if !observing.isEmpty {
@@ -105,8 +112,14 @@ public struct GlanceState: Sendable, Equatable {
     public var lastStop: GlanceStop?
     /// Running boxes. rvd has no box status yet, so this stays 0 until it does.
     public var boxesRunning = 0
-    /// rv has no pause yet, so this stays nil until it does.
+    /// When a pause ends, if set directly; `pauseEnd` also reads the
+    /// posture's `rv pause`.
     public var pausedUntil: Date?
+    /// When the current pause ends: the posture's, else `pausedUntil`.
+    public var pauseEnd: Date? {
+        if case .paused(let until) = posture { return until }
+        return pausedUntil
+    }
     /// Events rvd dropped before this reader saw them.
     public var missed: UInt64 = 0
 
@@ -131,7 +144,7 @@ public struct GlanceState: Sendable, Equatable {
             return .justStopped
         }
         if boxesRunning > 0 { return .boxed }
-        if let pausedUntil, pausedUntil > now { return .paused }
+        if let pauseEnd, pauseEnd > now { return .paused }
         if case .watching = posture { return .watching }
         return .guarding
     }
