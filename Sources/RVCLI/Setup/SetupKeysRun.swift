@@ -50,53 +50,51 @@ enum SetupKeysRun {
         secrets: SecretsEnvironment,
         palette: Palette,
         terminal: KeysTerminal = .current(),
+        style: KeysPromptStyle = .platform,
         confirmOwner: (String) async throws -> Void = { _ = try await OwnerConfirmation.check($0) }
     ) async -> Int32 {
         let explicit = mode == .explicit
         let gate = KeysGate.decide(
-            interactive: terminal.isInteractive(), agents: AgentHostMarkers.callingHosts(in: environment))
-        if let refusal = KeysScreen.refusal(gate) {
-            guard explicit else { return 0 }
+            interactive: terminal.isInteractive(), agents: AgentHostMarkers.callingHosts(in: environment),
+            ci: explicit == false && (environment["CI"] ?? "").isEmpty == false)
+        guard gate == .open else {
+            guard explicit, let refusal = KeysScreen.refusal(gate) else { return 0 }
             CommandContext.writeStderr(BoxInk.paint(refusal, palette: palette))
             return OwnerConfirmation.refusalExitCode
         }
-        let kept: Set<String>
-        switch SecretsRun.configuration(secrets) {
-        case .failure(let failure):
-            guard explicit else { return 0 }
-            CommandContext.writeStderr("rv setup keys: \(failure.message)\n")
-            return failure.exitCode
-        case .success(let configuration):
-            kept = Set(configuration.secrets.map(\.name))
-        }
+        guard let kept = keptNames(secrets, explicit: explicit) else { return explicit ? 1 : 0 }
         let loaded = KeyScanSources.load(home: home, environment: environment)
         let plan = KeyPlan.make(KeyScan.find(loaded.input, names: KnownSecretDefaults.names), kept: kept)
         func say(_ text: String) { CommandContext.writeStdout(BoxInk.paint(text, palette: palette)) }
+        let lead = explicit ? "" : "\n"
+        let notes = KeysScreen.exposureLines(plan.keptButExposed, kept: true) + KeysScreen.conflictLines(plan.conflicts)
 
         guard plan.offers.isEmpty == false else {
-            if plan.keptButExposed.isEmpty == false {
-                say((explicit ? "" : "\n") + KeysScreen.exposureLines(plan.keptButExposed, kept: true))
+            if notes.isEmpty == false {
+                say(lead + notes)
             } else if explicit {
                 say(KeysScreen.nothingFound(shellFiles: loaded.shellFileCount))
             }
             return 0
         }
-        say((explicit ? "" : "\n") + KeysScreen.found(plan.offers)
-            + KeysScreen.exposureLines(plan.keptButExposed, kept: true))
-        CommandContext.writeStdout(KeysScreen.question(plan.offers.count))
-        let answer = (terminal.readAnswer() ?? "n").trimmingCharacters(in: .whitespaces).lowercased()
-        guard answer.isEmpty || answer == "y" || answer == "yes" else {
-            say(KeysScreen.declined)
-            return 0
+        say(lead + KeysScreen.found(plan.offers) + notes)
+        if style.asksFirst {
+            CommandContext.writeStdout(KeysScreen.question(plan.offers.count))
+            // No answer (Ctrl-D, the time limit, no terminal) is a no.
+            let answer = terminal.readAnswer()?.trimmingCharacters(in: .whitespaces).lowercased()
+            guard let answer, answer.isEmpty || answer == "y" || answer == "yes" else {
+                say(KeysScreen.declined)
+                return 0
+            }
         }
         do {
             try await confirmOwner(KeysScreen.ownerSummary(plan.offers))
         } catch {
             CommandContext.writeStderr("\(error)\n")
-            say(KeysScreen.ownerRefused)
+            say(KeysScreen.declined)
             return explicit ? OwnerConfirmation.refusalExitCode : 0
         }
-        say(KeysScreen.approved)
+        if let approved = style.approvedLine { say(approved) }
         let moved = keep(plan.offers, secrets: secrets)
         let exposures = plan.offers.filter { moved.kept.contains($0.name) }
             .flatMap { KeyPlan.exposures(of: $0.name, sightings: $0.sightings) }
@@ -104,22 +102,45 @@ enum SetupKeysRun {
         return explicit && moved.failed.isEmpty == false ? 1 : 0
     }
 
+    /// The names rv keeps now, or nil (said, when explicit) when secrets.json cannot be read.
+    static func keptNames(_ secrets: SecretsEnvironment, explicit: Bool) -> Set<String>? {
+        switch SecretsRun.configuration(secrets) {
+        case .failure(let failure):
+            if explicit { CommandContext.writeStderr("rv setup keys: \(failure.message)\n") }
+            return nil
+        case .success(let configuration):
+            return Set(configuration.secrets.map(\.name))
+        }
+    }
+
     /// Each offer kept as `rv secrets add NAME` keeps a well-known name: the
-    /// gateway defaults, least-privilege allow rules, the rv keychain.
+    /// gateway defaults, least-privilege allow rules, the rv keychain. What
+    /// rv keeps is read again first: a name kept while the owner was being
+    /// asked is never replaced.
     static func keep(
         _ offers: [KeyOffer], secrets: SecretsEnvironment
     ) -> (kept: [String], failed: [(name: String, reason: String)]) {
         var kept: [String] = []
         var failed: [(name: String, reason: String)] = []
         for offer in offers {
+            switch SecretsRun.configuration(secrets) {
+            case .failure(let failure):
+                failed.append((offer.name, failure.message))
+                continue
+            case .success(let configuration) where configuration.secret(named: offer.name) != nil:
+                failed.append((offer.name, "rv already keeps one; nothing was replaced"))
+                continue
+            case .success:
+                break
+            }
             let definition = SecretsRun.definitionForSet(
                 name: offer.name, isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
                 environment: false
             ).definition
-            let origin = offer.shownSighting.map { "kept by rv setup from \($0.label)" }
+            let origin = "kept by rv setup from \(offer.source.label)"
             switch SecretsRun.set(
                 name: offer.name, value: offer.value.bytes, definition: definition, agents: [],
-                description: origin.flatMap { $0.count <= 200 ? $0 : nil }, environment: secrets)
+                description: origin.count <= 200 ? origin : nil, environment: secrets)
             {
             case .success: kept.append(offer.name)
             case .failure(let failure): failed.append((offer.name, failure.message))
@@ -143,7 +164,9 @@ struct KeysTerminal: Sendable {
             return KeysTerminal(
                 isInteractive: { context.stdinIsTTY == true && context.stdoutIsTTY == true },
                 readAnswer: {
-                    context.stdinText.map { String($0.split(separator: "\n", omittingEmptySubsequences: false)[0]) }
+                    // A line ends with a newline; text without one is Ctrl-D.
+                    guard let text = context.stdinText, let end = text.firstIndex(of: "\n") else { return nil }
+                    return String(text[..<end])
                 })
         }
         return KeysTerminal(
@@ -157,19 +180,33 @@ struct KeysTerminal: Sendable {
             readAnswer: { readLineFromTerminal() })
     }
 
-    /// One short line from `/dev/tty`; nil without a terminal.
+    /// How long the question waits for an answer before it reads as no.
+    static let answerTimeoutMilliseconds: Int32 = 120_000
+
+    /// One short line from `/dev/tty`. nil without a terminal, on Ctrl-D
+    /// (end of input before a newline), or when nobody answers within
+    /// `answerTimeoutMilliseconds`, so automation holding a pty never hangs.
     private static func readLineFromTerminal() -> String? {
         let fd = open("/dev/tty", O_RDONLY | O_NOCTTY | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         var bytes: [UInt8] = []
         var byte: UInt8 = 0
-        while read(fd, &byte, 1) == 1 {
-            if byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") { break }
+        var remaining = answerTimeoutMilliseconds
+        while remaining > 0 {
+            var waiting = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let started = Date()
+            let ready = poll(&waiting, 1, min(remaining, 1_000))
+            remaining -= Int32(Date().timeIntervalSince(started) * 1_000) + (ready == 0 ? 0 : 1)
+            if ready < 0, errno == EINTR { continue }
+            guard ready >= 0 else { return nil }
+            if ready == 0 { continue }
+            guard read(fd, &byte, 1) == 1 else { return nil }
+            if byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") { return String(decoding: bytes, as: UTF8.self) }
             bytes.append(byte)
-            if bytes.count > 64 { break }
+            if bytes.count > 64 { return String(decoding: bytes, as: UTF8.self) }
         }
-        return String(decoding: bytes, as: UTF8.self)
+        return nil
     }
 }
 

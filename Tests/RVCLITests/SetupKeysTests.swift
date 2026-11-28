@@ -65,7 +65,8 @@ struct SetupKeysTests {
 
     func run(
         _ mode: SetupKeysRun.Mode, _ machine: Machine, environment: [String: String] = [:], tty: Bool = true,
-        answer: String? = "\n", owner: Bool = true, capture: CLIOutputCapture
+        answer: String? = "\n", owner: Bool = true, style: KeysPromptStyle = .questionThenPassword,
+        capture: CLIOutputCapture
     ) async throws -> Int32 {
         let secrets = machine.environment()
         return try await withCLIProcess(
@@ -73,7 +74,8 @@ struct SetupKeysTests {
             ownerAuthOutcome: owner ? .authenticated : nil, output: capture
         ) {
             await SetupKeysRun.run(
-                mode, home: machine.home, environment: environment, secrets: secrets, palette: colorOffPalette)
+                mode, home: machine.home, environment: environment, secrets: secrets, palette: colorOffPalette,
+                style: style)
         }
     }
 
@@ -94,11 +96,11 @@ struct SetupKeysTests {
 
         #expect(code == 0)
         #expect(capture.stdout == """
-            ◆ rv found 2 keys your agents can read
-              OPENAI_API_KEY  ~/.zshrc:3  → api.openai.com
-              GITHUB_TOKEN    gh login    → api.github.com · github-read
-              Keep them? ⏎ \(KeysScreen.approved)✓ Kept 2 · agents get a stand-in, never the key
+            ◆ rv found 2 keys · OPENAI_API_KEY in ~/.zshrc:3 · GITHUB_TOKEN from gh
+              Keep them? ⏎   password · ✓
+            ✓ Kept. Your agents can use them. They can't leak them.
             ◐ ~/.zshrc:3 still exports OPENAI_API_KEY · delete that line
+            ◐ gh's login file still holds GITHUB_TOKEN · agents can read it
             → rv run --secret OPENAI_API_KEY --secret GITHUB_TOKEN -- <command>
 
             """)
@@ -120,7 +122,88 @@ struct SetupKeysTests {
         try expectNoValue(capture, machine)
     }
 
-    @Test("anything but Enter, y or yes keeps nothing", arguments: ["n", "no", "q"])
+    /// macOS (v6c): no question; the Touch ID sheet is the one question,
+    /// and no method is claimed afterwards (it may have been the password).
+    @Test func touchIDSheet_isTheOnlyQuestion() async throws {
+        let machine = try Machine()
+        defer { machine.tearDown() }
+        let capture = CLIOutputCapture()
+        #expect(try await run(.explicit, machine, answer: nil, style: .touchIDSheet, capture: capture) == 0)
+        #expect(capture.stdout.hasPrefix("""
+            ◆ rv found 2 keys · OPENAI_API_KEY in ~/.zshrc:3 · GITHUB_TOKEN from gh
+            ✓ Kept. Your agents can use them. They can't leak them.
+
+            """))
+        #expect(capture.stdout.contains("Keep them") == false)
+        #expect(capture.stdout.contains("Touch ID") == false)
+        #expect(machine.stored("OPENAI_API_KEY") == Data(Self.fakeOpenAI.utf8))
+
+        let cancelled = try Machine()
+        defer { cancelled.tearDown() }
+        let refused = CLIOutputCapture()
+        #expect(try await run(.explicit, cancelled, answer: nil, owner: false, style: .touchIDSheet, capture: refused)
+            == OwnerConfirmation.refusalExitCode)
+        #expect(refused.stdout.hasSuffix("from gh\n  Nothing changed.\n→ rv setup keys\n"))
+        #expect(cancelled.stored("OPENAI_API_KEY") == nil)
+    }
+
+    /// Ctrl-D (end of input with no newline) and no answer at all are a no, never Enter.
+    @Test("Ctrl-D or no answer declines", arguments: [String?.none, "", "y"])
+    func endOfInput_declines(answer: String?) async throws {
+        let machine = try Machine()
+        defer { machine.tearDown() }
+        let capture = CLIOutputCapture()
+        #expect(try await run(.explicit, machine, answer: answer, capture: capture) == 0)
+        #expect(capture.stdout.hasSuffix("  Keep them? ⏎   Nothing changed.\n→ rv setup keys\n"))
+        #expect(machine.stored("OPENAI_API_KEY") == nil)
+    }
+
+    @Test func afterSetup_skipsUnderCI() async throws {
+        let machine = try Machine()
+        defer { machine.tearDown() }
+        let capture = CLIOutputCapture()
+        #expect(try await run(.afterSetup, machine, environment: ["CI": "true"], capture: capture) == 0)
+        #expect(capture.stdout.isEmpty)
+        #expect(machine.stored("OPENAI_API_KEY") == nil)
+    }
+
+    /// Review blocker 1, end to end: a value planted in the environment is never kept under the file's name.
+    @Test func environmentThatDisagreesWithTheFile_keepsNeither() async throws {
+        let machine = try Machine()
+        defer { machine.tearDown() }
+        let capture = CLIOutputCapture()
+        let planted = ["OPENAI_API_KEY": "sk-fake-planted-by-agent-0000"]
+        #expect(try await run(.explicit, machine, environment: planted, capture: capture) == 0)
+        #expect(capture.stdout.hasPrefix("""
+            ◆ rv found 1 key · GITHUB_TOKEN from gh
+            ◐ OPENAI_API_KEY in ~/.zshrc:3 differs from the environment's · kept neither · rv secrets add OPENAI_API_KEY
+
+            """))
+        #expect(machine.stored("OPENAI_API_KEY") == nil)
+        #expect(capture.stdout.contains("sk-fake-planted") == false)
+    }
+
+    @Test func keep_rechecksWhatRvKeeps_afterTheOwnerCheck() throws {
+        let machine = try Machine()
+        defer { machine.tearDown() }
+        let offers = KeyPlan.make(
+            KeyScan.find(KeyScanInput(environment: ["OPENAI_API_KEY": Self.fakeOpenAI]), names: KnownSecretDefaults.names),
+            kept: []).offers
+        let original = Data("sk-fake-kept-meanwhile-0000".utf8)
+        _ = SecretsRun.set(
+            name: "OPENAI_API_KEY", value: original,
+            definition: SecretsRun.definitionForSet(
+                name: "OPENAI_API_KEY", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+                environment: false
+            ).definition,
+            agents: [], description: nil, environment: machine.environment())
+        let moved = SetupKeysRun.keep(offers, secrets: machine.environment())
+        #expect(moved.kept.isEmpty)
+        #expect(moved.failed.map(\.name) == ["OPENAI_API_KEY"])
+        #expect(machine.stored("OPENAI_API_KEY") == original)
+    }
+
+    @Test("anything but Enter, y or yes keeps nothing", arguments: ["n\n", "no\n", "q\n"])
     func declined_changesNothing(answer: String) async throws {
         let machine = try Machine()
         defer { machine.tearDown() }
@@ -138,7 +221,7 @@ struct SetupKeysTests {
         let capture = CLIOutputCapture()
         #expect(try await run(.explicit, machine, owner: false, capture: capture) == OwnerConfirmation.refusalExitCode)
         #expect(capture.stderr.contains("needs owner authentication"))
-        #expect(capture.stdout.hasSuffix("  Nothing changed.\n"))
+        #expect(capture.stdout.hasSuffix("  Nothing changed.\n→ rv setup keys\n"))
         #expect(machine.stored("OPENAI_API_KEY") == nil)
         try expectNoValue(capture, machine)
     }
@@ -185,7 +268,7 @@ struct SetupKeysTests {
         defer { machine.tearDown() }
         let capture = CLIOutputCapture()
         #expect(try await run(.afterSetup, machine, owner: false, capture: capture) == 0)
-        #expect(capture.stdout.hasPrefix("\n◆ rv found 2 keys your agents can read\n"))
+        #expect(capture.stdout.hasPrefix("\n◆ rv found 2 keys · OPENAI_API_KEY in ~/.zshrc:3 · GITHUB_TOKEN from gh\n"))
         #expect(machine.stored("OPENAI_API_KEY") == nil)
     }
 
@@ -203,8 +286,7 @@ struct SetupKeysTests {
         let capture = CLIOutputCapture()
         #expect(try await run(.explicit, machine, capture: capture) == 0)
         #expect(capture.stdout.hasPrefix("""
-            ◆ rv found 1 key your agents can read
-              GITHUB_TOKEN  gh login  → api.github.com · github-read
+            ◆ rv found 1 key · GITHUB_TOKEN from gh
             ◐ ~/.zshrc:3 still exports OPENAI_API_KEY, which rv keeps · delete that line
               Keep it? ⏎
             """))
@@ -229,7 +311,7 @@ struct SetupKeysTests {
         let color = BoxInk.palette(isTerminal: true, environment: ["TERM": "xterm-256color"])
         let painted = BoxInk.paint(text, palette: color)
         #expect(painted != text)
-        #expect(painted.contains("✓\(color.reset) Kept 1 · agents get a stand-in, never the key"))
+        #expect(painted.contains("✓\(color.reset) Kept. Your agents can use it. They can't leak it."))
         for environment in [["TERM": "xterm-256color", "NO_COLOR": "1"], ["TERM": "dumb"]] {
             #expect(BoxInk.paint(text, palette: BoxInk.palette(isTerminal: true, environment: environment)) == text)
         }

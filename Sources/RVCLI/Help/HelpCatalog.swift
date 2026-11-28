@@ -438,7 +438,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv setup [--force] [--observe] [--json] [--robot] [--plain] [--no-color]"),
-                HelpRow(name: "rv setup --dry-run [--force] [--observe]"), HelpRow(name: "rv setup keys"),
+                HelpRow(name: "rv setup --dry-run [--force] [--observe]"),
+                HelpRow(name: "rv setup keys"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
@@ -460,7 +461,8 @@ enum HelpCatalog {
         nextHeading: "After setup",
         next: [
             HelpNextItem(command: "rv test 'git reset --hard'", description: "Prove day-one deny"),
-            HelpNextItem(command: "rv doctor", description: "Confirm hosts and service"), HelpNextItem(command: "rv setup keys", description: "Keep the API keys your agents can read in rv, by name only"),
+            HelpNextItem(command: "rv doctor", description: "Confirm hosts and service"),
+            HelpNextItem(command: "rv setup keys", description: "Keep the API keys your agents can read in rv, by name only"),
         ]
     )
 

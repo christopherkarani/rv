@@ -48,7 +48,7 @@ struct KeyDiscoveryTests {
         #expect(KeyScan.exports(in: line).isEmpty)
     }
 
-    @Test func find_namesEveryPlace_andPrefersTheEnvironmentsValue() {
+    @Test func find_namesEveryPlace_andPrefersTheFilesValue() {
         let input = KeyScanInput(
             shellFiles: [
                 ShellStartupFile(displayPath: "~/.zshrc", contents: "export OPENAI_API_KEY=sk-fake-from-file-0000\n"),
@@ -59,9 +59,35 @@ struct KeyDiscoveryTests {
         let found = KeyScan.find(input, names: Self.names)
         #expect(found.map(\.name) == ["OPENAI_API_KEY", "GITHUB_TOKEN"])
         #expect(found[0].sightings == [.shellFile(path: "~/.zshrc", line: 1), .environment])
-        #expect(found[0].value == FoundKeyValue(Self.fakeOpenAI))
+        #expect(found[0].value == FoundKeyValue("sk-fake-from-file-0000"))
+        #expect(found[0].valueSighting == .shellFile(path: "~/.zshrc", line: 1))
+        #expect(found[0].environmentDiffers)
         #expect(found[1].sightings == [.login("gh")])
+        #expect(found[1].valueSighting == .login("gh"))
         #expect(found[1].value == FoundKeyValue(Self.fakeGitHub))
+    }
+
+    /// Review blocker 1: an agent that starts rv with its own environment
+    /// must not get its value kept under the shell file's name.
+    @Test func plan_neverOffersAKeyWhoseFileAndEnvironmentDisagree() throws {
+        let file = ShellStartupFile(displayPath: "~/.zshrc", contents: "export OPENAI_API_KEY=sk-fake-from-file-0000\n")
+        let planted = KeyScan.find(
+            KeyScanInput(shellFiles: [file], environment: ["OPENAI_API_KEY": "sk-fake-planted-0000"]), names: Self.names)
+        let plan = KeyPlan.make(planted, kept: [])
+        #expect(plan.offers.isEmpty)
+        #expect(plan.conflicts.map(\.name) == ["OPENAI_API_KEY"])
+        #expect(KeysScreen.conflictLines(plan.conflicts)
+            == "◐ OPENAI_API_KEY in ~/.zshrc:1 differs from the environment's · kept neither · rv secrets add OPENAI_API_KEY\n")
+
+        let agreeing = KeyScan.find(
+            KeyScanInput(shellFiles: [file], environment: ["OPENAI_API_KEY": "sk-fake-from-file-0000"]), names: Self.names)
+        let offer = try #require(KeyPlan.make(agreeing, kept: []).offers.first)
+        #expect(offer.source == .shellFile(path: "~/.zshrc", line: 1))
+
+        let environmentOnly = KeyScan.find(KeyScanInput(environment: ["OPENAI_API_KEY": Self.fakeOpenAI]), names: Self.names)
+        let fromEnvironment = try #require(KeyPlan.make(environmentOnly, kept: []).offers.first)
+        #expect(fromEnvironment.source == .environment)
+        #expect(KeysScreen.found([fromEnvironment]) == "◆ rv found 1 key · OPENAI_API_KEY in the environment\n")
     }
 
     @Test func find_takesTheLastLiteralLineInAFile() {
@@ -79,6 +105,44 @@ struct KeyDiscoveryTests {
             ghHosts: "github.com:\n    user: someone\n    git_protocol: https\n",
             vercelAuth: Data(#"{"token": ""}"#.utf8))
         #expect(KeyScan.find(input, names: Self.names).isEmpty)
+    }
+
+    /// Review blocker 2: in a multi-account `hosts.yml` only the active
+    /// account's token (directly under `github.com:`) is read.
+    @Test func ghToken_ignoresNestedAccountTokens() {
+        let multi = """
+            github.com:
+                users:
+                    old-account:
+                        oauth_token: ghp_fakeInactive00000000
+                    someone:
+                        oauth_token: ghp_fakeAlsoNested000000
+                git_protocol: https
+                oauth_token: \(Self.fakeGitHub)
+                user: someone
+            """
+        #expect(KeyScan.ghToken(multi) == Self.fakeGitHub)
+        let nestedOnly = "github.com:\n    users:\n        someone:\n            oauth_token: ghp_fakeInactive00000000\n    user: someone\n"
+        #expect(KeyScan.ghToken(nestedOnly) == nil)
+    }
+
+    @Test func crlfFiles_readLikeLF() {
+        let zshrc = "# windows editor\r\nexport OPENAI_API_KEY=\(Self.fakeOpenAI)\r\n"
+        #expect(KeyScan.exports(in: zshrc) == [KeyScan.Export(name: "OPENAI_API_KEY", line: 2, literal: Self.fakeOpenAI)])
+        #expect(KeyScan.ghToken("github.com:\r\n    oauth_token: \(Self.fakeGitHub)\r\n") == Self.fakeGitHub)
+    }
+
+    @Test func hashStartsACommentOnlyAfterABlank() {
+        #expect(KeyScan.exports(in: "export OPENAI_API_KEY=sk-fake#0000aaaa # note")
+            == [KeyScan.Export(name: "OPENAI_API_KEY", line: 1, literal: "sk-fake#0000aaaa")])
+        #expect(KeyScan.exports(in: "export OPENAI_API_KEY=\"sk-fake-0000aaaa\"#x").isEmpty)
+    }
+
+    @Test("values that are not printable ASCII are not keys", arguments: [
+        "sk-fake-\u{FFFD}0000aaaa", "sk-fake-é0000aaaa", "sk-fake-\u{7F}0000aaaa", "sk-fake-\u{200B}0000aaaa",
+    ])
+    func isRealValue_rejectsNonASCII(value: String) {
+        #expect(KeyScan.isRealValue(value) == false)
     }
 
     @Test func ghToken_readsOnlyTheGitHubBlock() {
@@ -99,8 +163,10 @@ struct KeyDiscoveryTests {
 
     @Test func plan_offersOnlyNewNamesItCanPlace() throws {
         let found = [
-            FoundKey(name: "OPENAI_API_KEY", sightings: [.shellFile(path: "~/.zshrc", line: 3)], value: FoundKeyValue(Self.fakeOpenAI)),
-            FoundKey(name: "ANTHROPIC_API_KEY", sightings: [.shellFile(path: "~/.zshrc", line: 4), .environment], value: FoundKeyValue("sk-ant-fake-0000")),
+            FoundKey(name: "OPENAI_API_KEY", sightings: [.shellFile(path: "~/.zshrc", line: 3)], value: FoundKeyValue(Self.fakeOpenAI),
+                     valueSighting: .shellFile(path: "~/.zshrc", line: 3)),
+            FoundKey(name: "ANTHROPIC_API_KEY", sightings: [.shellFile(path: "~/.zshrc", line: 4), .environment], value: FoundKeyValue("sk-ant-fake-0000"),
+                     valueSighting: .shellFile(path: "~/.zshrc", line: 4)),
             FoundKey(name: "STRIPE_SECRET_KEY", sightings: [.shellFile(path: "~/.profile", line: 1)], value: nil),
         ]
         let plan = KeyPlan.make(found, kept: ["ANTHROPIC_API_KEY"])
@@ -110,28 +176,29 @@ struct KeyDiscoveryTests {
         #expect(unplaceable.isEmpty)
     }
 
-    @Test func exposures_nameTheEnvironmentOnlyWithoutAShellLine() {
-        #expect(KeyPlan.exposures(of: "X", sightings: [.environment, .login("gh")]) == [KeyExposure(name: "X", sighting: .environment)])
-        #expect(KeyPlan.exposures(of: "X", sightings: [.login("gh")]).isEmpty)
+    @Test func exposures_nameLoginFiles_andTheEnvironmentOnlyWithoutAShellLine() {
+        #expect(KeyPlan.exposures(of: "X", sightings: [.environment, .login("vercel")])
+            == [KeyExposure(name: "X", sighting: .login("vercel")), KeyExposure(name: "X", sighting: .environment)])
+        #expect(KeyPlan.exposures(of: "X", sightings: [.shellFile(path: "~/.zshrc", line: 2), .environment])
+            == [KeyExposure(name: "X", sighting: .shellFile(path: "~/.zshrc", line: 2))])
+        #expect(KeysScreen.exposureLines([KeyExposure(name: "VERCEL_TOKEN", sighting: .login("vercel"))], kept: false)
+            == "◐ vercel's login file still holds VERCEL_TOKEN · agents can read it\n")
     }
 
     @Test func gate_agentMarkersWinOverATerminal() {
         #expect(KeysGate.decide(interactive: true, agents: []) == .open)
         #expect(KeysGate.decide(interactive: false, agents: []) == .noTerminal)
         #expect(KeysGate.decide(interactive: true, agents: [.claude]) == .agent(.claude))
+        #expect(KeysGate.decide(interactive: true, agents: [], ci: true) == .automation)
     }
 
-    @Test func screen_rowsAlignAndNameTheHost() throws {
+    @Test func screen_foundIsOneLine_asInV6c() throws {
         let plan = KeyPlan.make([
-            FoundKey(name: "OPENAI_API_KEY", sightings: [.environment, .shellFile(path: "~/.zshrc", line: 12)], value: FoundKeyValue(Self.fakeOpenAI)),
-            FoundKey(name: "GITHUB_TOKEN", sightings: [.login("gh")], value: FoundKeyValue(Self.fakeGitHub)),
+            FoundKey(name: "OPENAI_API_KEY", sightings: [.shellFile(path: "~/.zshrc", line: 12)], value: FoundKeyValue(Self.fakeOpenAI),
+                     valueSighting: .shellFile(path: "~/.zshrc", line: 12)),
+            FoundKey(name: "GITHUB_TOKEN", sightings: [.login("gh")], value: FoundKeyValue(Self.fakeGitHub), valueSighting: .login("gh")),
         ], kept: [])
-        #expect(KeysScreen.found(plan.offers) == """
-            ◆ rv found 2 keys your agents can read
-              OPENAI_API_KEY  ~/.zshrc:12  → api.openai.com
-              GITHUB_TOKEN    gh login     → api.github.com · github-read
-
-            """)
+        #expect(KeysScreen.found(plan.offers) == "◆ rv found 2 keys · OPENAI_API_KEY in ~/.zshrc:12 · GITHUB_TOKEN from gh\n")
         #expect(KeysScreen.question(2) == "  Keep them? ⏎ ")
         #expect(KeysScreen.question(1) == "  Keep it? ⏎ ")
     }
@@ -141,7 +208,7 @@ struct KeyDiscoveryTests {
             kept: ["OPENAI_API_KEY"], failed: [("GITHUB_TOKEN", "could not store it")],
             exposures: [KeyExposure(name: "OPENAI_API_KEY", sighting: .shellFile(path: "~/.zshrc", line: 12))])
         #expect(text == """
-            ✓ Kept 1 · agents get a stand-in, never the key
+            ✓ Kept. Your agents can use it. They can't leak it.
             ✕ GITHUB_TOKEN not kept: could not store it
             ◐ ~/.zshrc:12 still exports OPENAI_API_KEY · delete that line
             → rv run --secret OPENAI_API_KEY -- <command>
