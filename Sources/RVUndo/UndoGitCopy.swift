@@ -179,6 +179,7 @@ enum UndoGitCopy {
         let zeros = String(repeating: "0", count: head.utf8.count)
         var records: [String] = []
         var staged: [(mode: String, file: String, path: String)] = []
+        var touched = Set<String>()
         var tally = UndoTally()
         let rootFD = try UndoTree.openDirectory(root)
         var cursor = try UndoDirCursor(root: rootFD)
@@ -203,7 +204,7 @@ enum UndoGitCopy {
                 // a link is not followed, and the entry is left as it was.
                 guard case .missing = error else { continue }
                 if budget.isSecret(entry.path) { notes.append(UndoSkip.secret(entry.path).note); continue }
-                records.append("0 \(zeros)\t\(entry.path)")
+                records.append("0 \(zeros)\t\(entry.path)"); touched.insert(entry.path)
                 continue
             }
             guard state.mayDiffer(from: entry, indexWritten: indexWritten) else { continue }
@@ -213,7 +214,7 @@ enum UndoGitCopy {
             }
             switch state {
             case .missing, .other:
-                records.append("0 \(zeros)\t\(entry.path)")
+                records.append("0 \(zeros)\t\(entry.path)"); touched.insert(entry.path)
             case .file(let size, _, _, let executable):
                 // A second name for another file (a secret, say) would put
                 // that file's bytes in the repository's objects.
@@ -226,16 +227,23 @@ enum UndoGitCopy {
                 try stageFile(name, in: parent, as: file, into: stage, shown: entry.path, budget: budget, tally: &tally)
                 tally.bytes += size
                 staged.append((executable ? "100755" : "100644", file, entry.path))
+                touched.insert(entry.path)
             case .link:
                 let file = "f\(staged.count)"
                 try stageLink(name, in: parent, as: file, into: stage, shown: entry.path)
                 staged.append(("120000", file, entry.path))
+                touched.insert(entry.path)
             }
             tally.entries += 1
             try budget.check(tally)
         }
 
-        tally.files = records.count + staged.count
+        // Files kept: changed in the working tree, or staged (the index
+        // differs from HEAD's tree, read with `ls-tree`: tree objects only).
+        if indexTree != headTree {
+            touched.formUnion(try stagedPaths(runner, head: head, entries: entries, deadline: budget.deadline))
+        }
+        tally.files = touched.count
         tally.entries = tally.files
         tally.lines = nil
         guard records.isEmpty == false || staged.isEmpty == false else {
@@ -261,6 +269,29 @@ enum UndoGitCopy {
         let workTree = try runner.text(["write-tree"], indexFile: tempIndex)
         guard workTree != headTree || indexTree != headTree else { return Kept(head: head, stash: nil) }
         return Kept(head: head, stash: try commitPair(runner, head: head, index: indexTree, work: workTree), tally: tally)
+    }
+
+    /// Paths whose index entry differs from HEAD's tree (added, changed or
+    /// removed in the index).
+    private static func stagedPaths(
+        _ runner: UndoGit, head: String, entries: [UndoIndexEntry], deadline: ContinuousClock.Instant
+    ) throws(UndoSkip) -> Set<String> {
+        let listing = try runner.run(["ls-tree", "-r", "-z", "--full-tree", head], maxOutput: 64 * 1024 * 1024)
+        guard listing.status == 0 else { throw .gitFailed("ls-tree") }
+        var tree: [String: String] = [:]
+        for (number, raw) in listing.stdout.split(separator: 0).enumerated() {
+            if number & 0x3FF == 0, ContinuousClock.now >= deadline { throw .outOfTime }
+            let line = String(decoding: raw, as: UTF8.self)
+            guard let tab = line.firstIndex(of: "\t") else { continue }
+            let fields = line[..<tab].split(separator: " ")
+            guard fields.count == 3 else { continue }
+            tree[String(line[line.index(after: tab)...])] = fields[0] + " " + fields[2]
+        }
+        var paths = Set<String>()
+        for entry in entries {
+            if tree.removeValue(forKey: entry.path) != entry.mode + " " + entry.object { paths.insert(entry.path) }
+        }
+        return paths.union(tree.keys)
     }
 
     /// The index commit and the work commit on top, as `git stash` makes

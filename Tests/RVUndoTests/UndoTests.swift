@@ -613,7 +613,8 @@ struct UndoGitTests {
         // Counted from what rv handed git (no diff runs): both files, their bytes.
         #expect(kept.tally.files == 2)
         #expect(kept.tally.lines == nil)
-        #expect(kept.tally.bytes == UInt64("one\ntwo\nthree\n".utf8.count + "new file\n".utf8.count))
+        // Bytes rv handed git (the staged file was already in the repository).
+        #expect(kept.tally.bytes == UInt64("one\ntwo\nthree\n".utf8.count))
         #expect(kept.storedBytes == kept.tally.bytes)
         let ref = try #require(kept.git?.ref)
         #expect(try scratch.git(["rev-parse", "--verify", "-q", ref]).isEmpty == false)

@@ -170,7 +170,14 @@ public struct UndoStore: Sendable {
         }
         var staying = newestFirst.filter { going.contains($0.id) == false }
         var bytes = staying.reduce(UInt64(0)) { $0 + $1.storedBytes }
-        while staying.count > maxCopies || bytes > maxBytes, let oldest = staying.popLast() {
+        // Too many: the oldest goes, whatever its kind. Too big: the oldest
+        // that holds bytes goes (an empty one would not help).
+        while staying.count > maxCopies, let oldest = staying.popLast() {
+            going.insert(oldest.id)
+            bytes -= oldest.storedBytes
+        }
+        while bytes > maxBytes, let index = staying.lastIndex(where: { $0.storedBytes > 0 }) {
+            let oldest = staying.remove(at: index)
             going.insert(oldest.id)
             bytes -= oldest.storedBytes
         }
