@@ -93,14 +93,14 @@ struct CommandVocabularyParityTests {
     @Test("the docs check catches prompts, planned names and typos, not quoted messages")
     func docCheckSeparatesCommandsFromMessages() {
         let flagged = Self.docSpellings("""
-            Run `rv stauts` or `rv protect git`.
+            Run `rv stauts` or `rv keys forget OPENAI_API_KEY`.
             ```
             $ rv frobnicate
             rv is not installed at <path>
             ```
             `rv is not installed at <path>`, `rv mcp: server is back`, `rv blocks --json`
             """).filter(Self.docNamesUnknownCommand).map(\.text)
-        #expect(flagged == ["rv stauts", "rv protect git", "rv frobnicate"])
+        #expect(flagged == ["rv stauts", "rv keys forget OPENAI_API_KEY", "rv frobnicate"])
     }
 
     @Test("planned names are data only: the parser refuses every one today")
