@@ -128,15 +128,22 @@ struct LogCommandTests {
         #expect(none.hasSuffix("  → rv log   every row\n"))
     }
 
-    @Test("rv blocks prints what it printed before rv log existed")
+    @Test("rv blocks still lists every row in its own words")
     func blocksUnchanged() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         Self.seed(home)
         let blocks = try BlocksRun.list(home: home, json: false, now: Self.now)
-        // rv blocks lists every row, judge notes included, in its own words.
+        // rv blocks lists every row, judge notes included, and folds none
+        // away, so it never prints rv log's hint to show them.
         #expect(blocks.components(separatedBy: "core.judge:laya-block").count == 3)
-        #expect(blocks.contains("✕") == false && blocks.contains("◐") == false)
+        // What rv log prints of its own (its summary line, its hint to show
+        // every row) must stay out of rv blocks.
+        let log = try output(home)
+        for own in ["every row", "→ rv log", "2 judge notes in shadow"] {
+            #expect(log.contains(own), "rv log prints \(own): \(log)")
+            #expect(blocks.contains(own) == false, "rv blocks must not print \(own): \(blocks)")
+        }
     }
 
     // MARK: - rvd's decision log

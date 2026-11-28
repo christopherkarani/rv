@@ -13,7 +13,7 @@ struct SelfProtectionReadVerbsTests {
         "rv", "rv status", "rv doctor", "rv doctor --json", "rv blocks", "rv log --all --rule core.git:reset-hard",
         "rv log -n 20 --host claude", "rv why a7c-835", "rv explain \"git reset --hard\"", "rv box list",
         "rv service status", "rv policy status --json", "rv uninstall --help", "rv secrets set --help",
-        "rv --help", "rv help secrets", "rv --version",
+        "rv --help", "rv help secrets", "rv --version", "rv wait a7c835", "rv wait a7c835 --timeout 600",
     ])
     func readOnlyVerbs_enterTheSafeLane(_ command: String) {
         #expect(SafeCommandLane.isSafe(command), "\(command)")
@@ -24,6 +24,7 @@ struct SelfProtectionReadVerbsTests {
         "rv allow-once abc123", "rv doctor --fix", "rv log --clear", "rv box claude", "rv box list --rm",
         "rv secrets set K --help --force", "rv a b c --help", "rv doctor; rv uninstall", "rv why $(rv uninstall)",
         "/tmp/rv doctor", "rv service restart", "rv policy apply",
+        "rv wait a7c835; rv uninstall", "rv wait $(cat x)", "rv wait a7c835 --timeout 600 --then-run x",
     ])
     func writeVerbsAndOtherFlags_stayOut(_ command: String) {
         #expect(SafeCommandLane.isSafe(command) == false, "\(command)")
@@ -55,6 +56,13 @@ struct SelfProtectionReadVerbsTests {
         let rule = try #require(RuleID(rawValue: "core.secrets:home-rv-config"))
         #expect(builtinStopAdvice(rule)?.saferCommand == "rv secrets list")
         #expect(await Self.peek("rv secrets list", home: home, cwd: cwd).decision == .allow)
+    }
+
+    /// H2: the wait a stop's who line names is allowed too.
+    @Test(arguments: ["enforce", "observe"])
+    func waitForTheOwnersAnswer_isAllowed(_ mode: String) async throws {
+        let (home, cwd) = try Self.fixture(mode: mode)
+        #expect(await Self.peek("rv wait a7c835", home: home, cwd: cwd).decision == .allow)
     }
 
     private static func fixture(mode: String) throws -> (HomeDirectory, WorkingDirectory) {

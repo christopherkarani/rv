@@ -41,11 +41,14 @@ func isolatedClient(
     transport: (any ServiceTransport)? = nil,
     allowOnceDirectory: URL? = nil
 ) throws -> ServiceClient {
-    ServiceClient(
+    var client = ServiceClient(
         transport: transport,
         allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
         home: try isolatedHome()
     )
+    // A stop never carries the test machine's account name.
+    client.stopOwner = .unknown
+    return client
 }
 
 func isolatedClient(
@@ -53,12 +56,14 @@ func isolatedClient(
     lazySession: @escaping @Sendable () -> EvaluateSession,
     allowOnceDirectory: URL? = nil
 ) throws -> ServiceClient {
-    ServiceClient(
+    var client = ServiceClient(
         transport: transport,
         lazySession: lazySession,
         allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
         home: try isolatedHome()
     )
+    client.stopOwner = .unknown
+    return client
 }
 
 func cliRun(

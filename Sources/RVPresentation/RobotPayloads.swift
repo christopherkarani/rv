@@ -55,6 +55,8 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
     package var effective: String? = nil
     /// Typed rules that also match but did not decide; omitted when none.
     package var typedRules: [ExplainAlsoMatch]? = nil
+    /// Packs that are off but would stop the command; omitted when none.
+    package var offPacks: [ExplainOffPack]? = nil
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -67,6 +69,7 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
         case mode
         case effective
         case typedRules = "typed_rules"
+        case offPacks = "off_packs"
     }
 }
 
@@ -273,7 +276,8 @@ public func explainRobotPayload(from model: ExplainViewModel) -> ExplainRobotPay
         nextAction: model.nextAction,
         mode: observed ? observeRobotMode : nil,
         effective: observed ? effective : nil,
-        typedRules: model.alsoMatches.isEmpty ? nil : model.alsoMatches
+        typedRules: model.alsoMatches.isEmpty ? nil : model.alsoMatches,
+        offPacks: model.offPacks.isEmpty ? nil : model.offPacks
     )
 }
 

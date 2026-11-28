@@ -177,34 +177,6 @@ struct BlocksCommandTests {
         #expect(plain == (try BlocksRun.list(home: home, json: false, now: now)))
     }
 
-    /// A guard-mode deny the host showed as an ask reads `⏺ Asks`; an
-    /// observed row is never an ask row, and other rows keep their bytes.
-    @Test func askedRowsReadAsAsks() throws {
-        let home = try tempHome()
-        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let ledger = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-        func record(_ offset: TimeInterval, observed: Bool, asked: Bool) -> DenialLedgerRecord {
-            DenialLedgerRecord(
-                timestamp: now.addingTimeInterval(offset), host: .hook(.claude), tool: .bash,
-                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), category: .pack(.coreGit),
-                path: "", observed: observed, wouldBe: .ask, asked: asked
-            )
-        }
-        ledger.append(record(-10, observed: false, asked: false), now: now)
-        ledger.append(record(-5, observed: true, asked: true), now: now)
-        ledger.append(record(0, observed: false, asked: true), now: now)
-        let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
-        #expect(lines[0].hasSuffix("Z  ⏺ Asks  claude  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[1].hasSuffix("Z  ◐ Would stop  claude  Bash  core.git:reset-hard  core.git  "))
-        #expect(lines[2].hasSuffix("Z  ✕ Stopped  claude  Bash  core.git:reset-hard  core.git  "))
-        let json = try BlocksRun.list(home: home, json: true, now: now)
-        let rows = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
-        #expect(rows[0]["asked"] as? Bool == true)
-        #expect(rows[1]["asked"] == nil)
-        #expect(rows[2]["asked"] == nil)
-    }
-
     @Test func fileToolPathEscapesControls() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence

@@ -133,18 +133,18 @@ enum ObserveFloor {
             return .enforce(result)
         }
         // A deny that ended evaluation early may hide a catastrophic later
-        // segment: each is read on its own, and the first catastrophic one
-        // is enforced under its own rule.
+        // segment, of the command or of program text it feeds a shell
+        // (`sh -c 'git reset --hard; rm -rf /usr/*'`): each is read on its
+        // own, and the first catastrophic one is enforced under its own rule.
         if case .deny = result.decision, let verdict = context.segmentVerdict {
-            let segments = shellChainSegments(command.rawValue)
-                .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
-            if segments.count > 1 {
-                for segment in segments {
-                    guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
-                    let read = verdict(ShellCommand(rawValue: segment))
-                    if ObserveCatastrophe.isCatastrophic(read, command: segment, home: context.home) {
-                        return .enforce(read)
-                    }
+            guard let segments = catastropheSegments(command, inTime: { clock.now < deadline }) else {
+                return .enforce(unanalyzable(result))
+            }
+            for segment in segments {
+                guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
+                let read = verdict(ShellCommand(rawValue: segment))
+                if ObserveCatastrophe.isCatastrophic(read, command: segment, home: context.home) {
+                    return .enforce(read)
                 }
             }
         }
@@ -156,6 +156,41 @@ enum ObserveFloor {
             return .enforce(unanalyzable(result))
         }
         return .observed
+    }
+
+    /// The commands read on their own for a catastrophe, once each and
+    /// never the whole command again: for the command and for each shell
+    /// or `eval` payload in it (`ObserveShellPayloads`, which reads the
+    /// `'\''` quoting the launcher parser does not), the payload itself,
+    /// every simple command it launches (`launchedCommands`: chains,
+    /// pipes, launchers, nested payloads), rejoined as shell words, and its
+    /// outer segments as written. nil: the budget ran out while reading.
+    private static func catastropheSegments(_ command: ShellCommand, inTime: () -> Bool) -> [String]? {
+        func nonEmpty(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+        var seen: Set<String> = [command.rawValue]
+        var segments: [String] = []
+        for text in [command.rawValue] + ObserveShellPayloads.payloads(command.rawValue) {
+            guard inTime() else { return nil }
+            let launched = launchedCommands(text).map(shellText).filter(nonEmpty)
+            let outer = shellChainSegments(text).filter(nonEmpty)
+            let candidates = [text].filter(nonEmpty) + launched + (outer.count > 1 ? outer : [])
+            segments += candidates.filter { seen.insert($0).inserted }
+        }
+        return segments
+    }
+
+    /// argv as one shell command: a word with blanks, quotes or shell
+    /// punctuation is single-quoted; redirect operators, `~`, globs and
+    /// expansions stay as they are, so the gate reads them as the shell does.
+    private static func shellText(_ argv: [String]) -> String {
+        argv.map { word in
+            let operatorLike = word.isEmpty == false && word.allSatisfy { "0123456789<>&|".contains($0) }
+                && word.contains(where: { "<>".contains($0) })
+            guard operatorLike == false, word.isEmpty || word.contains(where: { " \t\n'\";|&()<>`\\".contains($0) }) else {
+                return word
+            }
+            return "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }.joined(separator: " ")
     }
 
     // MARK: The verdict

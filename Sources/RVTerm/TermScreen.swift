@@ -77,7 +77,13 @@ public enum TermScreen {
         let pill: TermSpan
         switch state.mode {
         case .guarding: pill = TermSpan(" ● guarding ", .ok, bold: true, fill: .ok)
-        case .watching: pill = TermSpan(" ◐ watching ", .watch, bold: true, fill: .watch)
+        case .watching:
+            if let until = state.pausedUntil, until > state.now {
+                let minutes = max(1, Int((until.timeIntervalSince(state.now) + 59) / 60))
+                pill = TermSpan(" ◐ paused · \(minutes) min ", .watch, bold: true, fill: .watch)
+            } else {
+                pill = TermSpan(" ◐ watching ", .watch, bold: true, fill: .watch)
+            }
         }
         let right = [pill, TermSpan("  " + clock(state.now, calendar: calendar, seconds: false), .soft)]
         canvas.segs(width - length(right) - 2, 0, right)

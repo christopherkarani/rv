@@ -22,9 +22,6 @@ package let observeRobotStoppedEffective = "deny"
 package let stoppedWords = "\(CommandVocabulary.Glyph.stopped.rawValue) Stopped"
 package let stoppedInEveryModeWords = stoppedWords + ", in every mode"
 package let wouldStopWords = "\(CommandVocabulary.Glyph.watched.rawValue) Would stop"
-/// A guard-mode deny the host showed as an ask (`rv blocks`): the person
-/// may have let it run, so it never reads as a stop.
-package let asksWords = "\(CommandVocabulary.Glyph.ask.rawValue) \(CommandVocabulary.Glyph.ask.word)"
 
 /// How observe mode treated a verdict that is not an allow.
 public enum ObserveOutcome: Sendable, Equatable {

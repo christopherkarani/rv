@@ -362,12 +362,6 @@ static int rvd_state_allows_observe(void) {
 #endif
 }
 
-/* No CLI replay: neither a transport failure nor malformed input grants
- * authority. Renders the classified fallback (hook_fallback.h): input
- * failures always deny; daemon-unavailable classes follow
- * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
- * steps aside when the owner chose observe mode, RV_HOOK_WHEN_DOWN is not
- * deny, and the rvd state marker allows it. */
 /* The owner's first name for the stop's `who` line, from this account's
  * passwd full name (gecos), never the environment an agent sets. Empty
  * when the name is not one plain word (the stop then says "your user"). */
@@ -382,6 +376,12 @@ static void owner_first_name(char *out, size_t cap) {
     (void)rv_owner_first_name(entry.pw_gecos, out, cap);
 }
 
+/* No CLI replay: neither a transport failure nor malformed input grants
+ * authority. Renders the classified fallback (hook_fallback.h): input
+ * failures always deny; daemon-unavailable classes follow
+ * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
+ * steps aside when the owner chose observe mode, RV_HOOK_WHEN_DOWN is not
+ * deny, and the rvd state marker allows it. */
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
     char owner[RV_OWNER_NAME_MAX + 1];

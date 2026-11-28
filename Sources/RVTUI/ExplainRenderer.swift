@@ -64,6 +64,18 @@ public struct ExplainRenderer: FrameRenderer {
             )
         }
 
+        if !model.offPacks.isEmpty {
+            children.append(
+                .group(
+                    label: "Packs that are off",
+                    emphasis: .mark,
+                    children: model.offPacks.map {
+                        .group(label: $0.display, emphasis: .plain, children: [.text("$ \($0.turnOn)", emphasis: .fact)])
+                    }
+                )
+            )
+        }
+
         if let next = model.nextAction {
             children.append(.leaf(label: "Next", value: next, emphasis: .plain))
         }

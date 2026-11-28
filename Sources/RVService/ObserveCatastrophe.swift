@@ -50,9 +50,10 @@ enum ObserveCatastrophe {
     ///   `cp /dev/zero /dev/sda`), or whose words write one
     ///   (`writesDiskDevice`), is: a disk wipe under another rule.
     /// - A root-delete rule is when a target is a root (`rm -rf /usr/*`
-    ///   reads as `/usr`). With no analyzed target (`xargs rm -rf ~`), its
-    ///   words decide: one names a root, or one rv cannot expand (`$X`,
-    ///   `$(…)`), fails closed as catastrophic.
+    ///   reads as `/usr`), or one rv cannot know (`~/{}` from `xargs -I{}`).
+    ///   With no analyzed target (`xargs rm -rf ~`), the delete segment's
+    ///   words decide: one names a root, or one rv cannot know (`$X`,
+    ///   `$(…)`, `{}`), fails closed as catastrophic.
     static func isCatastrophic(_ result: EvaluationResult, command: String? = nil, home: HomeDirectory?) -> Bool {
         guard case .deny(let deny) = result.decision else { return false }
         if diskRules.contains(deny.ruleID) || deny.ruleID == forkBomb { return true }
@@ -66,13 +67,33 @@ enum ObserveCatastrophe {
         let targets = result.analysis.filesystemAction?.targets ?? []
         guard targets.isEmpty else {
             return targets.contains { target in
-                [target.canonical, target.apparent].contains { isRoot($0, home: home) }
+                // An analyzed target has its expansions resolved; only an
+                // `xargs` placeholder is still unknown.
+                [target.canonical, target.apparent].contains { isRoot($0, home: home) || $0.contains("{}") }
             }
         }
         guard let command else { return true }
-        return words(command).contains { word in
-            isRoot(word, home: home) || word.contains("$") || word.contains("`")
+        return deleteWords(command).contains { word in isRoot(word, home: home) || unknowable(word) }
+    }
+
+    /// A word rv cannot know until it runs: an expansion (`$X`, `$(…)`,
+    /// a backtick) or an `xargs` placeholder (`{}`).
+    private static func unknowable(_ word: String) -> Bool {
+        word.contains("$") || word.contains("`") || word.contains("{}")
+    }
+
+    /// Verbs whose segment holds a delete's operands (`xargs` feeds one).
+    private static let deleteVerbs: Set<String> = ["rm", "xargs", "find", "shred", "unlink", "tar", "srm"]
+
+    /// The words of the segments of `command` that run a delete, so an
+    /// expansion elsewhere (`cd $PROJ && … xargs rm -rf ~/build`) is not
+    /// read as its target. Every word when no segment names a delete verb.
+    private static func deleteWords(_ command: String) -> [String] {
+        let segments = shellChainSegments(command).map(words)
+        let deleting = segments.filter { segment in
+            segment.contains { deleteVerbs.contains($0.split(separator: "/").last.map(String.init) ?? $0) }
         }
+        return (deleting.isEmpty ? segments : deleting).flatMap { $0 }
     }
 
     /// The targets an action writes, deletes or moves onto (a read or a
@@ -89,11 +110,21 @@ enum ObserveCatastrophe {
 
     /// A whole disk or one of its partitions: `/dev/sda`, `/dev/sdb1`,
     /// `/dev/nvme0n1`, `/dev/nvme0n1p2`, `/dev/disk2`, `/dev/rdisk2s1`,
-    /// `/dev/mmcblk0p1`, `/dev/vda`, `/dev/xvda`, `/dev/hda`. Never
-    /// `/dev/null`, `/dev/zero` or a tty.
+    /// `/dev/mmcblk0p1`, `/dev/vda`, `/dev/xvda`, `/dev/hda`, `/dev/md0`,
+    /// `/dev/dm-0`, `/dev/loop0`, `/dev/mapper/vg-root`,
+    /// `/dev/disk/by-id/…`. Never `/dev/null`, `/dev/zero` or a tty.
     static func isDiskDevice(_ path: String) -> Bool {
         guard path.hasPrefix("/dev/") else { return false }
         let name = String(path.dropFirst("/dev/".count))
+        // Device-mapper, md RAID, loop devices and stable disk names.
+        for prefix in ["mapper/", "md/", "disk/by-"] where name.hasPrefix(prefix) {
+            return name.count > prefix.count && name.hasSuffix("/") == false
+        }
+        for prefix in ["md", "dm-", "loop"] where name.hasPrefix(prefix) {
+            let rest = name.dropFirst(prefix.count)
+            return rest.isEmpty == false && rest.allSatisfy { $0.isASCII && ($0.isNumber || $0 == "p") }
+                && rest.first?.isNumber == true
+        }
         func digits(_ text: Substring) -> Bool { text.isEmpty == false && text.allSatisfy { $0.isASCII && $0.isNumber } }
         func letters(_ text: Substring) -> Bool { text.isEmpty == false && text.allSatisfy { $0 >= "a" && $0 <= "z" } }
         // sd/hd/vd/xvd + letters + optional partition digits.
@@ -182,20 +213,52 @@ enum ObserveCatastrophe {
 
     // MARK: Roots
 
-    /// `/`, home, or a top-level system directory, after trailing `/*`
-    /// globs and slashes are dropped (`/usr/*` and `/usr/` are `/usr`).
+    /// `/`, home, or a top-level system directory, read lexically: quotes
+    /// dropped, trailing `/*` globs, slashes and `/.` dropped (`/usr/*` and
+    /// `/usr/` are `/usr`), and a trailing `/..` names the parent (`~/..`,
+    /// `/usr/local/..`). Home is `~`, `$HOME`, `${HOME}` or any
+    /// `${HOME…}` expansion that still names it (`${HOME:?}`,
+    /// `${HOME:-/tmp}`, `${HOME%/}`); `${HOME}/x` is below it.
     private static func isRoot(_ path: String, home: HomeDirectory?) -> Bool {
-        var trimmed = path
+        var trimmed = path.filter { $0 != "'" && $0 != "\"" }
+        var parents = 0
         while true {
             if trimmed.hasSuffix("/*") { trimmed.removeLast(2); continue }
+            if trimmed.hasSuffix("/..") { trimmed.removeLast(3); parents += 1; continue }
+            if trimmed.hasSuffix("/.") { trimmed.removeLast(2); continue }
             if trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast(); continue }
-            break
+            guard parents > 0 else { break }
+            // The parent of `/` or of home is a root too.
+            if trimmed.isEmpty || isHomeWord(trimmed) { return true }
+            guard let slash = trimmed.lastIndex(of: "/") else { return false }
+            trimmed = String(trimmed[..<slash])
+            parents -= 1
         }
         if trimmed.isEmpty { trimmed = "/" }
-        if systemRoots.contains(trimmed) || ["~", "$HOME", "${HOME}"].contains(trimmed) { return true }
+        if systemRoots.contains(trimmed) || isHomeWord(trimmed) { return true }
         guard let home else { return false }
         var homePath = home.rawValue
         while homePath.count > 1, homePath.hasSuffix("/") { homePath.removeLast() }
         return trimmed == homePath
+    }
+
+    /// `~`, `$HOME`, `${HOME}`, or `${HOME` with an operator that leaves
+    /// home or one of its parents (`:?`, `?`, `:-`, `-`, `:=`, `=`, `:+`,
+    /// `+`, `%`), closed by the word's last brace. Never `${HOME_DIR}` or
+    /// `${HOME#/}`.
+    private static func isHomeWord(_ word: String) -> Bool {
+        if word == "~" || word == "$HOME" || word == "${HOME}" { return true }
+        guard word.hasPrefix("${HOME") else { return false }
+        let rest = word.dropFirst("${HOME".count)
+        guard let first = rest.first, ":?-=+%".contains(first) else { return false }
+        var depth = 1
+        for (offset, char) in rest.enumerated() {
+            if char == "{" { depth += 1 }
+            if char == "}" {
+                depth -= 1
+                if depth == 0 { return offset == rest.count - 1 }
+            }
+        }
+        return false
     }
 }

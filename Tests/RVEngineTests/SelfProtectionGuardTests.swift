@@ -6,6 +6,11 @@ import RVDomain
 struct SelfProtectionGuardTests {
     static let weakening: [String] = [
         "rv packs disable core.filesystem",
+        "rv packs off core.filesystem",
+        "rv protect git off",
+        "rv protect off redis",
+        "rv protect redis $X",
+        "rv-cli protect docker off",
         "rv uninstall",
         "rv uninstall --yes",
         "rv uninstall --purge",
@@ -263,16 +268,29 @@ struct SelfProtectionGuardTests {
         "bash -c 'rv workspace upload ~/.config/gh'",
         "rv-cli workspace download . ~/copy",
         "ls | xargs rv workspace upload",
+        // `rv pause <duration>` watches every host (H4); agents never pause.
+        "rv pause 10m",
+        "rv pause 1h",
+        "rv pause --json 10m",
+        "rv pause $D",
+        "bash -c 'rv pause 10m'",
+        "rv-cli pause 30m",
     ]
 
     static let harmless: [String] = [
         "rv test 'ls'",
+        "rv pause",
+        "rv pause --end",
+        "rv pause --json",
         "rv workspace status",
         "rv workspace leftovers",
         "rv workspace --workspace /p status",
         "rv doctor",
         "rv packs list",
         "rv packs enable database.postgresql",
+        "rv packs on database.redis",
+        "rv protect redis",
+        "rv protect terraform",
         "rv safety",
         "rv safety strict",
         "rv policy show",

@@ -11,7 +11,7 @@ public func hookWire(
         stdin: stdin,
         codec: codec,
         world: world,
-        firstCall: { result, command, verdict, unlockCode, askRecorded in
+        firstCall: { result, command, verdict, unlockCode, askRecorded, voice in
             hookWire(
                 from: result,
                 command: command,
@@ -21,7 +21,7 @@ public func hookWire(
                     unlockCode: unlockCode,
                     askRecorded: askRecorded
                 ),
-                voice: world.voice
+                voice: voice
             )
         }
     )
@@ -32,7 +32,7 @@ private func hookBody(
     codec: any HostCodec,
     world: HookEvaluateWorld,
     firstCall: (
-        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool, StopVoice
     ) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
@@ -59,7 +59,7 @@ private func hookRequestBody(
     codec: any HostCodec,
     world: HookEvaluateWorld,
     firstCall: (
-        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool, StopVoice
     ) -> HookWire
 ) async -> HookWire {
     switch request {
@@ -69,7 +69,8 @@ private func hookRequestBody(
             file: file,
             codec: codec,
             evaluateFile: world.evaluateFile,
-            voice: world.voice
+            voice: world.voice,
+            saferAllowed: world.saferAllowed
         )
     case .shell(_, let command, let cwd, _):
         let result = await world.evaluate(command, cwd)
@@ -94,7 +95,9 @@ private func hookRequestBody(
                 )
             }
         }
-        return firstCall(result, command, auth.verdict, unlockCode, askRecorded)
+        // The pack's safer command shows only when rv allows it here.
+        let voice = await world.voice.vetted(for: result, cwd: cwd, by: world.saferAllowed)
+        return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }
 
@@ -103,13 +106,15 @@ private func hookFileBody(
     file: FileToolAction,
     codec: any HostCodec,
     evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult,
-    voice: StopVoice
+    voice: StopVoice,
+    saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
 ) async -> HookWire {
     if file.path.isEmpty {
         return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: voice))
     }
     let result = await evaluateFile(file, request.cwd)
-    return hookFileWire(from: result, using: codec, path: file.path, voice: voice)
+    let vetted = await voice.vetted(for: result, cwd: request.cwd, by: saferAllowed)
+    return hookFileWire(from: result, using: codec, path: file.path, voice: vetted)
 }
 
 /// File wire: `HookMapper` composes the presentation; a file result that
