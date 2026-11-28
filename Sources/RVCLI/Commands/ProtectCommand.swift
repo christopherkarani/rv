@@ -33,6 +33,13 @@ struct Protect: AsyncParsableCommand {
         } catch {
             try CommandContext.fail("rv: the bundled packs cannot be read. Run rv doctor.\n")
         }
+        // A multi-word name (`docker compose`, `github actions`) must be a
+        // name rv knows as written; anything else is two tools.
+        if request.names.count > 1 {
+            guard case .found = tools.resolve(request.tool) else {
+                try CommandContext.fail(ProtectText.oneAtATime(request.names[0], off: request.off))
+            }
+        }
         let target = try resolve(request.tool, tools: tools, off: request.off)
         if request.off {
             try await ProtectFlow.turnOff(target)
@@ -70,7 +77,8 @@ private func readAnswer() -> String {
     return readLine() ?? "n"
 }
 
-/// `rv protect` arguments: one tool name, and `off` anywhere to remove.
+/// `rv protect` arguments: one tool name (which may be several words, such
+/// as `docker compose`), and `off` anywhere to remove.
 struct ProtectRequest: Equatable {
     struct Refusal: Error {
         let message: String
@@ -78,20 +86,20 @@ struct ProtectRequest: Equatable {
 
     static let offWord = "off"
 
-    var tool: String
+    /// The words that are not `off`, in order.
+    var names: [String]
     var off: Bool
 
+    /// The names joined by a space: what `ProtectTools.resolve` looks up.
+    var tool: String { names.joined(separator: " ") }
+
     init(words: [String]) throws {
-        let off = words.contains(Self.offWord)
-        let names = words.filter { $0 != Self.offWord }
-        guard names.count == 1, let tool = names.first else {
+        off = words.contains(Self.offWord)
+        names = words.filter { $0 != Self.offWord }
+        guard names.isEmpty == false else {
             let program = CommandVocabulary.Command.protect.invocation
-            throw Refusal(message: names.isEmpty
-                ? "rv: name a tool to protect, such as redis or terraform.\n→ \(program) TOOL\n"
-                : "rv: name one tool at a time.\n→ \(program) \(DisplayedText.field(names[0]))\(off ? " off" : "")\n")
+            throw Refusal(message: "rv: name a tool to protect, such as redis or terraform.\n→ \(program) TOOL\n")
         }
-        self.tool = tool
-        self.off = off
     }
 }
 
@@ -118,6 +126,10 @@ enum ProtectText {
 
     static func alreadyOff(_ target: ProtectTarget) -> String {
         "  \(target.name) is not protected.\n"
+    }
+
+    static func oneAtATime(_ first: String, off: Bool) -> String {
+        "rv: name one tool at a time.\n→ \(CommandVocabulary.Command.protect.invocation) \(DisplayedText.field(first))\(off ? " off" : "")\n"
     }
 
     static func required(_ target: ProtectTarget) -> String {

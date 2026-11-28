@@ -1,6 +1,6 @@
 import RVDomain
 
-/// A pack that is off but would stop an explained command if it were on.
+/// A pack that is off with a rule that stops an explained command.
 /// `rv explain` checked only the packs in force, so a command a bundled
 /// pack would catch read as plain "allow" with no hint the pack exists.
 public struct ExplainOffPack: Equatable, Sendable, Encodable {
@@ -15,9 +15,11 @@ public struct ExplainOffPack: Equatable, Sendable, Encodable {
         self.turnOn = turnOn
     }
 
-    /// `Would stop if database.redis were on (database.redis:flushall)`
+    /// `A rule in database.redis matches (database.redis:flushall)`. Not
+    /// "would stop": the owner's allowlist and policy rules, which the
+    /// probe does not apply, may still let the command run.
     public var display: String {
-        "Would stop if \(DisplayedText.field(packID.rawValue)) were on (\(DisplayedText.field(ruleID.rawValue)))"
+        "A rule in \(DisplayedText.field(packID.rawValue)) matches (\(DisplayedText.field(ruleID.rawValue)))"
     }
 
     enum CodingKeys: String, CodingKey {

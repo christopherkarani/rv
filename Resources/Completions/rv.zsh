@@ -15,6 +15,7 @@ _rv() {
     'prompt:One glyph for your shell prompt'
     'news:What is new in this rv, measured on your week'
     'packs:List and enable packs'
+    'protect:Protect a tool'
     'policy:Typed rules'
     'scan:Session forensics'
     'allow-once:Mint and redeem single-use unlock codes'

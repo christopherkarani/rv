@@ -11,6 +11,7 @@ complete -c rv -n "__fish_use_subcommand" -a "check" -d "Check a plan before an 
 complete -c rv -n "__fish_use_subcommand" -a "prompt" -d "One glyph for your shell prompt"
 complete -c rv -n "__fish_use_subcommand" -a "news" -d "What is new in this rv, measured on your week"
 complete -c rv -n "__fish_use_subcommand" -a "packs" -d "List and enable packs"
+complete -c rv -n "__fish_use_subcommand" -a "protect" -d "Protect a tool"
 complete -c rv -n "__fish_use_subcommand" -a "policy" -d "Typed rules"
 complete -c rv -n "__fish_use_subcommand" -a "scan" -d "Session forensics"
 complete -c rv -n "__fish_use_subcommand" -a "allow-once" -d "Mint and redeem single-use unlock codes"
