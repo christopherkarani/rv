@@ -7,12 +7,12 @@ import RVDomain
 //     ✕ Stopped   git reset --hard (core.git/reset-hard)
 //     why     destroys uncommitted changes
 //     safer   git status
-//     who     ask Chris to run  rv allow-once a1b2c3
+//     who     ask Chris to run  rv unlock a1b2c3
 //
 // The verdict and the command, the rule id, why in under ten words, one
 // safer command when the rule's pack offers one, and who acts. The text is
 // plain (it goes to an agent, not a TTY): no ANSI, no box drawing. It never
-// tells the agent to run `rv allow-once` itself: the code is for the person
+// tells the agent to run `rv unlock` itself: the code is for the person
 // the `who` line names. "Cost in numbers" (B3) and self-protection's own
 // words (B2) come later.
 
@@ -110,7 +110,7 @@ public struct StopNotice: Sendable, Equatable {
     public var why: String
     /// One safer command, or nil.
     public var safer: String?
-    /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
+    /// Who acts ("ask Chris to run  rv unlock a1b2c3").
     public var who: String
     /// The third-try note (B5, `stopStreakNote`), or nil.
     public var again: String?
@@ -184,14 +184,14 @@ public enum HookVoiceNext: Sendable, Equatable {
 /// The aside after it is the agent's, and says so: `rv wait <code>` (H2)
 /// only waits for the owner's answer and never decides anything.
 public func unlockLine(for code: AllowOnceUnlockCode, owner: OwnerName = .unknown) -> String {
-    "\(askOwner(owner)) to run\(commandGap)\(CommandVocabulary.Command.allowOnce.invocation) \(code.rawValue)"
+    "\(askOwner(owner)) to run\(commandGap)\(CommandVocabulary.Alias.unlock.invocation) \(code.rawValue)"
         + "\(commandGap)(you can wait: \(CommandVocabulary.Command.wait.invocation) \(code.rawValue))"
 }
 
 /// The `who` line for a repeat stop of the same command and cwd: no second
 /// code is minted.
 public func earlierPendingUnlockLine(owner: OwnerName = .unknown) -> String {
-    "\(askOwner(owner)) to run the earlier code with\(commandGap)\(CommandVocabulary.Command.allowOnce.invocation)"
+    "\(askOwner(owner)) to run the earlier code with\(commandGap)\(CommandVocabulary.Alias.unlock.invocation)"
 }
 
 /// The `who` line when rv minted nothing and the pack names no one: the
@@ -253,10 +253,13 @@ func unlockHookVoiceNext(_ mint: AllowOnceUnlockMint?, fallback: HookVoiceNext =
     }
 }
 
-/// First `rv allow-once <6hex>` in `text`, if present.
+/// First `rv unlock <6hex>` in `text`, if present. Stops print the
+/// official name (`rv unlock`, Q1); text from before the rename spelled it
+/// `rv allow-once`, the permanent alias, so that spelling is read too.
 public func allowOnceUnlockCode(in text: String) -> AllowOnceUnlockCode? {
-    let marker = CommandVocabulary.Command.allowOnce.invocation + " "
-    guard let range = text.range(of: marker) else { return nil }
+    let markers = [CommandVocabulary.Alias.unlock.invocation, CommandVocabulary.Command.allowOnce.invocation]
+    let found = markers.compactMap { text.range(of: $0 + " ") }.min { $0.lowerBound < $1.lowerBound }
+    guard let range = found else { return nil }
     let code = String(text[range.upperBound...].prefix(6))
     return AllowOnceUnlockCode(validating: code)
 }

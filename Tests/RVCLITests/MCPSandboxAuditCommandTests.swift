@@ -25,7 +25,7 @@ struct MCPSandboxAuditCommandTests {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: FakeKeychain().writer,
                 approvalSigning: .file(configDirectory: config),
-                presence: UserPresence { _, _ in .confirmed(method: "test") })
+                presence: UserPresence { _, _ in .confirmed(method: "test") }, hasTerminal: { true })
         }
 
         /// mcp.json as an outside edit: owner-only, unsigned.

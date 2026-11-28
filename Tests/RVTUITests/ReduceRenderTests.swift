@@ -117,7 +117,7 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
     #expect(lines.contains { $0.contains("Suggestions") })
     #expect(lines.contains { $0.contains("Preview first") })
     #expect(lines.contains { $0.contains("$ git diff && git status") })
-    #expect(lines.contains { $0.contains("Next") && $0.contains("rv allow-once") })
+    #expect(lines.contains { $0.contains("Next") && $0.contains("rv unlock") })
     #expect(!text.contains("μs"))
     #expect(lines.allSatisfy { $0.count <= 80 })
 }

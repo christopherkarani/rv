@@ -1022,7 +1022,7 @@ public actor ServiceRuntime {
         let suggestion: String?
         switch result.decision {
         case .deny:
-            suggestion = "Run it in Terminal, or rv allow-once."
+            suggestion = "Run it in Terminal, or \(CommandVocabulary.Alias.unlock.invocation)."
         case .indeterminate:
             suggestion = "Run it in Terminal."
         case .allow:
@@ -1047,7 +1047,7 @@ public actor ServiceRuntime {
         let suggestions: [String]
         switch result.decision {
         case .deny:
-            suggestions = ["Run it in Terminal, or rv allow-once."]
+            suggestions = ["Run it in Terminal, or \(CommandVocabulary.Alias.unlock.invocation)."]
         case .indeterminate:
             suggestions = ["Run it in Terminal."]
         case .allow:

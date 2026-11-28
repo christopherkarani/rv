@@ -139,7 +139,7 @@ public func explainViewModel(
         fact = observed == .stoppedInObserve ? observeOnlyStopSentence : indeterminateSentence(reason)
         next = nil
     }
-    // A watched verdict ran: no "run it in Terminal, or rv allow-once"
+    // A watched verdict ran: no "run it in Terminal, or rv unlock"
     // advice for a command observe already let through.
     let watched: Bool
     if case .watched = observed, result.decision != .allow { watched = true } else { watched = false }

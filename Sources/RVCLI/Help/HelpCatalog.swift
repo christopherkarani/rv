@@ -1080,7 +1080,7 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "code",
-                    description: "The six-character code in the agent's stop message (\"rv allow-once a1b2c3\")"
+                    description: "The six-character code in the agent's stop message (\"rv unlock a1b2c3\")"
                 ),
                 HelpRow(
                     name: "redeem",

@@ -51,7 +51,7 @@
       ],
       "notes": [
         "GraphQL needs POST, which a read-only rule cannot tell from a mutation, so gh commands that use it are refused",
-        "For git over https bind a second secret: rv secrets set NAME --provider github:git --base-url-env VAR"
+        "For git over https bind a second secret: rv secrets add NAME --provider github:git --base-url-env VAR"
       ]
     },
     {

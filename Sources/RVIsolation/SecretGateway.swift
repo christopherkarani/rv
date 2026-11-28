@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+import RVDomain
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -1007,7 +1008,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             failure = "upstream returned 401 for the brokered credential"
             closed = true
             _ = transmit(fd, GatewaySocket.plainResponse(
-                status: 502, reason: "the brokered credential was rejected upstream; update it with `rv secrets set`"))
+                status: 502, reason: "the brokered credential was rejected upstream; update it with `\(CommandVocabulary.Alias.secretsAdd.invocation)`"))
             return
         }
         framed = method != "HEAD" && status != 204 && status != 304 && (status < 100 || status >= 200)

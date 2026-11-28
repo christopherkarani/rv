@@ -60,7 +60,13 @@ struct Protect: AsyncParsableCommand {
         case .nearest(let target):
             if off == false, CLIProcess.stdinIsTTY(), CLIProcess.stdoutIsTTY() {
                 CommandContext.writeStdout("  \(target.name)? ⏎ ")
-                let answer = readAnswer().trimmingCharacters(in: .whitespaces).lowercased()
+                guard let line = readAnswer() else {
+                    // No answer at all (end of input): nothing echoed a
+                    // newline, so end the prompt's line before saying so.
+                    CommandContext.writeStdout("\n")
+                    try CommandContext.fail("  Nothing changed.\n")
+                }
+                let answer = line.trimmingCharacters(in: .whitespaces).lowercased()
                 if answer.isEmpty || answer == "y" || answer == "yes" { return target }
                 try CommandContext.fail("  Nothing changed.\n")
             }
@@ -71,13 +77,14 @@ struct Protect: AsyncParsableCommand {
     }
 }
 
-/// One line from the terminal (tests: the context's stdin text). No
-/// input reads as no.
-private func readAnswer() -> String {
+/// One line from the terminal (tests: the context's stdin text), or `nil`
+/// at end of input, which reads as no.
+private func readAnswer() -> String? {
     if let text = CLIProcess.context?.stdinText {
-        return text.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? "n"
+        guard text.isEmpty == false else { return nil }
+        return text.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init)
     }
-    return readLine() ?? "n"
+    return readLine()
 }
 
 /// `rv protect` arguments: one tool name (which may be several words, such

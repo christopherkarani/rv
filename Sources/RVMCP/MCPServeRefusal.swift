@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVIsolation
 
 /// Why `rv mcp serve` starts nothing, kept as a value so the same refusal
@@ -29,6 +30,9 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case blocked(String)
         case secretUndefined(server: String, secret: String)
         case secretUnavailable(server: String, secret: String)
+        /// `${secret:NAME}` is in this local server's args; rv never puts a
+        /// secret value in a process's arguments.
+        case secretInArguments(server: String, secret: MCPArgumentSecret)
         /// The cage is enforced here and this local server has no sandbox.
         case noSandbox(String)
         /// The cage is enforced here and its sandbox leaves the network open.
@@ -90,6 +94,7 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .blocked(let name): "\(MCPDisplayedText.field(name)) is blocked in mcp.json"
         case .secretUndefined(_, let secret): "secret \(MCPDisplayedText.field(secret)) is not set up"
         case .secretUnavailable(_, let secret): "rv could not read secret \(MCPDisplayedText.field(secret))"
+        case .secretInArguments(_, let found): found.reason
         case .noSandbox: "not sealed: it has no sandbox"
         case .openNetwork: "not sealed: its sandbox network is open"
         case .cageUnavailable: "rv can't seal it on this host"
@@ -113,8 +118,9 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .configurationUnusable: "rv mcp check"
         case .noServers: "rv mcp import"
         case .unknownServer, .blocked: "rv mcp list"
-        case .secretUndefined(_, let secret): "rv secrets set \(MCPDisplayedText.field(secret))"
+        case .secretUndefined(_, let secret): "\(CommandVocabulary.Alias.secretsAdd.invocation) \(MCPDisplayedText.field(secret))"
         case .secretUnavailable, .secretsUnusable: "rv secrets check"
+        case .secretInArguments(_, let found): found.fix
         case .noSandbox(let server):
             "add \"sandbox\": {\"network\": false} to \(MCPDisplayedText.field(server)) in mcp.json, then rv mcp trust"
         case .openNetwork(let server):
@@ -176,6 +182,7 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
             guard first == nil else { continue }
             switch refusal {
             case .placeholder(let placeholder): first = cause(server: server, placeholders: placeholder)
+            case .secretInArguments(let secret): first = .secretInArguments(server: server, secret: secret)
             case .sandbox:
                 // `MCPLaunchPlanner.sealRefusal` refuses one alone only for
                 // these two.
@@ -372,6 +379,9 @@ extension MCPServeRefusal {
             names.first { secrets.secret(named: $0) == nil }.map { .secretUndefined(server: name, secret: $0) }
         }
         if let remote = server.remote { return undefined(remote.secretNames) }
+        if let secret = MCPLaunchPlanner.argumentSecret(server) {
+            return .secretInArguments(server: name, secret: secret)
+        }
         if server.placeholders.isEmpty == false {
             if let refusal = MCPPlaceholderPlanning.refusal(
                 server, platformSupported: placeholdersSupported, cageEnforced: requireSandbox, secrets: secrets)

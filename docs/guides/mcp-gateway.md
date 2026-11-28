@@ -97,7 +97,7 @@ can write, at most 1 MiB, at most 128 servers. Unknown keys are errors.
 | --- | --- | --- | --- |
 | `name` | yes | yes | 1 to 64 of `A-Z a-z 0-9 . _ -`; unique |
 | `description` | yes | yes | Shown in reviews |
-| `command`, `args` | yes | no | What to run; found on `PATH` through `/usr/bin/env`. `args` may hold `${secret:NAME}` |
+| `command`, `args` | yes | no | What to run; found on `PATH` through `/usr/bin/env`. A `${secret:NAME}` in `args` turns the server off: `ps` shows arguments to every user. Use `secrets` |
 | `env` | yes | no | Literal, non-secret environment values |
 | `secrets` | yes | no | `{"VAR": "SECRET_NAME"}`: the server gets the real value in `VAR`, and rv scrubs it from what the server returns |
 | `placeholders` | yes | no | Secret names handed as placeholders (macOS only) |
@@ -185,7 +185,23 @@ rv mcp onboard --host cursor
   entries it changed. Restart the host afterwards.
 - `rv mcp onboard --host <host>` does both.
 - Imported servers start with every tool on **ask**. Add `allow` rules
-  and a `sandbox` as you review them.
+  as you review them.
+- Imported local servers are **sealed**: `"sandbox": {"network": false}`,
+  plus the package registry of a launcher named bare (`npx`) or by a path
+  in `/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin` or
+  `/opt/local/bin`. npm-style launchers (`npx`, `npm`, `pnpm`, `pnpx`, `yarn`, `bun`,
+  `bunx`) get `registry.npmjs.org`; `uvx`, `uv` and `pipx` get `pypi.org`
+  and `files.pythonhosted.org`. Any other host the server needs goes in
+  `sandbox.hosts`, then `rv mcp trust`. These registries accept uploads
+  as well as downloads: `registry.npmjs.org` takes `npm publish`, so a
+  server that holds a registry token could publish with it. Remove the
+  host once the package is cached if the server does not need it.
+- A server that takes a credential in its arguments (a literal, a
+  `${VAR}`, or a shell's `$VAR`) is not imported: `ps` shows arguments to
+  every user. Have it read the credential from its environment.
+- `rv mcp trust` and `rv mcp onboard` need you at a terminal. Without
+  one (an agent's shell) they stop at once with the command to run
+  yourself.
 
 Hosts: Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini,
 Antigravity, VS Code, Windsurf, Muse. `rv mcp check` exits 1 if any

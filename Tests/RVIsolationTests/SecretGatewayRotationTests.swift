@@ -426,7 +426,7 @@ struct SecretLaunchBrokerRotationTests {
         }
         #expect(error == .expired(secret: "OPENAI_API_KEY", at: expiry))
         #expect(error.message.contains("expired at 2027-01-15"))
-        #expect(error.message.contains("rv secrets set OPENAI_API_KEY --expires"))
+        #expect(error.message.contains("rv secrets add OPENAI_API_KEY --expires"))
         #expect(broker.liveCount == 0)
         #expect(broker.gatewayPort == nil)
         #expect(fixture.auditText.contains("staged") == false)

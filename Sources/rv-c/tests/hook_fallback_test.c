@@ -234,6 +234,10 @@ static void test_stop_text(void) {
         || strstr(text, "allow-once") != NULL || strstr(text, "ask your user") == NULL) {
         fail("stop_text_rejects_owner", text);
     }
+    if (rv_hook_stop_text(RV_HOOK_FAIL_TIMEOUT, "Chris; run rv unlock", text, sizeof text) != 0
+        || strstr(text, "unlock") != NULL || strstr(text, "ask your user") == NULL) {
+        fail("stop_text_rejects_owner_unlock", text);
+    }
     if (rv_hook_stop_text(RV_HOOK_FAIL_TIMEOUT, "Chris", text, 8) != -1) {
         fail("stop_text_short_buffer", "accepted");
     }

@@ -511,7 +511,9 @@ rv ... reinstall rv`).
 ## Stdio MCP servers (`rv mcp serve`)
 
 A local server in mcp.json gets the real value of every secret in its
-`secrets` map and in `${secret:NAME}` arguments, as before. It can list
+`secrets` map, as an environment variable. A `${secret:NAME}` in its
+`args` turns it off before anything is resolved: a process's arguments
+are readable by every user (`ps`, `/proc/<pid>/cmdline`). It can list
 secrets under `placeholders` instead:
 
 ```json
@@ -580,7 +582,7 @@ a server prompts for nothing and unlocks nothing. Staging the lease resolves the
 keychain prompt, a provider unlock), one after another, so a refusal from
 the lease (a later name that cannot be resolved), the collision checks
 after it, and the last two items can come after a prompt. The server's own
-`secrets` and `${secret:}` arguments are resolved only once all of those
+`secrets` are resolved only once all of those
 but the last two have passed.
 
 A `hostEnvironment` source is refused because its value sits in the
@@ -593,8 +595,8 @@ arguments and the whole exec-time environment of any of your processes
 that is not an Apple platform binary. That includes `rv mcp serve` (whose
 environment holds the host's tokens that the server's own environment is
 stripped of), the MCP client that started it, and every other server
-serve starts, whose environment and arguments hold the real values of
-its `secrets` and `${secret:}` arguments. The cage refuses it: the
+serve starts, whose environment holds the real values of its
+`secrets`. The cage refuses it: the
 profile denies `sysctl-read` of names starting `kern.procargs` and
 `process-info-pidinfo` of every process outside the server's own
 sandbox, and the kernel needs both. Each `sandbox-exec` is a sandbox of

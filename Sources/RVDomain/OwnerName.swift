@@ -1,5 +1,5 @@
 /// The first name of the person who owns this Mac, as stop text says it:
-/// "ask Chris to run  rv allow-once a1b2c3". rv reads it from the account's
+/// "ask Chris to run  rv unlock a1b2c3". rv reads it from the account's
 /// passwd full name (the gecos field: macOS `RealName`), never from the
 /// environment, which an agent controls. Changing the full name takes the
 /// account password (`chfn`, System Settings) or root, so an agent cannot

@@ -122,7 +122,7 @@ struct ObserveWouldBeTests {
         #expect(observe.exitCode == 0)
         #expect(observe.stdout.contains("Decision: ◐ Would stop"))
         #expect(!observe.stdout.contains("Decision: DENY"))
-        // It ran: no "run it in Terminal, or rv allow-once" advice.
+        // It ran: no "run it in Terminal, or rv unlock" advice.
         #expect(!observe.stdout.contains("allow-once"))
         #expect(observe.stdout.contains("Rule         core.git/reset-hard"))
         #expect(observe.stdout.contains("destructive  core.git/reset-hard"))

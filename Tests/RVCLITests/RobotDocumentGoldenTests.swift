@@ -44,11 +44,11 @@ private func decoded(_ json: String) throws -> NSDictionary {
         from: denyResult(),
         command: ShellCommand(rawValue: "git reset --hard")
     )
-    let golden = #"{"schema":"rv.explain.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes","next_action":"run it in Terminal, or rv allow-once"}"#
+    let golden = #"{"schema":"rv.explain.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes","next_action":"run it in Terminal, or rv unlock"}"#
     let rendered = try RobotDocument.explain(explainRobotPayload(from: model)).render()
     #expect(
         rendered
-            == #"{"decision":"deny","next_action":"run it in Terminal, or rv allow-once","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.explain.v1"}"#
+            == #"{"decision":"deny","next_action":"run it in Terminal, or rv unlock","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.explain.v1"}"#
     )
     let decodedGolden = try decoded(golden)
     #expect(try decoded(rendered) == decodedGolden)

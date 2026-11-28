@@ -48,7 +48,7 @@ public enum SecretsScanGuard {
     /// Sentence 1 is the stop; sentence 2 is the human's command, short
     /// enough to survive `hostDenyWhy`.
     public static let reason =
-        "Only the owner can switch off or silence the commit check. Ask them to move the key into rv: rv secrets set NAME."
+        "Only the owner can switch off or silence the commit check. Ask them to move the key into rv: \(CommandVocabulary.Alias.secretsAdd.invocation) NAME."
 
     /// The git config key the hook reads, folded.
     static let switchKey = "rv.secretsscan"

@@ -107,6 +107,8 @@ struct MCPServeRefusalTests {
         #expect(cause([.refused(server: "p", .placeholder(.unknownSecret("K")))]) == .secretUndefined(server: "p", secret: "K"))
         #expect(cause([.refused(server: "wax", .sandbox("x")), .process(launch)]) == nil)
         #expect(cause([]) == nil)
+        #expect(cause([.refused(server: "wax", .secretInArguments(.reference("WAX_TOKEN")))])
+            == .secretInArguments(server: "wax", secret: .reference("WAX_TOKEN")))
     }
 
     /// Every off state names its own fix; none sends the person to a
@@ -115,9 +117,12 @@ struct MCPServeRefusalTests {
         func next(_ cause: MCPServeRefusal.Cause) -> String { MCPServeRefusal(servers: ["wax"], cause: cause, log: "").next }
         #expect(next(.noSandbox("wax")) == #"add "sandbox": {"network": false} to wax in mcp.json, then rv mcp trust"#)
         #expect(next(.openNetwork("wax")) == "list the hosts wax needs in sandbox.hosts in mcp.json, then rv mcp trust")
-        #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets set WAX_TOKEN")
+        #expect(next(.secretUndefined(server: "wax", secret: "WAX_TOKEN")) == "rv secrets add WAX_TOKEN")
         #expect(next(.placeholders(server: "wax", .unsupportedPlatform)) == "fix wax's placeholders in mcp.json, then rv mcp trust")
         #expect(next(.cageUnavailable) == "rv doctor")
+        let inArgs = MCPServeRefusal(servers: ["wax"], cause: .secretInArguments(server: "wax", secret: .reference("WAX_TOKEN")), log: "")
+        #expect(inArgs.next == #"remove ${secret:WAX_TOKEN} from args and add "secrets": {"WAX_TOKEN": "WAX_TOKEN"} so the server reads $WAX_TOKEN, then rv mcp trust"#)
+        #expect(inArgs.reason.contains("\n") == false && inArgs.next.contains("\n") == false)
         // Lease detail is the gateway's, not mcp.json's: it stays out of the agent's text.
         let lease = MCPServeRefusal(servers: ["wax"], cause: .placeholders(server: "wax", .leaseFailed("socket /tmp/x: EACCES")), log: "")
         #expect(lease.agentMessage.contains("/tmp/x") == false)
@@ -143,7 +148,7 @@ struct MCPServeRefusalTests {
             MCPServerDefinition(name: "sealed", command: "c", sandbox: sealed),
             MCPServerDefinition(name: "keyed", command: "k", secrets: ["WAX_TOKEN": "WAX_TOKEN"], sandbox: sealed),
             MCPServerDefinition(name: "missing", command: "m", secrets: ["TOKEN": "NOPE"], sandbox: sealed),
-            MCPServerDefinition(name: "argmissing", command: "m", args: ["--key=${secret:GONE}"], sandbox: sealed),
+            MCPServerDefinition(name: "argsecret", command: "m", args: ["--key=${secret:WAX_TOKEN}"], sandbox: sealed),
             MCPServerDefinition(name: "held", command: "h", sandbox: sealed, placeholders: ["API_KEY"]),
             MCPServerDefinition(name: "unknownheld", command: "h", sandbox: sealed, placeholders: ["NOPE"]),
             MCPServerDefinition(name: "envheld", command: "h", sandbox: sealed, placeholders: ["WAX_TOKEN"]),
@@ -175,9 +180,11 @@ struct MCPServeRefusalTests {
         #expect(cause("sealed", cage: true) == nil)
         #expect(cause("keyed", cage: true) == nil)
         #expect(cause("web", cage: true) == nil)
-        // A secret secrets.json does not define, by `secrets`, in args, or in a remote header.
+        // A secret secrets.json does not define, by `secrets` or in a remote header.
         #expect(cause("missing", cage: true) == .secretUndefined(server: "missing", secret: "NOPE"))
-        #expect(cause("argmissing", cage: true) == .secretUndefined(server: "argmissing", secret: "GONE"))
+        // A secret in args is off even though it is defined, caged or not.
+        #expect(cause("argsecret", cage: true) == .secretInArguments(server: "argsecret", secret: .reference("WAX_TOKEN")))
+        #expect(cause("argsecret", cage: false) == .secretInArguments(server: "argsecret", secret: .reference("WAX_TOKEN")))
         #expect(cause("webmissing", cage: true) == .secretUndefined(server: "webmissing", secret: "NOPE"))
         // Placeholders: the planner's own checks.
         #expect(cause("held", cage: true) == nil)
