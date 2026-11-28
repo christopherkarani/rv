@@ -32,7 +32,7 @@ public struct DenyViewModel: Equatable, Sendable {
     }
 }
 
-package let denyNextAction = "run it in Terminal, or rv allow-once"
+package let denyNextAction = "run it in Terminal, or \(CommandVocabulary.Alias.unlock.invocation)"
 
 package func factSentence(from reason: String) -> String {
     let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)

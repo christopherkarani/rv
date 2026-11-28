@@ -6,11 +6,11 @@ import Testing
 private let resetHardReason =
     "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let resetHardAskReason =
-    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock."
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
-    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv unlock.\"}\n"
 
 private func resetHardEvent() -> [String: Any] {
     [
@@ -33,7 +33,7 @@ private func resetHardEvent() -> [String: Any] {
     #expect(source.contains("RV_ASK_CONFIRM") == false)
     #expect(source.contains("plugin.approval.request") == false)
     #expect(source.contains("plugin.approval.waitDecision") == false)
-    #expect(source.contains("allow-once"))
+    #expect(source.contains("rv unlock"))
     #expect(source.contains("timeoutMs: RV_HOOK_TIMEOUT_MS + 15_000"))
     #expect(source.contains("requireApproval") == false)
     #expect(source.contains("allow-always") == false)

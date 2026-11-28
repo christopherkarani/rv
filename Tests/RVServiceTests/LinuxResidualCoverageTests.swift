@@ -349,7 +349,7 @@ struct LinuxResidualCoverageTests {
             Issue.record("explain deny must reply")
             return
         }
-        #expect(denyReply.suggestion == "Run it in Terminal, or rv allow-once.")
+        #expect(denyReply.suggestion == "Run it in Terminal, or rv unlock.")
 
         let decode = await runtime.handleIncoming(Data("not-json".utf8), handshakeOK: true)
         #expect(decode.handshakeAccepted)

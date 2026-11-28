@@ -246,8 +246,9 @@ enum SecretsRun {
 
     static func listText(_ report: ListReport) -> String {
         guard report.secrets.isEmpty == false || report.warnings.isEmpty == false else {
+            // The short form: `rv secrets add --help` keeps the flags.
             return "No secrets configured. Add one with:\n"
-                + "  \(CommandVocabulary.Alias.secretsAdd.invocation) NAME --gateway https://api.example.com --base-url-env EXAMPLE_BASE_URL\n"
+                + "\(CommandVocabulary.Glyph.next.rawValue) \(CommandVocabulary.Alias.secretsAdd.invocation) NAME\n"
         }
         let width = report.secrets.map(\.name.count).max() ?? 0
         var lines = report.secrets.map { row -> String in

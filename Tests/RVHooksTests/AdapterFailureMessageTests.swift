@@ -267,13 +267,19 @@ private func writeStub(_ stub: AdapterStub, in root: URL) throws -> String {
         try "#!/bin/sh\nexit 0\n".write(toFile: rvPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: rvPath)
     case .stdout, .sleep:
+        // The reply goes through a file, not the environment: on macOS
+        // Process hands environment values over decomposed (NFD), which
+        // would change a non-ASCII owner name the C hook writes as NFC.
+        if case .stdout(let stdout, _) = stub {
+            try Data(stdout.utf8).write(to: URL(fileURLWithPath: rvPath + ".stdout"))
+        }
         let script = """
         #!/bin/sh
         cat > /dev/null
         if [ -n "$RV_STUB_SLEEP" ]; then
           exec sleep "$RV_STUB_SLEEP"
         fi
-        printf '%s' "$RV_STUB_STDOUT"
+        cat "$0.stdout"
         exit "${RV_STUB_EXIT:-0}"
         """
         try writeExecutableStub(script, toFile: rvPath)
@@ -295,8 +301,7 @@ private func stubEnvironment(_ stub: AdapterStub, root: URL) -> [String: String]
     environment["HOME"] = root.path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     switch stub {
-    case .stdout(let stdout, let exitCode):
-        environment["RV_STUB_STDOUT"] = stdout
+    case .stdout(_, let exitCode):
         environment["RV_STUB_EXIT"] = String(exitCode)
     case .sleep(let seconds):
         environment["RV_STUB_SLEEP"] = String(seconds)

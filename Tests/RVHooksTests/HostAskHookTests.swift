@@ -129,7 +129,7 @@ struct HostAskHookTests {
         #expect(json["decision"] as? String == "deny")
         #expect(json["rule"] as? String == "core.secrets/env-exfil")
         #expect(wire.stdout.contains(approveInRVLine()) == false)
-        #expect(wire.stdout.contains("rv allow-once") == false)
+        #expect((wire.stdout.contains("rv allow-once") || wire.stdout.contains("rv unlock")) == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
     }
@@ -160,7 +160,7 @@ struct HostAskHookTests {
         )
         #expect(json["decision"] as? String == "deny")
         #expect(wire.stdout.contains(approveInRVLine()) == false)
-        #expect(wire.stdout.contains("rv allow-once") == false)
+        #expect((wire.stdout.contains("rv allow-once") || wire.stdout.contains("rv unlock")) == false)
         #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
     }

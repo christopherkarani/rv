@@ -32,7 +32,7 @@ struct MCPCommandTests {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
                 approvalSigning: approvalSigning ?? .file(configDirectory: config), presence: presence,
-                oauthTokens: .file(configDirectory: config))
+                oauthTokens: .file(configDirectory: config), hasTerminal: { true })
         }
 
         func approvalEvents() -> [AuditEvent] {
@@ -101,19 +101,17 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)
+        // E3: imported local servers are sealed, so serve will start them.
+        let github = try #require(try MCPRun.configuration(fixture.environment()).get().server(named: "github"))
+        #expect(github.sandbox == MCPSandboxPolicy(network: false, hosts: ["registry.npmjs.org"]))
+        #expect(imported.contains("import github: npx (credentials → rv secrets GITHUB_PERSONAL_ACCESS_TOKEN) · sealed, reaches only registry.npmjs.org"))
+        #expect(after.problems.contains { $0.message.contains("has no sandbox") } == false)
         if MCPSandbox.enforced {
-            // Imported local servers carry no sandbox yet: governed, but check
-            // stays red until one is added and the file is re-trusted.
-            #expect(after.passes == false)
-            #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
+            #expect(after.problems.contains { $0.message.contains("github") } == false)
+            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" } == false)
         } else {
-            // No cage on this host: check names the bare server as uncaged.
-            #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
-        }
-        if MCPSandbox.enforced {
-            // Serve will not start an unsealed server, so list says off.
-            #expect(after.rows.contains { $0.name == "github" && $0.status == "off" && $0.offReason == "off · not sealed: it has no sandbox" })
-        } else {
+            // No cage on this host: check says the sandbox is not enforced here.
+            #expect(after.problems.contains { $0.message == MCPPlatformSupport.sandboxUnenforced(server: "github") })
             #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         }
         let relative = try report(fixture, rvExecutable: "")
@@ -168,6 +166,16 @@ struct MCPCommandTests {
         #expect(uncaged.allSatisfy { $0.message.contains("sandbox is unavailable on this host") })
         let platformDefault = MCPRun.sandboxProblems(configuration, configDirectory: directory)
         #expect(platformDefault == (MCPSandbox.enforced ? enforced : uncaged))
+    }
+
+    @Test func checkFlagsASecretInALocalServersArgs() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "argy", command: "a", args: ["--token=${secret:API_TOKEN}"]),
+            MCPServerDefinition(name: "envy", command: "e", secrets: ["API_TOKEN": "API_TOKEN"]),
+        ])
+        let problems = MCPRun.argumentSecretProblems(configuration, configDirectory: URL(fileURLWithPath: "/nonexistent"))
+        #expect(problems.map(\.message) == ["argy: " + MCPLaunchPlanner.argumentSecretMessage(.reference("API_TOKEN"))])
+        #expect(problems.allSatisfy { $0.message.contains("\n") == false })
     }
 
     @Test func problemLinesLabelEachProblem() {
@@ -3648,15 +3656,15 @@ struct MCPCommandTests {
             environment: bare.environment(presence: Self.present),
             show: { text in review.withLock { $0 += text } }
         ).get()
-        let text = review.withLock { $0 }
-        #expect(result.contains("wrote mcp.json"))
-        #expect(text.contains("${secret:"))
-        #expect(text.contains("→ secret"))
-        #expect(bare.keychain.items.withLock { $0 }.isEmpty == false)
-        let written = bare.text(".config/rv/mcp.json")
-        #expect(written.contains("${secret:"))
-        #expect(written.contains(token) == false)
-        #expect(written.contains(other) == false)
+        let text = review.withLock { $0 } + result
+        // E4: a credential in the args would be shown by ps, so the server is
+        // skipped whole: nothing is written and none of its values are stored.
+        #expect(result.contains("nothing to import"))
+        #expect(text.contains("a credential is in its args"))
+        #expect(text.contains(token) == false)
+        #expect(text.contains(other) == false)
+        #expect(bare.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: bare.config.appendingPathComponent("mcp.json").path) == false)
     }
 
     @Test func importRefusesASplitterInsideAToken() async throws {
@@ -6094,7 +6102,9 @@ struct MCPCommandTests {
             #expect(text.contains("first: \"/bin/echo\", \"\\\\n  notes: /usr/bin/true\""))
             #expect(text.contains("env NOTE=/usr/bin\\n\(trailer)\\n  hidden: true"))
             #expect(text.contains("later: \"/usr/bin/true\", \"--ok\""))
-            #expect(text.contains("no sandbox"))
+            // E3: imported local servers are sealed, and the review says so.
+            #expect(text.contains("no sandbox") == false)
+            #expect(text.contains("sandbox network false"))
             #expect(text.contains("ask before every tool"))
             Self.expectNoForgedReviewLine(text, trailer: trailer)
         }
@@ -6102,7 +6112,7 @@ struct MCPCommandTests {
         #expect(importLines.filter { $0.hasPrefix("sha256 ") }.count == 1)
         let body = importedReview.components(separatedBy: "\nsha256 ").first ?? ""
         #expect(body.contains("later: \"/usr/bin/true\", \"--ok\""))
-        #expect(body.contains("no sandbox"))
+        #expect(body.contains("sandbox network false"))
         #expect(imported.contains("wrote mcp.json"))
     }
 

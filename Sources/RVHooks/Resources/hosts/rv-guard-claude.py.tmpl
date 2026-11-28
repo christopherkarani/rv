@@ -1,7 +1,7 @@
 """RV destructive-command guard for Claude Bash.
 
 Claude PreToolUse command hook. Step 8B: host dialogs never authorize an
-rv review. Approval happens in RVOperatorUI (or `rv allow-once`); the
+rv review. Approval happens in RVOperatorUI (or `rv unlock`); the
 agent retries afterwards, so rv's policy `ask` blocks (leftover-ask-as-
 permit: host Allow would run the tool with no RV approval).
 

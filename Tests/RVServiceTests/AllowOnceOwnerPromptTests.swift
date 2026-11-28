@@ -141,7 +141,7 @@ struct AllowOnceOwnerPromptTests {
             Issue.record("the hook must answer")
             return
         }
-        let match = try #require(denied.stdout.firstMatch(of: /rv allow-once ([0-9a-f]{6})/))
+        let match = try #require(denied.stdout.firstMatch(of: /rv unlock ([0-9a-f]{6})/))
         let code = String(match.1)
         let pending = try #require(await rig.store.validatePending(code: code, now: now))
         let params = AttestTTYRedemptionParams(
@@ -160,7 +160,7 @@ struct AllowOnceOwnerPromptTests {
             Issue.record("the hook must answer")
             return
         }
-        #expect(allowed.stdout.contains("rv allow-once") == false)
+        #expect((allowed.stdout.contains("rv allow-once") || allowed.stdout.contains("rv unlock")) == false)
     }
 
     @Test func aCommandTooLongToShowIsRefusedWithoutAPrompt() async throws {

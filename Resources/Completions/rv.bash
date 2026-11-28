@@ -2,7 +2,7 @@ _rv() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local cmd="${COMP_WORDS[1]}"
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "run opencode box workspace test try term wait why explain check prompt news packs protect policy scan unlock allow-once allowlist service hook setup init uninstall doctor safety blocks log guard watch host pause audit secrets login mcp managed report operator egress" -- "$cur") )
+    COMPREPLY=( $(compgen -W "run opencode box workspace test try term wait undo why explain check prompt news packs protect policy scan unlock allow-once allowlist service hook setup init uninstall doctor safety blocks log guard watch host pause audit secrets login mcp managed report operator egress" -- "$cur") )
     return
   fi
   case "$cmd" in
@@ -12,7 +12,7 @@ _rv() {
     workspace)
       COMPREPLY=( $(compgen -W "start attach status close" -- "$cur") )
       ;;
-    allow-once)
+    unlock|allow-once)
       COMPREPLY=( $(compgen -W "mint list clear" -- "$cur") )
       ;;
     allowlist)

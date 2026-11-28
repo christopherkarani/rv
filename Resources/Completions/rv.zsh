@@ -12,6 +12,7 @@ _rv() {
     'term:Watch what rv is doing, full screen'
     'wait:Wait for the answer to a stop'
     'why:Why rv stopped a command, or let it run'
+    'undo:Restore what a reset or delete removed'
     'pause:Pause rv for a while (owner only)'
     'explain:Explain a decision'
     'check:Check a plan before an agent runs it'
@@ -60,7 +61,7 @@ _rv() {
           ws=('start:Start or attach' 'attach:Attach until stdin closes' 'status:Show the live host' 'close:Close the workspace')
           _describe -t commands 'workspace' ws
           ;;
-        allow-once)
+        unlock|allow-once)
           local -a ao
           ao=('mint:Mint a code' 'list:List rows' 'clear:Clear rows')
           _describe -t commands 'allow-once' ao

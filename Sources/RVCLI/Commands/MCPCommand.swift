@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import ArgumentParser
 import Foundation
 import RVDomain
@@ -18,6 +23,11 @@ struct MCPEnvironment: Sendable {
     var approvalSigning: MCPApprovalSigning = .unavailable
     var presence = UserPresence { _, _ in .refused("no user presence available") }
     var oauthTokens: MCPOAuthTokenStore = .none
+    /// Whether this process has a terminal the person can answer on. Trust
+    /// and onboard ask for that first, so an agent's shell gets one line
+    /// and the fix instead of a prompt nobody will answer. No terminal
+    /// unless one is proven: `live` checks `/dev/tty`.
+    var hasTerminal: @Sendable () -> Bool = { false }
 
     static func live(home: HomeDirectory) -> MCPEnvironment {
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
@@ -29,7 +39,8 @@ struct MCPEnvironment: Sendable {
             managed: ManagedRun.installed(home: home),
             approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue),
             presence: .live,
-            oauthTokens: .live(configDirectory: configDirectory, home: home.rawValue)
+            oauthTokens: .live(configDirectory: configDirectory, home: home.rawValue),
+            hasTerminal: { MCPRun.controllingTerminalExists() }
         )
     }
 
@@ -223,6 +234,7 @@ enum MCPRun {
         }
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
         problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
+        problems += argumentSecretProblems(configuration, configDirectory: environment.configDirectory)
         let auditing = configuration.servers.filter { $0.sandbox?.enforcement == .audit }
         return Report(
             servers: configuration.servers.count,
@@ -467,6 +479,17 @@ enum MCPRun {
         }
     }
 
+    /// Local servers that name a secret in their args: serve never starts
+    /// them, because a process's arguments are readable by every user.
+    static func argumentSecretProblems(_ configuration: MCPConfiguration, configDirectory: URL) -> [Problem] {
+        let path = MCPConfiguration.fileURL(configDirectory: configDirectory).path
+        return configuration.servers.compactMap { server in
+            MCPLaunchPlanner.argumentSecret(server).map {
+                Problem(path: path, message: "\(server.name): " + MCPLaunchPlanner.argumentSecretMessage($0))
+            }
+        }
+    }
+
     static func problemLines(_ report: Report, home: URL) -> [String] {
         report.problems.map {
             "problem: \(reviewField(abbreviate($0.path, home: home))): \(reviewField($0.message))"
@@ -516,7 +539,7 @@ enum MCPRun {
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
             "approving needs you present: \(OwnerAuthWording.method). A pseudo-terminal cannot approve",
-            "the confirmation code is in the agent's terminal or its MCP log; an agent retry keeps the same code",
+            "the confirmation code is in the terminal where the agent runs; an agent retry keeps the same code",
         ])
             .joined(separator: "\n") + "\n"
     }
@@ -699,11 +722,32 @@ enum MCPRun {
             : "could not create rv's approvals key (\(MCPApprovalKeyIdentity.keychainService))"
     }
 
+    /// True when this process has a controlling terminal: `/dev/tty`
+    /// opens and is a tty. An agent's shell usually has none.
+    static func controllingTerminalExists() -> Bool {
+        let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        return isatty(fd) == 1
+    }
+
+    /// The one-line refusal, and its one fix, for a command that needs the
+    /// person at a terminal when this process has none. Checked before
+    /// anything is read or any key is used, so nothing waits on a prompt
+    /// (Touch ID included) that no one at a terminal asked for.
+    static func needsTerminal(_ subcommand: String, _ nothing: String) -> CommandFailure {
+        let command = "\(CommandVocabulary.Command.mcp.invocation) \(subcommand)"
+        return CommandFailure(
+            "\(CommandVocabulary.Glyph.stopped.rawValue) needs you at your own terminal, and this process has no terminal; \(nothing)\n"
+                + "\(CommandVocabulary.Glyph.next.rawValue) \(command)")
+    }
+
     /// Signs mcp.json as it is now, after showing what it allows and confirming presence.
     static func trust(
         environment: MCPEnvironment, show: @Sendable (String) -> Void
     ) async -> Result<String, CommandFailure> {
         if environment.approvalSigning.custodyIsSameUser { return .failure(CommandFailure(MCPPlatformSupport.trustUnavailable)) }
+        guard environment.hasTerminal() else { return .failure(needsTerminal("trust", "nothing was signed")) }
         let url = MCPConfiguration.fileURL(configDirectory: environment.configDirectory)
         let data: Data
         switch OwnerOnlyFile.read(url, maximumBytes: MCPConfiguration.maximumBytes) {
@@ -1439,6 +1483,9 @@ enum MCPRun {
             if names.isEmpty == false {
                 detail += " (credentials → rv secrets " + names.sorted().map(reviewField).joined(separator: ", ") + ")"
             }
+            if server.remote == nil, let sandbox = server.sandbox {
+                detail += " · " + MCPImport.sealedNote(sandbox)
+            }
             lines.append(detail)
         }
         lines += plan.skipped.map { "skip \(reviewField($0.name)): \(reviewField($0.reason))" }
@@ -1532,6 +1579,9 @@ enum MCPRun {
         if toolModeForFreshConfig != nil, configuration.servers.isEmpty {
             lines.append("tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
+        if plan.servers.contains(where: { $0.remote == nil }) {
+            lines.append("local servers are sealed: each reaches only the sites in its sandbox.hosts; add any it needs to mcp.json, then `rv mcp trust`")
+        }
         lines.append("every tool asks for approval until you allow it (mcp.json \"tools\" or `rv mcp approve <id> --always`)")
         lines.append("next: `rv mcp setup --host \(host.rawValue)` routes the host through rv")
         return .success(lines.joined(separator: "\n") + "\n")
@@ -1545,6 +1595,9 @@ enum MCPRun {
         rvPath: String, environment: MCPEnvironment,
         show: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result<String, CommandFailure> {
+        if dryRun == false, environment.hasTerminal() == false {
+            return .failure(needsTerminal("onboard --host \(host.rawValue)", "nothing was imported"))
+        }
         let imported: String
         switch await importServers(
             host: host, names: names, project: project, dryRun: dryRun,

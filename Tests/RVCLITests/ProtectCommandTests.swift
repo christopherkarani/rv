@@ -93,6 +93,20 @@ struct ProtectCommandTests {
         #expect(PacksConfigStore.isAbsent(home: home))
     }
 
+    /// End of input is no answer: the prompt's line ends first, so
+    /// "Nothing changed." does not read as the answer to it.
+    @Test func typo_atATerminal_endOfInputChangesNothing() async throws {
+        let home = try isolatedHome()
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, stdinText: "", output: capture) {
+            let command = try Protect.parse(["reddis"])
+            await #expect(throws: ExitCode(1)) { try await command.run() }
+        }
+        #expect(capture.stdout == "  Redis? ⏎ \n")
+        #expect(capture.stderr == "  Nothing changed.\n")
+        #expect(PacksConfigStore.isAbsent(home: home))
+    }
+
     /// A typo on the way off is never auto-corrected, even at a terminal.
     @Test func typo_off_isNeverGuessed() async throws {
         let home = try isolatedHome()

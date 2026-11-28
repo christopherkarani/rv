@@ -6,11 +6,11 @@ import Testing
 private let resetHardReason =
     "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let resetHardAskReason =
-    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock."
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
-    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv unlock.\"}\n"
 
 private func resetHardEvent() -> [String: Any] {
     [

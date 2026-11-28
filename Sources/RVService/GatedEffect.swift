@@ -2,6 +2,7 @@ import Foundation
 import RVDomain
 import RVHistory
 import RVPolicy
+import RVUndo
 
 /// One side-effect write a gated evaluation asks for. The decision part of
 /// each door returns these in the order they would have been written; the
@@ -28,6 +29,10 @@ enum GatedEffect: Sendable, Equatable {
     /// rebase recovery, contained delete). Appended to `audit.jsonl` as
     /// `command.override`. Apply only; never written for a peek.
     case overrideAudit(OverrideRow)
+    /// Keep an undo copy before the command runs (H3): an observe-mode
+    /// would-be deny or an allow-once override of a reset, discard, clean
+    /// or delete. Apply and hook hosts only (`UndoHookPoint`).
+    case keepCopy(UndoRequest)
 
     struct ExemptionAudit: Sendable, Equatable {
         let dropped: [String]

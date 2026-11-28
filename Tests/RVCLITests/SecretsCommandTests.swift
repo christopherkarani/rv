@@ -80,8 +80,7 @@ struct SecretsCommandTests {
         defer { fixture.tearDown() }
         let configuration = try SecretsRun.configuration(fixture.environment()).get()
         let text = SecretsRun.listText(SecretsRun.list(configuration, profiles: []))
-        #expect(text.hasPrefix("No secrets configured."))
-        #expect(text.contains("rv secrets add NAME --gateway"))
+        #expect(text == "No secrets configured. Add one with:\n→ rv secrets add NAME\n")
     }
 
     @Test func setDefinesANewGatewaySecretAndStoresTheValueInTheKeychain() throws {

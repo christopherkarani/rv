@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// A per-launch capability token standing in for a real secret in the cage:
 /// `<prefix>rvph_<32 lowercase hex>`. Worthless outside the minting gateway.
@@ -316,7 +317,7 @@ public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
         case .auditUnavailable: "the audit log could not record this request, so it was not forwarded"
         case .runtimeMismatch: "placeholder was presented from outside the runtime it was issued to"
         case .runtimeUnverified: "the gateway could not confirm this connection comes from the placeholder's runtime"
-        case .expired: "the secret has expired; store a new value with `rv secrets set` and a later --expires"
+        case .expired: "the secret has expired; store a new value with `\(CommandVocabulary.Alias.secretsAdd.invocation)` and a later --expires"
         case .refreshFailed: "the secret could not be refreshed from its provider, so it was not used"
         case .awsKeyMismatch: "the request is signed with an access key other than this secret's AWS_ACCESS_KEY_ID"
         case .awsSignedStreaming:

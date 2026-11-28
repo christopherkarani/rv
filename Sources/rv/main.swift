@@ -16,15 +16,13 @@ enum RVEntry {
         let args = CommandAlias.expanded(VersionSpelling.normalized(Array(CommandLine.arguments.dropFirst())))
         if args.isEmpty {
             // Piped, in CI, or from an agent, bare `rv` prints the command
-            // list instead of failing with "requires an interactive
-            // terminal": pipes and scripts always get help (Q3). On a
-            // terminal it still opens the workspace shell until the
-            // four-line status (C4) replaces it.
+            // list: pipes and scripts always get help (Q3). On a terminal
+            // it answers "am I safe?" in four lines (C4).
             guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
                 _ = HelpDispatch.tryEmit(arguments: [])
                 return
             }
-            await RV.main(["workspace", "tui"])
+            await BareStatus.run()
             return
         }
         if HelpDispatch.tryEmit(arguments: args) {
