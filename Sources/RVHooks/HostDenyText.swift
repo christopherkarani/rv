@@ -36,12 +36,22 @@ public struct StopAdvice: Sendable, Equatable {
 public struct StopVoice: Sendable {
     /// The machine owner's first name ("ask Chris"), from passwd.
     public var owner: OwnerName
-    /// The pack advice for a rule id, or nil.
+    /// The pack advice for a rule id, else rv's own (`builtinStopAdvice`),
+    /// or nil.
     public var advice: @Sendable (RuleID) -> StopAdvice?
+    /// How many stops of this rule the session has hit lately, this one
+    /// included (B5); 0 when nothing counted.
+    public var streak: Int
+    /// Whether a self-protection stop offers its help page: false once the
+    /// hook door found rv would not let that page run here (`vetted`).
+    public var offersSelfProtectionHelp = true
 
-    public init(owner: OwnerName, advice: @escaping @Sendable (RuleID) -> StopAdvice? = { _ in nil }) {
+    public init(
+        owner: OwnerName, advice: @escaping @Sendable (RuleID) -> StopAdvice? = { _ in nil }, streak: Int = 0
+    ) {
         self.owner = owner
-        self.advice = advice
+        self.advice = { rule in advice(rule) ?? builtinStopAdvice(rule) }
+        self.streak = streak
     }
 
     /// No name ("your user") and no pack advice.
@@ -51,30 +61,46 @@ public struct StopVoice: Sendable {
     /// stays): for a stop whose pack advice rv would itself stop.
     public func withoutSaferCommand(for rule: RuleID) -> StopVoice {
         let advice = self.advice
-        return StopVoice(owner: owner) { asked in
+        var voice = self
+        voice.advice = { asked in
             guard var found = advice(asked) else { return nil }
             if asked == rule { found.saferCommand = nil }
             return found
         }
+        return voice
     }
 
-    /// This voice for `result`'s stop at `cwd`: the stopping rule's safer
-    /// command stays only when `allowed` says rv lets it run there.
+    /// This voice for `result`'s stop of `command` at `cwd`: the safer
+    /// command it would show (the stopping rule's advice, pack or rv's own,
+    /// or a self-protection stop's help page) stays only when `allowed`
+    /// says rv lets it run there.
     public func vetted(
         for result: EvaluationResult,
+        command: ShellCommand? = nil,
         cwd: WorkingDirectory?,
         by allowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
     ) async -> StopVoice {
-        guard let allowed, case .deny(let deny) = result.decision,
-              let safer = advice(deny.ruleID)?.saferCommand
-        else { return self }
-        let rule = deny.ruleID
-        return await allowed(ShellCommand(rawValue: safer), cwd) ? self : withoutSaferCommand(for: rule)
+        guard let allowed else { return self }
+        switch result.decision {
+        case .deny(let deny):
+            guard let safer = advice(deny.ruleID)?.saferCommand else { return self }
+            return await allowed(ShellCommand(rawValue: safer), cwd) ? self : withoutSaferCommand(for: deny.ruleID)
+        case .indeterminate(.selfProtection):
+            guard let help = command.flatMap(selfProtectionSaferCommand) else { return self }
+            var voice = self
+            voice.offersSelfProtectionHelp = await allowed(ShellCommand(rawValue: help), cwd)
+            return voice
+        default:
+            return self
+        }
     }
 }
 
 /// One stop, in the shape every host shows.
 public struct StopNotice: Sendable, Equatable {
+    /// The verdict word after the glyph: `Stopped`, or self-protection's
+    /// own `rv protects itself` (B2).
+    public var verdict: String
     /// The command (first line, escaped) or path; nil for a stop that has
     /// no command (an unreadable hook request).
     public var subject: String?
@@ -86,13 +112,20 @@ public struct StopNotice: Sendable, Equatable {
     public var safer: String?
     /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
     public var who: String
+    /// The third-try note (B5, `stopStreakNote`), or nil.
+    public var again: String?
 
-    public init(subject: String?, rule: String, why: String, safer: String? = nil, who: String) {
+    public init(
+        verdict: String = CommandVocabulary.Glyph.stopped.word,
+        subject: String?, rule: String, why: String, safer: String? = nil, who: String, again: String? = nil
+    ) {
+        self.verdict = verdict
         self.subject = subject
         self.rule = rule
         self.why = why
         self.safer = safer
         self.who = who
+        self.again = again
     }
 
     /// The host text: one idea per line, the next command last.
@@ -102,13 +135,16 @@ public struct StopNotice: Sendable, Equatable {
         if let safer {
             lines.append(stopLabel("safer") + safer)
         }
+        if let again {
+            lines.append(stopLabel("again") + again)
+        }
         lines.append(stopLabel("who") + who)
         return lines.joined(separator: "\n")
     }
 
     /// `✕ Stopped   <command> (<rule>)`.
     public var verdictLine: String {
-        let head = "\(CommandVocabulary.Glyph.stopped.rawValue) \(CommandVocabulary.Glyph.stopped.word)   "
+        let head = "\(CommandVocabulary.Glyph.stopped.rawValue) \(verdict)   "
         guard let subject, subject.isEmpty == false else {
             return "\(head)(\(rule))"
         }
@@ -145,8 +181,11 @@ public enum HookVoiceNext: Sendable, Equatable {
 /// The `who` line for a minted code: the owner runs it, never the agent.
 /// The grant binds the normalized command (sudo/env/path spellings share
 /// one grant, B-F2).
+/// The aside after it is the agent's, and says so: `rv wait <code>` (H2)
+/// only waits for the owner's answer and never decides anything.
 public func unlockLine(for code: AllowOnceUnlockCode, owner: OwnerName = .unknown) -> String {
     "\(askOwner(owner)) to run\(commandGap)\(CommandVocabulary.Command.allowOnce.invocation) \(code.rawValue)"
+        + "\(commandGap)(you can wait: \(CommandVocabulary.Command.wait.invocation) \(code.rawValue))"
 }
 
 /// The `who` line for a repeat stop of the same command and cwd: no second
@@ -444,7 +483,8 @@ private func stopNotice(
         safer: advice?.saferCommand.map(singleLine).flatMap(printableSafer),
         who: stopWho(
             kind: kind, unlock: unlock, ownerStep: ownerRepairStep(in: deny.reason), whoActs: advice?.whoActs,
-            owner: voice.owner)
+            owner: voice.owner),
+        again: stopStreakNote(voice.streak)
     )
 }
 
@@ -509,11 +549,15 @@ public func indeterminateStopNotice(
     command: ShellCommand?,
     voice: StopVoice = .plain
 ) -> StopNotice {
-    StopNotice(
+    if reason == .selfProtection {
+        return selfProtectionStopNotice(command: command, voice: voice)
+    }
+    return StopNotice(
         subject: command.map(hookDenyCommandPreview),
         rule: reason.map(indeterminateStopRule) ?? "rv.indeterminate/incomplete",
         why: reason.map(indeterminateStopWhy) ?? "rv could not finish checking it",
-        who: ownTerminalLine(owner: voice.owner)
+        who: ownTerminalLine(owner: voice.owner),
+        again: stopStreakNote(voice.streak)
     )
 }
 

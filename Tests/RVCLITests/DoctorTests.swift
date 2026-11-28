@@ -1142,3 +1142,19 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     #expect(sessions.withLock { $0 } == 0)
     #expect(stdout.contains("running"))
 }
+
+/// G6b: a pack id a bundle update dropped (or any line rv skips) is named
+/// by file and line, so the owner knows which pack is no longer enforced.
+@Test func doctorNamesTheSkippedPacksLine() throws {
+    let home = try isolatedHome()
+    let url = PacksConfigStore.configURL(home: home)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "[packs]\nenabled = [\n  \"database.redis\",\n  \"database.gone\",\n]\n".write(
+        to: url, atomically: true, encoding: .utf8)
+    let problems = DoctorRun.packsConfigProblems(home: home)
+    #expect(problems.count == 1)
+    #expect(problems.first?.id == "packs-config")
+    #expect(problems.first?.severity == .warn)
+    #expect(problems.first?.summary == "\(url.path):4  [packs] no pack, category or preset is named database.gone; rv skips this line")
+    #expect(DoctorRun.packsConfigProblems(home: try isolatedHome()).isEmpty)
+}

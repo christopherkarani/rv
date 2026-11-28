@@ -18,6 +18,11 @@ public enum HookDecodeOutcome: Equatable, Sendable {
     case request(HookRequest)
     /// Not a shell invocation for this host (other tool or event).
     case foreign
+    /// The host's session-start event (B4): no tool runs, nothing is
+    /// evaluated, and the reply is rv's house rules or nothing. Only hosts
+    /// with a session-start context wire decode this; for every other
+    /// host the event stays `.foreign`.
+    case sessionStart(cwd: WorkingDirectory?)
     /// Addressed to this host but unparseable — fail closed on purpose.
     case malformed(HookMalformation)
 }
